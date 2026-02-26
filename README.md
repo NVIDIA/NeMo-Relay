@@ -123,7 +123,7 @@ flowchart TB
         direction TB
         SanitizeRequestGuardrails[/Sanitize Request Guardrail/]
         SanitizeResponseGuardrails[/Sanitize Response Guardrail/]
-        EventSubscribers@{ shape: processes, label: "Event Subscribers" }
+        EventSubscribers[["Event Subscribers"]]
     end
 
 
