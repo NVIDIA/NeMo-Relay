@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // types.go defines the Go-side data types, opaque handle wrappers, and helper
 // functions that correspond to the C FFI types exposed by nvagentrt-ffi. Each
 // handle struct wraps an opaque C pointer and uses a Go runtime finalizer to
@@ -20,55 +23,55 @@ typedef struct FfiEvent FfiEvent;
 typedef struct FfiStream FfiStream;
 
 // Accessors — ScopeHandle
-extern char* nv_agentrt_scope_handle_uuid(const FfiScopeHandle* ptr);
-extern char* nv_agentrt_scope_handle_name(const FfiScopeHandle* ptr);
-extern int32_t nv_agentrt_scope_handle_scope_type(const FfiScopeHandle* ptr);
-extern uint32_t nv_agentrt_scope_handle_attributes(const FfiScopeHandle* ptr);
-extern char* nv_agentrt_scope_handle_parent_uuid(const FfiScopeHandle* ptr);
-extern char* nv_agentrt_scope_handle_data(const FfiScopeHandle* ptr);
-extern char* nv_agentrt_scope_handle_metadata(const FfiScopeHandle* ptr);
-extern void nv_agentrt_scope_handle_free(FfiScopeHandle* ptr);
+extern char* nvagentrt_scope_handle_uuid(const FfiScopeHandle* ptr);
+extern char* nvagentrt_scope_handle_name(const FfiScopeHandle* ptr);
+extern int32_t nvagentrt_scope_handle_scope_type(const FfiScopeHandle* ptr);
+extern uint32_t nvagentrt_scope_handle_attributes(const FfiScopeHandle* ptr);
+extern char* nvagentrt_scope_handle_parent_uuid(const FfiScopeHandle* ptr);
+extern char* nvagentrt_scope_handle_data(const FfiScopeHandle* ptr);
+extern char* nvagentrt_scope_handle_metadata(const FfiScopeHandle* ptr);
+extern void nvagentrt_scope_handle_free(FfiScopeHandle* ptr);
 
 // Accessors — ToolHandle
-extern char* nv_agentrt_tool_handle_uuid(const FfiToolHandle* ptr);
-extern char* nv_agentrt_tool_handle_name(const FfiToolHandle* ptr);
-extern uint32_t nv_agentrt_tool_handle_attributes(const FfiToolHandle* ptr);
-extern char* nv_agentrt_tool_handle_parent_uuid(const FfiToolHandle* ptr);
-extern void nv_agentrt_tool_handle_free(FfiToolHandle* ptr);
+extern char* nvagentrt_tool_handle_uuid(const FfiToolHandle* ptr);
+extern char* nvagentrt_tool_handle_name(const FfiToolHandle* ptr);
+extern uint32_t nvagentrt_tool_handle_attributes(const FfiToolHandle* ptr);
+extern char* nvagentrt_tool_handle_parent_uuid(const FfiToolHandle* ptr);
+extern void nvagentrt_tool_handle_free(FfiToolHandle* ptr);
 
 // Accessors — LLMHandle
-extern char* nv_agentrt_llm_handle_uuid(const FfiLLMHandle* ptr);
-extern char* nv_agentrt_llm_handle_name(const FfiLLMHandle* ptr);
-extern uint32_t nv_agentrt_llm_handle_attributes(const FfiLLMHandle* ptr);
-extern char* nv_agentrt_llm_handle_parent_uuid(const FfiLLMHandle* ptr);
-extern void nv_agentrt_llm_handle_free(FfiLLMHandle* ptr);
+extern char* nvagentrt_llm_handle_uuid(const FfiLLMHandle* ptr);
+extern char* nvagentrt_llm_handle_name(const FfiLLMHandle* ptr);
+extern uint32_t nvagentrt_llm_handle_attributes(const FfiLLMHandle* ptr);
+extern char* nvagentrt_llm_handle_parent_uuid(const FfiLLMHandle* ptr);
+extern void nvagentrt_llm_handle_free(FfiLLMHandle* ptr);
 
 // LLMRequest
-extern FfiLLMRequest* nv_agentrt_llm_request_new(const char* method, const char* url, const char* headers_json, const char* body_json);
-extern char* nv_agentrt_llm_request_method(const FfiLLMRequest* ptr);
-extern char* nv_agentrt_llm_request_url(const FfiLLMRequest* ptr);
-extern char* nv_agentrt_llm_request_headers(const FfiLLMRequest* ptr);
-extern char* nv_agentrt_llm_request_body(const FfiLLMRequest* ptr);
-extern void nv_agentrt_llm_request_free(FfiLLMRequest* ptr);
+extern FfiLLMRequest* nvagentrt_llm_request_new(const char* method, const char* url, const char* headers_json, const char* body_json);
+extern char* nvagentrt_llm_request_method(const FfiLLMRequest* ptr);
+extern char* nvagentrt_llm_request_url(const FfiLLMRequest* ptr);
+extern char* nvagentrt_llm_request_headers(const FfiLLMRequest* ptr);
+extern char* nvagentrt_llm_request_body(const FfiLLMRequest* ptr);
+extern void nvagentrt_llm_request_free(FfiLLMRequest* ptr);
 
 // Event accessors
-extern char* nv_agentrt_event_uuid(const FfiEvent* ptr);
-extern char* nv_agentrt_event_name(const FfiEvent* ptr);
-extern int32_t nv_agentrt_event_type(const FfiEvent* ptr);
-extern char* nv_agentrt_event_data(const FfiEvent* ptr);
-extern char* nv_agentrt_event_metadata(const FfiEvent* ptr);
-extern char* nv_agentrt_event_timestamp(const FfiEvent* ptr);
-extern void nv_agentrt_event_free(FfiEvent* ptr);
+extern char* nvagentrt_event_uuid(const FfiEvent* ptr);
+extern char* nvagentrt_event_name(const FfiEvent* ptr);
+extern int32_t nvagentrt_event_type(const FfiEvent* ptr);
+extern char* nvagentrt_event_data(const FfiEvent* ptr);
+extern char* nvagentrt_event_metadata(const FfiEvent* ptr);
+extern char* nvagentrt_event_timestamp(const FfiEvent* ptr);
+extern void nvagentrt_event_free(FfiEvent* ptr);
 
 // String free
-extern void nv_agentrt_string_free(char* ptr);
+extern void nvagentrt_string_free(char* ptr);
 
 // Last error
-extern const char* nv_agentrt_last_error();
+extern const char* nvagentrt_last_error();
 
 // Stream
-extern void nv_agentrt_stream_free(FfiStream* stream);
-extern int32_t nv_agentrt_stream_next(FfiStream* stream, char** out_chunk);
+extern void nvagentrt_stream_free(FfiStream* stream);
+extern int32_t nvagentrt_stream_next(FfiStream* stream, char** out_chunk);
 */
 import "C"
 
@@ -189,7 +192,7 @@ func newScopeHandle(ptr *C.FfiScopeHandle) *ScopeHandle {
 	h := &ScopeHandle{ptr: ptr}
 	runtime.SetFinalizer(h, func(h *ScopeHandle) {
 		if h.ptr != nil {
-			C.nv_agentrt_scope_handle_free(h.ptr)
+			C.nvagentrt_scope_handle_free(h.ptr)
 			h.ptr = nil
 		}
 	})
@@ -197,35 +200,35 @@ func newScopeHandle(ptr *C.FfiScopeHandle) *ScopeHandle {
 }
 
 // UUID returns the unique identifier for this scope.
-func (h *ScopeHandle) UUID() string { return goString(C.nv_agentrt_scope_handle_uuid(h.ptr)) }
+func (h *ScopeHandle) UUID() string { return goString(C.nvagentrt_scope_handle_uuid(h.ptr)) }
 
 // Name returns the human-readable name of this scope.
-func (h *ScopeHandle) Name() string { return goString(C.nv_agentrt_scope_handle_name(h.ptr)) }
+func (h *ScopeHandle) Name() string { return goString(C.nvagentrt_scope_handle_name(h.ptr)) }
 
 // Type returns the ScopeType of this scope.
 func (h *ScopeHandle) Type() ScopeType {
-	return ScopeType(C.nv_agentrt_scope_handle_scope_type(h.ptr))
+	return ScopeType(C.nvagentrt_scope_handle_scope_type(h.ptr))
 }
 
 // Attributes returns the attribute bitflags for this scope.
 func (h *ScopeHandle) Attributes() uint32 {
-	return uint32(C.nv_agentrt_scope_handle_attributes(h.ptr))
+	return uint32(C.nvagentrt_scope_handle_attributes(h.ptr))
 }
 
 // ParentUUID returns the UUID of the parent scope, or an empty string if this
 // is a root scope.
 func (h *ScopeHandle) ParentUUID() string {
-	return goStringOpt(C.nv_agentrt_scope_handle_parent_uuid(h.ptr))
+	return goStringOpt(C.nvagentrt_scope_handle_parent_uuid(h.ptr))
 }
 
 // Data returns the optional data JSON payload attached to this scope.
 func (h *ScopeHandle) Data() json.RawMessage {
-	return goJSONOpt(C.nv_agentrt_scope_handle_data(h.ptr))
+	return goJSONOpt(C.nvagentrt_scope_handle_data(h.ptr))
 }
 
 // Metadata returns the optional metadata JSON payload attached to this scope.
 func (h *ScopeHandle) Metadata() json.RawMessage {
-	return goJSONOpt(C.nv_agentrt_scope_handle_metadata(h.ptr))
+	return goJSONOpt(C.nvagentrt_scope_handle_metadata(h.ptr))
 }
 
 // ToolHandle wraps an opaque C pointer to a tool call handle. It is returned
@@ -242,7 +245,7 @@ func newToolHandle(ptr *C.FfiToolHandle) *ToolHandle {
 	h := &ToolHandle{ptr: ptr}
 	runtime.SetFinalizer(h, func(h *ToolHandle) {
 		if h.ptr != nil {
-			C.nv_agentrt_tool_handle_free(h.ptr)
+			C.nvagentrt_tool_handle_free(h.ptr)
 			h.ptr = nil
 		}
 	})
@@ -250,19 +253,19 @@ func newToolHandle(ptr *C.FfiToolHandle) *ToolHandle {
 }
 
 // UUID returns the unique identifier for this tool call.
-func (h *ToolHandle) UUID() string { return goString(C.nv_agentrt_tool_handle_uuid(h.ptr)) }
+func (h *ToolHandle) UUID() string { return goString(C.nvagentrt_tool_handle_uuid(h.ptr)) }
 
 // Name returns the name of the tool being called.
-func (h *ToolHandle) Name() string { return goString(C.nv_agentrt_tool_handle_name(h.ptr)) }
+func (h *ToolHandle) Name() string { return goString(C.nvagentrt_tool_handle_name(h.ptr)) }
 
 // Attributes returns the attribute bitflags for this tool call.
 func (h *ToolHandle) Attributes() uint32 {
-	return uint32(C.nv_agentrt_tool_handle_attributes(h.ptr))
+	return uint32(C.nvagentrt_tool_handle_attributes(h.ptr))
 }
 
 // ParentUUID returns the UUID of the parent scope for this tool call.
 func (h *ToolHandle) ParentUUID() string {
-	return goStringOpt(C.nv_agentrt_tool_handle_parent_uuid(h.ptr))
+	return goStringOpt(C.nvagentrt_tool_handle_parent_uuid(h.ptr))
 }
 
 // LLMHandle wraps an opaque C pointer to an LLM call handle. It is returned
@@ -279,7 +282,7 @@ func newLLMHandle(ptr *C.FfiLLMHandle) *LLMHandle {
 	h := &LLMHandle{ptr: ptr}
 	runtime.SetFinalizer(h, func(h *LLMHandle) {
 		if h.ptr != nil {
-			C.nv_agentrt_llm_handle_free(h.ptr)
+			C.nvagentrt_llm_handle_free(h.ptr)
 			h.ptr = nil
 		}
 	})
@@ -287,19 +290,19 @@ func newLLMHandle(ptr *C.FfiLLMHandle) *LLMHandle {
 }
 
 // UUID returns the unique identifier for this LLM call.
-func (h *LLMHandle) UUID() string { return goString(C.nv_agentrt_llm_handle_uuid(h.ptr)) }
+func (h *LLMHandle) UUID() string { return goString(C.nvagentrt_llm_handle_uuid(h.ptr)) }
 
 // Name returns the name of the LLM being called.
-func (h *LLMHandle) Name() string { return goString(C.nv_agentrt_llm_handle_name(h.ptr)) }
+func (h *LLMHandle) Name() string { return goString(C.nvagentrt_llm_handle_name(h.ptr)) }
 
 // Attributes returns the attribute bitflags for this LLM call.
 func (h *LLMHandle) Attributes() uint32 {
-	return uint32(C.nv_agentrt_llm_handle_attributes(h.ptr))
+	return uint32(C.nvagentrt_llm_handle_attributes(h.ptr))
 }
 
 // ParentUUID returns the UUID of the parent scope for this LLM call.
 func (h *LLMHandle) ParentUUID() string {
-	return goStringOpt(C.nv_agentrt_llm_handle_parent_uuid(h.ptr))
+	return goStringOpt(C.nvagentrt_llm_handle_parent_uuid(h.ptr))
 }
 
 // LLMRequest wraps an opaque C pointer to an LLM request. It contains the HTTP
@@ -333,14 +336,14 @@ func NewLLMRequest(method, url string, headers map[string]interface{}, body inte
 	defer C.free(unsafe.Pointer(cHeaders))
 	defer C.free(unsafe.Pointer(cBody))
 
-	ptr := C.nv_agentrt_llm_request_new(cMethod, cURL, cHeaders, cBody)
+	ptr := C.nvagentrt_llm_request_new(cMethod, cURL, cHeaders, cBody)
 	if ptr == nil {
 		return nil
 	}
 	r := &LLMRequest{ptr: ptr}
 	runtime.SetFinalizer(r, func(r *LLMRequest) {
 		if r.ptr != nil {
-			C.nv_agentrt_llm_request_free(r.ptr)
+			C.nvagentrt_llm_request_free(r.ptr)
 			r.ptr = nil
 		}
 	})
@@ -348,19 +351,19 @@ func NewLLMRequest(method, url string, headers map[string]interface{}, body inte
 }
 
 // Method returns the HTTP method (e.g., "POST") for this request.
-func (r *LLMRequest) Method() string { return goString(C.nv_agentrt_llm_request_method(r.ptr)) }
+func (r *LLMRequest) Method() string { return goString(C.nvagentrt_llm_request_method(r.ptr)) }
 
 // URL returns the endpoint URL for this request.
-func (r *LLMRequest) URL() string { return goString(C.nv_agentrt_llm_request_url(r.ptr)) }
+func (r *LLMRequest) URL() string { return goString(C.nvagentrt_llm_request_url(r.ptr)) }
 
 // Headers returns the request headers as a JSON object.
 func (r *LLMRequest) Headers() json.RawMessage {
-	return goJSONOpt(C.nv_agentrt_llm_request_headers(r.ptr))
+	return goJSONOpt(C.nvagentrt_llm_request_headers(r.ptr))
 }
 
 // Body returns the request body as raw JSON.
 func (r *LLMRequest) Body() json.RawMessage {
-	return goJSONOpt(C.nv_agentrt_llm_request_body(r.ptr))
+	return goJSONOpt(C.nvagentrt_llm_request_body(r.ptr))
 }
 
 // Event wraps an opaque C pointer to a lifecycle event emitted by the runtime.
@@ -374,22 +377,22 @@ type Event struct {
 }
 
 // UUID returns the unique identifier for this event.
-func (e *Event) UUID() string { return goString(C.nv_agentrt_event_uuid(e.ptr)) }
+func (e *Event) UUID() string { return goString(C.nvagentrt_event_uuid(e.ptr)) }
 
 // Name returns the name associated with this event, or an empty string if none.
-func (e *Event) Name() string { return goStringOpt(C.nv_agentrt_event_name(e.ptr)) }
+func (e *Event) Name() string { return goStringOpt(C.nvagentrt_event_name(e.ptr)) }
 
 // Type returns the EventType (Start, End, or Mark) of this event.
-func (e *Event) Type() EventType { return EventType(C.nv_agentrt_event_type(e.ptr)) }
+func (e *Event) Type() EventType { return EventType(C.nvagentrt_event_type(e.ptr)) }
 
 // Data returns the optional data JSON payload of this event.
-func (e *Event) Data() json.RawMessage { return goJSONOpt(C.nv_agentrt_event_data(e.ptr)) }
+func (e *Event) Data() json.RawMessage { return goJSONOpt(C.nvagentrt_event_data(e.ptr)) }
 
 // Metadata returns the optional metadata JSON payload of this event.
-func (e *Event) Metadata() json.RawMessage { return goJSONOpt(C.nv_agentrt_event_metadata(e.ptr)) }
+func (e *Event) Metadata() json.RawMessage { return goJSONOpt(C.nvagentrt_event_metadata(e.ptr)) }
 
 // Timestamp returns the ISO 8601 timestamp string of when this event occurred.
-func (e *Event) Timestamp() string { return goString(C.nv_agentrt_event_timestamp(e.ptr)) }
+func (e *Event) Timestamp() string { return goString(C.nvagentrt_event_timestamp(e.ptr)) }
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -401,7 +404,7 @@ func goString(cstr *C.char) string {
 		return ""
 	}
 	s := C.GoString(cstr)
-	C.nv_agentrt_string_free(cstr)
+	C.nvagentrt_string_free(cstr)
 	return s
 }
 
@@ -411,7 +414,7 @@ func goStringOpt(cstr *C.char) string {
 		return ""
 	}
 	s := C.GoString(cstr)
-	C.nv_agentrt_string_free(cstr)
+	C.nvagentrt_string_free(cstr)
 	return s
 }
 
@@ -421,6 +424,6 @@ func goJSONOpt(cstr *C.char) json.RawMessage {
 		return nil
 	}
 	s := C.GoString(cstr)
-	C.nv_agentrt_string_free(cstr)
+	C.nvagentrt_string_free(cstr)
 	return json.RawMessage(s)
 }

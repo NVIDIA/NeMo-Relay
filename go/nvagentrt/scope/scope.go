@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package scope provides shorthand access to NVAgentRT scope operations.
 //
 // It re-exports the core scope management functions (GetHandle, PushScope,

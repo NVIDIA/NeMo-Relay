@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Intercept registration for tools and LLMs.
 
 Intercepts transform requests/responses or replace execution functions entirely.
@@ -52,54 +55,54 @@ Example::
 """
 
 from nvagentrt._native import (
-    nv_agentrt_deregister_llm_execution_intercept as deregister_llm_execution,
+    nvagentrt_deregister_llm_execution_intercept as deregister_llm_execution,
 )
 from nvagentrt._native import (
-    nv_agentrt_deregister_llm_request_intercept as deregister_llm_request,
+    nvagentrt_deregister_llm_request_intercept as deregister_llm_request,
 )
 from nvagentrt._native import (
-    nv_agentrt_deregister_llm_response_intercept as deregister_llm_response,
+    nvagentrt_deregister_llm_response_intercept as deregister_llm_response,
 )
 from nvagentrt._native import (
-    nv_agentrt_deregister_llm_stream_execution_intercept as deregister_llm_stream_execution,
+    nvagentrt_deregister_llm_stream_execution_intercept as deregister_llm_stream_execution,
 )
 from nvagentrt._native import (
-    nv_agentrt_deregister_llm_stream_response_intercept as deregister_llm_stream_response,
+    nvagentrt_deregister_llm_stream_response_intercept as deregister_llm_stream_response,
 )
 from nvagentrt._native import (
-    nv_agentrt_deregister_tool_execution_intercept as deregister_tool_execution,
+    nvagentrt_deregister_tool_execution_intercept as deregister_tool_execution,
 )
 from nvagentrt._native import (
-    nv_agentrt_deregister_tool_request_intercept as deregister_tool_request,
+    nvagentrt_deregister_tool_request_intercept as deregister_tool_request,
 )
 from nvagentrt._native import (
-    nv_agentrt_deregister_tool_response_intercept as deregister_tool_response,
+    nvagentrt_deregister_tool_response_intercept as deregister_tool_response,
 )
 from nvagentrt._native import (
-    nv_agentrt_register_llm_execution_intercept as register_llm_execution,
+    nvagentrt_register_llm_execution_intercept as register_llm_execution,
 )
 from nvagentrt._native import (
     # LLM intercepts
-    nv_agentrt_register_llm_request_intercept as register_llm_request,
+    nvagentrt_register_llm_request_intercept as register_llm_request,
 )
 from nvagentrt._native import (
-    nv_agentrt_register_llm_response_intercept as register_llm_response,
+    nvagentrt_register_llm_response_intercept as register_llm_response,
 )
 from nvagentrt._native import (
-    nv_agentrt_register_llm_stream_execution_intercept as register_llm_stream_execution,
+    nvagentrt_register_llm_stream_execution_intercept as register_llm_stream_execution,
 )
 from nvagentrt._native import (
-    nv_agentrt_register_llm_stream_response_intercept as register_llm_stream_response,
+    nvagentrt_register_llm_stream_response_intercept as register_llm_stream_response,
 )
 from nvagentrt._native import (
-    nv_agentrt_register_tool_execution_intercept as register_tool_execution,
+    nvagentrt_register_tool_execution_intercept as register_tool_execution,
 )
 from nvagentrt._native import (
     # Tool intercepts
-    nv_agentrt_register_tool_request_intercept as register_tool_request,
+    nvagentrt_register_tool_request_intercept as register_tool_request,
 )
 from nvagentrt._native import (
-    nv_agentrt_register_tool_response_intercept as register_tool_response,
+    nvagentrt_register_tool_response_intercept as register_tool_response,
 )
 
 __all__ = [

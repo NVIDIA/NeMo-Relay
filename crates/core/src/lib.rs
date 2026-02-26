@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! # NVAgentRT Core
 //!
 //! The core runtime library for the NVAgentRT multi-language agent framework. This crate

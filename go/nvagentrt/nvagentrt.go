@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package nvagentrt provides Go bindings for the NVAgentRT agent runtime via CGo.
 //
 // NVAgentRT is a multi-language agent runtime framework that provides execution
@@ -35,18 +38,18 @@ typedef struct FfiStream FfiStream;
 typedef void (*NvAgentRtFreeFn)(void* user_data);
 
 // Core API
-extern int32_t nv_agentrt_get_handle(FfiScopeHandle** out);
-extern int32_t nv_agentrt_push_scope(const char* name, int32_t scope_type, const FfiScopeHandle* parent, uint32_t attributes, FfiScopeHandle** out);
-extern int32_t nv_agentrt_pop_scope(const FfiScopeHandle* handle);
-extern int32_t nv_agentrt_event(const char* name, const FfiScopeHandle* parent, const char* data_json, const char* metadata_json);
+extern int32_t nvagentrt_get_handle(FfiScopeHandle** out);
+extern int32_t nvagentrt_push_scope(const char* name, int32_t scope_type, const FfiScopeHandle* parent, uint32_t attributes, FfiScopeHandle** out);
+extern int32_t nvagentrt_pop_scope(const FfiScopeHandle* handle);
+extern int32_t nvagentrt_event(const char* name, const FfiScopeHandle* parent, const char* data_json, const char* metadata_json);
 
 // Tool lifecycle
-extern int32_t nv_agentrt_tool_call(const char* name, const char* args_json, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, FfiToolHandle** out);
-extern int32_t nv_agentrt_tool_call_end(const FfiToolHandle* handle, const char* result_json, const char* data_json, const char* metadata_json);
+extern int32_t nvagentrt_tool_call(const char* name, const char* args_json, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, FfiToolHandle** out);
+extern int32_t nvagentrt_tool_call_end(const FfiToolHandle* handle, const char* result_json, const char* data_json, const char* metadata_json);
 
 // Tool call execute (with C function pointer callbacks)
 typedef char* (*NvAgentRtToolExecFn)(void* user_data, const char* args_json);
-extern int32_t nv_agentrt_tool_call_execute(
+extern int32_t nvagentrt_tool_call_execute(
 	const char* name, const char* args_json,
 	NvAgentRtToolExecFn func_cb, void* func_user_data, NvAgentRtFreeFn func_free,
 	const FfiScopeHandle* parent, uint32_t attributes,
@@ -54,12 +57,12 @@ extern int32_t nv_agentrt_tool_call_execute(
 	char** out);
 
 // LLM lifecycle
-extern int32_t nv_agentrt_llm_call(const char* name, const FfiLLMRequest* request, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, FfiLLMHandle** out);
-extern int32_t nv_agentrt_llm_call_end(const FfiLLMHandle* handle, const char* response_json, const char* data_json, const char* metadata_json);
+extern int32_t nvagentrt_llm_call(const char* name, const FfiLLMRequest* request, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, FfiLLMHandle** out);
+extern int32_t nvagentrt_llm_call_end(const FfiLLMHandle* handle, const char* response_json, const char* data_json, const char* metadata_json);
 
 // LLM call execute
 typedef char* (*NvAgentRtLlmExecFn)(void* user_data, const FfiLLMRequest* request);
-extern int32_t nv_agentrt_llm_call_execute(
+extern int32_t nvagentrt_llm_call_execute(
 	const char* name, const FfiLLMRequest* request,
 	NvAgentRtLlmExecFn func_cb, void* func_user_data, NvAgentRtFreeFn func_free,
 	const FfiScopeHandle* parent, uint32_t attributes,
@@ -67,7 +70,7 @@ extern int32_t nv_agentrt_llm_call_execute(
 	char** out);
 
 // LLM stream execute
-extern int32_t nv_agentrt_llm_stream_call_execute(
+extern int32_t nvagentrt_llm_stream_call_execute(
 	const char* name, const FfiLLMRequest* request,
 	NvAgentRtLlmExecFn func_cb, void* func_user_data, NvAgentRtFreeFn func_free,
 	const FfiScopeHandle* parent, uint32_t attributes,
@@ -76,69 +79,69 @@ extern int32_t nv_agentrt_llm_stream_call_execute(
 
 // Tool guardrails
 typedef char* (*NvAgentRtToolSanitizeFn)(void* user_data, const char* name, const char* args_json);
-extern int32_t nv_agentrt_register_tool_sanitize_request_guardrail(const char* name, int32_t priority, NvAgentRtToolSanitizeFn cb, void* user_data, NvAgentRtFreeFn free_fn);
-extern int32_t nv_agentrt_deregister_tool_sanitize_request_guardrail(const char* name);
-extern int32_t nv_agentrt_register_tool_sanitize_response_guardrail(const char* name, int32_t priority, NvAgentRtToolSanitizeFn cb, void* user_data, NvAgentRtFreeFn free_fn);
-extern int32_t nv_agentrt_deregister_tool_sanitize_response_guardrail(const char* name);
+extern int32_t nvagentrt_register_tool_sanitize_request_guardrail(const char* name, int32_t priority, NvAgentRtToolSanitizeFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+extern int32_t nvagentrt_deregister_tool_sanitize_request_guardrail(const char* name);
+extern int32_t nvagentrt_register_tool_sanitize_response_guardrail(const char* name, int32_t priority, NvAgentRtToolSanitizeFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+extern int32_t nvagentrt_deregister_tool_sanitize_response_guardrail(const char* name);
 
 typedef char* (*NvAgentRtToolConditionalFn)(void* user_data, const char* name, const char* args_json);
-extern int32_t nv_agentrt_register_tool_conditional_execution_guardrail(const char* name, int32_t priority, NvAgentRtToolConditionalFn cb, void* user_data, NvAgentRtFreeFn free_fn);
-extern int32_t nv_agentrt_deregister_tool_conditional_execution_guardrail(const char* name);
+extern int32_t nvagentrt_register_tool_conditional_execution_guardrail(const char* name, int32_t priority, NvAgentRtToolConditionalFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+extern int32_t nvagentrt_deregister_tool_conditional_execution_guardrail(const char* name);
 
 // Tool intercepts
-extern int32_t nv_agentrt_register_tool_request_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtToolSanitizeFn cb, void* user_data, NvAgentRtFreeFn free_fn);
-extern int32_t nv_agentrt_deregister_tool_request_intercept(const char* name);
-extern int32_t nv_agentrt_register_tool_response_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtToolSanitizeFn cb, void* user_data, NvAgentRtFreeFn free_fn);
-extern int32_t nv_agentrt_deregister_tool_response_intercept(const char* name);
+extern int32_t nvagentrt_register_tool_request_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtToolSanitizeFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+extern int32_t nvagentrt_deregister_tool_request_intercept(const char* name);
+extern int32_t nvagentrt_register_tool_response_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtToolSanitizeFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+extern int32_t nvagentrt_deregister_tool_response_intercept(const char* name);
 
 typedef _Bool (*NvAgentRtToolExecConditionalFn)(void* user_data, const char* name, const char* args_json);
-extern int32_t nv_agentrt_register_tool_execution_intercept(const char* name, int32_t priority, NvAgentRtToolExecConditionalFn cond_cb, void* cond_user_data, NvAgentRtFreeFn cond_free, NvAgentRtToolExecFn exec_cb, void* exec_user_data, NvAgentRtFreeFn exec_free);
-extern int32_t nv_agentrt_deregister_tool_execution_intercept(const char* name);
+extern int32_t nvagentrt_register_tool_execution_intercept(const char* name, int32_t priority, NvAgentRtToolExecConditionalFn cond_cb, void* cond_user_data, NvAgentRtFreeFn cond_free, NvAgentRtToolExecFn exec_cb, void* exec_user_data, NvAgentRtFreeFn exec_free);
+extern int32_t nvagentrt_deregister_tool_execution_intercept(const char* name);
 
 // LLM guardrails
 typedef FfiLLMRequest* (*NvAgentRtLlmRequestFn)(void* user_data, const FfiLLMRequest* request);
-extern int32_t nv_agentrt_register_llm_sanitize_request_guardrail(const char* name, int32_t priority, NvAgentRtLlmRequestFn cb, void* user_data, NvAgentRtFreeFn free_fn);
-extern int32_t nv_agentrt_deregister_llm_sanitize_request_guardrail(const char* name);
+extern int32_t nvagentrt_register_llm_sanitize_request_guardrail(const char* name, int32_t priority, NvAgentRtLlmRequestFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+extern int32_t nvagentrt_deregister_llm_sanitize_request_guardrail(const char* name);
 
 typedef char* (*NvAgentRtJsonFn)(void* user_data, const char* json);
-extern int32_t nv_agentrt_register_llm_sanitize_response_guardrail(const char* name, int32_t priority, NvAgentRtJsonFn cb, void* user_data, NvAgentRtFreeFn free_fn);
-extern int32_t nv_agentrt_deregister_llm_sanitize_response_guardrail(const char* name);
+extern int32_t nvagentrt_register_llm_sanitize_response_guardrail(const char* name, int32_t priority, NvAgentRtJsonFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+extern int32_t nvagentrt_deregister_llm_sanitize_response_guardrail(const char* name);
 
 typedef char* (*NvAgentRtLlmConditionalFn)(void* user_data, const FfiLLMRequest* request);
-extern int32_t nv_agentrt_register_llm_conditional_execution_guardrail(const char* name, int32_t priority, NvAgentRtLlmConditionalFn cb, void* user_data, NvAgentRtFreeFn free_fn);
-extern int32_t nv_agentrt_deregister_llm_conditional_execution_guardrail(const char* name);
+extern int32_t nvagentrt_register_llm_conditional_execution_guardrail(const char* name, int32_t priority, NvAgentRtLlmConditionalFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+extern int32_t nvagentrt_deregister_llm_conditional_execution_guardrail(const char* name);
 
 // LLM intercepts
-extern int32_t nv_agentrt_register_llm_request_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtLlmRequestFn cb, void* user_data, NvAgentRtFreeFn free_fn);
-extern int32_t nv_agentrt_deregister_llm_request_intercept(const char* name);
-extern int32_t nv_agentrt_register_llm_response_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtJsonFn cb, void* user_data, NvAgentRtFreeFn free_fn);
-extern int32_t nv_agentrt_deregister_llm_response_intercept(const char* name);
+extern int32_t nvagentrt_register_llm_request_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtLlmRequestFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+extern int32_t nvagentrt_deregister_llm_request_intercept(const char* name);
+extern int32_t nvagentrt_register_llm_response_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtJsonFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+extern int32_t nvagentrt_deregister_llm_response_intercept(const char* name);
 
 typedef char* (*NvAgentRtSseInterceptFn)(void* user_data, const char* sse_json);
-extern int32_t nv_agentrt_register_llm_stream_response_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtSseInterceptFn cb, void* user_data, NvAgentRtFreeFn free_fn);
-extern int32_t nv_agentrt_deregister_llm_stream_response_intercept(const char* name);
+extern int32_t nvagentrt_register_llm_stream_response_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtSseInterceptFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+extern int32_t nvagentrt_deregister_llm_stream_response_intercept(const char* name);
 
 typedef _Bool (*NvAgentRtLlmExecConditionalFn)(void* user_data, const FfiLLMRequest* request);
-extern int32_t nv_agentrt_register_llm_execution_intercept(const char* name, int32_t priority, NvAgentRtLlmExecConditionalFn cond_cb, void* cond_user_data, NvAgentRtFreeFn cond_free, NvAgentRtLlmExecFn exec_cb, void* exec_user_data, NvAgentRtFreeFn exec_free);
-extern int32_t nv_agentrt_deregister_llm_execution_intercept(const char* name);
-extern int32_t nv_agentrt_register_llm_stream_execution_intercept(const char* name, int32_t priority, NvAgentRtLlmExecConditionalFn cond_cb, void* cond_user_data, NvAgentRtFreeFn cond_free, NvAgentRtLlmExecFn exec_cb, void* exec_user_data, NvAgentRtFreeFn exec_free);
-extern int32_t nv_agentrt_deregister_llm_stream_execution_intercept(const char* name);
+extern int32_t nvagentrt_register_llm_execution_intercept(const char* name, int32_t priority, NvAgentRtLlmExecConditionalFn cond_cb, void* cond_user_data, NvAgentRtFreeFn cond_free, NvAgentRtLlmExecFn exec_cb, void* exec_user_data, NvAgentRtFreeFn exec_free);
+extern int32_t nvagentrt_deregister_llm_execution_intercept(const char* name);
+extern int32_t nvagentrt_register_llm_stream_execution_intercept(const char* name, int32_t priority, NvAgentRtLlmExecConditionalFn cond_cb, void* cond_user_data, NvAgentRtFreeFn cond_free, NvAgentRtLlmExecFn exec_cb, void* exec_user_data, NvAgentRtFreeFn exec_free);
+extern int32_t nvagentrt_deregister_llm_stream_execution_intercept(const char* name);
 
 // Subscribers
 typedef void (*NvAgentRtEventSubscriberFn)(void* user_data, const FfiEvent* event);
-extern int32_t nv_agentrt_register_subscriber(const char* name, NvAgentRtEventSubscriberFn cb, void* user_data, NvAgentRtFreeFn free_fn);
-extern int32_t nv_agentrt_deregister_subscriber(const char* name);
+extern int32_t nvagentrt_register_subscriber(const char* name, NvAgentRtEventSubscriberFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+extern int32_t nvagentrt_deregister_subscriber(const char* name);
 
 // Error
-extern const char* nv_agentrt_last_error();
+extern const char* nvagentrt_last_error();
 
 // String free
-extern void nv_agentrt_string_free(char* ptr);
+extern void nvagentrt_string_free(char* ptr);
 
 // Scope stack isolation
-extern int32_t nv_agentrt_scope_stack_create(FfiScopeStack** out);
-extern int32_t nv_agentrt_scope_stack_set_thread(const FfiScopeStack* stack);
-extern void nv_agentrt_scope_stack_free(FfiScopeStack* ptr);
+extern int32_t nvagentrt_scope_stack_create(FfiScopeStack** out);
+extern int32_t nvagentrt_scope_stack_set_thread(const FfiScopeStack* stack);
+extern void nvagentrt_scope_stack_free(FfiScopeStack* ptr);
 
 // Go trampoline forward declarations (defined via //export in callbacks.go)
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
@@ -168,7 +171,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func lastError() error {
-	msg := C.nv_agentrt_last_error()
+	msg := C.nvagentrt_last_error()
 	if msg == nil {
 		return errors.New("unknown nvagentrt error")
 	}
@@ -226,7 +229,7 @@ func WithScopeAttributes(attrs uint32) ScopeOption {
 // beyond the lifetime of the scope itself.
 func GetHandle() (*ScopeHandle, error) {
 	var out *C.FfiScopeHandle
-	status := C.nv_agentrt_get_handle(&out)
+	status := C.nvagentrt_get_handle(&out)
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}
@@ -251,7 +254,7 @@ func PushScope(name string, scopeType ScopeType, opts ...ScopeOption) (*ScopeHan
 	defer C.free(unsafe.Pointer(cName))
 
 	var out *C.FfiScopeHandle
-	status := C.nv_agentrt_push_scope(cName, C.int32_t(scopeType), o.parent, C.uint32_t(o.attributes), &out)
+	status := C.nvagentrt_push_scope(cName, C.int32_t(scopeType), o.parent, C.uint32_t(o.attributes), &out)
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}
@@ -263,7 +266,7 @@ func PushScope(name string, scopeType ScopeType, opts ...ScopeOption) (*ScopeHan
 // previous call to [PushScope]. Popping scopes out of stack order returns an
 // error.
 func PopScope(handle *ScopeHandle) error {
-	return checkStatus(C.nv_agentrt_pop_scope(handle.ptr))
+	return checkStatus(C.nvagentrt_pop_scope(handle.ptr))
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +330,7 @@ func EmitEvent(name string, opts ...EventOption) error {
 		defer C.free(unsafe.Pointer(o.metadata))
 	}
 
-	return checkStatus(C.nv_agentrt_event(cName, o.parent, o.data, o.metadata))
+	return checkStatus(C.nvagentrt_event(cName, o.parent, o.data, o.metadata))
 }
 
 // ---------------------------------------------------------------------------
@@ -410,7 +413,7 @@ func ToolCall(name string, args json.RawMessage, opts ...ToolCallOption) (*ToolH
 	defer C.free(unsafe.Pointer(cArgs))
 
 	var out *C.FfiToolHandle
-	status := C.nv_agentrt_tool_call(cName, cArgs, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, &out)
+	status := C.nvagentrt_tool_call(cName, cArgs, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, &out)
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}
@@ -430,7 +433,7 @@ func ToolCallEnd(handle *ToolHandle, result json.RawMessage, opts ...ToolCallOpt
 	cResult := C.CString(string(result))
 	defer C.free(unsafe.Pointer(cResult))
 
-	return checkStatus(C.nv_agentrt_tool_call_end(handle.ptr, cResult, o.data, o.metadata))
+	return checkStatus(C.nvagentrt_tool_call_end(handle.ptr, cResult, o.data, o.metadata))
 }
 
 // ToolCallExecute runs a complete tool call lifecycle: it emits a Start event,
@@ -454,7 +457,7 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 	defer C.free(unsafe.Pointer(cArgs))
 
 	var out *C.char
-	status := C.nv_agentrt_tool_call_execute(
+	status := C.nvagentrt_tool_call_execute(
 		cName, cArgs,
 		C.NvAgentRtToolExecFn(C.goToolExecTrampoline),
 		id,
@@ -467,7 +470,7 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 		return nil, err
 	}
 	result := json.RawMessage(C.GoString(out))
-	C.nv_agentrt_string_free(out)
+	C.nvagentrt_string_free(out)
 	return result, nil
 }
 
@@ -551,7 +554,7 @@ func LlmCall(name string, request *LLMRequest, opts ...LLMCallOption) (*LLMHandl
 	defer C.free(unsafe.Pointer(cName))
 
 	var out *C.FfiLLMHandle
-	status := C.nv_agentrt_llm_call(cName, request.ptr, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, &out)
+	status := C.nvagentrt_llm_call(cName, request.ptr, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, &out)
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}
@@ -571,7 +574,7 @@ func LlmCallEnd(handle *LLMHandle, response json.RawMessage, opts ...LLMCallOpti
 	cResponse := C.CString(string(response))
 	defer C.free(unsafe.Pointer(cResponse))
 
-	return checkStatus(C.nv_agentrt_llm_call_end(handle.ptr, cResponse, o.data, o.metadata))
+	return checkStatus(C.nvagentrt_llm_call_end(handle.ptr, cResponse, o.data, o.metadata))
 }
 
 // LlmCallExecute runs a complete LLM call lifecycle: it emits a Start event,
@@ -593,7 +596,7 @@ func LlmCallExecute(name string, request *LLMRequest, fn LLMExecutionFunc, opts 
 	defer C.free(unsafe.Pointer(cName))
 
 	var out *C.char
-	status := C.nv_agentrt_llm_call_execute(
+	status := C.nvagentrt_llm_call_execute(
 		cName, request.ptr,
 		C.NvAgentRtLlmExecFn(C.goLlmExecTrampoline),
 		id,
@@ -606,7 +609,7 @@ func LlmCallExecute(name string, request *LLMRequest, fn LLMExecutionFunc, opts 
 		return nil, err
 	}
 	result := json.RawMessage(C.GoString(out))
-	C.nv_agentrt_string_free(out)
+	C.nvagentrt_string_free(out)
 	return result, nil
 }
 
@@ -629,7 +632,7 @@ func LlmStreamCallExecute(name string, request *LLMRequest, fn LLMExecutionFunc,
 	defer C.free(unsafe.Pointer(cName))
 
 	var out *C.FfiStream
-	status := C.nv_agentrt_llm_stream_call_execute(
+	status := C.nvagentrt_llm_stream_call_execute(
 		cName, request.ptr,
 		C.NvAgentRtLlmExecFn(C.goLlmExecTrampoline),
 		id,
@@ -658,7 +661,7 @@ func RegisterToolSanitizeRequestGuardrail(name string, priority int32, fn ToolSa
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_tool_sanitize_request_guardrail(
+	return checkStatus(C.nvagentrt_register_tool_sanitize_request_guardrail(
 		cName, C.int32_t(priority),
 		C.NvAgentRtToolSanitizeFn(C.goToolSanitizeTrampoline),
 		id,
@@ -672,7 +675,7 @@ func RegisterToolSanitizeRequestGuardrail(name string, priority int32, fn ToolSa
 func DeregisterToolSanitizeRequestGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_tool_sanitize_request_guardrail(cName))
+	return checkStatus(C.nvagentrt_deregister_tool_sanitize_request_guardrail(cName))
 }
 
 // RegisterToolSanitizeResponseGuardrail registers a guardrail that sanitizes
@@ -683,7 +686,7 @@ func RegisterToolSanitizeResponseGuardrail(name string, priority int32, fn ToolS
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_tool_sanitize_response_guardrail(
+	return checkStatus(C.nvagentrt_register_tool_sanitize_response_guardrail(
 		cName, C.int32_t(priority),
 		C.NvAgentRtToolSanitizeFn(C.goToolSanitizeTrampoline),
 		id,
@@ -697,7 +700,7 @@ func RegisterToolSanitizeResponseGuardrail(name string, priority int32, fn ToolS
 func DeregisterToolSanitizeResponseGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_tool_sanitize_response_guardrail(cName))
+	return checkStatus(C.nvagentrt_deregister_tool_sanitize_response_guardrail(cName))
 }
 
 // RegisterToolConditionalExecutionGuardrail registers a guardrail that
@@ -710,7 +713,7 @@ func RegisterToolConditionalExecutionGuardrail(name string, priority int32, fn T
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_tool_conditional_execution_guardrail(
+	return checkStatus(C.nvagentrt_register_tool_conditional_execution_guardrail(
 		cName, C.int32_t(priority),
 		C.NvAgentRtToolConditionalFn(C.goToolConditionalTrampoline),
 		id,
@@ -724,7 +727,7 @@ func RegisterToolConditionalExecutionGuardrail(name string, priority int32, fn T
 func DeregisterToolConditionalExecutionGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_tool_conditional_execution_guardrail(cName))
+	return checkStatus(C.nvagentrt_deregister_tool_conditional_execution_guardrail(cName))
 }
 
 // RegisterToolRequestIntercept registers an intercept that transforms tool
@@ -736,7 +739,7 @@ func RegisterToolRequestIntercept(name string, priority int32, breakChain bool, 
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_tool_request_intercept(
+	return checkStatus(C.nvagentrt_register_tool_request_intercept(
 		cName, C.int32_t(priority), C._Bool(breakChain),
 		C.NvAgentRtToolSanitizeFn(C.goToolSanitizeTrampoline),
 		id,
@@ -749,7 +752,7 @@ func RegisterToolRequestIntercept(name string, priority int32, breakChain bool, 
 func DeregisterToolRequestIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_tool_request_intercept(cName))
+	return checkStatus(C.nvagentrt_deregister_tool_request_intercept(cName))
 }
 
 // RegisterToolResponseIntercept registers an intercept that transforms tool
@@ -761,7 +764,7 @@ func RegisterToolResponseIntercept(name string, priority int32, breakChain bool,
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_tool_response_intercept(
+	return checkStatus(C.nvagentrt_register_tool_response_intercept(
 		cName, C.int32_t(priority), C._Bool(breakChain),
 		C.NvAgentRtToolSanitizeFn(C.goToolSanitizeTrampoline),
 		id,
@@ -774,7 +777,7 @@ func RegisterToolResponseIntercept(name string, priority int32, breakChain bool,
 func DeregisterToolResponseIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_tool_response_intercept(cName))
+	return checkStatus(C.nvagentrt_deregister_tool_response_intercept(cName))
 }
 
 // RegisterToolExecutionIntercept registers an intercept that can replace tool
@@ -785,7 +788,7 @@ func RegisterToolExecutionIntercept(name string, priority int32, condFn ToolExec
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_tool_execution_intercept(
+	return checkStatus(C.nvagentrt_register_tool_execution_intercept(
 		cName, C.int32_t(priority),
 		C.NvAgentRtToolExecConditionalFn(C.goToolExecConditionalTrampoline),
 		condID,
@@ -801,7 +804,7 @@ func RegisterToolExecutionIntercept(name string, priority int32, condFn ToolExec
 func DeregisterToolExecutionIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_tool_execution_intercept(cName))
+	return checkStatus(C.nvagentrt_deregister_tool_execution_intercept(cName))
 }
 
 // ---------------------------------------------------------------------------
@@ -817,7 +820,7 @@ func RegisterLlmSanitizeRequestGuardrail(name string, priority int32, fn LLMRequ
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_llm_sanitize_request_guardrail(
+	return checkStatus(C.nvagentrt_register_llm_sanitize_request_guardrail(
 		cName, C.int32_t(priority),
 		C.NvAgentRtLlmRequestFn(C.goLlmRequestTrampoline),
 		id,
@@ -830,7 +833,7 @@ func RegisterLlmSanitizeRequestGuardrail(name string, priority int32, fn LLMRequ
 func DeregisterLlmSanitizeRequestGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_llm_sanitize_request_guardrail(cName))
+	return checkStatus(C.nvagentrt_deregister_llm_sanitize_request_guardrail(cName))
 }
 
 // RegisterLlmSanitizeResponseGuardrail registers a guardrail that sanitizes
@@ -841,7 +844,7 @@ func RegisterLlmSanitizeResponseGuardrail(name string, priority int32, fn JSONFu
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_llm_sanitize_response_guardrail(
+	return checkStatus(C.nvagentrt_register_llm_sanitize_response_guardrail(
 		cName, C.int32_t(priority),
 		C.NvAgentRtJsonFn(C.goJSONTrampoline),
 		id,
@@ -854,7 +857,7 @@ func RegisterLlmSanitizeResponseGuardrail(name string, priority int32, fn JSONFu
 func DeregisterLlmSanitizeResponseGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_llm_sanitize_response_guardrail(cName))
+	return checkStatus(C.nvagentrt_deregister_llm_sanitize_response_guardrail(cName))
 }
 
 // RegisterLlmConditionalExecutionGuardrail registers a guardrail that
@@ -867,7 +870,7 @@ func RegisterLlmConditionalExecutionGuardrail(name string, priority int32, fn LL
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_llm_conditional_execution_guardrail(
+	return checkStatus(C.nvagentrt_register_llm_conditional_execution_guardrail(
 		cName, C.int32_t(priority),
 		C.NvAgentRtLlmConditionalFn(C.goLlmConditionalTrampoline),
 		id,
@@ -880,7 +883,7 @@ func RegisterLlmConditionalExecutionGuardrail(name string, priority int32, fn LL
 func DeregisterLlmConditionalExecutionGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_llm_conditional_execution_guardrail(cName))
+	return checkStatus(C.nvagentrt_deregister_llm_conditional_execution_guardrail(cName))
 }
 
 // RegisterLlmRequestIntercept registers an intercept that transforms LLM
@@ -891,7 +894,7 @@ func RegisterLlmRequestIntercept(name string, priority int32, breakChain bool, f
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_llm_request_intercept(
+	return checkStatus(C.nvagentrt_register_llm_request_intercept(
 		cName, C.int32_t(priority), C._Bool(breakChain),
 		C.NvAgentRtLlmRequestFn(C.goLlmRequestTrampoline),
 		id,
@@ -904,7 +907,7 @@ func RegisterLlmRequestIntercept(name string, priority int32, breakChain bool, f
 func DeregisterLlmRequestIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_llm_request_intercept(cName))
+	return checkStatus(C.nvagentrt_deregister_llm_request_intercept(cName))
 }
 
 // RegisterLlmResponseIntercept registers an intercept that transforms LLM
@@ -915,7 +918,7 @@ func RegisterLlmResponseIntercept(name string, priority int32, breakChain bool, 
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_llm_response_intercept(
+	return checkStatus(C.nvagentrt_register_llm_response_intercept(
 		cName, C.int32_t(priority), C._Bool(breakChain),
 		C.NvAgentRtJsonFn(C.goJSONTrampoline),
 		id,
@@ -928,7 +931,7 @@ func RegisterLlmResponseIntercept(name string, priority int32, breakChain bool, 
 func DeregisterLlmResponseIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_llm_response_intercept(cName))
+	return checkStatus(C.nvagentrt_deregister_llm_response_intercept(cName))
 }
 
 // RegisterLlmStreamResponseIntercept registers an intercept that transforms
@@ -940,7 +943,7 @@ func RegisterLlmStreamResponseIntercept(name string, priority int32, breakChain 
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_llm_stream_response_intercept(
+	return checkStatus(C.nvagentrt_register_llm_stream_response_intercept(
 		cName, C.int32_t(priority), C._Bool(breakChain),
 		C.NvAgentRtSseInterceptFn(C.goSseInterceptTrampoline),
 		id,
@@ -953,7 +956,7 @@ func RegisterLlmStreamResponseIntercept(name string, priority int32, breakChain 
 func DeregisterLlmStreamResponseIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_llm_stream_response_intercept(cName))
+	return checkStatus(C.nvagentrt_deregister_llm_stream_response_intercept(cName))
 }
 
 // RegisterLlmExecutionIntercept registers an intercept that can replace LLM
@@ -964,7 +967,7 @@ func RegisterLlmExecutionIntercept(name string, priority int32, condFn LLMExecCo
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_llm_execution_intercept(
+	return checkStatus(C.nvagentrt_register_llm_execution_intercept(
 		cName, C.int32_t(priority),
 		C.NvAgentRtLlmExecConditionalFn(C.goLlmExecConditionalTrampoline),
 		condID,
@@ -980,7 +983,7 @@ func RegisterLlmExecutionIntercept(name string, priority int32, condFn LLMExecCo
 func DeregisterLlmExecutionIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_llm_execution_intercept(cName))
+	return checkStatus(C.nvagentrt_deregister_llm_execution_intercept(cName))
 }
 
 // RegisterLlmStreamExecutionIntercept registers an intercept that can replace
@@ -991,7 +994,7 @@ func RegisterLlmStreamExecutionIntercept(name string, priority int32, condFn LLM
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_llm_stream_execution_intercept(
+	return checkStatus(C.nvagentrt_register_llm_stream_execution_intercept(
 		cName, C.int32_t(priority),
 		C.NvAgentRtLlmExecConditionalFn(C.goLlmExecConditionalTrampoline),
 		condID,
@@ -1007,7 +1010,7 @@ func RegisterLlmStreamExecutionIntercept(name string, priority int32, condFn LLM
 func DeregisterLlmStreamExecutionIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_llm_stream_execution_intercept(cName))
+	return checkStatus(C.nvagentrt_deregister_llm_stream_execution_intercept(cName))
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,7 +1026,7 @@ func RegisterSubscriber(name string, fn EventSubscriberFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_register_subscriber(
+	return checkStatus(C.nvagentrt_register_subscriber(
 		cName,
 		C.NvAgentRtEventSubscriberFn(C.goEventSubscriberTrampoline),
 		id,
@@ -1036,7 +1039,7 @@ func RegisterSubscriber(name string, fn EventSubscriberFunc) error {
 func DeregisterSubscriber(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nv_agentrt_deregister_subscriber(cName))
+	return checkStatus(C.nvagentrt_deregister_subscriber(cName))
 }
 
 // ---------------------------------------------------------------------------
@@ -1053,7 +1056,7 @@ type ScopeStack struct {
 // The caller must call Close() when done.
 func NewScopeStack() (*ScopeStack, error) {
 	var ptr *C.FfiScopeStack
-	status := C.nv_agentrt_scope_stack_create(&ptr)
+	status := C.nvagentrt_scope_stack_create(&ptr)
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}
@@ -1063,7 +1066,7 @@ func NewScopeStack() (*ScopeStack, error) {
 // Close frees the scope stack. After calling Close, the ScopeStack must not be used.
 func (s *ScopeStack) Close() {
 	if s.ptr != nil {
-		C.nv_agentrt_scope_stack_free(s.ptr)
+		C.nvagentrt_scope_stack_free(s.ptr)
 		s.ptr = nil
 	}
 }
@@ -1074,6 +1077,6 @@ func (s *ScopeStack) Close() {
 func (s *ScopeStack) Run(fn func()) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	C.nv_agentrt_scope_stack_set_thread(s.ptr)
+	C.nvagentrt_scope_stack_set_thread(s.ptr)
 	fn()
 }

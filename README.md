@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # NVAgentRT
 
 Multi-language agent runtime for execution scope management, lifecycle events, and middleware (guardrails/intercepts) on tool and LLM calls. Rust core with Python, Go, Node.js, and WASM bindings.

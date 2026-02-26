@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package llm provides shorthand access to NVAgentRT LLM call operations.
 //
 // It re-exports the core LLM lifecycle functions (LlmCall, LlmCallEnd,

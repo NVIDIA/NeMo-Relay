@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Streaming LLM response wrapper.
 //!
 //! This module provides [`LlmStreamWrapper`], a [`Stream`] adapter
@@ -103,7 +106,7 @@ impl LlmStreamWrapper {
             .collect();
         let response = Json::Array(aggregated);
         // Ignoring errors here — best-effort end event emission
-        let _ = crate::api::nv_agentrt_llm_call_end(
+        let _ = crate::api::nvagentrt_llm_call_end(
             &self.handle,
             response,
             self.data.clone(),

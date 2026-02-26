@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Event subscriber registration.
 
 Subscribers receive lifecycle events (scope start/end, tool start/end,
@@ -23,10 +26,10 @@ Example::
 """
 
 from nvagentrt._native import (
-    nv_agentrt_deregister_subscriber as deregister,
+    nvagentrt_deregister_subscriber as deregister,
 )
 from nvagentrt._native import (
-    nv_agentrt_register_subscriber as register,
+    nvagentrt_register_subscriber as register,
 )
 
 __all__ = ["register", "deregister"]

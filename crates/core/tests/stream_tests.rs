@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 #![allow(clippy::await_holding_lock)]
 
 use std::pin::Pin;
@@ -134,7 +137,7 @@ async fn test_stream_wrapper_with_intercept() {
     reset_global();
 
     // Register a stream response intercept
-    nv_agentrt_register_llm_stream_response_intercept(
+    nvagentrt_register_llm_stream_response_intercept(
         "test_stream_intercept",
         1,
         false,
@@ -158,7 +161,7 @@ async fn test_stream_wrapper_with_intercept() {
     assert_eq!(chunks.len(), 1);
     assert!(chunks[0].contains("[intercepted] original"));
 
-    nv_agentrt_deregister_llm_stream_response_intercept("test_stream_intercept").unwrap();
+    nvagentrt_deregister_llm_stream_response_intercept("test_stream_intercept").unwrap();
 }
 
 #[tokio::test]
@@ -168,7 +171,7 @@ async fn test_stream_wrapper_emits_end_event() {
 
     let events = std::sync::Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nv_agentrt_register_subscriber(
+    nvagentrt_register_subscriber(
         "stream_end_test",
         Box::new(move |e: &Event| {
             ec.lock().unwrap().push((e.event_type, e.scope_type));
@@ -186,7 +189,7 @@ async fn test_stream_wrapper_emits_end_event() {
         headers: serde_json::Map::new(),
         body: json!({}),
     };
-    let handle = nv_agentrt_llm_call(
+    let handle = nvagentrt_llm_call(
         "test_llm",
         &request,
         None,
@@ -209,7 +212,7 @@ async fn test_stream_wrapper_emits_end_event() {
     assert_eq!(captured.last().unwrap().0, EventType::End);
 
     drop(captured);
-    nv_agentrt_deregister_subscriber("stream_end_test").unwrap();
+    nvagentrt_deregister_subscriber("stream_end_test").unwrap();
 }
 
 #[tokio::test]

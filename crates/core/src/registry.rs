@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Priority-sorted named registry.
 //!
 //! [`SortedRegistry`] is the backbone data structure for all guardrail and intercept

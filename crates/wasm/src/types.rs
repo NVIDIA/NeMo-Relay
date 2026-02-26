@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! WASM-friendly wrapper types and integer constants for the NVAgentRT runtime.
 //!
 //! Because `wasm_bindgen` does not support Rust enums with data or bitflags

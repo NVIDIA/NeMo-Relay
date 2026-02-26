@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Guardrail registration for tools and LLMs.
 
 Guardrails run inside the middleware pipeline and can sanitize or gate requests
@@ -42,42 +45,42 @@ Example::
 """
 
 from nvagentrt._native import (
-    nv_agentrt_deregister_llm_conditional_execution_guardrail as deregister_llm_conditional_execution,
+    nvagentrt_deregister_llm_conditional_execution_guardrail as deregister_llm_conditional_execution,
 )
 from nvagentrt._native import (
-    nv_agentrt_deregister_llm_sanitize_request_guardrail as deregister_llm_sanitize_request,
+    nvagentrt_deregister_llm_sanitize_request_guardrail as deregister_llm_sanitize_request,
 )
 from nvagentrt._native import (
-    nv_agentrt_deregister_llm_sanitize_response_guardrail as deregister_llm_sanitize_response,
+    nvagentrt_deregister_llm_sanitize_response_guardrail as deregister_llm_sanitize_response,
 )
 from nvagentrt._native import (
-    nv_agentrt_deregister_tool_conditional_execution_guardrail as deregister_tool_conditional_execution,
+    nvagentrt_deregister_tool_conditional_execution_guardrail as deregister_tool_conditional_execution,
 )
 from nvagentrt._native import (
-    nv_agentrt_deregister_tool_sanitize_request_guardrail as deregister_tool_sanitize_request,
+    nvagentrt_deregister_tool_sanitize_request_guardrail as deregister_tool_sanitize_request,
 )
 from nvagentrt._native import (
-    nv_agentrt_deregister_tool_sanitize_response_guardrail as deregister_tool_sanitize_response,
+    nvagentrt_deregister_tool_sanitize_response_guardrail as deregister_tool_sanitize_response,
 )
 from nvagentrt._native import (
-    nv_agentrt_register_llm_conditional_execution_guardrail as register_llm_conditional_execution,
+    nvagentrt_register_llm_conditional_execution_guardrail as register_llm_conditional_execution,
 )
 from nvagentrt._native import (
     # LLM guardrails
-    nv_agentrt_register_llm_sanitize_request_guardrail as register_llm_sanitize_request,
+    nvagentrt_register_llm_sanitize_request_guardrail as register_llm_sanitize_request,
 )
 from nvagentrt._native import (
-    nv_agentrt_register_llm_sanitize_response_guardrail as register_llm_sanitize_response,
+    nvagentrt_register_llm_sanitize_response_guardrail as register_llm_sanitize_response,
 )
 from nvagentrt._native import (
-    nv_agentrt_register_tool_conditional_execution_guardrail as register_tool_conditional_execution,
+    nvagentrt_register_tool_conditional_execution_guardrail as register_tool_conditional_execution,
 )
 from nvagentrt._native import (
     # Tool guardrails
-    nv_agentrt_register_tool_sanitize_request_guardrail as register_tool_sanitize_request,
+    nvagentrt_register_tool_sanitize_request_guardrail as register_tool_sanitize_request,
 )
 from nvagentrt._native import (
-    nv_agentrt_register_tool_sanitize_response_guardrail as register_tool_sanitize_response,
+    nvagentrt_register_tool_sanitize_response_guardrail as register_tool_sanitize_response,
 )
 
 __all__ = [

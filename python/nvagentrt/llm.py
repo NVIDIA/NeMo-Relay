@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """LLM lifecycle operations.
 
 Provides both manual and managed LLM-call workflows, including streaming.
@@ -38,16 +41,16 @@ Example::
 """
 
 from nvagentrt._native import (
-    nv_agentrt_llm_call as call,
+    nvagentrt_llm_call as call,
 )
 from nvagentrt._native import (
-    nv_agentrt_llm_call_end as call_end,
+    nvagentrt_llm_call_end as call_end,
 )
 from nvagentrt._native import (
-    nv_agentrt_llm_call_execute as execute,
+    nvagentrt_llm_call_execute as execute,
 )
 from nvagentrt._native import (
-    nv_agentrt_llm_stream_call_execute as stream_execute,
+    nvagentrt_llm_stream_call_execute as stream_execute,
 )
 
 __all__ = ["call", "call_end", "execute", "stream_execute"]

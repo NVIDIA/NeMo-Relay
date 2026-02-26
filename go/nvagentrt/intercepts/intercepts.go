@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package intercepts provides shorthand access to NVAgentRT intercept registration.
 //
 // Intercepts are priority-ordered middleware that transform or replace tool and

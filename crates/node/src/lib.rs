@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! NAPI-RS bindings for NVAgentRT, exposing the agent runtime framework to Node.js.
 //!
 //! This crate provides JavaScript/TypeScript access to scope management, tool and LLM

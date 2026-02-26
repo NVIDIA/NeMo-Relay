@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Type stubs for nvagentrt.
 
 Provides static type information for the ``nvagentrt`` package, including
@@ -390,14 +393,14 @@ def get_scope_stack() -> ScopeStack:
 # Scope / handle operations
 # ---------------------------------------------------------------------------
 
-def nv_agentrt_get_handle() -> Optional[ScopeHandle]:
+def nvagentrt_get_handle() -> Optional[ScopeHandle]:
     """Return the current scope handle from the task-local scope stack.
 
     Returns ``None`` if the scope stack is empty.
     """
     ...
 
-def nv_agentrt_push_scope(
+def nvagentrt_push_scope(
     name: str,
     scope_type: ScopeType,
     *,
@@ -417,15 +420,15 @@ def nv_agentrt_push_scope(
     """
     ...
 
-def nv_agentrt_pop_scope(handle: ScopeHandle) -> None:
+def nvagentrt_pop_scope(handle: ScopeHandle) -> None:
     """Remove a scope from the stack and emit an End event.
 
     Args:
-        handle: The scope handle returned by ``nv_agentrt_push_scope``.
+        handle: The scope handle returned by ``nvagentrt_push_scope``.
     """
     ...
 
-def nv_agentrt_event(
+def nvagentrt_event(
     name: str,
     *,
     handle: Optional[ScopeHandle] = None,
@@ -446,7 +449,7 @@ def nv_agentrt_event(
 # Tool lifecycle
 # ---------------------------------------------------------------------------
 
-def nv_agentrt_tool_call(
+def nvagentrt_tool_call(
     name: str,
     args: Json,
     *,
@@ -457,12 +460,12 @@ def nv_agentrt_tool_call(
 ) -> ToolHandle:
     """Begin a tool call manually.
 
-    Returns a ``ToolHandle`` that must be passed to ``nv_agentrt_tool_call_end``.
+    Returns a ``ToolHandle`` that must be passed to ``nvagentrt_tool_call_end``.
     Emits a Start event.
     """
     ...
 
-def nv_agentrt_tool_call_end(
+def nvagentrt_tool_call_end(
     handle: ToolHandle,
     result: Json,
     *,
@@ -472,7 +475,7 @@ def nv_agentrt_tool_call_end(
     """End a manual tool call. Records the result and emits an End event."""
     ...
 
-def nv_agentrt_tool_call_execute(
+def nvagentrt_tool_call_execute(
     name: str,
     args: Json,
     func: Callable[[Json], Awaitable[Json]],
@@ -502,7 +505,7 @@ def nv_agentrt_tool_call_execute(
 # LLM lifecycle
 # ---------------------------------------------------------------------------
 
-def nv_agentrt_llm_call(
+def nvagentrt_llm_call(
     name: str,
     request: LLMRequest,
     *,
@@ -513,12 +516,12 @@ def nv_agentrt_llm_call(
 ) -> LLMHandle:
     """Begin an LLM call manually.
 
-    Returns an ``LLMHandle`` that must be passed to ``nv_agentrt_llm_call_end``.
+    Returns an ``LLMHandle`` that must be passed to ``nvagentrt_llm_call_end``.
     Emits a Start event.
     """
     ...
 
-def nv_agentrt_llm_call_end(
+def nvagentrt_llm_call_end(
     handle: LLMHandle,
     response: Json,
     *,
@@ -528,7 +531,7 @@ def nv_agentrt_llm_call_end(
     """End a manual LLM call. Records the response and emits an End event."""
     ...
 
-def nv_agentrt_llm_call_execute(
+def nvagentrt_llm_call_execute(
     name: str,
     request: LLMRequest,
     func: Callable[[LLMRequest], Awaitable[Json]],
@@ -554,7 +557,7 @@ def nv_agentrt_llm_call_execute(
     """
     ...
 
-async def nv_agentrt_llm_stream_call_execute(
+async def nvagentrt_llm_stream_call_execute(
     name: str,
     request: LLMRequest,
     func: Callable[[LLMRequest], AsyncIterator[str]],
@@ -584,7 +587,7 @@ async def nv_agentrt_llm_stream_call_execute(
 # Tool guardrails
 # ---------------------------------------------------------------------------
 
-def nv_agentrt_register_tool_sanitize_request_guardrail(
+def nvagentrt_register_tool_sanitize_request_guardrail(
     name: str, priority: int, guardrail: Callable[[str, Json], Json]
 ) -> None:
     """Register a tool sanitize-request guardrail.
@@ -593,11 +596,11 @@ def nv_agentrt_register_tool_sanitize_request_guardrail(
     """
     ...
 
-def nv_agentrt_deregister_tool_sanitize_request_guardrail(name: str) -> bool:
+def nvagentrt_deregister_tool_sanitize_request_guardrail(name: str) -> bool:
     """Remove a tool sanitize-request guardrail. Returns ``True`` if found."""
     ...
 
-def nv_agentrt_register_tool_sanitize_response_guardrail(
+def nvagentrt_register_tool_sanitize_response_guardrail(
     name: str, priority: int, guardrail: Callable[[str, Json], Json]
 ) -> None:
     """Register a tool sanitize-response guardrail.
@@ -606,11 +609,11 @@ def nv_agentrt_register_tool_sanitize_response_guardrail(
     """
     ...
 
-def nv_agentrt_deregister_tool_sanitize_response_guardrail(name: str) -> bool:
+def nvagentrt_deregister_tool_sanitize_response_guardrail(name: str) -> bool:
     """Remove a tool sanitize-response guardrail. Returns ``True`` if found."""
     ...
 
-def nv_agentrt_register_tool_conditional_execution_guardrail(
+def nvagentrt_register_tool_conditional_execution_guardrail(
     name: str, priority: int, guardrail: Callable[[str, Json], Optional[str]]
 ) -> None:
     """Register a tool conditional-execution guardrail.
@@ -619,7 +622,7 @@ def nv_agentrt_register_tool_conditional_execution_guardrail(
     """
     ...
 
-def nv_agentrt_deregister_tool_conditional_execution_guardrail(name: str) -> bool:
+def nvagentrt_deregister_tool_conditional_execution_guardrail(name: str) -> bool:
     """Remove a tool conditional-execution guardrail. Returns ``True`` if found."""
     ...
 
@@ -627,7 +630,7 @@ def nv_agentrt_deregister_tool_conditional_execution_guardrail(name: str) -> boo
 # Tool intercepts
 # ---------------------------------------------------------------------------
 
-def nv_agentrt_register_tool_request_intercept(
+def nvagentrt_register_tool_request_intercept(
     name: str,
     priority: int,
     break_chain: bool,
@@ -639,11 +642,11 @@ def nv_agentrt_register_tool_request_intercept(
     """
     ...
 
-def nv_agentrt_deregister_tool_request_intercept(name: str) -> bool:
+def nvagentrt_deregister_tool_request_intercept(name: str) -> bool:
     """Remove a tool request intercept. Returns ``True`` if found."""
     ...
 
-def nv_agentrt_register_tool_response_intercept(
+def nvagentrt_register_tool_response_intercept(
     name: str,
     priority: int,
     break_chain: bool,
@@ -655,11 +658,11 @@ def nv_agentrt_register_tool_response_intercept(
     """
     ...
 
-def nv_agentrt_deregister_tool_response_intercept(name: str) -> bool:
+def nvagentrt_deregister_tool_response_intercept(name: str) -> bool:
     """Remove a tool response intercept. Returns ``True`` if found."""
     ...
 
-def nv_agentrt_register_tool_execution_intercept(
+def nvagentrt_register_tool_execution_intercept(
     name: str,
     priority: int,
     conditional: Callable[[str, Json], bool],
@@ -672,7 +675,7 @@ def nv_agentrt_register_tool_execution_intercept(
     """
     ...
 
-def nv_agentrt_deregister_tool_execution_intercept(name: str) -> bool:
+def nvagentrt_deregister_tool_execution_intercept(name: str) -> bool:
     """Remove a tool execution intercept. Returns ``True`` if found."""
     ...
 
@@ -680,7 +683,7 @@ def nv_agentrt_deregister_tool_execution_intercept(name: str) -> bool:
 # LLM guardrails
 # ---------------------------------------------------------------------------
 
-def nv_agentrt_register_llm_sanitize_request_guardrail(
+def nvagentrt_register_llm_sanitize_request_guardrail(
     name: str, priority: int, guardrail: Callable[[LLMRequest], LLMRequest]
 ) -> None:
     """Register an LLM sanitize-request guardrail.
@@ -689,11 +692,11 @@ def nv_agentrt_register_llm_sanitize_request_guardrail(
     """
     ...
 
-def nv_agentrt_deregister_llm_sanitize_request_guardrail(name: str) -> bool:
+def nvagentrt_deregister_llm_sanitize_request_guardrail(name: str) -> bool:
     """Remove an LLM sanitize-request guardrail. Returns ``True`` if found."""
     ...
 
-def nv_agentrt_register_llm_sanitize_response_guardrail(
+def nvagentrt_register_llm_sanitize_response_guardrail(
     name: str, priority: int, guardrail: Callable[[Json], Json]
 ) -> None:
     """Register an LLM sanitize-response guardrail.
@@ -702,11 +705,11 @@ def nv_agentrt_register_llm_sanitize_response_guardrail(
     """
     ...
 
-def nv_agentrt_deregister_llm_sanitize_response_guardrail(name: str) -> bool:
+def nvagentrt_deregister_llm_sanitize_response_guardrail(name: str) -> bool:
     """Remove an LLM sanitize-response guardrail. Returns ``True`` if found."""
     ...
 
-def nv_agentrt_register_llm_conditional_execution_guardrail(
+def nvagentrt_register_llm_conditional_execution_guardrail(
     name: str, priority: int, guardrail: Callable[[LLMRequest], Optional[str]]
 ) -> None:
     """Register an LLM conditional-execution guardrail.
@@ -715,7 +718,7 @@ def nv_agentrt_register_llm_conditional_execution_guardrail(
     """
     ...
 
-def nv_agentrt_deregister_llm_conditional_execution_guardrail(name: str) -> bool:
+def nvagentrt_deregister_llm_conditional_execution_guardrail(name: str) -> bool:
     """Remove an LLM conditional-execution guardrail. Returns ``True`` if found."""
     ...
 
@@ -723,7 +726,7 @@ def nv_agentrt_deregister_llm_conditional_execution_guardrail(name: str) -> bool
 # LLM intercepts
 # ---------------------------------------------------------------------------
 
-def nv_agentrt_register_llm_request_intercept(
+def nvagentrt_register_llm_request_intercept(
     name: str,
     priority: int,
     break_chain: bool,
@@ -735,11 +738,11 @@ def nv_agentrt_register_llm_request_intercept(
     """
     ...
 
-def nv_agentrt_deregister_llm_request_intercept(name: str) -> bool:
+def nvagentrt_deregister_llm_request_intercept(name: str) -> bool:
     """Remove an LLM request intercept. Returns ``True`` if found."""
     ...
 
-def nv_agentrt_register_llm_response_intercept(
+def nvagentrt_register_llm_response_intercept(
     name: str,
     priority: int,
     break_chain: bool,
@@ -751,11 +754,11 @@ def nv_agentrt_register_llm_response_intercept(
     """
     ...
 
-def nv_agentrt_deregister_llm_response_intercept(name: str) -> bool:
+def nvagentrt_deregister_llm_response_intercept(name: str) -> bool:
     """Remove an LLM response intercept. Returns ``True`` if found."""
     ...
 
-def nv_agentrt_register_llm_stream_response_intercept(
+def nvagentrt_register_llm_stream_response_intercept(
     name: str,
     priority: int,
     break_chain: bool,
@@ -767,11 +770,11 @@ def nv_agentrt_register_llm_stream_response_intercept(
     """
     ...
 
-def nv_agentrt_deregister_llm_stream_response_intercept(name: str) -> bool:
+def nvagentrt_deregister_llm_stream_response_intercept(name: str) -> bool:
     """Remove an LLM stream-response intercept. Returns ``True`` if found."""
     ...
 
-def nv_agentrt_register_llm_execution_intercept(
+def nvagentrt_register_llm_execution_intercept(
     name: str,
     priority: int,
     conditional: Callable[[LLMRequest], bool],
@@ -784,11 +787,11 @@ def nv_agentrt_register_llm_execution_intercept(
     """
     ...
 
-def nv_agentrt_deregister_llm_execution_intercept(name: str) -> bool:
+def nvagentrt_deregister_llm_execution_intercept(name: str) -> bool:
     """Remove an LLM execution intercept. Returns ``True`` if found."""
     ...
 
-def nv_agentrt_register_llm_stream_execution_intercept(
+def nvagentrt_register_llm_stream_execution_intercept(
     name: str,
     priority: int,
     conditional: Callable[[LLMRequest], bool],
@@ -802,7 +805,7 @@ def nv_agentrt_register_llm_stream_execution_intercept(
     """
     ...
 
-def nv_agentrt_deregister_llm_stream_execution_intercept(name: str) -> bool:
+def nvagentrt_deregister_llm_stream_execution_intercept(name: str) -> bool:
     """Remove an LLM stream-execution intercept. Returns ``True`` if found."""
     ...
 
@@ -810,13 +813,13 @@ def nv_agentrt_deregister_llm_stream_execution_intercept(name: str) -> bool:
 # Subscribers
 # ---------------------------------------------------------------------------
 
-def nv_agentrt_register_subscriber(name: str, callback: Callable[[Event], None]) -> None:
+def nvagentrt_register_subscriber(name: str, callback: Callable[[Event], None]) -> None:
     """Register an event subscriber.
 
     Callback: ``(event) -> None`` — called for every lifecycle event.
     """
     ...
 
-def nv_agentrt_deregister_subscriber(name: str) -> bool:
+def nvagentrt_deregister_subscriber(name: str) -> bool:
     """Remove an event subscriber. Returns ``True`` if found."""
     ...

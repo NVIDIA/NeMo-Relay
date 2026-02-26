@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Type definitions for the NVAgentRT Node.js NAPI bindings.
 //!
 //! Contains enums, handle wrappers, request/response structures, event types,

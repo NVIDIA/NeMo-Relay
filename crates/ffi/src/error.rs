@@ -1,9 +1,12 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Error handling for the FFI layer.
 //!
 //! This module defines the [`NvAgentRtStatus`] enum returned by every exported
 //! FFI function, along with thread-local storage for human-readable error
 //! messages. After any non-`Ok` return, the caller should invoke
-//! [`nv_agentrt_last_error`] on the same thread to obtain a diagnostic string.
+//! [`nvagentrt_last_error`] on the same thread to obtain a diagnostic string.
 //! The error message remains valid until the next FFI call on that thread clears
 //! it via [`clear_last_error`].
 
@@ -17,7 +20,7 @@ use nvagentrt_core::AgentRtError;
 /// Status codes returned by all FFI functions.
 ///
 /// Every `extern "C"` function in this library returns an `NvAgentRtStatus`.
-/// On non-`Ok` returns, call [`nv_agentrt_last_error`] on the same thread to
+/// On non-`Ok` returns, call [`nvagentrt_last_error`] on the same thread to
 /// retrieve a human-readable error message.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +70,7 @@ pub fn clear_last_error() {
 /// until the next FFI call on the same thread. Do **not** free the returned
 /// pointer.
 #[no_mangle]
-pub extern "C" fn nv_agentrt_last_error() -> *const c_char {
+pub extern "C" fn nvagentrt_last_error() -> *const c_char {
     LAST_ERROR.with(|cell| {
         cell.borrow()
             .as_ref()

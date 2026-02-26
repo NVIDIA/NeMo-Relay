@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 //! Conversion utilities between C strings/JSON and Rust types.
 //!
@@ -42,7 +45,7 @@ pub fn c_str_to_opt_json(ptr: *const c_char) -> Option<Option<Json>> {
 }
 
 /// Convert a JSON value to a library-owned C string.
-/// The caller must free with `nv_agentrt_string_free`.
+/// The caller must free with `nvagentrt_string_free`.
 pub fn json_to_c_string(value: &Json) -> *mut c_char {
     match serde_json::to_string(value) {
         Ok(s) => CString::new(s).unwrap_or_default().into_raw(),
@@ -70,14 +73,14 @@ pub fn c_str_to_string(ptr: *const c_char) -> Result<String, NvAgentRtStatus> {
         })
 }
 
-/// Free a C string previously returned by any `nv_agentrt_*` accessor function.
+/// Free a C string previously returned by any `nvagentrt_*` accessor function.
 /// Passing null is a safe no-op.
 ///
 /// # Safety
 /// `ptr` must be a pointer returned by this library, or null. Double-free is
 /// undefined behavior.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_string_free(ptr: *mut c_char) {
+pub unsafe extern "C" fn nvagentrt_string_free(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(unsafe { CString::from_raw(ptr) });
     }

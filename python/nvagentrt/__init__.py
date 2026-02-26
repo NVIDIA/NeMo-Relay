@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """NVAgentRT - Agent Runtime with scope/handle management, guardrails, and intercepts.
 
 NVAgentRT provides execution scope management, lifecycle event tracking, and

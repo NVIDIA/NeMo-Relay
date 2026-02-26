@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Conversion utilities between JavaScript (`JsValue`) and Rust (`serde_json::Value`).
 //!
 //! These helpers are used throughout the WASM bindings to marshal data across

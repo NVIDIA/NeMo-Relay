@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
 
@@ -21,21 +24,21 @@ fn parse_json(s: &str) -> JsValue {
 
 #[wasm_bindgen_test]
 fn test_get_handle_returns_root() {
-    let handle = nv_agentrt_get_handle().unwrap();
+    let handle = nvagentrt_get_handle().unwrap();
     assert!(!handle.uuid().is_empty());
 }
 
 #[wasm_bindgen_test]
 fn test_push_pop_scope() {
-    let scope = nv_agentrt_push_scope("test_wasm_scope", SCOPE_TYPE_AGENT, None, None).unwrap();
+    let scope = nvagentrt_push_scope("test_wasm_scope", SCOPE_TYPE_AGENT, None, None).unwrap();
     assert_eq!(scope.name(), "test_wasm_scope");
     assert_eq!(scope.scope_type(), SCOPE_TYPE_AGENT);
-    nv_agentrt_pop_scope(&scope).unwrap();
+    nvagentrt_pop_scope(&scope).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_scope_with_attributes() {
-    let scope = nv_agentrt_push_scope(
+    let scope = nvagentrt_push_scope(
         "attr_scope",
         SCOPE_TYPE_FUNCTION,
         None,
@@ -43,30 +46,30 @@ fn test_scope_with_attributes() {
     )
     .unwrap();
     assert_eq!(scope.attributes(), SCOPE_PARALLEL | SCOPE_RELOCATABLE);
-    nv_agentrt_pop_scope(&scope).unwrap();
+    nvagentrt_pop_scope(&scope).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_scope_with_parent() {
-    let parent = nv_agentrt_push_scope("parent_scope", SCOPE_TYPE_AGENT, None, None).unwrap();
+    let parent = nvagentrt_push_scope("parent_scope", SCOPE_TYPE_AGENT, None, None).unwrap();
     let parent_uuid = parent.uuid();
     let child =
-        nv_agentrt_push_scope("child_scope", SCOPE_TYPE_FUNCTION, Some(parent), None).unwrap();
+        nvagentrt_push_scope("child_scope", SCOPE_TYPE_FUNCTION, Some(parent), None).unwrap();
     assert_eq!(child.parent_uuid().unwrap(), parent_uuid);
-    nv_agentrt_pop_scope(&child).unwrap();
-    let current = nv_agentrt_get_handle().unwrap();
+    nvagentrt_pop_scope(&child).unwrap();
+    let current = nvagentrt_get_handle().unwrap();
     assert_eq!(current.uuid(), parent_uuid);
-    nv_agentrt_pop_scope(&current).unwrap();
+    nvagentrt_pop_scope(&current).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_scope_nesting() {
-    let s1 = nv_agentrt_push_scope("nest_1", SCOPE_TYPE_AGENT, None, None).unwrap();
-    let s2 = nv_agentrt_push_scope("nest_2", SCOPE_TYPE_FUNCTION, None, None).unwrap();
-    let s3 = nv_agentrt_push_scope("nest_3", SCOPE_TYPE_TOOL, None, None).unwrap();
-    nv_agentrt_pop_scope(&s3).unwrap();
-    nv_agentrt_pop_scope(&s2).unwrap();
-    nv_agentrt_pop_scope(&s1).unwrap();
+    let s1 = nvagentrt_push_scope("nest_1", SCOPE_TYPE_AGENT, None, None).unwrap();
+    let s2 = nvagentrt_push_scope("nest_2", SCOPE_TYPE_FUNCTION, None, None).unwrap();
+    let s3 = nvagentrt_push_scope("nest_3", SCOPE_TYPE_TOOL, None, None).unwrap();
+    nvagentrt_pop_scope(&s3).unwrap();
+    nvagentrt_pop_scope(&s2).unwrap();
+    nvagentrt_pop_scope(&s1).unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -85,9 +88,9 @@ fn test_all_scope_types() {
         (SCOPE_TYPE_UNKNOWN, "unknown_s"),
     ];
     for (st, name) in types {
-        let scope = nv_agentrt_push_scope(name, st, None, None).unwrap();
+        let scope = nvagentrt_push_scope(name, st, None, None).unwrap();
         assert_eq!(scope.scope_type(), st);
-        nv_agentrt_pop_scope(&scope).unwrap();
+        nvagentrt_pop_scope(&scope).unwrap();
     }
 }
 
@@ -97,23 +100,23 @@ fn test_all_scope_types() {
 
 #[wasm_bindgen_test]
 fn test_event_basic() {
-    nv_agentrt_event("test_event", None, JsValue::NULL, JsValue::NULL).unwrap();
+    nvagentrt_event("test_event", None, JsValue::NULL, JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_event_with_data() {
     let data = parse_json(r#"{"key":"value"}"#);
-    nv_agentrt_event("data_event", None, data, JsValue::NULL).unwrap();
+    nvagentrt_event("data_event", None, data, JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_event_with_parent() {
-    let scope = nv_agentrt_push_scope("event_parent", SCOPE_TYPE_AGENT, None, None).unwrap();
+    let scope = nvagentrt_push_scope("event_parent", SCOPE_TYPE_AGENT, None, None).unwrap();
     let scope_uuid = scope.uuid();
-    nv_agentrt_event("child_event", Some(scope), JsValue::NULL, JsValue::NULL).unwrap();
-    let current = nv_agentrt_get_handle().unwrap();
+    nvagentrt_event("child_event", Some(scope), JsValue::NULL, JsValue::NULL).unwrap();
+    let current = nvagentrt_get_handle().unwrap();
     assert_eq!(current.uuid(), scope_uuid);
-    nv_agentrt_pop_scope(&current).unwrap();
+    nvagentrt_pop_scope(&current).unwrap();
 }
 
 // ===========================================================================
@@ -150,8 +153,8 @@ fn test_subscriber_receives_events() {
     let cb = js_fn1("event", "globalThis.__wasm_test_events.push(event)");
     register_subscriber("wasm_event_collector", cb).unwrap();
 
-    let scope = nv_agentrt_push_scope("sub_test", SCOPE_TYPE_AGENT, None, None).unwrap();
-    nv_agentrt_pop_scope(&scope).unwrap();
+    let scope = nvagentrt_push_scope("sub_test", SCOPE_TYPE_AGENT, None, None).unwrap();
+    nvagentrt_pop_scope(&scope).unwrap();
 
     let events = js_sys::eval("globalThis.__wasm_test_events").unwrap();
     let arr = js_sys::Array::from(&events);
@@ -170,8 +173,8 @@ fn test_subscriber_event_properties() {
     );
     register_subscriber("wasm_prop_collector", cb).unwrap();
 
-    let scope = nv_agentrt_push_scope("prop_test", SCOPE_TYPE_FUNCTION, None, None).unwrap();
-    nv_agentrt_pop_scope(&scope).unwrap();
+    let scope = nvagentrt_push_scope("prop_test", SCOPE_TYPE_FUNCTION, None, None).unwrap();
+    nvagentrt_pop_scope(&scope).unwrap();
 
     let event = js_sys::eval("globalThis.__wasm_evt_props").unwrap();
     assert!(
@@ -202,7 +205,7 @@ fn test_event_mark() {
     register_subscriber("wasm_mark_collector", cb).unwrap();
 
     let data = parse_json(r#"{"marker":"test"}"#);
-    nv_agentrt_event("mark_event", None, data, JsValue::NULL).unwrap();
+    nvagentrt_event("mark_event", None, data, JsValue::NULL).unwrap();
 
     let events = js_sys::eval("globalThis.__wasm_mark_events").unwrap();
     let arr = js_sys::Array::from(&events);

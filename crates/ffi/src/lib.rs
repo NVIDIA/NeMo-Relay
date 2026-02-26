@@ -1,8 +1,11 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! C FFI layer for NVAgentRT.
 //!
 //! This crate exposes the NVAgentRT core runtime as a C-compatible shared library.
 //! It is consumed by the Go bindings via CGo and generates a C header file
-//! (`nvagentrt.h`) through `cbindgen`. All exported symbols use the `nv_agentrt_`
+//! (`nvagentrt.h`) through `cbindgen`. All exported symbols use the `nvagentrt_`
 //! prefix.
 //!
 //! # Middleware Pipeline
@@ -21,7 +24,7 @@
 //! # Error Handling
 //!
 //! Every `extern "C"` function returns an [`error::NvAgentRtStatus`] code. On
-//! failure, call [`error::nv_agentrt_last_error`] on the same thread to retrieve
+//! failure, call [`error::nvagentrt_last_error`] on the same thread to retrieve
 //! a human-readable error description. The error is stored in thread-local
 //! storage and is valid until the next FFI call on that thread.
 //!
@@ -29,8 +32,8 @@
 //!
 //! All opaque handles (`FfiScopeHandle`, `FfiToolHandle`, `FfiLLMHandle`, etc.)
 //! are heap-allocated and must be freed through their corresponding
-//! `nv_agentrt_*_free` functions. C strings returned by accessor functions must
-//! be freed with `nv_agentrt_string_free`.
+//! `nvagentrt_*_free` functions. C strings returned by accessor functions must
+//! be freed with `nvagentrt_string_free`.
 //!
 //! # Modules
 //!

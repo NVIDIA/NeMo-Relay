@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Streaming LLM response wrapper for async iteration from JavaScript.
 //!
 //! Provides `WasmLlmStream`, an async-iterator-compatible type that lets

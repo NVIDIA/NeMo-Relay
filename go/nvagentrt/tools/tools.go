@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package tools provides shorthand access to NVAgentRT tool call operations.
 //
 // It re-exports the core tool lifecycle functions (ToolCall, ToolCallEnd,

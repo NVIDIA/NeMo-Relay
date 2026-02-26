@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! PyO3 native extension module for NVAgentRT.
 //!
 //! This crate compiles to a `_native` Python C extension that is imported by the
@@ -7,7 +10,7 @@
 //! ## Modules
 //!
 //! - `py_types` — Python-facing type wrappers (`ScopeHandle`, `ToolHandle`, etc.)
-//! - `py_api` — Python-facing API functions (`nv_agentrt_push_scope`, etc.)
+//! - `py_api` — Python-facing API functions (`nvagentrt_push_scope`, etc.)
 //! - `py_callable` — Bridges between Python callables and Rust callback types
 //! - `py_context` — Notes on scope propagation between sync/async contexts
 //! - `convert` — JSON ↔ Python conversion utilities

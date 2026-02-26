@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 #![allow(clippy::type_complexity)]
 //! C function pointer typedefs and wrapper functions for FFI callbacks.
 //!
@@ -154,9 +157,9 @@ pub fn wrap_tool_sanitize_fn(
         let c_name = CString::new(name).unwrap_or_default();
         let c_args = json_to_c_string(&args);
         let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nv_agentrt_string_free_internal(c_args) };
+        unsafe { nvagentrt_string_free_internal(c_args) };
         let result = ptr_to_json(result_ptr);
-        unsafe { nv_agentrt_string_free_internal(result_ptr) };
+        unsafe { nvagentrt_string_free_internal(result_ptr) };
         result
     })
 }
@@ -172,9 +175,9 @@ pub fn wrap_tool_conditional_fn(
         let c_name = CString::new(name).unwrap_or_default();
         let c_args = json_to_c_string(args);
         let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nv_agentrt_string_free_internal(c_args) };
+        unsafe { nvagentrt_string_free_internal(c_args) };
         let result = ptr_to_opt_string(result_ptr);
-        unsafe { nv_agentrt_string_free_internal(result_ptr) };
+        unsafe { nvagentrt_string_free_internal(result_ptr) };
         result
     })
 }
@@ -190,7 +193,7 @@ pub fn wrap_tool_exec_conditional_fn(
         let c_name = CString::new(name).unwrap_or_default();
         let c_args = json_to_c_string(args);
         let result = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nv_agentrt_string_free_internal(c_args) };
+        unsafe { nvagentrt_string_free_internal(c_args) };
         result
     })
 }
@@ -207,9 +210,9 @@ pub fn wrap_tool_exec_fn(
         Box::pin(async move {
             let c_args = json_to_c_string(&args);
             let result_ptr = unsafe { cb(ud.ptr, c_args) };
-            unsafe { nv_agentrt_string_free_internal(c_args) };
+            unsafe { nvagentrt_string_free_internal(c_args) };
             let result = ptr_to_json(result_ptr);
-            unsafe { nv_agentrt_string_free_internal(result_ptr) };
+            unsafe { nvagentrt_string_free_internal(result_ptr) };
             Ok(result)
         })
     })
@@ -225,9 +228,9 @@ pub fn wrap_json_fn(
     Box::new(move |value: Json| {
         let c_json = json_to_c_string(&value);
         let result_ptr = unsafe { cb(ud.ptr, c_json) };
-        unsafe { nv_agentrt_string_free_internal(c_json) };
+        unsafe { nvagentrt_string_free_internal(c_json) };
         let result = ptr_to_json(result_ptr);
-        unsafe { nv_agentrt_string_free_internal(result_ptr) };
+        unsafe { nvagentrt_string_free_internal(result_ptr) };
         result
     })
 }
@@ -270,7 +273,7 @@ pub fn wrap_llm_conditional_fn(
         let ffi_req = FfiLLMRequest(request.clone());
         let result_ptr = unsafe { cb(ud.ptr, &ffi_req) };
         let result = ptr_to_opt_string(result_ptr);
-        unsafe { nv_agentrt_string_free_internal(result_ptr) };
+        unsafe { nvagentrt_string_free_internal(result_ptr) };
         result
     })
 }
@@ -301,7 +304,7 @@ pub fn wrap_llm_exec_fn(
             let ffi_req = FfiLLMRequest(request);
             let result_ptr = unsafe { cb(ud.ptr, &ffi_req) };
             let result = ptr_to_json(result_ptr);
-            unsafe { nv_agentrt_string_free_internal(result_ptr) };
+            unsafe { nvagentrt_string_free_internal(result_ptr) };
             Ok(result)
         })
     })
@@ -332,7 +335,7 @@ pub fn wrap_llm_stream_exec_fn(
             let ffi_req = FfiLLMRequest(request);
             let result_ptr = unsafe { cb(ud.ptr, &ffi_req) };
             let raw = ptr_to_string(result_ptr).unwrap_or_default();
-            unsafe { nv_agentrt_string_free_internal(result_ptr) };
+            unsafe { nvagentrt_string_free_internal(result_ptr) };
             // The C callback returns the full response as a single string for stream
             // We emit it as a single-item stream
             let stream = tokio_stream::once(Ok(raw));
@@ -357,7 +360,7 @@ pub fn wrap_sse_intercept_fn(
             return event;
         }
         let result_str = ptr_to_string(result_ptr).unwrap_or_default();
-        unsafe { nv_agentrt_string_free_internal(result_ptr) };
+        unsafe { nvagentrt_string_free_internal(result_ptr) };
         serde_json::from_str(&result_str).unwrap_or(event)
     })
 }
@@ -403,7 +406,7 @@ fn ptr_to_string(ptr: *mut c_char) -> Option<String> {
 }
 
 /// Internal helper to free C strings we allocated.
-unsafe fn nv_agentrt_string_free_internal(ptr: *mut c_char) {
+unsafe fn nvagentrt_string_free_internal(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(unsafe { CString::from_raw(ptr) });
     }

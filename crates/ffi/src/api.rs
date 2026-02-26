@@ -1,7 +1,10 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Top-level FFI API functions exported as `extern "C"`.
 //!
 //! Each function clears the thread-local error before executing and returns an
-//! [`NvAgentRtStatus`]. On failure, call [`nv_agentrt_last_error`] to retrieve
+//! [`NvAgentRtStatus`]. On failure, call [`nvagentrt_last_error`] to retrieve
 //! the error message.
 
 use std::sync::OnceLock;
@@ -39,18 +42,18 @@ fn tokio_runtime() -> &'static Runtime {
 ///
 /// # Parameters
 /// - `out`: On success, receives a heap-allocated `FfiScopeHandle` that must be
-///   freed with `nv_agentrt_scope_handle_free`.
+///   freed with `nvagentrt_scope_handle_free`.
 ///
 /// # Safety
 /// `out` must be a valid, non-null pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_get_handle(out: *mut *mut FfiScopeHandle) -> NvAgentRtStatus {
+pub unsafe extern "C" fn nvagentrt_get_handle(out: *mut *mut FfiScopeHandle) -> NvAgentRtStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
         return NvAgentRtStatus::NullPointer;
     }
-    match core::nv_agentrt_get_handle() {
+    match core::nvagentrt_get_handle() {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiScopeHandle(h))) };
             NvAgentRtStatus::Ok
@@ -71,7 +74,7 @@ pub unsafe extern "C" fn nv_agentrt_get_handle(out: *mut *mut FfiScopeHandle) ->
 /// # Safety
 /// `name` must be a valid C string. `out` must be non-null. `parent` may be null.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_push_scope(
+pub unsafe extern "C" fn nvagentrt_push_scope(
     name: *const c_char,
     scope_type: NvAgentRtScopeType,
     parent: *const FfiScopeHandle,
@@ -94,7 +97,7 @@ pub unsafe extern "C" fn nv_agentrt_push_scope(
     };
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes);
 
-    match core::nv_agentrt_push_scope(&name, scope_type.into(), parent_ref, attrs) {
+    match core::nvagentrt_push_scope(&name, scope_type.into(), parent_ref, attrs) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiScopeHandle(h))) };
             NvAgentRtStatus::Ok
@@ -111,13 +114,13 @@ pub unsafe extern "C" fn nv_agentrt_push_scope(
 /// # Safety
 /// `handle` must be a valid, non-null `FfiScopeHandle` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_pop_scope(handle: *const FfiScopeHandle) -> NvAgentRtStatus {
+pub unsafe extern "C" fn nvagentrt_pop_scope(handle: *const FfiScopeHandle) -> NvAgentRtStatus {
     clear_last_error();
     if handle.is_null() {
         set_last_error("handle is null");
         return NvAgentRtStatus::NullPointer;
     }
-    match core::nv_agentrt_pop_scope(&unsafe { &*handle }.0.uuid) {
+    match core::nvagentrt_pop_scope(&unsafe { &*handle }.0.uuid) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -134,7 +137,7 @@ pub unsafe extern "C" fn nv_agentrt_pop_scope(handle: *const FfiScopeHandle) -> 
 /// # Safety
 /// `name` must be a valid C string. Other pointer args may be null.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_event(
+pub unsafe extern "C" fn nvagentrt_event(
     name: *const c_char,
     parent: *const FfiScopeHandle,
     data_json: *const c_char,
@@ -159,7 +162,7 @@ pub unsafe extern "C" fn nv_agentrt_event(
         None => return NvAgentRtStatus::InvalidJson,
     };
 
-    match core::nv_agentrt_event(&name, parent_ref, data, metadata) {
+    match core::nvagentrt_event(&name, parent_ref, data, metadata) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -183,7 +186,7 @@ pub unsafe extern "C" fn nv_agentrt_event(
 /// # Safety
 /// `name` and `args_json` must be valid C strings. `out` must be non-null.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_tool_call(
+pub unsafe extern "C" fn nvagentrt_tool_call(
     name: *const c_char,
     args_json: *const c_char,
     parent: *const FfiScopeHandle,
@@ -220,7 +223,7 @@ pub unsafe extern "C" fn nv_agentrt_tool_call(
         None => return NvAgentRtStatus::InvalidJson,
     };
 
-    match core::nv_agentrt_tool_call(&name, args, parent_ref, attrs, data, metadata) {
+    match core::nvagentrt_tool_call(&name, args, parent_ref, attrs, data, metadata) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiToolHandle(h))) };
             NvAgentRtStatus::Ok
@@ -232,7 +235,7 @@ pub unsafe extern "C" fn nv_agentrt_tool_call(
 /// End a tool call, running post-call guardrails and intercepts.
 ///
 /// # Parameters
-/// - `handle`: The tool handle from `nv_agentrt_tool_call`.
+/// - `handle`: The tool handle from `nvagentrt_tool_call`.
 /// - `result_json`: Tool result as a JSON C string.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
@@ -240,7 +243,7 @@ pub unsafe extern "C" fn nv_agentrt_tool_call(
 /// # Safety
 /// `handle` and `result_json` must be valid, non-null pointers.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_tool_call_end(
+pub unsafe extern "C" fn nvagentrt_tool_call_end(
     handle: *const FfiToolHandle,
     result_json: *const c_char,
     data_json: *const c_char,
@@ -264,7 +267,7 @@ pub unsafe extern "C" fn nv_agentrt_tool_call_end(
         None => return NvAgentRtStatus::InvalidJson,
     };
 
-    match core::nv_agentrt_tool_call_end(&unsafe { &*handle }.0, result, data, metadata) {
+    match core::nvagentrt_tool_call_end(&unsafe { &*handle }.0, result, data, metadata) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -284,12 +287,12 @@ pub unsafe extern "C" fn nv_agentrt_tool_call_end(
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `out`: On success, receives the result as a JSON C string. Caller must free
-///   with `nv_agentrt_string_free`.
+///   with `nvagentrt_string_free`.
 ///
 /// # Safety
 /// `name`, `args_json`, and `out` must be valid, non-null pointers.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_tool_call_execute(
+pub unsafe extern "C" fn nvagentrt_tool_call_execute(
     name: *const c_char,
     args_json: *const c_char,
     func: NvAgentRtToolExecCb,
@@ -332,7 +335,7 @@ pub unsafe extern "C" fn nv_agentrt_tool_call_execute(
     let exec_fn = wrap_tool_exec_fn(func, func_user_data, func_free);
 
     let result = tokio_runtime().block_on(async {
-        core::nv_agentrt_tool_call_execute(
+        core::nvagentrt_tool_call_execute(
             &name,
             args,
             exec_fn,
@@ -361,7 +364,7 @@ pub unsafe extern "C" fn nv_agentrt_tool_call_execute(
 ///
 /// # Parameters
 /// - `name`: Null-terminated LLM provider name.
-/// - `request`: The LLM request object (created via `nv_agentrt_llm_request_new`).
+/// - `request`: The LLM request object (created via `nvagentrt_llm_request_new`).
 /// - `parent`: Optional parent scope handle, or null.
 /// - `attributes`: Bitfield of LLM attributes.
 /// - `data_json`: Optional JSON data, or null.
@@ -371,7 +374,7 @@ pub unsafe extern "C" fn nv_agentrt_tool_call_execute(
 /// # Safety
 /// `name`, `request`, and `out` must be valid, non-null pointers.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_llm_call(
+pub unsafe extern "C" fn nvagentrt_llm_call(
     name: *const c_char,
     request: *const FfiLLMRequest,
     parent: *const FfiScopeHandle,
@@ -404,7 +407,7 @@ pub unsafe extern "C" fn nv_agentrt_llm_call(
         None => return NvAgentRtStatus::InvalidJson,
     };
 
-    match core::nv_agentrt_llm_call(
+    match core::nvagentrt_llm_call(
         &name,
         &unsafe { &*request }.0,
         parent_ref,
@@ -423,7 +426,7 @@ pub unsafe extern "C" fn nv_agentrt_llm_call(
 /// End an LLM call, running post-call guardrails and intercepts.
 ///
 /// # Parameters
-/// - `handle`: The LLM handle from `nv_agentrt_llm_call`.
+/// - `handle`: The LLM handle from `nvagentrt_llm_call`.
 /// - `response_json`: LLM response as a JSON C string.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
@@ -431,7 +434,7 @@ pub unsafe extern "C" fn nv_agentrt_llm_call(
 /// # Safety
 /// `handle` and `response_json` must be valid, non-null pointers.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_llm_call_end(
+pub unsafe extern "C" fn nvagentrt_llm_call_end(
     handle: *const FfiLLMHandle,
     response_json: *const c_char,
     data_json: *const c_char,
@@ -455,7 +458,7 @@ pub unsafe extern "C" fn nv_agentrt_llm_call_end(
         None => return NvAgentRtStatus::InvalidJson,
     };
 
-    match core::nv_agentrt_llm_call_end(&unsafe { &*handle }.0, response, data, metadata) {
+    match core::nvagentrt_llm_call_end(&unsafe { &*handle }.0, response, data, metadata) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -475,12 +478,12 @@ pub unsafe extern "C" fn nv_agentrt_llm_call_end(
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `out`: On success, receives the response as a JSON C string. Caller must
-///   free with `nv_agentrt_string_free`.
+///   free with `nvagentrt_string_free`.
 ///
 /// # Safety
 /// `name`, `request`, and `out` must be valid, non-null pointers.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_llm_call_execute(
+pub unsafe extern "C" fn nvagentrt_llm_call_execute(
     name: *const c_char,
     request: *const FfiLLMRequest,
     func: NvAgentRtLlmExecCb,
@@ -520,7 +523,7 @@ pub unsafe extern "C" fn nv_agentrt_llm_call_execute(
     let exec_fn = wrap_llm_exec_fn(func, func_user_data, func_free);
 
     let result = tokio_runtime().block_on(async {
-        core::nv_agentrt_llm_call_execute(&name, req, exec_fn, parent_handle, attrs, data, metadata)
+        core::nvagentrt_llm_call_execute(&name, req, exec_fn, parent_handle, attrs, data, metadata)
             .await
     });
 
@@ -538,13 +541,13 @@ pub unsafe extern "C" fn nv_agentrt_llm_call_execute(
 // ---------------------------------------------------------------------------
 
 /// Opaque stream handle for consuming LLM streaming responses chunk by chunk.
-/// Use `nv_agentrt_stream_next` to poll and `nv_agentrt_stream_free` to release.
+/// Use `nvagentrt_stream_next` to poll and `nvagentrt_stream_free` to release.
 pub struct FfiStream {
     receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvagentrt_core::Result<String>>>,
 }
 
 /// Execute a streaming LLM call end-to-end. Returns a stream handle that can
-/// be polled with `nv_agentrt_stream_next`. Blocks until the stream is set up.
+/// be polled with `nvagentrt_stream_next`. Blocks until the stream is set up.
 ///
 /// # Parameters
 /// - `name`: Null-terminated LLM provider name.
@@ -561,7 +564,7 @@ pub struct FfiStream {
 /// # Safety
 /// `name`, `request`, and `out` must be valid, non-null pointers.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_llm_stream_call_execute(
+pub unsafe extern "C" fn nvagentrt_llm_stream_call_execute(
     name: *const c_char,
     request: *const FfiLLMRequest,
     func: NvAgentRtLlmExecCb,
@@ -601,7 +604,7 @@ pub unsafe extern "C" fn nv_agentrt_llm_stream_call_execute(
     let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
 
     let result = tokio_runtime().block_on(async {
-        core::nv_agentrt_llm_stream_call_execute(
+        core::nvagentrt_llm_stream_call_execute(
             &name,
             req,
             exec_fn,
@@ -639,14 +642,14 @@ pub unsafe extern "C" fn nv_agentrt_llm_stream_call_execute(
 ///
 /// # Returns
 /// - `1`: A chunk was written to `*out_chunk`. Caller must free with
-///   `nv_agentrt_string_free`.
+///   `nvagentrt_string_free`.
 /// - `0`: The stream is complete (no more chunks).
-/// - `-1`: An error occurred. Call `nv_agentrt_last_error` for details.
+/// - `-1`: An error occurred. Call `nvagentrt_last_error` for details.
 ///
 /// # Safety
 /// `stream` and `out_chunk` must be valid, non-null pointers.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_stream_next(
+pub unsafe extern "C" fn nvagentrt_stream_next(
     stream: *mut FfiStream,
     out_chunk: *mut *mut c_char,
 ) -> i32 {
@@ -675,9 +678,9 @@ pub unsafe extern "C" fn nv_agentrt_stream_next(
 ///
 /// # Safety
 /// `stream` must be a valid `FfiStream` pointer returned by
-/// `nv_agentrt_llm_stream_call_execute`, or null.
+/// `nvagentrt_llm_stream_call_execute`, or null.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_stream_free(stream: *mut FfiStream) {
+pub unsafe extern "C" fn nvagentrt_stream_free(stream: *mut FfiStream) {
     if !stream.is_null() {
         drop(unsafe { Box::from_raw(stream) });
     }
@@ -743,14 +746,14 @@ ffi_guardrail_tool_api!(
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nv_agentrt_register_tool_sanitize_request_guardrail,
+    nvagentrt_register_tool_sanitize_request_guardrail,
     /// Deregister a tool request sanitization guardrail by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nv_agentrt_deregister_tool_sanitize_request_guardrail,
-    core::nv_agentrt_register_tool_sanitize_request_guardrail,
-    core::nv_agentrt_deregister_tool_sanitize_request_guardrail,
+    nvagentrt_deregister_tool_sanitize_request_guardrail,
+    core::nvagentrt_register_tool_sanitize_request_guardrail,
+    core::nvagentrt_deregister_tool_sanitize_request_guardrail,
     wrap_tool_sanitize_fn
 );
 
@@ -767,14 +770,14 @@ ffi_guardrail_tool_api!(
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nv_agentrt_register_tool_sanitize_response_guardrail,
+    nvagentrt_register_tool_sanitize_response_guardrail,
     /// Deregister a tool response sanitization guardrail by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nv_agentrt_deregister_tool_sanitize_response_guardrail,
-    core::nv_agentrt_register_tool_sanitize_response_guardrail,
-    core::nv_agentrt_deregister_tool_sanitize_response_guardrail,
+    nvagentrt_deregister_tool_sanitize_response_guardrail,
+    core::nvagentrt_register_tool_sanitize_response_guardrail,
+    core::nvagentrt_deregister_tool_sanitize_response_guardrail,
     wrap_tool_sanitize_fn
 );
 
@@ -791,7 +794,7 @@ ffi_guardrail_tool_api!(
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_register_tool_conditional_execution_guardrail(
+pub unsafe extern "C" fn nvagentrt_register_tool_conditional_execution_guardrail(
     name: *const c_char,
     priority: i32,
     cb: NvAgentRtToolConditionalCb,
@@ -804,7 +807,7 @@ pub unsafe extern "C" fn nv_agentrt_register_tool_conditional_execution_guardrai
         Err(status) => return status,
     };
     let wrapped = wrap_tool_conditional_fn(cb, user_data, free_fn);
-    match core::nv_agentrt_register_tool_conditional_execution_guardrail(&name, priority, wrapped) {
+    match core::nvagentrt_register_tool_conditional_execution_guardrail(&name, priority, wrapped) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -815,7 +818,7 @@ pub unsafe extern "C" fn nv_agentrt_register_tool_conditional_execution_guardrai
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_deregister_tool_conditional_execution_guardrail(
+pub unsafe extern "C" fn nvagentrt_deregister_tool_conditional_execution_guardrail(
     name: *const c_char,
 ) -> NvAgentRtStatus {
     clear_last_error();
@@ -823,7 +826,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_tool_conditional_execution_guardr
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nv_agentrt_deregister_tool_conditional_execution_guardrail(&name) {
+    match core::nvagentrt_deregister_tool_conditional_execution_guardrail(&name) {
         Ok(_) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -892,14 +895,14 @@ ffi_intercept_tool_api!(
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nv_agentrt_register_tool_request_intercept,
+    nvagentrt_register_tool_request_intercept,
     /// Deregister a tool request intercept by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nv_agentrt_deregister_tool_request_intercept,
-    core::nv_agentrt_register_tool_request_intercept,
-    core::nv_agentrt_deregister_tool_request_intercept,
+    nvagentrt_deregister_tool_request_intercept,
+    core::nvagentrt_register_tool_request_intercept,
+    core::nvagentrt_deregister_tool_request_intercept,
     wrap_tool_sanitize_fn
 );
 
@@ -918,14 +921,14 @@ ffi_intercept_tool_api!(
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nv_agentrt_register_tool_response_intercept,
+    nvagentrt_register_tool_response_intercept,
     /// Deregister a tool response intercept by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nv_agentrt_deregister_tool_response_intercept,
-    core::nv_agentrt_register_tool_response_intercept,
-    core::nv_agentrt_deregister_tool_response_intercept,
+    nvagentrt_deregister_tool_response_intercept,
+    core::nvagentrt_register_tool_response_intercept,
+    core::nvagentrt_deregister_tool_response_intercept,
     wrap_tool_sanitize_fn
 );
 
@@ -945,7 +948,7 @@ ffi_intercept_tool_api!(
 /// # Safety
 /// `name` must be a valid C string. Callback pointers must be valid.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_register_tool_execution_intercept(
+pub unsafe extern "C" fn nvagentrt_register_tool_execution_intercept(
     name: *const c_char,
     priority: i32,
     cond_cb: NvAgentRtToolExecConditionalCb,
@@ -962,7 +965,7 @@ pub unsafe extern "C" fn nv_agentrt_register_tool_execution_intercept(
     };
     let cond = wrap_tool_exec_conditional_fn(cond_cb, cond_user_data, cond_free);
     let exec = wrap_tool_exec_fn(exec_cb, exec_user_data, exec_free);
-    match core::nv_agentrt_register_tool_execution_intercept(&name, priority, cond, exec) {
+    match core::nvagentrt_register_tool_execution_intercept(&name, priority, cond, exec) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -973,7 +976,7 @@ pub unsafe extern "C" fn nv_agentrt_register_tool_execution_intercept(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_deregister_tool_execution_intercept(
+pub unsafe extern "C" fn nvagentrt_deregister_tool_execution_intercept(
     name: *const c_char,
 ) -> NvAgentRtStatus {
     clear_last_error();
@@ -981,7 +984,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_tool_execution_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nv_agentrt_deregister_tool_execution_intercept(&name) {
+    match core::nvagentrt_deregister_tool_execution_intercept(&name) {
         Ok(_) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1004,7 +1007,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_tool_execution_intercept(
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_register_llm_sanitize_request_guardrail(
+pub unsafe extern "C" fn nvagentrt_register_llm_sanitize_request_guardrail(
     name: *const c_char,
     priority: i32,
     cb: NvAgentRtLlmRequestCb,
@@ -1017,7 +1020,7 @@ pub unsafe extern "C" fn nv_agentrt_register_llm_sanitize_request_guardrail(
         Err(status) => return status,
     };
     let wrapped = wrap_llm_sanitize_request_fn(cb, user_data, free_fn);
-    match core::nv_agentrt_register_llm_sanitize_request_guardrail(&name, priority, wrapped) {
+    match core::nvagentrt_register_llm_sanitize_request_guardrail(&name, priority, wrapped) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1028,7 +1031,7 @@ pub unsafe extern "C" fn nv_agentrt_register_llm_sanitize_request_guardrail(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_deregister_llm_sanitize_request_guardrail(
+pub unsafe extern "C" fn nvagentrt_deregister_llm_sanitize_request_guardrail(
     name: *const c_char,
 ) -> NvAgentRtStatus {
     clear_last_error();
@@ -1036,7 +1039,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_llm_sanitize_request_guardrail(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nv_agentrt_deregister_llm_sanitize_request_guardrail(&name) {
+    match core::nvagentrt_deregister_llm_sanitize_request_guardrail(&name) {
         Ok(_) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1098,14 +1101,14 @@ ffi_guardrail_json_api!(
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nv_agentrt_register_llm_sanitize_response_guardrail,
+    nvagentrt_register_llm_sanitize_response_guardrail,
     /// Deregister an LLM response sanitization guardrail by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nv_agentrt_deregister_llm_sanitize_response_guardrail,
-    core::nv_agentrt_register_llm_sanitize_response_guardrail,
-    core::nv_agentrt_deregister_llm_sanitize_response_guardrail
+    nvagentrt_deregister_llm_sanitize_response_guardrail,
+    core::nvagentrt_register_llm_sanitize_response_guardrail,
+    core::nvagentrt_deregister_llm_sanitize_response_guardrail
 );
 
 /// Register an LLM conditional execution guardrail. The callback decides
@@ -1121,7 +1124,7 @@ ffi_guardrail_json_api!(
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_register_llm_conditional_execution_guardrail(
+pub unsafe extern "C" fn nvagentrt_register_llm_conditional_execution_guardrail(
     name: *const c_char,
     priority: i32,
     cb: NvAgentRtLlmConditionalCb,
@@ -1134,7 +1137,7 @@ pub unsafe extern "C" fn nv_agentrt_register_llm_conditional_execution_guardrail
         Err(status) => return status,
     };
     let wrapped = wrap_llm_conditional_fn(cb, user_data, free_fn);
-    match core::nv_agentrt_register_llm_conditional_execution_guardrail(&name, priority, wrapped) {
+    match core::nvagentrt_register_llm_conditional_execution_guardrail(&name, priority, wrapped) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1145,7 +1148,7 @@ pub unsafe extern "C" fn nv_agentrt_register_llm_conditional_execution_guardrail
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_deregister_llm_conditional_execution_guardrail(
+pub unsafe extern "C" fn nvagentrt_deregister_llm_conditional_execution_guardrail(
     name: *const c_char,
 ) -> NvAgentRtStatus {
     clear_last_error();
@@ -1153,7 +1156,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_llm_conditional_execution_guardra
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nv_agentrt_deregister_llm_conditional_execution_guardrail(&name) {
+    match core::nvagentrt_deregister_llm_conditional_execution_guardrail(&name) {
         Ok(_) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1177,7 +1180,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_llm_conditional_execution_guardra
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_register_llm_request_intercept(
+pub unsafe extern "C" fn nvagentrt_register_llm_request_intercept(
     name: *const c_char,
     priority: i32,
     break_chain: bool,
@@ -1191,7 +1194,7 @@ pub unsafe extern "C" fn nv_agentrt_register_llm_request_intercept(
         Err(status) => return status,
     };
     let wrapped = wrap_llm_sanitize_request_fn(cb, user_data, free_fn);
-    match core::nv_agentrt_register_llm_request_intercept(&name, priority, break_chain, wrapped) {
+    match core::nvagentrt_register_llm_request_intercept(&name, priority, break_chain, wrapped) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1202,7 +1205,7 @@ pub unsafe extern "C" fn nv_agentrt_register_llm_request_intercept(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_deregister_llm_request_intercept(
+pub unsafe extern "C" fn nvagentrt_deregister_llm_request_intercept(
     name: *const c_char,
 ) -> NvAgentRtStatus {
     clear_last_error();
@@ -1210,7 +1213,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_llm_request_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nv_agentrt_deregister_llm_request_intercept(&name) {
+    match core::nvagentrt_deregister_llm_request_intercept(&name) {
         Ok(_) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1230,7 +1233,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_llm_request_intercept(
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_register_llm_response_intercept(
+pub unsafe extern "C" fn nvagentrt_register_llm_response_intercept(
     name: *const c_char,
     priority: i32,
     break_chain: bool,
@@ -1244,7 +1247,7 @@ pub unsafe extern "C" fn nv_agentrt_register_llm_response_intercept(
         Err(status) => return status,
     };
     let wrapped = wrap_json_fn(cb, user_data, free_fn);
-    match core::nv_agentrt_register_llm_response_intercept(&name, priority, break_chain, wrapped) {
+    match core::nvagentrt_register_llm_response_intercept(&name, priority, break_chain, wrapped) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1255,7 +1258,7 @@ pub unsafe extern "C" fn nv_agentrt_register_llm_response_intercept(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_deregister_llm_response_intercept(
+pub unsafe extern "C" fn nvagentrt_deregister_llm_response_intercept(
     name: *const c_char,
 ) -> NvAgentRtStatus {
     clear_last_error();
@@ -1263,7 +1266,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_llm_response_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nv_agentrt_deregister_llm_response_intercept(&name) {
+    match core::nvagentrt_deregister_llm_response_intercept(&name) {
         Ok(_) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1283,7 +1286,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_llm_response_intercept(
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_register_llm_stream_response_intercept(
+pub unsafe extern "C" fn nvagentrt_register_llm_stream_response_intercept(
     name: *const c_char,
     priority: i32,
     break_chain: bool,
@@ -1297,7 +1300,7 @@ pub unsafe extern "C" fn nv_agentrt_register_llm_stream_response_intercept(
         Err(status) => return status,
     };
     let wrapped = wrap_sse_intercept_fn(cb, user_data, free_fn);
-    match core::nv_agentrt_register_llm_stream_response_intercept(
+    match core::nvagentrt_register_llm_stream_response_intercept(
         &name,
         priority,
         break_chain,
@@ -1313,7 +1316,7 @@ pub unsafe extern "C" fn nv_agentrt_register_llm_stream_response_intercept(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_deregister_llm_stream_response_intercept(
+pub unsafe extern "C" fn nvagentrt_deregister_llm_stream_response_intercept(
     name: *const c_char,
 ) -> NvAgentRtStatus {
     clear_last_error();
@@ -1321,7 +1324,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_llm_stream_response_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nv_agentrt_deregister_llm_stream_response_intercept(&name) {
+    match core::nvagentrt_deregister_llm_stream_response_intercept(&name) {
         Ok(_) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1343,7 +1346,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_llm_stream_response_intercept(
 /// # Safety
 /// `name` must be a valid C string. Callback pointers must be valid.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_register_llm_execution_intercept(
+pub unsafe extern "C" fn nvagentrt_register_llm_execution_intercept(
     name: *const c_char,
     priority: i32,
     cond_cb: NvAgentRtLlmExecConditionalCb,
@@ -1360,7 +1363,7 @@ pub unsafe extern "C" fn nv_agentrt_register_llm_execution_intercept(
     };
     let cond = wrap_llm_exec_conditional_fn(cond_cb, cond_user_data, cond_free);
     let exec = wrap_llm_exec_fn(exec_cb, exec_user_data, exec_free);
-    match core::nv_agentrt_register_llm_execution_intercept(&name, priority, cond, exec) {
+    match core::nvagentrt_register_llm_execution_intercept(&name, priority, cond, exec) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1371,7 +1374,7 @@ pub unsafe extern "C" fn nv_agentrt_register_llm_execution_intercept(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_deregister_llm_execution_intercept(
+pub unsafe extern "C" fn nvagentrt_deregister_llm_execution_intercept(
     name: *const c_char,
 ) -> NvAgentRtStatus {
     clear_last_error();
@@ -1379,7 +1382,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_llm_execution_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nv_agentrt_deregister_llm_execution_intercept(&name) {
+    match core::nvagentrt_deregister_llm_execution_intercept(&name) {
         Ok(_) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1401,7 +1404,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_llm_execution_intercept(
 /// # Safety
 /// `name` must be a valid C string. Callback pointers must be valid.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_register_llm_stream_execution_intercept(
+pub unsafe extern "C" fn nvagentrt_register_llm_stream_execution_intercept(
     name: *const c_char,
     priority: i32,
     cond_cb: NvAgentRtLlmExecConditionalCb,
@@ -1418,7 +1421,7 @@ pub unsafe extern "C" fn nv_agentrt_register_llm_stream_execution_intercept(
     };
     let cond = wrap_llm_exec_conditional_fn(cond_cb, cond_user_data, cond_free);
     let exec = wrap_llm_stream_exec_fn(exec_cb, exec_user_data, exec_free);
-    match core::nv_agentrt_register_llm_stream_execution_intercept(&name, priority, cond, exec) {
+    match core::nvagentrt_register_llm_stream_execution_intercept(&name, priority, cond, exec) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1429,7 +1432,7 @@ pub unsafe extern "C" fn nv_agentrt_register_llm_stream_execution_intercept(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_deregister_llm_stream_execution_intercept(
+pub unsafe extern "C" fn nvagentrt_deregister_llm_stream_execution_intercept(
     name: *const c_char,
 ) -> NvAgentRtStatus {
     clear_last_error();
@@ -1437,7 +1440,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_llm_stream_execution_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nv_agentrt_deregister_llm_stream_execution_intercept(&name) {
+    match core::nvagentrt_deregister_llm_stream_execution_intercept(&name) {
         Ok(_) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1459,7 +1462,7 @@ pub unsafe extern "C" fn nv_agentrt_deregister_llm_stream_execution_intercept(
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_register_subscriber(
+pub unsafe extern "C" fn nvagentrt_register_subscriber(
     name: *const c_char,
     cb: NvAgentRtEventSubscriberCb,
     user_data: *mut libc::c_void,
@@ -1471,7 +1474,7 @@ pub unsafe extern "C" fn nv_agentrt_register_subscriber(
         Err(status) => return status,
     };
     let wrapped = wrap_event_subscriber(cb, user_data, free_fn);
-    match core::nv_agentrt_register_subscriber(&name, wrapped) {
+    match core::nvagentrt_register_subscriber(&name, wrapped) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1482,13 +1485,13 @@ pub unsafe extern "C" fn nv_agentrt_register_subscriber(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_deregister_subscriber(name: *const c_char) -> NvAgentRtStatus {
+pub unsafe extern "C" fn nvagentrt_deregister_subscriber(name: *const c_char) -> NvAgentRtStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nv_agentrt_deregister_subscriber(&name) {
+    match core::nvagentrt_deregister_subscriber(&name) {
         Ok(_) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1501,17 +1504,17 @@ pub unsafe extern "C" fn nv_agentrt_deregister_subscriber(name: *const c_char) -
 /// Create a new isolated scope stack with its own root scope.
 ///
 /// Each scope stack is independent: scopes pushed on one do not appear on another.
-/// Use `nv_agentrt_scope_stack_set_thread` to bind a stack to the current thread
+/// Use `nvagentrt_scope_stack_set_thread` to bind a stack to the current thread
 /// before making other NVAgentRT API calls.
 ///
 /// # Parameters
 /// - `out`: On success, receives a heap-allocated `FfiScopeStack` that must be
-///   freed with `nv_agentrt_scope_stack_free`.
+///   freed with `nvagentrt_scope_stack_free`.
 ///
 /// # Safety
 /// `out` must be a valid, non-null pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_scope_stack_create(
+pub unsafe extern "C" fn nvagentrt_scope_stack_create(
     out: *mut *mut FfiScopeStack,
 ) -> NvAgentRtStatus {
     clear_last_error();
@@ -1527,7 +1530,7 @@ pub unsafe extern "C" fn nv_agentrt_scope_stack_create(
 /// Bind an isolated scope stack to the current OS thread.
 ///
 /// After this call, all NVAgentRT scope operations on the current thread
-/// (e.g. `nv_agentrt_push_scope`, `nv_agentrt_get_handle`) will use the
+/// (e.g. `nvagentrt_push_scope`, `nvagentrt_get_handle`) will use the
 /// given scope stack. This is typically used from Go goroutines that have
 /// called `runtime.LockOSThread()`.
 ///
@@ -1537,7 +1540,7 @@ pub unsafe extern "C" fn nv_agentrt_scope_stack_create(
 /// # Safety
 /// `stack` must be a valid, non-null `FfiScopeStack` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nv_agentrt_scope_stack_set_thread(
+pub unsafe extern "C" fn nvagentrt_scope_stack_set_thread(
     stack: *const FfiScopeStack,
 ) -> NvAgentRtStatus {
     clear_last_error();

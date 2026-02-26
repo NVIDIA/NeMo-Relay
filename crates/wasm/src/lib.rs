@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! WebAssembly bindings for the NVAgentRT agent runtime framework.
 //!
 //! This crate exposes the core NVAgentRT API to JavaScript/TypeScript via

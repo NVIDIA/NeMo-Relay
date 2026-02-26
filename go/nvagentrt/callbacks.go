@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // callbacks.go defines the Go callback type aliases used by the NVAgentRT
 // middleware and subscriber systems, and the CGo trampoline functions that
 // bridge Go closures to C function pointers.
@@ -38,12 +41,12 @@ typedef char* (*NvAgentRtSseInterceptFn)(void* user_data, const char* sse_json);
 typedef void (*NvAgentRtEventSubscriberFn)(void* user_data, const FfiEvent* event);
 
 // LLMRequest accessors (also declared in types.go, needed here for trampolines)
-extern FfiLLMRequest* nv_agentrt_llm_request_new(const char* method, const char* url, const char* headers_json, const char* body_json);
-extern char* nv_agentrt_llm_request_method(const FfiLLMRequest* ptr);
-extern char* nv_agentrt_llm_request_url(const FfiLLMRequest* ptr);
-extern char* nv_agentrt_llm_request_headers(const FfiLLMRequest* ptr);
-extern char* nv_agentrt_llm_request_body(const FfiLLMRequest* ptr);
-extern void nv_agentrt_string_free(char* ptr);
+extern FfiLLMRequest* nvagentrt_llm_request_new(const char* method, const char* url, const char* headers_json, const char* body_json);
+extern char* nvagentrt_llm_request_method(const FfiLLMRequest* ptr);
+extern char* nvagentrt_llm_request_url(const FfiLLMRequest* ptr);
+extern char* nvagentrt_llm_request_headers(const FfiLLMRequest* ptr);
+extern char* nvagentrt_llm_request_body(const FfiLLMRequest* ptr);
+extern void nvagentrt_string_free(char* ptr);
 */
 import "C"
 
@@ -224,10 +227,10 @@ func goFreeTrampoline(userData unsafe.Pointer) {
 func goLlmRequestTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) *C.FfiLLMRequest {
 	fn := lookupClosure(userData).(LLMRequestFunc)
 
-	method := goString(C.nv_agentrt_llm_request_method(request))
-	url := goString(C.nv_agentrt_llm_request_url(request))
-	headers := goJSONOpt(C.nv_agentrt_llm_request_headers(request))
-	body := goJSONOpt(C.nv_agentrt_llm_request_body(request))
+	method := goString(C.nvagentrt_llm_request_method(request))
+	url := goString(C.nvagentrt_llm_request_url(request))
+	headers := goJSONOpt(C.nvagentrt_llm_request_headers(request))
+	body := goJSONOpt(C.nvagentrt_llm_request_body(request))
 
 	m2, u2, h2, b2 := fn(method, url, headers, body)
 
@@ -240,17 +243,17 @@ func goLlmRequestTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) *
 	defer C.free(unsafe.Pointer(cHeaders))
 	defer C.free(unsafe.Pointer(cBody))
 
-	return C.nv_agentrt_llm_request_new(cMethod, cURL, cHeaders, cBody)
+	return C.nvagentrt_llm_request_new(cMethod, cURL, cHeaders, cBody)
 }
 
 //export goLlmConditionalTrampoline
 func goLlmConditionalTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) *C.char {
 	fn := lookupClosure(userData).(LLMConditionalFunc)
 
-	method := goString(C.nv_agentrt_llm_request_method(request))
-	url := goString(C.nv_agentrt_llm_request_url(request))
-	headers := goJSONOpt(C.nv_agentrt_llm_request_headers(request))
-	body := goJSONOpt(C.nv_agentrt_llm_request_body(request))
+	method := goString(C.nvagentrt_llm_request_method(request))
+	url := goString(C.nvagentrt_llm_request_url(request))
+	headers := goJSONOpt(C.nvagentrt_llm_request_headers(request))
+	body := goJSONOpt(C.nvagentrt_llm_request_body(request))
 
 	result := fn(method, url, headers, body)
 	if result == nil {
@@ -263,10 +266,10 @@ func goLlmConditionalTrampoline(userData unsafe.Pointer, request *C.FfiLLMReques
 func goLlmExecConditionalTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) C._Bool {
 	fn := lookupClosure(userData).(LLMExecConditionalFunc)
 
-	method := goString(C.nv_agentrt_llm_request_method(request))
-	url := goString(C.nv_agentrt_llm_request_url(request))
-	headers := goJSONOpt(C.nv_agentrt_llm_request_headers(request))
-	body := goJSONOpt(C.nv_agentrt_llm_request_body(request))
+	method := goString(C.nvagentrt_llm_request_method(request))
+	url := goString(C.nvagentrt_llm_request_url(request))
+	headers := goJSONOpt(C.nvagentrt_llm_request_headers(request))
+	body := goJSONOpt(C.nvagentrt_llm_request_body(request))
 
 	return C._Bool(fn(method, url, headers, body))
 }
@@ -275,10 +278,10 @@ func goLlmExecConditionalTrampoline(userData unsafe.Pointer, request *C.FfiLLMRe
 func goLlmExecTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) *C.char {
 	fn := lookupClosure(userData).(LLMExecutionFunc)
 
-	method := goString(C.nv_agentrt_llm_request_method(request))
-	url := goString(C.nv_agentrt_llm_request_url(request))
-	headers := goJSONOpt(C.nv_agentrt_llm_request_headers(request))
-	body := goJSONOpt(C.nv_agentrt_llm_request_body(request))
+	method := goString(C.nvagentrt_llm_request_method(request))
+	url := goString(C.nvagentrt_llm_request_url(request))
+	headers := goJSONOpt(C.nvagentrt_llm_request_headers(request))
+	body := goJSONOpt(C.nvagentrt_llm_request_body(request))
 
 	result, err := fn(method, url, headers, body)
 	if err != nil {

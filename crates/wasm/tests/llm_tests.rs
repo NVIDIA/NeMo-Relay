@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
 
@@ -29,18 +32,18 @@ fn make_llm_request(method: &str, url: &str) -> WasmLLMRequest {
 fn test_llm_call_and_end() {
     let req = make_llm_request("POST", "https://api.test.com");
     let handle =
-        nv_agentrt_llm_call("test_llm", &req, None, None, JsValue::NULL, JsValue::NULL).unwrap();
+        nvagentrt_llm_call("test_llm", &req, None, None, JsValue::NULL, JsValue::NULL).unwrap();
     assert_eq!(handle.name(), "test_llm");
     assert!(!handle.uuid().is_empty());
 
     let response = parse_json(r#"{"choices":[{"text":"hello"}]}"#);
-    nv_agentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
+    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_call_with_attributes() {
     let req = make_llm_request("POST", "https://api.test.com");
-    let handle = nv_agentrt_llm_call(
+    let handle = nvagentrt_llm_call(
         "attr_llm",
         &req,
         None,
@@ -52,15 +55,15 @@ fn test_llm_call_with_attributes() {
     assert_eq!(handle.attributes(), LLM_STATELESS | LLM_STREAMING);
 
     let response = parse_json(r#"{}"#);
-    nv_agentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
+    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_call_with_parent() {
-    let scope = nv_agentrt_push_scope("llm_parent", SCOPE_TYPE_AGENT, None, None).unwrap();
+    let scope = nvagentrt_push_scope("llm_parent", SCOPE_TYPE_AGENT, None, None).unwrap();
     let scope_uuid = scope.uuid();
     let req = make_llm_request("POST", "https://api.test.com");
-    let handle = nv_agentrt_llm_call(
+    let handle = nvagentrt_llm_call(
         "parented_llm",
         &req,
         Some(scope),
@@ -72,10 +75,10 @@ fn test_llm_call_with_parent() {
     assert_eq!(handle.parent_uuid().unwrap(), scope_uuid);
 
     let response = parse_json(r#"{}"#);
-    nv_agentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
+    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
 
-    let current = nv_agentrt_get_handle().unwrap();
-    nv_agentrt_pop_scope(&current).unwrap();
+    let current = nvagentrt_get_handle().unwrap();
+    nvagentrt_pop_scope(&current).unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -83,11 +86,11 @@ fn test_llm_call_with_data_metadata() {
     let req = make_llm_request("POST", "https://api.test.com");
     let data = parse_json(r#"{"info":"llm_test"}"#);
     let meta = parse_json(r#"{"version":"2.0"}"#);
-    let handle = nv_agentrt_llm_call("data_llm", &req, None, None, data, meta).unwrap();
+    let handle = nvagentrt_llm_call("data_llm", &req, None, None, data, meta).unwrap();
 
     let response = parse_json(r#"{}"#);
     let end_data = parse_json(r#"{"tokens":100}"#);
-    nv_agentrt_llm_call_end(&handle, response, end_data, JsValue::NULL).unwrap();
+    nvagentrt_llm_call_end(&handle, response, end_data, JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -98,9 +101,9 @@ fn test_llm_call_generates_events() {
 
     let req = make_llm_request("POST", "https://api.test.com");
     let handle =
-        nv_agentrt_llm_call("evt_llm", &req, None, None, JsValue::NULL, JsValue::NULL).unwrap();
+        nvagentrt_llm_call("evt_llm", &req, None, None, JsValue::NULL, JsValue::NULL).unwrap();
     let response = parse_json(r#"{}"#);
-    nv_agentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
+    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
 
     let events = js_sys::eval("globalThis.__llm_events").unwrap();
     let arr = js_sys::Array::from(&events);
@@ -121,7 +124,7 @@ fn test_llm_call_generates_events() {
 async fn test_llm_execute_basic() {
     let func = js_fn1("request", "return {response: 'hello from llm'}");
     let req = make_llm_request("POST", "https://api.test.com");
-    let result = nv_agentrt_llm_call_execute(
+    let result = nvagentrt_llm_call_execute(
         "exec_llm",
         &req,
         func,
@@ -141,7 +144,7 @@ async fn test_llm_execute_basic() {
 async fn test_llm_execute_promise() {
     let func = js_fn1("request", "return Promise.resolve({async: true})");
     let req = make_llm_request("POST", "https://api.test.com");
-    let result = nv_agentrt_llm_call_execute(
+    let result = nvagentrt_llm_call_execute(
         "async_llm",
         &req,
         func,
@@ -273,7 +276,7 @@ async fn test_llm_request_intercept_modifies_request() {
 
     let func = js_fn1("request", "return {url: request.url}");
     let req = make_llm_request("POST", "https://original.com");
-    let result = nv_agentrt_llm_call_execute(
+    let result = nvagentrt_llm_call_execute(
         "mod_llm",
         &req,
         func,
@@ -301,7 +304,7 @@ async fn test_llm_response_intercept_modifies_response() {
 
     let func = js_fn1("request", "return {value: 'test'}");
     let req = make_llm_request("POST", "https://api.test.com");
-    let result = nv_agentrt_llm_call_execute(
+    let result = nvagentrt_llm_call_execute(
         "resp_mod_llm",
         &req,
         func,
@@ -327,7 +330,7 @@ async fn test_llm_execution_intercept_replaces_func() {
 
     let original = js_fn1("request", "return {original: true}");
     let req = make_llm_request("POST", "https://api.test.com");
-    let result = nv_agentrt_llm_call_execute(
+    let result = nvagentrt_llm_call_execute(
         "repl_llm",
         &req,
         original,

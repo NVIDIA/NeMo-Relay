@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 package nvagentrt
 
 /*
@@ -6,9 +9,9 @@ package nvagentrt
 
 typedef struct FfiStream FfiStream;
 
-extern int32_t nv_agentrt_stream_next(FfiStream* stream, char** out_chunk);
-extern void nv_agentrt_stream_free(FfiStream* stream);
-extern void nv_agentrt_string_free(char* ptr);
+extern int32_t nvagentrt_stream_next(FfiStream* stream, char** out_chunk);
+extern void nvagentrt_stream_free(FfiStream* stream);
+extern void nvagentrt_string_free(char* ptr);
 */
 import "C"
 
@@ -68,13 +71,13 @@ func (s *LlmStream) Next() (string, error) {
 	}
 
 	var chunk *C.char
-	rc := C.nv_agentrt_stream_next(s.ptr, &chunk)
+	rc := C.nvagentrt_stream_next(s.ptr, &chunk)
 
 	switch rc {
 	case 1:
 		// Chunk available
 		text := C.GoString(chunk)
-		C.nv_agentrt_string_free(chunk)
+		C.nvagentrt_string_free(chunk)
 		return text, nil
 	case 0:
 		// Stream done
@@ -90,7 +93,7 @@ func (s *LlmStream) Next() (string, error) {
 // further calls to [LlmStream.Next] return [io.EOF].
 func (s *LlmStream) Close() {
 	if !s.closed && s.ptr != nil {
-		C.nv_agentrt_stream_free(s.ptr)
+		C.nvagentrt_stream_free(s.ptr)
 		s.ptr = nil
 		s.closed = true
 	}

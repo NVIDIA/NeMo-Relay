@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Error types for the NVAgentRT runtime.
 //!
 //! All fallible operations in the runtime return [`Result<T>`], which uses

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Streaming LLM response support for the Node.js NAPI bindings.
 //!
 //! Provides the `LlmStream` type, an async iterator that yields response chunks

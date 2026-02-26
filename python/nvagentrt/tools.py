@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Tool lifecycle operations.
 
 Provides both manual and managed tool-call workflows.
@@ -30,13 +33,13 @@ Example::
 """
 
 from nvagentrt._native import (
-    nv_agentrt_tool_call as call,
+    nvagentrt_tool_call as call,
 )
 from nvagentrt._native import (
-    nv_agentrt_tool_call_end as call_end,
+    nvagentrt_tool_call_end as call_end,
 )
 from nvagentrt._native import (
-    nv_agentrt_tool_call_execute as execute,
+    nvagentrt_tool_call_execute as execute,
 )
 
 __all__ = ["call", "call_end", "execute"]

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Python-facing API functions for the NVAgentRT runtime.
 //!
 //! Each `#[pyfunction]` here is registered into the `_native` module and
@@ -42,8 +45,8 @@ pub fn create_scope_stack() -> PyScopeStack {
 /// scope stack is empty.
 #[pyfunction]
 #[pyo3(signature = ())]
-fn nv_agentrt_get_handle() -> PyResult<PyScopeHandle> {
-    core::nv_agentrt_get_handle()
+fn nvagentrt_get_handle() -> PyResult<PyScopeHandle> {
+    core::nvagentrt_get_handle()
         .map(PyScopeHandle::from)
         .map_err(to_py_err)
 }
@@ -63,7 +66,7 @@ fn nv_agentrt_get_handle() -> PyResult<PyScopeHandle> {
 ///     RuntimeError: If the scope stack is empty and no parent handle is given.
 #[pyfunction]
 #[pyo3(signature = (name, scope_type, *, handle=None, attributes=None))]
-fn nv_agentrt_push_scope(
+fn nvagentrt_push_scope(
     name: &str,
     scope_type: PyScopeType,
     handle: Option<PyScopeHandle>,
@@ -72,7 +75,7 @@ fn nv_agentrt_push_scope(
     let attrs = attributes
         .map(|a| a.inner)
         .unwrap_or(core_types::ScopeAttributes::empty());
-    core::nv_agentrt_push_scope(
+    core::nvagentrt_push_scope(
         name,
         scope_type.into(),
         handle.as_ref().map(|h| &h.inner),
@@ -90,8 +93,8 @@ fn nv_agentrt_push_scope(
 /// Raises:
 ///     RuntimeError: If the scope is not found on the stack.
 #[pyfunction]
-fn nv_agentrt_pop_scope(handle: &PyScopeHandle) -> PyResult<()> {
-    core::nv_agentrt_pop_scope(&handle.inner.uuid).map_err(to_py_err)
+fn nvagentrt_pop_scope(handle: &PyScopeHandle) -> PyResult<()> {
+    core::nvagentrt_pop_scope(&handle.inner.uuid).map_err(to_py_err)
 }
 
 /// Emit a ``Mark`` event under the current or specified scope.
@@ -103,7 +106,7 @@ fn nv_agentrt_pop_scope(handle: &PyScopeHandle) -> PyResult<()> {
 ///     metadata: Optional JSON-serializable metadata.
 #[pyfunction]
 #[pyo3(signature = (name, *, handle=None, data=None, metadata=None))]
-fn nv_agentrt_event(
+fn nvagentrt_event(
     name: &str,
     handle: Option<PyScopeHandle>,
     data: Option<&Bound<'_, PyAny>>,
@@ -111,7 +114,7 @@ fn nv_agentrt_event(
 ) -> PyResult<()> {
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
-    core::nv_agentrt_event(name, handle.as_ref().map(|h| &h.inner), data, metadata)
+    core::nvagentrt_event(name, handle.as_ref().map(|h| &h.inner), data, metadata)
         .map_err(to_py_err)
 }
 
@@ -136,7 +139,7 @@ fn nv_agentrt_event(
 ///     A ``ToolHandle`` that must be passed to ``tool_call_end``.
 #[pyfunction]
 #[pyo3(signature = (name, args, *, handle=None, attributes=None, data=None, metadata=None))]
-fn nv_agentrt_tool_call(
+fn nvagentrt_tool_call(
     name: &str,
     args: &Bound<'_, PyAny>,
     handle: Option<PyScopeHandle>,
@@ -150,7 +153,7 @@ fn nv_agentrt_tool_call(
         .unwrap_or(core_types::ToolAttributes::empty());
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
-    core::nv_agentrt_tool_call(
+    core::nvagentrt_tool_call(
         name,
         args_json,
         handle.as_ref().map(|h| &h.inner),
@@ -171,7 +174,7 @@ fn nv_agentrt_tool_call(
 ///     metadata: Optional JSON-serializable metadata.
 #[pyfunction]
 #[pyo3(signature = (handle, result, *, data=None, metadata=None))]
-fn nv_agentrt_tool_call_end(
+fn nvagentrt_tool_call_end(
     handle: &PyToolHandle,
     result: &Bound<'_, PyAny>,
     data: Option<&Bound<'_, PyAny>>,
@@ -180,7 +183,7 @@ fn nv_agentrt_tool_call_end(
     let result_json = py_to_json(result)?;
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
-    core::nv_agentrt_tool_call_end(&handle.inner, result_json, data, metadata).map_err(to_py_err)
+    core::nvagentrt_tool_call_end(&handle.inner, result_json, data, metadata).map_err(to_py_err)
 }
 
 /// Execute a tool call through the full middleware pipeline.
@@ -204,7 +207,7 @@ fn nv_agentrt_tool_call_end(
 #[pyfunction]
 #[pyo3(signature = (name, args, func, *, handle=None, attributes=None, data=None, metadata=None))]
 #[allow(clippy::too_many_arguments)]
-fn nv_agentrt_tool_call_execute<'py>(
+fn nvagentrt_tool_call_execute<'py>(
     py: Python<'py>,
     name: String,
     args: &Bound<'py, PyAny>,
@@ -227,7 +230,7 @@ fn nv_agentrt_tool_call_execute<'py>(
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         nvagentrt_core::TASK_SCOPE_STACK
             .scope(scope_stack, async move {
-                let result = core::nv_agentrt_tool_call_execute(
+                let result = core::nvagentrt_tool_call_execute(
                     &name,
                     args_json,
                     exec_fn,
@@ -265,7 +268,7 @@ fn nv_agentrt_tool_call_execute<'py>(
 ///     An ``LLMHandle`` that must be passed to ``llm_call_end``.
 #[pyfunction]
 #[pyo3(signature = (name, request, *, handle=None, attributes=None, data=None, metadata=None))]
-fn nv_agentrt_llm_call(
+fn nvagentrt_llm_call(
     name: &str,
     request: &PyLLMRequest,
     handle: Option<PyScopeHandle>,
@@ -278,7 +281,7 @@ fn nv_agentrt_llm_call(
         .unwrap_or(core_types::LLMAttributes::empty());
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
-    core::nv_agentrt_llm_call(
+    core::nvagentrt_llm_call(
         name,
         &request.inner,
         handle.as_ref().map(|h| &h.inner),
@@ -299,7 +302,7 @@ fn nv_agentrt_llm_call(
 ///     metadata: Optional JSON-serializable metadata.
 #[pyfunction]
 #[pyo3(signature = (handle, response, *, data=None, metadata=None))]
-fn nv_agentrt_llm_call_end(
+fn nvagentrt_llm_call_end(
     handle: &PyLLMHandle,
     response: &Bound<'_, PyAny>,
     data: Option<&Bound<'_, PyAny>>,
@@ -308,7 +311,7 @@ fn nv_agentrt_llm_call_end(
     let response_json = py_to_json(response)?;
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
-    core::nv_agentrt_llm_call_end(&handle.inner, response_json, data, metadata).map_err(to_py_err)
+    core::nvagentrt_llm_call_end(&handle.inner, response_json, data, metadata).map_err(to_py_err)
 }
 
 /// Execute an LLM call through the full middleware pipeline.
@@ -332,7 +335,7 @@ fn nv_agentrt_llm_call_end(
 #[pyfunction]
 #[pyo3(signature = (name, request, func, *, handle=None, attributes=None, data=None, metadata=None))]
 #[allow(clippy::too_many_arguments)]
-fn nv_agentrt_llm_call_execute<'py>(
+fn nvagentrt_llm_call_execute<'py>(
     py: Python<'py>,
     name: String,
     request: PyLLMRequest,
@@ -354,7 +357,7 @@ fn nv_agentrt_llm_call_execute<'py>(
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         nvagentrt_core::TASK_SCOPE_STACK
             .scope(scope_stack, async move {
-                let result = core::nv_agentrt_llm_call_execute(
+                let result = core::nvagentrt_llm_call_execute(
                     &name,
                     request.inner,
                     exec_fn,
@@ -392,7 +395,7 @@ fn nv_agentrt_llm_call_execute<'py>(
 #[pyfunction]
 #[pyo3(signature = (name, request, func, *, handle=None, attributes=None, data=None, metadata=None))]
 #[allow(clippy::too_many_arguments)]
-fn nv_agentrt_llm_stream_call_execute<'py>(
+fn nvagentrt_llm_stream_call_execute<'py>(
     py: Python<'py>,
     name: String,
     request: PyLLMRequest,
@@ -414,7 +417,7 @@ fn nv_agentrt_llm_stream_call_execute<'py>(
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         nvagentrt_core::TASK_SCOPE_STACK
             .scope(scope_stack, async move {
-                let rust_stream = core::nv_agentrt_llm_stream_call_execute(
+                let rust_stream = core::nvagentrt_llm_stream_call_execute(
                     &name,
                     request.inner,
                     exec_fn,
@@ -471,10 +474,10 @@ macro_rules! py_guardrail_tool_api {
 //
 // Deregister with ``deregister_tool_sanitize_request_guardrail``.
 py_guardrail_tool_api!(
-    nv_agentrt_register_tool_sanitize_request_guardrail,
-    nv_agentrt_deregister_tool_sanitize_request_guardrail,
-    core::nv_agentrt_register_tool_sanitize_request_guardrail,
-    core::nv_agentrt_deregister_tool_sanitize_request_guardrail,
+    nvagentrt_register_tool_sanitize_request_guardrail,
+    nvagentrt_deregister_tool_sanitize_request_guardrail,
+    core::nvagentrt_register_tool_sanitize_request_guardrail,
+    core::nvagentrt_deregister_tool_sanitize_request_guardrail,
     py_callable::wrap_py_tool_fn
 );
 
@@ -484,10 +487,10 @@ py_guardrail_tool_api!(
 //
 // Deregister with ``deregister_tool_sanitize_response_guardrail``.
 py_guardrail_tool_api!(
-    nv_agentrt_register_tool_sanitize_response_guardrail,
-    nv_agentrt_deregister_tool_sanitize_response_guardrail,
-    core::nv_agentrt_register_tool_sanitize_response_guardrail,
-    core::nv_agentrt_deregister_tool_sanitize_response_guardrail,
+    nvagentrt_register_tool_sanitize_response_guardrail,
+    nvagentrt_deregister_tool_sanitize_response_guardrail,
+    core::nvagentrt_register_tool_sanitize_response_guardrail,
+    core::nvagentrt_deregister_tool_sanitize_response_guardrail,
     py_callable::wrap_py_tool_fn
 );
 
@@ -496,12 +499,12 @@ py_guardrail_tool_api!(
 /// Callback: ``(tool_name: str, args: Any) -> Optional[str]``.
 /// Return ``None`` to allow execution, or a rejection reason string to block it.
 #[pyfunction]
-fn nv_agentrt_register_tool_conditional_execution_guardrail(
+fn nvagentrt_register_tool_conditional_execution_guardrail(
     name: &str,
     priority: i32,
     guardrail: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nv_agentrt_register_tool_conditional_execution_guardrail(
+    core::nvagentrt_register_tool_conditional_execution_guardrail(
         name,
         priority,
         py_callable::wrap_py_tool_conditional_fn(guardrail),
@@ -511,8 +514,8 @@ fn nv_agentrt_register_tool_conditional_execution_guardrail(
 
 /// Remove a previously registered tool conditional-execution guardrail.
 #[pyfunction]
-fn nv_agentrt_deregister_tool_conditional_execution_guardrail(name: &str) -> PyResult<bool> {
-    core::nv_agentrt_deregister_tool_conditional_execution_guardrail(name).map_err(to_py_err)
+fn nvagentrt_deregister_tool_conditional_execution_guardrail(name: &str) -> PyResult<bool> {
+    core::nvagentrt_deregister_tool_conditional_execution_guardrail(name).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -545,10 +548,10 @@ macro_rules! py_intercept_tool_api {
 // Callback: ``(tool_name: str, args: Any) -> Any`` — transforms tool arguments.
 // If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
 py_intercept_tool_api!(
-    nv_agentrt_register_tool_request_intercept,
-    nv_agentrt_deregister_tool_request_intercept,
-    core::nv_agentrt_register_tool_request_intercept,
-    core::nv_agentrt_deregister_tool_request_intercept,
+    nvagentrt_register_tool_request_intercept,
+    nvagentrt_deregister_tool_request_intercept,
+    core::nvagentrt_register_tool_request_intercept,
+    core::nvagentrt_deregister_tool_request_intercept,
     py_callable::wrap_py_tool_fn
 );
 
@@ -557,10 +560,10 @@ py_intercept_tool_api!(
 // Callback: ``(tool_name: str, result: Any) -> Any`` — transforms tool result.
 // If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
 py_intercept_tool_api!(
-    nv_agentrt_register_tool_response_intercept,
-    nv_agentrt_deregister_tool_response_intercept,
-    core::nv_agentrt_register_tool_response_intercept,
-    core::nv_agentrt_deregister_tool_response_intercept,
+    nvagentrt_register_tool_response_intercept,
+    nvagentrt_deregister_tool_response_intercept,
+    core::nvagentrt_register_tool_response_intercept,
+    core::nvagentrt_deregister_tool_response_intercept,
     py_callable::wrap_py_tool_fn
 );
 
@@ -571,13 +574,13 @@ py_intercept_tool_api!(
 ///
 /// ``callable``: ``async (args: Any) -> Any`` — replacement execution function.
 #[pyfunction]
-fn nv_agentrt_register_tool_execution_intercept(
+fn nvagentrt_register_tool_execution_intercept(
     name: &str,
     priority: i32,
     conditional: Py<PyAny>,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nv_agentrt_register_tool_execution_intercept(
+    core::nvagentrt_register_tool_execution_intercept(
         name,
         priority,
         py_callable::wrap_py_tool_exec_conditional_fn(conditional),
@@ -588,8 +591,8 @@ fn nv_agentrt_register_tool_execution_intercept(
 
 /// Remove a previously registered tool execution intercept.
 #[pyfunction]
-fn nv_agentrt_deregister_tool_execution_intercept(name: &str) -> PyResult<bool> {
-    core::nv_agentrt_deregister_tool_execution_intercept(name).map_err(to_py_err)
+fn nvagentrt_deregister_tool_execution_intercept(name: &str) -> PyResult<bool> {
+    core::nvagentrt_deregister_tool_execution_intercept(name).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -600,12 +603,12 @@ fn nv_agentrt_deregister_tool_execution_intercept(name: &str) -> PyResult<bool> 
 ///
 /// Callback: ``(request: LLMRequest) -> LLMRequest`` — returns a sanitized request.
 #[pyfunction]
-fn nv_agentrt_register_llm_sanitize_request_guardrail(
+fn nvagentrt_register_llm_sanitize_request_guardrail(
     name: &str,
     priority: i32,
     guardrail: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nv_agentrt_register_llm_sanitize_request_guardrail(
+    core::nvagentrt_register_llm_sanitize_request_guardrail(
         name,
         priority,
         py_callable::wrap_py_llm_sanitize_request_fn(guardrail),
@@ -615,8 +618,8 @@ fn nv_agentrt_register_llm_sanitize_request_guardrail(
 
 /// Remove a previously registered LLM sanitize-request guardrail.
 #[pyfunction]
-fn nv_agentrt_deregister_llm_sanitize_request_guardrail(name: &str) -> PyResult<bool> {
-    core::nv_agentrt_deregister_llm_sanitize_request_guardrail(name).map_err(to_py_err)
+fn nvagentrt_deregister_llm_sanitize_request_guardrail(name: &str) -> PyResult<bool> {
+    core::nvagentrt_deregister_llm_sanitize_request_guardrail(name).map_err(to_py_err)
 }
 
 /// Macro that generates a register/deregister pair for guardrails
@@ -640,10 +643,10 @@ macro_rules! py_guardrail_json_api {
 //
 // Callback: ``(response: Any) -> Any`` — returns a sanitized response.
 py_guardrail_json_api!(
-    nv_agentrt_register_llm_sanitize_response_guardrail,
-    nv_agentrt_deregister_llm_sanitize_response_guardrail,
-    core::nv_agentrt_register_llm_sanitize_response_guardrail,
-    core::nv_agentrt_deregister_llm_sanitize_response_guardrail
+    nvagentrt_register_llm_sanitize_response_guardrail,
+    nvagentrt_deregister_llm_sanitize_response_guardrail,
+    core::nvagentrt_register_llm_sanitize_response_guardrail,
+    core::nvagentrt_deregister_llm_sanitize_response_guardrail
 );
 
 /// Register an LLM conditional-execution guardrail.
@@ -651,12 +654,12 @@ py_guardrail_json_api!(
 /// Callback: ``(request: LLMRequest) -> Optional[str]``.
 /// Return ``None`` to allow execution, or a rejection reason string to block it.
 #[pyfunction]
-fn nv_agentrt_register_llm_conditional_execution_guardrail(
+fn nvagentrt_register_llm_conditional_execution_guardrail(
     name: &str,
     priority: i32,
     guardrail: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nv_agentrt_register_llm_conditional_execution_guardrail(
+    core::nvagentrt_register_llm_conditional_execution_guardrail(
         name,
         priority,
         py_callable::wrap_py_llm_conditional_fn(guardrail),
@@ -666,8 +669,8 @@ fn nv_agentrt_register_llm_conditional_execution_guardrail(
 
 /// Remove a previously registered LLM conditional-execution guardrail.
 #[pyfunction]
-fn nv_agentrt_deregister_llm_conditional_execution_guardrail(name: &str) -> PyResult<bool> {
-    core::nv_agentrt_deregister_llm_conditional_execution_guardrail(name).map_err(to_py_err)
+fn nvagentrt_deregister_llm_conditional_execution_guardrail(name: &str) -> PyResult<bool> {
+    core::nvagentrt_deregister_llm_conditional_execution_guardrail(name).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -679,13 +682,13 @@ fn nv_agentrt_deregister_llm_conditional_execution_guardrail(name: &str) -> PyRe
 /// Callback: ``(request: LLMRequest) -> LLMRequest`` — transforms the request.
 /// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
 #[pyfunction]
-fn nv_agentrt_register_llm_request_intercept(
+fn nvagentrt_register_llm_request_intercept(
     name: &str,
     priority: i32,
     break_chain: bool,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nv_agentrt_register_llm_request_intercept(
+    core::nvagentrt_register_llm_request_intercept(
         name,
         priority,
         break_chain,
@@ -696,8 +699,8 @@ fn nv_agentrt_register_llm_request_intercept(
 
 /// Remove a previously registered LLM request intercept.
 #[pyfunction]
-fn nv_agentrt_deregister_llm_request_intercept(name: &str) -> PyResult<bool> {
-    core::nv_agentrt_deregister_llm_request_intercept(name).map_err(to_py_err)
+fn nvagentrt_deregister_llm_request_intercept(name: &str) -> PyResult<bool> {
+    core::nvagentrt_deregister_llm_request_intercept(name).map_err(to_py_err)
 }
 
 /// Register an LLM response intercept.
@@ -705,13 +708,13 @@ fn nv_agentrt_deregister_llm_request_intercept(name: &str) -> PyResult<bool> {
 /// Callback: ``(response: Any) -> Any`` — transforms the LLM response.
 /// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
 #[pyfunction]
-fn nv_agentrt_register_llm_response_intercept(
+fn nvagentrt_register_llm_response_intercept(
     name: &str,
     priority: i32,
     break_chain: bool,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nv_agentrt_register_llm_response_intercept(
+    core::nvagentrt_register_llm_response_intercept(
         name,
         priority,
         break_chain,
@@ -722,8 +725,8 @@ fn nv_agentrt_register_llm_response_intercept(
 
 /// Remove a previously registered LLM response intercept.
 #[pyfunction]
-fn nv_agentrt_deregister_llm_response_intercept(name: &str) -> PyResult<bool> {
-    core::nv_agentrt_deregister_llm_response_intercept(name).map_err(to_py_err)
+fn nvagentrt_deregister_llm_response_intercept(name: &str) -> PyResult<bool> {
+    core::nvagentrt_deregister_llm_response_intercept(name).map_err(to_py_err)
 }
 
 /// Register an LLM stream-response intercept.
@@ -731,13 +734,13 @@ fn nv_agentrt_deregister_llm_response_intercept(name: &str) -> PyResult<bool> {
 /// Callback: ``(event: SseEvent) -> SseEvent`` — transforms each SSE event in a stream.
 /// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
 #[pyfunction]
-fn nv_agentrt_register_llm_stream_response_intercept(
+fn nvagentrt_register_llm_stream_response_intercept(
     name: &str,
     priority: i32,
     break_chain: bool,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nv_agentrt_register_llm_stream_response_intercept(
+    core::nvagentrt_register_llm_stream_response_intercept(
         name,
         priority,
         break_chain,
@@ -748,8 +751,8 @@ fn nv_agentrt_register_llm_stream_response_intercept(
 
 /// Remove a previously registered LLM stream-response intercept.
 #[pyfunction]
-fn nv_agentrt_deregister_llm_stream_response_intercept(name: &str) -> PyResult<bool> {
-    core::nv_agentrt_deregister_llm_stream_response_intercept(name).map_err(to_py_err)
+fn nvagentrt_deregister_llm_stream_response_intercept(name: &str) -> PyResult<bool> {
+    core::nvagentrt_deregister_llm_stream_response_intercept(name).map_err(to_py_err)
 }
 
 /// Register an LLM execution intercept that can replace the LLM call.
@@ -759,13 +762,13 @@ fn nv_agentrt_deregister_llm_stream_response_intercept(name: &str) -> PyResult<b
 ///
 /// ``callable``: ``async (request: LLMRequest) -> Any`` — replacement execution function.
 #[pyfunction]
-fn nv_agentrt_register_llm_execution_intercept(
+fn nvagentrt_register_llm_execution_intercept(
     name: &str,
     priority: i32,
     conditional: Py<PyAny>,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nv_agentrt_register_llm_execution_intercept(
+    core::nvagentrt_register_llm_execution_intercept(
         name,
         priority,
         py_callable::wrap_py_llm_exec_conditional_fn(conditional),
@@ -776,8 +779,8 @@ fn nv_agentrt_register_llm_execution_intercept(
 
 /// Remove a previously registered LLM execution intercept.
 #[pyfunction]
-fn nv_agentrt_deregister_llm_execution_intercept(name: &str) -> PyResult<bool> {
-    core::nv_agentrt_deregister_llm_execution_intercept(name).map_err(to_py_err)
+fn nvagentrt_deregister_llm_execution_intercept(name: &str) -> PyResult<bool> {
+    core::nvagentrt_deregister_llm_execution_intercept(name).map_err(to_py_err)
 }
 
 /// Register an LLM stream-execution intercept that can replace the streaming LLM call.
@@ -788,13 +791,13 @@ fn nv_agentrt_deregister_llm_execution_intercept(name: &str) -> PyResult<bool> {
 /// ``callable``: ``async (request: LLMRequest) -> AsyncIterator[str]`` —
 /// replacement streaming execution function.
 #[pyfunction]
-fn nv_agentrt_register_llm_stream_execution_intercept(
+fn nvagentrt_register_llm_stream_execution_intercept(
     name: &str,
     priority: i32,
     conditional: Py<PyAny>,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nv_agentrt_register_llm_stream_execution_intercept(
+    core::nvagentrt_register_llm_stream_execution_intercept(
         name,
         priority,
         py_callable::wrap_py_llm_exec_conditional_fn(conditional),
@@ -805,8 +808,8 @@ fn nv_agentrt_register_llm_stream_execution_intercept(
 
 /// Remove a previously registered LLM stream-execution intercept.
 #[pyfunction]
-fn nv_agentrt_deregister_llm_stream_execution_intercept(name: &str) -> PyResult<bool> {
-    core::nv_agentrt_deregister_llm_stream_execution_intercept(name).map_err(to_py_err)
+fn nvagentrt_deregister_llm_stream_execution_intercept(name: &str) -> PyResult<bool> {
+    core::nvagentrt_deregister_llm_stream_execution_intercept(name).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -825,8 +828,8 @@ fn nv_agentrt_deregister_llm_stream_execution_intercept(name: &str) -> PyResult<
 /// Raises:
 ///     RuntimeError: If a subscriber with this name already exists.
 #[pyfunction]
-fn nv_agentrt_register_subscriber(name: &str, callback: Py<PyAny>) -> PyResult<()> {
-    core::nv_agentrt_register_subscriber(name, py_callable::wrap_py_event_subscriber(callback))
+fn nvagentrt_register_subscriber(name: &str, callback: Py<PyAny>) -> PyResult<()> {
+    core::nvagentrt_register_subscriber(name, py_callable::wrap_py_event_subscriber(callback))
         .map_err(to_py_err)
 }
 
@@ -834,8 +837,8 @@ fn nv_agentrt_register_subscriber(name: &str, callback: Py<PyAny>) -> PyResult<(
 ///
 /// Returns ``True`` if a subscriber with that name was found and removed.
 #[pyfunction]
-fn nv_agentrt_deregister_subscriber(name: &str) -> PyResult<bool> {
-    core::nv_agentrt_deregister_subscriber(name).map_err(to_py_err)
+fn nvagentrt_deregister_subscriber(name: &str) -> PyResult<bool> {
+    core::nvagentrt_deregister_subscriber(name).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -848,145 +851,145 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;
 
     // Scope/handle ops
-    m.add_function(wrap_pyfunction!(nv_agentrt_get_handle, m)?)?;
-    m.add_function(wrap_pyfunction!(nv_agentrt_push_scope, m)?)?;
-    m.add_function(wrap_pyfunction!(nv_agentrt_pop_scope, m)?)?;
-    m.add_function(wrap_pyfunction!(nv_agentrt_event, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_get_handle, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_push_scope, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_pop_scope, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_event, m)?)?;
 
     // Tool lifecycle
-    m.add_function(wrap_pyfunction!(nv_agentrt_tool_call, m)?)?;
-    m.add_function(wrap_pyfunction!(nv_agentrt_tool_call_end, m)?)?;
-    m.add_function(wrap_pyfunction!(nv_agentrt_tool_call_execute, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_tool_call, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_tool_call_end, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_tool_call_execute, m)?)?;
 
     // LLM lifecycle
-    m.add_function(wrap_pyfunction!(nv_agentrt_llm_call, m)?)?;
-    m.add_function(wrap_pyfunction!(nv_agentrt_llm_call_end, m)?)?;
-    m.add_function(wrap_pyfunction!(nv_agentrt_llm_call_execute, m)?)?;
-    m.add_function(wrap_pyfunction!(nv_agentrt_llm_stream_call_execute, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_llm_call, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_llm_call_end, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_llm_call_execute, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_llm_stream_call_execute, m)?)?;
 
     // Tool guardrails
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_register_tool_sanitize_request_guardrail,
+        nvagentrt_register_tool_sanitize_request_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_deregister_tool_sanitize_request_guardrail,
+        nvagentrt_deregister_tool_sanitize_request_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_register_tool_sanitize_response_guardrail,
+        nvagentrt_register_tool_sanitize_response_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_deregister_tool_sanitize_response_guardrail,
+        nvagentrt_deregister_tool_sanitize_response_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_register_tool_conditional_execution_guardrail,
+        nvagentrt_register_tool_conditional_execution_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_deregister_tool_conditional_execution_guardrail,
+        nvagentrt_deregister_tool_conditional_execution_guardrail,
         m
     )?)?;
 
     // Tool intercepts
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_register_tool_request_intercept,
+        nvagentrt_register_tool_request_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_deregister_tool_request_intercept,
+        nvagentrt_deregister_tool_request_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_register_tool_response_intercept,
+        nvagentrt_register_tool_response_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_deregister_tool_response_intercept,
+        nvagentrt_deregister_tool_response_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_register_tool_execution_intercept,
+        nvagentrt_register_tool_execution_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_deregister_tool_execution_intercept,
+        nvagentrt_deregister_tool_execution_intercept,
         m
     )?)?;
 
     // LLM guardrails
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_register_llm_sanitize_request_guardrail,
+        nvagentrt_register_llm_sanitize_request_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_deregister_llm_sanitize_request_guardrail,
+        nvagentrt_deregister_llm_sanitize_request_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_register_llm_sanitize_response_guardrail,
+        nvagentrt_register_llm_sanitize_response_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_deregister_llm_sanitize_response_guardrail,
+        nvagentrt_deregister_llm_sanitize_response_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_register_llm_conditional_execution_guardrail,
+        nvagentrt_register_llm_conditional_execution_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_deregister_llm_conditional_execution_guardrail,
+        nvagentrt_deregister_llm_conditional_execution_guardrail,
         m
     )?)?;
 
     // LLM intercepts
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_register_llm_request_intercept,
+        nvagentrt_register_llm_request_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_deregister_llm_request_intercept,
+        nvagentrt_deregister_llm_request_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_register_llm_response_intercept,
+        nvagentrt_register_llm_response_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_deregister_llm_response_intercept,
+        nvagentrt_deregister_llm_response_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_register_llm_stream_response_intercept,
+        nvagentrt_register_llm_stream_response_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_deregister_llm_stream_response_intercept,
+        nvagentrt_deregister_llm_stream_response_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_register_llm_execution_intercept,
+        nvagentrt_register_llm_execution_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_deregister_llm_execution_intercept,
+        nvagentrt_deregister_llm_execution_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_register_llm_stream_execution_intercept,
+        nvagentrt_register_llm_stream_execution_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nv_agentrt_deregister_llm_stream_execution_intercept,
+        nvagentrt_deregister_llm_stream_execution_intercept,
         m
     )?)?;
 
     // Subscribers
-    m.add_function(wrap_pyfunction!(nv_agentrt_register_subscriber, m)?)?;
-    m.add_function(wrap_pyfunction!(nv_agentrt_deregister_subscriber, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_register_subscriber, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_deregister_subscriber, m)?)?;
 
     Ok(())
 }

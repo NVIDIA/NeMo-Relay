@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! JSON utilities for the NVAgentRT runtime.
 //!
 //! This module provides a [`Json`] type alias for [`serde_json::Value`] used

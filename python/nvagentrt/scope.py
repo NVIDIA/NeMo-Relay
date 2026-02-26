@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Scope and handle operations.
 
 The scope stack is a hierarchical structure that tracks execution context.
@@ -28,16 +31,16 @@ Example::
 """
 
 from nvagentrt._native import (
-    nv_agentrt_event as event,
+    nvagentrt_event as event,
 )
 from nvagentrt._native import (
-    nv_agentrt_get_handle as get_handle,
+    nvagentrt_get_handle as get_handle,
 )
 from nvagentrt._native import (
-    nv_agentrt_pop_scope as pop,
+    nvagentrt_pop_scope as pop,
 )
 from nvagentrt._native import (
-    nv_agentrt_push_scope as push,
+    nvagentrt_push_scope as push,
 )
 
 __all__ = ["get_handle", "push", "pop", "event"]

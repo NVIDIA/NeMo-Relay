@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Conversion utilities for bridging between NVAgentRT core types and NAPI types.
 //!
 //! Provides helpers to convert errors and optional JSON values between the core

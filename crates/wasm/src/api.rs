@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Top-level NVAgentRT API functions exposed to JavaScript via `wasm_bindgen`.
 //!
 //! This module contains all public entry points for:
@@ -36,8 +39,8 @@ use crate::types::*;
 ///
 /// Throws if the scope stack is empty.
 #[wasm_bindgen(js_name = "getHandle")]
-pub fn nv_agentrt_get_handle() -> Result<WasmScopeHandle, JsValue> {
-    nvagentrt_core::nv_agentrt_get_handle()
+pub fn nvagentrt_get_handle() -> Result<WasmScopeHandle, JsValue> {
+    nvagentrt_core::nvagentrt_get_handle()
         .map(WasmScopeHandle::from)
         .map_err(to_js_err)
 }
@@ -49,14 +52,14 @@ pub fn nv_agentrt_get_handle() -> Result<WasmScopeHandle, JsValue> {
 /// - `parent` - Optional parent scope handle; uses the current top if omitted.
 /// - `attributes` - Optional bitfield of scope attribute flags.
 #[wasm_bindgen(js_name = "pushScope")]
-pub fn nv_agentrt_push_scope(
+pub fn nvagentrt_push_scope(
     name: &str,
     scope_type: i32,
     parent: Option<WasmScopeHandle>,
     attributes: Option<u32>,
 ) -> Result<WasmScopeHandle, JsValue> {
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    nvagentrt_core::nv_agentrt_push_scope(
+    nvagentrt_core::nvagentrt_push_scope(
         name,
         i32_to_scope_type(scope_type),
         parent.as_ref().map(|h| &h.inner),
@@ -70,8 +73,8 @@ pub fn nv_agentrt_push_scope(
 ///
 /// Throws if the handle does not match the current top of the stack.
 #[wasm_bindgen(js_name = "popScope")]
-pub fn nv_agentrt_pop_scope(handle: &WasmScopeHandle) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_pop_scope(&handle.inner.uuid).map_err(to_js_err)
+pub fn nvagentrt_pop_scope(handle: &WasmScopeHandle) -> Result<(), JsValue> {
+    nvagentrt_core::nvagentrt_pop_scope(&handle.inner.uuid).map_err(to_js_err)
 }
 
 /// Emits a custom event to all registered subscribers.
@@ -81,13 +84,13 @@ pub fn nv_agentrt_pop_scope(handle: &WasmScopeHandle) -> Result<(), JsValue> {
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "event")]
-pub fn nv_agentrt_event(
+pub fn nvagentrt_event(
     name: &str,
     parent: Option<WasmScopeHandle>,
     data: JsValue,
     metadata: JsValue,
 ) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_event(
+    nvagentrt_core::nvagentrt_event(
         name,
         parent.as_ref().map(|h| &h.inner),
         opt_js_to_json(&data)?,
@@ -111,7 +114,7 @@ pub fn nv_agentrt_event(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "toolCall")]
-pub fn nv_agentrt_tool_call(
+pub fn nvagentrt_tool_call(
     name: &str,
     args: JsValue,
     parent: Option<WasmScopeHandle>,
@@ -121,7 +124,7 @@ pub fn nv_agentrt_tool_call(
 ) -> Result<WasmToolHandle, JsValue> {
     let args_json = js_to_json(&args)?;
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    nvagentrt_core::nv_agentrt_tool_call(
+    nvagentrt_core::nvagentrt_tool_call(
         name,
         args_json,
         parent.as_ref().map(|h| &h.inner),
@@ -140,14 +143,14 @@ pub fn nv_agentrt_tool_call(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "toolCallEnd")]
-pub fn nv_agentrt_tool_call_end(
+pub fn nvagentrt_tool_call_end(
     handle: &WasmToolHandle,
     result: JsValue,
     data: JsValue,
     metadata: JsValue,
 ) -> Result<(), JsValue> {
     let result_json = js_to_json(&result)?;
-    nvagentrt_core::nv_agentrt_tool_call_end(
+    nvagentrt_core::nvagentrt_tool_call_end(
         &handle.inner,
         result_json,
         opt_js_to_json(&data)?,
@@ -169,7 +172,7 @@ pub fn nv_agentrt_tool_call_end(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "toolCallExecute")]
-pub async fn nv_agentrt_tool_call_execute(
+pub async fn nvagentrt_tool_call_execute(
     name: &str,
     args: JsValue,
     func: Function,
@@ -185,7 +188,7 @@ pub async fn nv_agentrt_tool_call_execute(
         .unwrap_or_else(nvagentrt_core::task_scope_top);
     let exec_fn = callable::wrap_js_tool_exec_fn(func);
 
-    let result = nvagentrt_core::nv_agentrt_tool_call_execute(
+    let result = nvagentrt_core::nvagentrt_tool_call_execute(
         name,
         args_json,
         exec_fn,
@@ -215,7 +218,7 @@ pub async fn nv_agentrt_tool_call_execute(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "llmCall")]
-pub fn nv_agentrt_llm_call(
+pub fn nvagentrt_llm_call(
     name: &str,
     request: &WasmLLMRequest,
     parent: Option<WasmScopeHandle>,
@@ -224,7 +227,7 @@ pub fn nv_agentrt_llm_call(
     metadata: JsValue,
 ) -> Result<WasmLLMHandle, JsValue> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    nvagentrt_core::nv_agentrt_llm_call(
+    nvagentrt_core::nvagentrt_llm_call(
         name,
         &request.inner,
         parent.as_ref().map(|h| &h.inner),
@@ -243,14 +246,14 @@ pub fn nv_agentrt_llm_call(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "llmCallEnd")]
-pub fn nv_agentrt_llm_call_end(
+pub fn nvagentrt_llm_call_end(
     handle: &WasmLLMHandle,
     response: JsValue,
     data: JsValue,
     metadata: JsValue,
 ) -> Result<(), JsValue> {
     let response_json = js_to_json(&response)?;
-    nvagentrt_core::nv_agentrt_llm_call_end(
+    nvagentrt_core::nvagentrt_llm_call_end(
         &handle.inner,
         response_json,
         opt_js_to_json(&data)?,
@@ -272,7 +275,7 @@ pub fn nv_agentrt_llm_call_end(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "llmCallExecute")]
-pub async fn nv_agentrt_llm_call_execute(
+pub async fn nvagentrt_llm_call_execute(
     name: &str,
     request: &WasmLLMRequest,
     func: Function,
@@ -287,7 +290,7 @@ pub async fn nv_agentrt_llm_call_execute(
         .unwrap_or_else(nvagentrt_core::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
 
-    let result = nvagentrt_core::nv_agentrt_llm_call_execute(
+    let result = nvagentrt_core::nvagentrt_llm_call_execute(
         name,
         request.inner.clone(),
         exec_fn,
@@ -317,7 +320,7 @@ pub fn register_tool_sanitize_request_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_register_tool_sanitize_request_guardrail(
+    nvagentrt_core::nvagentrt_register_tool_sanitize_request_guardrail(
         name,
         priority,
         callable::wrap_js_tool_fn(guardrail),
@@ -330,7 +333,7 @@ pub fn register_tool_sanitize_request_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolSanitizeRequestGuardrail")]
 pub fn deregister_tool_sanitize_request_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_tool_sanitize_request_guardrail(name).map_err(to_js_err)
+    nvagentrt_core::nvagentrt_deregister_tool_sanitize_request_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that sanitizes tool response data after execution.
@@ -344,7 +347,7 @@ pub fn register_tool_sanitize_response_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_register_tool_sanitize_response_guardrail(
+    nvagentrt_core::nvagentrt_register_tool_sanitize_response_guardrail(
         name,
         priority,
         callable::wrap_js_tool_fn(guardrail),
@@ -357,7 +360,7 @@ pub fn register_tool_sanitize_response_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolSanitizeResponseGuardrail")]
 pub fn deregister_tool_sanitize_response_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_tool_sanitize_response_guardrail(name).map_err(to_js_err)
+    nvagentrt_core::nvagentrt_deregister_tool_sanitize_response_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that conditionally gates tool execution.
@@ -374,7 +377,7 @@ pub fn register_tool_conditional_execution_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_register_tool_conditional_execution_guardrail(
+    nvagentrt_core::nvagentrt_register_tool_conditional_execution_guardrail(
         name,
         priority,
         callable::wrap_js_tool_conditional_fn(guardrail),
@@ -387,7 +390,7 @@ pub fn register_tool_conditional_execution_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolConditionalExecutionGuardrail")]
 pub fn deregister_tool_conditional_execution_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_tool_conditional_execution_guardrail(name)
+    nvagentrt_core::nvagentrt_deregister_tool_conditional_execution_guardrail(name)
         .map_err(to_js_err)
 }
 
@@ -406,7 +409,7 @@ pub fn register_tool_request_intercept(
     break_chain: bool,
     func: Function,
 ) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_register_tool_request_intercept(
+    nvagentrt_core::nvagentrt_register_tool_request_intercept(
         name,
         priority,
         break_chain,
@@ -420,7 +423,7 @@ pub fn register_tool_request_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolRequestIntercept")]
 pub fn deregister_tool_request_intercept(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_tool_request_intercept(name).map_err(to_js_err)
+    nvagentrt_core::nvagentrt_deregister_tool_request_intercept(name).map_err(to_js_err)
 }
 
 /// Registers an intercept that transforms tool response data.
@@ -436,7 +439,7 @@ pub fn register_tool_response_intercept(
     break_chain: bool,
     func: Function,
 ) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_register_tool_response_intercept(
+    nvagentrt_core::nvagentrt_register_tool_response_intercept(
         name,
         priority,
         break_chain,
@@ -450,7 +453,7 @@ pub fn register_tool_response_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolResponseIntercept")]
 pub fn deregister_tool_response_intercept(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_tool_response_intercept(name).map_err(to_js_err)
+    nvagentrt_core::nvagentrt_deregister_tool_response_intercept(name).map_err(to_js_err)
 }
 
 /// Registers an intercept that can replace tool execution entirely.
@@ -466,7 +469,7 @@ pub fn register_tool_execution_intercept(
     conditional: Function,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_register_tool_execution_intercept(
+    nvagentrt_core::nvagentrt_register_tool_execution_intercept(
         name,
         priority,
         callable::wrap_js_tool_exec_conditional_fn(conditional),
@@ -480,7 +483,7 @@ pub fn register_tool_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolExecutionIntercept")]
 pub fn deregister_tool_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_tool_execution_intercept(name).map_err(to_js_err)
+    nvagentrt_core::nvagentrt_deregister_tool_execution_intercept(name).map_err(to_js_err)
 }
 
 // LLM guardrails
@@ -496,7 +499,7 @@ pub fn register_llm_sanitize_request_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_register_llm_sanitize_request_guardrail(
+    nvagentrt_core::nvagentrt_register_llm_sanitize_request_guardrail(
         name,
         priority,
         callable::wrap_js_llm_sanitize_request_fn(guardrail),
@@ -509,7 +512,7 @@ pub fn register_llm_sanitize_request_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmSanitizeRequestGuardrail")]
 pub fn deregister_llm_sanitize_request_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_llm_sanitize_request_guardrail(name).map_err(to_js_err)
+    nvagentrt_core::nvagentrt_deregister_llm_sanitize_request_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that sanitizes LLM response data after the call.
@@ -523,7 +526,7 @@ pub fn register_llm_sanitize_response_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_register_llm_sanitize_response_guardrail(
+    nvagentrt_core::nvagentrt_register_llm_sanitize_response_guardrail(
         name,
         priority,
         callable::wrap_js_json_fn(guardrail),
@@ -536,7 +539,7 @@ pub fn register_llm_sanitize_response_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmSanitizeResponseGuardrail")]
 pub fn deregister_llm_sanitize_response_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_llm_sanitize_response_guardrail(name).map_err(to_js_err)
+    nvagentrt_core::nvagentrt_deregister_llm_sanitize_response_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that conditionally gates LLM execution.
@@ -553,7 +556,7 @@ pub fn register_llm_conditional_execution_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_register_llm_conditional_execution_guardrail(
+    nvagentrt_core::nvagentrt_register_llm_conditional_execution_guardrail(
         name,
         priority,
         callable::wrap_js_llm_conditional_fn(guardrail),
@@ -566,7 +569,7 @@ pub fn register_llm_conditional_execution_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmConditionalExecutionGuardrail")]
 pub fn deregister_llm_conditional_execution_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_llm_conditional_execution_guardrail(name)
+    nvagentrt_core::nvagentrt_deregister_llm_conditional_execution_guardrail(name)
         .map_err(to_js_err)
 }
 
@@ -585,7 +588,7 @@ pub fn register_llm_request_intercept(
     break_chain: bool,
     func: Function,
 ) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_register_llm_request_intercept(
+    nvagentrt_core::nvagentrt_register_llm_request_intercept(
         name,
         priority,
         break_chain,
@@ -599,7 +602,7 @@ pub fn register_llm_request_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmRequestIntercept")]
 pub fn deregister_llm_request_intercept(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_llm_request_intercept(name).map_err(to_js_err)
+    nvagentrt_core::nvagentrt_deregister_llm_request_intercept(name).map_err(to_js_err)
 }
 
 /// Registers an intercept that transforms LLM response data.
@@ -615,7 +618,7 @@ pub fn register_llm_response_intercept(
     break_chain: bool,
     func: Function,
 ) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_register_llm_response_intercept(
+    nvagentrt_core::nvagentrt_register_llm_response_intercept(
         name,
         priority,
         break_chain,
@@ -629,7 +632,7 @@ pub fn register_llm_response_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmResponseIntercept")]
 pub fn deregister_llm_response_intercept(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_llm_response_intercept(name).map_err(to_js_err)
+    nvagentrt_core::nvagentrt_deregister_llm_response_intercept(name).map_err(to_js_err)
 }
 
 /// Registers an intercept that transforms individual SSE events in a streaming LLM response.
@@ -645,7 +648,7 @@ pub fn register_llm_stream_response_intercept(
     break_chain: bool,
     func: Function,
 ) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_register_llm_stream_response_intercept(
+    nvagentrt_core::nvagentrt_register_llm_stream_response_intercept(
         name,
         priority,
         break_chain,
@@ -659,7 +662,7 @@ pub fn register_llm_stream_response_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmStreamResponseIntercept")]
 pub fn deregister_llm_stream_response_intercept(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_llm_stream_response_intercept(name).map_err(to_js_err)
+    nvagentrt_core::nvagentrt_deregister_llm_stream_response_intercept(name).map_err(to_js_err)
 }
 
 /// Registers an intercept that can replace LLM execution entirely.
@@ -675,7 +678,7 @@ pub fn register_llm_execution_intercept(
     conditional: Function,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_register_llm_execution_intercept(
+    nvagentrt_core::nvagentrt_register_llm_execution_intercept(
         name,
         priority,
         callable::wrap_js_llm_exec_conditional_fn(conditional),
@@ -689,7 +692,7 @@ pub fn register_llm_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmExecutionIntercept")]
 pub fn deregister_llm_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_llm_execution_intercept(name).map_err(to_js_err)
+    nvagentrt_core::nvagentrt_deregister_llm_execution_intercept(name).map_err(to_js_err)
 }
 
 /// Registers an intercept that can replace streaming LLM execution entirely.
@@ -721,7 +724,7 @@ pub fn register_llm_stream_execution_intercept(
                 >)
         })
     });
-    nvagentrt_core::nv_agentrt_register_llm_stream_execution_intercept(
+    nvagentrt_core::nvagentrt_register_llm_stream_execution_intercept(
         name,
         priority,
         callable::wrap_js_llm_exec_conditional_fn(conditional),
@@ -735,7 +738,7 @@ pub fn register_llm_stream_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmStreamExecutionIntercept")]
 pub fn deregister_llm_stream_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_llm_stream_execution_intercept(name).map_err(to_js_err)
+    nvagentrt_core::nvagentrt_deregister_llm_stream_execution_intercept(name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -748,7 +751,7 @@ pub fn deregister_llm_stream_execution_intercept(name: &str) -> Result<bool, JsV
 /// - `callback` - JS function `(event) => void` called for each event.
 #[wasm_bindgen(js_name = "registerSubscriber")]
 pub fn register_subscriber(name: &str, callback: Function) -> Result<(), JsValue> {
-    nvagentrt_core::nv_agentrt_register_subscriber(
+    nvagentrt_core::nvagentrt_register_subscriber(
         name,
         callable::wrap_js_event_subscriber(callback),
     )
@@ -760,7 +763,7 @@ pub fn register_subscriber(name: &str, callback: Function) -> Result<(), JsValue
 /// Returns `true` if the subscriber was found and removed.
 #[wasm_bindgen(js_name = "deregisterSubscriber")]
 pub fn deregister_subscriber(name: &str) -> Result<bool, JsValue> {
-    nvagentrt_core::nv_agentrt_deregister_subscriber(name).map_err(to_js_err)
+    nvagentrt_core::nvagentrt_deregister_subscriber(name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Scope tracking uses per-task storage (tokio::task_local!) with a thread-local
 // fallback for synchronous callers (Python GIL thread, sync tests). The Python
 // async execute functions snapshot the calling thread's scope top before entering

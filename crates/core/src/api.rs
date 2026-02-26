@@ -1,20 +1,23 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Public API for the NVAgentRT runtime.
 //!
 //! This module contains all top-level functions that language bindings and
 //! application code call. The API is organized into several groups:
 //!
-//! - **Scope operations** — [`nv_agentrt_get_handle`], [`nv_agentrt_push_scope`],
-//!   [`nv_agentrt_pop_scope`], [`nv_agentrt_event`]
-//! - **Tool lifecycle** — [`nv_agentrt_tool_call`], [`nv_agentrt_tool_call_end`],
-//!   [`nv_agentrt_tool_call_execute`]
-//! - **LLM lifecycle** — [`nv_agentrt_llm_call`], [`nv_agentrt_llm_call_end`],
-//!   [`nv_agentrt_llm_call_execute`], [`nv_agentrt_llm_stream_call_execute`]
-//! - **Guardrail registration** — `nv_agentrt_register_*_guardrail` /
-//!   `nv_agentrt_deregister_*_guardrail` for tool and LLM sanitize/conditional guardrails
-//! - **Intercept registration** — `nv_agentrt_register_*_intercept` /
-//!   `nv_agentrt_deregister_*_intercept` for tool and LLM request/response/execution intercepts
-//! - **Subscriber registration** — [`nv_agentrt_register_subscriber`],
-//!   [`nv_agentrt_deregister_subscriber`]
+//! - **Scope operations** — [`nvagentrt_get_handle`], [`nvagentrt_push_scope`],
+//!   [`nvagentrt_pop_scope`], [`nvagentrt_event`]
+//! - **Tool lifecycle** — [`nvagentrt_tool_call`], [`nvagentrt_tool_call_end`],
+//!   [`nvagentrt_tool_call_execute`]
+//! - **LLM lifecycle** — [`nvagentrt_llm_call`], [`nvagentrt_llm_call_end`],
+//!   [`nvagentrt_llm_call_execute`], [`nvagentrt_llm_stream_call_execute`]
+//! - **Guardrail registration** — `nvagentrt_register_*_guardrail` /
+//!   `nvagentrt_deregister_*_guardrail` for tool and LLM sanitize/conditional guardrails
+//! - **Intercept registration** — `nvagentrt_register_*_intercept` /
+//!   `nvagentrt_deregister_*_intercept` for tool and LLM request/response/execution intercepts
+//! - **Subscriber registration** — [`nvagentrt_register_subscriber`],
+//!   [`nvagentrt_deregister_subscriber`]
 //!
 //! All functions operate on the global context singleton returned by
 //! [`global_context`].
@@ -148,9 +151,9 @@ macro_rules! execution_intercept_registry_api {
 // Tool guardrail registrations
 //
 // Each pair generates:
-//   - `nv_agentrt_register_*`: registers a named guardrail with a priority.
+//   - `nvagentrt_register_*`: registers a named guardrail with a priority.
 //     Returns AlreadyExists if the name is taken.
-//   - `nv_agentrt_deregister_*`: removes a guardrail by name.
+//   - `nvagentrt_deregister_*`: removes a guardrail by name.
 //     Returns Ok(true) if it existed, Ok(false) otherwise.
 // ---------------------------------------------------------------------------
 
@@ -160,8 +163,8 @@ macro_rules! execution_intercept_registry_api {
 // Errors: Returns `AgentRtError::AlreadyExists` if a guardrail with the given name is already registered.
 // deregister: Deregisters a tool request sanitize guardrail by name.
 guardrail_registry_api!(
-    nv_agentrt_register_tool_sanitize_request_guardrail,
-    nv_agentrt_deregister_tool_sanitize_request_guardrail,
+    nvagentrt_register_tool_sanitize_request_guardrail,
+    nvagentrt_deregister_tool_sanitize_request_guardrail,
     tool_sanitize_request_guardrails,
     ToolSanitizeFn
 );
@@ -170,8 +173,8 @@ guardrail_registry_api!(
 // Callback signature: `(tool_name: &str, result: Json) -> Json`.
 // deregister: Deregisters a tool response sanitize guardrail by name.
 guardrail_registry_api!(
-    nv_agentrt_register_tool_sanitize_response_guardrail,
-    nv_agentrt_deregister_tool_sanitize_response_guardrail,
+    nvagentrt_register_tool_sanitize_response_guardrail,
+    nvagentrt_deregister_tool_sanitize_response_guardrail,
     tool_sanitize_response_guardrails,
     ToolSanitizeFn
 );
@@ -181,8 +184,8 @@ guardrail_registry_api!(
 // Return `None` to allow, `Some(reason)` to reject.
 // deregister: Deregisters a tool conditional execution guardrail by name.
 guardrail_registry_api!(
-    nv_agentrt_register_tool_conditional_execution_guardrail,
-    nv_agentrt_deregister_tool_conditional_execution_guardrail,
+    nvagentrt_register_tool_conditional_execution_guardrail,
+    nvagentrt_deregister_tool_conditional_execution_guardrail,
     tool_conditional_execution_guardrails,
     ToolConditionalFn
 );
@@ -199,8 +202,8 @@ guardrail_registry_api!(
 // Set `break_chain = true` to prevent subsequent intercepts from running.
 // deregister: Deregisters a tool request intercept by name.
 intercept_registry_api!(
-    nv_agentrt_register_tool_request_intercept,
-    nv_agentrt_deregister_tool_request_intercept,
+    nvagentrt_register_tool_request_intercept,
+    nvagentrt_deregister_tool_request_intercept,
     tool_request_intercepts,
     ToolInterceptFn
 );
@@ -210,8 +213,8 @@ intercept_registry_api!(
 // Set `break_chain = true` to prevent subsequent intercepts from running.
 // deregister: Deregisters a tool response intercept by name.
 intercept_registry_api!(
-    nv_agentrt_register_tool_response_intercept,
-    nv_agentrt_deregister_tool_response_intercept,
+    nvagentrt_register_tool_response_intercept,
+    nvagentrt_deregister_tool_response_intercept,
     tool_response_intercepts,
     ToolInterceptFn
 );
@@ -221,8 +224,8 @@ intercept_registry_api!(
 // If it returns `true`, the `callable` is used instead: `(args: Json) -> Future<Result<Json>>`.
 // deregister: Deregisters a tool execution intercept by name.
 execution_intercept_registry_api!(
-    nv_agentrt_register_tool_execution_intercept,
-    nv_agentrt_deregister_tool_execution_intercept,
+    nvagentrt_register_tool_execution_intercept,
+    nvagentrt_deregister_tool_execution_intercept,
     tool_execution_intercepts,
     ToolExecutionConditionalFn,
     ToolExecutionFn
@@ -236,8 +239,8 @@ execution_intercept_registry_api!(
 // Callback signature: `(request: LLMRequest) -> LLMRequest`.
 // deregister: Deregisters an LLM request sanitize guardrail by name.
 guardrail_registry_api!(
-    nv_agentrt_register_llm_sanitize_request_guardrail,
-    nv_agentrt_deregister_llm_sanitize_request_guardrail,
+    nvagentrt_register_llm_sanitize_request_guardrail,
+    nvagentrt_deregister_llm_sanitize_request_guardrail,
     llm_sanitize_request_guardrails,
     LlmSanitizeRequestFn
 );
@@ -246,8 +249,8 @@ guardrail_registry_api!(
 // Callback signature: `(response: Json) -> Json`.
 // deregister: Deregisters an LLM response sanitize guardrail by name.
 guardrail_registry_api!(
-    nv_agentrt_register_llm_sanitize_response_guardrail,
-    nv_agentrt_deregister_llm_sanitize_response_guardrail,
+    nvagentrt_register_llm_sanitize_response_guardrail,
+    nvagentrt_deregister_llm_sanitize_response_guardrail,
     llm_sanitize_response_guardrails,
     LlmSanitizeResponseFn
 );
@@ -257,8 +260,8 @@ guardrail_registry_api!(
 // Return `None` to allow, `Some(reason)` to reject.
 // deregister: Deregisters an LLM conditional execution guardrail by name.
 guardrail_registry_api!(
-    nv_agentrt_register_llm_conditional_execution_guardrail,
-    nv_agentrt_deregister_llm_conditional_execution_guardrail,
+    nvagentrt_register_llm_conditional_execution_guardrail,
+    nvagentrt_deregister_llm_conditional_execution_guardrail,
     llm_conditional_execution_guardrails,
     LlmConditionalFn
 );
@@ -271,8 +274,8 @@ guardrail_registry_api!(
 // Callback signature: `(request: LLMRequest) -> LLMRequest`.
 // deregister: Deregisters an LLM request intercept by name.
 intercept_registry_api!(
-    nv_agentrt_register_llm_request_intercept,
-    nv_agentrt_deregister_llm_request_intercept,
+    nvagentrt_register_llm_request_intercept,
+    nvagentrt_deregister_llm_request_intercept,
     llm_request_intercepts,
     LlmRequestInterceptFn
 );
@@ -281,8 +284,8 @@ intercept_registry_api!(
 // Callback signature: `(response: Json) -> Json`.
 // deregister: Deregisters an LLM response intercept by name.
 intercept_registry_api!(
-    nv_agentrt_register_llm_response_intercept,
-    nv_agentrt_deregister_llm_response_intercept,
+    nvagentrt_register_llm_response_intercept,
+    nvagentrt_deregister_llm_response_intercept,
     llm_response_intercepts,
     LlmResponseInterceptFn
 );
@@ -291,8 +294,8 @@ intercept_registry_api!(
 // Callback signature: `(event: SseEvent) -> SseEvent`.
 // deregister: Deregisters an LLM stream response intercept by name.
 intercept_registry_api!(
-    nv_agentrt_register_llm_stream_response_intercept,
-    nv_agentrt_deregister_llm_stream_response_intercept,
+    nvagentrt_register_llm_stream_response_intercept,
+    nvagentrt_deregister_llm_stream_response_intercept,
     llm_stream_response_intercepts,
     LlmStreamResponseInterceptFn
 );
@@ -302,8 +305,8 @@ intercept_registry_api!(
 // If it returns `true`, the `callable` is used: `(request: LLMRequest) -> Future<Result<Json>>`.
 // deregister: Deregisters an LLM execution intercept by name.
 execution_intercept_registry_api!(
-    nv_agentrt_register_llm_execution_intercept,
-    nv_agentrt_deregister_llm_execution_intercept,
+    nvagentrt_register_llm_execution_intercept,
+    nvagentrt_deregister_llm_execution_intercept,
     llm_execution_intercepts,
     LlmExecutionConditionalFn,
     LlmExecutionFn
@@ -314,8 +317,8 @@ execution_intercept_registry_api!(
 // If it returns `true`, the `callable` is used: `(request: LLMRequest) -> Future<Result<Stream>>`.
 // deregister: Deregisters an LLM streaming execution intercept by name.
 execution_intercept_registry_api!(
-    nv_agentrt_register_llm_stream_execution_intercept,
-    nv_agentrt_deregister_llm_stream_execution_intercept,
+    nvagentrt_register_llm_stream_execution_intercept,
+    nvagentrt_deregister_llm_stream_execution_intercept,
     llm_stream_execution_intercepts,
     LlmStreamExecutionConditionalFn,
     LlmStreamExecutionFn
@@ -329,7 +332,7 @@ execution_intercept_registry_api!(
 ///
 /// Returns [`AgentRtError::AlreadyExists`] if a subscriber with the given name
 /// is already registered.
-pub fn nv_agentrt_register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()> {
+pub fn nvagentrt_register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()> {
     let ctx = global_context();
     let mut state = ctx
         .write()
@@ -344,7 +347,7 @@ pub fn nv_agentrt_register_subscriber(name: &str, callback: EventSubscriberFn) -
 }
 
 /// Deregisters an event subscriber by name. Returns `true` if it existed, `false` otherwise.
-pub fn nv_agentrt_deregister_subscriber(name: &str) -> Result<bool> {
+pub fn nvagentrt_deregister_subscriber(name: &str) -> Result<bool> {
     let ctx = global_context();
     let mut state = ctx
         .write()
@@ -359,7 +362,7 @@ pub fn nv_agentrt_deregister_subscriber(name: &str) -> Result<bool> {
 /// Returns a clone of the current top scope handle from the scope stack.
 ///
 /// Always succeeds because the root scope is always present.
-pub fn nv_agentrt_get_handle() -> Result<ScopeHandle> {
+pub fn nvagentrt_get_handle() -> Result<ScopeHandle> {
     Ok(task_scope_top())
 }
 
@@ -369,7 +372,7 @@ pub fn nv_agentrt_get_handle() -> Result<ScopeHandle> {
 /// top of the scope stack is used as the parent.
 ///
 /// Returns the new [`ScopeHandle`].
-pub fn nv_agentrt_push_scope(
+pub fn nvagentrt_push_scope(
     name: &str,
     scope_type: ScopeType,
     parent: Option<&ScopeHandle>,
@@ -388,7 +391,7 @@ pub fn nv_agentrt_push_scope(
 /// Removes a scope from the scope stack by UUID and emits an `End` event.
 ///
 /// Returns [`AgentRtError::NotFound`] if the UUID is not in the stack.
-pub fn nv_agentrt_pop_scope(handle_uuid: &Uuid) -> Result<()> {
+pub fn nvagentrt_pop_scope(handle_uuid: &Uuid) -> Result<()> {
     let scope = task_scope_remove(handle_uuid)?;
     let ctx = global_context();
     let state = ctx
@@ -402,7 +405,7 @@ pub fn nv_agentrt_pop_scope(handle_uuid: &Uuid) -> Result<()> {
 ///
 /// This is a lightweight way to record application-specific events (e.g.,
 /// checkpoints, metrics) without creating a scope or handle.
-pub fn nv_agentrt_event(
+pub fn nvagentrt_event(
     name: &str,
     parent: Option<&ScopeHandle>,
     data: Option<Json>,
@@ -425,8 +428,8 @@ pub fn nv_agentrt_event(
 /// and emits a `Start` event.
 ///
 /// The sanitized arguments are stored in the handle's `data` under `"sanitized_args"`.
-/// Call [`nv_agentrt_tool_call_end`] when the tool completes.
-pub fn nv_agentrt_tool_call(
+/// Call [`nvagentrt_tool_call_end`] when the tool completes.
+pub fn nvagentrt_tool_call(
     name: &str,
     args: Json,
     parent: Option<&ScopeHandle>,
@@ -452,7 +455,7 @@ pub fn nv_agentrt_tool_call(
 /// Ends a tool call: runs response sanitize guardrails and emits an `End` event.
 ///
 /// The sanitized result is stored in the event's `data` under `"sanitized_result"`.
-pub fn nv_agentrt_tool_call_end(
+pub fn nvagentrt_tool_call_end(
     handle: &ToolHandle,
     result: Json,
     data: Option<Json>,
@@ -479,7 +482,7 @@ pub fn nv_agentrt_tool_call_end(
 ///
 /// This is the high-level function that orchestrates the full middleware pipeline.
 /// Returns [`AgentRtError::GuardrailRejected`] if a conditional guardrail rejects the call.
-pub async fn nv_agentrt_tool_call_execute(
+pub async fn nvagentrt_tool_call_execute(
     name: &str,
     args: Json,
     func: ToolExecutionFn,
@@ -498,7 +501,7 @@ pub async fn nv_agentrt_tool_call_execute(
     };
 
     // Tool call start
-    let handle = nv_agentrt_tool_call(
+    let handle = nvagentrt_tool_call(
         name,
         intercepted_args.clone(),
         parent.as_ref(),
@@ -542,7 +545,7 @@ pub async fn nv_agentrt_tool_call_execute(
     };
 
     // Tool call end
-    nv_agentrt_tool_call_end(&handle, result.clone(), data, metadata)?;
+    nvagentrt_tool_call_end(&handle, result.clone(), data, metadata)?;
 
     Ok(result)
 }
@@ -555,8 +558,8 @@ pub async fn nv_agentrt_tool_call_execute(
 /// and emits a `Start` event.
 ///
 /// The sanitized request is stored in the handle's `data` under `"sanitized_request"`.
-/// Call [`nv_agentrt_llm_call_end`] when the LLM call completes.
-pub fn nv_agentrt_llm_call(
+/// Call [`nvagentrt_llm_call_end`] when the LLM call completes.
+pub fn nvagentrt_llm_call(
     name: &str,
     request: &LLMRequest,
     parent: Option<&ScopeHandle>,
@@ -583,7 +586,7 @@ pub fn nv_agentrt_llm_call(
 }
 
 /// Ends an LLM call: runs response sanitize guardrails and emits an `End` event.
-pub fn nv_agentrt_llm_call_end(
+pub fn nvagentrt_llm_call_end(
     handle: &LLMHandle,
     response: Json,
     data: Option<Json>,
@@ -609,7 +612,7 @@ pub fn nv_agentrt_llm_call_end(
 /// override), response intercepts, and sanitize response guardrails.
 ///
 /// Returns [`AgentRtError::GuardrailRejected`] if a conditional guardrail rejects the call.
-pub async fn nv_agentrt_llm_call_execute(
+pub async fn nvagentrt_llm_call_execute(
     name: &str,
     request: LLMRequest,
     func: LlmExecutionFn,
@@ -628,7 +631,7 @@ pub async fn nv_agentrt_llm_call_execute(
     };
 
     // LLM call start
-    let handle = nv_agentrt_llm_call(
+    let handle = nvagentrt_llm_call(
         name,
         &intercepted_request,
         parent.as_ref(),
@@ -672,21 +675,21 @@ pub async fn nv_agentrt_llm_call_execute(
     };
 
     // LLM call end
-    nv_agentrt_llm_call_end(&handle, response.clone(), data, metadata)?;
+    nvagentrt_llm_call_end(&handle, response.clone(), data, metadata)?;
 
     Ok(response)
 }
 
 /// Executes a complete streaming LLM call lifecycle.
 ///
-/// Similar to [`nv_agentrt_llm_call_execute`] but returns a
+/// Similar to [`nvagentrt_llm_call_execute`] but returns a
 /// [`Stream`] of SSE text chunks. The returned stream is
 /// wrapped in [`LlmStreamWrapper`] which handles SSE parsing, per-event
 /// intercepts, event aggregation, and automatic `End` event emission when
 /// the stream is exhausted.
 ///
 /// Returns [`AgentRtError::GuardrailRejected`] if a conditional guardrail rejects the call.
-pub async fn nv_agentrt_llm_stream_call_execute(
+pub async fn nvagentrt_llm_stream_call_execute(
     name: &str,
     request: LLMRequest,
     func: LlmStreamExecutionFn,
@@ -705,7 +708,7 @@ pub async fn nv_agentrt_llm_stream_call_execute(
     };
 
     // LLM call start
-    let handle = nv_agentrt_llm_call(
+    let handle = nvagentrt_llm_call(
         name,
         &intercepted_request,
         parent.as_ref(),
@@ -768,21 +771,21 @@ mod tests {
         reset_global();
 
         // Root scope is always present
-        let root = nv_agentrt_get_handle().unwrap();
+        let root = nvagentrt_get_handle().unwrap();
         assert_eq!(root.name, "root");
 
-        let handle = nv_agentrt_push_scope(
+        let handle = nvagentrt_push_scope(
             "test_scope",
             ScopeType::Agent,
             None,
             ScopeAttributes::empty(),
         )
         .unwrap();
-        assert_eq!(nv_agentrt_get_handle().unwrap().name, "test_scope");
-        nv_agentrt_pop_scope(&handle.uuid).unwrap();
+        assert_eq!(nvagentrt_get_handle().unwrap().name, "test_scope");
+        nvagentrt_pop_scope(&handle.uuid).unwrap();
 
         // After pop, root scope is on top again
-        assert_eq!(nv_agentrt_get_handle().unwrap().name, "root");
+        assert_eq!(nvagentrt_get_handle().unwrap().name, "root");
     }
 
     #[test]
@@ -791,7 +794,7 @@ mod tests {
         reset_global();
         let count = Arc::new(AtomicU32::new(0));
         let c = count.clone();
-        nv_agentrt_register_subscriber(
+        nvagentrt_register_subscriber(
             "test_sub",
             Box::new(move |_| {
                 c.fetch_add(1, Ordering::SeqCst);
@@ -800,38 +803,37 @@ mod tests {
         .unwrap();
 
         // Duplicate should fail
-        assert!(nv_agentrt_register_subscriber("test_sub", Box::new(|_| {}),).is_err());
+        assert!(nvagentrt_register_subscriber("test_sub", Box::new(|_| {}),).is_err());
 
         // Push scope emits event
         let handle =
-            nv_agentrt_push_scope("s", ScopeType::Function, None, ScopeAttributes::empty())
-                .unwrap();
+            nvagentrt_push_scope("s", ScopeType::Function, None, ScopeAttributes::empty()).unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 1);
 
-        nv_agentrt_pop_scope(&handle.uuid).unwrap();
+        nvagentrt_pop_scope(&handle.uuid).unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 2);
 
         // Deregister
-        assert!(nv_agentrt_deregister_subscriber("test_sub").unwrap());
-        assert!(!nv_agentrt_deregister_subscriber("test_sub").unwrap());
+        assert!(nvagentrt_deregister_subscriber("test_sub").unwrap());
+        assert!(!nvagentrt_deregister_subscriber("test_sub").unwrap());
     }
 
     #[test]
     fn test_tool_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nv_agentrt_register_tool_sanitize_request_guardrail("g1", 10, Box::new(|_name, args| args))
+        nvagentrt_register_tool_sanitize_request_guardrail("g1", 10, Box::new(|_name, args| args))
             .unwrap();
 
         // Duplicate fails
-        assert!(nv_agentrt_register_tool_sanitize_request_guardrail(
+        assert!(nvagentrt_register_tool_sanitize_request_guardrail(
             "g1",
             10,
             Box::new(|_name, args| args),
         )
         .is_err());
 
-        assert!(nv_agentrt_deregister_tool_sanitize_request_guardrail("g1").unwrap());
+        assert!(nvagentrt_deregister_tool_sanitize_request_guardrail("g1").unwrap());
     }
 
     // -- Scope hierarchy --
@@ -841,32 +843,32 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let s1 = nv_agentrt_push_scope("level1", ScopeType::Agent, None, ScopeAttributes::empty())
+        let s1 = nvagentrt_push_scope("level1", ScopeType::Agent, None, ScopeAttributes::empty())
             .unwrap();
-        assert_eq!(nv_agentrt_get_handle().unwrap().name, "level1");
+        assert_eq!(nvagentrt_get_handle().unwrap().name, "level1");
 
-        let s2 = nv_agentrt_push_scope(
+        let s2 = nvagentrt_push_scope(
             "level2",
             ScopeType::Function,
             Some(&s1),
             ScopeAttributes::empty(),
         )
         .unwrap();
-        assert_eq!(nv_agentrt_get_handle().unwrap().name, "level2");
+        assert_eq!(nvagentrt_get_handle().unwrap().name, "level2");
         assert_eq!(s2.parent_uuid, Some(s1.uuid));
 
-        nv_agentrt_pop_scope(&s2.uuid).unwrap();
-        assert_eq!(nv_agentrt_get_handle().unwrap().name, "level1");
+        nvagentrt_pop_scope(&s2.uuid).unwrap();
+        assert_eq!(nvagentrt_get_handle().unwrap().name, "level1");
 
-        nv_agentrt_pop_scope(&s1.uuid).unwrap();
-        assert_eq!(nv_agentrt_get_handle().unwrap().name, "root");
+        nvagentrt_pop_scope(&s1.uuid).unwrap();
+        assert_eq!(nvagentrt_get_handle().unwrap().name, "root");
     }
 
     #[test]
     fn test_pop_nonexistent_scope() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        let result = nv_agentrt_pop_scope(&Uuid::new_v4());
+        let result = nvagentrt_pop_scope(&Uuid::new_v4());
         assert!(result.is_err());
     }
 
@@ -874,7 +876,7 @@ mod tests {
     fn test_scope_attributes_propagated() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        let handle = nv_agentrt_push_scope(
+        let handle = nvagentrt_push_scope(
             "parallel_scope",
             ScopeType::Agent,
             None,
@@ -883,7 +885,7 @@ mod tests {
         .unwrap();
         assert!(handle.attributes.contains(ScopeAttributes::PARALLEL));
         assert!(handle.attributes.contains(ScopeAttributes::RELOCATABLE));
-        nv_agentrt_pop_scope(&handle.uuid).unwrap();
+        nvagentrt_pop_scope(&handle.uuid).unwrap();
     }
 
     // -- Event emission --
@@ -895,7 +897,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nv_agentrt_register_subscriber(
+        nvagentrt_register_subscriber(
             "evt_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push((e.name.clone(), e.event_type));
@@ -903,7 +905,7 @@ mod tests {
         )
         .unwrap();
 
-        nv_agentrt_event("my_mark", None, Some(json!({"x": 1})), None).unwrap();
+        nvagentrt_event("my_mark", None, Some(json!({"x": 1})), None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -911,7 +913,7 @@ mod tests {
         assert_eq!(captured[0].1, crate::types::EventType::Mark);
 
         drop(captured);
-        nv_agentrt_deregister_subscriber("evt_test").unwrap();
+        nvagentrt_deregister_subscriber("evt_test").unwrap();
     }
 
     // -- Tool lifecycle --
@@ -923,7 +925,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nv_agentrt_register_subscriber(
+        nvagentrt_register_subscriber(
             "tool_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.event_type);
@@ -931,7 +933,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nv_agentrt_tool_call(
+        let handle = nvagentrt_tool_call(
             "my_tool",
             json!({"input": "data"}),
             None,
@@ -942,7 +944,7 @@ mod tests {
         .unwrap();
         assert_eq!(handle.name, "my_tool");
 
-        nv_agentrt_tool_call_end(&handle, json!({"output": "result"}), None, None).unwrap();
+        nvagentrt_tool_call_end(&handle, json!({"output": "result"}), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -950,7 +952,7 @@ mod tests {
         assert_eq!(captured[1], crate::types::EventType::End);
 
         drop(captured);
-        nv_agentrt_deregister_subscriber("tool_test").unwrap();
+        nvagentrt_deregister_subscriber("tool_test").unwrap();
     }
 
     #[test]
@@ -959,7 +961,7 @@ mod tests {
         reset_global();
 
         // Register a sanitizer that adds a field
-        nv_agentrt_register_tool_sanitize_request_guardrail(
+        nvagentrt_register_tool_sanitize_request_guardrail(
             "sanitizer",
             1,
             Box::new(|_name, mut args| {
@@ -973,7 +975,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nv_agentrt_register_subscriber(
+        nvagentrt_register_subscriber(
             "tool_san_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -981,7 +983,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nv_agentrt_tool_call(
+        let handle = nvagentrt_tool_call(
             "my_tool",
             json!({"input": "data"}),
             None,
@@ -999,9 +1001,9 @@ mod tests {
         assert_eq!(data["sanitized_args"]["input"], "data");
 
         drop(captured);
-        nv_agentrt_tool_call_end(&handle, json!("ok"), None, None).unwrap();
-        nv_agentrt_deregister_subscriber("tool_san_test").unwrap();
-        nv_agentrt_deregister_tool_sanitize_request_guardrail("sanitizer").unwrap();
+        nvagentrt_tool_call_end(&handle, json!("ok"), None, None).unwrap();
+        nvagentrt_deregister_subscriber("tool_san_test").unwrap();
+        nvagentrt_deregister_tool_sanitize_request_guardrail("sanitizer").unwrap();
     }
 
     #[test]
@@ -1009,7 +1011,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nv_agentrt_register_tool_sanitize_response_guardrail(
+        nvagentrt_register_tool_sanitize_response_guardrail(
             "resp_sanitizer",
             1,
             Box::new(|_name, mut result| {
@@ -1024,7 +1026,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nv_agentrt_register_subscriber(
+        nvagentrt_register_subscriber(
             "tool_resp_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1033,9 +1035,9 @@ mod tests {
         .unwrap();
 
         let handle =
-            nv_agentrt_tool_call("tool", json!({}), None, ToolAttributes::empty(), None, None)
+            nvagentrt_tool_call("tool", json!({}), None, ToolAttributes::empty(), None, None)
                 .unwrap();
-        nv_agentrt_tool_call_end(&handle, json!({"output": "raw"}), None, None).unwrap();
+        nvagentrt_tool_call_end(&handle, json!({"output": "raw"}), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];
@@ -1044,8 +1046,8 @@ mod tests {
         assert_eq!(data["sanitized_result"]["output"], "raw");
 
         drop(captured);
-        nv_agentrt_deregister_subscriber("tool_resp_test").unwrap();
-        nv_agentrt_deregister_tool_sanitize_response_guardrail("resp_sanitizer").unwrap();
+        nvagentrt_deregister_subscriber("tool_resp_test").unwrap();
+        nvagentrt_deregister_tool_sanitize_response_guardrail("resp_sanitizer").unwrap();
     }
 
     // -- Tool call execute (async) --
@@ -1058,7 +1060,7 @@ mod tests {
         let func: ToolExecutionFn =
             Box::new(|args| Box::pin(async move { Ok(json!({"result": args["input"]})) }));
 
-        let result = nv_agentrt_tool_call_execute(
+        let result = nvagentrt_tool_call_execute(
             "exec_tool",
             json!({"input": "hello"}),
             func,
@@ -1078,7 +1080,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nv_agentrt_register_tool_request_intercept(
+        nvagentrt_register_tool_request_intercept(
             "req_intercept",
             1,
             false,
@@ -1093,7 +1095,7 @@ mod tests {
 
         let func: ToolExecutionFn = Box::new(|args| Box::pin(async move { Ok(args) }));
 
-        let result = nv_agentrt_tool_call_execute(
+        let result = nvagentrt_tool_call_execute(
             "tool",
             json!({"original": true}),
             func,
@@ -1108,7 +1110,7 @@ mod tests {
         assert_eq!(result["original"], true);
         assert_eq!(result["added_by_intercept"], true);
 
-        nv_agentrt_deregister_tool_request_intercept("req_intercept").unwrap();
+        nvagentrt_deregister_tool_request_intercept("req_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -1116,7 +1118,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nv_agentrt_register_tool_response_intercept(
+        nvagentrt_register_tool_response_intercept(
             "resp_intercept",
             1,
             false,
@@ -1133,7 +1135,7 @@ mod tests {
         let func: ToolExecutionFn =
             Box::new(|_args| Box::pin(async move { Ok(json!({"output": "raw"})) }));
 
-        let result = nv_agentrt_tool_call_execute(
+        let result = nvagentrt_tool_call_execute(
             "tool",
             json!({}),
             func,
@@ -1148,7 +1150,7 @@ mod tests {
         assert_eq!(result["output"], "raw");
         assert_eq!(result["response_intercepted"], true);
 
-        nv_agentrt_deregister_tool_response_intercept("resp_intercept").unwrap();
+        nvagentrt_deregister_tool_response_intercept("resp_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -1156,7 +1158,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nv_agentrt_register_tool_conditional_execution_guardrail(
+        nvagentrt_register_tool_conditional_execution_guardrail(
             "blocker",
             1,
             Box::new(|_name, _args| Some("forbidden tool".into())),
@@ -1166,7 +1168,7 @@ mod tests {
         let func: ToolExecutionFn =
             Box::new(|_args| Box::pin(async move { Ok(json!({"should_not_reach": true})) }));
 
-        let result = nv_agentrt_tool_call_execute(
+        let result = nvagentrt_tool_call_execute(
             "tool",
             json!({}),
             func,
@@ -1183,7 +1185,7 @@ mod tests {
             e => panic!("expected GuardrailRejected, got {e:?}"),
         }
 
-        nv_agentrt_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
+        nvagentrt_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
     }
 
     #[tokio::test]
@@ -1191,7 +1193,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nv_agentrt_register_tool_execution_intercept(
+        nvagentrt_register_tool_execution_intercept(
             "exec_intercept",
             1,
             Box::new(|_name: &str, _args: &Json| true),
@@ -1205,7 +1207,7 @@ mod tests {
         let func: ToolExecutionFn =
             Box::new(|_args| Box::pin(async move { Ok(json!({"from_original": true})) }));
 
-        let result = nv_agentrt_tool_call_execute(
+        let result = nvagentrt_tool_call_execute(
             "tool",
             json!({}),
             func,
@@ -1221,7 +1223,7 @@ mod tests {
         assert_eq!(result["from_intercept"], true);
         assert!(result.get("from_original").is_none());
 
-        nv_agentrt_deregister_tool_execution_intercept("exec_intercept").unwrap();
+        nvagentrt_deregister_tool_execution_intercept("exec_intercept").unwrap();
     }
 
     // -- LLM lifecycle --
@@ -1233,7 +1235,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nv_agentrt_register_subscriber(
+        nvagentrt_register_subscriber(
             "llm_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.event_type);
@@ -1248,11 +1250,11 @@ mod tests {
             body: json!({"messages": []}),
         };
         let handle =
-            nv_agentrt_llm_call("my_llm", &request, None, LLMAttributes::empty(), None, None)
+            nvagentrt_llm_call("my_llm", &request, None, LLMAttributes::empty(), None, None)
                 .unwrap();
         assert_eq!(handle.name, "my_llm");
 
-        nv_agentrt_llm_call_end(&handle, json!({"response": "ok"}), None, None).unwrap();
+        nvagentrt_llm_call_end(&handle, json!({"response": "ok"}), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -1260,7 +1262,7 @@ mod tests {
         assert_eq!(captured[1], crate::types::EventType::End);
 
         drop(captured);
-        nv_agentrt_deregister_subscriber("llm_test").unwrap();
+        nvagentrt_deregister_subscriber("llm_test").unwrap();
     }
 
     #[test]
@@ -1268,7 +1270,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nv_agentrt_register_llm_sanitize_request_guardrail(
+        nvagentrt_register_llm_sanitize_request_guardrail(
             "llm_sanitizer",
             1,
             Box::new(|mut req: LLMRequest| {
@@ -1280,7 +1282,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nv_agentrt_register_subscriber(
+        nvagentrt_register_subscriber(
             "llm_san_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1295,7 +1297,7 @@ mod tests {
             body: json!({}),
         };
         let handle =
-            nv_agentrt_llm_call("llm", &request, None, LLMAttributes::empty(), None, None).unwrap();
+            nvagentrt_llm_call("llm", &request, None, LLMAttributes::empty(), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         let start_event = &captured[0];
@@ -1305,9 +1307,9 @@ mod tests {
         assert_eq!(sanitized_req["headers"]["X-Sanitized"], "true");
 
         drop(captured);
-        nv_agentrt_llm_call_end(&handle, json!("ok"), None, None).unwrap();
-        nv_agentrt_deregister_subscriber("llm_san_test").unwrap();
-        nv_agentrt_deregister_llm_sanitize_request_guardrail("llm_sanitizer").unwrap();
+        nvagentrt_llm_call_end(&handle, json!("ok"), None, None).unwrap();
+        nvagentrt_deregister_subscriber("llm_san_test").unwrap();
+        nvagentrt_deregister_llm_sanitize_request_guardrail("llm_sanitizer").unwrap();
     }
 
     #[tokio::test]
@@ -1325,7 +1327,7 @@ mod tests {
             body: json!({}),
         };
 
-        let result = nv_agentrt_llm_call_execute(
+        let result = nvagentrt_llm_call_execute(
             "llm",
             request,
             func,
@@ -1345,7 +1347,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nv_agentrt_register_llm_conditional_execution_guardrail(
+        nvagentrt_register_llm_conditional_execution_guardrail(
             "llm_blocker",
             1,
             Box::new(|_req: &LLMRequest| Some("blocked by policy".into())),
@@ -1361,7 +1363,7 @@ mod tests {
             body: json!({}),
         };
 
-        let result = nv_agentrt_llm_call_execute(
+        let result = nvagentrt_llm_call_execute(
             "llm",
             request,
             func,
@@ -1378,7 +1380,7 @@ mod tests {
             e => panic!("expected GuardrailRejected, got {e:?}"),
         }
 
-        nv_agentrt_deregister_llm_conditional_execution_guardrail("llm_blocker").unwrap();
+        nvagentrt_deregister_llm_conditional_execution_guardrail("llm_blocker").unwrap();
     }
 
     #[tokio::test]
@@ -1386,7 +1388,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nv_agentrt_register_llm_request_intercept(
+        nvagentrt_register_llm_request_intercept(
             "llm_req_intercept",
             1,
             false,
@@ -1407,7 +1409,7 @@ mod tests {
             body: json!({}),
         };
 
-        let result = nv_agentrt_llm_call_execute(
+        let result = nvagentrt_llm_call_execute(
             "llm",
             request,
             func,
@@ -1421,7 +1423,7 @@ mod tests {
 
         assert_eq!(result["called_url"], "https://intercepted.example.com");
 
-        nv_agentrt_deregister_llm_request_intercept("llm_req_intercept").unwrap();
+        nvagentrt_deregister_llm_request_intercept("llm_req_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -1429,7 +1431,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nv_agentrt_register_llm_response_intercept(
+        nvagentrt_register_llm_response_intercept(
             "llm_resp_intercept",
             1,
             false,
@@ -1452,7 +1454,7 @@ mod tests {
             body: json!({}),
         };
 
-        let result = nv_agentrt_llm_call_execute(
+        let result = nvagentrt_llm_call_execute(
             "llm",
             request,
             func,
@@ -1467,7 +1469,7 @@ mod tests {
         assert_eq!(result["original"], true);
         assert_eq!(result["response_modified"], true);
 
-        nv_agentrt_deregister_llm_response_intercept("llm_resp_intercept").unwrap();
+        nvagentrt_deregister_llm_response_intercept("llm_resp_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -1475,7 +1477,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nv_agentrt_register_llm_execution_intercept(
+        nvagentrt_register_llm_execution_intercept(
             "llm_exec_intercept",
             1,
             Box::new(|_req: &LLMRequest| true),
@@ -1496,7 +1498,7 @@ mod tests {
             body: json!({}),
         };
 
-        let result = nv_agentrt_llm_call_execute(
+        let result = nvagentrt_llm_call_execute(
             "llm",
             request,
             func,
@@ -1511,7 +1513,7 @@ mod tests {
         assert_eq!(result["from_intercept"], true);
         assert!(result.get("from_original").is_none());
 
-        nv_agentrt_deregister_llm_execution_intercept("llm_exec_intercept").unwrap();
+        nvagentrt_deregister_llm_execution_intercept("llm_exec_intercept").unwrap();
     }
 
     // -- All guardrail/intercept registration pairs --
@@ -1520,59 +1522,58 @@ mod tests {
     fn test_tool_sanitize_response_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nv_agentrt_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r)).unwrap();
+        nvagentrt_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r)).unwrap();
         assert!(
-            nv_agentrt_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r))
+            nvagentrt_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r))
                 .is_err()
         );
-        assert!(nv_agentrt_deregister_tool_sanitize_response_guardrail("g1").unwrap());
-        assert!(!nv_agentrt_deregister_tool_sanitize_response_guardrail("g1").unwrap());
+        assert!(nvagentrt_deregister_tool_sanitize_response_guardrail("g1").unwrap());
+        assert!(!nvagentrt_deregister_tool_sanitize_response_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_tool_conditional_execution_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nv_agentrt_register_tool_conditional_execution_guardrail("g1", 1, Box::new(|_n, _a| None))
+        nvagentrt_register_tool_conditional_execution_guardrail("g1", 1, Box::new(|_n, _a| None))
             .unwrap();
-        assert!(nv_agentrt_register_tool_conditional_execution_guardrail(
+        assert!(nvagentrt_register_tool_conditional_execution_guardrail(
             "g1",
             1,
             Box::new(|_n, _a| None)
         )
         .is_err());
-        assert!(nv_agentrt_deregister_tool_conditional_execution_guardrail("g1").unwrap());
+        assert!(nvagentrt_deregister_tool_conditional_execution_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_tool_request_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nv_agentrt_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| a)).unwrap();
+        nvagentrt_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| a)).unwrap();
         assert!(
-            nv_agentrt_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| a))
-                .is_err()
+            nvagentrt_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| a)).is_err()
         );
-        assert!(nv_agentrt_deregister_tool_request_intercept("i1").unwrap());
+        assert!(nvagentrt_deregister_tool_request_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_tool_response_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nv_agentrt_register_tool_response_intercept("i1", 1, false, Box::new(|_n, r| r)).unwrap();
+        nvagentrt_register_tool_response_intercept("i1", 1, false, Box::new(|_n, r| r)).unwrap();
         assert!(
-            nv_agentrt_register_tool_response_intercept("i1", 1, false, Box::new(|_n, r| r))
+            nvagentrt_register_tool_response_intercept("i1", 1, false, Box::new(|_n, r| r))
                 .is_err()
         );
-        assert!(nv_agentrt_deregister_tool_response_intercept("i1").unwrap());
+        assert!(nvagentrt_deregister_tool_response_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_tool_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nv_agentrt_register_tool_execution_intercept(
+        nvagentrt_register_tool_execution_intercept(
             "i1",
             1,
             Box::new(|_n: &str, _a: &Json| false),
@@ -1582,7 +1583,7 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(nv_agentrt_register_tool_execution_intercept(
+        assert!(nvagentrt_register_tool_execution_intercept(
             "i1",
             1,
             Box::new(|_n: &str, _a: &Json| false),
@@ -1590,85 +1591,83 @@ mod tests {
                 as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>),
         )
         .is_err());
-        assert!(nv_agentrt_deregister_tool_execution_intercept("i1").unwrap());
+        assert!(nvagentrt_deregister_tool_execution_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_sanitize_request_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nv_agentrt_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).unwrap();
+        nvagentrt_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).unwrap();
         assert!(
-            nv_agentrt_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).is_err()
+            nvagentrt_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).is_err()
         );
-        assert!(nv_agentrt_deregister_llm_sanitize_request_guardrail("g1").unwrap());
+        assert!(nvagentrt_deregister_llm_sanitize_request_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_sanitize_response_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nv_agentrt_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).unwrap();
+        nvagentrt_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).unwrap();
         assert!(
-            nv_agentrt_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).is_err()
+            nvagentrt_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).is_err()
         );
-        assert!(nv_agentrt_deregister_llm_sanitize_response_guardrail("g1").unwrap());
+        assert!(nvagentrt_deregister_llm_sanitize_response_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_conditional_execution_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nv_agentrt_register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| None))
+        nvagentrt_register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| None))
             .unwrap();
-        assert!(nv_agentrt_register_llm_conditional_execution_guardrail(
+        assert!(nvagentrt_register_llm_conditional_execution_guardrail(
             "g1",
             1,
             Box::new(|_r| None)
         )
         .is_err());
-        assert!(nv_agentrt_deregister_llm_conditional_execution_guardrail("g1").unwrap());
+        assert!(nvagentrt_deregister_llm_conditional_execution_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_request_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nv_agentrt_register_llm_request_intercept("i1", 1, false, Box::new(|r| r)).unwrap();
-        assert!(
-            nv_agentrt_register_llm_request_intercept("i1", 1, false, Box::new(|r| r)).is_err()
-        );
-        assert!(nv_agentrt_deregister_llm_request_intercept("i1").unwrap());
+        nvagentrt_register_llm_request_intercept("i1", 1, false, Box::new(|r| r)).unwrap();
+        assert!(nvagentrt_register_llm_request_intercept("i1", 1, false, Box::new(|r| r)).is_err());
+        assert!(nvagentrt_deregister_llm_request_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_response_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nv_agentrt_register_llm_response_intercept("i1", 1, false, Box::new(|r| r)).unwrap();
+        nvagentrt_register_llm_response_intercept("i1", 1, false, Box::new(|r| r)).unwrap();
         assert!(
-            nv_agentrt_register_llm_response_intercept("i1", 1, false, Box::new(|r| r)).is_err()
+            nvagentrt_register_llm_response_intercept("i1", 1, false, Box::new(|r| r)).is_err()
         );
-        assert!(nv_agentrt_deregister_llm_response_intercept("i1").unwrap());
+        assert!(nvagentrt_deregister_llm_response_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_stream_response_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nv_agentrt_register_llm_stream_response_intercept("i1", 1, false, Box::new(|e| e)).unwrap();
+        nvagentrt_register_llm_stream_response_intercept("i1", 1, false, Box::new(|e| e)).unwrap();
         assert!(
-            nv_agentrt_register_llm_stream_response_intercept("i1", 1, false, Box::new(|e| e))
+            nvagentrt_register_llm_stream_response_intercept("i1", 1, false, Box::new(|e| e))
                 .is_err()
         );
-        assert!(nv_agentrt_deregister_llm_stream_response_intercept("i1").unwrap());
+        assert!(nvagentrt_deregister_llm_stream_response_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nv_agentrt_register_llm_execution_intercept(
+        nvagentrt_register_llm_execution_intercept(
             "i1",
             1,
             Box::new(|_r: &LLMRequest| false),
@@ -1678,14 +1677,14 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(nv_agentrt_deregister_llm_execution_intercept("i1").unwrap());
+        assert!(nvagentrt_deregister_llm_execution_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_stream_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nv_agentrt_register_llm_stream_execution_intercept(
+        nvagentrt_register_llm_stream_execution_intercept(
             "i1",
             1,
             Box::new(|_r: &LLMRequest| false),
@@ -1712,7 +1711,7 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(nv_agentrt_deregister_llm_stream_execution_intercept("i1").unwrap());
+        assert!(nvagentrt_deregister_llm_stream_execution_intercept("i1").unwrap());
     }
 
     // -- Deregister non-existent returns false --
@@ -1721,33 +1720,33 @@ mod tests {
     fn test_deregister_nonexistent_subscriber() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nv_agentrt_deregister_subscriber("nonexistent").unwrap());
+        assert!(!nvagentrt_deregister_subscriber("nonexistent").unwrap());
     }
 
     #[test]
     fn test_deregister_nonexistent_guardrails() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nv_agentrt_deregister_tool_sanitize_request_guardrail("nope").unwrap());
-        assert!(!nv_agentrt_deregister_tool_sanitize_response_guardrail("nope").unwrap());
-        assert!(!nv_agentrt_deregister_tool_conditional_execution_guardrail("nope").unwrap());
-        assert!(!nv_agentrt_deregister_llm_sanitize_request_guardrail("nope").unwrap());
-        assert!(!nv_agentrt_deregister_llm_sanitize_response_guardrail("nope").unwrap());
-        assert!(!nv_agentrt_deregister_llm_conditional_execution_guardrail("nope").unwrap());
+        assert!(!nvagentrt_deregister_tool_sanitize_request_guardrail("nope").unwrap());
+        assert!(!nvagentrt_deregister_tool_sanitize_response_guardrail("nope").unwrap());
+        assert!(!nvagentrt_deregister_tool_conditional_execution_guardrail("nope").unwrap());
+        assert!(!nvagentrt_deregister_llm_sanitize_request_guardrail("nope").unwrap());
+        assert!(!nvagentrt_deregister_llm_sanitize_response_guardrail("nope").unwrap());
+        assert!(!nvagentrt_deregister_llm_conditional_execution_guardrail("nope").unwrap());
     }
 
     #[test]
     fn test_deregister_nonexistent_intercepts() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nv_agentrt_deregister_tool_request_intercept("nope").unwrap());
-        assert!(!nv_agentrt_deregister_tool_response_intercept("nope").unwrap());
-        assert!(!nv_agentrt_deregister_tool_execution_intercept("nope").unwrap());
-        assert!(!nv_agentrt_deregister_llm_request_intercept("nope").unwrap());
-        assert!(!nv_agentrt_deregister_llm_response_intercept("nope").unwrap());
-        assert!(!nv_agentrt_deregister_llm_stream_response_intercept("nope").unwrap());
-        assert!(!nv_agentrt_deregister_llm_execution_intercept("nope").unwrap());
-        assert!(!nv_agentrt_deregister_llm_stream_execution_intercept("nope").unwrap());
+        assert!(!nvagentrt_deregister_tool_request_intercept("nope").unwrap());
+        assert!(!nvagentrt_deregister_tool_response_intercept("nope").unwrap());
+        assert!(!nvagentrt_deregister_tool_execution_intercept("nope").unwrap());
+        assert!(!nvagentrt_deregister_llm_request_intercept("nope").unwrap());
+        assert!(!nvagentrt_deregister_llm_response_intercept("nope").unwrap());
+        assert!(!nvagentrt_deregister_llm_stream_response_intercept("nope").unwrap());
+        assert!(!nvagentrt_deregister_llm_execution_intercept("nope").unwrap());
+        assert!(!nvagentrt_deregister_llm_stream_execution_intercept("nope").unwrap());
     }
 
     // -- LLM stream call execute --
@@ -1789,7 +1788,7 @@ mod tests {
             body: json!({}),
         };
 
-        let mut stream = nv_agentrt_llm_stream_call_execute(
+        let mut stream = nvagentrt_llm_stream_call_execute(
             "llm",
             request,
             func,
@@ -1815,7 +1814,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nv_agentrt_register_llm_conditional_execution_guardrail(
+        nvagentrt_register_llm_conditional_execution_guardrail(
             "stream_blocker",
             1,
             Box::new(|_req: &LLMRequest| Some("stream blocked".into())),
@@ -1848,7 +1847,7 @@ mod tests {
             body: json!({}),
         };
 
-        let result = nv_agentrt_llm_stream_call_execute(
+        let result = nvagentrt_llm_stream_call_execute(
             "llm",
             request,
             func,
@@ -1865,7 +1864,7 @@ mod tests {
             Ok(_) => panic!("expected error, got Ok"),
         }
 
-        nv_agentrt_deregister_llm_conditional_execution_guardrail("stream_blocker").unwrap();
+        nvagentrt_deregister_llm_conditional_execution_guardrail("stream_blocker").unwrap();
     }
 
     // -- Tool call with explicit parent --
@@ -1876,9 +1875,9 @@ mod tests {
         reset_global();
 
         let scope =
-            nv_agentrt_push_scope("parent", ScopeType::Agent, None, ScopeAttributes::empty())
+            nvagentrt_push_scope("parent", ScopeType::Agent, None, ScopeAttributes::empty())
                 .unwrap();
-        let handle = nv_agentrt_tool_call(
+        let handle = nvagentrt_tool_call(
             "tool",
             json!({}),
             Some(&scope),
@@ -1889,8 +1888,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(handle.parent_uuid, Some(scope.uuid));
-        nv_agentrt_tool_call_end(&handle, json!({}), None, None).unwrap();
-        nv_agentrt_pop_scope(&scope.uuid).unwrap();
+        nvagentrt_tool_call_end(&handle, json!({}), None, None).unwrap();
+        nvagentrt_pop_scope(&scope.uuid).unwrap();
     }
 
     // -- LLM call with attributes --
@@ -1906,7 +1905,7 @@ mod tests {
             headers: serde_json::Map::new(),
             body: json!({}),
         };
-        let handle = nv_agentrt_llm_call(
+        let handle = nvagentrt_llm_call(
             "llm",
             &request,
             None,
@@ -1918,6 +1917,6 @@ mod tests {
 
         assert!(handle.attributes.contains(LLMAttributes::STATELESS));
         assert!(handle.attributes.contains(LLMAttributes::STREAMING));
-        nv_agentrt_llm_call_end(&handle, json!({}), None, None).unwrap();
+        nvagentrt_llm_call_end(&handle, json!({}), None, None).unwrap();
     }
 }
