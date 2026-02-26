@@ -1,0 +1,48 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "nvagentrt"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.maturin]
+manifest-path = "crates/python/Cargo.toml"
+python-source = "python"
+module-name = "nvagentrt._native"
+features = ["pyo3/extension-module"]
+
+[dependency-groups]
+dev = [
+    "pre-commit~=4.0",
+    "ruff~=0.11",
+    "ty>=0.0.1a7",
+    "uv~=0.10.0",
+]
+test = [
+    "pytest>=8",
+    "pytest-asyncio>=0.26"
+]
+
+[tool.uv]
+default-groups = ["dev", "test"]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
+asyncio_mode = "auto"
+
+[tool.ty.analysis]
+# nvagentrt._native is a compiled Rust extension (built by maturin) that only
+# exists after `uv sync` / `pip install -e .`. Suppress unresolved-import for it.
+allowed-unresolved-imports = ["nvagentrt._native"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]

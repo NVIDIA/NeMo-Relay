@@ -1,0 +1,49 @@
+# Rust
+/target
+
+# Python
+/.venv
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.so
+python/nvagentrt/_native*.so
+
+# Python (Windows)
+python/nvagentrt/_native*.pyd
+
+# Go
+go/nvagentrt/nvagentrt_test
+go/nvagentrt/nvagentrt_test.exe
+
+# Node.js (NAPI-RS)
+node_modules/
+crates/node/*.node
+crates/node/index.js
+crates/node/index.d.ts
+
+# WASM
+crates/wasm/pkg/
+
+# Shared libraries
+*.dylib
+*.dll
+
+# Testing / caches
+.pytest_cache/
+package-lock.json
+
+# OS — macOS
+.DS_Store
+
+# OS — Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# OS — Linux
+*~
+.directory

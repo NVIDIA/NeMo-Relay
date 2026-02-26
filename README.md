@@ -1,93 +1,164 @@
-# AgentRT
+# NVAgentRT
 
+Multi-language agent runtime for execution scope management, lifecycle events, and middleware (guardrails/intercepts) on tool and LLM calls. Rust core with Python, Go, Node.js, and WASM bindings.
 
-
-## Getting started
-
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+## Repository Structure
 
 ```
-cd existing_repo
-git remote add origin https://gitlab-master.nvidia.com/nemo-agent-toolkit/dev/AgentRT.git
-git branch -M main
-git push -uf origin main
+crates/
+  core/       # Core runtime library (nvagentrt-core)
+  python/     # PyO3 Python bindings (_native C extension)
+  ffi/        # C FFI layer (used by Go, generates header via cbindgen)
+  node/       # NAPI Node.js bindings
+  wasm/       # wasm-bindgen WebAssembly bindings
+python/       # Python wrapper module (nvagentrt/)
+go/           # Go CGo bindings
 ```
 
-## Integrate with your tools
+## Prerequisites
 
-- [ ] [Set up project integrations](https://gitlab-master.nvidia.com/nemo-agent-toolkit/dev/AgentRT/-/settings/integrations)
+| Dependency | Version | Notes |
+|---|---|---|
+| Rust | stable toolchain | Install via [rustup](https://rustup.rs/). Also install `cargo-deny` (`cargo install cargo-deny`) for license/dependency auditing. |
+| Python | >= 3.11 | Uses [uv](https://docs.astral.sh/uv/) for venv, deps, and builds. Maturin is installed automatically via uv. |
+| Go | >= 1.21 | Required for the Go bindings. |
+| Node.js | LTS | Required for napi-rs Node.js bindings. |
+| wasm-pack | latest | Required for WASM builds (`cargo install wasm-pack`). |
+| pre-commit | via uv | Installed as a dev dependency; activate with `uv run pre-commit install` after `uv sync`. |
 
-## Collaborate with your team
+## Building
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+### Rust (core + all crates)
 
-## Test and Deploy
+```bash
+cargo build --workspace
+cargo build -p nvagentrt-core          # Core only
+```
 
-Use the built-in continuous integration in GitLab.
+### Python
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+```bash
+uv sync                                # Create venv, install deps, build native extension
+```
 
-***
+### Go
 
-# Editing this README
+The Go bindings link against the FFI shared library, so build it first:
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+```bash
+cargo build --release -p nvagentrt-ffi
+```
 
-## Suggestions for a good README
+### Node.js
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+```bash
+cd crates/node && npm install && npm run build
+```
 
-## Name
-Choose a self-explaining name for your project.
+### WASM
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+```bash
+wasm-pack build crates/wasm
+```
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+## Testing
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+### Rust
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+```bash
+cargo test --workspace                 # All Rust tests
+cargo test -p nvagentrt-core           # Core tests only
+```
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+### Python
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+```bash
+uv run pytest                          # Runs tests in python/tests/
+```
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+### Go
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+```bash
+cd go/nvagentrt && CGO_LDFLAGS="-L../../target/release" go test -v ./...
+```
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+## Dev Tooling
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+Pre-commit hooks run automatically on `git commit` after setup (`uv run pre-commit install`). The hooks enforce:
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+**General** — trailing whitespace, EOF fixup, YAML/TOML/JSON validity, merge conflict markers, large file check (500 KB max).
 
-## License
-For open source projects, say how it is licensed.
+**Python** — [Ruff](https://docs.astral.sh/ruff/) for linting (`E`, `F`, `W`, `I` rules) and formatting (line length 120, double quotes). [ty](https://github.com/astral-sh/ty) for type checking.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+**Rust** — `cargo fmt` for formatting, `cargo clippy` with `-D warnings` for lints, `cargo deny` for license/advisory auditing (configured in `deny.toml`).
+
+**Go** — `gofmt` for formatting, `go vet` for static analysis.
+
+## Architecture Overview
+
+NVAgentRT manages a **scope stack** of hierarchical execution scopes (identified by UUID handles) with a root scope always present. Scopes carry registered tools, LLM providers, guardrails, intercepts, and event subscribers.
+
+The tool/LLM call lifecycle pipeline:
+
+```mermaid
+---
+config:
+  look: handDrawn
+  theme: neutral
+---
+flowchart TB
+    direction TB
+    Request([Request])
+    subgraph **Execution**
+        RequestIntercepts[/Request Intercepts/]
+        ConditionalExecutionGuardrails{{Conditional-Execution Guardrail}}
+        HasExecutionIntercept{{Has Valid Execution Intercept}}
+        ExecutionIntercepts[/Execution Intercept/]
+        DefaultCallable[Default Callable]
+        ResponseIntercepts[/Response Intercepts/]
+    end
+    Response([Response])
+
+    subgraph **Observability**
+        direction TB
+        SanitizeRequestGuardrails[/Sanitize Request Guardrail/]
+        SanitizeResponseGuardrails[/Sanitize Response Guardrail/]
+        EventSubscribers@{ shape: processes, label: "Event Subscribers" }
+    end
+
+
+    Request -->|Request| RequestIntercepts
+    RequestIntercepts -->|Transformed Request| ConditionalExecutionGuardrails
+    RequestIntercepts -->|Transformed Request| SanitizeRequestGuardrails
+    ConditionalExecutionGuardrails -->|Rejected Reason| Response
+    ConditionalExecutionGuardrails -->|Rejected Reason| EventSubscribers
+    ConditionalExecutionGuardrails -->|Transformed Request| HasExecutionIntercept
+    HasExecutionIntercept -->|Yes| ExecutionIntercepts
+    HasExecutionIntercept -->|No| DefaultCallable
+    ExecutionIntercepts -->|Direct Response| ResponseIntercepts
+    DefaultCallable -->|Direct Response| ResponseIntercepts
+    ResponseIntercepts -->|Transformed Response| Response
+    ResponseIntercepts -->|Transformed Response| SanitizeResponseGuardrails
+    SanitizeRequestGuardrails -->|Sanitized Request| EventSubscribers
+    SanitizeResponseGuardrails -->|Sanitized Response| EventSubscribers
+
+    style Request fill:#eee,stroke:#333
+    style Response fill:#eee,stroke:#333
+    style EventSubscribers fill:#bff,stroke:#088
+    style RequestIntercepts fill:#ffb,stroke:#880
+    style HasExecutionIntercept fill:#ffb,stroke:#880
+    style ResponseIntercepts fill:#ffb,stroke:#880
+    style ExecutionIntercepts fill:#ffb,stroke:#880
+    style ConditionalExecutionGuardrails fill:#bfb,stroke:#080
+    style SanitizeRequestGuardrails fill:#bfb,stroke:#080
+    style SanitizeResponseGuardrails fill:#bfb,stroke:#080
+
+```
+
+Key mechanisms:
+
+- **Intercept chains** — priority-ordered middleware that can transform requests/responses; supports `break_chain` for short-circuit.
+- **Guardrails** — sanitize (modify) or gate (allow/reject) at request and response boundaries.
+- **Stream wrapping** — `LlmStreamWrapper` buffers and parses SSE events, applying intercepts mid-stream.
+- **Event subscribers** — observer pattern with named subscribers for lifecycle events.
+- **Context propagation** — `tokio::task_local` for async, thread-local for sync paths.

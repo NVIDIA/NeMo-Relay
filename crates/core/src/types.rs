@@ -1,0 +1,1003 @@
+//! Core data types for the NVAgentRT runtime.
+//!
+//! This module defines the fundamental types used throughout the framework:
+//!
+//! - **Attribute bitflags** — [`ScopeAttributes`], [`ToolAttributes`], [`LLMAttributes`]
+//! - **Enums** — [`ScopeType`], [`EventType`]
+//! - **Handle types** — [`ScopeHandle`], [`ToolHandle`], [`LLMHandle`], [`HandleAttributes`]
+//! - **Request/response types** — [`LLMRequest`], [`SseEvent`]
+//! - **Event types** — [`Event`]
+//! - **Middleware containers** — [`Intercept`], [`ExecutionIntercept`], [`GuardrailEntry`]
+
+use bitflags::bitflags;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::json::Json;
+
+// ---------------------------------------------------------------------------
+// Attribute flags
+// ---------------------------------------------------------------------------
+
+bitflags! {
+    /// Attribute flags for execution scopes.
+    ///
+    /// These flags describe behavioral properties of a scope and can be combined
+    /// using bitwise OR.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub struct ScopeAttributes: u32 {
+        /// The scope supports parallel execution of child operations.
+        const PARALLEL    = 0b01;
+        /// The scope can be relocated (moved between execution contexts).
+        const RELOCATABLE = 0b10;
+    }
+}
+
+bitflags! {
+    /// Attribute flags for tool handles.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub struct ToolAttributes: u32 {
+        /// The tool executes locally (as opposed to a remote/API tool).
+        const LOCAL = 0b01;
+    }
+}
+
+bitflags! {
+    /// Attribute flags for LLM handles.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub struct LLMAttributes: u32 {
+        /// The LLM call is stateless (no conversation history maintained).
+        const STATELESS = 0b01;
+        /// The LLM call uses streaming (SSE) responses.
+        const STREAMING = 0b10;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// The type of an execution scope, indicating what kind of component owns it.
+///
+/// Serializes to/from lowercase strings (e.g., `"agent"`, `"tool"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScopeType {
+    /// An autonomous agent scope.
+    Agent,
+    /// A function/subroutine scope.
+    Function,
+    /// A tool invocation scope.
+    Tool,
+    /// An LLM call scope.
+    Llm,
+    /// A retriever (e.g., vector search) scope.
+    Retriever,
+    /// An embedding model scope.
+    Embedder,
+    /// A reranker model scope.
+    Reranker,
+    /// A guardrail evaluation scope.
+    Guardrail,
+    /// An evaluator/judge scope.
+    Evaluator,
+    /// A user-defined custom scope type.
+    Custom,
+    /// An unknown or unspecified scope type.
+    Unknown,
+}
+
+/// The type of a lifecycle event.
+///
+/// Serializes to/from lowercase strings (e.g., `"start"`, `"end"`, `"mark"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EventType {
+    /// A scope or handle has been created / entered.
+    Start,
+    /// A scope or handle has been destroyed / exited.
+    End,
+    /// A standalone marker event (not tied to scope lifecycle).
+    Mark,
+}
+
+// ---------------------------------------------------------------------------
+// Handle types
+// ---------------------------------------------------------------------------
+
+/// Unified attributes enum so an [`Event`] can carry the attribute set of
+/// whichever handle type produced it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HandleAttributes {
+    /// Attributes from a [`ScopeHandle`].
+    Scope(ScopeAttributes),
+    /// Attributes from a [`ToolHandle`].
+    Tool(ToolAttributes),
+    /// Attributes from an [`LLMHandle`].
+    Llm(LLMAttributes),
+}
+
+/// A handle representing an active execution scope in the scope stack.
+///
+/// Scope handles form a hierarchical tree via `parent_uuid`. Every scope stack
+/// starts with a root scope (name `"root"`, type [`ScopeType::Agent`]) that
+/// cannot be removed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScopeHandle {
+    /// Unique identifier for this scope, generated as a v4 UUID on creation.
+    pub uuid: Uuid,
+    /// The kind of component that owns this scope.
+    pub scope_type: ScopeType,
+    /// Human-readable name for this scope.
+    pub name: String,
+    /// Optional application-specific data attached to this scope.
+    pub data: Option<Json>,
+    /// Optional metadata (e.g., tracing info) attached to this scope.
+    pub metadata: Option<Json>,
+    /// Behavioral attribute flags for this scope.
+    pub attributes: ScopeAttributes,
+    /// UUID of the parent scope, or `None` for the root scope.
+    pub parent_uuid: Option<Uuid>,
+}
+
+impl ScopeHandle {
+    /// Creates a new scope handle with a fresh v4 UUID.
+    ///
+    /// The `data` and `metadata` fields are initialized to `None`.
+    pub fn new(
+        name: String,
+        scope_type: ScopeType,
+        attributes: ScopeAttributes,
+        parent_uuid: Option<Uuid>,
+    ) -> Self {
+        Self {
+            uuid: Uuid::new_v4(),
+            scope_type,
+            name,
+            data: None,
+            metadata: None,
+            attributes,
+            parent_uuid,
+        }
+    }
+}
+
+/// A handle representing an active tool invocation.
+///
+/// Created by [`nv_agentrt_tool_call`](crate::api::nv_agentrt_tool_call) and
+/// ended by [`nv_agentrt_tool_call_end`](crate::api::nv_agentrt_tool_call_end).
+/// Each handle gets a unique v4 UUID and emits `Start`/`End` lifecycle events
+/// to all registered subscribers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolHandle {
+    /// Unique identifier for this tool invocation.
+    pub uuid: Uuid,
+    /// The tool name (e.g., `"web_search"`, `"calculator"`).
+    pub name: String,
+    /// Optional application-specific data (e.g., sanitized arguments).
+    pub data: Option<Json>,
+    /// Optional metadata (e.g., tracing info).
+    pub metadata: Option<Json>,
+    /// Behavioral attribute flags for this tool call.
+    pub attributes: ToolAttributes,
+    /// UUID of the parent scope or handle.
+    pub parent_uuid: Option<Uuid>,
+}
+
+impl ToolHandle {
+    /// Creates a new tool handle with a fresh v4 UUID.
+    pub fn new(
+        name: String,
+        attributes: ToolAttributes,
+        parent_uuid: Option<Uuid>,
+        data: Option<Json>,
+        metadata: Option<Json>,
+    ) -> Self {
+        Self {
+            uuid: Uuid::new_v4(),
+            name,
+            data,
+            metadata,
+            attributes,
+            parent_uuid,
+        }
+    }
+}
+
+/// A handle representing an active LLM call.
+///
+/// Created by [`nv_agentrt_llm_call`](crate::api::nv_agentrt_llm_call) and
+/// ended by [`nv_agentrt_llm_call_end`](crate::api::nv_agentrt_llm_call_end).
+/// For streaming calls, the [`LlmStreamWrapper`](crate::stream::LlmStreamWrapper)
+/// automatically emits the `End` event when the stream is exhausted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LLMHandle {
+    /// Unique identifier for this LLM call.
+    pub uuid: Uuid,
+    /// The LLM provider or model name.
+    pub name: String,
+    /// Optional application-specific data (e.g., sanitized request).
+    pub data: Option<Json>,
+    /// Optional metadata (e.g., tracing info).
+    pub metadata: Option<Json>,
+    /// Behavioral attribute flags for this LLM call.
+    pub attributes: LLMAttributes,
+    /// UUID of the parent scope or handle.
+    pub parent_uuid: Option<Uuid>,
+}
+
+impl LLMHandle {
+    /// Creates a new LLM handle with a fresh v4 UUID.
+    pub fn new(
+        name: String,
+        attributes: LLMAttributes,
+        parent_uuid: Option<Uuid>,
+        data: Option<Json>,
+        metadata: Option<Json>,
+    ) -> Self {
+        Self {
+            uuid: Uuid::new_v4(),
+            name,
+            data,
+            metadata,
+            attributes,
+            parent_uuid,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LLMRequest
+// ---------------------------------------------------------------------------
+
+/// An HTTP-like request structure representing an outgoing LLM API call.
+///
+/// This is the canonical request representation passed through the LLM
+/// guardrail and intercept pipelines. Intercepts can modify any field
+/// (e.g., rewrite the URL, inject headers, transform the body).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LLMRequest {
+    /// HTTP method (typically `"POST"`).
+    pub method: String,
+    /// The endpoint URL for the LLM API.
+    pub url: String,
+    /// HTTP headers as key-value pairs.
+    pub headers: serde_json::Map<String, Json>,
+    /// The request body (typically a JSON object with messages, parameters, etc.).
+    pub body: Json,
+}
+
+// ---------------------------------------------------------------------------
+// SSE Event
+// ---------------------------------------------------------------------------
+
+/// A parsed Server-Sent Events (SSE) event.
+///
+/// SSE is the standard protocol used by most LLM APIs for streaming responses.
+/// This struct represents a single event that can be parsed from raw SSE text
+/// and serialized back to SSE format.
+///
+/// # Wire format
+///
+/// ```text
+/// event: message
+/// id: 42
+/// retry: 3000
+/// data: {"token": "hello"}
+///
+/// ```
+///
+/// Events are separated by double newlines (`\n\n`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SseEvent {
+    /// The event type (from the `event:` field), or `None` if not specified.
+    pub event: Option<String>,
+    /// The event payload (from one or more `data:` lines, joined by newlines).
+    pub data: String,
+    /// The event ID (from the `id:` field), or `None` if not specified.
+    pub id: Option<String>,
+    /// Reconnection time in milliseconds (from the `retry:` field), or `None`.
+    pub retry: Option<u64>,
+}
+
+impl SseEvent {
+    /// Parse a single SSE event from raw text block (lines between `\n\n` boundaries).
+    pub fn parse(raw: &str) -> Self {
+        let mut event = None;
+        let mut data_lines: Vec<&str> = Vec::new();
+        let mut id = None;
+        let mut retry = None;
+
+        for line in raw.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            if let Some(value) = line.strip_prefix("event:") {
+                event = Some(value.trim().to_string());
+            } else if let Some(value) = line.strip_prefix("data:") {
+                data_lines.push(value.strip_prefix(' ').unwrap_or(value));
+            } else if let Some(value) = line.strip_prefix("id:") {
+                id = Some(value.trim().to_string());
+            } else if let Some(value) = line.strip_prefix("retry:") {
+                retry = value.trim().parse().ok();
+            }
+        }
+
+        SseEvent {
+            event,
+            data: data_lines.join("\n"),
+            id,
+            retry,
+        }
+    }
+
+    /// Parse a stream of raw SSE text into multiple events (split on `\n\n`).
+    pub fn parse_many(raw: &str) -> Vec<Self> {
+        raw.split("\n\n")
+            .filter(|block| !block.trim().is_empty())
+            .map(Self::parse)
+            .collect()
+    }
+
+    /// Serialize back to raw SSE text format.
+    pub fn to_sse_string(&self) -> String {
+        let mut out = String::new();
+        if let Some(ref ev) = self.event {
+            out.push_str("event: ");
+            out.push_str(ev);
+            out.push('\n');
+        }
+        if let Some(ref id) = self.id {
+            out.push_str("id: ");
+            out.push_str(id);
+            out.push('\n');
+        }
+        if let Some(retry) = self.retry {
+            out.push_str("retry: ");
+            out.push_str(&retry.to_string());
+            out.push('\n');
+        }
+        for line in self.data.lines() {
+            out.push_str("data: ");
+            out.push_str(line);
+            out.push('\n');
+        }
+        // If data is empty, still emit a data field
+        if self.data.is_empty() {
+            out.push_str("data: \n");
+        }
+        out.push('\n');
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Container types for registries
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // -- ScopeAttributes bitflags --
+
+    #[test]
+    fn test_scope_attributes_empty() {
+        let attrs = ScopeAttributes::empty();
+        assert!(!attrs.contains(ScopeAttributes::PARALLEL));
+        assert!(!attrs.contains(ScopeAttributes::RELOCATABLE));
+        assert!(attrs.bits() == 0);
+    }
+
+    #[test]
+    fn test_scope_attributes_individual() {
+        assert_eq!(ScopeAttributes::PARALLEL.bits(), 0b01);
+        assert_eq!(ScopeAttributes::RELOCATABLE.bits(), 0b10);
+    }
+
+    #[test]
+    fn test_scope_attributes_combined() {
+        let attrs = ScopeAttributes::PARALLEL | ScopeAttributes::RELOCATABLE;
+        assert!(attrs.contains(ScopeAttributes::PARALLEL));
+        assert!(attrs.contains(ScopeAttributes::RELOCATABLE));
+        assert_eq!(attrs.bits(), 0b11);
+    }
+
+    #[test]
+    fn test_scope_attributes_serde_roundtrip() {
+        let attrs = ScopeAttributes::PARALLEL | ScopeAttributes::RELOCATABLE;
+        let json = serde_json::to_string(&attrs).unwrap();
+        let deserialized: ScopeAttributes = serde_json::from_str(&json).unwrap();
+        assert_eq!(attrs, deserialized);
+    }
+
+    // -- ToolAttributes bitflags --
+
+    #[test]
+    fn test_tool_attributes() {
+        assert_eq!(ToolAttributes::LOCAL.bits(), 0b01);
+        let empty = ToolAttributes::empty();
+        assert!(!empty.contains(ToolAttributes::LOCAL));
+    }
+
+    #[test]
+    fn test_tool_attributes_serde_roundtrip() {
+        let attrs = ToolAttributes::LOCAL;
+        let json = serde_json::to_string(&attrs).unwrap();
+        let deserialized: ToolAttributes = serde_json::from_str(&json).unwrap();
+        assert_eq!(attrs, deserialized);
+    }
+
+    // -- LLMAttributes bitflags --
+
+    #[test]
+    fn test_llm_attributes_individual() {
+        assert_eq!(LLMAttributes::STATELESS.bits(), 0b01);
+        assert_eq!(LLMAttributes::STREAMING.bits(), 0b10);
+    }
+
+    #[test]
+    fn test_llm_attributes_combined() {
+        let attrs = LLMAttributes::STATELESS | LLMAttributes::STREAMING;
+        assert!(attrs.contains(LLMAttributes::STATELESS));
+        assert!(attrs.contains(LLMAttributes::STREAMING));
+    }
+
+    #[test]
+    fn test_llm_attributes_serde_roundtrip() {
+        let attrs = LLMAttributes::STATELESS | LLMAttributes::STREAMING;
+        let json = serde_json::to_string(&attrs).unwrap();
+        let deserialized: LLMAttributes = serde_json::from_str(&json).unwrap();
+        assert_eq!(attrs, deserialized);
+    }
+
+    // -- ScopeType --
+
+    #[test]
+    fn test_scope_type_all_variants() {
+        let variants = vec![
+            ScopeType::Agent,
+            ScopeType::Function,
+            ScopeType::Tool,
+            ScopeType::Llm,
+            ScopeType::Retriever,
+            ScopeType::Embedder,
+            ScopeType::Reranker,
+            ScopeType::Guardrail,
+            ScopeType::Evaluator,
+            ScopeType::Custom,
+            ScopeType::Unknown,
+        ];
+        assert_eq!(variants.len(), 11);
+    }
+
+    #[test]
+    fn test_scope_type_serde_roundtrip() {
+        let variants = vec![
+            (ScopeType::Agent, "\"agent\""),
+            (ScopeType::Function, "\"function\""),
+            (ScopeType::Tool, "\"tool\""),
+            (ScopeType::Llm, "\"llm\""),
+            (ScopeType::Retriever, "\"retriever\""),
+            (ScopeType::Embedder, "\"embedder\""),
+            (ScopeType::Reranker, "\"reranker\""),
+            (ScopeType::Guardrail, "\"guardrail\""),
+            (ScopeType::Evaluator, "\"evaluator\""),
+            (ScopeType::Custom, "\"custom\""),
+            (ScopeType::Unknown, "\"unknown\""),
+        ];
+        for (variant, expected_json) in variants {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, expected_json);
+            let deserialized: ScopeType = serde_json::from_str(&json).unwrap();
+            assert_eq!(variant, deserialized);
+        }
+    }
+
+    // -- EventType --
+
+    #[test]
+    fn test_event_type_serde() {
+        let variants = vec![
+            (EventType::Start, "\"start\""),
+            (EventType::End, "\"end\""),
+            (EventType::Mark, "\"mark\""),
+        ];
+        for (variant, expected_json) in variants {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, expected_json);
+            let deserialized: EventType = serde_json::from_str(&json).unwrap();
+            assert_eq!(variant, deserialized);
+        }
+    }
+
+    // -- HandleAttributes --
+
+    #[test]
+    fn test_handle_attributes_variants() {
+        let scope = HandleAttributes::Scope(ScopeAttributes::PARALLEL);
+        let tool = HandleAttributes::Tool(ToolAttributes::LOCAL);
+        let _llm = HandleAttributes::Llm(LLMAttributes::STREAMING);
+
+        // Equality
+        assert_eq!(scope, HandleAttributes::Scope(ScopeAttributes::PARALLEL));
+        assert_ne!(scope, HandleAttributes::Scope(ScopeAttributes::RELOCATABLE));
+        assert_ne!(scope, tool);
+    }
+
+    #[test]
+    fn test_handle_attributes_serde_roundtrip() {
+        let attrs = HandleAttributes::Tool(ToolAttributes::LOCAL);
+        let json = serde_json::to_string(&attrs).unwrap();
+        let deserialized: HandleAttributes = serde_json::from_str(&json).unwrap();
+        assert_eq!(attrs, deserialized);
+    }
+
+    // -- ScopeHandle --
+
+    #[test]
+    fn test_scope_handle_new() {
+        let handle = ScopeHandle::new(
+            "my_scope".to_string(),
+            ScopeType::Agent,
+            ScopeAttributes::PARALLEL,
+            None,
+        );
+        assert_eq!(handle.name, "my_scope");
+        assert_eq!(handle.scope_type, ScopeType::Agent);
+        assert_eq!(handle.attributes, ScopeAttributes::PARALLEL);
+        assert!(handle.parent_uuid.is_none());
+        assert!(handle.data.is_none());
+        assert!(handle.metadata.is_none());
+        // UUID should be valid v4
+        assert!(!handle.uuid.is_nil());
+    }
+
+    #[test]
+    fn test_scope_handle_with_parent() {
+        let parent_uuid = Uuid::new_v4();
+        let handle = ScopeHandle::new(
+            "child".to_string(),
+            ScopeType::Function,
+            ScopeAttributes::empty(),
+            Some(parent_uuid),
+        );
+        assert_eq!(handle.parent_uuid, Some(parent_uuid));
+    }
+
+    #[test]
+    fn test_scope_handle_unique_uuids() {
+        let h1 = ScopeHandle::new("a".into(), ScopeType::Agent, ScopeAttributes::empty(), None);
+        let h2 = ScopeHandle::new("a".into(), ScopeType::Agent, ScopeAttributes::empty(), None);
+        assert_ne!(h1.uuid, h2.uuid);
+    }
+
+    #[test]
+    fn test_scope_handle_serde_roundtrip() {
+        let handle = ScopeHandle::new(
+            "test".to_string(),
+            ScopeType::Tool,
+            ScopeAttributes::RELOCATABLE,
+            Some(Uuid::new_v4()),
+        );
+        let json = serde_json::to_string(&handle).unwrap();
+        let deserialized: ScopeHandle = serde_json::from_str(&json).unwrap();
+        assert_eq!(handle.uuid, deserialized.uuid);
+        assert_eq!(handle.name, deserialized.name);
+        assert_eq!(handle.scope_type, deserialized.scope_type);
+        assert_eq!(handle.attributes, deserialized.attributes);
+        assert_eq!(handle.parent_uuid, deserialized.parent_uuid);
+    }
+
+    // -- ToolHandle --
+
+    #[test]
+    fn test_tool_handle_new() {
+        let parent_uuid = Uuid::new_v4();
+        let data = Some(json!({"key": "value"}));
+        let metadata = Some(json!({"version": 1}));
+        let handle = ToolHandle::new(
+            "my_tool".to_string(),
+            ToolAttributes::LOCAL,
+            Some(parent_uuid),
+            data.clone(),
+            metadata.clone(),
+        );
+        assert_eq!(handle.name, "my_tool");
+        assert_eq!(handle.attributes, ToolAttributes::LOCAL);
+        assert_eq!(handle.parent_uuid, Some(parent_uuid));
+        assert_eq!(handle.data, data);
+        assert_eq!(handle.metadata, metadata);
+        assert!(!handle.uuid.is_nil());
+    }
+
+    #[test]
+    fn test_tool_handle_serde_roundtrip() {
+        let handle = ToolHandle::new(
+            "tool".into(),
+            ToolAttributes::empty(),
+            None,
+            Some(json!({"x": 1})),
+            None,
+        );
+        let json_str = serde_json::to_string(&handle).unwrap();
+        let deserialized: ToolHandle = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(handle.uuid, deserialized.uuid);
+        assert_eq!(handle.name, deserialized.name);
+    }
+
+    // -- LLMHandle --
+
+    #[test]
+    fn test_llm_handle_new() {
+        let handle = LLMHandle::new(
+            "gpt".to_string(),
+            LLMAttributes::STATELESS | LLMAttributes::STREAMING,
+            None,
+            None,
+            Some(json!({"model": "gpt-4"})),
+        );
+        assert_eq!(handle.name, "gpt");
+        assert!(handle.attributes.contains(LLMAttributes::STATELESS));
+        assert!(handle.attributes.contains(LLMAttributes::STREAMING));
+        assert!(handle.data.is_none());
+        assert!(handle.metadata.is_some());
+    }
+
+    // -- LLMRequest --
+
+    #[test]
+    fn test_llm_request_serde() {
+        let mut headers = serde_json::Map::new();
+        headers.insert("Authorization".into(), json!("Bearer token"));
+        let req = LLMRequest {
+            method: "POST".into(),
+            url: "https://api.example.com/v1/chat".into(),
+            headers,
+            body: json!({"messages": []}),
+        };
+        let json_str = serde_json::to_string(&req).unwrap();
+        let deserialized: LLMRequest = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(req.method, deserialized.method);
+        assert_eq!(req.url, deserialized.url);
+        assert_eq!(req.body, deserialized.body);
+    }
+
+    // -- SseEvent --
+
+    #[test]
+    fn test_sse_event_parse_basic() {
+        let raw = "event: message\ndata: hello world\n";
+        let event = SseEvent::parse(raw);
+        assert_eq!(event.event, Some("message".to_string()));
+        assert_eq!(event.data, "hello world");
+        assert!(event.id.is_none());
+        assert!(event.retry.is_none());
+    }
+
+    #[test]
+    fn test_sse_event_parse_all_fields() {
+        let raw = "event: update\ndata: payload\nid: 42\nretry: 3000\n";
+        let event = SseEvent::parse(raw);
+        assert_eq!(event.event, Some("update".to_string()));
+        assert_eq!(event.data, "payload");
+        assert_eq!(event.id, Some("42".to_string()));
+        assert_eq!(event.retry, Some(3000));
+    }
+
+    #[test]
+    fn test_sse_event_parse_multiline_data() {
+        let raw = "data: line1\ndata: line2\ndata: line3\n";
+        let event = SseEvent::parse(raw);
+        assert_eq!(event.data, "line1\nline2\nline3");
+    }
+
+    #[test]
+    fn test_sse_event_parse_data_with_leading_space() {
+        let raw = "data: hello\n";
+        let event = SseEvent::parse(raw);
+        assert_eq!(event.data, "hello");
+
+        // Without space after colon
+        let raw2 = "data:hello\n";
+        let event2 = SseEvent::parse(raw2);
+        assert_eq!(event2.data, "hello");
+    }
+
+    #[test]
+    fn test_sse_event_parse_empty_data() {
+        let raw = "event: ping\n";
+        let event = SseEvent::parse(raw);
+        assert_eq!(event.event, Some("ping".to_string()));
+        assert_eq!(event.data, "");
+    }
+
+    #[test]
+    fn test_sse_event_parse_empty_input() {
+        let event = SseEvent::parse("");
+        assert!(event.event.is_none());
+        assert_eq!(event.data, "");
+    }
+
+    #[test]
+    fn test_sse_event_parse_json_data() {
+        let raw = "data: {\"key\": \"value\", \"num\": 42}\n";
+        let event = SseEvent::parse(raw);
+        let parsed: serde_json::Value = serde_json::from_str(&event.data).unwrap();
+        assert_eq!(parsed, json!({"key": "value", "num": 42}));
+    }
+
+    #[test]
+    fn test_sse_event_parse_many_basic() {
+        let raw = "event: msg\ndata: first\n\nevent: msg\ndata: second\n\n";
+        let events = SseEvent::parse_many(raw);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].data, "first");
+        assert_eq!(events[1].data, "second");
+    }
+
+    #[test]
+    fn test_sse_event_parse_many_empty() {
+        let events = SseEvent::parse_many("");
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_sse_event_parse_many_single() {
+        let raw = "data: only\n\n";
+        let events = SseEvent::parse_many(raw);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "only");
+    }
+
+    #[test]
+    fn test_sse_event_parse_many_with_blank_blocks() {
+        let raw = "\n\ndata: one\n\n\n\ndata: two\n\n";
+        let events = SseEvent::parse_many(raw);
+        assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn test_sse_event_to_sse_string_basic() {
+        let event = SseEvent {
+            event: Some("message".into()),
+            data: "hello".into(),
+            id: None,
+            retry: None,
+        };
+        let sse = event.to_sse_string();
+        assert!(sse.contains("event: message\n"));
+        assert!(sse.contains("data: hello\n"));
+        assert!(sse.ends_with("\n"));
+    }
+
+    #[test]
+    fn test_sse_event_to_sse_string_all_fields() {
+        let event = SseEvent {
+            event: Some("update".into()),
+            data: "payload".into(),
+            id: Some("123".into()),
+            retry: Some(5000),
+        };
+        let sse = event.to_sse_string();
+        assert!(sse.contains("event: update\n"));
+        assert!(sse.contains("id: 123\n"));
+        assert!(sse.contains("retry: 5000\n"));
+        assert!(sse.contains("data: payload\n"));
+    }
+
+    #[test]
+    fn test_sse_event_to_sse_string_multiline_data() {
+        let event = SseEvent {
+            event: None,
+            data: "line1\nline2".into(),
+            id: None,
+            retry: None,
+        };
+        let sse = event.to_sse_string();
+        assert!(sse.contains("data: line1\n"));
+        assert!(sse.contains("data: line2\n"));
+    }
+
+    #[test]
+    fn test_sse_event_to_sse_string_empty_data() {
+        let event = SseEvent {
+            event: None,
+            data: "".into(),
+            id: None,
+            retry: None,
+        };
+        let sse = event.to_sse_string();
+        assert!(sse.contains("data: \n"));
+    }
+
+    #[test]
+    fn test_sse_event_roundtrip() {
+        let original = SseEvent {
+            event: Some("chunk".into()),
+            data: "{\"token\": \"hello\"}".into(),
+            id: Some("evt_1".into()),
+            retry: Some(1000),
+        };
+        let sse_str = original.to_sse_string();
+        let parsed = SseEvent::parse(&sse_str);
+        assert_eq!(original.event, parsed.event);
+        assert_eq!(original.data, parsed.data);
+        assert_eq!(original.id, parsed.id);
+        assert_eq!(original.retry, parsed.retry);
+    }
+
+    #[test]
+    fn test_sse_event_invalid_retry() {
+        let raw = "retry: not_a_number\ndata: test\n";
+        let event = SseEvent::parse(raw);
+        assert!(event.retry.is_none());
+        assert_eq!(event.data, "test");
+    }
+
+    // -- Event --
+
+    #[test]
+    fn test_event_new() {
+        let parent = Uuid::new_v4();
+        let uuid = Uuid::new_v4();
+        let event = Event::new(
+            Some(parent),
+            uuid,
+            Some("test_event".into()),
+            Some(json!({"key": "val"})),
+            None,
+            Some(HandleAttributes::Scope(ScopeAttributes::empty())),
+            EventType::Start,
+            Some(ScopeType::Agent),
+        );
+        assert_eq!(event.parent_uuid, Some(parent));
+        assert_eq!(event.uuid, uuid);
+        assert_eq!(event.name, Some("test_event".into()));
+        assert_eq!(event.event_type, EventType::Start);
+        assert_eq!(event.scope_type, Some(ScopeType::Agent));
+        assert!(event.data.is_some());
+        assert!(event.metadata.is_none());
+    }
+
+    #[test]
+    fn test_event_serde_roundtrip() {
+        let event = Event::new(
+            None,
+            Uuid::new_v4(),
+            Some("evt".into()),
+            None,
+            None,
+            None,
+            EventType::Mark,
+            None,
+        );
+        let json_str = serde_json::to_string(&event).unwrap();
+        let deserialized: Event = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(event.uuid, deserialized.uuid);
+        assert_eq!(event.event_type, deserialized.event_type);
+    }
+
+    #[test]
+    fn test_event_timestamp_is_recent() {
+        let before = chrono::Utc::now();
+        let event = Event::new(
+            None,
+            Uuid::new_v4(),
+            None,
+            None,
+            None,
+            None,
+            EventType::Mark,
+            None,
+        );
+        let after = chrono::Utc::now();
+        assert!(event.timestamp >= before);
+        assert!(event.timestamp <= after);
+    }
+}
+
+/// A priority-ordered intercept that transforms data flowing through a chain.
+///
+/// Intercepts are executed in ascending priority order. Each intercept receives
+/// the current value, transforms it, and passes it to the next intercept in the
+/// chain. If `break_chain` is `true`, no further intercepts in the chain execute.
+pub struct Intercept<F> {
+    /// Sort priority (lower = earlier). Determines execution order within the chain.
+    pub priority: i32,
+    /// If `true`, stop the chain after this intercept runs (short-circuit).
+    pub break_chain: bool,
+    /// The transformation function.
+    pub callable: F,
+}
+
+/// An execution intercept that conditionally replaces the default execution function.
+///
+/// The `conditional` function is checked first; if it returns `true`, the
+/// `callable` function is used instead of the default execution path. Only
+/// the first matching execution intercept (by priority) is used.
+pub struct ExecutionIntercept<C, F> {
+    /// Sort priority (lower = checked first).
+    pub priority: i32,
+    /// A predicate that determines whether this intercept should handle the call.
+    pub conditional: C,
+    /// The replacement execution function, invoked if `conditional` returns `true`.
+    pub callable: F,
+}
+
+/// A guardrail entry in a priority-ordered registry.
+///
+/// Guardrails are executed in ascending priority order. They can sanitize data
+/// (transform it) or conditionally gate execution (return an error to reject).
+pub struct GuardrailEntry<F> {
+    /// Sort priority (lower = earlier).
+    pub priority: i32,
+    /// The guardrail function (sanitizer or conditional check).
+    pub guardrail: F,
+}
+
+// ---------------------------------------------------------------------------
+// Event
+// ---------------------------------------------------------------------------
+
+/// A lifecycle event emitted to all registered subscribers.
+///
+/// Events are produced when scopes, tool handles, or LLM handles are created
+/// or destroyed, and when explicit marker events are fired via
+/// [`nv_agentrt_event`](crate::api::nv_agentrt_event). Subscribers receive
+/// a reference to each event and can use them for logging, tracing, metrics,
+/// or other observability tasks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Event {
+    /// UUID of the parent scope or handle, if any.
+    pub parent_uuid: Option<Uuid>,
+    /// UUID of the entity that produced this event.
+    pub uuid: Uuid,
+    /// UTC timestamp of when this event was created.
+    pub timestamp: DateTime<Utc>,
+    /// Human-readable name of the source entity.
+    pub name: Option<String>,
+    /// Optional application-specific data snapshot.
+    pub data: Option<Json>,
+    /// Optional metadata snapshot.
+    pub metadata: Option<Json>,
+    /// Attribute flags of the source handle, if applicable.
+    pub attributes: Option<HandleAttributes>,
+    /// Whether this is a start, end, or marker event.
+    pub event_type: EventType,
+    /// The scope type of the source entity, if applicable.
+    pub scope_type: Option<ScopeType>,
+}
+
+impl Event {
+    /// Creates a new event with the current UTC timestamp.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        parent_uuid: Option<Uuid>,
+        uuid: Uuid,
+        name: Option<String>,
+        data: Option<Json>,
+        metadata: Option<Json>,
+        attributes: Option<HandleAttributes>,
+        event_type: EventType,
+        scope_type: Option<ScopeType>,
+    ) -> Self {
+        Self {
+            parent_uuid,
+            uuid,
+            timestamp: Utc::now(),
+            name,
+            data,
+            metadata,
+            attributes,
+            event_type,
+            scope_type,
+        }
+    }
+}
