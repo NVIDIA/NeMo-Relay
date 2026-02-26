@@ -1493,3 +1493,59 @@ pub unsafe extern "C" fn nv_agentrt_deregister_subscriber(name: *const c_char) -
         Err(e) => status_from_error(&e),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Scope stack isolation
+// ---------------------------------------------------------------------------
+
+/// Create a new isolated scope stack with its own root scope.
+///
+/// Each scope stack is independent: scopes pushed on one do not appear on another.
+/// Use `nv_agentrt_scope_stack_set_thread` to bind a stack to the current thread
+/// before making other NVAgentRT API calls.
+///
+/// # Parameters
+/// - `out`: On success, receives a heap-allocated `FfiScopeStack` that must be
+///   freed with `nv_agentrt_scope_stack_free`.
+///
+/// # Safety
+/// `out` must be a valid, non-null pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nv_agentrt_scope_stack_create(
+    out: *mut *mut FfiScopeStack,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NvAgentRtStatus::NullPointer;
+    }
+    let handle = core::create_scope_stack();
+    unsafe { *out = Box::into_raw(Box::new(FfiScopeStack(handle))) };
+    NvAgentRtStatus::Ok
+}
+
+/// Bind an isolated scope stack to the current OS thread.
+///
+/// After this call, all NVAgentRT scope operations on the current thread
+/// (e.g. `nv_agentrt_push_scope`, `nv_agentrt_get_handle`) will use the
+/// given scope stack. This is typically used from Go goroutines that have
+/// called `runtime.LockOSThread()`.
+///
+/// The `FfiScopeStack` is **not** consumed — the caller retains ownership
+/// and must still free it when done.
+///
+/// # Safety
+/// `stack` must be a valid, non-null `FfiScopeStack` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nv_agentrt_scope_stack_set_thread(
+    stack: *const FfiScopeStack,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    if stack.is_null() {
+        set_last_error("stack pointer is null");
+        return NvAgentRtStatus::NullPointer;
+    }
+    let handle = unsafe { &*stack }.0.clone();
+    core::set_thread_scope_stack(handle);
+    NvAgentRtStatus::Ok
+}

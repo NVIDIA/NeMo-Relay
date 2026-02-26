@@ -101,11 +101,6 @@ NVAgentRT manages a **scope stack** of hierarchical execution scopes (identified
 The tool/LLM call lifecycle pipeline:
 
 ```mermaid
----
-config:
-  look: handDrawn
-  theme: neutral
----
 flowchart TB
     direction TB
     Request([Request])
@@ -152,7 +147,6 @@ flowchart TB
     style ConditionalExecutionGuardrails fill:#bfb,stroke:#080
     style SanitizeRequestGuardrails fill:#bfb,stroke:#080
     style SanitizeResponseGuardrails fill:#bfb,stroke:#080
-
 ```
 
 Key mechanisms:

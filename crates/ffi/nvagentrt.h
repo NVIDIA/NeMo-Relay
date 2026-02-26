@@ -145,6 +145,11 @@ typedef struct FfiLLMRequest FfiLLMRequest;
 typedef struct FfiScopeHandle FfiScopeHandle;
 
 /**
+ * Opaque handle to an isolated scope stack for per-request/per-task isolation.
+ */
+typedef struct FfiScopeStack FfiScopeStack;
+
+/**
  * Opaque wrapper around a server-sent event (SSE) used in LLM streaming.
  */
 typedef struct FfiSseEvent FfiSseEvent;
@@ -789,6 +794,38 @@ NvAgentRtStatus nv_agentrt_register_subscriber(const char *name,
 NvAgentRtStatus nv_agentrt_deregister_subscriber(const char *name);
 
 /**
+ * Create a new isolated scope stack with its own root scope.
+ *
+ * Each scope stack is independent: scopes pushed on one do not appear on another.
+ * Use `nv_agentrt_scope_stack_set_thread` to bind a stack to the current thread
+ * before making other NVAgentRT API calls.
+ *
+ * # Parameters
+ * - `out`: On success, receives a heap-allocated `FfiScopeStack` that must be
+ *   freed with `nv_agentrt_scope_stack_free`.
+ *
+ * # Safety
+ * `out` must be a valid, non-null pointer.
+ */
+NvAgentRtStatus nv_agentrt_scope_stack_create(struct FfiScopeStack **out);
+
+/**
+ * Bind an isolated scope stack to the current OS thread.
+ *
+ * After this call, all NVAgentRT scope operations on the current thread
+ * (e.g. `nv_agentrt_push_scope`, `nv_agentrt_get_handle`) will use the
+ * given scope stack. This is typically used from Go goroutines that have
+ * called `runtime.LockOSThread()`.
+ *
+ * The `FfiScopeStack` is **not** consumed — the caller retains ownership
+ * and must still free it when done.
+ *
+ * # Safety
+ * `stack` must be a valid, non-null `FfiScopeStack` pointer.
+ */
+NvAgentRtStatus nv_agentrt_scope_stack_set_thread(const struct FfiScopeStack *stack);
+
+/**
  * Free a C string previously returned by any `nv_agentrt_*` accessor function.
  * Passing null is a safe no-op.
  *
@@ -855,6 +892,14 @@ void nv_agentrt_event_free(struct FfiEvent *ptr);
  * `ptr` must be a valid pointer returned by an `nv_agentrt_*` function, or null.
  */
 void nv_agentrt_sse_event_free(struct FfiSseEvent *ptr);
+
+/**
+ * Free a scope stack handle previously returned by `nv_agentrt_scope_stack_create`.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `nv_agentrt_scope_stack_create`, or null.
+ */
+void nv_agentrt_scope_stack_free(struct FfiScopeStack *ptr);
 
 /**
  * Return the UUID of a scope handle as a C string. Caller must free the result

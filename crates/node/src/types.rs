@@ -103,6 +103,29 @@ impl From<core_types::EventType> for EventType {
 // Handle wrappers
 // ---------------------------------------------------------------------------
 
+/// Handle to an isolated scope stack for per-request/per-task isolation.
+#[napi]
+pub struct JsScopeStack {
+    pub(crate) inner: nvagentrt_core::ScopeStackHandle,
+}
+
+#[napi]
+impl JsScopeStack {
+    /// Creates a new isolated scope stack with its own root scope.
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner: nvagentrt_core::create_scope_stack(),
+        }
+    }
+}
+
+impl From<nvagentrt_core::ScopeStackHandle> for JsScopeStack {
+    fn from(h: nvagentrt_core::ScopeStackHandle) -> Self {
+        Self { inner: h }
+    }
+}
+
 /// A handle to an execution scope in the agent runtime.
 ///
 /// Scopes form a hierarchical stack representing the current execution context

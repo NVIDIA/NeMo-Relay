@@ -1,0 +1,153 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const lib = require('../index.js');
+
+const {
+  getHandle, pushScope, popScope, event,
+  registerSubscriber, deregisterSubscriber,
+  ScopeType,
+  SCOPE_ATTR_PARALLEL, SCOPE_ATTR_RELOCATABLE,
+} = lib;
+
+// ===========================================================================
+// Scope operations
+// ===========================================================================
+
+describe('Scope operations', () => {
+  it('getHandle returns root', () => {
+    const handle = getHandle();
+    assert.ok(handle.uuid);
+    assert.ok(handle.uuid.length > 0);
+  });
+
+  it('push and pop scope', () => {
+    const scope = pushScope('node_test_scope', ScopeType.Agent, null, null);
+    assert.equal(scope.name, 'node_test_scope');
+    assert.equal(scope.scopeType, ScopeType.Agent);
+    popScope(scope);
+  });
+
+  it('scope with attributes', () => {
+    const scope = pushScope('attr_scope', ScopeType.Function, null, SCOPE_ATTR_PARALLEL | SCOPE_ATTR_RELOCATABLE);
+    assert.equal(scope.attributes, SCOPE_ATTR_PARALLEL | SCOPE_ATTR_RELOCATABLE);
+    popScope(scope);
+  });
+
+  it('scope with parent', () => {
+    const parent = pushScope('parent_scope', ScopeType.Agent, null, null);
+    const child = pushScope('child_scope', ScopeType.Function, parent, null);
+    assert.equal(child.parentUuid, parent.uuid);
+    popScope(child);
+    popScope(parent);
+  });
+
+  it('scope nesting', () => {
+    const s1 = pushScope('nest_1', ScopeType.Agent, null, null);
+    const s2 = pushScope('nest_2', ScopeType.Function, null, null);
+    const s3 = pushScope('nest_3', ScopeType.Tool, null, null);
+    popScope(s3);
+    popScope(s2);
+    popScope(s1);
+  });
+
+  it('all scope types', () => {
+    const types = [
+      [ScopeType.Agent, 'agent_s'],
+      [ScopeType.Function, 'function_s'],
+      [ScopeType.Tool, 'tool_s'],
+      [ScopeType.Llm, 'llm_s'],
+      [ScopeType.Retriever, 'retriever_s'],
+      [ScopeType.Embedder, 'embedder_s'],
+      [ScopeType.Reranker, 'reranker_s'],
+      [ScopeType.Guardrail, 'guardrail_s'],
+      [ScopeType.Evaluator, 'evaluator_s'],
+      [ScopeType.Custom, 'custom_s'],
+      [ScopeType.Unknown, 'unknown_s'],
+    ];
+    for (const [st, name] of types) {
+      const scope = pushScope(name, st, null, null);
+      assert.equal(scope.scopeType, st);
+      popScope(scope);
+    }
+  });
+});
+
+// ===========================================================================
+// Events
+// ===========================================================================
+
+describe('Events', () => {
+  it('basic event', () => {
+    event('test_event', null, null, null);
+  });
+
+  it('event with data', () => {
+    event('data_event', null, { key: 'value' }, null);
+  });
+
+  it('event with parent', () => {
+    const scope = pushScope('event_parent', ScopeType.Agent, null, null);
+    event('child_event', scope, null, null);
+    popScope(scope);
+  });
+});
+
+// ===========================================================================
+// Subscribers
+// ===========================================================================
+
+describe('Subscribers', () => {
+  it('register and deregister', () => {
+    registerSubscriber('node_sub_1', () => {});
+    const removed = deregisterSubscriber('node_sub_1');
+    assert.equal(removed, true);
+  });
+
+  it('duplicate subscriber fails', () => {
+    registerSubscriber('node_dup_sub', () => {});
+    assert.throws(() => registerSubscriber('node_dup_sub', () => {}));
+    deregisterSubscriber('node_dup_sub');
+  });
+
+  it('deregister nonexistent', () => {
+    const removed = deregisterSubscriber('nonexistent_sub');
+    assert.equal(removed, false);
+  });
+
+  it('subscriber receives events', async () => {
+    const events = [];
+    registerSubscriber('node_event_collector', (e) => events.push(e));
+    const scope = pushScope('sub_test', ScopeType.Agent, null, null);
+    popScope(scope);
+    // Subscriber callbacks are NonBlocking — wait for the event loop to drain
+    await new Promise(r => setTimeout(r, 50));
+    assert.ok(events.length > 0, 'Expected at least one event');
+    deregisterSubscriber('node_event_collector');
+  });
+
+  it('subscriber event properties', async () => {
+    let captured = null;
+    registerSubscriber('node_prop_collector', (e) => { if (!captured) captured = e; });
+    const scope = pushScope('prop_test', ScopeType.Function, null, null);
+    popScope(scope);
+    await new Promise(r => setTimeout(r, 50));
+    assert.ok(captured, 'Expected an event');
+    assert.ok(typeof captured.uuid === 'string');
+    assert.ok(typeof captured.timestamp === 'string');
+    assert.ok(typeof captured.event_type === 'number');
+    deregisterSubscriber('node_prop_collector');
+  });
+
+  it('mark events', async () => {
+    const events = [];
+    registerSubscriber('node_mark_collector', (e) => events.push(e));
+    event('mark_event', null, { marker: 'test' }, null);
+    await new Promise(r => setTimeout(r, 50));
+    const found = events.some(e => e.event_type === 2); // Mark = 2
+    assert.ok(found, 'Expected a Mark event (eventType=2)');
+    deregisterSubscriber('node_mark_collector');
+  });
+});

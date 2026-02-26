@@ -11,7 +11,7 @@ use std::task::{Context, Poll};
 
 use tokio_stream::Stream;
 
-use crate::context::global_context;
+use crate::context::{current_scope_stack, global_context, ScopeStackHandle};
 use crate::error::Result;
 use crate::json::Json;
 use crate::types::*;
@@ -26,6 +26,7 @@ use crate::types::*;
 pub struct LlmStreamWrapper {
     inner: Pin<Box<dyn Stream<Item = Result<String>> + Send>>,
     handle: LLMHandle,
+    scope_stack: ScopeStackHandle,
     buffer: String,
     collected: Vec<SseEvent>,
     pending: VecDeque<String>,
@@ -36,6 +37,10 @@ pub struct LlmStreamWrapper {
 
 impl LlmStreamWrapper {
     /// Creates a new `LlmStreamWrapper` around the given raw SSE stream.
+    ///
+    /// Captures the current [`ScopeStackHandle`] at creation time so the
+    /// correct scope stack is used when the stream is later polled, even if
+    /// polling happens on a different task or thread.
     ///
     /// - `inner` — the raw stream of SSE text chunks from the LLM provider.
     /// - `handle` — the [`LLMHandle`] for this call (used for the `End` event).
@@ -49,6 +54,7 @@ impl LlmStreamWrapper {
         Self {
             inner,
             handle,
+            scope_stack: current_scope_stack(),
             buffer: String::new(),
             collected: Vec::new(),
             pending: VecDeque::new(),
@@ -78,6 +84,14 @@ impl LlmStreamWrapper {
             self.collected.push(event.clone());
             self.pending.push_back(event.to_sse_string());
         }
+    }
+
+    /// Returns the captured scope stack handle for this stream.
+    ///
+    /// Callers can use this to bind the correct scope stack when spawning
+    /// the stream on a different task via `TASK_SCOPE_STACK.scope(...)`.
+    pub fn scope_stack(&self) -> &ScopeStackHandle {
+        &self.scope_stack
     }
 
     /// Emit the LLM END event with aggregated response data.

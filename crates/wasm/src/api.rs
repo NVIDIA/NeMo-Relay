@@ -762,3 +762,29 @@ pub fn register_subscriber(name: &str, callback: Function) -> Result<(), JsValue
 pub fn deregister_subscriber(name: &str) -> Result<bool, JsValue> {
     nvagentrt_core::nv_agentrt_deregister_subscriber(name).map_err(to_js_err)
 }
+
+// ---------------------------------------------------------------------------
+// Scope stack isolation
+// ---------------------------------------------------------------------------
+
+/// Creates a new isolated scope stack.
+#[wasm_bindgen(js_name = "createScopeStack")]
+pub fn create_scope_stack() -> WasmScopeStack {
+    WasmScopeStack {
+        inner: nvagentrt_core::create_scope_stack(),
+    }
+}
+
+/// Returns the current thread's scope stack handle.
+#[wasm_bindgen(js_name = "currentScopeStack")]
+pub fn current_scope_stack() -> WasmScopeStack {
+    WasmScopeStack {
+        inner: nvagentrt_core::current_scope_stack(),
+    }
+}
+
+/// Binds a scope stack to the current thread.
+#[wasm_bindgen(js_name = "setThreadScopeStack")]
+pub fn set_thread_scope_stack(stack: &WasmScopeStack) {
+    nvagentrt_core::set_thread_scope_stack(stack.inner.clone());
+}

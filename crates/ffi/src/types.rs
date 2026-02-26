@@ -31,6 +31,8 @@ pub struct FfiLLMRequest(pub core_types::LLMRequest);
 pub struct FfiEvent(pub core_types::Event);
 /// Opaque wrapper around a server-sent event (SSE) used in LLM streaming.
 pub struct FfiSseEvent(pub core_types::SseEvent);
+/// Opaque handle to an isolated scope stack for per-request/per-task isolation.
+pub struct FfiScopeStack(pub nvagentrt_core::ScopeStackHandle);
 
 // ---------------------------------------------------------------------------
 // Enums exposed to C
@@ -187,6 +189,17 @@ pub unsafe extern "C" fn nv_agentrt_event_free(ptr: *mut FfiEvent) {
 /// `ptr` must be a valid pointer returned by an `nv_agentrt_*` function, or null.
 #[no_mangle]
 pub unsafe extern "C" fn nv_agentrt_sse_event_free(ptr: *mut FfiSseEvent) {
+    if !ptr.is_null() {
+        drop(unsafe { Box::from_raw(ptr) });
+    }
+}
+
+/// Free a scope stack handle previously returned by `nv_agentrt_scope_stack_create`.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `nv_agentrt_scope_stack_create`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn nv_agentrt_scope_stack_free(ptr: *mut FfiScopeStack) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }

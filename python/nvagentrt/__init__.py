@@ -42,6 +42,8 @@ Types (available at top level):
     LLMRequest, Event
 """
 
+import contextvars
+
 from nvagentrt import guardrails, intercepts, llm, scope, subscribers, tools
 from nvagentrt._native import (
     Event,
@@ -56,6 +58,23 @@ from nvagentrt._native import (
     ToolAttributes,
     ToolHandle,
 )
+from nvagentrt._native import ScopeStack as _ScopeStack
+from nvagentrt._native import create_scope_stack as _create_scope_stack
+
+_scope_stack_var: contextvars.ContextVar[_ScopeStack] = contextvars.ContextVar("nvagentrt_scope_stack")
+
+
+def get_scope_stack() -> _ScopeStack:
+    """Get the current task's scope stack, creating one if needed."""
+    stack = _scope_stack_var.get(None)
+    if stack is None:
+        stack = _create_scope_stack()
+        _scope_stack_var.set(stack)
+    return stack
+
+
+ScopeStack = _ScopeStack
+create_scope_stack = _create_scope_stack
 
 __all__ = [
     # Submodules
@@ -65,6 +84,10 @@ __all__ = [
     "guardrails",
     "intercepts",
     "subscribers",
+    # Scope stack isolation
+    "ScopeStack",
+    "create_scope_stack",
+    "get_scope_stack",
     # Types
     "ScopeAttributes",
     "ToolAttributes",

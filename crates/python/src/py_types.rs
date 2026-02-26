@@ -131,6 +131,24 @@ impl PyLlmStream {
 }
 
 // ---------------------------------------------------------------------------
+// ScopeStack (per-request isolation handle)
+// ---------------------------------------------------------------------------
+
+/// An isolated scope stack for per-request/per-task isolation.
+///
+/// Each ``ScopeStack`` wraps an independent scope stack with its own root
+/// scope. Use ``create_scope_stack()`` to obtain one.
+#[pyclass(name = "ScopeStack")]
+pub struct PyScopeStack(pub nvagentrt_core::ScopeStackHandle);
+
+#[pymethods]
+impl PyScopeStack {
+    fn __repr__(&self) -> String {
+        "<ScopeStack>".to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ScopeAttributes (bitflag wrapper)
 // ---------------------------------------------------------------------------
 
@@ -793,6 +811,7 @@ impl From<core_types::Event> for PyEvent {
 // ---------------------------------------------------------------------------
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyScopeStack>()?;
     m.add_class::<PySseEvent>()?;
     m.add_class::<PyLlmStream>()?;
     m.add_class::<PyScopeAttributes>()?;

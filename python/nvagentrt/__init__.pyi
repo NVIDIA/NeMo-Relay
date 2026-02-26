@@ -4,6 +4,7 @@ Provides static type information for the ``nvagentrt`` package, including
 all types exported from the native Rust extension and all API functions.
 """
 
+import contextvars
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 Json = Any
@@ -354,6 +355,10 @@ class SseEvent:
         """Reconnection time in milliseconds, or ``None``."""
         ...
 
+class ScopeStack:
+    """An isolated scope stack for per-request/per-task isolation."""
+    def __repr__(self) -> str: ...
+
 class LlmStream:
     """An async iterator of SSE text chunks from a streaming LLM response.
 
@@ -366,6 +371,20 @@ class LlmStream:
 
     def __aiter__(self) -> AsyncIterator[str]: ...
     async def __anext__(self) -> str: ...
+
+# ---------------------------------------------------------------------------
+# Scope stack creation
+# ---------------------------------------------------------------------------
+
+_scope_stack_var: contextvars.ContextVar[ScopeStack]
+
+def create_scope_stack() -> ScopeStack:
+    """Create a new isolated scope stack with its own root scope."""
+    ...
+
+def get_scope_stack() -> ScopeStack:
+    """Get the current task's scope stack, creating one if needed."""
+    ...
 
 # ---------------------------------------------------------------------------
 # Scope / handle operations

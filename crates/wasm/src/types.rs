@@ -269,6 +269,43 @@ impl From<core_types::LLMHandle> for WasmLLMHandle {
 }
 
 // ---------------------------------------------------------------------------
+// Scope stack handle
+// ---------------------------------------------------------------------------
+
+/// Handle to an isolated scope stack for per-request/per-task isolation.
+///
+/// In a WASM environment (browser/Node.js), there is no native async-local
+/// storage, so scope stacks are passed explicitly. Create one per logical
+/// request and pass it to scope-stack-aware API variants.
+#[wasm_bindgen]
+pub struct WasmScopeStack {
+    pub(crate) inner: nvagentrt_core::ScopeStackHandle,
+}
+
+#[wasm_bindgen]
+impl WasmScopeStack {
+    /// Creates a new isolated scope stack with its own root scope.
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner: nvagentrt_core::create_scope_stack(),
+        }
+    }
+}
+
+impl Default for WasmScopeStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl From<nvagentrt_core::ScopeStackHandle> for WasmScopeStack {
+    fn from(h: nvagentrt_core::ScopeStackHandle) -> Self {
+        Self { inner: h }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // LLMRequest
 // ---------------------------------------------------------------------------
 

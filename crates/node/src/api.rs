@@ -21,6 +21,32 @@ use crate::stream::LlmStream;
 use crate::types::*;
 
 // ---------------------------------------------------------------------------
+// Scope stack isolation
+// ---------------------------------------------------------------------------
+
+/// Creates a new isolated scope stack.
+#[napi]
+pub fn create_scope_stack() -> JsScopeStack {
+    JsScopeStack {
+        inner: nvagentrt_core::create_scope_stack(),
+    }
+}
+
+/// Returns the current execution context's scope stack handle.
+#[napi]
+pub fn current_scope_stack() -> JsScopeStack {
+    JsScopeStack {
+        inner: nvagentrt_core::current_scope_stack(),
+    }
+}
+
+/// Binds a scope stack to the current thread.
+#[napi]
+pub fn set_thread_scope_stack(stack: &JsScopeStack) {
+    nvagentrt_core::set_thread_scope_stack(stack.inner.clone());
+}
+
+// ---------------------------------------------------------------------------
 // Scope / handle operations
 // ---------------------------------------------------------------------------
 
@@ -151,18 +177,23 @@ pub async fn tool_call_execute(
         .map(|h| h.inner.clone())
         .unwrap_or_else(core::task_scope_top);
     let exec_fn = callable::wrap_js_tool_exec_fn(func);
+    let scope_stack = nvagentrt_core::current_scope_stack();
 
-    core::nv_agentrt_tool_call_execute(
-        &name,
-        args,
-        exec_fn,
-        Some(parent),
-        attrs,
-        opt_json(data),
-        opt_json(metadata),
-    )
-    .await
-    .map_err(to_napi_err)
+    nvagentrt_core::TASK_SCOPE_STACK
+        .scope(scope_stack, async move {
+            core::nv_agentrt_tool_call_execute(
+                &name,
+                args,
+                exec_fn,
+                Some(parent),
+                attrs,
+                opt_json(data),
+                opt_json(metadata),
+            )
+            .await
+            .map_err(to_napi_err)
+        })
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -233,18 +264,23 @@ pub async fn llm_call_execute(
         .map(|h| h.inner.clone())
         .unwrap_or_else(core::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
+    let scope_stack = nvagentrt_core::current_scope_stack();
 
-    core::nv_agentrt_llm_call_execute(
-        &name,
-        request.inner.clone(),
-        exec_fn,
-        Some(parent),
-        attrs,
-        opt_json(data),
-        opt_json(metadata),
-    )
-    .await
-    .map_err(to_napi_err)
+    nvagentrt_core::TASK_SCOPE_STACK
+        .scope(scope_stack, async move {
+            core::nv_agentrt_llm_call_execute(
+                &name,
+                request.inner.clone(),
+                exec_fn,
+                Some(parent),
+                attrs,
+                opt_json(data),
+                opt_json(metadata),
+            )
+            .await
+            .map_err(to_napi_err)
+        })
+        .await
 }
 
 /// Execute a streaming LLM call end-to-end with full lifecycle management.
@@ -269,46 +305,54 @@ pub async fn llm_stream_call_execute(
 
     // For stream execution, we need the stream-specific wrapper
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
+    let scope_stack = nvagentrt_core::current_scope_stack();
 
-    // Use the non-streaming execute and convert to a single-item stream wrapped in LlmStream
-    let rust_stream = core::nv_agentrt_llm_stream_call_execute(
-        &name,
-        request.inner.clone(),
-        // We need LlmStreamExecutionFn but we have LlmExecutionFn — create a bridge
-        Box::new(move |req| {
-            let fut = exec_fn(req);
-            Box::pin(async move {
-                let result = fut.await?;
-                let text = serde_json::to_string(&result)
-                    .map_err(|e| nvagentrt_core::AgentRtError::Internal(e.to_string()))?;
-                let stream = tokio_stream::once(Ok(text));
-                Ok(Box::pin(stream)
-                    as std::pin::Pin<
-                        Box<dyn tokio_stream::Stream<Item = nvagentrt_core::Result<String>> + Send>,
-                    >)
+    nvagentrt_core::TASK_SCOPE_STACK
+        .scope(scope_stack, async move {
+            // Use the non-streaming execute and convert to a single-item stream wrapped in LlmStream
+            let rust_stream = core::nv_agentrt_llm_stream_call_execute(
+                &name,
+                request.inner.clone(),
+                // We need LlmStreamExecutionFn but we have LlmExecutionFn — create a bridge
+                Box::new(move |req| {
+                    let fut = exec_fn(req);
+                    Box::pin(async move {
+                        let result = fut.await?;
+                        let text = serde_json::to_string(&result)
+                            .map_err(|e| nvagentrt_core::AgentRtError::Internal(e.to_string()))?;
+                        let stream = tokio_stream::once(Ok(text));
+                        Ok(Box::pin(stream)
+                            as std::pin::Pin<
+                                Box<
+                                    dyn tokio_stream::Stream<Item = nvagentrt_core::Result<String>>
+                                        + Send,
+                                >,
+                            >)
+                    })
+                }),
+                Some(parent),
+                attrs,
+                opt_json(data),
+                opt_json(metadata),
+            )
+            .await
+            .map_err(to_napi_err)?;
+
+            let (tx, rx) = tokio::sync::mpsc::channel(32);
+            tokio::spawn(async move {
+                let mut stream = rust_stream;
+                while let Some(item) = stream.next().await {
+                    if tx.send(item).await.is_err() {
+                        break;
+                    }
+                }
+            });
+
+            Ok(LlmStream {
+                receiver: tokio::sync::Mutex::new(rx),
             })
-        }),
-        Some(parent),
-        attrs,
-        opt_json(data),
-        opt_json(metadata),
-    )
-    .await
-    .map_err(to_napi_err)?;
-
-    let (tx, rx) = tokio::sync::mpsc::channel(32);
-    tokio::spawn(async move {
-        let mut stream = rust_stream;
-        while let Some(item) = stream.next().await {
-            if tx.send(item).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    Ok(LlmStream {
-        receiver: tokio::sync::Mutex::new(rx),
-    })
+        })
+        .await
 }
 
 // ---------------------------------------------------------------------------

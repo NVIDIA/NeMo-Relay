@@ -20,6 +20,19 @@ fn to_py_err(e: core::AgentRtError) -> PyErr {
 }
 
 // ---------------------------------------------------------------------------
+// Scope stack creation
+// ---------------------------------------------------------------------------
+
+/// Create a new isolated scope stack with its own root scope.
+///
+/// Returns:
+///     A ``ScopeStack`` that can be used for per-request or per-task isolation.
+#[pyfunction]
+pub fn create_scope_stack() -> PyScopeStack {
+    PyScopeStack(nvagentrt_core::create_scope_stack())
+}
+
+// ---------------------------------------------------------------------------
 // Scope / handle operations
 // ---------------------------------------------------------------------------
 
@@ -210,19 +223,24 @@ fn nv_agentrt_tool_call_execute<'py>(
     let exec_fn = py_callable::wrap_py_tool_exec_fn(func);
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
 
+    let scope_stack = nvagentrt_core::current_scope_stack();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let result = core::nv_agentrt_tool_call_execute(
-            &name,
-            args_json,
-            exec_fn,
-            Some(parent_handle),
-            attrs,
-            data_json,
-            metadata_json,
-        )
-        .await
-        .map_err(to_py_err)?;
-        Python::attach(|py| json_to_py(py, &result))
+        nvagentrt_core::TASK_SCOPE_STACK
+            .scope(scope_stack, async move {
+                let result = core::nv_agentrt_tool_call_execute(
+                    &name,
+                    args_json,
+                    exec_fn,
+                    Some(parent_handle),
+                    attrs,
+                    data_json,
+                    metadata_json,
+                )
+                .await
+                .map_err(to_py_err)?;
+                Python::attach(|py| json_to_py(py, &result))
+            })
+            .await
     })
 }
 
@@ -332,19 +350,24 @@ fn nv_agentrt_llm_call_execute<'py>(
     let exec_fn = py_callable::wrap_py_llm_exec_fn(func);
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
 
+    let scope_stack = nvagentrt_core::current_scope_stack();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let result = core::nv_agentrt_llm_call_execute(
-            &name,
-            request.inner,
-            exec_fn,
-            Some(parent_handle),
-            attrs,
-            data_json,
-            metadata_json,
-        )
-        .await
-        .map_err(to_py_err)?;
-        Python::attach(|py| json_to_py(py, &result))
+        nvagentrt_core::TASK_SCOPE_STACK
+            .scope(scope_stack, async move {
+                let result = core::nv_agentrt_llm_call_execute(
+                    &name,
+                    request.inner,
+                    exec_fn,
+                    Some(parent_handle),
+                    attrs,
+                    data_json,
+                    metadata_json,
+                )
+                .await
+                .map_err(to_py_err)?;
+                Python::attach(|py| json_to_py(py, &result))
+            })
+            .await
     })
 }
 
@@ -387,33 +410,38 @@ fn nv_agentrt_llm_stream_call_execute<'py>(
     let exec_fn = py_callable::wrap_py_llm_stream_exec_fn(func);
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
 
+    let scope_stack = nvagentrt_core::current_scope_stack();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let rust_stream = core::nv_agentrt_llm_stream_call_execute(
-            &name,
-            request.inner,
-            exec_fn,
-            Some(parent_handle),
-            attrs,
-            data_json,
-            metadata_json,
-        )
-        .await
-        .map_err(to_py_err)?;
+        nvagentrt_core::TASK_SCOPE_STACK
+            .scope(scope_stack, async move {
+                let rust_stream = core::nv_agentrt_llm_stream_call_execute(
+                    &name,
+                    request.inner,
+                    exec_fn,
+                    Some(parent_handle),
+                    attrs,
+                    data_json,
+                    metadata_json,
+                )
+                .await
+                .map_err(to_py_err)?;
 
-        // Spawn a tokio task that drains the Rust stream into an mpsc channel
-        let (tx, rx) = tokio::sync::mpsc::channel::<nvagentrt_core::Result<String>>(32);
-        tokio::spawn(async move {
-            let mut stream = rust_stream;
-            while let Some(item) = stream.next().await {
-                if tx.send(item).await.is_err() {
-                    break; // receiver dropped
-                }
-            }
-        });
+                // Spawn a tokio task that drains the Rust stream into an mpsc channel
+                let (tx, rx) = tokio::sync::mpsc::channel::<nvagentrt_core::Result<String>>(32);
+                tokio::spawn(async move {
+                    let mut stream = rust_stream;
+                    while let Some(item) = stream.next().await {
+                        if tx.send(item).await.is_err() {
+                            break; // receiver dropped
+                        }
+                    }
+                });
 
-        Ok(PyLlmStream {
-            receiver: tokio::sync::Mutex::new(rx),
-        })
+                Ok(PyLlmStream {
+                    receiver: tokio::sync::Mutex::new(rx),
+                })
+            })
+            .await
     })
 }
 
@@ -816,6 +844,9 @@ fn nv_agentrt_deregister_subscriber(name: &str) -> PyResult<bool> {
 
 /// Register all API functions into the given `PyModule`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Scope stack creation
+    m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;
+
     // Scope/handle ops
     m.add_function(wrap_pyfunction!(nv_agentrt_get_handle, m)?)?;
     m.add_function(wrap_pyfunction!(nv_agentrt_push_scope, m)?)?;

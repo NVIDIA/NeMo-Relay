@@ -141,19 +141,55 @@ impl Default for ScopeStack {
 }
 
 // ---------------------------------------------------------------------------
+// Scope stack handle (shareable, isolated reference)
+// ---------------------------------------------------------------------------
+
+/// Opaque, shareable reference to an isolated scope stack.
+///
+/// Each `ScopeStackHandle` wraps an independent [`ScopeStack`] behind an
+/// `Arc<RwLock<...>>`, allowing it to be shared across async boundaries and
+/// threads while maintaining per-request/per-task isolation.
+pub type ScopeStackHandle = Arc<std::sync::RwLock<ScopeStack>>;
+
+/// Creates a new isolated scope stack (with its own root scope) and returns
+/// a shareable handle to it.
+pub fn create_scope_stack() -> ScopeStackHandle {
+    Arc::new(std::sync::RwLock::new(ScopeStack::new()))
+}
+
+// ---------------------------------------------------------------------------
 // Task-local + thread-local scope storage
 // ---------------------------------------------------------------------------
 
 tokio::task_local! {
-    /// Task-local scope stack, set via `tokio::task::LocalSet` or
-    /// `TASK_SCOPE_STACK.scope(...)`. Preferred over the thread-local fallback
-    /// in async contexts.
-    pub static TASK_SCOPE_STACK: RefCell<ScopeStack>;
+    /// Task-local scope stack handle, set via `TASK_SCOPE_STACK.scope(...)`.
+    /// Preferred over the thread-local fallback in async contexts.
+    pub static TASK_SCOPE_STACK: ScopeStackHandle;
 }
 
 thread_local! {
-    /// Thread-local scope stack, used as a fallback when no task-local scope is set.
-    static THREAD_SCOPE_STACK: RefCell<ScopeStack> = RefCell::new(ScopeStack::new());
+    /// Thread-local scope stack handle, used as a fallback when no task-local
+    /// scope is set. Each thread gets its own independent scope stack by default.
+    static THREAD_SCOPE_STACK: RefCell<ScopeStackHandle> = RefCell::new(create_scope_stack());
+}
+
+/// Returns the [`ScopeStackHandle`] for the current execution context.
+///
+/// Checks the task-local first; falls back to the thread-local if no task-local
+/// scope is set. The returned handle can be stored and later bound to other
+/// tasks or threads via [`TASK_SCOPE_STACK`] or [`set_thread_scope_stack`].
+pub fn current_scope_stack() -> ScopeStackHandle {
+    TASK_SCOPE_STACK
+        .try_with(|s| s.clone())
+        .unwrap_or_else(|_| THREAD_SCOPE_STACK.with(|s| s.borrow().clone()))
+}
+
+/// Binds a specific [`ScopeStackHandle`] to the current thread's thread-local storage.
+///
+/// This is primarily used by FFI consumers (e.g. Go goroutines) that need to
+/// pin a particular scope stack to an OS thread before making API calls.
+pub fn set_thread_scope_stack(handle: ScopeStackHandle) {
+    THREAD_SCOPE_STACK.with(|s| *s.borrow_mut() = handle);
 }
 
 /// Returns a clone of the top scope handle from the current execution context.
@@ -161,21 +197,18 @@ thread_local! {
 /// Checks the task-local stack first; falls back to the thread-local stack if
 /// no task-local scope is set. Always succeeds because the root scope is always present.
 pub fn task_scope_top() -> ScopeHandle {
-    TASK_SCOPE_STACK
-        .try_with(|stack| stack.borrow().top().clone())
-        .unwrap_or_else(|_| THREAD_SCOPE_STACK.with(|stack| stack.borrow().top().clone()))
+    let stack = current_scope_stack();
+    let guard = stack.read().expect("scope stack lock poisoned");
+    guard.top().clone()
 }
 
 /// Pushes a scope handle onto the current execution context's scope stack.
 ///
 /// Uses the task-local stack if available, otherwise falls back to the thread-local stack.
 pub fn task_scope_push(handle: ScopeHandle) {
-    if TASK_SCOPE_STACK
-        .try_with(|stack| stack.borrow_mut().push(handle.clone()))
-        .is_err()
-    {
-        THREAD_SCOPE_STACK.with(|stack| stack.borrow_mut().push(handle));
-    }
+    let stack = current_scope_stack();
+    let mut guard = stack.write().expect("scope stack lock poisoned");
+    guard.push(handle);
 }
 
 /// Removes a scope handle by UUID from the current execution context's scope stack.
@@ -183,16 +216,11 @@ pub fn task_scope_push(handle: ScopeHandle) {
 /// Returns the removed handle on success, or [`AgentRtError::NotFound`] if the
 /// UUID is not in the stack (or refers to the immovable root scope).
 pub fn task_scope_remove(uuid: &Uuid) -> Result<ScopeHandle> {
-    match TASK_SCOPE_STACK.try_with(|stack| stack.borrow_mut().remove(uuid)) {
-        Ok(Some(h)) => Ok(h),
-        Ok(None) => Err(AgentRtError::NotFound("scope handle not found".into())),
-        Err(_) => THREAD_SCOPE_STACK.with(|stack| {
-            stack
-                .borrow_mut()
-                .remove(uuid)
-                .ok_or_else(|| AgentRtError::NotFound("scope handle not found".into()))
-        }),
-    }
+    let stack = current_scope_stack();
+    let mut guard = stack.write().expect("scope stack lock poisoned");
+    guard
+        .remove(uuid)
+        .ok_or_else(|| AgentRtError::NotFound("scope handle not found".into()))
 }
 
 // ---------------------------------------------------------------------------

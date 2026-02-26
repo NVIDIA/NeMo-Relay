@@ -51,12 +51,13 @@ pub mod types;
 
 pub use api::*;
 pub use context::{
-    global_context, task_scope_push, task_scope_remove, task_scope_top, EventSubscriberFn,
-    LlmConditionalFn, LlmExecutionConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
-    LlmResponseInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
-    LlmStreamExecutionConditionalFn, LlmStreamExecutionFn, LlmStreamResponseInterceptFn,
-    NVAgentRTContextState, ScopeStack, ToolConditionalFn, ToolExecutionConditionalFn,
-    ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn, TASK_SCOPE_STACK,
+    create_scope_stack, current_scope_stack, global_context, set_thread_scope_stack,
+    task_scope_push, task_scope_remove, task_scope_top, EventSubscriberFn, LlmConditionalFn,
+    LlmExecutionConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmResponseInterceptFn,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionConditionalFn,
+    LlmStreamExecutionFn, LlmStreamResponseInterceptFn, NVAgentRTContextState, ScopeStack,
+    ScopeStackHandle, ToolConditionalFn, ToolExecutionConditionalFn, ToolExecutionFn,
+    ToolInterceptFn, ToolSanitizeFn, TASK_SCOPE_STACK,
 };
 pub use error::{AgentRtError, Result};
 pub use json::{merge_json, Json};

@@ -25,6 +25,7 @@ package nvagentrt
 #include <stdlib.h>
 
 typedef struct FfiScopeHandle FfiScopeHandle;
+typedef struct FfiScopeStack FfiScopeStack;
 typedef struct FfiToolHandle FfiToolHandle;
 typedef struct FfiLLMHandle FfiLLMHandle;
 typedef struct FfiLLMRequest FfiLLMRequest;
@@ -134,6 +135,11 @@ extern const char* nv_agentrt_last_error();
 // String free
 extern void nv_agentrt_string_free(char* ptr);
 
+// Scope stack isolation
+extern int32_t nv_agentrt_scope_stack_create(FfiScopeStack** out);
+extern int32_t nv_agentrt_scope_stack_set_thread(const FfiScopeStack* stack);
+extern void nv_agentrt_scope_stack_free(FfiScopeStack* ptr);
+
 // Go trampoline forward declarations (defined via //export in callbacks.go)
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
 extern char* goToolConditionalTrampoline(void*, const char*, const char*);
@@ -153,6 +159,7 @@ import "C"
 import (
 	"encoding/json"
 	"errors"
+	"runtime"
 	"unsafe"
 )
 
@@ -1030,4 +1037,43 @@ func DeregisterSubscriber(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nv_agentrt_deregister_subscriber(cName))
+}
+
+// ---------------------------------------------------------------------------
+// Scope stack isolation
+// ---------------------------------------------------------------------------
+
+// ScopeStack represents an isolated scope stack for per-request/per-goroutine isolation.
+// Each ScopeStack has its own root scope and is independent of other scope stacks.
+type ScopeStack struct {
+	ptr *C.FfiScopeStack
+}
+
+// NewScopeStack creates a new isolated scope stack.
+// The caller must call Close() when done.
+func NewScopeStack() (*ScopeStack, error) {
+	var ptr *C.FfiScopeStack
+	status := C.nv_agentrt_scope_stack_create(&ptr)
+	if err := checkStatus(status); err != nil {
+		return nil, err
+	}
+	return &ScopeStack{ptr: ptr}, nil
+}
+
+// Close frees the scope stack. After calling Close, the ScopeStack must not be used.
+func (s *ScopeStack) Close() {
+	if s.ptr != nil {
+		C.nv_agentrt_scope_stack_free(s.ptr)
+		s.ptr = nil
+	}
+}
+
+// Run binds this scope stack to the current OS thread and executes fn.
+// The calling goroutine is locked to the OS thread for the duration of fn.
+// All NVAgentRT scope operations within fn will use this scope stack.
+func (s *ScopeStack) Run(fn func()) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	C.nv_agentrt_scope_stack_set_thread(s.ptr)
+	fn()
 }
