@@ -290,8 +290,8 @@ intercept_registry_api!(
     LlmResponseInterceptFn
 );
 
-// Registers an LLM stream response intercept applied to each SSE event during streaming.
-// Callback signature: `(event: SseEvent) -> SseEvent`.
+// Registers an LLM stream response intercept applied to each chunk during streaming.
+// Callback signature: `(chunk: String) -> String`.
 // deregister: Deregisters an LLM stream response intercept by name.
 intercept_registry_api!(
     nvagentrt_register_llm_stream_response_intercept,
@@ -517,6 +517,13 @@ pub async fn nvagentrt_tool_call_execute(
             .write()
             .map_err(|e| AgentRtError::Internal(e.to_string()))?;
         if let Some(err) = state.tool_conditional_execution_chain(name, &intercepted_args) {
+            drop(state);
+            let mut rejection_data = data.unwrap_or_else(|| json!({}));
+            if let Some(obj) = rejection_data.as_object_mut() {
+                obj.insert("rejected".into(), json!(true));
+                obj.insert("rejection_reason".into(), json!(&err));
+            }
+            let _ = nvagentrt_tool_call_end(&handle, json!(null), Some(rejection_data), metadata);
             return Err(AgentRtError::GuardrailRejected(err));
         }
     }
@@ -647,6 +654,13 @@ pub async fn nvagentrt_llm_call_execute(
             .write()
             .map_err(|e| AgentRtError::Internal(e.to_string()))?;
         if let Some(err) = state.llm_conditional_execution_chain(&intercepted_request) {
+            drop(state);
+            let mut rejection_data = data.unwrap_or_else(|| json!({}));
+            if let Some(obj) = rejection_data.as_object_mut() {
+                obj.insert("rejected".into(), json!(true));
+                obj.insert("rejection_reason".into(), json!(&err));
+            }
+            let _ = nvagentrt_llm_call_end(&handle, json!(null), Some(rejection_data), metadata);
             return Err(AgentRtError::GuardrailRejected(err));
         }
     }
@@ -683,16 +697,26 @@ pub async fn nvagentrt_llm_call_execute(
 /// Executes a complete streaming LLM call lifecycle.
 ///
 /// Similar to [`nvagentrt_llm_call_execute`] but returns a
-/// [`Stream`] of SSE text chunks. The returned stream is
-/// wrapped in [`LlmStreamWrapper`] which handles SSE parsing, per-event
-/// intercepts, event aggregation, and automatic `End` event emission when
-/// the stream is exhausted.
+/// [`Stream`] of text chunks. The returned stream is
+/// wrapped in [`LlmStreamWrapper`] which applies per-chunk stream
+/// response intercepts, feeds each intercepted chunk to the `collector`,
+/// and on stream exhaustion calls the `finalizer` to produce the
+/// aggregated response. That response then flows through response
+/// intercepts and sanitize response guardrails before the `End` event
+/// is emitted.
+///
+/// - `collector` — called with each intercepted chunk; use this to
+///   accumulate streaming tokens or forward them to another sink.
+/// - `finalizer` — called once when the stream is exhausted; returns the
+///   aggregated response as [`Json`].
 ///
 /// Returns [`AgentRtError::GuardrailRejected`] if a conditional guardrail rejects the call.
 pub async fn nvagentrt_llm_stream_call_execute(
     name: &str,
     request: LLMRequest,
     func: LlmStreamExecutionFn,
+    collector: Box<dyn FnMut(String) + Send>,
+    finalizer: Box<dyn FnOnce() -> Json + Send>,
     parent: Option<ScopeHandle>,
     attributes: LLMAttributes,
     data: Option<Json>,
@@ -724,6 +748,13 @@ pub async fn nvagentrt_llm_stream_call_execute(
             .write()
             .map_err(|e| AgentRtError::Internal(e.to_string()))?;
         if let Some(err) = state.llm_conditional_execution_chain(&intercepted_request) {
+            drop(state);
+            let mut rejection_data = data.unwrap_or_else(|| json!({}));
+            if let Some(obj) = rejection_data.as_object_mut() {
+                obj.insert("rejected".into(), json!(true));
+                obj.insert("rejection_reason".into(), json!(&err));
+            }
+            let _ = nvagentrt_llm_call_end(&handle, json!(null), Some(rejection_data), metadata);
             return Err(AgentRtError::GuardrailRejected(err));
         }
     }
@@ -742,8 +773,8 @@ pub async fn nvagentrt_llm_stream_call_execute(
     };
     let raw_stream = exec_future.await?;
 
-    // Wrap in LlmStreamWrapper which handles parsing, intercepts, and END event
-    let wrapper = LlmStreamWrapper::new(raw_stream, handle, data, metadata);
+    // Wrap in LlmStreamWrapper which handles intercepts, collector/finalizer, and END event
+    let wrapper = LlmStreamWrapper::new(raw_stream, handle, collector, finalizer, data, metadata);
     Ok(Box::pin(wrapper))
 }
 
@@ -1158,6 +1189,16 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let ec = events.clone();
+        nvagentrt_register_subscriber(
+            "tool_reject_sub",
+            Box::new(move |e: &crate::types::Event| {
+                ec.lock().unwrap().push(e.clone());
+            }),
+        )
+        .unwrap();
+
         nvagentrt_register_tool_conditional_execution_guardrail(
             "blocker",
             1,
@@ -1185,6 +1226,17 @@ mod tests {
             e => panic!("expected GuardrailRejected, got {e:?}"),
         }
 
+        // Verify paired START/END events with rejection data
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[0].event_type, crate::types::EventType::Start);
+        assert_eq!(captured[1].event_type, crate::types::EventType::End);
+        let end_data = captured[1].data.as_ref().unwrap();
+        assert_eq!(end_data["rejected"], true);
+        assert_eq!(end_data["rejection_reason"], "forbidden tool");
+
+        drop(captured);
+        nvagentrt_deregister_subscriber("tool_reject_sub").unwrap();
         nvagentrt_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
     }
 
@@ -1347,6 +1399,16 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let ec = events.clone();
+        nvagentrt_register_subscriber(
+            "llm_reject_sub",
+            Box::new(move |e: &crate::types::Event| {
+                ec.lock().unwrap().push(e.clone());
+            }),
+        )
+        .unwrap();
+
         nvagentrt_register_llm_conditional_execution_guardrail(
             "llm_blocker",
             1,
@@ -1380,6 +1442,17 @@ mod tests {
             e => panic!("expected GuardrailRejected, got {e:?}"),
         }
 
+        // Verify paired START/END events with rejection data
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[0].event_type, crate::types::EventType::Start);
+        assert_eq!(captured[1].event_type, crate::types::EventType::End);
+        let end_data = captured[1].data.as_ref().unwrap();
+        assert_eq!(end_data["rejected"], true);
+        assert_eq!(end_data["rejection_reason"], "blocked by policy");
+
+        drop(captured);
+        nvagentrt_deregister_subscriber("llm_reject_sub").unwrap();
         nvagentrt_deregister_llm_conditional_execution_guardrail("llm_blocker").unwrap();
     }
 
@@ -1655,9 +1728,9 @@ mod tests {
     fn test_llm_stream_response_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_llm_stream_response_intercept("i1", 1, false, Box::new(|e| e)).unwrap();
+        nvagentrt_register_llm_stream_response_intercept("i1", 1, false, Box::new(|s| s)).unwrap();
         assert!(
-            nvagentrt_register_llm_stream_response_intercept("i1", 1, false, Box::new(|e| e))
+            nvagentrt_register_llm_stream_response_intercept("i1", 1, false, Box::new(|s| s))
                 .is_err()
         );
         assert!(nvagentrt_deregister_llm_stream_response_intercept("i1").unwrap());
@@ -1788,10 +1861,28 @@ mod tests {
             body: json!({}),
         };
 
+        let collected = Arc::new(Mutex::new(Vec::new()));
+        let cc = collected.clone();
+        let collector: Box<dyn FnMut(String) + Send> = Box::new(move |chunk| {
+            cc.lock().unwrap().push(chunk);
+        });
+        let fc = collected.clone();
+        let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(move || {
+            let chunks = fc.lock().unwrap();
+            Json::Array(
+                chunks
+                    .iter()
+                    .filter_map(|s| serde_json::from_str(s).ok())
+                    .collect(),
+            )
+        });
+
         let mut stream = nvagentrt_llm_stream_call_execute(
             "llm",
             request,
             func,
+            collector,
+            finalizer,
             None,
             LLMAttributes::STREAMING,
             None,
@@ -1805,14 +1896,24 @@ mod tests {
             chunks.push(item.unwrap());
         }
 
-        // Should have received 2 SSE events
-        assert!(chunks.len() >= 2);
+        // Should have received 2 chunks
+        assert_eq!(chunks.len(), 2);
     }
 
     #[tokio::test]
     async fn test_llm_stream_call_execute_conditional_rejection() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let ec = events.clone();
+        nvagentrt_register_subscriber(
+            "stream_reject_sub",
+            Box::new(move |e: &crate::types::Event| {
+                ec.lock().unwrap().push(e.clone());
+            }),
+        )
+        .unwrap();
 
         nvagentrt_register_llm_conditional_execution_guardrail(
             "stream_blocker",
@@ -1847,10 +1948,15 @@ mod tests {
             body: json!({}),
         };
 
+        let collector: Box<dyn FnMut(String) + Send> = Box::new(|_| {});
+        let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| Json::Null);
+
         let result = nvagentrt_llm_stream_call_execute(
             "llm",
             request,
             func,
+            collector,
+            finalizer,
             None,
             LLMAttributes::STREAMING,
             None,
@@ -1864,6 +1970,17 @@ mod tests {
             Ok(_) => panic!("expected error, got Ok"),
         }
 
+        // Verify paired START/END events with rejection data
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[0].event_type, crate::types::EventType::Start);
+        assert_eq!(captured[1].event_type, crate::types::EventType::End);
+        let end_data = captured[1].data.as_ref().unwrap();
+        assert_eq!(end_data["rejected"], true);
+        assert_eq!(end_data["rejection_reason"], "stream blocked");
+
+        drop(captured);
+        nvagentrt_deregister_subscriber("stream_reject_sub").unwrap();
         nvagentrt_deregister_llm_conditional_execution_guardrail("stream_blocker").unwrap();
     }
 

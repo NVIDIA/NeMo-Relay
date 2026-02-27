@@ -15,15 +15,18 @@ Functions:
 
     execute(name, request, func, *, handle=None, attributes=None, data=None, metadata=None)
         Execute an LLM call through the full middleware pipeline (request
-        intercepts → sanitize-request guardrails → conditional-execution
-        guardrails → execution intercepts → *func* → response intercepts →
+        intercepts -> sanitize-request guardrails -> conditional-execution
+        guardrails -> execution intercepts -> *func* -> response intercepts ->
         sanitize-response guardrails). Returns an awaitable of the final response.
 
-    stream_execute(name, request, func, *, handle=None, attributes=None, data=None, metadata=None)
+    stream_execute(name, request, func, collector, finalizer, *, handle=None, attributes=None, data=None, metadata=None)
         Like ``execute`` but the execution function returns an async iterator
-        of SSE text chunks. Returns an awaitable ``LlmStream`` that can be
-        iterated with ``async for``. Stream-response intercepts are applied
-        to each SSE event in flight.
+        of SSE text chunks. The ``collector`` callable is invoked with each
+        intercepted chunk (after stream response intercepts). The ``finalizer``
+        callable is invoked once when the stream is exhausted and returns the
+        aggregated response as a JSON-serializable value. Returns an awaitable
+        ``LlmStream`` that can be iterated with ``async for``.
+        Stream-response intercepts are applied to each SSE event in flight.
 
 Example::
 
@@ -34,8 +37,16 @@ Example::
     # Non-streaming
     resp = await nvagentrt.llm.execute("gpt-4", req, my_llm_fn)
 
-    # Streaming
-    stream = await nvagentrt.llm.stream_execute("gpt-4", req, my_stream_fn)
+    # Streaming with collector/finalizer
+    chunks = []
+    def collect(chunk: str) -> None:
+        chunks.append(chunk)
+    def finalize() -> dict:
+        return {"content": "".join(chunks)}
+
+    stream = await nvagentrt.llm.stream_execute(
+        "gpt-4", req, my_stream_fn, collect, finalize,
+    )
     async for chunk in stream:
         print(chunk, end="")
 """

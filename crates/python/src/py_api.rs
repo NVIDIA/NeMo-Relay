@@ -385,6 +385,10 @@ fn nvagentrt_llm_call_execute<'py>(
 ///     name: Model/provider name.
 ///     request: An ``LLMRequest`` describing the HTTP call.
 ///     func: An async callable ``(LLMRequest) -> AsyncIterator[str]`` that returns raw SSE text chunks.
+///     collector: A callable ``(str) -> None`` invoked with each intercepted chunk
+///         (after stream response intercepts have been applied).
+///     finalizer: A callable ``() -> Any`` invoked once when the stream is exhausted.
+///         Its return value is the aggregated response (converted to JSON).
 ///     handle: Optional parent scope handle.
 ///     attributes: Optional ``LLMAttributes`` bitflags.
 ///     data: Optional JSON-serializable application data.
@@ -393,13 +397,15 @@ fn nvagentrt_llm_call_execute<'py>(
 /// Returns:
 ///     An awaitable that resolves to an ``LlmStream`` async iterator of SSE text chunks.
 #[pyfunction]
-#[pyo3(signature = (name, request, func, *, handle=None, attributes=None, data=None, metadata=None))]
+#[pyo3(signature = (name, request, func, collector, finalizer, *, handle=None, attributes=None, data=None, metadata=None))]
 #[allow(clippy::too_many_arguments)]
 fn nvagentrt_llm_stream_call_execute<'py>(
     py: Python<'py>,
     name: String,
     request: PyLLMRequest,
     func: Py<PyAny>,
+    collector: Py<PyAny>,
+    finalizer: Py<PyAny>,
     handle: Option<PyScopeHandle>,
     attributes: Option<PyLLMAttributes>,
     data: Option<&Bound<'py, PyAny>>,
@@ -411,6 +417,8 @@ fn nvagentrt_llm_stream_call_execute<'py>(
     let data_json = opt_py_to_json(data)?;
     let metadata_json = opt_py_to_json(metadata)?;
     let exec_fn = py_callable::wrap_py_llm_stream_exec_fn(func);
+    let collector_fn = py_callable::wrap_py_collector_fn(collector);
+    let finalizer_fn = py_callable::wrap_py_finalizer_fn(finalizer);
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
 
     let scope_stack = nvagentrt_core::current_scope_stack();
@@ -421,6 +429,8 @@ fn nvagentrt_llm_stream_call_execute<'py>(
                     &name,
                     request.inner,
                     exec_fn,
+                    collector_fn,
+                    finalizer_fn,
                     Some(parent_handle),
                     attrs,
                     data_json,
@@ -731,7 +741,7 @@ fn nvagentrt_deregister_llm_response_intercept(name: &str) -> PyResult<bool> {
 
 /// Register an LLM stream-response intercept.
 ///
-/// Callback: ``(event: SseEvent) -> SseEvent`` — transforms each SSE event in a stream.
+/// Callback: ``(chunk: str) -> str`` — transforms each chunk in a stream.
 /// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
 #[pyfunction]
 fn nvagentrt_register_llm_stream_response_intercept(
@@ -744,7 +754,7 @@ fn nvagentrt_register_llm_stream_response_intercept(
         name,
         priority,
         break_chain,
-        py_callable::wrap_py_sse_intercept_fn(callable),
+        py_callable::wrap_py_string_intercept_fn(callable),
     )
     .map_err(to_py_err)
 }

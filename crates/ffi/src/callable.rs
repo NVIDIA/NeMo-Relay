@@ -23,7 +23,7 @@ use libc::c_char;
 use serde_json::Value as Json;
 use tokio_stream::Stream;
 
-use nvagentrt_core::types::{LLMRequest, SseEvent};
+use nvagentrt_core::types::LLMRequest;
 use nvagentrt_core::Result;
 
 use crate::convert::json_to_c_string;
@@ -109,6 +109,17 @@ pub type NvAgentRtSseInterceptCb =
 /// the runtime. The `FfiEvent` pointer is only valid for the duration of the call.
 pub type NvAgentRtEventSubscriberCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, event: *const FfiEvent);
+
+/// Callback for collecting intercepted stream chunks. Invoked with each chunk
+/// (after stream response intercepts have been applied) as a null-terminated
+/// C string. The string is only valid for the duration of the call.
+pub type NvAgentRtCollectorCb = unsafe extern "C" fn(chunk: *const c_char);
+
+/// Callback for finalizing a collected stream. Invoked once when the stream is
+/// exhausted. Must return a JSON C string representing the aggregated response.
+/// The returned string must be allocated with `malloc` or equivalent; the
+/// runtime will free it.
+pub type NvAgentRtFinalizerCb = unsafe extern "C" fn() -> *mut c_char;
 
 // ---------------------------------------------------------------------------
 // Shared user_data wrapper (ensures cleanup)
@@ -344,24 +355,57 @@ pub fn wrap_llm_stream_exec_fn(
     })
 }
 
-/// Wrap a C SSE intercept callback into a Rust closure. The SSE event is
-/// serialized to JSON before being passed to the C callback.
-pub fn wrap_sse_intercept_fn(
+/// Wrap a C string intercept callback into a Rust closure. The chunk string
+/// is passed as a C string and the callback returns a (possibly modified) C string.
+pub fn wrap_string_intercept_fn(
     cb: NvAgentRtSseInterceptCb,
     user_data: *mut libc::c_void,
     free_fn: NvAgentRtFreeFn,
-) -> Box<dyn Fn(SseEvent) -> SseEvent + Send + Sync> {
+) -> Box<dyn Fn(String) -> String + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(move |event: SseEvent| {
-        let sse_json = serde_json::to_string(&event).unwrap_or_default();
-        let c_json = CString::new(sse_json).unwrap_or_default();
-        let result_ptr = unsafe { cb(ud.ptr, c_json.as_ptr()) };
+    Box::new(move |chunk: String| {
+        let c_chunk = CString::new(chunk.clone()).unwrap_or_default();
+        let result_ptr = unsafe { cb(ud.ptr, c_chunk.as_ptr()) };
         if result_ptr.is_null() {
-            return event;
+            return chunk;
         }
-        let result_str = ptr_to_string(result_ptr).unwrap_or_default();
+        let result = ptr_to_string(result_ptr).unwrap_or(chunk);
         unsafe { nvagentrt_string_free_internal(result_ptr) };
-        serde_json::from_str(&result_str).unwrap_or(event)
+        result
+    })
+}
+
+/// Wrap a C collector callback into a `Box<dyn FnMut(String) + Send>` for use
+/// by the core runtime. Each intercepted chunk string is converted to a C string
+/// and passed to the callback.
+///
+/// # Safety
+/// The caller must ensure `cb` remains valid for the lifetime of the returned
+/// closure. The C callback is invoked synchronously from the stream-consumption
+/// task.
+pub fn wrap_collector_fn(cb: NvAgentRtCollectorCb) -> Box<dyn FnMut(String) + Send> {
+    // NvAgentRtCollectorCb is a plain `extern "C" fn` pointer (no user_data),
+    // which is Copy + Send, so it can be moved into the closure directly.
+    Box::new(move |chunk: String| {
+        let c_chunk = CString::new(chunk).unwrap_or_default();
+        unsafe { cb(c_chunk.as_ptr()) };
+    })
+}
+
+/// Wrap a C finalizer callback into a `Box<dyn FnOnce() -> Json + Send>` for
+/// use by the core runtime. The callback is invoked exactly once when the
+/// stream is exhausted. The returned C string is parsed as JSON and then freed.
+///
+/// # Safety
+/// The caller must ensure `cb` remains valid until the returned closure is
+/// invoked. The C callback must return a valid, heap-allocated JSON C string
+/// (or null, in which case `Json::Null` is returned).
+pub fn wrap_finalizer_fn(cb: NvAgentRtFinalizerCb) -> Box<dyn FnOnce() -> Json + Send> {
+    Box::new(move || {
+        let result_ptr = unsafe { cb() };
+        let result = ptr_to_json(result_ptr);
+        unsafe { nvagentrt_string_free_internal(result_ptr) };
+        result
     })
 }
 

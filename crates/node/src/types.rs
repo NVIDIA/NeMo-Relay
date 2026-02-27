@@ -342,45 +342,6 @@ impl JsLLMRequest {
 }
 
 // ---------------------------------------------------------------------------
-// SseEvent
-// ---------------------------------------------------------------------------
-
-/// A Server-Sent Event (SSE) received during an LLM streaming response.
-#[napi(object)]
-pub struct JsSseEvent {
-    /// The event type field (e.g., "message"), or `null` if absent.
-    pub event: Option<String>,
-    /// The event data payload.
-    pub data: String,
-    /// The event ID, or `null` if absent.
-    pub id: Option<String>,
-    /// The reconnection retry interval in milliseconds, or `null` if absent.
-    pub retry: Option<f64>,
-}
-
-impl From<core_types::SseEvent> for JsSseEvent {
-    fn from(e: core_types::SseEvent) -> Self {
-        Self {
-            event: e.event,
-            data: e.data,
-            id: e.id,
-            retry: e.retry.map(|r| r as f64),
-        }
-    }
-}
-
-impl From<JsSseEvent> for core_types::SseEvent {
-    fn from(e: JsSseEvent) -> Self {
-        Self {
-            event: e.event,
-            data: e.data,
-            id: e.id,
-            retry: e.retry.map(|r| r as u64),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Event (read-only, for subscribers)
 // ---------------------------------------------------------------------------
 

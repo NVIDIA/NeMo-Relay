@@ -254,11 +254,20 @@ class TestLLMStreaming:
 
             return gen()
 
-        req = make_request()
-        stream = await llm.stream_execute("stream_llm", req, stream_func)
+        collected = []
 
+        def collector(chunk):
+            collected.append(chunk)
+
+        def finalizer():
+            return {"chunks": collected}
+
+        req = make_request()
+        stream = await llm.stream_execute("stream_llm", req, stream_func, collector, finalizer)
         chunks = []
         async for chunk in stream:
             chunks.append(chunk)
 
         assert len(chunks) >= 2
+        # Collector should have received all chunks
+        assert len(collected) == len(chunks)

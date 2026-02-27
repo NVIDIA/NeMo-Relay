@@ -155,11 +155,6 @@ typedef struct FfiScopeHandle FfiScopeHandle;
 typedef struct FfiScopeStack FfiScopeStack;
 
 /**
- * Opaque wrapper around a server-sent event (SSE) used in LLM streaming.
- */
-typedef struct FfiSseEvent FfiSseEvent;
-
-/**
  * Opaque stream handle for consuming LLM streaming responses chunk by chunk.
  * Use `nvagentrt_stream_next` to poll and `nvagentrt_stream_free` to release.
  */
@@ -169,6 +164,10 @@ typedef struct FfiStream FfiStream;
  * Opaque handle representing an active tool call.
  */
 typedef struct FfiToolHandle FfiToolHandle;
+
+typedef struct Option_NvAgentRtCollectorCb Option_NvAgentRtCollectorCb;
+
+typedef struct Option_NvAgentRtFinalizerCb Option_NvAgentRtFinalizerCb;
 
 /**
  * Callback for tool execution. Receives arguments as JSON, returns result as JSON.
@@ -452,6 +451,11 @@ NvAgentRtStatus nvagentrt_llm_call_execute(const char *name,
  * - `func`: C callback that performs the actual LLM call.
  * - `func_user_data`: Opaque pointer passed to `func`.
  * - `func_free`: Optional destructor for `func_user_data`.
+ * - `collector`: Callback invoked with each intercepted chunk string. May be
+ *   null, in which case chunks are not collected.
+ * - `finalizer`: Callback invoked once when the stream is exhausted to produce
+ *   the aggregated response as a JSON C string. May be null, in which case the
+ *   finalizer returns `Json::Null`.
  * - `parent`: Optional parent scope handle, or null.
  * - `attributes`: Bitfield of LLM attributes.
  * - `data_json`: Optional JSON data, or null.
@@ -459,13 +463,16 @@ NvAgentRtStatus nvagentrt_llm_call_execute(const char *name,
  * - `out`: On success, receives a heap-allocated `FfiStream`.
  *
  * # Safety
- * `name`, `request`, and `out` must be valid, non-null pointers.
+ * `name`, `request`, and `out` must be valid, non-null pointers. `collector`
+ * and `finalizer` may be null.
  */
 NvAgentRtStatus nvagentrt_llm_stream_call_execute(const char *name,
                                                   const struct FfiLLMRequest *request,
                                                   NvAgentRtLlmExecCb func,
                                                   void *func_user_data,
                                                   NvAgentRtFreeFn func_free,
+                                                  struct Option_NvAgentRtCollectorCb collector,
+                                                  struct Option_NvAgentRtFinalizerCb finalizer,
                                                   const struct FfiScopeHandle *parent,
                                                   uint32_t attributes,
                                                   const char *data_json,
@@ -676,13 +683,13 @@ NvAgentRtStatus nvagentrt_deregister_llm_response_intercept(const char *name);
 
 /**
  * Register an LLM streaming response intercept. The callback transforms
- * individual SSE events as they arrive during a streaming LLM call.
+ * individual chunk strings as they arrive during a streaming LLM call.
  *
  * # Parameters
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
  * - `break_chain`: If true, stop processing further intercepts after this one.
- * - `cb`: SSE event transform callback (receives/returns JSON).
+ * - `cb`: Chunk string transform callback (receives/returns C string).
  * - `user_data`: Opaque pointer passed to `cb`.
  * - `free_fn`: Optional destructor for `user_data`.
  *
@@ -889,14 +896,6 @@ void nvagentrt_llm_request_free(struct FfiLLMRequest *ptr);
  * `ptr` must be a valid pointer returned by an `nvagentrt_*` function, or null.
  */
 void nvagentrt_event_free(struct FfiEvent *ptr);
-
-/**
- * Free an SSE event object.
- *
- * # Safety
- * `ptr` must be a valid pointer returned by an `nvagentrt_*` function, or null.
- */
-void nvagentrt_sse_event_free(struct FfiSseEvent *ptr);
 
 /**
  * Free a scope stack handle previously returned by `nvagentrt_scope_stack_create`.

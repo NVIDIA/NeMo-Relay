@@ -240,7 +240,7 @@ func TestLlmResponseInterceptRegisterDeregister(t *testing.T) {
 
 func TestLlmStreamResponseInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterLlmStreamResponseIntercept("go_llm_sr", 1, false,
-		func(sseJSON json.RawMessage) json.RawMessage { return sseJSON },
+		func(chunk string) string { return chunk },
 	)
 	if err != nil {
 		t.Fatalf("register failed: %v", err)

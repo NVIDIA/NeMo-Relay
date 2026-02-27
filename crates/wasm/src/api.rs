@@ -29,6 +29,7 @@ use nvagentrt_core::types as core_types;
 
 use crate::callable;
 use crate::convert::*;
+use crate::stream::WasmLlmStream;
 use crate::types::*;
 
 // ---------------------------------------------------------------------------
@@ -303,6 +304,94 @@ pub async fn nvagentrt_llm_call_execute(
     .map_err(to_js_err)?;
 
     Ok(json_to_js(&result))
+}
+
+/// Executes a streaming LLM call lifecycle: begin, execute the provided function,
+/// and stream back chunks with full middleware pipeline support.
+///
+/// Returns a `WasmLlmStream` whose `next()` method yields response chunks
+/// incrementally. Stream-level intercepts are applied to each chunk.
+///
+/// - `name` - LLM provider/model name.
+/// - `request` - The LLM request containing method, URL, headers, and body.
+/// - `func` - JavaScript function `(request) => result | Promise<result>` to execute.
+/// - `collector` - Optional JavaScript function `(chunk) => void` called with each
+///   intercepted chunk for accumulation.
+/// - `finalizer` - Optional JavaScript function `() => object` called once when the
+///   stream is exhausted to produce the aggregated response.
+/// - `parent` - Optional parent scope handle.
+/// - `attributes` - Optional bitfield of LLM attribute flags.
+/// - `data` - Optional JSON data payload.
+/// - `metadata` - Optional JSON metadata payload.
+#[wasm_bindgen(js_name = "llmStreamCallExecute")]
+pub async fn nvagentrt_llm_stream_call_execute(
+    name: &str,
+    request: &WasmLLMRequest,
+    func: Function,
+    collector: Option<Function>,
+    finalizer: Option<Function>,
+    parent: Option<WasmScopeHandle>,
+    attributes: Option<u32>,
+    data: JsValue,
+    metadata: JsValue,
+) -> Result<WasmLlmStream, JsValue> {
+    let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
+    let parent_handle = parent
+        .map(|h| h.inner)
+        .unwrap_or_else(nvagentrt_core::task_scope_top);
+    let exec_fn = callable::wrap_js_llm_exec_fn(func);
+
+    let wrapped_collector: Box<dyn FnMut(String) + Send> = match collector {
+        Some(cb) => callable::wrap_js_collector_fn(cb),
+        None => Box::new(|_: String| {}),
+    };
+
+    let wrapped_finalizer: Box<dyn FnOnce() -> serde_json::Value + Send> = match finalizer {
+        Some(cb) => callable::wrap_js_finalizer_fn(cb),
+        None => Box::new(|| serde_json::Value::Null),
+    };
+
+    let rust_stream = nvagentrt_core::nvagentrt_llm_stream_call_execute(
+        name,
+        request.inner.clone(),
+        // Bridge LlmExecutionFn -> LlmStreamExecutionFn
+        Box::new(move |req| {
+            let fut = exec_fn(req);
+            Box::pin(async move {
+                let result = fut.await?;
+                let text = serde_json::to_string(&result)
+                    .map_err(|e| nvagentrt_core::AgentRtError::Internal(e.to_string()))?;
+                let stream = tokio_stream::once(Ok(text));
+                Ok(Box::pin(stream)
+                    as std::pin::Pin<
+                        Box<dyn tokio_stream::Stream<Item = nvagentrt_core::Result<String>> + Send>,
+                    >)
+            })
+        }),
+        wrapped_collector,
+        wrapped_finalizer,
+        Some(parent_handle),
+        attrs,
+        opt_js_to_json(&data)?,
+        opt_js_to_json(&metadata)?,
+    )
+    .await
+    .map_err(to_js_err)?;
+
+    use tokio_stream::StreamExt;
+    let (tx, rx) = tokio::sync::mpsc::channel(32);
+    wasm_bindgen_futures::spawn_local(async move {
+        let mut stream = rust_stream;
+        while let Some(item) = stream.next().await {
+            if tx.send(item).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    Ok(WasmLlmStream {
+        receiver: tokio::sync::Mutex::new(rx),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -635,12 +724,12 @@ pub fn deregister_llm_response_intercept(name: &str) -> Result<bool, JsValue> {
     nvagentrt_core::nvagentrt_deregister_llm_response_intercept(name).map_err(to_js_err)
 }
 
-/// Registers an intercept that transforms individual SSE events in a streaming LLM response.
+/// Registers an intercept that transforms individual chunks in a streaming LLM response.
 ///
 /// - `name` - Unique intercept name.
 /// - `priority` - Execution priority (lower runs first).
 /// - `break_chain` - If `true`, stops further intercepts from running after this one.
-/// - `func` - JS function `(sseEvent) => transformedSseEvent`.
+/// - `func` - JS function `(chunk) => transformedChunk`.
 #[wasm_bindgen(js_name = "registerLlmStreamResponseIntercept")]
 pub fn register_llm_stream_response_intercept(
     name: &str,
@@ -652,7 +741,7 @@ pub fn register_llm_stream_response_intercept(
         name,
         priority,
         break_chain,
-        callable::wrap_js_sse_intercept_fn(func),
+        callable::wrap_js_string_intercept_fn(func),
     )
     .map_err(to_js_err)
 }

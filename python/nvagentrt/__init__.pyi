@@ -236,7 +236,7 @@ class LLMHandle:
         ...
 
 # ---------------------------------------------------------------------------
-# LLMRequest / Event / SseEvent / LlmStream
+# LLMRequest / Event / LlmStream
 # ---------------------------------------------------------------------------
 
 class LLMRequest:
@@ -316,46 +316,6 @@ class Event:
     @property
     def scope_type(self) -> Optional[ScopeType]:
         """Scope type of the source entity, if applicable."""
-        ...
-
-class SseEvent:
-    """A parsed Server-Sent Events (SSE) event.
-
-    Used by LLM stream-response intercepts to inspect or transform
-    individual events within a streaming response.
-    """
-
-    def __init__(
-        self,
-        data: str,
-        event: str | None = None,
-        id: str | None = None,
-        retry: int | None = None,
-    ) -> None:
-        """Create an SSE event.
-
-        Args:
-            data: The event data payload.
-            event: Optional event type field.
-            id: Optional event ID.
-            retry: Optional reconnection time in milliseconds.
-        """
-        ...
-    @property
-    def event(self) -> Optional[str]:
-        """The SSE event type field, or ``None``."""
-        ...
-    @property
-    def data(self) -> str:
-        """The SSE data payload."""
-        ...
-    @property
-    def id(self) -> Optional[str]:
-        """The SSE event ID, or ``None``."""
-        ...
-    @property
-    def retry(self) -> Optional[int]:
-        """Reconnection time in milliseconds, or ``None``."""
         ...
 
 class ScopeStack:
@@ -561,6 +521,8 @@ async def nvagentrt_llm_stream_call_execute(
     name: str,
     request: LLMRequest,
     func: Callable[[LLMRequest], AsyncIterator[str]],
+    collector: Callable[[str], None],
+    finalizer: Callable[[], Any],
     *,
     handle: Optional[ScopeHandle] = None,
     attributes: Optional[LLMAttributes] = None,
@@ -573,6 +535,11 @@ async def nvagentrt_llm_stream_call_execute(
         name: Model/provider name.
         request: The LLM request.
         func: Async callable ``(request) -> AsyncIterator[str]`` returning SSE chunks.
+        collector: A callable ``(chunk: str) -> None`` invoked with each
+            intercepted chunk after stream response intercepts have been applied.
+        finalizer: A callable ``() -> Any`` invoked once when the stream is
+            exhausted. Its return value is the aggregated response (converted
+            to JSON).
         handle: Optional parent scope handle.
         attributes: Optional ``LLMAttributes`` bitflags.
         data: Optional application data.
@@ -762,11 +729,11 @@ def nvagentrt_register_llm_stream_response_intercept(
     name: str,
     priority: int,
     break_chain: bool,
-    callable: Callable[[SseEvent], SseEvent],
+    callable: Callable[[str], str],
 ) -> None:
     """Register an LLM stream-response intercept.
 
-    Callback: ``(event) -> transformed_event`` — applied to each SSE event.
+    Callback: ``(chunk) -> transformed_chunk`` — applied to each chunk.
     """
     ...
 

@@ -70,9 +70,12 @@ extern int32_t nvagentrt_llm_call_execute(
 	char** out);
 
 // LLM stream execute
+typedef void (*NvAgentRtCollectorFn)(const char* chunk);
+typedef char* (*NvAgentRtFinalizerFn)();
 extern int32_t nvagentrt_llm_stream_call_execute(
 	const char* name, const FfiLLMRequest* request,
 	NvAgentRtLlmExecFn func_cb, void* func_user_data, NvAgentRtFreeFn func_free,
+	NvAgentRtCollectorFn collector, NvAgentRtFinalizerFn finalizer,
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
 	FfiStream** out);
@@ -155,7 +158,9 @@ extern FfiLLMRequest* goLlmRequestTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmConditionalTrampoline(void*, const FfiLLMRequest*);
 extern _Bool goLlmExecConditionalTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmExecTrampoline(void*, const FfiLLMRequest*);
-extern char* goSseInterceptTrampoline(void*, const char*);
+extern char* goStringInterceptTrampoline(void*, const char*);
+extern void goCollectorTrampoline(const char*);
+extern char* goFinalizerTrampoline();
 */
 import "C"
 
@@ -619,7 +624,13 @@ func LlmCallExecute(name string, request *LLMRequest, fn LLMExecutionFunc, opts 
 // individual SSE (Server-Sent Event) chunks. Stream response intercepts are
 // applied to each chunk as it is consumed. The caller must call [LlmStream.Next]
 // repeatedly until [io.EOF] is returned, then call [LlmStream.Close].
-func LlmStreamCallExecute(name string, request *LLMRequest, fn LLMExecutionFunc, opts ...LLMCallOption) (*LlmStream, error) {
+//
+// The optional collector callback is invoked with each intercepted chunk string,
+// allowing the caller to accumulate chunks for aggregation. The optional
+// finalizer callback is invoked once when the stream is exhausted and must
+// return a JSON string representing the aggregated response. Pass nil for
+// either to use the default no-op behavior.
+func LlmStreamCallExecute(name string, request *LLMRequest, fn LLMExecutionFunc, collector CollectorFunc, finalizer FinalizerFunc, opts ...LLMCallOption) (*LlmStream, error) {
 	o := &llmCallOptions{}
 	for _, opt := range opts {
 		opt(o)
@@ -631,12 +642,39 @@ func LlmStreamCallExecute(name string, request *LLMRequest, fn LLMExecutionFunc,
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
+	// Set the active collector/finalizer for the duration of the blocking FFI call.
+	// The C collector/finalizer callbacks are plain function pointers (no user_data),
+	// so we route through global state protected by collectorMu.
+	collectorMu.Lock()
+	activeCollector = collector
+	activeFinalizer = finalizer
+	collectorMu.Unlock()
+
+	defer func() {
+		collectorMu.Lock()
+		activeCollector = nil
+		activeFinalizer = nil
+		collectorMu.Unlock()
+	}()
+
+	var cCollector C.NvAgentRtCollectorFn
+	if collector != nil {
+		cCollector = C.NvAgentRtCollectorFn(C.goCollectorTrampoline)
+	}
+
+	var cFinalizer C.NvAgentRtFinalizerFn
+	if finalizer != nil {
+		cFinalizer = C.NvAgentRtFinalizerFn(C.goFinalizerTrampoline)
+	}
+
 	var out *C.FfiStream
 	status := C.nvagentrt_llm_stream_call_execute(
 		cName, request.ptr,
 		C.NvAgentRtLlmExecFn(C.goLlmExecTrampoline),
 		id,
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
+		cCollector,
+		cFinalizer,
 		o.parent, C.uint32_t(o.attributes),
 		o.data, o.metadata,
 		&out,
@@ -935,17 +973,17 @@ func DeregisterLlmResponseIntercept(name string) error {
 }
 
 // RegisterLlmStreamResponseIntercept registers an intercept that transforms
-// individual Server-Sent Event (SSE) chunks during a streaming LLM response.
-// The callback receives each SSE event as JSON and must return the (possibly
-// modified) event. Intercepts run in priority order (lower values first). When
-// breakChain is true, no lower-priority intercepts are invoked after this one.
-func RegisterLlmStreamResponseIntercept(name string, priority int32, breakChain bool, fn SseInterceptFunc) error {
+// individual chunks during a streaming LLM response. The callback receives
+// each chunk as a string and must return the (possibly modified) chunk.
+// Intercepts run in priority order (lower values first). When breakChain is
+// true, no lower-priority intercepts are invoked after this one.
+func RegisterLlmStreamResponseIntercept(name string, priority int32, breakChain bool, fn StringInterceptFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nvagentrt_register_llm_stream_response_intercept(
 		cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NvAgentRtSseInterceptFn(C.goSseInterceptTrampoline),
+		C.NvAgentRtSseInterceptFn(C.goStringInterceptTrampoline),
 		id,
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
 	))

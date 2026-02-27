@@ -10,11 +10,11 @@ use pyo3::prelude::*;
 use serde_json::Value as Json;
 use tokio_stream::Stream;
 
-use nvagentrt_core::types::{LLMRequest, SseEvent};
+use nvagentrt_core::types::LLMRequest;
 use nvagentrt_core::AgentRtError;
 
 use crate::convert::{json_to_py, py_to_json};
-use crate::py_types::{PyLLMRequest, PySseEvent};
+use crate::py_types::PyLLMRequest;
 
 /// Wrap a Python callable `(str, Json) -> Json` for tool sanitize/intercept fns.
 pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
@@ -359,20 +359,45 @@ pub fn wrap_py_llm_stream_exec_fn(
     })
 }
 
-/// Wrap a Python callable `(SseEvent) -> SseEvent` for LLM stream response intercepts.
-pub fn wrap_py_sse_intercept_fn(
-    py_fn: Py<PyAny>,
-) -> Box<dyn Fn(SseEvent) -> SseEvent + Send + Sync> {
-    Box::new(move |event: SseEvent| {
+/// Wrap a Python callable `(str) -> None` as a collector for streaming LLM calls.
+///
+/// The collector is invoked with each intercepted chunk (after stream response
+/// intercepts have been applied). It receives a single `str` argument and
+/// returns nothing.
+pub fn wrap_py_collector_fn(py_fn: Py<PyAny>) -> Box<dyn FnMut(String) + Send> {
+    Box::new(move |chunk: String| {
         Python::attach(|py| {
-            let py_event = PySseEvent { inner: event };
+            py_fn
+                .call1(py, (chunk,))
+                .expect("Python collector callable failed");
+        })
+    })
+}
+
+/// Wrap a Python callable `() -> Any` as a finalizer for streaming LLM calls.
+///
+/// The finalizer is called once when the stream is fully consumed. Its return
+/// value is converted from a Python object to `serde_json::Value` (Json) and
+/// used as the aggregated response.
+pub fn wrap_py_finalizer_fn(py_fn: Py<PyAny>) -> Box<dyn FnOnce() -> Json + Send> {
+    Box::new(move || {
+        Python::attach(|py| {
+            let result = py_fn.call0(py).expect("Python finalizer callable failed");
+            py_to_json(result.bind(py)).expect("py_to_json failed in finalizer")
+        })
+    })
+}
+
+/// Wrap a Python callable `(str) -> str` for LLM stream response intercepts.
+pub fn wrap_py_string_intercept_fn(
+    py_fn: Py<PyAny>,
+) -> Box<dyn Fn(String) -> String + Send + Sync> {
+    Box::new(move |chunk: String| {
+        Python::attach(|py| {
             let result = py_fn
-                .call1(py, (py_event,))
-                .expect("Python SSE intercept callable failed");
-            result
-                .extract::<PySseEvent>(py)
-                .expect("Expected SseEvent return")
-                .inner
+                .call1(py, (chunk.clone(),))
+                .expect("Python stream intercept callable failed");
+            result.extract::<String>(py).expect("Expected str return")
         })
     })
 }

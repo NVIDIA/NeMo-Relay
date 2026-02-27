@@ -56,8 +56,8 @@ pub type LlmConditionalFn = Box<dyn Fn(&LLMRequest) -> Option<String> + Send + S
 pub type LlmRequestInterceptFn = Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync>;
 /// LLM response intercept: `(response) -> transformed_response`.
 pub type LlmResponseInterceptFn = Box<dyn Fn(Json) -> Json + Send + Sync>;
-/// LLM streaming response intercept: `(sse_event) -> transformed_event`.
-pub type LlmStreamResponseInterceptFn = Box<dyn Fn(SseEvent) -> SseEvent + Send + Sync>;
+/// LLM streaming response intercept: `(chunk) -> transformed_chunk`.
+pub type LlmStreamResponseInterceptFn = Box<dyn Fn(String) -> String + Send + Sync>;
 /// LLM execution function: `(request) -> Future<Result<Json>>`.
 pub type LlmExecutionFn =
     Box<dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
@@ -266,7 +266,7 @@ pub struct NVAgentRTContextState {
     pub llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
     /// Registry of LLM response intercepts.
     pub llm_response_intercepts: SortedRegistry<Intercept<LlmResponseInterceptFn>>,
-    /// Registry of LLM streaming response intercepts (per-SSE-event).
+    /// Registry of LLM streaming response intercepts (per-chunk).
     pub llm_stream_response_intercepts: SortedRegistry<Intercept<LlmStreamResponseInterceptFn>>,
     /// Registry of LLM execution intercepts (conditionally replace execution).
     pub llm_execution_intercepts:
@@ -637,9 +637,9 @@ impl NVAgentRTContextState {
         v
     }
 
-    /// Runs the LLM stream response intercept chain on a single SSE event.
-    pub fn llm_stream_response_intercepts_chain(&mut self, event: SseEvent) -> SseEvent {
-        let mut v = event;
+    /// Runs the LLM stream response intercept chain on a single chunk string.
+    pub fn llm_stream_response_intercepts_chain(&mut self, chunk: String) -> String {
+        let mut v = chunk;
         for entry in self.llm_stream_response_intercepts.sorted_values() {
             v = (entry.callable)(v);
             if entry.break_chain {
@@ -1659,22 +1659,13 @@ mod tests {
                 Intercept {
                     priority: 1,
                     break_chain: false,
-                    callable: Box::new(|mut event: SseEvent| {
-                        event.data = format!("modified: {}", event.data);
-                        event
-                    }),
+                    callable: Box::new(|chunk: String| format!("modified: {}", chunk)),
                 },
             )
             .unwrap();
 
-        let event = SseEvent {
-            event: Some("chunk".into()),
-            data: "original".into(),
-            id: None,
-            retry: None,
-        };
-        let result = ctx.llm_stream_response_intercepts_chain(event);
-        assert_eq!(result.data, "modified: original");
+        let result = ctx.llm_stream_response_intercepts_chain("original".to_string());
+        assert_eq!(result, "modified: original");
     }
 
     #[test]

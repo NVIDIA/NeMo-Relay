@@ -16,7 +16,7 @@ use std::sync::Arc;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use serde_json::Value as Json;
 
-use nvagentrt_core::types::{LLMRequest, SseEvent};
+use nvagentrt_core::types::LLMRequest;
 use nvagentrt_core::{AgentRtError, Result};
 
 use crate::types::JsEvent;
@@ -227,25 +227,57 @@ pub fn wrap_js_llm_exec_fn(
     })
 }
 
-/// Wrap a JS function for SSE intercept: `(event: JsSseEvent) => JsSseEvent`.
-pub fn wrap_js_sse_intercept_fn(
-    func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(SseEvent) -> SseEvent + Send + Sync> {
-    let func = Arc::new(func);
-    Box::new(move |event: SseEvent| {
-        let func = func.clone();
-        let event_json = serde_json::to_value(&event).unwrap_or(Json::Null);
+/// Wrap a JS function `(chunk: string) => void` as a collector callback.
+///
+/// The collector is called with each intercepted chunk during a streaming LLM response.
+/// It is used to accumulate chunks on the JavaScript side for aggregation.
+pub fn wrap_js_collector_fn(
+    func: ThreadsafeFunction<String, ErrorStrategy::Fatal>,
+) -> Box<dyn FnMut(String) + Send> {
+    Box::new(move |chunk: String| {
+        func.call(chunk, ThreadsafeFunctionCallMode::Blocking);
+    })
+}
+
+/// Wrap a JS function `() => object` as a finalizer callback.
+///
+/// The finalizer is called exactly once when the stream is exhausted.
+/// It takes no arguments and must return a JSON value representing the
+/// aggregated response.
+pub fn wrap_js_finalizer_fn(
+    func: ThreadsafeFunction<(), ErrorStrategy::Fatal>,
+) -> Box<dyn FnOnce() -> Json + Send> {
+    Box::new(move || {
         let (tx, rx) = std::sync::mpsc::channel();
         func.call_with_return_value(
-            event_json,
+            (),
             ThreadsafeFunctionCallMode::Blocking,
             move |val: Json| {
                 let _ = tx.send(val);
                 Ok(())
             },
         );
-        let result = rx.recv().unwrap_or(Json::Null);
-        serde_json::from_value(result).unwrap_or(event)
+        rx.recv().unwrap_or(Json::Null)
+    })
+}
+
+/// Wrap a JS function for stream intercept: `(chunk: string) => string`.
+pub fn wrap_js_string_intercept_fn(
+    func: ThreadsafeFunction<String, ErrorStrategy::Fatal>,
+) -> Box<dyn Fn(String) -> String + Send + Sync> {
+    let func = Arc::new(func);
+    Box::new(move |chunk: String| {
+        let func = func.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        func.call_with_return_value(
+            chunk.clone(),
+            ThreadsafeFunctionCallMode::Blocking,
+            move |val: String| {
+                let _ = tx.send(val);
+                Ok(())
+            },
+        );
+        rx.recv().unwrap_or(chunk)
     })
 }
 

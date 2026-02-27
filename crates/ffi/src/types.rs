@@ -32,8 +32,6 @@ pub struct FfiLLMHandle(pub core_types::LLMHandle);
 pub struct FfiLLMRequest(pub core_types::LLMRequest);
 /// Opaque wrapper around a lifecycle event emitted by the runtime.
 pub struct FfiEvent(pub core_types::Event);
-/// Opaque wrapper around a server-sent event (SSE) used in LLM streaming.
-pub struct FfiSseEvent(pub core_types::SseEvent);
 /// Opaque handle to an isolated scope stack for per-request/per-task isolation.
 pub struct FfiScopeStack(pub nvagentrt_core::ScopeStackHandle);
 
@@ -181,17 +179,6 @@ pub unsafe extern "C" fn nvagentrt_llm_request_free(ptr: *mut FfiLLMRequest) {
 /// `ptr` must be a valid pointer returned by an `nvagentrt_*` function, or null.
 #[no_mangle]
 pub unsafe extern "C" fn nvagentrt_event_free(ptr: *mut FfiEvent) {
-    if !ptr.is_null() {
-        drop(unsafe { Box::from_raw(ptr) });
-    }
-}
-
-/// Free an SSE event object.
-///
-/// # Safety
-/// `ptr` must be a valid pointer returned by an `nvagentrt_*` function, or null.
-#[no_mangle]
-pub unsafe extern "C" fn nvagentrt_sse_event_free(ptr: *mut FfiSseEvent) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }

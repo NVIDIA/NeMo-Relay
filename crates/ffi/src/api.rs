@@ -555,6 +555,11 @@ pub struct FfiStream {
 /// - `func`: C callback that performs the actual LLM call.
 /// - `func_user_data`: Opaque pointer passed to `func`.
 /// - `func_free`: Optional destructor for `func_user_data`.
+/// - `collector`: Callback invoked with each intercepted chunk string. May be
+///   null, in which case chunks are not collected.
+/// - `finalizer`: Callback invoked once when the stream is exhausted to produce
+///   the aggregated response as a JSON C string. May be null, in which case the
+///   finalizer returns `Json::Null`.
 /// - `parent`: Optional parent scope handle, or null.
 /// - `attributes`: Bitfield of LLM attributes.
 /// - `data_json`: Optional JSON data, or null.
@@ -562,7 +567,8 @@ pub struct FfiStream {
 /// - `out`: On success, receives a heap-allocated `FfiStream`.
 ///
 /// # Safety
-/// `name`, `request`, and `out` must be valid, non-null pointers.
+/// `name`, `request`, and `out` must be valid, non-null pointers. `collector`
+/// and `finalizer` may be null.
 #[no_mangle]
 pub unsafe extern "C" fn nvagentrt_llm_stream_call_execute(
     name: *const c_char,
@@ -570,6 +576,8 @@ pub unsafe extern "C" fn nvagentrt_llm_stream_call_execute(
     func: NvAgentRtLlmExecCb,
     func_user_data: *mut libc::c_void,
     func_free: NvAgentRtFreeFn,
+    collector: Option<NvAgentRtCollectorCb>,
+    finalizer: Option<NvAgentRtFinalizerCb>,
     parent: *const FfiScopeHandle,
     attributes: u32,
     data_json: *const c_char,
@@ -603,11 +611,23 @@ pub unsafe extern "C" fn nvagentrt_llm_stream_call_execute(
 
     let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
 
+    let wrapped_collector: Box<dyn FnMut(String) + Send> = match collector {
+        Some(cb) => wrap_collector_fn(cb),
+        None => Box::new(|_: String| {}),
+    };
+
+    let wrapped_finalizer: Box<dyn FnOnce() -> serde_json::Value + Send> = match finalizer {
+        Some(cb) => wrap_finalizer_fn(cb),
+        None => Box::new(|| serde_json::Value::Null),
+    };
+
     let result = tokio_runtime().block_on(async {
         core::nvagentrt_llm_stream_call_execute(
             &name,
             req,
             exec_fn,
+            wrapped_collector,
+            wrapped_finalizer,
             parent_handle,
             attrs,
             data,
@@ -1273,13 +1293,13 @@ pub unsafe extern "C" fn nvagentrt_deregister_llm_response_intercept(
 }
 
 /// Register an LLM streaming response intercept. The callback transforms
-/// individual SSE events as they arrive during a streaming LLM call.
+/// individual chunk strings as they arrive during a streaming LLM call.
 ///
 /// # Parameters
 /// - `name`: Unique intercept name.
 /// - `priority`: Execution priority (lower runs first).
 /// - `break_chain`: If true, stop processing further intercepts after this one.
-/// - `cb`: SSE event transform callback (receives/returns JSON).
+/// - `cb`: Chunk string transform callback (receives/returns C string).
 /// - `user_data`: Opaque pointer passed to `cb`.
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
@@ -1299,7 +1319,7 @@ pub unsafe extern "C" fn nvagentrt_register_llm_stream_response_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    let wrapped = wrap_sse_intercept_fn(cb, user_data, free_fn);
+    let wrapped = wrap_string_intercept_fn(cb, user_data, free_fn);
     match core::nvagentrt_register_llm_stream_response_intercept(
         &name,
         priority,

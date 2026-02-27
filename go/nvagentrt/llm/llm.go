@@ -52,6 +52,11 @@ func Execute(name string, request *nvagentrt.LLMRequest, fn nvagentrt.LLMExecuti
 // StreamExecute runs a streaming LLM call lifecycle with the full middleware
 // pipeline and returns an [nvagentrt.LlmStream] for consuming SSE chunks. This
 // is a shorthand for [nvagentrt.LlmStreamCallExecute].
-func StreamExecute(name string, request *nvagentrt.LLMRequest, fn nvagentrt.LLMExecutionFunc, opts ...nvagentrt.LLMCallOption) (*nvagentrt.LlmStream, error) {
-	return nvagentrt.LlmStreamCallExecute(name, request, fn, opts...)
+//
+// The collector callback is invoked with each intercepted chunk string for
+// accumulation. The finalizer callback is invoked once when the stream is
+// exhausted and must return a JSON string representing the aggregated response.
+// Pass nil for either to use the default no-op behavior.
+func StreamExecute(name string, request *nvagentrt.LLMRequest, fn nvagentrt.LLMExecutionFunc, collector nvagentrt.CollectorFunc, finalizer nvagentrt.FinalizerFunc, opts ...nvagentrt.LLMCallOption) (*nvagentrt.LlmStream, error) {
+	return nvagentrt.LlmStreamCallExecute(name, request, fn, collector, finalizer, opts...)
 }

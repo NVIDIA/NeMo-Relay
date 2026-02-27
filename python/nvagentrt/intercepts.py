@@ -30,7 +30,7 @@ lower-priority intercepts run after this one.
         ``fn(response: Any) -> Any`` — transform LLM response.
 
     register_llm_stream_response(name, priority, break_chain, fn)
-        ``fn(event: SseEvent) -> SseEvent`` — transform each SSE event.
+        ``fn(chunk: str) -> str`` — transform each chunk.
 
     register_llm_execution(name, priority, conditional, fn)
         ``conditional(request: LLMRequest) -> bool``.

@@ -68,6 +68,16 @@ var (
 	closureNextID     atomic.Uint64
 )
 
+// collectorMu protects the active collector/finalizer callbacks during a
+// streaming LLM call. Because the FFI collector/finalizer callbacks do not
+// carry user_data, we use thread-local-like global state set immediately
+// before the blocking FFI call.
+var (
+	collectorMu     sync.Mutex
+	activeCollector CollectorFunc
+	activeFinalizer FinalizerFunc
+)
+
 // registerClosure stores fn in the global registry and returns an
 // unsafe.Pointer that encodes the registry key. The returned pointer is
 // suitable for passing as void* user_data to C callbacks.
@@ -149,9 +159,19 @@ type LLMExecConditionalFunc func(method, url string, headers, body json.RawMessa
 // JSON or an error.
 type LLMExecutionFunc func(method, url string, headers, body json.RawMessage) (json.RawMessage, error)
 
-// SseInterceptFunc is a callback that transforms a single Server-Sent Event
-// (as JSON) during a streaming LLM response.
-type SseInterceptFunc func(sseJSON json.RawMessage) json.RawMessage
+// StringInterceptFunc is a callback that transforms a single chunk (as a
+// string) during a streaming LLM response.
+type StringInterceptFunc func(chunk string) string
+
+// CollectorFunc is a callback invoked with each intercepted chunk during a
+// streaming LLM response. It is used to accumulate chunks on the Go side for
+// aggregation. The chunk string is only valid for the duration of the call.
+type CollectorFunc func(chunk string)
+
+// FinalizerFunc is a callback invoked exactly once when a streaming LLM
+// response is exhausted. It takes no arguments and must return a JSON string
+// representing the aggregated response.
+type FinalizerFunc func() string
 
 // EventSubscriberFunc is a callback invoked for each lifecycle event emitted
 // by the runtime. The Event pointer is only valid for the duration of the
@@ -290,10 +310,38 @@ func goLlmExecTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) *C.c
 	return C.CString(string(result))
 }
 
-//export goSseInterceptTrampoline
-func goSseInterceptTrampoline(userData unsafe.Pointer, sseJSON *C.char) *C.char {
-	fn := lookupClosure(userData).(SseInterceptFunc)
-	goSSE := json.RawMessage(C.GoString(sseJSON))
-	result := fn(goSSE)
-	return C.CString(string(result))
+//export goCollectorTrampoline
+func goCollectorTrampoline(chunk *C.char) {
+	// The collector callback doesn't use user_data; it is stored separately
+	// and invoked directly by the FFI layer. However, for the Go binding we
+	// need to route through the closure registry. The closure ID is encoded
+	// in the global collectorClosureID variable set before the FFI call.
+	goChunk := C.GoString(chunk)
+	collectorMu.Lock()
+	fn := activeCollector
+	collectorMu.Unlock()
+	if fn != nil {
+		fn(goChunk)
+	}
+}
+
+//export goFinalizerTrampoline
+func goFinalizerTrampoline() *C.char {
+	collectorMu.Lock()
+	fn := activeFinalizer
+	activeFinalizer = nil
+	collectorMu.Unlock()
+	if fn != nil {
+		result := fn()
+		return C.CString(result)
+	}
+	return C.CString("null")
+}
+
+//export goStringInterceptTrampoline
+func goStringInterceptTrampoline(userData unsafe.Pointer, sseJSON *C.char) *C.char {
+	fn := lookupClosure(userData).(StringInterceptFunc)
+	goChunk := C.GoString(sseJSON)
+	result := fn(goChunk)
+	return C.CString(result)
 }

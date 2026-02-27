@@ -117,10 +117,10 @@ func DeregisterLlmResponse(name string) error {
 // --- LLM Stream Response ---
 
 // RegisterLlmStreamResponse registers an intercept that transforms individual
-// SSE events during a streaming LLM response. When breakChain is true, no
+// chunks during a streaming LLM response. When breakChain is true, no
 // lower-priority intercepts run after this one. This is a shorthand for
 // [nvagentrt.RegisterLlmStreamResponseIntercept].
-func RegisterLlmStreamResponse(name string, priority int32, breakChain bool, fn nvagentrt.SseInterceptFunc) error {
+func RegisterLlmStreamResponse(name string, priority int32, breakChain bool, fn nvagentrt.StringInterceptFunc) error {
 	return nvagentrt.RegisterLlmStreamResponseIntercept(name, priority, breakChain, fn)
 }
 

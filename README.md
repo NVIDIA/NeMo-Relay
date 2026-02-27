@@ -107,51 +107,70 @@ The tool/LLM call lifecycle pipeline:
 
 ```mermaid
 flowchart TB
-    direction TB
     Request([Request])
-    subgraph **Execution**
+
+    subgraph Execution
+        direction TB
         RequestIntercepts[/Request Intercepts/]
         ConditionalExecutionGuardrails{{Conditional-Execution Guardrail}}
-        HasExecutionIntercept{{Has Valid Execution Intercept}}
-        ExecutionIntercepts[/Execution Intercept/]
-        DefaultCallable[Default Callable]
+        RaiseException[Raise Exception]
+        subgraph Invoke
+            direction TB
+            HasExecutionIntercept{{Has Valid Execution Intercept}}
+            ExecutionIntercepts[/Execution Intercept/]
+            DefaultCallable[Default Callable]
+        end
+
+        subgraph Streaming
+            direction TB
+            StreamingResponseIntercepts[/Streaming Response Intercepts/]
+            Finalizer[Finalizer]
+            Collector[Collector]
+        end
+
         ResponseIntercepts[/Response Intercepts/]
     end
-    Response([Response])
 
-    subgraph **Observability**
+    subgraph Observability
         direction TB
         SanitizeRequestGuardrails[/Sanitize Request Guardrail/]
         SanitizeResponseGuardrails[/Sanitize Response Guardrail/]
         EventSubscribers[["Event Subscribers"]]
     end
-
+    Response([Response])
 
     Request -->|Request| RequestIntercepts
-    RequestIntercepts -->|Transformed Request| ConditionalExecutionGuardrails
-    RequestIntercepts -->|Transformed Request| SanitizeRequestGuardrails
-    ConditionalExecutionGuardrails -->|Rejected Reason| Response
-    ConditionalExecutionGuardrails -->|Rejected Reason| EventSubscribers
-    ConditionalExecutionGuardrails -->|Transformed Request| HasExecutionIntercept
+    RequestIntercepts -->|Transformed Request| SanitizeRequestGuardrails & ConditionalExecutionGuardrails
+    ConditionalExecutionGuardrails -->|"(rejected)"| RaiseException & EventSubscribers
+    ConditionalExecutionGuardrails -->|"(passed)" Transformed Request| Invoke
     HasExecutionIntercept -->|Yes| ExecutionIntercepts
     HasExecutionIntercept -->|No| DefaultCallable
-    ExecutionIntercepts -->|Direct Response| ResponseIntercepts
-    DefaultCallable -->|Direct Response| ResponseIntercepts
+    Invoke -->|Response| ResponseIntercepts
+    Invoke -.->|Streaming Response| StreamingResponseIntercepts
+    ResponseIntercepts ==>|Transformed Response| SanitizeResponseGuardrails
     ResponseIntercepts -->|Transformed Response| Response
-    ResponseIntercepts -->|Transformed Response| SanitizeResponseGuardrails
+    StreamingResponseIntercepts -.->|"(stream ends)"| Finalizer
+    Finalizer -.->|Aggregated Response| ResponseIntercepts
+    StreamingResponseIntercepts -.->|stream chunk| Collector
+    Collector -.->|stream chunk| Response
     SanitizeRequestGuardrails -->|Sanitized Request| EventSubscribers
     SanitizeResponseGuardrails -->|Sanitized Response| EventSubscribers
 
-    style Request fill:#eee,stroke:#333
-    style Response fill:#eee,stroke:#333
-    style EventSubscribers fill:#bff,stroke:#088
-    style RequestIntercepts fill:#ffb,stroke:#880
-    style HasExecutionIntercept fill:#ffb,stroke:#880
-    style ResponseIntercepts fill:#ffb,stroke:#880
-    style ExecutionIntercepts fill:#ffb,stroke:#880
-    style ConditionalExecutionGuardrails fill:#bfb,stroke:#080
-    style SanitizeRequestGuardrails fill:#bfb,stroke:#080
-    style SanitizeResponseGuardrails fill:#bfb,stroke:#080
+    style Request fill:#eee,stroke:#333,color:#333
+    style Response fill:#eee,stroke:#333,color:#333
+    style EventSubscribers fill:#bff,stroke:#044,color:#044
+    style RequestIntercepts fill:#ffb,stroke:#440,color:#440
+    style HasExecutionIntercept fill:#ffb,stroke:#440,color:#440
+    style ResponseIntercepts fill:#ffb,stroke:#440,color:#440
+    style StreamingResponseIntercepts fill:#ffb,stroke:#440,color:#440
+    style ExecutionIntercepts fill:#ffb,stroke:#440,color:#440
+    style ConditionalExecutionGuardrails fill:#bfb,stroke:#040,color:#040
+    style SanitizeRequestGuardrails fill:#bfb,stroke:#040,color:#040
+    style SanitizeResponseGuardrails fill:#bfb,stroke:#040,color:#040
+    style RaiseException fill:#fbb,stroke:#400,color:#400
+    style DefaultCallable fill:#fbf,stroke:#404,color:#404
+    style Collector fill:#fbf,stroke:#404,color:#404
+    style Finalizer fill:#fbf,stroke:#404,color:#404
 ```
 
 Key mechanisms:

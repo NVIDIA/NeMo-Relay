@@ -11,7 +11,6 @@ from nvagentrt import (
     ScopeType,
     ToolAttributes,
 )
-from nvagentrt._native import SseEvent
 
 
 class TestScopeType:
@@ -116,23 +115,3 @@ class TestLLMRequest:
         r = repr(req)
         assert "POST" in r
         assert "api.example.com" in r
-
-
-class TestSseEvent:
-    def test_constructor(self):
-        event = SseEvent("hello world")
-        assert event.data == "hello world"
-        assert event.event is None
-        assert event.id is None
-        assert event.retry is None
-
-    def test_constructor_all_fields(self):
-        event = SseEvent("payload", event="chunk", id="42", retry=5000)
-        assert event.data == "payload"
-        assert event.event == "chunk"
-        assert event.id == "42"
-        assert event.retry == 5000
-
-    def test_repr(self):
-        event = SseEvent("test")
-        assert "test" in repr(event)

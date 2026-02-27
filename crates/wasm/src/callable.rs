@@ -19,7 +19,7 @@ use serde_json::Value as Json;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use nvagentrt_core::types::{LLMRequest, SseEvent};
+use nvagentrt_core::types::LLMRequest;
 use nvagentrt_core::{AgentRtError, Result};
 
 use crate::convert::{js_to_json, json_to_js};
@@ -196,18 +196,39 @@ pub fn wrap_js_llm_exec_fn(
     })
 }
 
-/// Wrap a JS function for SSE intercept: `(event) => event`.
-pub fn wrap_js_sse_intercept_fn(func: Function) -> Box<dyn Fn(SseEvent) -> SseEvent + Send + Sync> {
+/// Wrap a JS function `(chunk) => void` as a collector callback.
+///
+/// The collector is called with each intercepted chunk during a streaming LLM response.
+/// It is used to accumulate chunks on the JavaScript side for aggregation.
+pub fn wrap_js_collector_fn(func: Function) -> Box<dyn FnMut(String) + Send> {
     let func = SendWrapper::new(func);
-    Box::new(move |event: SseEvent| {
-        let event_json = serde_json::to_value(&event).unwrap_or(Json::Null);
-        let js_event = json_to_js(&event_json);
-        match func.call1(&JsValue::NULL, &js_event) {
-            Ok(result) => {
-                let result_json = js_to_json(&result).unwrap_or(Json::Null);
-                serde_json::from_value(result_json).unwrap_or(event)
-            }
-            Err(_) => event,
+    Box::new(move |chunk: String| {
+        let js_chunk = JsValue::from_str(&chunk);
+        let _ = func.call1(&JsValue::NULL, &js_chunk);
+    })
+}
+
+/// Wrap a JS function `() => object` as a finalizer callback.
+///
+/// The finalizer is called exactly once when the stream is exhausted.
+/// It takes no arguments and must return a JSON value representing the
+/// aggregated response.
+pub fn wrap_js_finalizer_fn(func: Function) -> Box<dyn FnOnce() -> Json + Send> {
+    let func = SendWrapper::new(func);
+    Box::new(move || match func.call0(&JsValue::NULL) {
+        Ok(result) => js_to_json(&result).unwrap_or(Json::Null),
+        Err(_) => Json::Null,
+    })
+}
+
+/// Wrap a JS function for stream intercept: `(chunk) => chunk`.
+pub fn wrap_js_string_intercept_fn(func: Function) -> Box<dyn Fn(String) -> String + Send + Sync> {
+    let func = SendWrapper::new(func);
+    Box::new(move |chunk: String| {
+        let js_chunk = JsValue::from_str(&chunk);
+        match func.call1(&JsValue::NULL, &js_chunk) {
+            Ok(result) => result.as_string().unwrap_or(chunk),
+            Err(_) => chunk,
         }
     })
 }

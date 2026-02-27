@@ -291,11 +291,18 @@ pub async fn llm_call_execute(
 /// Similar to `llmCallExecute`, but returns an `LlmStream` whose `next()` method yields
 /// response chunks incrementally. The `func` callback receives the request as JSON and
 /// its response is streamed back. Stream-level intercepts are applied to each chunk.
+///
+/// The optional `collector` callback is invoked with each intercepted chunk string,
+/// allowing the caller to accumulate chunks for aggregation. The optional `finalizer`
+/// callback is invoked once when the stream is exhausted and must return a JSON value
+/// representing the aggregated response.
 #[napi]
 pub async fn llm_stream_call_execute(
     name: String,
     request: &JsLLMRequest,
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    collector: Option<ThreadsafeFunction<String, ErrorStrategy::Fatal>>,
+    finalizer: Option<ThreadsafeFunction<(), ErrorStrategy::Fatal>>,
     handle: Option<&JsScopeHandle>,
     attributes: Option<u32>,
     data: Option<Json>,
@@ -308,6 +315,17 @@ pub async fn llm_stream_call_execute(
 
     // For stream execution, we need the stream-specific wrapper
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
+
+    let wrapped_collector: Box<dyn FnMut(String) + Send> = match collector {
+        Some(cb) => callable::wrap_js_collector_fn(cb),
+        None => Box::new(|_: String| {}),
+    };
+
+    let wrapped_finalizer: Box<dyn FnOnce() -> Json + Send> = match finalizer {
+        Some(cb) => callable::wrap_js_finalizer_fn(cb),
+        None => Box::new(|| Json::Null),
+    };
+
     let scope_stack = nvagentrt_core::current_scope_stack();
 
     nvagentrt_core::TASK_SCOPE_STACK
@@ -333,6 +351,8 @@ pub async fn llm_stream_call_execute(
                             >)
                     })
                 }),
+                wrapped_collector,
+                wrapped_finalizer,
                 Some(parent),
                 attrs,
                 opt_json(data),
@@ -670,9 +690,9 @@ pub fn deregister_llm_response_intercept(name: String) -> Result<bool> {
     core::nvagentrt_deregister_llm_response_intercept(&name).map_err(to_napi_err)
 }
 
-/// Register an intercept that transforms individual SSE events in a streaming LLM response.
+/// Register an intercept that transforms individual chunks in a streaming LLM response.
 ///
-/// The `callable` receives each SSE event as JSON and returns the transformed event.
+/// The `callable` receives each chunk as a string and returns the transformed chunk.
 /// If `breakChain` is `true`, no lower-priority intercepts run after this one.
 /// Higher `priority` values run first.
 #[napi]
@@ -680,13 +700,13 @@ pub fn register_llm_stream_response_intercept(
     name: String,
     priority: i32,
     break_chain: bool,
-    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    callable: ThreadsafeFunction<String, ErrorStrategy::Fatal>,
 ) -> Result<()> {
     core::nvagentrt_register_llm_stream_response_intercept(
         &name,
         priority,
         break_chain,
-        callable::wrap_js_sse_intercept_fn(callable),
+        callable::wrap_js_string_intercept_fn(callable),
     )
     .map_err(to_napi_err)
 }

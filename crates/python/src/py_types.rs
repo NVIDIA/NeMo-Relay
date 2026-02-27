@@ -15,79 +15,6 @@ use nvagentrt_core::types as core_types;
 use crate::convert::{json_to_py, opt_json_to_py, py_to_json};
 
 // ---------------------------------------------------------------------------
-// SseEvent
-// ---------------------------------------------------------------------------
-
-/// A Server-Sent Events (SSE) event used in streaming LLM responses.
-///
-/// Attributes:
-///     data (str): The event payload.
-///     event (str | None): The event type.
-///     id (str | None): The event ID.
-///     retry (int | None): Reconnection time in milliseconds.
-#[pyclass(name = "SseEvent", from_py_object)]
-#[derive(Clone)]
-pub struct PySseEvent {
-    pub inner: core_types::SseEvent,
-}
-
-#[pymethods]
-impl PySseEvent {
-    /// Create a new SseEvent.
-    ///
-    /// Args:
-    ///     data: The event payload string.
-    ///     event: Optional event type name.
-    ///     id: Optional event ID.
-    ///     retry: Optional reconnection time in milliseconds.
-    #[new]
-    #[pyo3(signature = (data, event=None, id=None, retry=None))]
-    fn new(data: String, event: Option<String>, id: Option<String>, retry: Option<u64>) -> Self {
-        Self {
-            inner: core_types::SseEvent {
-                event,
-                data,
-                id,
-                retry,
-            },
-        }
-    }
-
-    #[getter]
-    fn event(&self) -> Option<String> {
-        self.inner.event.clone()
-    }
-
-    #[getter]
-    fn data(&self) -> String {
-        self.inner.data.clone()
-    }
-
-    #[getter]
-    fn id(&self) -> Option<String> {
-        self.inner.id.clone()
-    }
-
-    #[getter]
-    fn retry(&self) -> Option<u64> {
-        self.inner.retry
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "SseEvent(data={:?}, event={:?}, id={:?}, retry={:?})",
-            self.inner.data, self.inner.event, self.inner.id, self.inner.retry
-        )
-    }
-}
-
-impl From<core_types::SseEvent> for PySseEvent {
-    fn from(e: core_types::SseEvent) -> Self {
-        Self { inner: e }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // LlmStream (async iterator)
 // ---------------------------------------------------------------------------
 
@@ -815,7 +742,6 @@ impl From<core_types::Event> for PyEvent {
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyScopeStack>()?;
-    m.add_class::<PySseEvent>()?;
     m.add_class::<PyLlmStream>()?;
     m.add_class::<PyScopeAttributes>()?;
     m.add_class::<PyToolAttributes>()?;

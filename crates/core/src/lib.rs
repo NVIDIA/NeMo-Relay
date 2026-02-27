@@ -24,11 +24,11 @@
 //! - [`json`] — JSON type alias ([`Json`]) and the [`merge_json`] utility.
 //! - [`registry`] — [`SortedRegistry`](registry::SortedRegistry) — a priority-sorted, named collection used for
 //!   all guardrail and intercept registries.
-//! - [`stream`] — [`LlmStreamWrapper`] — an SSE stream adapter that buffers, parses,
-//!   intercepts, and aggregates streaming LLM responses.
+//! - [`stream`] — [`LlmStreamWrapper`] — a stream adapter that applies per-chunk
+//!   intercepts and aggregates streaming LLM responses.
 //! - [`types`] — Core data types: attribute bitflags, enums ([`ScopeType`], [`EventType`]),
 //!   handle structs ([`ScopeHandle`], [`ToolHandle`], [`LLMHandle`]), [`LLMRequest`],
-//!   [`SseEvent`], [`Event`], and middleware container types.
+//!   [`Event`], and middleware container types.
 //!
 //! ## Middleware Pipeline
 //!
