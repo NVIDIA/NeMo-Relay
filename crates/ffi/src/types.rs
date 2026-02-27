@@ -34,6 +34,8 @@ pub struct FfiLLMRequest(pub core_types::LLMRequest);
 pub struct FfiEvent(pub core_types::Event);
 /// Opaque handle to an isolated scope stack for per-request/per-task isolation.
 pub struct FfiScopeStack(pub nvagentrt_core::ScopeStackHandle);
+/// Opaque ATIF exporter handle.
+pub struct FfiAtifExporter(pub nvagentrt_core::atif::AtifExporter);
 
 // ---------------------------------------------------------------------------
 // Enums exposed to C
@@ -190,6 +192,17 @@ pub unsafe extern "C" fn nvagentrt_event_free(ptr: *mut FfiEvent) {
 /// `ptr` must be a valid pointer returned by `nvagentrt_scope_stack_create`, or null.
 #[no_mangle]
 pub unsafe extern "C" fn nvagentrt_scope_stack_free(ptr: *mut FfiScopeStack) {
+    if !ptr.is_null() {
+        drop(unsafe { Box::from_raw(ptr) });
+    }
+}
+
+/// Free an ATIF exporter handle previously returned by `nvagentrt_atif_exporter_create`.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `nvagentrt_atif_exporter_create`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_atif_exporter_free(ptr: *mut FfiAtifExporter) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -593,4 +606,116 @@ pub unsafe extern "C" fn nvagentrt_event_timestamp(ptr: *const FfiEvent) -> *mut
         return std::ptr::null_mut();
     }
     str_to_c_string(&unsafe { &*ptr }.0.timestamp.to_rfc3339())
+}
+
+/// Return the event input as a JSON C string, or null if no input is set.
+/// Caller must free the result with `nvagentrt_string_free`.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiEvent` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_event_input(ptr: *const FfiEvent) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    match &unsafe { &*ptr }.0.input {
+        Some(d) => json_to_c_string(d),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Return the event output as a JSON C string, or null if no output is set.
+/// Caller must free the result with `nvagentrt_string_free`.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiEvent` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_event_output(ptr: *const FfiEvent) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    match &unsafe { &*ptr }.0.output {
+        Some(d) => json_to_c_string(d),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Return the event model name as a C string, or null if no model name is set.
+/// Caller must free the result with `nvagentrt_string_free`.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiEvent` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_event_model_name(ptr: *const FfiEvent) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    match &unsafe { &*ptr }.0.model_name {
+        Some(s) => str_to_c_string(s),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Return the event tool call ID as a C string, or null if no tool call ID is set.
+/// Caller must free the result with `nvagentrt_string_free`.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiEvent` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_event_tool_call_id(ptr: *const FfiEvent) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    match &unsafe { &*ptr }.0.tool_call_id {
+        Some(s) => str_to_c_string(s),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Return the event root UUID as a C string, or null if no root UUID is set.
+/// Caller must free the result with `nvagentrt_string_free`.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiEvent` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_event_root_uuid(ptr: *const FfiEvent) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    match &unsafe { &*ptr }.0.root_uuid {
+        Some(u) => str_to_c_string(&u.to_string()),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Return the event parent UUID as a C string, or null if no parent UUID is set.
+/// Caller must free the result with `nvagentrt_string_free`.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiEvent` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_event_parent_uuid(ptr: *const FfiEvent) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    match &unsafe { &*ptr }.0.parent_uuid {
+        Some(u) => str_to_c_string(&u.to_string()),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Return the event scope type as a C string, or null if no scope type is set.
+/// Caller must free the result with `nvagentrt_string_free`.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiEvent` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_event_scope_type(ptr: *const FfiEvent) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    match &unsafe { &*ptr }.0.scope_type {
+        Some(st) => str_to_c_string(&format!("{:?}", st)),
+        None => std::ptr::null_mut(),
+    }
 }

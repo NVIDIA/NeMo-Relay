@@ -18,6 +18,12 @@
 //!
 //! - [`api`] — Public API functions for scope management, tool/LLM lifecycle operations,
 //!   and guardrail/intercept/subscriber registration. These are the primary entry points.
+//! - [`atif`] — ATIF (Agent Trajectory Interchange Format) trajectory exporter.
+//!   Provides [`AtifExporter`](atif::AtifExporter) — an event subscriber that collects
+//!   lifecycle events and exports them as ATIF v1.6 trajectories. Also defines the
+//!   ATIF data types: [`AtifTrajectory`](atif::AtifTrajectory),
+//!   [`AtifStep`](atif::AtifStep), [`AtifToolCall`](atif::AtifToolCall),
+//!   [`AtifObservation`](atif::AtifObservation), and [`AtifMetrics`](atif::AtifMetrics).
 //! - [`context`] — Global context singleton, scope stack, task-local/thread-local storage,
 //!   callable type aliases, and middleware chain execution logic.
 //! - [`error`] — Error types ([`AgentRtError`]) and the [`Result`] type alias.
@@ -28,7 +34,8 @@
 //!   intercepts and aggregates streaming LLM responses.
 //! - [`types`] — Core data types: attribute bitflags, enums ([`ScopeType`], [`EventType`]),
 //!   handle structs ([`ScopeHandle`], [`ToolHandle`], [`LLMHandle`]), [`LLMRequest`],
-//!   [`Event`], and middleware container types.
+//!   [`Event`] (with typed lifecycle fields: `input`, `output`, `model_name`,
+//!   `tool_call_id`, `root_uuid`), [`EventBuilder`], and middleware container types.
 //!
 //! ## Middleware Pipeline
 //!
@@ -45,6 +52,7 @@
 //! easy addition and removal at runtime.
 
 pub mod api;
+pub mod atif;
 pub mod context;
 pub mod error;
 pub mod json;

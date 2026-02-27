@@ -6,9 +6,11 @@
 Provides both manual and managed tool-call workflows.
 
 Functions:
-    call(name, args, *, handle=None, attributes=None, data=None, metadata=None)
+    call(name, args, *, handle=None, attributes=None, data=None, metadata=None, tool_call_id=None)
         Begin a tool call manually. Returns a ``ToolHandle`` that must later
-        be passed to ``call_end``. Emits a ``Start`` event.
+        be passed to ``call_end``. Emits a ``Start`` event. The optional
+        ``tool_call_id`` is an external correlation ID propagated to events
+        for ATIF trajectory linking.
 
     call_end(handle, result, *, data=None, metadata=None)
         End a manual tool call. Records the result and emits an ``End`` event.

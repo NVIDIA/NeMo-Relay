@@ -317,6 +317,55 @@ class Event:
     def scope_type(self) -> Optional[ScopeType]:
         """Scope type of the source entity, if applicable."""
         ...
+    @property
+    def input(self) -> Optional[Any]:
+        """Post-guardrail input (tool args, LLM request)."""
+        ...
+    @property
+    def output(self) -> Optional[Any]:
+        """Post-guardrail output (tool result, LLM response)."""
+        ...
+    @property
+    def model_name(self) -> Optional[str]:
+        """LLM model identifier."""
+        ...
+    @property
+    def tool_call_id(self) -> Optional[str]:
+        """External correlation ID for tool calls."""
+        ...
+    @property
+    def root_uuid(self) -> Optional[str]:
+        """Root scope UUID for concurrent agent isolation."""
+        ...
+
+class AtifExporter:
+    """ATIF trajectory exporter that collects events and exports ATIF trajectories."""
+
+    def __init__(
+        self,
+        session_id: str,
+        agent_name: str,
+        agent_version: str,
+        *,
+        model_name: Optional[str] = None,
+        tool_definitions: Optional[list[Any]] = None,
+        extra: Optional[Any] = None,
+    ) -> None: ...
+    def register(self, name: str) -> None:
+        """Register this exporter as an event subscriber with the given name."""
+        ...
+    def deregister(self, name: str) -> bool:
+        """Deregister the event subscriber. Returns ``True`` if found."""
+        ...
+    def export(self, root_uuid: Optional[str] = None) -> dict[str, Any]:
+        """Export collected events as an ATIF trajectory dict."""
+        ...
+    def export_json(self, root_uuid: Optional[str] = None) -> str:
+        """Export collected events as a JSON string."""
+        ...
+    def clear(self) -> None:
+        """Clear all collected events."""
+        ...
 
 class ScopeStack:
     """An isolated scope stack for per-request/per-task isolation."""
@@ -417,6 +466,7 @@ def nvagentrt_tool_call(
     attributes: Optional[ToolAttributes] = None,
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
+    tool_call_id: Optional[str] = None,
 ) -> ToolHandle:
     """Begin a tool call manually.
 
@@ -473,6 +523,7 @@ def nvagentrt_llm_call(
     attributes: Optional[LLMAttributes] = None,
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
+    model_name: Optional[str] = None,
 ) -> LLMHandle:
     """Begin an LLM call manually.
 
@@ -500,6 +551,7 @@ def nvagentrt_llm_call_execute(
     attributes: Optional[LLMAttributes] = None,
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
+    model_name: Optional[str] = None,
 ) -> Awaitable[Json]:
     """Execute an LLM call through the full middleware pipeline.
 
@@ -528,6 +580,7 @@ async def nvagentrt_llm_stream_call_execute(
     attributes: Optional[LLMAttributes] = None,
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
+    model_name: Optional[str] = None,
 ) -> LlmStream:
     """Execute a streaming LLM call through the full middleware pipeline.
 

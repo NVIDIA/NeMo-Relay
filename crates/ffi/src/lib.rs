@@ -37,8 +37,15 @@
 //!
 //! # Modules
 //!
-//! - [`api`] -- Top-level FFI entry points (scope, tool, LLM, guardrail, intercept, subscriber).
-//! - [`types`] -- C-compatible struct and enum definitions.
+//! - [`api`] -- Top-level FFI entry points (scope, tool, LLM, guardrail, intercept,
+//!   subscriber, ATIF exporter). Tool calls accept an optional `tool_call_id` and
+//!   LLM calls accept an optional `model_name` for ATIF trajectory correlation.
+//!   ATIF exporter functions (`nvagentrt_atif_exporter_*`) create, register,
+//!   export, and clear trajectory data.
+//! - [`types`] -- C-compatible struct and enum definitions, plus event accessor
+//!   functions (`nvagentrt_event_input`, `_output`, `_model_name`, `_tool_call_id`,
+//!   `_root_uuid`, `_parent_uuid`, `_scope_type`) and the `FfiAtifExporter`
+//!   opaque handle.
 //! - [`error`] -- Status codes and thread-local error storage.
 //! - [`callable`] -- C function pointer typedefs and wrapper functions.
 //! - [`convert`] -- JSON and C-string conversion utilities.

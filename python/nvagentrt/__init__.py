@@ -42,13 +42,15 @@ Types (available at top level):
     ScopeAttributes, ToolAttributes, LLMAttributes,
     ScopeType, EventType,
     ScopeHandle, ToolHandle, LLMHandle,
-    LLMRequest, Event
+    LLMRequest, Event, AtifExporter
 """
 
 import contextvars
 
 from nvagentrt import guardrails, intercepts, llm, scope, subscribers, tools
 from nvagentrt._native import (
+    # ATIF exporter
+    AtifExporter,
     Event,
     EventType,
     LLMAttributes,
@@ -102,4 +104,5 @@ __all__ = [
     "LLMHandle",
     "LLMRequest",
     "Event",
+    "AtifExporter",
 ]

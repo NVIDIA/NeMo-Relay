@@ -61,6 +61,13 @@ extern int32_t nvagentrt_event_type(const FfiEvent* ptr);
 extern char* nvagentrt_event_data(const FfiEvent* ptr);
 extern char* nvagentrt_event_metadata(const FfiEvent* ptr);
 extern char* nvagentrt_event_timestamp(const FfiEvent* ptr);
+extern char* nvagentrt_event_input(const void* ptr);
+extern char* nvagentrt_event_output(const void* ptr);
+extern char* nvagentrt_event_model_name(const void* ptr);
+extern char* nvagentrt_event_tool_call_id(const void* ptr);
+extern char* nvagentrt_event_root_uuid(const void* ptr);
+extern char* nvagentrt_event_parent_uuid(const void* ptr);
+extern char* nvagentrt_event_scope_type(const void* ptr);
 extern void nvagentrt_event_free(FfiEvent* ptr);
 
 // String free
@@ -393,6 +400,41 @@ func (e *Event) Metadata() json.RawMessage { return goJSONOpt(C.nvagentrt_event_
 
 // Timestamp returns the ISO 8601 timestamp string of when this event occurred.
 func (e *Event) Timestamp() string { return goString(C.nvagentrt_event_timestamp(e.ptr)) }
+
+// Input returns the optional input JSON payload of this event, or nil if not set.
+func (e *Event) Input() json.RawMessage {
+	return goJSONOpt((*C.char)(C.nvagentrt_event_input(unsafe.Pointer(e.ptr))))
+}
+
+// Output returns the optional output JSON payload of this event, or nil if not set.
+func (e *Event) Output() json.RawMessage {
+	return goJSONOpt((*C.char)(C.nvagentrt_event_output(unsafe.Pointer(e.ptr))))
+}
+
+// ModelName returns the model name associated with this event, or an empty string if not set.
+func (e *Event) ModelName() string {
+	return goStringOpt((*C.char)(C.nvagentrt_event_model_name(unsafe.Pointer(e.ptr))))
+}
+
+// ToolCallID returns the tool call ID associated with this event, or an empty string if not set.
+func (e *Event) ToolCallID() string {
+	return goStringOpt((*C.char)(C.nvagentrt_event_tool_call_id(unsafe.Pointer(e.ptr))))
+}
+
+// RootUUID returns the root scope UUID associated with this event, or an empty string if not set.
+func (e *Event) RootUUID() string {
+	return goStringOpt((*C.char)(C.nvagentrt_event_root_uuid(unsafe.Pointer(e.ptr))))
+}
+
+// ParentUUID returns the parent scope UUID associated with this event, or an empty string if not set.
+func (e *Event) ParentUUID() string {
+	return goStringOpt((*C.char)(C.nvagentrt_event_parent_uuid(unsafe.Pointer(e.ptr))))
+}
+
+// ScopeType returns the scope type string associated with this event, or an empty string if not set.
+func (e *Event) ScopeType() string {
+	return goStringOpt((*C.char)(C.nvagentrt_event_scope_type(unsafe.Pointer(e.ptr))))
+}
 
 // ---------------------------------------------------------------------------
 // Helpers

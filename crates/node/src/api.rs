@@ -130,6 +130,7 @@ pub fn tool_call(
     attributes: Option<u32>,
     data: Option<Json>,
     metadata: Option<Json>,
+    tool_call_id: Option<String>,
 ) -> Result<JsToolHandle> {
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
     core::nvagentrt_tool_call(
@@ -139,6 +140,7 @@ pub fn tool_call(
         attrs,
         opt_json(data),
         opt_json(metadata),
+        tool_call_id,
     )
     .map(JsToolHandle::from)
     .map_err(to_napi_err)
@@ -217,6 +219,7 @@ pub fn llm_call(
     attributes: Option<u32>,
     data: Option<Json>,
     metadata: Option<Json>,
+    model_name: Option<String>,
 ) -> Result<JsLLMHandle> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     core::nvagentrt_llm_call(
@@ -226,6 +229,7 @@ pub fn llm_call(
         attrs,
         opt_json(data),
         opt_json(metadata),
+        model_name,
     )
     .map(JsLLMHandle::from)
     .map_err(to_napi_err)
@@ -252,6 +256,7 @@ pub fn llm_call_end(
 /// The `func` callback receives the (possibly intercepted) request as JSON and must return
 /// the LLM response as JSON. All guardrails and intercepts are applied automatically.
 /// Returns the final (possibly intercepted) LLM response.
+#[allow(clippy::too_many_arguments)]
 #[napi]
 pub async fn llm_call_execute(
     name: String,
@@ -261,6 +266,7 @@ pub async fn llm_call_execute(
     attributes: Option<u32>,
     data: Option<Json>,
     metadata: Option<Json>,
+    model_name: Option<String>,
 ) -> Result<Json> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent = handle
@@ -279,6 +285,7 @@ pub async fn llm_call_execute(
                 attrs,
                 opt_json(data),
                 opt_json(metadata),
+                model_name,
             )
             .await
             .map_err(to_napi_err)
@@ -296,6 +303,7 @@ pub async fn llm_call_execute(
 /// allowing the caller to accumulate chunks for aggregation. The optional `finalizer`
 /// callback is invoked once when the stream is exhausted and must return a JSON value
 /// representing the aggregated response.
+#[allow(clippy::too_many_arguments)]
 #[napi]
 pub async fn llm_stream_call_execute(
     name: String,
@@ -307,6 +315,7 @@ pub async fn llm_stream_call_execute(
     attributes: Option<u32>,
     data: Option<Json>,
     metadata: Option<Json>,
+    model_name: Option<String>,
 ) -> Result<LlmStream> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent = handle
@@ -357,6 +366,7 @@ pub async fn llm_stream_call_execute(
                 attrs,
                 opt_json(data),
                 opt_json(metadata),
+                model_name,
             )
             .await
             .map_err(to_napi_err)?;
@@ -817,4 +827,83 @@ pub fn register_subscriber(
 #[napi]
 pub fn deregister_subscriber(name: String) -> Result<bool> {
     core::nvagentrt_deregister_subscriber(&name).map_err(to_napi_err)
+}
+
+// ---------------------------------------------------------------------------
+// ATIF Exporter
+// ---------------------------------------------------------------------------
+
+/// An ATIF (Agent Trajectory Interchange Format) exporter that collects lifecycle events
+/// and exports them as a structured trajectory.
+///
+/// Create an instance with session and agent metadata, then register it as an event subscriber.
+/// When ready, call `exportJson()` to serialize the collected trajectory.
+#[napi]
+pub struct JsAtifExporter {
+    inner: nvagentrt_core::atif::AtifExporter,
+}
+
+#[napi]
+impl JsAtifExporter {
+    /// Create a new ATIF exporter.
+    ///
+    /// `sessionId` identifies the session. `agentName` and `agentVersion` describe the agent.
+    /// Optional `modelName` records the LLM model used.
+    #[napi(constructor)]
+    pub fn new(
+        session_id: String,
+        agent_name: String,
+        agent_version: String,
+        model_name: Option<String>,
+    ) -> napi::Result<Self> {
+        let agent_info = nvagentrt_core::atif::AtifAgentInfo {
+            name: agent_name,
+            version: agent_version,
+            model_name,
+            tool_definitions: None,
+            extra: None,
+        };
+        Ok(Self {
+            inner: nvagentrt_core::atif::AtifExporter::new(session_id, agent_info),
+        })
+    }
+
+    /// Register this exporter as an event subscriber with the given name.
+    ///
+    /// Throws if a subscriber with the same `name` already exists.
+    #[napi]
+    pub fn register(&self, name: String) -> napi::Result<()> {
+        let subscriber = self.inner.subscriber();
+        nvagentrt_core::nvagentrt_register_subscriber(&name, subscriber)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Deregister this exporter's event subscriber by name.
+    ///
+    /// Returns `true` if a subscriber with that name was found and removed.
+    #[napi]
+    pub fn deregister(&self, name: String) -> napi::Result<bool> {
+        nvagentrt_core::nvagentrt_deregister_subscriber(&name)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Export the collected trajectory as a JSON string.
+    ///
+    /// If `rootUuid` is provided, only the subtree rooted at that scope is exported.
+    /// Returns a JSON-serialized `AtifTrajectory`.
+    #[napi]
+    pub fn export_json(&self, root_uuid: Option<String>) -> napi::Result<String> {
+        let root = root_uuid
+            .map(|s| uuid::Uuid::parse_str(&s))
+            .transpose()
+            .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+        let trajectory = self.inner.export(root);
+        serde_json::to_string(&trajectory).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Clear all collected events from the exporter.
+    #[napi]
+    pub fn clear(&self) {
+        self.inner.clear();
+    }
 }

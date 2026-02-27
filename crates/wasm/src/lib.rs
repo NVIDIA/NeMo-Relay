@@ -15,9 +15,15 @@
 //!   registration, and event subscribers.
 //! - [`types`] -- WASM-friendly wrapper types (`WasmScopeHandle`,
 //!   `WasmToolHandle`, `WasmLLMHandle`, `WasmLLMRequest`, `WasmEvent`) and
-//!   integer constants for scope types and attribute flags.
+//!   integer constants for scope types and attribute flags. `WasmEvent` exposes
+//!   typed lifecycle fields (`input`, `output`, `model_name`, `tool_call_id`,
+//!   `root_uuid`).
 //! - [`stream`] -- `WasmLlmStream`, an async-iterator-like wrapper for
 //!   consuming streaming LLM responses from JavaScript.
+//!
+//! Tool calls accept an optional `tool_call_id` and LLM calls accept an optional
+//! `model_name` for ATIF trajectory correlation. The `WasmAtifExporter` class
+//! collects lifecycle events and exports ATIF v1.6 trajectories.
 //! - `callable` (internal) -- Adapters that convert JavaScript callback
 //!   functions into the Rust closure signatures expected by the core runtime.
 //! - `convert` (internal) -- JSON marshalling helpers between `JsValue` and

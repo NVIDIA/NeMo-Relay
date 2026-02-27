@@ -44,7 +44,7 @@ extern int32_t nvagentrt_pop_scope(const FfiScopeHandle* handle);
 extern int32_t nvagentrt_event(const char* name, const FfiScopeHandle* parent, const char* data_json, const char* metadata_json);
 
 // Tool lifecycle
-extern int32_t nvagentrt_tool_call(const char* name, const char* args_json, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, FfiToolHandle** out);
+extern int32_t nvagentrt_tool_call(const char* name, const char* args_json, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* tool_call_id, FfiToolHandle** out);
 extern int32_t nvagentrt_tool_call_end(const FfiToolHandle* handle, const char* result_json, const char* data_json, const char* metadata_json);
 
 // Tool call execute (with C function pointer callbacks)
@@ -57,7 +57,7 @@ extern int32_t nvagentrt_tool_call_execute(
 	char** out);
 
 // LLM lifecycle
-extern int32_t nvagentrt_llm_call(const char* name, const FfiLLMRequest* request, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, FfiLLMHandle** out);
+extern int32_t nvagentrt_llm_call(const char* name, const FfiLLMRequest* request, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* model_name, FfiLLMHandle** out);
 extern int32_t nvagentrt_llm_call_end(const FfiLLMHandle* handle, const char* response_json, const char* data_json, const char* metadata_json);
 
 // LLM call execute
@@ -67,6 +67,7 @@ extern int32_t nvagentrt_llm_call_execute(
 	NvAgentRtLlmExecFn func_cb, void* func_user_data, NvAgentRtFreeFn func_free,
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
+	const char* model_name,
 	char** out);
 
 // LLM stream execute
@@ -78,6 +79,7 @@ extern int32_t nvagentrt_llm_stream_call_execute(
 	NvAgentRtCollectorFn collector, NvAgentRtFinalizerFn finalizer,
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
+	const char* model_name,
 	FfiStream** out);
 
 // Tool guardrails
@@ -145,6 +147,14 @@ extern void nvagentrt_string_free(char* ptr);
 extern int32_t nvagentrt_scope_stack_create(FfiScopeStack** out);
 extern int32_t nvagentrt_scope_stack_set_thread(const FfiScopeStack* stack);
 extern void nvagentrt_scope_stack_free(FfiScopeStack* ptr);
+
+// ATIF exporter
+extern int32_t nvagentrt_atif_exporter_create(const char*, const char*, const char*, const char*, void**);
+extern int32_t nvagentrt_atif_exporter_register(const void*, const char*);
+extern int32_t nvagentrt_atif_exporter_deregister(const char*);
+extern int32_t nvagentrt_atif_exporter_export(const void*, const char*, char**);
+extern int32_t nvagentrt_atif_exporter_clear(const void*);
+extern void nvagentrt_atif_exporter_free(void*);
 
 // Go trampoline forward declarations (defined via //export in callbacks.go)
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
@@ -347,6 +357,7 @@ type toolCallOptions struct {
 	attributes uint32
 	data       *C.char
 	metadata   *C.char
+	toolCallID *C.char
 }
 
 // ToolCallOption is a functional option that configures optional parameters for
@@ -389,12 +400,25 @@ func WithToolMetadata(metadata json.RawMessage) ToolCallOption {
 	}
 }
 
+// WithToolCallID sets an optional tool call ID for the tool call. This ID is
+// typically assigned by the LLM to correlate the tool invocation with the
+// original tool_call request in the conversation. Pass an empty string or omit
+// this option to leave the tool call ID unset.
+func WithToolCallID(id string) ToolCallOption {
+	return func(o *toolCallOptions) {
+		o.toolCallID = C.CString(id)
+	}
+}
+
 func freeToolOpts(o *toolCallOptions) {
 	if o.data != nil {
 		C.free(unsafe.Pointer(o.data))
 	}
 	if o.metadata != nil {
 		C.free(unsafe.Pointer(o.metadata))
+	}
+	if o.toolCallID != nil {
+		C.free(unsafe.Pointer(o.toolCallID))
 	}
 }
 
@@ -418,7 +442,7 @@ func ToolCall(name string, args json.RawMessage, opts ...ToolCallOption) (*ToolH
 	defer C.free(unsafe.Pointer(cArgs))
 
 	var out *C.FfiToolHandle
-	status := C.nvagentrt_tool_call(cName, cArgs, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, &out)
+	status := C.nvagentrt_tool_call(cName, cArgs, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.toolCallID, &out)
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}
@@ -488,6 +512,7 @@ type llmCallOptions struct {
 	attributes uint32
 	data       *C.char
 	metadata   *C.char
+	modelName  *C.char
 }
 
 // LLMCallOption is a functional option that configures optional parameters for
@@ -531,12 +556,25 @@ func WithLLMMetadata(metadata json.RawMessage) LLMCallOption {
 	}
 }
 
+// WithLLMModelName sets an optional model name for the LLM call. This is used
+// to record which specific model (e.g., "gpt-4", "claude-3-opus") was invoked,
+// separate from the logical LLM provider name. Pass an empty string or omit
+// this option to leave the model name unset.
+func WithLLMModelName(name string) LLMCallOption {
+	return func(o *llmCallOptions) {
+		o.modelName = C.CString(name)
+	}
+}
+
 func freeLLMOpts(o *llmCallOptions) {
 	if o.data != nil {
 		C.free(unsafe.Pointer(o.data))
 	}
 	if o.metadata != nil {
 		C.free(unsafe.Pointer(o.metadata))
+	}
+	if o.modelName != nil {
+		C.free(unsafe.Pointer(o.modelName))
 	}
 }
 
@@ -559,7 +597,7 @@ func LlmCall(name string, request *LLMRequest, opts ...LLMCallOption) (*LLMHandl
 	defer C.free(unsafe.Pointer(cName))
 
 	var out *C.FfiLLMHandle
-	status := C.nvagentrt_llm_call(cName, request.ptr, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, &out)
+	status := C.nvagentrt_llm_call(cName, request.ptr, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.modelName, &out)
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}
@@ -608,6 +646,7 @@ func LlmCallExecute(name string, request *LLMRequest, fn LLMExecutionFunc, opts 
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
 		o.parent, C.uint32_t(o.attributes),
 		o.data, o.metadata,
+		o.modelName,
 		&out,
 	)
 	if err := checkStatus(status); err != nil {
@@ -677,6 +716,7 @@ func LlmStreamCallExecute(name string, request *LLMRequest, fn LLMExecutionFunc,
 		cFinalizer,
 		o.parent, C.uint32_t(o.attributes),
 		o.data, o.metadata,
+		o.modelName,
 		&out,
 	)
 	if err := checkStatus(status); err != nil {
@@ -1117,4 +1157,84 @@ func (s *ScopeStack) Run(fn func()) {
 	defer runtime.UnlockOSThread()
 	C.nvagentrt_scope_stack_set_thread(s.ptr)
 	fn()
+}
+
+// ---------------------------------------------------------------------------
+// ATIF Exporter
+// ---------------------------------------------------------------------------
+
+// AtifExporter collects lifecycle events and exports them as ATIF trajectories.
+type AtifExporter struct {
+	ptr unsafe.Pointer
+}
+
+// NewAtifExporter creates a new ATIF exporter.
+// modelName can be empty string for no model name.
+func NewAtifExporter(sessionID, agentName, agentVersion, modelName string) (*AtifExporter, error) {
+	cSessionID := C.CString(sessionID)
+	defer C.free(unsafe.Pointer(cSessionID))
+	cAgentName := C.CString(agentName)
+	defer C.free(unsafe.Pointer(cAgentName))
+	cAgentVersion := C.CString(agentVersion)
+	defer C.free(unsafe.Pointer(cAgentVersion))
+
+	var cModelName *C.char
+	if modelName != "" {
+		cModelName = C.CString(modelName)
+		defer C.free(unsafe.Pointer(cModelName))
+	}
+
+	var ptr unsafe.Pointer
+	status := C.nvagentrt_atif_exporter_create(cSessionID, cAgentName, cAgentVersion, cModelName, &ptr)
+	if err := checkStatus(status); err != nil {
+		return nil, err
+	}
+	return &AtifExporter{ptr: ptr}, nil
+}
+
+// Register registers the exporter as an event subscriber with the given name.
+func (e *AtifExporter) Register(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	status := C.nvagentrt_atif_exporter_register(e.ptr, cName)
+	return checkStatus(status)
+}
+
+// Deregister removes the exporter subscriber by name.
+func (e *AtifExporter) Deregister(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	status := C.nvagentrt_atif_exporter_deregister(cName)
+	return checkStatus(status)
+}
+
+// ExportJSON exports collected events as an ATIF trajectory JSON string.
+// rootUUID filters to a specific root scope. Pass empty string for no filter.
+func (e *AtifExporter) ExportJSON(rootUUID string) (json.RawMessage, error) {
+	var cRootUUID *C.char
+	if rootUUID != "" {
+		cRootUUID = C.CString(rootUUID)
+		defer C.free(unsafe.Pointer(cRootUUID))
+	}
+
+	var cOut *C.char
+	status := C.nvagentrt_atif_exporter_export(e.ptr, cRootUUID, &cOut)
+	if err := checkStatus(status); err != nil {
+		return nil, err
+	}
+	defer C.nvagentrt_string_free(cOut)
+	return json.RawMessage(C.GoString(cOut)), nil
+}
+
+// Clear removes all collected events.
+func (e *AtifExporter) Clear() {
+	C.nvagentrt_atif_exporter_clear(e.ptr)
+}
+
+// Close frees the exporter handle.
+func (e *AtifExporter) Close() {
+	if e.ptr != nil {
+		C.nvagentrt_atif_exporter_free(e.ptr)
+		e.ptr = nil
+	}
 }

@@ -31,8 +31,16 @@ fn make_llm_request(method: &str, url: &str) -> WasmLLMRequest {
 #[wasm_bindgen_test]
 fn test_llm_call_and_end() {
     let req = make_llm_request("POST", "https://api.test.com");
-    let handle =
-        nvagentrt_llm_call("test_llm", &req, None, None, JsValue::NULL, JsValue::NULL).unwrap();
+    let handle = nvagentrt_llm_call(
+        "test_llm",
+        &req,
+        None,
+        None,
+        JsValue::NULL,
+        JsValue::NULL,
+        None,
+    )
+    .unwrap();
     assert_eq!(handle.name(), "test_llm");
     assert!(!handle.uuid().is_empty());
 
@@ -50,6 +58,7 @@ fn test_llm_call_with_attributes() {
         Some(LLM_STATELESS | LLM_STREAMING),
         JsValue::NULL,
         JsValue::NULL,
+        None,
     )
     .unwrap();
     assert_eq!(handle.attributes(), LLM_STATELESS | LLM_STREAMING);
@@ -70,6 +79,7 @@ fn test_llm_call_with_parent() {
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
     )
     .unwrap();
     assert_eq!(handle.parent_uuid().unwrap(), scope_uuid);
@@ -86,7 +96,7 @@ fn test_llm_call_with_data_metadata() {
     let req = make_llm_request("POST", "https://api.test.com");
     let data = parse_json(r#"{"info":"llm_test"}"#);
     let meta = parse_json(r#"{"version":"2.0"}"#);
-    let handle = nvagentrt_llm_call("data_llm", &req, None, None, data, meta).unwrap();
+    let handle = nvagentrt_llm_call("data_llm", &req, None, None, data, meta, None).unwrap();
 
     let response = parse_json(r#"{}"#);
     let end_data = parse_json(r#"{"tokens":100}"#);
@@ -100,8 +110,16 @@ fn test_llm_call_generates_events() {
     register_subscriber("wasm_llm_evt_sub", cb).unwrap();
 
     let req = make_llm_request("POST", "https://api.test.com");
-    let handle =
-        nvagentrt_llm_call("evt_llm", &req, None, None, JsValue::NULL, JsValue::NULL).unwrap();
+    let handle = nvagentrt_llm_call(
+        "evt_llm",
+        &req,
+        None,
+        None,
+        JsValue::NULL,
+        JsValue::NULL,
+        None,
+    )
+    .unwrap();
     let response = parse_json(r#"{}"#);
     nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
 
@@ -132,6 +150,7 @@ async fn test_llm_execute_basic() {
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
     )
     .await
     .unwrap();
@@ -152,6 +171,7 @@ async fn test_llm_execute_promise() {
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
     )
     .await
     .unwrap();
@@ -284,6 +304,7 @@ async fn test_llm_request_intercept_modifies_request() {
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
     )
     .await
     .unwrap();
@@ -312,6 +333,7 @@ async fn test_llm_response_intercept_modifies_response() {
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
     )
     .await
     .unwrap();
@@ -338,6 +360,7 @@ async fn test_llm_execution_intercept_replaces_func() {
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
     )
     .await
     .unwrap();

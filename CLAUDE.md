@@ -14,7 +14,7 @@ NVAgentRT is a multi-language agent runtime framework providing execution scope 
 ```
 crates/
   core/           # Core runtime library (nvagentrt-core)
-    src/          #   lib.rs, api.rs, context.rs, types.rs, registry.rs, stream.rs, error.rs, json.rs
+    src/          #   lib.rs, api.rs, atif.rs, context.rs, types.rs, registry.rs, stream.rs, error.rs, json.rs
     tests/        #   context_isolation_tests.rs, stream_tests.rs
   python/         # PyO3 Python bindings (_native C extension, abi3 stable ABI)
     src/          #   lib.rs, py_api.rs, py_types.rs, py_callable.rs, convert.rs, py_context.rs
@@ -88,4 +88,6 @@ wasm-pack build crates/wasm              # Produces pkg/ with .wasm, .js, .d.ts
 - **Intercept chains**: Priority-ordered, optional `break_chain` short-circuit
 - **Stream wrapping**: `LlmStreamWrapper` buffers/parses SSE events, applies intercepts mid-stream
 - **Event subscription**: Observer pattern with named subscribers
-- **Binding layers**: Core (Rust) -> FFI (C, used by Go via CGo) / PyO3 (Python) / NAPI (Node.js) / wasm-bindgen (WASM). Each binding mirrors the full API surface: scopes, tools, LLM, guardrails, intercepts, subscribers.
+- **Event lifecycle fields**: `Event` carries typed fields (`input`, `output`, `model_name`, `tool_call_id`, `root_uuid`) populated by the runtime. `input`/`output` hold post-guardrail data; `model_name` and `tool_call_id` are set via API params on `nvagentrt_llm_call` and `nvagentrt_tool_call` respectively; `root_uuid` identifies the root scope for concurrent agent isolation.
+- **ATIF trajectory export**: `AtifExporter` registers as an event subscriber, collects events, and exports ATIF v1.6 trajectories. LLM start/end events map to user/agent steps; tool start/end events map to tool_calls/observations. Filtering by `root_uuid` isolates concurrent agents. Exposed in all bindings (Python `AtifExporter`, Node.js `JsAtifExporter`, WASM `WasmAtifExporter`, FFI `nvagentrt_atif_exporter_*`, Go `AtifExporter`).
+- **Binding layers**: Core (Rust) -> FFI (C, used by Go via CGo) / PyO3 (Python) / NAPI (Node.js) / wasm-bindgen (WASM). Each binding mirrors the full API surface: scopes, tools, LLM, guardrails, intercepts, subscribers, ATIF export.

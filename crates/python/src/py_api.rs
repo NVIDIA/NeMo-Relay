@@ -138,7 +138,7 @@ fn nvagentrt_event(
 /// Returns:
 ///     A ``ToolHandle`` that must be passed to ``tool_call_end``.
 #[pyfunction]
-#[pyo3(signature = (name, args, *, handle=None, attributes=None, data=None, metadata=None))]
+#[pyo3(signature = (name, args, *, handle=None, attributes=None, data=None, metadata=None, tool_call_id=None))]
 fn nvagentrt_tool_call(
     name: &str,
     args: &Bound<'_, PyAny>,
@@ -146,6 +146,7 @@ fn nvagentrt_tool_call(
     attributes: Option<PyToolAttributes>,
     data: Option<&Bound<'_, PyAny>>,
     metadata: Option<&Bound<'_, PyAny>>,
+    tool_call_id: Option<String>,
 ) -> PyResult<PyToolHandle> {
     let args_json = py_to_json(args)?;
     let attrs = attributes
@@ -160,6 +161,7 @@ fn nvagentrt_tool_call(
         attrs,
         data,
         metadata,
+        tool_call_id,
     )
     .map(PyToolHandle::from)
     .map_err(to_py_err)
@@ -267,7 +269,7 @@ fn nvagentrt_tool_call_execute<'py>(
 /// Returns:
 ///     An ``LLMHandle`` that must be passed to ``llm_call_end``.
 #[pyfunction]
-#[pyo3(signature = (name, request, *, handle=None, attributes=None, data=None, metadata=None))]
+#[pyo3(signature = (name, request, *, handle=None, attributes=None, data=None, metadata=None, model_name=None))]
 fn nvagentrt_llm_call(
     name: &str,
     request: &PyLLMRequest,
@@ -275,6 +277,7 @@ fn nvagentrt_llm_call(
     attributes: Option<PyLLMAttributes>,
     data: Option<&Bound<'_, PyAny>>,
     metadata: Option<&Bound<'_, PyAny>>,
+    model_name: Option<String>,
 ) -> PyResult<PyLLMHandle> {
     let attrs = attributes
         .map(|a| a.inner)
@@ -288,6 +291,7 @@ fn nvagentrt_llm_call(
         attrs,
         data,
         metadata,
+        model_name,
     )
     .map(PyLLMHandle::from)
     .map_err(to_py_err)
@@ -333,7 +337,7 @@ fn nvagentrt_llm_call_end(
 /// Returns:
 ///     An awaitable that resolves to the (possibly transformed) LLM response.
 #[pyfunction]
-#[pyo3(signature = (name, request, func, *, handle=None, attributes=None, data=None, metadata=None))]
+#[pyo3(signature = (name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None))]
 #[allow(clippy::too_many_arguments)]
 fn nvagentrt_llm_call_execute<'py>(
     py: Python<'py>,
@@ -344,6 +348,7 @@ fn nvagentrt_llm_call_execute<'py>(
     attributes: Option<PyLLMAttributes>,
     data: Option<&Bound<'py, PyAny>>,
     metadata: Option<&Bound<'py, PyAny>>,
+    model_name: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let attrs = attributes
         .map(|a| a.inner)
@@ -365,6 +370,7 @@ fn nvagentrt_llm_call_execute<'py>(
                     attrs,
                     data_json,
                     metadata_json,
+                    model_name,
                 )
                 .await
                 .map_err(to_py_err)?;
@@ -397,7 +403,7 @@ fn nvagentrt_llm_call_execute<'py>(
 /// Returns:
 ///     An awaitable that resolves to an ``LlmStream`` async iterator of SSE text chunks.
 #[pyfunction]
-#[pyo3(signature = (name, request, func, collector, finalizer, *, handle=None, attributes=None, data=None, metadata=None))]
+#[pyo3(signature = (name, request, func, collector, finalizer, *, handle=None, attributes=None, data=None, metadata=None, model_name=None))]
 #[allow(clippy::too_many_arguments)]
 fn nvagentrt_llm_stream_call_execute<'py>(
     py: Python<'py>,
@@ -410,6 +416,7 @@ fn nvagentrt_llm_stream_call_execute<'py>(
     attributes: Option<PyLLMAttributes>,
     data: Option<&Bound<'py, PyAny>>,
     metadata: Option<&Bound<'py, PyAny>>,
+    model_name: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let attrs = attributes
         .map(|a| a.inner)
@@ -435,6 +442,7 @@ fn nvagentrt_llm_stream_call_execute<'py>(
                     attrs,
                     data_json,
                     metadata_json,
+                    model_name,
                 )
                 .await
                 .map_err(to_py_err)?;

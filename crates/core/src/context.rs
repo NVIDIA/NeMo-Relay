@@ -122,6 +122,17 @@ impl ScopeStack {
             .expect("scope stack should never be empty")
     }
 
+    /// Returns the UUID of the root (bottom-most) scope.
+    ///
+    /// This is O(1) — just reads the first element of the scope stack vec.
+    /// Used for concurrent agent isolation (each scope stack has its own root).
+    pub fn root_uuid(&self) -> Uuid {
+        self.stack
+            .first()
+            .expect("scope stack should never be empty")
+            .uuid
+    }
+
     /// Removes a scope by UUID and returns it, or `None` if not found or if
     /// the UUID belongs to the root scope (which cannot be removed).
     pub fn remove(&mut self, uuid: &Uuid) -> Option<ScopeHandle> {
@@ -323,17 +334,15 @@ impl NVAgentRTContextState {
         parent_uuid: Option<Uuid>,
         data: Option<Json>,
         metadata: Option<Json>,
+        root_uuid: Option<Uuid>,
     ) {
-        let event = Event::new(
-            parent_uuid,
-            Uuid::new_v4(),
-            Some(name.to_string()),
-            data,
-            metadata,
-            None,
-            EventType::Mark,
-            None,
-        );
+        let event = Event::builder(Uuid::new_v4(), EventType::Mark)
+            .parent_uuid(parent_uuid)
+            .name(name)
+            .data(data)
+            .metadata(metadata)
+            .root_uuid(root_uuid)
+            .build();
         self.emit_event(&event);
     }
 
@@ -344,38 +353,42 @@ impl NVAgentRTContextState {
         parent_uuid: Option<Uuid>,
         scope_type: ScopeType,
         attributes: ScopeAttributes,
+        root_uuid: Option<Uuid>,
     ) -> ScopeHandle {
         let handle = ScopeHandle::new(name.to_string(), scope_type, attributes, parent_uuid);
-        let event = Event::new(
-            handle.parent_uuid,
-            handle.uuid,
-            Some(handle.name.clone()),
-            handle.data.clone(),
-            handle.metadata.clone(),
-            Some(HandleAttributes::Scope(handle.attributes)),
-            EventType::Start,
-            Some(handle.scope_type),
-        );
+        let event = Event::builder(handle.uuid, EventType::Start)
+            .parent_uuid(handle.parent_uuid)
+            .name(handle.name.clone())
+            .data(handle.data.clone())
+            .metadata(handle.metadata.clone())
+            .attributes(HandleAttributes::Scope(handle.attributes))
+            .scope_type(handle.scope_type)
+            .root_uuid(root_uuid)
+            .build();
         self.emit_event(&event);
         handle
     }
 
     /// Emits an End event for the given scope handle.
-    pub fn end_scope_handle(&self, scope: &ScopeHandle) {
-        let event = Event::new(
-            scope.parent_uuid,
-            scope.uuid,
-            Some(scope.name.clone()),
-            scope.data.clone(),
-            scope.metadata.clone(),
-            Some(HandleAttributes::Scope(scope.attributes)),
-            EventType::End,
-            Some(scope.scope_type),
-        );
+    pub fn end_scope_handle(&self, scope: &ScopeHandle, root_uuid: Option<Uuid>) {
+        let event = Event::builder(scope.uuid, EventType::End)
+            .parent_uuid(scope.parent_uuid)
+            .name(scope.name.clone())
+            .data(scope.data.clone())
+            .metadata(scope.metadata.clone())
+            .attributes(HandleAttributes::Scope(scope.attributes))
+            .scope_type(scope.scope_type)
+            .root_uuid(root_uuid)
+            .build();
         self.emit_event(&event);
     }
 
     /// Creates a new tool handle and emits a Start event.
+    ///
+    /// The `input` field on the Start event is populated with the sanitized args.
+    /// The `tool_call_id` is propagated from the handle to the event.
+    /// The `root_uuid` is set from the current scope stack.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_tool_handle(
         &self,
         name: &str,
@@ -383,38 +396,58 @@ impl NVAgentRTContextState {
         attributes: ToolAttributes,
         data: Option<Json>,
         metadata: Option<Json>,
+        tool_call_id: Option<String>,
+        input: Option<Json>,
+        root_uuid: Option<Uuid>,
     ) -> ToolHandle {
-        let handle = ToolHandle::new(name.to_string(), attributes, parent_uuid, data, metadata);
-        let event = Event::new(
-            handle.parent_uuid,
-            handle.uuid,
-            Some(handle.name.clone()),
-            handle.data.clone(),
-            handle.metadata.clone(),
-            Some(HandleAttributes::Tool(handle.attributes)),
-            EventType::Start,
-            Some(ScopeType::Tool),
-        );
+        let mut handle = ToolHandle::new(name.to_string(), attributes, parent_uuid, data, metadata);
+        handle.tool_call_id = tool_call_id;
+        let event = Event::builder(handle.uuid, EventType::Start)
+            .parent_uuid(handle.parent_uuid)
+            .name(handle.name.clone())
+            .data(handle.data.clone())
+            .metadata(handle.metadata.clone())
+            .attributes(HandleAttributes::Tool(handle.attributes))
+            .scope_type(ScopeType::Tool)
+            .input(input)
+            .tool_call_id(handle.tool_call_id.clone())
+            .root_uuid(root_uuid)
+            .build();
         self.emit_event(&event);
         handle
     }
 
     /// Emits an End event for the given tool handle, merging any additional data/metadata.
-    pub fn end_tool_handle(&self, handle: &ToolHandle, data: Option<Json>, metadata: Option<Json>) {
-        let event = Event::new(
-            handle.parent_uuid,
-            handle.uuid,
-            Some(handle.name.clone()),
-            merge_json(handle.data.clone(), data),
-            merge_json(handle.metadata.clone(), metadata),
-            Some(HandleAttributes::Tool(handle.attributes)),
-            EventType::End,
-            Some(ScopeType::Tool),
-        );
+    ///
+    /// The `output` field on the End event is populated with the sanitized result.
+    pub fn end_tool_handle(
+        &self,
+        handle: &ToolHandle,
+        data: Option<Json>,
+        metadata: Option<Json>,
+        output: Option<Json>,
+        root_uuid: Option<Uuid>,
+    ) {
+        let event = Event::builder(handle.uuid, EventType::End)
+            .parent_uuid(handle.parent_uuid)
+            .name(handle.name.clone())
+            .data(merge_json(handle.data.clone(), data))
+            .metadata(merge_json(handle.metadata.clone(), metadata))
+            .attributes(HandleAttributes::Tool(handle.attributes))
+            .scope_type(ScopeType::Tool)
+            .output(output)
+            .tool_call_id(handle.tool_call_id.clone())
+            .root_uuid(root_uuid)
+            .build();
         self.emit_event(&event);
     }
 
     /// Creates a new LLM handle and emits a Start event.
+    ///
+    /// The `input` field on the Start event is populated with the sanitized request.
+    /// The `model_name` is propagated from the handle to the event.
+    /// The `root_uuid` is set from the current scope stack.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_llm_handle(
         &self,
         name: &str,
@@ -422,34 +455,49 @@ impl NVAgentRTContextState {
         attributes: LLMAttributes,
         data: Option<Json>,
         metadata: Option<Json>,
+        model_name: Option<String>,
+        input: Option<Json>,
+        root_uuid: Option<Uuid>,
     ) -> LLMHandle {
-        let handle = LLMHandle::new(name.to_string(), attributes, parent_uuid, data, metadata);
-        let event = Event::new(
-            handle.parent_uuid,
-            handle.uuid,
-            Some(handle.name.clone()),
-            handle.data.clone(),
-            handle.metadata.clone(),
-            Some(HandleAttributes::Llm(handle.attributes)),
-            EventType::Start,
-            Some(ScopeType::Llm),
-        );
+        let mut handle = LLMHandle::new(name.to_string(), attributes, parent_uuid, data, metadata);
+        handle.model_name = model_name;
+        let event = Event::builder(handle.uuid, EventType::Start)
+            .parent_uuid(handle.parent_uuid)
+            .name(handle.name.clone())
+            .data(handle.data.clone())
+            .metadata(handle.metadata.clone())
+            .attributes(HandleAttributes::Llm(handle.attributes))
+            .scope_type(ScopeType::Llm)
+            .input(input)
+            .model_name(handle.model_name.clone())
+            .root_uuid(root_uuid)
+            .build();
         self.emit_event(&event);
         handle
     }
 
     /// Emits an End event for the given LLM handle, merging any additional data/metadata.
-    pub fn end_llm_handle(&self, handle: &LLMHandle, data: Option<Json>, metadata: Option<Json>) {
-        let event = Event::new(
-            handle.parent_uuid,
-            handle.uuid,
-            Some(handle.name.clone()),
-            merge_json(handle.data.clone(), data),
-            merge_json(handle.metadata.clone(), metadata),
-            Some(HandleAttributes::Llm(handle.attributes)),
-            EventType::End,
-            Some(ScopeType::Llm),
-        );
+    ///
+    /// The `output` field on the End event is populated with the sanitized response.
+    pub fn end_llm_handle(
+        &self,
+        handle: &LLMHandle,
+        data: Option<Json>,
+        metadata: Option<Json>,
+        output: Option<Json>,
+        root_uuid: Option<Uuid>,
+    ) {
+        let event = Event::builder(handle.uuid, EventType::End)
+            .parent_uuid(handle.parent_uuid)
+            .name(handle.name.clone())
+            .data(merge_json(handle.data.clone(), data))
+            .metadata(merge_json(handle.metadata.clone(), metadata))
+            .attributes(HandleAttributes::Llm(handle.attributes))
+            .scope_type(ScopeType::Llm)
+            .output(output)
+            .model_name(handle.model_name.clone())
+            .root_uuid(root_uuid)
+            .build();
         self.emit_event(&event);
     }
 
@@ -734,14 +782,19 @@ mod tests {
         assert_eq!(task_scope_top().name, "root");
 
         let ctx = NVAgentRTContextState::new();
-        let handle =
-            ctx.create_scope_handle("test", None, ScopeType::Agent, ScopeAttributes::empty());
+        let handle = ctx.create_scope_handle(
+            "test",
+            None,
+            ScopeType::Agent,
+            ScopeAttributes::empty(),
+            None,
+        );
         task_scope_push(handle.clone());
         let top = task_scope_top();
         assert_eq!(top.name, "test");
 
         let removed = task_scope_remove(&handle.uuid).unwrap();
-        ctx.end_scope_handle(&removed);
+        ctx.end_scope_handle(&removed, None);
 
         // After pop, root scope is on top again
         assert_eq!(task_scope_top().name, "root");
@@ -768,11 +821,12 @@ mod tests {
             None,
             ScopeType::Function,
             ScopeAttributes::empty(),
+            None,
         );
         assert_eq!(count.load(Ordering::SeqCst), 1);
 
         // end_scope_handle emits an END event
-        ctx.end_scope_handle(&handle);
+        ctx.end_scope_handle(&handle, None);
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 
@@ -992,6 +1046,7 @@ mod tests {
             Some(Uuid::new_v4()),
             Some(serde_json::json!({"x": 1})),
             None,
+            None,
         );
 
         let captured = events.lock().unwrap();
@@ -1021,6 +1076,7 @@ mod tests {
             Some(Uuid::new_v4()),
             ScopeType::Retriever,
             ScopeAttributes::PARALLEL,
+            None,
         );
 
         let captured = events.lock().unwrap();
@@ -1049,8 +1105,8 @@ mod tests {
         );
 
         let handle =
-            ctx.create_scope_handle("sc", None, ScopeType::Agent, ScopeAttributes::empty());
-        ctx.end_scope_handle(&handle);
+            ctx.create_scope_handle("sc", None, ScopeType::Agent, ScopeAttributes::empty(), None);
+        ctx.end_scope_handle(&handle, None);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -1078,6 +1134,9 @@ mod tests {
             None,
             ToolAttributes::LOCAL,
             Some(serde_json::json!({"k": "v"})),
+            None,
+            None,
+            None,
             None,
         );
 
@@ -1112,8 +1171,11 @@ mod tests {
             ToolAttributes::empty(),
             Some(serde_json::json!({"a": 1})),
             None,
+            None,
+            None,
+            None,
         );
-        ctx.end_tool_handle(&handle, Some(serde_json::json!({"b": 2})), None);
+        ctx.end_tool_handle(&handle, Some(serde_json::json!({"b": 2})), None, None, None);
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];
@@ -1138,7 +1200,16 @@ mod tests {
             }),
         );
 
-        let _handle = ctx.create_llm_handle("llm", None, LLMAttributes::STREAMING, None, None);
+        let _handle = ctx.create_llm_handle(
+            "llm",
+            None,
+            LLMAttributes::STREAMING,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1169,8 +1240,17 @@ mod tests {
             LLMAttributes::empty(),
             None,
             Some(serde_json::json!({"m1": true})),
+            None,
+            None,
+            None,
         );
-        ctx.end_llm_handle(&handle, None, Some(serde_json::json!({"m2": false})));
+        ctx.end_llm_handle(
+            &handle,
+            None,
+            Some(serde_json::json!({"m2": false})),
+            None,
+            None,
+        );
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];

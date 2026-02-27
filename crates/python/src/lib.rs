@@ -9,8 +9,12 @@
 //!
 //! ## Modules
 //!
-//! - `py_types` — Python-facing type wrappers (`ScopeHandle`, `ToolHandle`, etc.)
-//! - `py_api` — Python-facing API functions (`nvagentrt_push_scope`, etc.)
+//! - `py_types` — Python-facing type wrappers (`ScopeHandle`, `ToolHandle`, `Event`,
+//!   `AtifExporter`, etc.). `Event` exposes typed lifecycle fields (`input`, `output`,
+//!   `model_name`, `tool_call_id`, `root_uuid`). `AtifExporter` collects events and
+//!   exports ATIF v1.6 trajectories.
+//! - `py_api` — Python-facing API functions (`nvagentrt_push_scope`, etc.). Tool calls
+//!   accept `tool_call_id` and LLM calls accept `model_name` for ATIF correlation.
 //! - `py_callable` — Bridges between Python callables and Rust callback types
 //! - `py_context` — Notes on scope propagation between sync/async contexts
 //! - `convert` — JSON ↔ Python conversion utilities

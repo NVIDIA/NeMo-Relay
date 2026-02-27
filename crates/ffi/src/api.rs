@@ -181,6 +181,7 @@ pub unsafe extern "C" fn nvagentrt_event(
 /// - `attributes`: Bitfield of tool attributes.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
+/// - `tool_call_id`: Optional external correlation ID for the tool call, or null.
 /// - `out`: On success, receives a heap-allocated `FfiToolHandle`.
 ///
 /// # Safety
@@ -193,6 +194,7 @@ pub unsafe extern "C" fn nvagentrt_tool_call(
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
+    tool_call_id: *const c_char,
     out: *mut *mut FfiToolHandle,
 ) -> NvAgentRtStatus {
     clear_last_error();
@@ -222,8 +224,24 @@ pub unsafe extern "C" fn nvagentrt_tool_call(
         Some(m) => m,
         None => return NvAgentRtStatus::InvalidJson,
     };
+    let tool_call_id_opt = if tool_call_id.is_null() {
+        None
+    } else {
+        match c_str_to_string(tool_call_id) {
+            Ok(s) => Some(s),
+            Err(status) => return status,
+        }
+    };
 
-    match core::nvagentrt_tool_call(&name, args, parent_ref, attrs, data, metadata) {
+    match core::nvagentrt_tool_call(
+        &name,
+        args,
+        parent_ref,
+        attrs,
+        data,
+        metadata,
+        tool_call_id_opt,
+    ) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiToolHandle(h))) };
             NvAgentRtStatus::Ok
@@ -369,6 +387,7 @@ pub unsafe extern "C" fn nvagentrt_tool_call_execute(
 /// - `attributes`: Bitfield of LLM attributes.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
+/// - `model_name`: Optional LLM model identifier, or null.
 /// - `out`: On success, receives a heap-allocated `FfiLLMHandle`.
 ///
 /// # Safety
@@ -381,6 +400,7 @@ pub unsafe extern "C" fn nvagentrt_llm_call(
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
+    model_name: *const c_char,
     out: *mut *mut FfiLLMHandle,
 ) -> NvAgentRtStatus {
     clear_last_error();
@@ -406,6 +426,14 @@ pub unsafe extern "C" fn nvagentrt_llm_call(
         Some(m) => m,
         None => return NvAgentRtStatus::InvalidJson,
     };
+    let model_name_opt = if model_name.is_null() {
+        None
+    } else {
+        match c_str_to_string(model_name) {
+            Ok(s) => Some(s),
+            Err(status) => return status,
+        }
+    };
 
     match core::nvagentrt_llm_call(
         &name,
@@ -414,6 +442,7 @@ pub unsafe extern "C" fn nvagentrt_llm_call(
         attrs,
         data,
         metadata,
+        model_name_opt,
     ) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiLLMHandle(h))) };
@@ -477,6 +506,7 @@ pub unsafe extern "C" fn nvagentrt_llm_call_end(
 /// - `attributes`: Bitfield of LLM attributes.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
+/// - `model_name`: Optional LLM model identifier, or null.
 /// - `out`: On success, receives the response as a JSON C string. Caller must
 ///   free with `nvagentrt_string_free`.
 ///
@@ -493,6 +523,7 @@ pub unsafe extern "C" fn nvagentrt_llm_call_execute(
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
+    model_name: *const c_char,
     out: *mut *mut c_char,
 ) -> NvAgentRtStatus {
     clear_last_error();
@@ -519,12 +550,29 @@ pub unsafe extern "C" fn nvagentrt_llm_call_execute(
         Some(m) => m,
         None => return NvAgentRtStatus::InvalidJson,
     };
+    let model_name_opt = if model_name.is_null() {
+        None
+    } else {
+        match c_str_to_string(model_name) {
+            Ok(s) => Some(s),
+            Err(status) => return status,
+        }
+    };
 
     let exec_fn = wrap_llm_exec_fn(func, func_user_data, func_free);
 
     let result = tokio_runtime().block_on(async {
-        core::nvagentrt_llm_call_execute(&name, req, exec_fn, parent_handle, attrs, data, metadata)
-            .await
+        core::nvagentrt_llm_call_execute(
+            &name,
+            req,
+            exec_fn,
+            parent_handle,
+            attrs,
+            data,
+            metadata,
+            model_name_opt,
+        )
+        .await
     });
 
     match result {
@@ -564,6 +612,7 @@ pub struct FfiStream {
 /// - `attributes`: Bitfield of LLM attributes.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
+/// - `model_name`: Optional LLM model identifier, or null.
 /// - `out`: On success, receives a heap-allocated `FfiStream`.
 ///
 /// # Safety
@@ -582,6 +631,7 @@ pub unsafe extern "C" fn nvagentrt_llm_stream_call_execute(
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
+    model_name: *const c_char,
     out: *mut *mut FfiStream,
 ) -> NvAgentRtStatus {
     clear_last_error();
@@ -608,6 +658,14 @@ pub unsafe extern "C" fn nvagentrt_llm_stream_call_execute(
         Some(m) => m,
         None => return NvAgentRtStatus::InvalidJson,
     };
+    let model_name_opt = if model_name.is_null() {
+        None
+    } else {
+        match c_str_to_string(model_name) {
+            Ok(s) => Some(s),
+            Err(status) => return status,
+        }
+    };
 
     let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
 
@@ -632,6 +690,7 @@ pub unsafe extern "C" fn nvagentrt_llm_stream_call_execute(
             attrs,
             data,
             metadata,
+            model_name_opt,
         )
         .await
     });
@@ -1570,5 +1629,193 @@ pub unsafe extern "C" fn nvagentrt_scope_stack_set_thread(
     }
     let handle = unsafe { &*stack }.0.clone();
     core::set_thread_scope_stack(handle);
+    NvAgentRtStatus::Ok
+}
+
+// ---------------------------------------------------------------------------
+// ATIF exporter
+// ---------------------------------------------------------------------------
+
+/// Creates a new ATIF exporter.
+///
+/// # Parameters
+/// - `session_id`: Session identifier string (required, non-null).
+/// - `agent_name`: Agent name string (required, non-null).
+/// - `agent_version`: Agent version string (required, non-null).
+/// - `model_name`: Default model name (nullable).
+/// - `out`: On success, receives a heap-allocated `FfiAtifExporter`.
+///
+/// # Safety
+/// All non-null string pointers must be valid C strings. `out` must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_atif_exporter_create(
+    session_id: *const c_char,
+    agent_name: *const c_char,
+    agent_version: *const c_char,
+    model_name: *const c_char,
+    out: *mut *mut FfiAtifExporter,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NvAgentRtStatus::NullPointer;
+    }
+    let session_id = match c_str_to_string(session_id) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    let agent_name = match c_str_to_string(agent_name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    let agent_version = match c_str_to_string(agent_version) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    let model_name_opt = if model_name.is_null() {
+        None
+    } else {
+        match c_str_to_string(model_name) {
+            Ok(s) => Some(s),
+            Err(status) => return status,
+        }
+    };
+
+    let agent_info = nvagentrt_core::atif::AtifAgentInfo {
+        name: agent_name,
+        version: agent_version,
+        model_name: model_name_opt,
+        tool_definitions: None,
+        extra: None,
+    };
+
+    let exporter = nvagentrt_core::atif::AtifExporter::new(session_id, agent_info);
+    unsafe { *out = Box::into_raw(Box::new(FfiAtifExporter(exporter))) };
+    NvAgentRtStatus::Ok
+}
+
+/// Registers the exporter as an event subscriber.
+///
+/// # Parameters
+/// - `exporter`: The exporter handle.
+/// - `name`: Subscriber name (required, non-null).
+///
+/// # Safety
+/// `exporter` and `name` must be valid, non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_atif_exporter_register(
+    exporter: *const FfiAtifExporter,
+    name: *const c_char,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    if exporter.is_null() {
+        set_last_error("exporter pointer is null");
+        return NvAgentRtStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    let subscriber = unsafe { &*exporter }.0.subscriber();
+    match core::nvagentrt_register_subscriber(&name, subscriber) {
+        Ok(()) => NvAgentRtStatus::Ok,
+        Err(e) => status_from_error(&e),
+    }
+}
+
+/// Deregisters the exporter subscriber.
+///
+/// # Parameters
+/// - `name`: Subscriber name (required, non-null).
+///
+/// # Safety
+/// `name` must be a valid C string.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_atif_exporter_deregister(
+    name: *const c_char,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    match core::nvagentrt_deregister_subscriber(&name) {
+        Ok(_) => NvAgentRtStatus::Ok,
+        Err(e) => status_from_error(&e),
+    }
+}
+
+/// Exports collected events as an ATIF trajectory JSON string.
+///
+/// # Parameters
+/// - `exporter`: The exporter handle.
+/// - `root_uuid`: Optional root UUID filter (nullable C string).
+/// - `out`: On success, receives a JSON string (caller must free with
+///   `nvagentrt_string_free`).
+///
+/// # Safety
+/// `exporter` and `out` must be valid, non-null pointers. `root_uuid` may be
+/// null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_atif_exporter_export(
+    exporter: *const FfiAtifExporter,
+    root_uuid: *const c_char,
+    out: *mut *mut c_char,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    if exporter.is_null() {
+        set_last_error("exporter pointer is null");
+        return NvAgentRtStatus::NullPointer;
+    }
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NvAgentRtStatus::NullPointer;
+    }
+    let root_uuid_opt = if root_uuid.is_null() {
+        None
+    } else {
+        let uuid_str = match c_str_to_string(root_uuid) {
+            Ok(s) => s,
+            Err(status) => return status,
+        };
+        match uuid::Uuid::parse_str(&uuid_str) {
+            Ok(u) => Some(u),
+            Err(e) => {
+                set_last_error(&format!("invalid UUID: {e}"));
+                return NvAgentRtStatus::Internal;
+            }
+        }
+    };
+
+    let trajectory = unsafe { &*exporter }.0.export(root_uuid_opt);
+    match serde_json::to_string(&trajectory) {
+        Ok(json_str) => {
+            unsafe { *out = str_to_c_string(&json_str) };
+            NvAgentRtStatus::Ok
+        }
+        Err(e) => {
+            set_last_error(&format!("failed to serialize trajectory: {e}"));
+            NvAgentRtStatus::Internal
+        }
+    }
+}
+
+/// Clears all collected events from the exporter.
+///
+/// # Parameters
+/// - `exporter`: The exporter handle.
+///
+/// # Safety
+/// `exporter` must be a valid, non-null `FfiAtifExporter` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_atif_exporter_clear(
+    exporter: *const FfiAtifExporter,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    if exporter.is_null() {
+        set_last_error("exporter pointer is null");
+        return NvAgentRtStatus::NullPointer;
+    }
+    unsafe { &*exporter }.0.clear();
     NvAgentRtStatus::Ok
 }

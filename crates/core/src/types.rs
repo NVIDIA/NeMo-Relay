@@ -186,6 +186,8 @@ pub struct ToolHandle {
     pub attributes: ToolAttributes,
     /// UUID of the parent scope or handle.
     pub parent_uuid: Option<Uuid>,
+    /// External correlation ID for tool calls (e.g., from LLM tool_call responses).
+    pub tool_call_id: Option<String>,
 }
 
 impl ToolHandle {
@@ -204,6 +206,7 @@ impl ToolHandle {
             metadata,
             attributes,
             parent_uuid,
+            tool_call_id: None,
         }
     }
 }
@@ -228,6 +231,8 @@ pub struct LLMHandle {
     pub attributes: LLMAttributes,
     /// UUID of the parent scope or handle.
     pub parent_uuid: Option<Uuid>,
+    /// LLM model identifier (e.g., `"gpt-4"`, `"claude-3-opus"`).
+    pub model_name: Option<String>,
 }
 
 impl LLMHandle {
@@ -246,6 +251,7 @@ impl LLMHandle {
             metadata,
             attributes,
             parent_uuid,
+            model_name: None,
         }
     }
 }
@@ -514,6 +520,20 @@ mod tests {
         assert_eq!(handle.data, data);
         assert_eq!(handle.metadata, metadata);
         assert!(!handle.uuid.is_nil());
+        assert!(handle.tool_call_id.is_none());
+    }
+
+    #[test]
+    fn test_tool_handle_tool_call_id() {
+        let mut handle = ToolHandle::new(
+            "my_tool".to_string(),
+            ToolAttributes::LOCAL,
+            None,
+            None,
+            None,
+        );
+        handle.tool_call_id = Some("call_abc123".to_string());
+        assert_eq!(handle.tool_call_id, Some("call_abc123".to_string()));
     }
 
     #[test]
@@ -547,6 +567,15 @@ mod tests {
         assert!(handle.attributes.contains(LLMAttributes::STREAMING));
         assert!(handle.data.is_none());
         assert!(handle.metadata.is_some());
+        assert!(handle.model_name.is_none());
+    }
+
+    #[test]
+    fn test_llm_handle_model_name() {
+        let mut handle =
+            LLMHandle::new("gpt".to_string(), LLMAttributes::empty(), None, None, None);
+        handle.model_name = Some("gpt-4".to_string());
+        assert_eq!(handle.model_name, Some("gpt-4".to_string()));
     }
 
     // -- LLMRequest --
@@ -628,6 +657,122 @@ mod tests {
         assert!(event.timestamp >= before);
         assert!(event.timestamp <= after);
     }
+
+    // -- Event new fields --
+
+    #[test]
+    fn test_event_new_fields_default_none() {
+        let event = Event::new(
+            None,
+            Uuid::new_v4(),
+            None,
+            None,
+            None,
+            None,
+            EventType::Mark,
+            None,
+        );
+        assert!(event.input.is_none());
+        assert!(event.output.is_none());
+        assert!(event.model_name.is_none());
+        assert!(event.tool_call_id.is_none());
+        assert!(event.root_uuid.is_none());
+    }
+
+    #[test]
+    fn test_event_serde_roundtrip_with_new_fields() {
+        let root_uuid = Uuid::new_v4();
+        let mut event = Event::new(
+            None,
+            Uuid::new_v4(),
+            Some("test".into()),
+            None,
+            None,
+            None,
+            EventType::Start,
+            Some(ScopeType::Tool),
+        );
+        event.input = Some(json!({"args": "hello"}));
+        event.output = Some(json!({"result": "world"}));
+        event.model_name = Some("gpt-4".to_string());
+        event.tool_call_id = Some("call_abc".to_string());
+        event.root_uuid = Some(root_uuid);
+
+        let json_str = serde_json::to_string(&event).unwrap();
+        let deserialized: Event = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(deserialized.input, Some(json!({"args": "hello"})));
+        assert_eq!(deserialized.output, Some(json!({"result": "world"})));
+        assert_eq!(deserialized.model_name, Some("gpt-4".to_string()));
+        assert_eq!(deserialized.tool_call_id, Some("call_abc".to_string()));
+        assert_eq!(deserialized.root_uuid, Some(root_uuid));
+    }
+
+    // -- EventBuilder --
+
+    #[test]
+    fn test_event_builder_defaults() {
+        let uuid = Uuid::new_v4();
+        let event = Event::builder(uuid, EventType::Mark).build();
+        assert_eq!(event.uuid, uuid);
+        assert_eq!(event.event_type, EventType::Mark);
+        assert!(event.parent_uuid.is_none());
+        assert!(event.name.is_none());
+        assert!(event.data.is_none());
+        assert!(event.metadata.is_none());
+        assert!(event.attributes.is_none());
+        assert!(event.scope_type.is_none());
+        assert!(event.input.is_none());
+        assert!(event.output.is_none());
+        assert!(event.model_name.is_none());
+        assert!(event.tool_call_id.is_none());
+        assert!(event.root_uuid.is_none());
+    }
+
+    #[test]
+    fn test_event_builder_all_setters() {
+        let uuid = Uuid::new_v4();
+        let parent = Uuid::new_v4();
+        let root = Uuid::new_v4();
+        let event = Event::builder(uuid, EventType::Start)
+            .parent_uuid(Some(parent))
+            .name("my_tool")
+            .data(Some(json!({"custom": true})))
+            .metadata(Some(json!({"trace": "abc"})))
+            .attributes(HandleAttributes::Tool(ToolAttributes::LOCAL))
+            .scope_type(ScopeType::Tool)
+            .input(Some(json!({"args": [1, 2]})))
+            .output(Some(json!({"result": 3})))
+            .model_name(Some("gpt-4".to_string()))
+            .tool_call_id(Some("call_xyz".to_string()))
+            .root_uuid(Some(root))
+            .build();
+
+        assert_eq!(event.uuid, uuid);
+        assert_eq!(event.event_type, EventType::Start);
+        assert_eq!(event.parent_uuid, Some(parent));
+        assert_eq!(event.name, Some("my_tool".into()));
+        assert_eq!(event.data, Some(json!({"custom": true})));
+        assert_eq!(event.metadata, Some(json!({"trace": "abc"})));
+        assert_eq!(
+            event.attributes,
+            Some(HandleAttributes::Tool(ToolAttributes::LOCAL))
+        );
+        assert_eq!(event.scope_type, Some(ScopeType::Tool));
+        assert_eq!(event.input, Some(json!({"args": [1, 2]})));
+        assert_eq!(event.output, Some(json!({"result": 3})));
+        assert_eq!(event.model_name, Some("gpt-4".to_string()));
+        assert_eq!(event.tool_call_id, Some("call_xyz".to_string()));
+        assert_eq!(event.root_uuid, Some(root));
+    }
+
+    #[test]
+    fn test_event_builder_timestamp_is_recent() {
+        let before = chrono::Utc::now();
+        let event = Event::builder(Uuid::new_v4(), EventType::End).build();
+        let after = chrono::Utc::now();
+        assert!(event.timestamp >= before);
+        assert!(event.timestamp <= after);
+    }
 }
 
 /// A priority-ordered intercept that transforms data flowing through a chain.
@@ -700,6 +845,21 @@ pub struct Event {
     pub event_type: EventType,
     /// The scope type of the source entity, if applicable.
     pub scope_type: Option<ScopeType>,
+    /// Post-guardrail input (tool args, LLM request).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<Json>,
+    /// Post-guardrail output (tool result, LLM response).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<Json>,
+    /// LLM model identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
+    /// External correlation ID for tool calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// Root scope UUID for concurrent agent isolation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_uuid: Option<Uuid>,
 }
 
 impl Event {
@@ -725,6 +885,138 @@ impl Event {
             attributes,
             event_type,
             scope_type,
+            input: None,
+            output: None,
+            model_name: None,
+            tool_call_id: None,
+            root_uuid: None,
+        }
+    }
+
+    /// Returns a builder initialized with the required fields.
+    pub fn builder(uuid: Uuid, event_type: EventType) -> EventBuilder {
+        EventBuilder {
+            uuid,
+            event_type,
+            parent_uuid: None,
+            name: None,
+            data: None,
+            metadata: None,
+            attributes: None,
+            scope_type: None,
+            input: None,
+            output: None,
+            model_name: None,
+            tool_call_id: None,
+            root_uuid: None,
+        }
+    }
+}
+
+/// Builder for constructing [`Event`] instances.
+///
+/// Created via [`Event::builder`]. All fields except `uuid`, `event_type`,
+/// and `timestamp` (auto-set to `Utc::now()`) default to `None`.
+pub struct EventBuilder {
+    uuid: Uuid,
+    event_type: EventType,
+    parent_uuid: Option<Uuid>,
+    name: Option<String>,
+    data: Option<Json>,
+    metadata: Option<Json>,
+    attributes: Option<HandleAttributes>,
+    scope_type: Option<ScopeType>,
+    input: Option<Json>,
+    output: Option<Json>,
+    model_name: Option<String>,
+    tool_call_id: Option<String>,
+    root_uuid: Option<Uuid>,
+}
+
+impl EventBuilder {
+    /// Sets the parent UUID.
+    pub fn parent_uuid(mut self, parent_uuid: Option<Uuid>) -> Self {
+        self.parent_uuid = parent_uuid;
+        self
+    }
+
+    /// Sets the event name.
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Sets the application-specific data.
+    pub fn data(mut self, data: Option<Json>) -> Self {
+        self.data = data;
+        self
+    }
+
+    /// Sets the metadata.
+    pub fn metadata(mut self, metadata: Option<Json>) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    /// Sets the handle attributes.
+    pub fn attributes(mut self, attributes: HandleAttributes) -> Self {
+        self.attributes = Some(attributes);
+        self
+    }
+
+    /// Sets the scope type.
+    pub fn scope_type(mut self, scope_type: ScopeType) -> Self {
+        self.scope_type = Some(scope_type);
+        self
+    }
+
+    /// Sets the post-guardrail input.
+    pub fn input(mut self, input: Option<Json>) -> Self {
+        self.input = input;
+        self
+    }
+
+    /// Sets the post-guardrail output.
+    pub fn output(mut self, output: Option<Json>) -> Self {
+        self.output = output;
+        self
+    }
+
+    /// Sets the LLM model name.
+    pub fn model_name(mut self, model_name: Option<String>) -> Self {
+        self.model_name = model_name;
+        self
+    }
+
+    /// Sets the tool call ID.
+    pub fn tool_call_id(mut self, tool_call_id: Option<String>) -> Self {
+        self.tool_call_id = tool_call_id;
+        self
+    }
+
+    /// Sets the root scope UUID.
+    pub fn root_uuid(mut self, root_uuid: Option<Uuid>) -> Self {
+        self.root_uuid = root_uuid;
+        self
+    }
+
+    /// Builds the [`Event`] with the current UTC timestamp.
+    pub fn build(self) -> Event {
+        Event {
+            parent_uuid: self.parent_uuid,
+            uuid: self.uuid,
+            timestamp: Utc::now(),
+            name: self.name,
+            data: self.data,
+            metadata: self.metadata,
+            attributes: self.attributes,
+            event_type: self.event_type,
+            scope_type: self.scope_type,
+            input: self.input,
+            output: self.output,
+            model_name: self.model_name,
+            tool_call_id: self.tool_call_id,
+            root_uuid: self.root_uuid,
         }
     }
 }

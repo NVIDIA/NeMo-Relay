@@ -178,5 +178,6 @@ Key mechanisms:
 - **Intercept chains** — priority-ordered middleware that can transform requests/responses; supports `break_chain` for short-circuit.
 - **Guardrails** — sanitize (modify) or gate (allow/reject) at request and response boundaries.
 - **Stream wrapping** — `LlmStreamWrapper` buffers and parses SSE events, applying intercepts mid-stream.
-- **Event subscribers** — observer pattern with named subscribers for lifecycle events.
+- **Event subscribers** — observer pattern with named subscribers for lifecycle events. Events carry typed lifecycle fields (`input`, `output`, `model_name`, `tool_call_id`, `root_uuid`) in addition to custom `data`/`metadata`.
 - **Context propagation** — `tokio::task_local` for async, thread-local for sync paths.
+- **ATIF trajectory export** — `AtifExporter` registers as an event subscriber and exports [ATIF v1.6](https://github.com/nvidia/ATIF) trajectories from collected lifecycle events. LLM calls map to user/agent steps; tool calls map to tool_calls/observations. Filter by `root_uuid` to isolate concurrent agents. Available in all bindings.

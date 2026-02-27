@@ -44,6 +44,13 @@ fn resolve_parent_uuid(parent: Option<&ScopeHandle>) -> Option<Uuid> {
     )
 }
 
+/// Returns the root UUID from the current scope stack for concurrent agent isolation.
+fn current_root_uuid() -> Option<Uuid> {
+    let stack = current_scope_stack();
+    let guard = stack.read().expect("scope stack lock poisoned");
+    Some(guard.root_uuid())
+}
+
 // ---------------------------------------------------------------------------
 // Macros for register/deregister API generation
 // ---------------------------------------------------------------------------
@@ -379,11 +386,12 @@ pub fn nvagentrt_push_scope(
     attributes: ScopeAttributes,
 ) -> Result<ScopeHandle> {
     let parent_uuid = resolve_parent_uuid(parent);
+    let root_uuid = current_root_uuid();
     let ctx = global_context();
     let state = ctx
         .read()
         .map_err(|e| AgentRtError::Internal(e.to_string()))?;
-    let handle = state.create_scope_handle(name, parent_uuid, scope_type, attributes);
+    let handle = state.create_scope_handle(name, parent_uuid, scope_type, attributes, root_uuid);
     task_scope_push(handle.clone());
     Ok(handle)
 }
@@ -392,12 +400,13 @@ pub fn nvagentrt_push_scope(
 ///
 /// Returns [`AgentRtError::NotFound`] if the UUID is not in the stack.
 pub fn nvagentrt_pop_scope(handle_uuid: &Uuid) -> Result<()> {
+    let root_uuid = current_root_uuid();
     let scope = task_scope_remove(handle_uuid)?;
     let ctx = global_context();
     let state = ctx
         .read()
         .map_err(|e| AgentRtError::Internal(e.to_string()))?;
-    state.end_scope_handle(&scope);
+    state.end_scope_handle(&scope, root_uuid);
     Ok(())
 }
 
@@ -412,11 +421,12 @@ pub fn nvagentrt_event(
     metadata: Option<Json>,
 ) -> Result<()> {
     let parent_uuid = resolve_parent_uuid(parent);
+    let root_uuid = current_root_uuid();
     let ctx = global_context();
     let state = ctx
         .read()
         .map_err(|e| AgentRtError::Internal(e.to_string()))?;
-    state.create_event(name, parent_uuid, data, metadata);
+    state.create_event(name, parent_uuid, data, metadata, root_uuid);
     Ok(())
 }
 
@@ -427,7 +437,7 @@ pub fn nvagentrt_event(
 /// Begins a tool call: runs request sanitize guardrails, creates a tool handle,
 /// and emits a `Start` event.
 ///
-/// The sanitized arguments are stored in the handle's `data` under `"sanitized_args"`.
+/// The sanitized arguments are stored in the event's `input` field.
 /// Call [`nvagentrt_tool_call_end`] when the tool completes.
 pub fn nvagentrt_tool_call(
     name: &str,
@@ -436,43 +446,47 @@ pub fn nvagentrt_tool_call(
     attributes: ToolAttributes,
     data: Option<Json>,
     metadata: Option<Json>,
+    tool_call_id: Option<String>,
 ) -> Result<ToolHandle> {
     let parent_uuid = resolve_parent_uuid(parent);
+    let root_uuid = current_root_uuid();
     let ctx = global_context();
     let mut state = ctx
         .write()
         .map_err(|e| AgentRtError::Internal(e.to_string()))?;
 
     let sanitized_args = state.tool_sanitize_request_chain(name, args);
-    let mut data = data.unwrap_or_else(|| json!({}));
-    if let Some(obj) = data.as_object_mut() {
-        obj.insert("sanitized_args".to_string(), sanitized_args);
-    }
 
-    Ok(state.create_tool_handle(name, parent_uuid, attributes, Some(data), metadata))
+    Ok(state.create_tool_handle(
+        name,
+        parent_uuid,
+        attributes,
+        data,
+        metadata,
+        tool_call_id,
+        Some(sanitized_args),
+        root_uuid,
+    ))
 }
 
 /// Ends a tool call: runs response sanitize guardrails and emits an `End` event.
 ///
-/// The sanitized result is stored in the event's `data` under `"sanitized_result"`.
+/// The sanitized result is stored in the event's `output` field.
 pub fn nvagentrt_tool_call_end(
     handle: &ToolHandle,
     result: Json,
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
+    let root_uuid = current_root_uuid();
     let ctx = global_context();
     let mut state = ctx
         .write()
         .map_err(|e| AgentRtError::Internal(e.to_string()))?;
 
     let sanitized_result = state.tool_sanitize_response_chain(&handle.name, result);
-    let mut data = data.unwrap_or_else(|| json!({}));
-    if let Some(obj) = data.as_object_mut() {
-        obj.insert("sanitized_result".to_string(), sanitized_result);
-    }
 
-    state.end_tool_handle(handle, Some(data), metadata);
+    state.end_tool_handle(handle, data, metadata, Some(sanitized_result), root_uuid);
     Ok(())
 }
 
@@ -508,6 +522,7 @@ pub async fn nvagentrt_tool_call_execute(
         attributes,
         data.clone(),
         metadata.clone(),
+        None,
     )?;
 
     // Conditional guardrails
@@ -564,7 +579,7 @@ pub async fn nvagentrt_tool_call_execute(
 /// Begins an LLM call: runs request sanitize guardrails, creates an LLM handle,
 /// and emits a `Start` event.
 ///
-/// The sanitized request is stored in the handle's `data` under `"sanitized_request"`.
+/// The sanitized request is stored in the event's `input` field.
 /// Call [`nvagentrt_llm_call_end`] when the LLM call completes.
 pub fn nvagentrt_llm_call(
     name: &str,
@@ -573,44 +588,48 @@ pub fn nvagentrt_llm_call(
     attributes: LLMAttributes,
     data: Option<Json>,
     metadata: Option<Json>,
+    model_name: Option<String>,
 ) -> Result<LLMHandle> {
     let parent_uuid = resolve_parent_uuid(parent);
+    let root_uuid = current_root_uuid();
     let ctx = global_context();
     let mut state = ctx
         .write()
         .map_err(|e| AgentRtError::Internal(e.to_string()))?;
 
     let sanitized_request = state.llm_sanitize_request_chain(request.clone());
-    let mut data = data.unwrap_or_else(|| json!({}));
-    if let Some(obj) = data.as_object_mut() {
-        obj.insert(
-            "sanitized_request".to_string(),
-            serde_json::to_value(&sanitized_request).unwrap_or(Json::Null),
-        );
-    }
+    let input = serde_json::to_value(&sanitized_request).unwrap_or(Json::Null);
 
-    Ok(state.create_llm_handle(name, parent_uuid, attributes, Some(data), metadata))
+    Ok(state.create_llm_handle(
+        name,
+        parent_uuid,
+        attributes,
+        data,
+        metadata,
+        model_name,
+        Some(input),
+        root_uuid,
+    ))
 }
 
 /// Ends an LLM call: runs response sanitize guardrails and emits an `End` event.
+///
+/// The sanitized response is stored in the event's `output` field.
 pub fn nvagentrt_llm_call_end(
     handle: &LLMHandle,
     response: Json,
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
+    let root_uuid = current_root_uuid();
     let ctx = global_context();
     let mut state = ctx
         .write()
         .map_err(|e| AgentRtError::Internal(e.to_string()))?;
 
     let sanitized_response = state.llm_sanitize_response_chain(response);
-    let mut data = data.unwrap_or_else(|| json!({}));
-    if let Some(obj) = data.as_object_mut() {
-        obj.insert("sanitized_result".to_string(), sanitized_response);
-    }
 
-    state.end_llm_handle(handle, Some(data), metadata);
+    state.end_llm_handle(handle, data, metadata, Some(sanitized_response), root_uuid);
     Ok(())
 }
 
@@ -619,6 +638,7 @@ pub fn nvagentrt_llm_call_end(
 /// override), response intercepts, and sanitize response guardrails.
 ///
 /// Returns [`AgentRtError::GuardrailRejected`] if a conditional guardrail rejects the call.
+#[allow(clippy::too_many_arguments)]
 pub async fn nvagentrt_llm_call_execute(
     name: &str,
     request: LLMRequest,
@@ -627,6 +647,7 @@ pub async fn nvagentrt_llm_call_execute(
     attributes: LLMAttributes,
     data: Option<Json>,
     metadata: Option<Json>,
+    model_name: Option<String>,
 ) -> Result<Json> {
     // Request intercepts
     let intercepted_request = {
@@ -645,6 +666,7 @@ pub async fn nvagentrt_llm_call_execute(
         attributes,
         data.clone(),
         metadata.clone(),
+        model_name,
     )?;
 
     // Conditional guardrails
@@ -711,6 +733,7 @@ pub async fn nvagentrt_llm_call_execute(
 ///   aggregated response as [`Json`].
 ///
 /// Returns [`AgentRtError::GuardrailRejected`] if a conditional guardrail rejects the call.
+#[allow(clippy::too_many_arguments)]
 pub async fn nvagentrt_llm_stream_call_execute(
     name: &str,
     request: LLMRequest,
@@ -721,6 +744,7 @@ pub async fn nvagentrt_llm_stream_call_execute(
     attributes: LLMAttributes,
     data: Option<Json>,
     metadata: Option<Json>,
+    model_name: Option<String>,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
     // Request intercepts
     let intercepted_request = {
@@ -739,6 +763,7 @@ pub async fn nvagentrt_llm_stream_call_execute(
         attributes,
         data.clone(),
         metadata.clone(),
+        model_name,
     )?;
 
     // Conditional guardrails
@@ -971,6 +996,7 @@ mod tests {
             ToolAttributes::empty(),
             None,
             None,
+            None,
         )
         .unwrap();
         assert_eq!(handle.name, "my_tool");
@@ -1021,15 +1047,16 @@ mod tests {
             ToolAttributes::empty(),
             None,
             None,
+            None,
         )
         .unwrap();
 
-        // The start event data should contain sanitized_args
+        // The start event input should contain sanitized args
         let captured = events.lock().unwrap();
         let start_event = &captured[0];
-        let data = start_event.data.as_ref().unwrap();
-        assert_eq!(data["sanitized_args"]["sanitized"], true);
-        assert_eq!(data["sanitized_args"]["input"], "data");
+        let input = start_event.input.as_ref().unwrap();
+        assert_eq!(input["sanitized"], true);
+        assert_eq!(input["input"], "data");
 
         drop(captured);
         nvagentrt_tool_call_end(&handle, json!("ok"), None, None).unwrap();
@@ -1065,16 +1092,23 @@ mod tests {
         )
         .unwrap();
 
-        let handle =
-            nvagentrt_tool_call("tool", json!({}), None, ToolAttributes::empty(), None, None)
-                .unwrap();
+        let handle = nvagentrt_tool_call(
+            "tool",
+            json!({}),
+            None,
+            ToolAttributes::empty(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         nvagentrt_tool_call_end(&handle, json!({"output": "raw"}), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];
-        let data = end_event.data.as_ref().unwrap();
-        assert_eq!(data["sanitized_result"]["cleaned"], true);
-        assert_eq!(data["sanitized_result"]["output"], "raw");
+        let output = end_event.output.as_ref().unwrap();
+        assert_eq!(output["cleaned"], true);
+        assert_eq!(output["output"], "raw");
 
         drop(captured);
         nvagentrt_deregister_subscriber("tool_resp_test").unwrap();
@@ -1301,9 +1335,16 @@ mod tests {
             headers: serde_json::Map::new(),
             body: json!({"messages": []}),
         };
-        let handle =
-            nvagentrt_llm_call("my_llm", &request, None, LLMAttributes::empty(), None, None)
-                .unwrap();
+        let handle = nvagentrt_llm_call(
+            "my_llm",
+            &request,
+            None,
+            LLMAttributes::empty(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(handle.name, "my_llm");
 
         nvagentrt_llm_call_end(&handle, json!({"response": "ok"}), None, None).unwrap();
@@ -1348,15 +1389,22 @@ mod tests {
             headers: serde_json::Map::new(),
             body: json!({}),
         };
-        let handle =
-            nvagentrt_llm_call("llm", &request, None, LLMAttributes::empty(), None, None).unwrap();
+        let handle = nvagentrt_llm_call(
+            "llm",
+            &request,
+            None,
+            LLMAttributes::empty(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let captured = events.lock().unwrap();
         let start_event = &captured[0];
-        let data = start_event.data.as_ref().unwrap();
-        // Sanitized request should be in data
-        let sanitized_req = &data["sanitized_request"];
-        assert_eq!(sanitized_req["headers"]["X-Sanitized"], "true");
+        // Sanitized request should be in input
+        let input = start_event.input.as_ref().unwrap();
+        assert_eq!(input["headers"]["X-Sanitized"], "true");
 
         drop(captured);
         nvagentrt_llm_call_end(&handle, json!("ok"), None, None).unwrap();
@@ -1385,6 +1433,7 @@ mod tests {
             func,
             None,
             LLMAttributes::empty(),
+            None,
             None,
             None,
         )
@@ -1431,6 +1480,7 @@ mod tests {
             func,
             None,
             LLMAttributes::empty(),
+            None,
             None,
             None,
         )
@@ -1490,6 +1540,7 @@ mod tests {
             LLMAttributes::empty(),
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1535,6 +1586,7 @@ mod tests {
             LLMAttributes::empty(),
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1577,6 +1629,7 @@ mod tests {
             func,
             None,
             LLMAttributes::empty(),
+            None,
             None,
             None,
         )
@@ -1887,6 +1940,7 @@ mod tests {
             LLMAttributes::STREAMING,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1961,6 +2015,7 @@ mod tests {
             LLMAttributes::STREAMING,
             None,
             None,
+            None,
         )
         .await;
 
@@ -2001,6 +2056,7 @@ mod tests {
             ToolAttributes::empty(),
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -2029,6 +2085,7 @@ mod tests {
             LLMAttributes::STATELESS | LLMAttributes::STREAMING,
             Some(json!({"custom": "data"})),
             Some(json!({"meta": "info"})),
+            None,
         )
         .unwrap();
 

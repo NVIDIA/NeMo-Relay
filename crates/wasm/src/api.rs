@@ -122,6 +122,7 @@ pub fn nvagentrt_tool_call(
     attributes: Option<u32>,
     data: JsValue,
     metadata: JsValue,
+    tool_call_id: Option<String>,
 ) -> Result<WasmToolHandle, JsValue> {
     let args_json = js_to_json(&args)?;
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
@@ -132,6 +133,7 @@ pub fn nvagentrt_tool_call(
         attrs,
         opt_js_to_json(&data)?,
         opt_js_to_json(&metadata)?,
+        tool_call_id,
     )
     .map(WasmToolHandle::from)
     .map_err(to_js_err)
@@ -226,6 +228,7 @@ pub fn nvagentrt_llm_call(
     attributes: Option<u32>,
     data: JsValue,
     metadata: JsValue,
+    model_name: Option<String>,
 ) -> Result<WasmLLMHandle, JsValue> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     nvagentrt_core::nvagentrt_llm_call(
@@ -235,6 +238,7 @@ pub fn nvagentrt_llm_call(
         attrs,
         opt_js_to_json(&data)?,
         opt_js_to_json(&metadata)?,
+        model_name,
     )
     .map(WasmLLMHandle::from)
     .map_err(to_js_err)
@@ -275,6 +279,7 @@ pub fn nvagentrt_llm_call_end(
 /// - `attributes` - Optional bitfield of LLM attribute flags.
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
+#[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmCallExecute")]
 pub async fn nvagentrt_llm_call_execute(
     name: &str,
@@ -284,6 +289,7 @@ pub async fn nvagentrt_llm_call_execute(
     attributes: Option<u32>,
     data: JsValue,
     metadata: JsValue,
+    model_name: Option<String>,
 ) -> Result<JsValue, JsValue> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
@@ -299,6 +305,7 @@ pub async fn nvagentrt_llm_call_execute(
         attrs,
         opt_js_to_json(&data)?,
         opt_js_to_json(&metadata)?,
+        model_name,
     )
     .await
     .map_err(to_js_err)?;
@@ -323,6 +330,7 @@ pub async fn nvagentrt_llm_call_execute(
 /// - `attributes` - Optional bitfield of LLM attribute flags.
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
+#[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmStreamCallExecute")]
 pub async fn nvagentrt_llm_stream_call_execute(
     name: &str,
@@ -334,6 +342,7 @@ pub async fn nvagentrt_llm_stream_call_execute(
     attributes: Option<u32>,
     data: JsValue,
     metadata: JsValue,
+    model_name: Option<String>,
 ) -> Result<WasmLlmStream, JsValue> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
@@ -374,6 +383,7 @@ pub async fn nvagentrt_llm_stream_call_execute(
         attrs,
         opt_js_to_json(&data)?,
         opt_js_to_json(&metadata)?,
+        model_name,
     )
     .await
     .map_err(to_js_err)?;
@@ -879,4 +889,65 @@ pub fn current_scope_stack() -> WasmScopeStack {
 #[wasm_bindgen(js_name = "setThreadScopeStack")]
 pub fn set_thread_scope_stack(stack: &WasmScopeStack) {
     nvagentrt_core::set_thread_scope_stack(stack.inner.clone());
+}
+
+// ---------------------------------------------------------------------------
+// ATIF exporter
+// ---------------------------------------------------------------------------
+
+/// ATIF trajectory exporter for collecting events and producing ATIF JSON.
+#[wasm_bindgen]
+pub struct WasmAtifExporter {
+    inner: nvagentrt_core::atif::AtifExporter,
+}
+
+#[wasm_bindgen]
+impl WasmAtifExporter {
+    /// Creates a new ATIF exporter.
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        session_id: String,
+        agent_name: String,
+        agent_version: String,
+        model_name: Option<String>,
+    ) -> Self {
+        let agent_info = nvagentrt_core::atif::AtifAgentInfo {
+            name: agent_name,
+            version: agent_version,
+            model_name,
+            tool_definitions: None,
+            extra: None,
+        };
+        Self {
+            inner: nvagentrt_core::atif::AtifExporter::new(session_id, agent_info),
+        }
+    }
+
+    /// Registers the exporter as an event subscriber.
+    pub fn register(&self, name: &str) -> Result<(), JsValue> {
+        let subscriber = self.inner.subscriber();
+        nvagentrt_core::nvagentrt_register_subscriber(name, subscriber)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Deregisters the exporter subscriber.
+    pub fn deregister(&self, name: &str) -> Result<bool, JsValue> {
+        nvagentrt_core::nvagentrt_deregister_subscriber(name)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Exports collected events as an ATIF trajectory JSON string.
+    pub fn export_json(&self, root_uuid: Option<String>) -> Result<String, JsValue> {
+        let root = root_uuid
+            .map(|s| uuid::Uuid::parse_str(&s))
+            .transpose()
+            .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+        let trajectory = self.inner.export(root);
+        serde_json::to_string(&trajectory).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Clears all collected events.
+    pub fn clear(&self) {
+        self.inner.clear();
+    }
 }

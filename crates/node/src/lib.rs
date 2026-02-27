@@ -4,9 +4,13 @@
 //! NAPI-RS bindings for NVAgentRT, exposing the agent runtime framework to Node.js.
 //!
 //! This crate provides JavaScript/TypeScript access to scope management, tool and LLM
-//! lifecycle operations, guardrails, intercepts, and event subscriptions via NAPI-RS.
-//! Doc comments on `#[napi]` items are emitted into the generated `index.d.ts` TypeScript
-//! definitions.
+//! lifecycle operations, guardrails, intercepts, event subscriptions, and ATIF trajectory
+//! export via NAPI-RS. Doc comments on `#[napi]` items are emitted into the generated
+//! `index.d.ts` TypeScript definitions.
+//!
+//! Tool calls accept an optional `toolCallId` and LLM calls accept an optional `modelName`
+//! for ATIF trajectory correlation. The `JsAtifExporter` class collects lifecycle events
+//! and exports ATIF v1.6 trajectories.
 
 #![allow(dead_code)]
 

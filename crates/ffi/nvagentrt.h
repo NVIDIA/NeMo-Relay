@@ -130,6 +130,11 @@ enum NvAgentRtStatus {
 typedef int32_t NvAgentRtStatus;
 
 /**
+ * Opaque ATIF exporter handle.
+ */
+typedef struct FfiAtifExporter FfiAtifExporter;
+
+/**
  * Opaque wrapper around a lifecycle event emitted by the runtime.
  */
 typedef struct FfiEvent FfiEvent;
@@ -309,6 +314,7 @@ NvAgentRtStatus nvagentrt_event(const char *name,
  * - `attributes`: Bitfield of tool attributes.
  * - `data_json`: Optional JSON data, or null.
  * - `metadata_json`: Optional JSON metadata, or null.
+ * - `tool_call_id`: Optional external correlation ID for the tool call, or null.
  * - `out`: On success, receives a heap-allocated `FfiToolHandle`.
  *
  * # Safety
@@ -320,6 +326,7 @@ NvAgentRtStatus nvagentrt_tool_call(const char *name,
                                     uint32_t attributes,
                                     const char *data_json,
                                     const char *metadata_json,
+                                    const char *tool_call_id,
                                     struct FfiToolHandle **out);
 
 /**
@@ -380,6 +387,7 @@ NvAgentRtStatus nvagentrt_tool_call_execute(const char *name,
  * - `attributes`: Bitfield of LLM attributes.
  * - `data_json`: Optional JSON data, or null.
  * - `metadata_json`: Optional JSON metadata, or null.
+ * - `model_name`: Optional LLM model identifier, or null.
  * - `out`: On success, receives a heap-allocated `FfiLLMHandle`.
  *
  * # Safety
@@ -391,6 +399,7 @@ NvAgentRtStatus nvagentrt_llm_call(const char *name,
                                    uint32_t attributes,
                                    const char *data_json,
                                    const char *metadata_json,
+                                   const char *model_name,
                                    struct FfiLLMHandle **out);
 
 /**
@@ -424,6 +433,7 @@ NvAgentRtStatus nvagentrt_llm_call_end(const struct FfiLLMHandle *handle,
  * - `attributes`: Bitfield of LLM attributes.
  * - `data_json`: Optional JSON data, or null.
  * - `metadata_json`: Optional JSON metadata, or null.
+ * - `model_name`: Optional LLM model identifier, or null.
  * - `out`: On success, receives the response as a JSON C string. Caller must
  *   free with `nvagentrt_string_free`.
  *
@@ -439,6 +449,7 @@ NvAgentRtStatus nvagentrt_llm_call_execute(const char *name,
                                            uint32_t attributes,
                                            const char *data_json,
                                            const char *metadata_json,
+                                           const char *model_name,
                                            char **out);
 
 /**
@@ -460,6 +471,7 @@ NvAgentRtStatus nvagentrt_llm_call_execute(const char *name,
  * - `attributes`: Bitfield of LLM attributes.
  * - `data_json`: Optional JSON data, or null.
  * - `metadata_json`: Optional JSON metadata, or null.
+ * - `model_name`: Optional LLM model identifier, or null.
  * - `out`: On success, receives a heap-allocated `FfiStream`.
  *
  * # Safety
@@ -477,6 +489,7 @@ NvAgentRtStatus nvagentrt_llm_stream_call_execute(const char *name,
                                                   uint32_t attributes,
                                                   const char *data_json,
                                                   const char *metadata_json,
+                                                  const char *model_name,
                                                   struct FfiStream **out);
 
 /**
@@ -838,6 +851,77 @@ NvAgentRtStatus nvagentrt_scope_stack_create(struct FfiScopeStack **out);
 NvAgentRtStatus nvagentrt_scope_stack_set_thread(const struct FfiScopeStack *stack);
 
 /**
+ * Creates a new ATIF exporter.
+ *
+ * # Parameters
+ * - `session_id`: Session identifier string (required, non-null).
+ * - `agent_name`: Agent name string (required, non-null).
+ * - `agent_version`: Agent version string (required, non-null).
+ * - `model_name`: Default model name (nullable).
+ * - `out`: On success, receives a heap-allocated `FfiAtifExporter`.
+ *
+ * # Safety
+ * All non-null string pointers must be valid C strings. `out` must be valid.
+ */
+NvAgentRtStatus nvagentrt_atif_exporter_create(const char *session_id,
+                                               const char *agent_name,
+                                               const char *agent_version,
+                                               const char *model_name,
+                                               struct FfiAtifExporter **out);
+
+/**
+ * Registers the exporter as an event subscriber.
+ *
+ * # Parameters
+ * - `exporter`: The exporter handle.
+ * - `name`: Subscriber name (required, non-null).
+ *
+ * # Safety
+ * `exporter` and `name` must be valid, non-null pointers.
+ */
+NvAgentRtStatus nvagentrt_atif_exporter_register(const struct FfiAtifExporter *exporter,
+                                                 const char *name);
+
+/**
+ * Deregisters the exporter subscriber.
+ *
+ * # Parameters
+ * - `name`: Subscriber name (required, non-null).
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NvAgentRtStatus nvagentrt_atif_exporter_deregister(const char *name);
+
+/**
+ * Exports collected events as an ATIF trajectory JSON string.
+ *
+ * # Parameters
+ * - `exporter`: The exporter handle.
+ * - `root_uuid`: Optional root UUID filter (nullable C string).
+ * - `out`: On success, receives a JSON string (caller must free with
+ *   `nvagentrt_string_free`).
+ *
+ * # Safety
+ * `exporter` and `out` must be valid, non-null pointers. `root_uuid` may be
+ * null.
+ */
+NvAgentRtStatus nvagentrt_atif_exporter_export(const struct FfiAtifExporter *exporter,
+                                               const char *root_uuid,
+                                               char **out);
+
+/**
+ * Clears all collected events from the exporter.
+ *
+ * # Parameters
+ * - `exporter`: The exporter handle.
+ *
+ * # Safety
+ * `exporter` must be a valid, non-null `FfiAtifExporter` pointer.
+ */
+NvAgentRtStatus nvagentrt_atif_exporter_clear(const struct FfiAtifExporter *exporter);
+
+/**
  * Free a C string previously returned by any `nvagentrt_*` accessor function.
  * Passing null is a safe no-op.
  *
@@ -904,6 +988,14 @@ void nvagentrt_event_free(struct FfiEvent *ptr);
  * `ptr` must be a valid pointer returned by `nvagentrt_scope_stack_create`, or null.
  */
 void nvagentrt_scope_stack_free(struct FfiScopeStack *ptr);
+
+/**
+ * Free an ATIF exporter handle previously returned by `nvagentrt_atif_exporter_create`.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `nvagentrt_atif_exporter_create`, or null.
+ */
+void nvagentrt_atif_exporter_free(struct FfiAtifExporter *ptr);
 
 /**
  * Return the UUID of a scope handle as a C string. Caller must free the result
@@ -1133,5 +1225,68 @@ char *nvagentrt_event_metadata(const struct FfiEvent *ptr);
  * `ptr` must be a valid `FfiEvent` pointer or null.
  */
 char *nvagentrt_event_timestamp(const struct FfiEvent *ptr);
+
+/**
+ * Return the event input as a JSON C string, or null if no input is set.
+ * Caller must free the result with `nvagentrt_string_free`.
+ *
+ * # Safety
+ * `ptr` must be a valid `FfiEvent` pointer or null.
+ */
+char *nvagentrt_event_input(const struct FfiEvent *ptr);
+
+/**
+ * Return the event output as a JSON C string, or null if no output is set.
+ * Caller must free the result with `nvagentrt_string_free`.
+ *
+ * # Safety
+ * `ptr` must be a valid `FfiEvent` pointer or null.
+ */
+char *nvagentrt_event_output(const struct FfiEvent *ptr);
+
+/**
+ * Return the event model name as a C string, or null if no model name is set.
+ * Caller must free the result with `nvagentrt_string_free`.
+ *
+ * # Safety
+ * `ptr` must be a valid `FfiEvent` pointer or null.
+ */
+char *nvagentrt_event_model_name(const struct FfiEvent *ptr);
+
+/**
+ * Return the event tool call ID as a C string, or null if no tool call ID is set.
+ * Caller must free the result with `nvagentrt_string_free`.
+ *
+ * # Safety
+ * `ptr` must be a valid `FfiEvent` pointer or null.
+ */
+char *nvagentrt_event_tool_call_id(const struct FfiEvent *ptr);
+
+/**
+ * Return the event root UUID as a C string, or null if no root UUID is set.
+ * Caller must free the result with `nvagentrt_string_free`.
+ *
+ * # Safety
+ * `ptr` must be a valid `FfiEvent` pointer or null.
+ */
+char *nvagentrt_event_root_uuid(const struct FfiEvent *ptr);
+
+/**
+ * Return the event parent UUID as a C string, or null if no parent UUID is set.
+ * Caller must free the result with `nvagentrt_string_free`.
+ *
+ * # Safety
+ * `ptr` must be a valid `FfiEvent` pointer or null.
+ */
+char *nvagentrt_event_parent_uuid(const struct FfiEvent *ptr);
+
+/**
+ * Return the event scope type as a C string, or null if no scope type is set.
+ * Caller must free the result with `nvagentrt_string_free`.
+ *
+ * # Safety
+ * `ptr` must be a valid `FfiEvent` pointer or null.
+ */
+char *nvagentrt_event_scope_type(const struct FfiEvent *ptr);
 
 #endif  /* NVAGENTRT_H */

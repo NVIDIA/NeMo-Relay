@@ -412,6 +412,16 @@ pub struct WasmEvent {
     pub event_type: i32,
     /// Scope type as an integer constant, if associated with a scope.
     pub scope_type: Option<i32>,
+    /// Post-guardrail input (tool args, LLM request body) as serialized JSON string.
+    pub input: Option<String>,
+    /// Post-guardrail output (tool result, LLM response) as serialized JSON string.
+    pub output: Option<String>,
+    /// LLM model identifier.
+    pub model_name: Option<String>,
+    /// External correlation ID for tool calls.
+    pub tool_call_id: Option<String>,
+    /// UUID of the root scope for concurrent agent isolation.
+    pub root_uuid: Option<String>,
 }
 
 impl From<&core_types::Event> for WasmEvent {
@@ -429,6 +439,17 @@ impl From<&core_types::Event> for WasmEvent {
                 core_types::EventType::Mark => 2,
             },
             scope_type: e.scope_type.map(scope_type_to_i32),
+            input: e
+                .input
+                .as_ref()
+                .map(|v| serde_json::to_string(v).unwrap_or_default()),
+            output: e
+                .output
+                .as_ref()
+                .map(|v| serde_json::to_string(v).unwrap_or_default()),
+            model_name: e.model_name.clone(),
+            tool_call_id: e.tool_call_id.clone(),
+            root_uuid: e.root_uuid.map(|u| u.to_string()),
         }
     }
 }

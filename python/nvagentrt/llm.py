@@ -6,20 +6,24 @@
 Provides both manual and managed LLM-call workflows, including streaming.
 
 Functions:
-    call(name, request, *, handle=None, attributes=None, data=None, metadata=None)
+    call(name, request, *, handle=None, attributes=None, data=None, metadata=None, model_name=None)
         Begin an LLM call manually. Returns an ``LLMHandle`` that must later
-        be passed to ``call_end``. Emits a ``Start`` event.
+        be passed to ``call_end``. Emits a ``Start`` event. The optional
+        ``model_name`` identifies the LLM model and is propagated to events
+        for ATIF trajectory export.
 
     call_end(handle, response, *, data=None, metadata=None)
         End a manual LLM call. Records the response and emits an ``End`` event.
 
-    execute(name, request, func, *, handle=None, attributes=None, data=None, metadata=None)
+    execute(name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None)
         Execute an LLM call through the full middleware pipeline (request
         intercepts -> sanitize-request guardrails -> conditional-execution
         guardrails -> execution intercepts -> *func* -> response intercepts ->
         sanitize-response guardrails). Returns an awaitable of the final response.
+        The optional ``model_name`` is propagated to events for ATIF trajectory export.
 
-    stream_execute(name, request, func, collector, finalizer, *, handle=None, attributes=None, data=None, metadata=None)
+    stream_execute(name, request, func, collector, finalizer, *, handle=None,
+            attributes=None, data=None, metadata=None, model_name=None)
         Like ``execute`` but the execution function returns an async iterator
         of SSE text chunks. The ``collector`` callable is invoked with each
         intercepted chunk (after stream response intercepts). The ``finalizer``

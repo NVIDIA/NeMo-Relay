@@ -722,6 +722,31 @@ impl PyEvent {
         self.inner.scope_type.map(|st| st.into())
     }
 
+    #[getter]
+    fn input(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.input)
+    }
+
+    #[getter]
+    fn output(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.output)
+    }
+
+    #[getter]
+    fn model_name(&self) -> Option<String> {
+        self.inner.model_name.clone()
+    }
+
+    #[getter]
+    fn tool_call_id(&self) -> Option<String> {
+        self.inner.tool_call_id.clone()
+    }
+
+    #[getter]
+    fn root_uuid(&self) -> Option<String> {
+        self.inner.root_uuid.map(|u| u.to_string())
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "Event(name={:?}, event_type={:?}, uuid='{}')",
@@ -733,6 +758,133 @@ impl PyEvent {
 impl From<core_types::Event> for PyEvent {
     fn from(e: core_types::Event) -> Self {
         Self { inner: e }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AtifExporter
+// ---------------------------------------------------------------------------
+
+/// ATIF trajectory exporter that collects events and exports ATIF trajectories.
+///
+/// Create an exporter, register it as an event subscriber, then call
+/// ``export()`` or ``export_json()`` to produce an ATIF trajectory.
+///
+/// Example::
+///
+///     exporter = AtifExporter("session-1", "my-agent", "1.0.0", model_name="gpt-4")
+///     exporter.register("atif")
+///     # ... run agent ...
+///     trajectory = exporter.export()
+///     exporter.deregister("atif")
+#[pyclass(name = "AtifExporter")]
+pub struct PyAtifExporter {
+    inner: nvagentrt_core::atif::AtifExporter,
+}
+
+#[pymethods]
+impl PyAtifExporter {
+    #[new]
+    #[pyo3(signature = (session_id, agent_name, agent_version, *, model_name=None, tool_definitions=None, extra=None))]
+    fn new(
+        session_id: String,
+        agent_name: String,
+        agent_version: String,
+        model_name: Option<String>,
+        tool_definitions: Option<&Bound<'_, pyo3::types::PyList>>,
+        extra: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let tool_defs = match tool_definitions {
+            Some(list) => {
+                let mut defs = Vec::new();
+                for item in list.iter() {
+                    defs.push(py_to_json(&item)?);
+                }
+                Some(defs)
+            }
+            None => None,
+        };
+        let extra_json = match extra {
+            Some(obj) if !obj.is_none() => Some(py_to_json(obj)?),
+            _ => None,
+        };
+        let agent_info = nvagentrt_core::atif::AtifAgentInfo {
+            name: agent_name,
+            version: agent_version,
+            model_name,
+            tool_definitions: tool_defs,
+            extra: extra_json,
+        };
+        Ok(Self {
+            inner: nvagentrt_core::atif::AtifExporter::new(session_id, agent_info),
+        })
+    }
+
+    /// Register this exporter as an event subscriber with the given name.
+    fn register(&self, name: String) -> PyResult<()> {
+        let subscriber = self.inner.subscriber();
+        nvagentrt_core::nvagentrt_register_subscriber(&name, subscriber)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Deregister the event subscriber with the given name.
+    ///
+    /// Returns ``True`` if a subscriber with that name was found and removed.
+    fn deregister(&self, name: String) -> PyResult<bool> {
+        nvagentrt_core::nvagentrt_deregister_subscriber(&name)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Export the collected events as an ATIF trajectory dict.
+    ///
+    /// Args:
+    ///     root_uuid: If provided, only events matching this root UUID are included.
+    ///
+    /// Returns:
+    ///     A dict representing the ATIF trajectory.
+    #[pyo3(signature = (root_uuid=None))]
+    fn export(&self, py: Python<'_>, root_uuid: Option<String>) -> PyResult<Py<PyAny>> {
+        let uuid = match root_uuid {
+            Some(s) => Some(uuid::Uuid::parse_str(&s).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("Invalid UUID: {e}"))
+            })?),
+            None => None,
+        };
+        let trajectory = self.inner.export(uuid);
+        let value = serde_json::to_value(&trajectory).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Serialization error: {e}"))
+        })?;
+        json_to_py(py, &value)
+    }
+
+    /// Export the collected events as a JSON string.
+    ///
+    /// Args:
+    ///     root_uuid: If provided, only events matching this root UUID are included.
+    ///
+    /// Returns:
+    ///     A JSON string representing the ATIF trajectory.
+    #[pyo3(signature = (root_uuid=None))]
+    fn export_json(&self, root_uuid: Option<String>) -> PyResult<String> {
+        let uuid = match root_uuid {
+            Some(s) => Some(uuid::Uuid::parse_str(&s).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("Invalid UUID: {e}"))
+            })?),
+            None => None,
+        };
+        let trajectory = self.inner.export(uuid);
+        serde_json::to_string(&trajectory).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Serialization error: {e}"))
+        })
+    }
+
+    /// Clear all collected events.
+    fn clear(&self) {
+        self.inner.clear();
+    }
+
+    fn __repr__(&self) -> String {
+        "<AtifExporter>".to_string()
     }
 }
 
@@ -753,5 +905,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLLMHandle>()?;
     m.add_class::<PyLLMRequest>()?;
     m.add_class::<PyEvent>()?;
+    m.add_class::<PyAtifExporter>()?;
     Ok(())
 }

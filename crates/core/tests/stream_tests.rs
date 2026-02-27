@@ -36,6 +36,7 @@ fn make_stream(items: Vec<Result<String>>) -> Pin<Box<dyn Stream<Item = Result<S
 ///
 /// Returns `(collector, finalizer, collected_chunks)` where `collected_chunks`
 /// can be inspected after the stream is consumed.
+#[allow(clippy::type_complexity)]
 fn make_collector_finalizer() -> (
     Box<dyn FnMut(String) + Send>,
     Box<dyn FnOnce() -> Json + Send>,
@@ -240,6 +241,7 @@ async fn test_stream_wrapper_emits_end_event() {
         LLMAttributes::STREAMING,
         None,
         None,
+        None,
     )
     .unwrap();
 
@@ -429,6 +431,7 @@ async fn test_stream_wrapper_response_intercepts_on_aggregated() {
         LLMAttributes::STREAMING,
         None,
         None,
+        None,
     )
     .unwrap();
 
@@ -440,17 +443,15 @@ async fn test_stream_wrapper_response_intercepts_on_aggregated() {
     // Consume the stream
     while let Some(_item) = wrapper.next().await {}
 
-    // The END event should contain the response-intercepted data
+    // The END event should contain the response-intercepted output
     let captured = events.lock().unwrap();
     let end_event = captured
         .iter()
         .find(|e| e.event_type == EventType::End)
         .unwrap();
-    let data = end_event.data.as_ref().unwrap();
-    // The sanitized_result should contain the intercepted response
-    let sanitized = &data["sanitized_result"];
-    assert_eq!(sanitized["aggregated"], "response");
-    assert_eq!(sanitized["intercepted"], true);
+    let output = end_event.output.as_ref().unwrap();
+    assert_eq!(output["aggregated"], "response");
+    assert_eq!(output["intercepted"], true);
 
     drop(captured);
     nvagentrt_deregister_subscriber("resp_intercept_test").unwrap();
@@ -558,6 +559,7 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
         LLMAttributes::STREAMING,
         None,
         None,
+        None,
     )
     .unwrap();
 
@@ -567,17 +569,16 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
     // Consume the stream
     while let Some(_item) = wrapper.next().await {}
 
-    // The END event should contain the finalizer's aggregated response
+    // The END event output should contain the finalizer's aggregated response
     let captured = events.lock().unwrap();
     let end_event = captured
         .iter()
         .find(|e| e.event_type == EventType::End)
         .unwrap();
-    let data = end_event.data.as_ref().unwrap();
-    let sanitized = &data["sanitized_result"];
+    let output = end_event.output.as_ref().unwrap();
     // The default finalizer collects JSON-parseable chunks into an array
-    assert!(sanitized.is_array());
-    let arr = sanitized.as_array().unwrap();
+    assert!(output.is_array());
+    let arr = output.as_array().unwrap();
     assert_eq!(arr.len(), 2);
     assert_eq!(arr[0]["token"], "a");
     assert_eq!(arr[1]["token"], "b");

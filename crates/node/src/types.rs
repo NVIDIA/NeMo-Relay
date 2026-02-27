@@ -368,6 +368,16 @@ pub struct JsEvent {
     pub event_type: i32,
     /// The scope type as an integer (0=Agent, 1=Function, ..., 10=Unknown), or `null` if absent.
     pub scope_type: Option<i32>,
+    /// Post-guardrail input (tool args, LLM request) as a JSON string, or `null`.
+    pub input: Option<String>,
+    /// Post-guardrail output (tool result, LLM response) as a JSON string, or `null`.
+    pub output: Option<String>,
+    /// LLM model identifier, or `null`.
+    pub model_name: Option<String>,
+    /// External correlation ID for tool calls, or `null`.
+    pub tool_call_id: Option<String>,
+    /// UUID of the root scope for concurrent agent isolation, or `null`.
+    pub root_uuid: Option<String>,
 }
 
 impl From<&core_types::Event> for JsEvent {
@@ -397,6 +407,17 @@ impl From<&core_types::Event> for JsEvent {
                 core_types::ScopeType::Custom => 9,
                 core_types::ScopeType::Unknown => 10,
             }),
+            input: e
+                .input
+                .as_ref()
+                .map(|v| serde_json::to_string(v).unwrap_or_default()),
+            output: e
+                .output
+                .as_ref()
+                .map(|v| serde_json::to_string(v).unwrap_or_default()),
+            model_name: e.model_name.clone(),
+            tool_call_id: e.tool_call_id.clone(),
+            root_uuid: e.root_uuid.map(|u| u.to_string()),
         }
     }
 }

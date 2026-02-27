@@ -29,8 +29,16 @@ fn parse_json(s: &str) -> JsValue {
 #[wasm_bindgen_test]
 fn test_tool_call_and_end() {
     let args = parse_json(r#"{"x": 1}"#);
-    let handle =
-        nvagentrt_tool_call("test_tool", args, None, None, JsValue::NULL, JsValue::NULL).unwrap();
+    let handle = nvagentrt_tool_call(
+        "test_tool",
+        args,
+        None,
+        None,
+        JsValue::NULL,
+        JsValue::NULL,
+        None,
+    )
+    .unwrap();
     assert_eq!(handle.name(), "test_tool");
     assert!(!handle.uuid().is_empty());
 
@@ -48,6 +56,7 @@ fn test_tool_call_with_attributes() {
         Some(TOOL_LOCAL),
         JsValue::NULL,
         JsValue::NULL,
+        None,
     )
     .unwrap();
     assert_eq!(handle.attributes(), TOOL_LOCAL);
@@ -61,7 +70,7 @@ fn test_tool_call_with_data_metadata() {
     let args = parse_json(r#"{}"#);
     let data = parse_json(r#"{"info":"test"}"#);
     let meta = parse_json(r#"{"version":"1.0"}"#);
-    let handle = nvagentrt_tool_call("data_tool", args, None, None, data, meta).unwrap();
+    let handle = nvagentrt_tool_call("data_tool", args, None, None, data, meta, None).unwrap();
 
     let result = parse_json(r#"{}"#);
     let end_data = parse_json(r#"{"done":true}"#);
@@ -80,6 +89,7 @@ fn test_tool_call_with_parent() {
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
     )
     .unwrap();
     assert_eq!(handle.parent_uuid().unwrap(), scope_uuid);
@@ -98,8 +108,16 @@ fn test_tool_call_generates_events() {
     register_subscriber("wasm_tool_evt_sub", cb).unwrap();
 
     let args = parse_json(r#"{}"#);
-    let handle =
-        nvagentrt_tool_call("evt_tool", args, None, None, JsValue::NULL, JsValue::NULL).unwrap();
+    let handle = nvagentrt_tool_call(
+        "evt_tool",
+        args,
+        None,
+        None,
+        JsValue::NULL,
+        JsValue::NULL,
+        None,
+    )
+    .unwrap();
     let result = parse_json(r#"{}"#);
     nvagentrt_tool_call_end(&handle, result, JsValue::NULL, JsValue::NULL).unwrap();
 
