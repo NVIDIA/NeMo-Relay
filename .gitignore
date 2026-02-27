@@ -35,7 +35,6 @@ crates/wasm/pkg/
 
 # Testing / caches
 .pytest_cache/
-package-lock.json
 
 # OS — macOS
 .DS_Store

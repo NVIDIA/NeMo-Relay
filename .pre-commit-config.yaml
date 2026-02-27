@@ -2,16 +2,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 repos:
+  # SPDX copyright header check
+  - repo: local
+    hooks:
+      - id: copyright-header
+        name: copyright header
+        entry: python3 scripts/check_copyright.py
+        language: system
+        files: '\.(rs|go|py|pyi|toml|yaml|yml|md|mjs|js|ts|h|sh)$|\.gitignore$'
+        exclude: '(index\.js|index\.d\.ts|nvagentrt\.h|node_modules/|target/|\.venv/|pkg/)$'
+
   # General file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
       - id: check-yaml
       - id: check-toml
       - id: check-json
       - id: check-merge-conflict
+      - id: check-symlinks
+      - id: end-of-file-fixer
       - id: check-added-large-files
         args: ["--maxkb=500"]
 
@@ -46,6 +60,13 @@ repos:
       - id: cargo-clippy
         name: cargo clippy
         entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-check
+        name: cargo check
+        entry: cargo check --workspace --all-targets
         language: system
         types: [rust]
         pass_filenames: false
