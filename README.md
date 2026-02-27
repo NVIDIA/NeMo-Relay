@@ -114,7 +114,7 @@ flowchart TB
         RequestIntercepts[/Request Intercepts/]
         ConditionalExecutionGuardrails{{Conditional-Execution Guardrail}}
         RaiseException[Raise Exception]
-        subgraph Invoke
+        subgraph Invocation
             direction TB
             HasExecutionIntercept{{Has Valid Execution Intercept}}
             ExecutionIntercepts[/Execution Intercept/]
@@ -129,32 +129,43 @@ flowchart TB
         end
 
         ResponseIntercepts[/Response Intercepts/]
+
+        subgraph Observability
+            direction TB
+            SanitizeRequestGuardrails[/Sanitize Request Guardrail/]
+            SanitizeResponseGuardrails[/Sanitize Response Guardrail/]
+            EventSubscribers[["Event Subscribers"]]
+        end
     end
 
-    subgraph Observability
-        direction TB
-        SanitizeRequestGuardrails[/Sanitize Request Guardrail/]
-        SanitizeResponseGuardrails[/Sanitize Response Guardrail/]
-        EventSubscribers[["Event Subscribers"]]
-    end
     Response([Response])
 
+
     Request -->|Request| RequestIntercepts
-    RequestIntercepts -->|Transformed Request| SanitizeRequestGuardrails & ConditionalExecutionGuardrails
-    ConditionalExecutionGuardrails -->|"(rejected)"| RaiseException & EventSubscribers
-    ConditionalExecutionGuardrails -->|"(passed)" Transformed Request| Invoke
+    RequestIntercepts -->|Transformed Request| SanitizeRequestGuardrails
+    RequestIntercepts -->|Transformed Request| ConditionalExecutionGuardrails
+    ConditionalExecutionGuardrails -->|"(rejected)"| EventSubscribers
+    ConditionalExecutionGuardrails -->|"(rejected)"| RaiseException
+    ConditionalExecutionGuardrails -->|"(passed)" Transformed Request| Invocation
     HasExecutionIntercept -->|Yes| ExecutionIntercepts
     HasExecutionIntercept -->|No| DefaultCallable
-    Invoke -->|Response| ResponseIntercepts
-    Invoke -.->|Streaming Response| StreamingResponseIntercepts
-    ResponseIntercepts ==>|Transformed Response| SanitizeResponseGuardrails
+
+    Invocation -->|Response| ResponseIntercepts
+    ResponseIntercepts -->|Transformed Response| SanitizeResponseGuardrails
     ResponseIntercepts -->|Transformed Response| Response
+
+    Invocation -.->|stream chunks| StreamingResponseIntercepts
     StreamingResponseIntercepts -.->|"(stream ends)"| Finalizer
-    Finalizer -.->|Aggregated Response| ResponseIntercepts
-    StreamingResponseIntercepts -.->|stream chunk| Collector
-    Collector -.->|stream chunk| Response
+    StreamingResponseIntercepts -.->|stream chunks| Collector
+    Collector -..->|stream chunks| Response
+    Finalizer -.->|Aggregated Response| SanitizeResponseGuardrails
+    Finalizer o--o|shared state| Collector
+
+
     SanitizeRequestGuardrails -->|Sanitized Request| EventSubscribers
     SanitizeResponseGuardrails -->|Sanitized Response| EventSubscribers
+
+
 
     style Request fill:#eee,stroke:#333,color:#333
     style Response fill:#eee,stroke:#333,color:#333
