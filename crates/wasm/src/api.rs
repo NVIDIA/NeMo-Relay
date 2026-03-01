@@ -892,6 +892,66 @@ pub fn set_thread_scope_stack(stack: &WasmScopeStack) {
 }
 
 // ---------------------------------------------------------------------------
+// Standalone middleware chains
+// ---------------------------------------------------------------------------
+
+/// Runs the registered tool request intercept chain on the given arguments.
+#[wasm_bindgen(js_name = "toolRequestIntercepts")]
+pub fn nvagentrt_tool_request_intercepts_wasm(
+    name: &str,
+    args: JsValue,
+) -> Result<JsValue, JsValue> {
+    let args_json = js_to_json(&args)?;
+    let result =
+        nvagentrt_core::nvagentrt_tool_request_intercepts(name, args_json).map_err(to_js_err)?;
+    Ok(json_to_js(&result))
+}
+
+/// Runs the registered tool conditional execution guardrail chain.
+#[wasm_bindgen(js_name = "toolConditionalExecution")]
+pub fn nvagentrt_tool_conditional_execution_wasm(name: &str, args: JsValue) -> Result<(), JsValue> {
+    let args_json = js_to_json(&args)?;
+    nvagentrt_core::nvagentrt_tool_conditional_execution(name, &args_json).map_err(to_js_err)
+}
+
+/// Runs the registered tool response intercept chain on the given result.
+#[wasm_bindgen(js_name = "toolResponseIntercepts")]
+pub fn nvagentrt_tool_response_intercepts_wasm(
+    name: &str,
+    result: JsValue,
+) -> Result<JsValue, JsValue> {
+    let result_json = js_to_json(&result)?;
+    let transformed =
+        nvagentrt_core::nvagentrt_tool_response_intercepts(name, result_json).map_err(to_js_err)?;
+    Ok(json_to_js(&transformed))
+}
+
+/// Runs the registered LLM request intercept chain on the given request.
+#[wasm_bindgen(js_name = "llmRequestIntercepts")]
+pub fn nvagentrt_llm_request_intercepts_wasm(
+    request: &WasmLLMRequest,
+) -> Result<WasmLLMRequest, JsValue> {
+    let result = nvagentrt_core::nvagentrt_llm_request_intercepts(request.inner.clone())
+        .map_err(to_js_err)?;
+    Ok(WasmLLMRequest { inner: result })
+}
+
+/// Runs the registered LLM conditional execution guardrail chain.
+#[wasm_bindgen(js_name = "llmConditionalExecution")]
+pub fn nvagentrt_llm_conditional_execution_wasm(request: &WasmLLMRequest) -> Result<(), JsValue> {
+    nvagentrt_core::nvagentrt_llm_conditional_execution(&request.inner).map_err(to_js_err)
+}
+
+/// Runs the registered LLM response intercept chain on the given response.
+#[wasm_bindgen(js_name = "llmResponseIntercepts")]
+pub fn nvagentrt_llm_response_intercepts_wasm(response: JsValue) -> Result<JsValue, JsValue> {
+    let response_json = js_to_json(&response)?;
+    let transformed =
+        nvagentrt_core::nvagentrt_llm_response_intercepts(response_json).map_err(to_js_err)?;
+    Ok(json_to_js(&transformed))
+}
+
+// ---------------------------------------------------------------------------
 // ATIF exporter
 // ---------------------------------------------------------------------------
 

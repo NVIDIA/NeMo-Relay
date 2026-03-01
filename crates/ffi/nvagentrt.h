@@ -917,6 +917,93 @@ NvAgentRtStatus nvagentrt_atif_exporter_export(const struct FfiAtifExporter *exp
 NvAgentRtStatus nvagentrt_atif_exporter_clear(const struct FfiAtifExporter *exporter);
 
 /**
+ * Run the registered tool request intercept chain on the given arguments.
+ *
+ * # Parameters
+ * - `name`: Tool name (null-terminated C string).
+ * - `args_json`: Tool arguments as a JSON C string.
+ * - `out`: On success, receives the transformed JSON string (caller must free
+ *   with `nvagentrt_string_free`).
+ *
+ * # Safety
+ * All pointers must be valid. `out` must be non-null.
+ */
+NvAgentRtStatus nvagentrt_tool_request_intercepts(const char *name,
+                                                  const char *args_json,
+                                                  char **out);
+
+/**
+ * Run the registered tool conditional execution guardrail chain.
+ *
+ * Returns `NvAgentRtStatus::Ok` if all guardrails pass, or
+ * `NvAgentRtStatus::GuardrailRejected` if blocked.
+ *
+ * # Parameters
+ * - `name`: Tool name (null-terminated C string).
+ * - `args_json`: Tool arguments as a JSON C string.
+ *
+ * # Safety
+ * All pointers must be valid.
+ */
+NvAgentRtStatus nvagentrt_tool_conditional_execution(const char *name, const char *args_json);
+
+/**
+ * Run the registered tool response intercept chain on the given result.
+ *
+ * # Parameters
+ * - `name`: Tool name (null-terminated C string).
+ * - `result_json`: Tool result as a JSON C string.
+ * - `out`: On success, receives the transformed JSON string (caller must free
+ *   with `nvagentrt_string_free`).
+ *
+ * # Safety
+ * All pointers must be valid. `out` must be non-null.
+ */
+NvAgentRtStatus nvagentrt_tool_response_intercepts(const char *name,
+                                                   const char *result_json,
+                                                   char **out);
+
+/**
+ * Run the registered LLM request intercept chain on the given request.
+ *
+ * # Parameters
+ * - `request_json`: LLM request as a JSON C string (serialized LLMRequest).
+ * - `out`: On success, receives the transformed JSON string (caller must free
+ *   with `nvagentrt_string_free`).
+ *
+ * # Safety
+ * All pointers must be valid. `out` must be non-null.
+ */
+NvAgentRtStatus nvagentrt_llm_request_intercepts(const char *request_json, char **out);
+
+/**
+ * Run the registered LLM conditional execution guardrail chain.
+ *
+ * Returns `NvAgentRtStatus::Ok` if all guardrails pass, or
+ * `NvAgentRtStatus::GuardrailRejected` if blocked.
+ *
+ * # Parameters
+ * - `request_json`: LLM request as a JSON C string (serialized LLMRequest).
+ *
+ * # Safety
+ * All pointers must be valid.
+ */
+NvAgentRtStatus nvagentrt_llm_conditional_execution(const char *request_json);
+
+/**
+ * Run the registered LLM response intercept chain on the given response.
+ *
+ * # Parameters
+ * - `response_json`: LLM response as a JSON C string.
+ * - `out`: On success, receives the transformed JSON string (caller must free
+ *   with `nvagentrt_string_free`).
+ *
+ * # Safety
+ * All pointers must be valid. `out` must be non-null.
+ */
+NvAgentRtStatus nvagentrt_llm_response_intercepts(const char *response_json, char **out);
+
+/**
  * Free a C string previously returned by any `nvagentrt_*` accessor function.
  * Passing null is a safe no-op.
  *

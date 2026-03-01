@@ -32,6 +32,18 @@ Functions:
         ``LlmStream`` that can be iterated with ``async for``.
         Stream-response intercepts are applied to each SSE event in flight.
 
+    request_intercepts(request)
+        Run the registered LLM request intercept chain on the given request.
+        Returns the transformed ``LLMRequest``.
+
+    conditional_execution(request)
+        Run the registered LLM conditional execution guardrail chain.
+        Raises ``RuntimeError`` if any guardrail rejects.
+
+    response_intercepts(response)
+        Run the registered LLM response intercept chain on the given response.
+        Returns the transformed response.
+
 Example::
 
     import nvagentrt
@@ -65,7 +77,24 @@ from nvagentrt._native import (
     nvagentrt_llm_call_execute as execute,
 )
 from nvagentrt._native import (
+    nvagentrt_llm_conditional_execution as conditional_execution,
+)
+from nvagentrt._native import (
+    nvagentrt_llm_request_intercepts as request_intercepts,
+)
+from nvagentrt._native import (
+    nvagentrt_llm_response_intercepts as response_intercepts,
+)
+from nvagentrt._native import (
     nvagentrt_llm_stream_call_execute as stream_execute,
 )
 
-__all__ = ["call", "call_end", "execute", "stream_execute"]
+__all__ = [
+    "call",
+    "call_end",
+    "execute",
+    "stream_execute",
+    "request_intercepts",
+    "conditional_execution",
+    "response_intercepts",
+]

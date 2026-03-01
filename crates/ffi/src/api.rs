@@ -1819,3 +1819,201 @@ pub unsafe extern "C" fn nvagentrt_atif_exporter_clear(
     unsafe { &*exporter }.0.clear();
     NvAgentRtStatus::Ok
 }
+
+// ---------------------------------------------------------------------------
+// Standalone middleware chains
+// ---------------------------------------------------------------------------
+
+/// Run the registered tool request intercept chain on the given arguments.
+///
+/// # Parameters
+/// - `name`: Tool name (null-terminated C string).
+/// - `args_json`: Tool arguments as a JSON C string.
+/// - `out`: On success, receives the transformed JSON string (caller must free
+///   with `nvagentrt_string_free`).
+///
+/// # Safety
+/// All pointers must be valid. `out` must be non-null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_tool_request_intercepts(
+    name: *const c_char,
+    args_json: *const c_char,
+    out: *mut *mut c_char,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    let args = match c_str_to_json(args_json) {
+        Some(a) => a,
+        None => return NvAgentRtStatus::InvalidJson,
+    };
+    match core::nvagentrt_tool_request_intercepts(&name, args) {
+        Ok(result) => {
+            unsafe { *out = json_to_c_string(&result) };
+            NvAgentRtStatus::Ok
+        }
+        Err(e) => status_from_error(&e),
+    }
+}
+
+/// Run the registered tool conditional execution guardrail chain.
+///
+/// Returns `NvAgentRtStatus::Ok` if all guardrails pass, or
+/// `NvAgentRtStatus::GuardrailRejected` if blocked.
+///
+/// # Parameters
+/// - `name`: Tool name (null-terminated C string).
+/// - `args_json`: Tool arguments as a JSON C string.
+///
+/// # Safety
+/// All pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_tool_conditional_execution(
+    name: *const c_char,
+    args_json: *const c_char,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    let args = match c_str_to_json(args_json) {
+        Some(a) => a,
+        None => return NvAgentRtStatus::InvalidJson,
+    };
+    match core::nvagentrt_tool_conditional_execution(&name, &args) {
+        Ok(()) => NvAgentRtStatus::Ok,
+        Err(e) => status_from_error(&e),
+    }
+}
+
+/// Run the registered tool response intercept chain on the given result.
+///
+/// # Parameters
+/// - `name`: Tool name (null-terminated C string).
+/// - `result_json`: Tool result as a JSON C string.
+/// - `out`: On success, receives the transformed JSON string (caller must free
+///   with `nvagentrt_string_free`).
+///
+/// # Safety
+/// All pointers must be valid. `out` must be non-null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_tool_response_intercepts(
+    name: *const c_char,
+    result_json: *const c_char,
+    out: *mut *mut c_char,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    let result = match c_str_to_json(result_json) {
+        Some(r) => r,
+        None => return NvAgentRtStatus::InvalidJson,
+    };
+    match core::nvagentrt_tool_response_intercepts(&name, result) {
+        Ok(transformed) => {
+            unsafe { *out = json_to_c_string(&transformed) };
+            NvAgentRtStatus::Ok
+        }
+        Err(e) => status_from_error(&e),
+    }
+}
+
+/// Run the registered LLM request intercept chain on the given request.
+///
+/// # Parameters
+/// - `request_json`: LLM request as a JSON C string (serialized LLMRequest).
+/// - `out`: On success, receives the transformed JSON string (caller must free
+///   with `nvagentrt_string_free`).
+///
+/// # Safety
+/// All pointers must be valid. `out` must be non-null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_llm_request_intercepts(
+    request_json: *const c_char,
+    out: *mut *mut c_char,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    let request_str = match c_str_to_string(request_json) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    let request: core::LLMRequest = match serde_json::from_str(&request_str) {
+        Ok(r) => r,
+        Err(_) => return NvAgentRtStatus::InvalidJson,
+    };
+    match core::nvagentrt_llm_request_intercepts(request) {
+        Ok(result) => match serde_json::to_string(&result) {
+            Ok(json_str) => {
+                unsafe { *out = str_to_c_string(&json_str) };
+                NvAgentRtStatus::Ok
+            }
+            Err(e) => {
+                set_last_error(&format!("failed to serialize LLMRequest: {e}"));
+                NvAgentRtStatus::Internal
+            }
+        },
+        Err(e) => status_from_error(&e),
+    }
+}
+
+/// Run the registered LLM conditional execution guardrail chain.
+///
+/// Returns `NvAgentRtStatus::Ok` if all guardrails pass, or
+/// `NvAgentRtStatus::GuardrailRejected` if blocked.
+///
+/// # Parameters
+/// - `request_json`: LLM request as a JSON C string (serialized LLMRequest).
+///
+/// # Safety
+/// All pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_llm_conditional_execution(
+    request_json: *const c_char,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    let request_str = match c_str_to_string(request_json) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    let request: core::LLMRequest = match serde_json::from_str(&request_str) {
+        Ok(r) => r,
+        Err(_) => return NvAgentRtStatus::InvalidJson,
+    };
+    match core::nvagentrt_llm_conditional_execution(&request) {
+        Ok(()) => NvAgentRtStatus::Ok,
+        Err(e) => status_from_error(&e),
+    }
+}
+
+/// Run the registered LLM response intercept chain on the given response.
+///
+/// # Parameters
+/// - `response_json`: LLM response as a JSON C string.
+/// - `out`: On success, receives the transformed JSON string (caller must free
+///   with `nvagentrt_string_free`).
+///
+/// # Safety
+/// All pointers must be valid. `out` must be non-null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_llm_response_intercepts(
+    response_json: *const c_char,
+    out: *mut *mut c_char,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    let response = match c_str_to_json(response_json) {
+        Some(r) => r,
+        None => return NvAgentRtStatus::InvalidJson,
+    };
+    match core::nvagentrt_llm_response_intercepts(response) {
+        Ok(transformed) => {
+            unsafe { *out = json_to_c_string(&transformed) };
+            NvAgentRtStatus::Ok
+        }
+        Err(e) => status_from_error(&e),
+    }
+}

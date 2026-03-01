@@ -604,6 +604,52 @@ async def nvagentrt_llm_stream_call_execute(
     ...
 
 # ---------------------------------------------------------------------------
+# Standalone middleware chains
+# ---------------------------------------------------------------------------
+
+def nvagentrt_tool_request_intercepts(name: str, args: Json) -> Json:
+    """Run the registered tool request intercept chain.
+
+    Returns the transformed arguments.
+    """
+    ...
+
+def nvagentrt_tool_conditional_execution(name: str, args: Json) -> None:
+    """Run the registered tool conditional execution guardrail chain.
+
+    Raises ``RuntimeError`` if any guardrail rejects.
+    """
+    ...
+
+def nvagentrt_tool_response_intercepts(name: str, result: Json) -> Json:
+    """Run the registered tool response intercept chain.
+
+    Returns the transformed result.
+    """
+    ...
+
+def nvagentrt_llm_request_intercepts(request: LLMRequest) -> LLMRequest:
+    """Run the registered LLM request intercept chain.
+
+    Returns the transformed request.
+    """
+    ...
+
+def nvagentrt_llm_conditional_execution(request: LLMRequest) -> None:
+    """Run the registered LLM conditional execution guardrail chain.
+
+    Raises ``RuntimeError`` if any guardrail rejects.
+    """
+    ...
+
+def nvagentrt_llm_response_intercepts(response: Json) -> Json:
+    """Run the registered LLM response intercept chain.
+
+    Returns the transformed response.
+    """
+    ...
+
+# ---------------------------------------------------------------------------
 # Tool guardrails
 # ---------------------------------------------------------------------------
 

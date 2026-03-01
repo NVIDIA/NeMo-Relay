@@ -45,3 +45,24 @@ func CallEnd(handle *nvagentrt.ToolHandle, result json.RawMessage, opts ...nvage
 func Execute(name string, args json.RawMessage, fn nvagentrt.ToolExecutionFunc, opts ...nvagentrt.ToolCallOption) (json.RawMessage, error) {
 	return nvagentrt.ToolCallExecute(name, args, fn, opts...)
 }
+
+// RequestIntercepts runs the registered tool request intercept chain on the
+// given arguments and returns the transformed arguments. This is a shorthand for
+// [nvagentrt.ToolRequestIntercepts].
+func RequestIntercepts(name string, args json.RawMessage) (json.RawMessage, error) {
+	return nvagentrt.ToolRequestIntercepts(name, args)
+}
+
+// ConditionalExecution runs the registered tool conditional execution guardrail
+// chain. Returns nil if all guardrails pass, or an error with the rejection
+// reason if blocked. This is a shorthand for [nvagentrt.ToolConditionalExecution].
+func ConditionalExecution(name string, args json.RawMessage) error {
+	return nvagentrt.ToolConditionalExecution(name, args)
+}
+
+// ResponseIntercepts runs the registered tool response intercept chain on the
+// given result and returns the transformed result. This is a shorthand for
+// [nvagentrt.ToolResponseIntercepts].
+func ResponseIntercepts(name string, result json.RawMessage) (json.RawMessage, error) {
+	return nvagentrt.ToolResponseIntercepts(name, result)
+}

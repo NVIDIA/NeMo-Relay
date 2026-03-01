@@ -21,6 +21,18 @@ Functions:
         guardrails → execution intercepts → *func* → response intercepts →
         sanitize-response guardrails). Returns an awaitable of the final result.
 
+    request_intercepts(name, args)
+        Run the registered tool request intercept chain on the given arguments.
+        Returns the transformed arguments.
+
+    conditional_execution(name, args)
+        Run the registered tool conditional execution guardrail chain.
+        Raises ``RuntimeError`` if any guardrail rejects.
+
+    response_intercepts(name, result)
+        Run the registered tool response intercept chain on the given result.
+        Returns the transformed result.
+
 Example::
 
     import nvagentrt
@@ -43,5 +55,14 @@ from nvagentrt._native import (
 from nvagentrt._native import (
     nvagentrt_tool_call_execute as execute,
 )
+from nvagentrt._native import (
+    nvagentrt_tool_conditional_execution as conditional_execution,
+)
+from nvagentrt._native import (
+    nvagentrt_tool_request_intercepts as request_intercepts,
+)
+from nvagentrt._native import (
+    nvagentrt_tool_response_intercepts as response_intercepts,
+)
 
-__all__ = ["call", "call_end", "execute"]
+__all__ = ["call", "call_end", "execute", "request_intercepts", "conditional_execution", "response_intercepts"]

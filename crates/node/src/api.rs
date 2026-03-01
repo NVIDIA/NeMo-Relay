@@ -830,6 +830,54 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 }
 
 // ---------------------------------------------------------------------------
+// Standalone middleware chains
+// ---------------------------------------------------------------------------
+
+/// Run the registered tool request intercept chain on the given arguments.
+/// Returns the transformed arguments.
+#[napi]
+pub fn tool_request_intercepts(name: String, args: Json) -> Result<Json> {
+    core::nvagentrt_tool_request_intercepts(&name, args).map_err(to_napi_err)
+}
+
+/// Run the registered tool conditional execution guardrail chain.
+/// Throws if any guardrail rejects.
+#[napi]
+pub fn tool_conditional_execution(name: String, args: Json) -> Result<()> {
+    core::nvagentrt_tool_conditional_execution(&name, &args).map_err(to_napi_err)
+}
+
+/// Run the registered tool response intercept chain on the given result.
+/// Returns the transformed result.
+#[napi]
+pub fn tool_response_intercepts(name: String, result: Json) -> Result<Json> {
+    core::nvagentrt_tool_response_intercepts(&name, result).map_err(to_napi_err)
+}
+
+/// Run the registered LLM request intercept chain on the given request.
+/// Returns the transformed request.
+#[napi]
+pub fn llm_request_intercepts(request: &JsLLMRequest) -> Result<JsLLMRequest> {
+    let result =
+        core::nvagentrt_llm_request_intercepts(request.inner.clone()).map_err(to_napi_err)?;
+    Ok(JsLLMRequest { inner: result })
+}
+
+/// Run the registered LLM conditional execution guardrail chain.
+/// Throws if any guardrail rejects.
+#[napi]
+pub fn llm_conditional_execution(request: &JsLLMRequest) -> Result<()> {
+    core::nvagentrt_llm_conditional_execution(&request.inner).map_err(to_napi_err)
+}
+
+/// Run the registered LLM response intercept chain on the given response.
+/// Returns the transformed response.
+#[napi]
+pub fn llm_response_intercepts(response: Json) -> Result<Json> {
+    core::nvagentrt_llm_response_intercepts(response).map_err(to_napi_err)
+}
+
+// ---------------------------------------------------------------------------
 // ATIF Exporter
 // ---------------------------------------------------------------------------
 

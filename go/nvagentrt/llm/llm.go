@@ -60,3 +60,24 @@ func Execute(name string, request *nvagentrt.LLMRequest, fn nvagentrt.LLMExecuti
 func StreamExecute(name string, request *nvagentrt.LLMRequest, fn nvagentrt.LLMExecutionFunc, collector nvagentrt.CollectorFunc, finalizer nvagentrt.FinalizerFunc, opts ...nvagentrt.LLMCallOption) (*nvagentrt.LlmStream, error) {
 	return nvagentrt.LlmStreamCallExecute(name, request, fn, collector, finalizer, opts...)
 }
+
+// RequestIntercepts runs the registered LLM request intercept chain on the
+// given request and returns the transformed request. This is a shorthand for
+// [nvagentrt.LlmRequestIntercepts].
+func RequestIntercepts(request json.RawMessage) (json.RawMessage, error) {
+	return nvagentrt.LlmRequestIntercepts(request)
+}
+
+// ConditionalExecution runs the registered LLM conditional execution guardrail
+// chain. Returns nil if all guardrails pass, or an error with the rejection
+// reason if blocked. This is a shorthand for [nvagentrt.LlmConditionalExecution].
+func ConditionalExecution(request json.RawMessage) error {
+	return nvagentrt.LlmConditionalExecution(request)
+}
+
+// ResponseIntercepts runs the registered LLM response intercept chain on the
+// given response and returns the transformed response. This is a shorthand for
+// [nvagentrt.LlmResponseIntercepts].
+func ResponseIntercepts(response json.RawMessage) (json.RawMessage, error) {
+	return nvagentrt.LlmResponseIntercepts(response)
+}

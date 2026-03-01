@@ -29,6 +29,8 @@
 package guardrails
 
 import (
+	"encoding/json"
+
 	"github.com/nvidia/nvagentrt/go/nvagentrt"
 )
 
@@ -128,4 +130,22 @@ func RegisterLlmConditionalExecution(name string, priority int32, fn nvagentrt.L
 // [nvagentrt.DeregisterLlmConditionalExecutionGuardrail].
 func DeregisterLlmConditionalExecution(name string) error {
 	return nvagentrt.DeregisterLlmConditionalExecutionGuardrail(name)
+}
+
+// --- Tool Conditional Execution (standalone) ---
+
+// ToolConditionalExecution runs the registered tool conditional execution
+// guardrail chain. Returns nil if all pass, or an error if blocked. This is a
+// shorthand for [nvagentrt.ToolConditionalExecution].
+func ToolConditionalExecution(name string, args json.RawMessage) error {
+	return nvagentrt.ToolConditionalExecution(name, args)
+}
+
+// --- LLM Conditional Execution (standalone) ---
+
+// LlmConditionalExecution runs the registered LLM conditional execution
+// guardrail chain. Returns nil if all pass, or an error if blocked. This is a
+// shorthand for [nvagentrt.LlmConditionalExecution].
+func LlmConditionalExecution(request json.RawMessage) error {
+	return nvagentrt.LlmConditionalExecution(request)
 }

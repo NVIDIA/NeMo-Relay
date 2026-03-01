@@ -34,6 +34,8 @@
 package intercepts
 
 import (
+	"encoding/json"
+
 	"github.com/nvidia/nvagentrt/go/nvagentrt"
 )
 
@@ -160,4 +162,40 @@ func RegisterLlmStreamExecution(name string, priority int32, condFn nvagentrt.LL
 // name. This is a shorthand for [nvagentrt.DeregisterLlmStreamExecutionIntercept].
 func DeregisterLlmStreamExecution(name string) error {
 	return nvagentrt.DeregisterLlmStreamExecutionIntercept(name)
+}
+
+// --- Tool Request Intercepts (standalone) ---
+
+// ToolRequestIntercepts runs the registered tool request intercept chain and
+// returns the transformed arguments. This is a shorthand for
+// [nvagentrt.ToolRequestIntercepts].
+func ToolRequestIntercepts(name string, args json.RawMessage) (json.RawMessage, error) {
+	return nvagentrt.ToolRequestIntercepts(name, args)
+}
+
+// --- Tool Response Intercepts (standalone) ---
+
+// ToolResponseIntercepts runs the registered tool response intercept chain and
+// returns the transformed result. This is a shorthand for
+// [nvagentrt.ToolResponseIntercepts].
+func ToolResponseIntercepts(name string, result json.RawMessage) (json.RawMessage, error) {
+	return nvagentrt.ToolResponseIntercepts(name, result)
+}
+
+// --- LLM Request Intercepts (standalone) ---
+
+// LlmRequestIntercepts runs the registered LLM request intercept chain and
+// returns the transformed request. This is a shorthand for
+// [nvagentrt.LlmRequestIntercepts].
+func LlmRequestIntercepts(request json.RawMessage) (json.RawMessage, error) {
+	return nvagentrt.LlmRequestIntercepts(request)
+}
+
+// --- LLM Response Intercepts (standalone) ---
+
+// LlmResponseIntercepts runs the registered LLM response intercept chain and
+// returns the transformed response. This is a shorthand for
+// [nvagentrt.LlmResponseIntercepts].
+func LlmResponseIntercepts(response json.RawMessage) (json.RawMessage, error) {
+	return nvagentrt.LlmResponseIntercepts(response)
 }

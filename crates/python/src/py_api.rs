@@ -831,6 +831,112 @@ fn nvagentrt_deregister_llm_stream_execution_intercept(name: &str) -> PyResult<b
 }
 
 // ---------------------------------------------------------------------------
+// Standalone middleware chains
+// ---------------------------------------------------------------------------
+
+/// Run the registered tool request intercept chain on the given arguments.
+///
+/// Returns the transformed arguments after all intercepts have been applied.
+///
+/// Args:
+///     name: Tool name.
+///     args: Tool arguments (any JSON-serializable object).
+///
+/// Returns:
+///     The (possibly transformed) arguments.
+#[pyfunction]
+fn nvagentrt_tool_request_intercepts<'py>(
+    py: Python<'py>,
+    name: &str,
+    args: &Bound<'py, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let args_json = py_to_json(args)?;
+    let result = core::nvagentrt_tool_request_intercepts(name, args_json).map_err(to_py_err)?;
+    json_to_py(py, &result)
+}
+
+/// Run the registered tool conditional execution guardrail chain.
+///
+/// Raises ``RuntimeError`` with the rejection reason if any guardrail rejects.
+///
+/// Args:
+///     name: Tool name.
+///     args: Tool arguments (any JSON-serializable object).
+#[pyfunction]
+fn nvagentrt_tool_conditional_execution(name: &str, args: &Bound<'_, PyAny>) -> PyResult<()> {
+    let args_json = py_to_json(args)?;
+    core::nvagentrt_tool_conditional_execution(name, &args_json).map_err(to_py_err)
+}
+
+/// Run the registered tool response intercept chain on the given result.
+///
+/// Returns the transformed result after all intercepts have been applied.
+///
+/// Args:
+///     name: Tool name.
+///     result: Tool result (any JSON-serializable object).
+///
+/// Returns:
+///     The (possibly transformed) result.
+#[pyfunction]
+fn nvagentrt_tool_response_intercepts<'py>(
+    py: Python<'py>,
+    name: &str,
+    result: &Bound<'py, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let result_json = py_to_json(result)?;
+    let transformed =
+        core::nvagentrt_tool_response_intercepts(name, result_json).map_err(to_py_err)?;
+    json_to_py(py, &transformed)
+}
+
+/// Run the registered LLM request intercept chain on the given request.
+///
+/// Returns the transformed request after all intercepts have been applied.
+///
+/// Args:
+///     request: The ``LLMRequest`` to transform.
+///
+/// Returns:
+///     A new ``LLMRequest`` with intercepts applied.
+#[pyfunction]
+fn nvagentrt_llm_request_intercepts(request: &PyLLMRequest) -> PyResult<PyLLMRequest> {
+    let result =
+        core::nvagentrt_llm_request_intercepts(request.inner.clone()).map_err(to_py_err)?;
+    Ok(PyLLMRequest { inner: result })
+}
+
+/// Run the registered LLM conditional execution guardrail chain.
+///
+/// Raises ``RuntimeError`` with the rejection reason if any guardrail rejects.
+///
+/// Args:
+///     request: The ``LLMRequest`` to check.
+#[pyfunction]
+fn nvagentrt_llm_conditional_execution(request: &PyLLMRequest) -> PyResult<()> {
+    core::nvagentrt_llm_conditional_execution(&request.inner).map_err(to_py_err)
+}
+
+/// Run the registered LLM response intercept chain on the given response.
+///
+/// Returns the transformed response after all intercepts have been applied.
+///
+/// Args:
+///     response: The LLM response (any JSON-serializable object).
+///
+/// Returns:
+///     The (possibly transformed) response.
+#[pyfunction]
+fn nvagentrt_llm_response_intercepts<'py>(
+    py: Python<'py>,
+    response: &Bound<'py, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let response_json = py_to_json(response)?;
+    let transformed = core::nvagentrt_llm_response_intercepts(response_json).map_err(to_py_err)?;
+    json_to_py(py, &transformed)
+}
+
+// ---------------------------------------------------------------------------
 // Subscriber registrations
 // ---------------------------------------------------------------------------
 
@@ -1008,6 +1114,14 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Subscribers
     m.add_function(wrap_pyfunction!(nvagentrt_register_subscriber, m)?)?;
     m.add_function(wrap_pyfunction!(nvagentrt_deregister_subscriber, m)?)?;
+
+    // Standalone middleware chains
+    m.add_function(wrap_pyfunction!(nvagentrt_tool_request_intercepts, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_tool_conditional_execution, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_tool_response_intercepts, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_llm_request_intercepts, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_llm_conditional_execution, m)?)?;
+    m.add_function(wrap_pyfunction!(nvagentrt_llm_response_intercepts, m)?)?;
 
     Ok(())
 }

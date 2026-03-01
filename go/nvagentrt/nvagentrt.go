@@ -137,6 +137,14 @@ typedef void (*NvAgentRtEventSubscriberFn)(void* user_data, const FfiEvent* even
 extern int32_t nvagentrt_register_subscriber(const char* name, NvAgentRtEventSubscriberFn cb, void* user_data, NvAgentRtFreeFn free_fn);
 extern int32_t nvagentrt_deregister_subscriber(const char* name);
 
+// Standalone middleware chains
+extern int32_t nvagentrt_tool_request_intercepts(const char* name, const char* args_json, char** out);
+extern int32_t nvagentrt_tool_conditional_execution(const char* name, const char* args_json);
+extern int32_t nvagentrt_tool_response_intercepts(const char* name, const char* result_json, char** out);
+extern int32_t nvagentrt_llm_request_intercepts(const char* request_json, char** out);
+extern int32_t nvagentrt_llm_conditional_execution(const char* request_json);
+extern int32_t nvagentrt_llm_response_intercepts(const char* response_json, char** out);
+
 // Error
 extern const char* nvagentrt_last_error();
 
@@ -1237,4 +1245,96 @@ func (e *AtifExporter) Close() {
 		C.nvagentrt_atif_exporter_free(e.ptr)
 		e.ptr = nil
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Standalone middleware chains
+// ---------------------------------------------------------------------------
+
+// ToolRequestIntercepts runs the registered tool request intercept chain on the
+// given arguments and returns the transformed arguments.
+func ToolRequestIntercepts(name string, args json.RawMessage) (json.RawMessage, error) {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	cArgs := C.CString(string(args))
+	defer C.free(unsafe.Pointer(cArgs))
+
+	var out *C.char
+	status := C.nvagentrt_tool_request_intercepts(cName, cArgs, &out)
+	if err := checkStatus(status); err != nil {
+		return nil, err
+	}
+	defer C.nvagentrt_string_free(out)
+	return json.RawMessage(C.GoString(out)), nil
+}
+
+// ToolConditionalExecution runs the registered tool conditional execution
+// guardrail chain. Returns nil if all guardrails pass, or an error with the
+// rejection reason if blocked.
+func ToolConditionalExecution(name string, args json.RawMessage) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	cArgs := C.CString(string(args))
+	defer C.free(unsafe.Pointer(cArgs))
+
+	status := C.nvagentrt_tool_conditional_execution(cName, cArgs)
+	return checkStatus(status)
+}
+
+// ToolResponseIntercepts runs the registered tool response intercept chain on
+// the given result and returns the transformed result.
+func ToolResponseIntercepts(name string, result json.RawMessage) (json.RawMessage, error) {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	cResult := C.CString(string(result))
+	defer C.free(unsafe.Pointer(cResult))
+
+	var out *C.char
+	status := C.nvagentrt_tool_response_intercepts(cName, cResult, &out)
+	if err := checkStatus(status); err != nil {
+		return nil, err
+	}
+	defer C.nvagentrt_string_free(out)
+	return json.RawMessage(C.GoString(out)), nil
+}
+
+// LlmRequestIntercepts runs the registered LLM request intercept chain on the
+// given request (serialized as JSON) and returns the transformed request JSON.
+func LlmRequestIntercepts(request json.RawMessage) (json.RawMessage, error) {
+	cRequest := C.CString(string(request))
+	defer C.free(unsafe.Pointer(cRequest))
+
+	var out *C.char
+	status := C.nvagentrt_llm_request_intercepts(cRequest, &out)
+	if err := checkStatus(status); err != nil {
+		return nil, err
+	}
+	defer C.nvagentrt_string_free(out)
+	return json.RawMessage(C.GoString(out)), nil
+}
+
+// LlmConditionalExecution runs the registered LLM conditional execution
+// guardrail chain. Returns nil if all guardrails pass, or an error with the
+// rejection reason if blocked.
+func LlmConditionalExecution(request json.RawMessage) error {
+	cRequest := C.CString(string(request))
+	defer C.free(unsafe.Pointer(cRequest))
+
+	status := C.nvagentrt_llm_conditional_execution(cRequest)
+	return checkStatus(status)
+}
+
+// LlmResponseIntercepts runs the registered LLM response intercept chain on
+// the given response and returns the transformed response.
+func LlmResponseIntercepts(response json.RawMessage) (json.RawMessage, error) {
+	cResponse := C.CString(string(response))
+	defer C.free(unsafe.Pointer(cResponse))
+
+	var out *C.char
+	status := C.nvagentrt_llm_response_intercepts(cResponse, &out)
+	if err := checkStatus(status); err != nil {
+		return nil, err
+	}
+	defer C.nvagentrt_string_free(out)
+	return json.RawMessage(C.GoString(out)), nil
 }

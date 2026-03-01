@@ -18,6 +18,10 @@
 //!   `nvagentrt_deregister_*_intercept` for tool and LLM request/response/execution intercepts
 //! - **Subscriber registration** — [`nvagentrt_register_subscriber`],
 //!   [`nvagentrt_deregister_subscriber`]
+//! - **Standalone middleware chains** — [`nvagentrt_tool_request_intercepts`],
+//!   [`nvagentrt_tool_conditional_execution`], [`nvagentrt_tool_response_intercepts`],
+//!   [`nvagentrt_llm_request_intercepts`], [`nvagentrt_llm_conditional_execution`],
+//!   [`nvagentrt_llm_response_intercepts`]
 //!
 //! All functions operate on the global context singleton returned by
 //! [`global_context`].
@@ -801,6 +805,94 @@ pub async fn nvagentrt_llm_stream_call_execute(
     // Wrap in LlmStreamWrapper which handles intercepts, collector/finalizer, and END event
     let wrapper = LlmStreamWrapper::new(raw_stream, handle, collector, finalizer, data, metadata);
     Ok(Box::pin(wrapper))
+}
+
+// ---------------------------------------------------------------------------
+// Standalone middleware chain functions
+// ---------------------------------------------------------------------------
+
+/// Runs the registered tool request intercept chain on the given arguments.
+///
+/// Returns the transformed arguments after all intercepts have been applied.
+/// This allows invoking request intercepts independently of the full
+/// [`nvagentrt_tool_call_execute`] pipeline.
+pub fn nvagentrt_tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
+    let ctx = global_context();
+    let mut state = ctx
+        .write()
+        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+    Ok(state.tool_request_intercepts_chain(name, args))
+}
+
+/// Runs the registered tool conditional execution guardrail chain.
+///
+/// Returns `Ok(())` if all guardrails pass, or
+/// [`Err(AgentRtError::GuardrailRejected(reason))`](AgentRtError::GuardrailRejected)
+/// if any guardrail rejects the call.
+pub fn nvagentrt_tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
+    let ctx = global_context();
+    let mut state = ctx
+        .write()
+        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+    if let Some(err) = state.tool_conditional_execution_chain(name, args) {
+        return Err(AgentRtError::GuardrailRejected(err));
+    }
+    Ok(())
+}
+
+/// Runs the registered tool response intercept chain on the given result.
+///
+/// Returns the transformed result after all intercepts have been applied.
+/// This allows invoking response intercepts independently of the full
+/// [`nvagentrt_tool_call_execute`] pipeline.
+pub fn nvagentrt_tool_response_intercepts(name: &str, result: Json) -> Result<Json> {
+    let ctx = global_context();
+    let mut state = ctx
+        .write()
+        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+    Ok(state.tool_response_intercepts_chain(name, result))
+}
+
+/// Runs the registered LLM request intercept chain on the given request.
+///
+/// Returns the transformed request after all intercepts have been applied.
+/// This allows invoking request intercepts independently of the full
+/// [`nvagentrt_llm_call_execute`] pipeline.
+pub fn nvagentrt_llm_request_intercepts(request: LLMRequest) -> Result<LLMRequest> {
+    let ctx = global_context();
+    let mut state = ctx
+        .write()
+        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+    Ok(state.llm_request_intercepts_chain(request))
+}
+
+/// Runs the registered LLM conditional execution guardrail chain.
+///
+/// Returns `Ok(())` if all guardrails pass, or
+/// [`Err(AgentRtError::GuardrailRejected(reason))`](AgentRtError::GuardrailRejected)
+/// if any guardrail rejects the call.
+pub fn nvagentrt_llm_conditional_execution(request: &LLMRequest) -> Result<()> {
+    let ctx = global_context();
+    let mut state = ctx
+        .write()
+        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+    if let Some(err) = state.llm_conditional_execution_chain(request) {
+        return Err(AgentRtError::GuardrailRejected(err));
+    }
+    Ok(())
+}
+
+/// Runs the registered LLM response intercept chain on the given response.
+///
+/// Returns the transformed response after all intercepts have been applied.
+/// This allows invoking response intercepts independently of the full
+/// [`nvagentrt_llm_call_execute`] pipeline.
+pub fn nvagentrt_llm_response_intercepts(response: Json) -> Result<Json> {
+    let ctx = global_context();
+    let mut state = ctx
+        .write()
+        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+    Ok(state.llm_response_intercepts_chain(response))
 }
 
 #[cfg(test)]
@@ -2092,5 +2184,173 @@ mod tests {
         assert!(handle.attributes.contains(LLMAttributes::STATELESS));
         assert!(handle.attributes.contains(LLMAttributes::STREAMING));
         nvagentrt_llm_call_end(&handle, json!({}), None, None).unwrap();
+    }
+
+    // -- Standalone middleware chain tests --
+
+    #[test]
+    fn test_tool_request_intercepts_standalone() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        nvagentrt_register_tool_request_intercept(
+            "add_field",
+            10,
+            false,
+            Box::new(|_name, mut args| {
+                if let Some(obj) = args.as_object_mut() {
+                    obj.insert("injected".into(), json!(true));
+                }
+                args
+            }),
+        )
+        .unwrap();
+
+        let result = nvagentrt_tool_request_intercepts("tool", json!({"key": "value"})).unwrap();
+        assert_eq!(result["key"], "value");
+        assert_eq!(result["injected"], true);
+
+        nvagentrt_deregister_tool_request_intercept("add_field").unwrap();
+    }
+
+    #[test]
+    fn test_tool_conditional_execution_standalone_pass() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        // No guardrails registered — should pass
+        assert!(nvagentrt_tool_conditional_execution("tool", &json!({})).is_ok());
+    }
+
+    #[test]
+    fn test_tool_conditional_execution_standalone_reject() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        nvagentrt_register_tool_conditional_execution_guardrail(
+            "blocker",
+            1,
+            Box::new(|_name, _args| Some("blocked".into())),
+        )
+        .unwrap();
+
+        match nvagentrt_tool_conditional_execution("tool", &json!({})) {
+            Err(AgentRtError::GuardrailRejected(msg)) => assert_eq!(msg, "blocked"),
+            other => panic!("expected GuardrailRejected, got {other:?}"),
+        }
+
+        nvagentrt_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
+    }
+
+    #[test]
+    fn test_tool_response_intercepts_standalone() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        nvagentrt_register_tool_response_intercept(
+            "wrap",
+            10,
+            false,
+            Box::new(|_name, result| json!({"wrapped": result})),
+        )
+        .unwrap();
+
+        let result = nvagentrt_tool_response_intercepts("tool", json!("hello")).unwrap();
+        assert_eq!(result["wrapped"], "hello");
+
+        nvagentrt_deregister_tool_response_intercept("wrap").unwrap();
+    }
+
+    #[test]
+    fn test_llm_request_intercepts_standalone() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        nvagentrt_register_llm_request_intercept(
+            "rewrite_url",
+            10,
+            false,
+            Box::new(|mut req| {
+                req.url = "https://new.example.com".into();
+                req
+            }),
+        )
+        .unwrap();
+
+        let request = LLMRequest {
+            method: "POST".into(),
+            url: "https://old.example.com".into(),
+            headers: serde_json::Map::new(),
+            body: json!({}),
+        };
+        let result = nvagentrt_llm_request_intercepts(request).unwrap();
+        assert_eq!(result.url, "https://new.example.com");
+
+        nvagentrt_deregister_llm_request_intercept("rewrite_url").unwrap();
+    }
+
+    #[test]
+    fn test_llm_conditional_execution_standalone_pass() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        let request = LLMRequest {
+            method: "POST".into(),
+            url: "https://api.example.com".into(),
+            headers: serde_json::Map::new(),
+            body: json!({}),
+        };
+        assert!(nvagentrt_llm_conditional_execution(&request).is_ok());
+    }
+
+    #[test]
+    fn test_llm_conditional_execution_standalone_reject() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        nvagentrt_register_llm_conditional_execution_guardrail(
+            "blocker",
+            1,
+            Box::new(|_req| Some("llm blocked".into())),
+        )
+        .unwrap();
+
+        let request = LLMRequest {
+            method: "POST".into(),
+            url: "https://api.example.com".into(),
+            headers: serde_json::Map::new(),
+            body: json!({}),
+        };
+        match nvagentrt_llm_conditional_execution(&request) {
+            Err(AgentRtError::GuardrailRejected(msg)) => assert_eq!(msg, "llm blocked"),
+            other => panic!("expected GuardrailRejected, got {other:?}"),
+        }
+
+        nvagentrt_deregister_llm_conditional_execution_guardrail("blocker").unwrap();
+    }
+
+    #[test]
+    fn test_llm_response_intercepts_standalone() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        nvagentrt_register_llm_response_intercept(
+            "tag",
+            10,
+            false,
+            Box::new(|mut resp| {
+                if let Some(obj) = resp.as_object_mut() {
+                    obj.insert("tagged".into(), json!(true));
+                }
+                resp
+            }),
+        )
+        .unwrap();
+
+        let result = nvagentrt_llm_response_intercepts(json!({"content": "hello"})).unwrap();
+        assert_eq!(result["content"], "hello");
+        assert_eq!(result["tagged"], true);
+
+        nvagentrt_deregister_llm_response_intercept("tag").unwrap();
     }
 }
