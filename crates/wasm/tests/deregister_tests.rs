@@ -3,7 +3,7 @@
 
 use wasm_bindgen_test::*;
 
-use nvagentrt_wasm::api::*;
+use nvmagic_wasm::api::*;
 
 // ===========================================================================
 // Deregister nonexistent

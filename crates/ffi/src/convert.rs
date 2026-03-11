@@ -12,7 +12,7 @@ use std::ffi::{CStr, CString};
 use libc::c_char;
 use serde_json::Value as Json;
 
-use crate::error::{set_last_error, NvAgentRtStatus};
+use crate::error::{set_last_error, NvMagicStatus};
 
 /// Parse a null-terminated C string as JSON. Returns `None` on error and sets last_error.
 pub fn c_str_to_json(ptr: *const c_char) -> Option<Json> {
@@ -45,7 +45,7 @@ pub fn c_str_to_opt_json(ptr: *const c_char) -> Option<Option<Json>> {
 }
 
 /// Convert a JSON value to a library-owned C string.
-/// The caller must free with `nvagentrt_string_free`.
+/// The caller must free with `nvmagic_string_free`.
 pub fn json_to_c_string(value: &Json) -> *mut c_char {
     match serde_json::to_string(value) {
         Ok(s) => CString::new(s).unwrap_or_default().into_raw(),
@@ -59,28 +59,28 @@ pub fn str_to_c_string(s: &str) -> *mut c_char {
 }
 
 /// Parse a C string to a Rust String. Returns Err status on failure.
-pub fn c_str_to_string(ptr: *const c_char) -> Result<String, NvAgentRtStatus> {
+pub fn c_str_to_string(ptr: *const c_char) -> Result<String, NvMagicStatus> {
     if ptr.is_null() {
         set_last_error("null string pointer");
-        return Err(NvAgentRtStatus::NullPointer);
+        return Err(NvMagicStatus::NullPointer);
     }
     unsafe { CStr::from_ptr(ptr) }
         .to_str()
         .map(|s| s.to_string())
         .map_err(|e| {
             set_last_error(&format!("invalid UTF-8: {e}"));
-            NvAgentRtStatus::InvalidUtf8
+            NvMagicStatus::InvalidUtf8
         })
 }
 
-/// Free a C string previously returned by any `nvagentrt_*` accessor function.
+/// Free a C string previously returned by any `nvmagic_*` accessor function.
 /// Passing null is a safe no-op.
 ///
 /// # Safety
 /// `ptr` must be a pointer returned by this library, or null. Double-free is
 /// undefined behavior.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_string_free(ptr: *mut c_char) {
+pub unsafe extern "C" fn nvmagic_string_free(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(unsafe { CString::from_raw(ptr) });
     }

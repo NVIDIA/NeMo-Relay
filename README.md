@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# NVAgentRT
+# NVMagic
 
 Multi-language agent runtime for execution scope management, lifecycle events, and middleware (guardrails/intercepts) on tool and LLM calls. Rust core with Python, Go, Node.js, and WASM bindings.
 
@@ -11,12 +11,12 @@ Multi-language agent runtime for execution scope management, lifecycle events, a
 
 ```
 crates/
-  core/       # Core runtime library (nvagentrt-core)
+  core/       # Core runtime library (nvmagic-core)
   python/     # PyO3 Python bindings (_native C extension)
   ffi/        # C FFI layer (used by Go, generates header via cbindgen)
   node/       # NAPI Node.js bindings
   wasm/       # wasm-bindgen WebAssembly bindings
-python/       # Python wrapper module (nvagentrt/)
+python/       # Python wrapper module (nvmagic/)
 go/           # Go CGo bindings
 ```
 
@@ -37,7 +37,7 @@ go/           # Go CGo bindings
 
 ```bash
 cargo build --workspace
-cargo build -p nvagentrt-core          # Core only
+cargo build -p nvmagic-core          # Core only
 ```
 
 ### Python
@@ -51,7 +51,7 @@ uv sync                                # Create venv, install deps, build native
 The Go bindings link against the FFI shared library, so build it first:
 
 ```bash
-cargo build --release -p nvagentrt-ffi
+cargo build --release -p nvmagic-ffi
 ```
 
 ### Node.js
@@ -72,7 +72,7 @@ wasm-pack build crates/wasm
 
 ```bash
 cargo test --workspace                 # All Rust tests
-cargo test -p nvagentrt-core           # Core tests only
+cargo test -p nvmagic-core           # Core tests only
 ```
 
 ### Python
@@ -84,7 +84,7 @@ uv run pytest                          # Runs tests in python/tests/
 ### Go
 
 ```bash
-cd go/nvagentrt && CGO_LDFLAGS="-L../../target/release" go test -v ./...
+cd go/nvmagic && CGO_LDFLAGS="-L../../target/release" go test -v ./...
 ```
 
 ## Dev Tooling
@@ -101,7 +101,7 @@ Pre-commit hooks run automatically on `git commit` after setup (`uv run pre-comm
 
 ## Architecture Overview
 
-NVAgentRT manages a **scope stack** of hierarchical execution scopes (identified by UUID handles) with a root scope always present. Scopes carry registered tools, LLM providers, guardrails, intercepts, and event subscribers.
+NVMagic manages a **scope stack** of hierarchical execution scopes (identified by UUID handles) with a root scope always present. Scopes carry registered tools, LLM providers, guardrails, intercepts, and event subscribers.
 
 The tool/LLM call lifecycle pipeline:
 

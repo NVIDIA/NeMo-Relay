@@ -3,8 +3,8 @@
 
 use wasm_bindgen_test::*;
 
-use nvagentrt_wasm::api::*;
-use nvagentrt_wasm::types::*;
+use nvmagic_wasm::api::*;
+use nvmagic_wasm::types::*;
 
 // ===========================================================================
 // Context isolation
@@ -32,14 +32,14 @@ fn test_set_thread_scope_stack_isolates_scopes() {
 
     // Switch to new stack and push a scope on it
     set_thread_scope_stack(&new_stack);
-    let scope = nvagentrt_push_scope("isolated_scope", SCOPE_TYPE_AGENT, None, None).unwrap();
-    let handle = nvagentrt_get_handle().unwrap();
+    let scope = nvmagic_push_scope("isolated_scope", SCOPE_TYPE_AGENT, None, None).unwrap();
+    let handle = nvmagic_get_handle().unwrap();
     assert_eq!(handle.name(), "isolated_scope");
-    nvagentrt_pop_scope(&scope).unwrap();
+    nvmagic_pop_scope(&scope).unwrap();
 
     // Restore original stack — the isolated scope should not be visible
     set_thread_scope_stack(&original);
-    let restored = nvagentrt_get_handle().unwrap();
+    let restored = nvmagic_get_handle().unwrap();
     assert_ne!(restored.name(), "isolated_scope");
 }
 
@@ -51,25 +51,25 @@ fn test_two_scope_stacks_are_independent() {
 
     // Push a scope on stack1
     set_thread_scope_stack(&stack1);
-    let s1 = nvagentrt_push_scope("stack1_scope", SCOPE_TYPE_AGENT, None, None).unwrap();
+    let s1 = nvmagic_push_scope("stack1_scope", SCOPE_TYPE_AGENT, None, None).unwrap();
 
     // Switch to stack2 and push a different scope
     set_thread_scope_stack(&stack2);
-    let s2 = nvagentrt_push_scope("stack2_scope", SCOPE_TYPE_TOOL, None, None).unwrap();
+    let s2 = nvmagic_push_scope("stack2_scope", SCOPE_TYPE_TOOL, None, None).unwrap();
 
     // Verify stack2 sees its own scope
-    let handle2 = nvagentrt_get_handle().unwrap();
+    let handle2 = nvmagic_get_handle().unwrap();
     assert_eq!(handle2.name(), "stack2_scope");
 
     // Switch back to stack1 — should see stack1's scope
     set_thread_scope_stack(&stack1);
-    let handle1 = nvagentrt_get_handle().unwrap();
+    let handle1 = nvmagic_get_handle().unwrap();
     assert_eq!(handle1.name(), "stack1_scope");
 
     // Clean up
-    nvagentrt_pop_scope(&s1).unwrap();
+    nvmagic_pop_scope(&s1).unwrap();
     set_thread_scope_stack(&stack2);
-    nvagentrt_pop_scope(&s2).unwrap();
+    nvmagic_pop_scope(&s2).unwrap();
 
     // Restore original
     set_thread_scope_stack(&original);

@@ -4,8 +4,8 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
 
-use nvagentrt_wasm::api::*;
-use nvagentrt_wasm::types::*;
+use nvmagic_wasm::api::*;
+use nvmagic_wasm::types::*;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -29,7 +29,7 @@ fn make_native() -> JsValue {
 #[wasm_bindgen_test]
 fn test_llm_call_and_end() {
     let native = make_native();
-    let handle = nvagentrt_llm_call(
+    let handle = nvmagic_llm_call(
         "test_llm",
         native,
         None,
@@ -44,13 +44,13 @@ fn test_llm_call_and_end() {
     assert!(!handle.uuid().is_empty());
 
     let response = parse_json(r#"{"choices":[{"text":"hello"}]}"#);
-    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
+    nvmagic_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_call_with_attributes() {
     let native = make_native();
-    let handle = nvagentrt_llm_call(
+    let handle = nvmagic_llm_call(
         "attr_llm",
         native,
         None,
@@ -64,15 +64,15 @@ fn test_llm_call_with_attributes() {
     assert_eq!(handle.attributes(), LLM_STATELESS | LLM_STREAMING);
 
     let response = parse_json(r#"{}"#);
-    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
+    nvmagic_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_call_with_parent() {
-    let scope = nvagentrt_push_scope("llm_parent", SCOPE_TYPE_AGENT, None, None).unwrap();
+    let scope = nvmagic_push_scope("llm_parent", SCOPE_TYPE_AGENT, None, None).unwrap();
     let scope_uuid = scope.uuid();
     let native = make_native();
-    let handle = nvagentrt_llm_call(
+    let handle = nvmagic_llm_call(
         "parented_llm",
         native,
         Some(scope),
@@ -86,10 +86,10 @@ fn test_llm_call_with_parent() {
     assert_eq!(handle.parent_uuid().unwrap(), scope_uuid);
 
     let response = parse_json(r#"{}"#);
-    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
+    nvmagic_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
 
-    let current = nvagentrt_get_handle().unwrap();
-    nvagentrt_pop_scope(&current).unwrap();
+    let current = nvmagic_get_handle().unwrap();
+    nvmagic_pop_scope(&current).unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -97,12 +97,11 @@ fn test_llm_call_with_data_metadata() {
     let native = make_native();
     let data = parse_json(r#"{"info":"llm_test"}"#);
     let meta = parse_json(r#"{"version":"2.0"}"#);
-    let handle =
-        nvagentrt_llm_call("data_llm", native, None, None, data, meta, None, None).unwrap();
+    let handle = nvmagic_llm_call("data_llm", native, None, None, data, meta, None, None).unwrap();
 
     let response = parse_json(r#"{}"#);
     let end_data = parse_json(r#"{"tokens":100}"#);
-    nvagentrt_llm_call_end(&handle, response, end_data, JsValue::NULL, None).unwrap();
+    nvmagic_llm_call_end(&handle, response, end_data, JsValue::NULL, None).unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -112,7 +111,7 @@ fn test_llm_call_generates_events() {
     register_subscriber("wasm_llm_evt_sub", cb).unwrap();
 
     let native = make_native();
-    let handle = nvagentrt_llm_call(
+    let handle = nvmagic_llm_call(
         "evt_llm",
         native,
         None,
@@ -124,7 +123,7 @@ fn test_llm_call_generates_events() {
     )
     .unwrap();
     let response = parse_json(r#"{}"#);
-    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
+    nvmagic_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
 
     let events = js_sys::eval("globalThis.__llm_events").unwrap();
     let arr = js_sys::Array::from(&events);
@@ -145,7 +144,7 @@ fn test_llm_call_generates_events() {
 async fn test_llm_execute_basic() {
     let func = js_fn1("native", "return {response: 'hello from llm'}");
     let native = make_native();
-    let result = nvagentrt_llm_call_execute(
+    let result = nvmagic_llm_call_execute(
         "exec_llm",
         native,
         func,
@@ -168,7 +167,7 @@ async fn test_llm_execute_basic() {
 async fn test_llm_execute_promise() {
     let func = js_fn1("native", "return Promise.resolve({async: true})");
     let native = make_native();
-    let result = nvagentrt_llm_call_execute(
+    let result = nvmagic_llm_call_execute(
         "async_llm",
         native,
         func,
@@ -297,7 +296,7 @@ async fn test_llm_request_intercept_modifies_request() {
         "return {saw_intercepted: native.intercepted || false}",
     );
     let native = make_native();
-    let result = nvagentrt_llm_call_execute(
+    let result = nvmagic_llm_call_execute(
         "mod_llm",
         native,
         func,
@@ -328,7 +327,7 @@ async fn test_llm_response_intercept_modifies_response() {
 
     let func = js_fn1("native", "return {value: 'test'}");
     let native = make_native();
-    let result = nvagentrt_llm_call_execute(
+    let result = nvmagic_llm_call_execute(
         "resp_mod_llm",
         native,
         func,
@@ -357,7 +356,7 @@ async fn test_llm_execution_intercept_replaces_func() {
 
     let original = js_fn1("native", "return {original: true}");
     let native = make_native();
-    let result = nvagentrt_llm_call_execute(
+    let result = nvmagic_llm_call_execute(
         "repl_llm",
         native,
         original,

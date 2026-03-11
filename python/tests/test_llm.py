@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for NVAgentRT LLM lifecycle, guardrails, intercepts, and streaming."""
+"""Tests for NVMagic LLM lifecycle, guardrails, intercepts, and streaming."""
 
 import pytest
-from nvagentrt import (
+from nvmagic import (
     LLMAttributes,
     LLMHandle,
     LLMRequest,

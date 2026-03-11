@@ -4,7 +4,7 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
 
-use nvagentrt_wasm::types::*;
+use nvmagic_wasm::types::*;
 
 // ---------------------------------------------------------------------------
 // Helper

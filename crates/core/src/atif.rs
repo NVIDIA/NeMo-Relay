@@ -4,7 +4,7 @@
 //! ATIF (Agent Trajectory Interchange Format) exporter.
 //!
 //! This module provides types and an exporter that collects lifecycle events
-//! from the NVAgentRT runtime and converts them into ATIF trajectories.
+//! from the NVMagic runtime and converts them into ATIF trajectories.
 //!
 //! The [`AtifExporter`] registers as an event subscriber, collects all events,
 //! and can export them as an [`AtifTrajectory`] via [`AtifExporter::export`].
@@ -171,7 +171,7 @@ impl AtifExporter {
     }
 
     /// Returns an event subscriber function that can be registered with
-    /// [`nvagentrt_register_subscriber`](crate::api::nvagentrt_register_subscriber).
+    /// [`nvmagic_register_subscriber`](crate::api::nvmagic_register_subscriber).
     pub fn subscriber(&self) -> EventSubscriberFn {
         let state = self.state.clone();
         Box::new(move |event: &Event| {

@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! # NVAgentRT Core
+//! # NVMagic Core
 //!
-//! The core runtime library for the NVAgentRT multi-language agent framework. This crate
+//! The core runtime library for the NVMagic multi-language agent framework. This crate
 //! provides execution scope management, lifecycle event tracking, and middleware pipelines
 //! (guardrails and intercepts) for tool and LLM calls.
 //!
 //! ## Architecture
 //!
-//! The runtime is organized around a **global context** ([`NVAgentRTContextState`]) that holds
+//! The runtime is organized around a **global context** ([`NVMagicContextState`]) that holds
 //! all registered middleware (guardrails, intercepts, subscribers) and a **scope stack**
 //! ([`ScopeStack`]) that tracks the hierarchical execution context via task-local or
 //! thread-local storage.
@@ -26,7 +26,7 @@
 //!   [`AtifObservation`](atif::AtifObservation), and [`AtifMetrics`](atif::AtifMetrics).
 //! - [`context`] — Global context singleton, scope stack, task-local/thread-local storage,
 //!   callable type aliases, and middleware chain execution logic.
-//! - [`error`] — Error types ([`AgentRtError`]) and the [`Result`] type alias.
+//! - [`error`] — Error types ([`MagicError`]) and the [`Result`] type alias.
 //! - [`json`] — JSON type alias ([`Json`]) and the [`merge_json`] utility.
 //! - [`registry`] — [`SortedRegistry`](registry::SortedRegistry) — a priority-sorted, named collection used for
 //!   all guardrail and intercept registries.
@@ -67,11 +67,11 @@ pub use context::{
     LlmExecutionConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn,
     LlmResponseInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
     LlmStreamExecutionConditionalFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
-    LlmStreamResponseInterceptFn, NVAgentRTContextState, ScopeStack, ScopeStackHandle,
+    LlmStreamResponseInterceptFn, NVMagicContextState, ScopeStack, ScopeStackHandle,
     ToolConditionalFn, ToolExecutionConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
     ToolInterceptFn, ToolSanitizeFn, TASK_SCOPE_STACK,
 };
-pub use error::{AgentRtError, Result};
+pub use error::{MagicError, Result};
 pub use json::{merge_json, Json};
 pub use stream::LlmStreamWrapper;
 pub use types::*;

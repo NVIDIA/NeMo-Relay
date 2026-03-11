@@ -6,12 +6,12 @@
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use nvagentrt_core::context::*;
-use nvagentrt_core::error::Result;
-use nvagentrt_core::json::Json;
-use nvagentrt_core::stream::LlmStreamWrapper;
-use nvagentrt_core::types::*;
-use nvagentrt_core::*;
+use nvmagic_core::context::*;
+use nvmagic_core::error::Result;
+use nvmagic_core::json::Json;
+use nvmagic_core::stream::LlmStreamWrapper;
+use nvmagic_core::types::*;
+use nvmagic_core::*;
 use serde_json::json;
 use tokio_stream::{Stream, StreamExt};
 
@@ -21,7 +21,7 @@ static TEST_MUTEX: Mutex<()> = Mutex::new(());
 fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NVAgentRTContextState::new();
+    *state = NVMagicContextState::new();
 }
 
 fn make_llm_handle(name: &str) -> LLMHandle {
@@ -141,7 +141,7 @@ async fn test_stream_wrapper_with_intercept() {
     reset_global();
 
     // Register a stream response intercept that transforms Json chunks
-    nvagentrt_register_llm_stream_response_intercept(
+    nvmagic_register_llm_stream_response_intercept(
         "test_stream_intercept",
         1,
         false,
@@ -163,7 +163,7 @@ async fn test_stream_wrapper_with_intercept() {
     assert_eq!(chunks.len(), 1);
     assert_eq!(chunks[0]["intercepted"], "original");
 
-    nvagentrt_deregister_llm_stream_response_intercept("test_stream_intercept").unwrap();
+    nvmagic_deregister_llm_stream_response_intercept("test_stream_intercept").unwrap();
 }
 
 #[tokio::test]
@@ -171,7 +171,7 @@ async fn test_stream_wrapper_intercept_chain() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    nvagentrt_register_llm_stream_response_intercept(
+    nvmagic_register_llm_stream_response_intercept(
         "intercept_a",
         1,
         false,
@@ -179,7 +179,7 @@ async fn test_stream_wrapper_intercept_chain() {
     )
     .unwrap();
 
-    nvagentrt_register_llm_stream_response_intercept(
+    nvmagic_register_llm_stream_response_intercept(
         "intercept_b",
         2,
         false,
@@ -197,8 +197,8 @@ async fn test_stream_wrapper_intercept_chain() {
     // A runs first (priority 1), then B (priority 2)
     assert_eq!(chunk, json!({"B": {"A": "x"}}));
 
-    nvagentrt_deregister_llm_stream_response_intercept("intercept_a").unwrap();
-    nvagentrt_deregister_llm_stream_response_intercept("intercept_b").unwrap();
+    nvmagic_deregister_llm_stream_response_intercept("intercept_a").unwrap();
+    nvmagic_deregister_llm_stream_response_intercept("intercept_b").unwrap();
 }
 
 #[tokio::test]
@@ -208,7 +208,7 @@ async fn test_stream_wrapper_emits_end_event() {
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nvagentrt_register_subscriber(
+    nvmagic_register_subscriber(
         "stream_end_test",
         Box::new(move |e: &Event| {
             ec.lock().unwrap().push((e.event_type, e.scope_type));
@@ -221,7 +221,7 @@ async fn test_stream_wrapper_emits_end_event() {
 
     // Use the real API to create the handle so events are properly tracked
     let native = json!({"messages": []});
-    let handle = nvagentrt_llm_call(
+    let handle = nvmagic_llm_call(
         "test_llm",
         &native,
         None,
@@ -247,7 +247,7 @@ async fn test_stream_wrapper_emits_end_event() {
     assert_eq!(captured.last().unwrap().0, EventType::End);
 
     drop(captured);
-    nvagentrt_deregister_subscriber("stream_end_test").unwrap();
+    nvmagic_deregister_subscriber("stream_end_test").unwrap();
 }
 
 #[tokio::test]
@@ -257,9 +257,7 @@ async fn test_stream_wrapper_error_propagation() {
 
     let items: Vec<Result<Json>> = vec![
         Ok(json!("good chunk")),
-        Err(nvagentrt_core::AgentRtError::Internal(
-            "stream error".into(),
-        )),
+        Err(nvmagic_core::MagicError::Internal("stream error".into())),
     ];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
@@ -356,7 +354,7 @@ async fn test_stream_wrapper_response_intercepts_not_applied_to_aggregated() {
     // Register a response intercept that adds a field to the aggregated response.
     // In the streaming path, response intercepts should NOT be applied to the
     // finalized aggregate — only sanitize response guardrails run for observability.
-    nvagentrt_register_llm_response_intercept(
+    nvmagic_register_llm_response_intercept(
         "resp_intercept",
         1,
         false,
@@ -372,7 +370,7 @@ async fn test_stream_wrapper_response_intercepts_not_applied_to_aggregated() {
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nvagentrt_register_subscriber(
+    nvmagic_register_subscriber(
         "resp_intercept_test",
         Box::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
@@ -384,7 +382,7 @@ async fn test_stream_wrapper_response_intercepts_not_applied_to_aggregated() {
     let inner = make_stream(items);
 
     let native = json!({"messages": []});
-    let handle = nvagentrt_llm_call(
+    let handle = nvmagic_llm_call(
         "test_llm",
         &native,
         None,
@@ -417,8 +415,8 @@ async fn test_stream_wrapper_response_intercepts_not_applied_to_aggregated() {
     assert!(output.get("intercepted").is_none());
 
     drop(captured);
-    nvagentrt_deregister_subscriber("resp_intercept_test").unwrap();
-    nvagentrt_deregister_llm_response_intercept("resp_intercept").unwrap();
+    nvmagic_deregister_subscriber("resp_intercept_test").unwrap();
+    nvmagic_deregister_llm_response_intercept("resp_intercept").unwrap();
 }
 
 #[tokio::test]
@@ -427,7 +425,7 @@ async fn test_stream_wrapper_collector_receives_intercepted_chunks() {
     reset_global();
 
     // Register a stream intercept that transforms chunks
-    nvagentrt_register_llm_stream_response_intercept(
+    nvmagic_register_llm_stream_response_intercept(
         "prefix_intercept",
         1,
         false,
@@ -449,7 +447,7 @@ async fn test_stream_wrapper_collector_receives_intercepted_chunks() {
     assert_eq!(chunks.len(), 1);
     assert_eq!(chunks[0]["prefixed"], "original");
 
-    nvagentrt_deregister_llm_stream_response_intercept("prefix_intercept").unwrap();
+    nvmagic_deregister_llm_stream_response_intercept("prefix_intercept").unwrap();
 }
 
 #[tokio::test]
@@ -462,8 +460,7 @@ async fn test_stream_wrapper_error_skips_collector_finalizer() {
     let finalizer_called = Arc::new(Mutex::new(false));
     let fc = finalizer_called.clone();
 
-    let items: Vec<Result<Json>> =
-        vec![Err(nvagentrt_core::AgentRtError::Internal("error".into()))];
+    let items: Vec<Result<Json>> = vec![Err(nvmagic_core::MagicError::Internal("error".into()))];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let collector: Box<dyn FnMut(Json) + Send> = Box::new(move |_| {
@@ -495,7 +492,7 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nvagentrt_register_subscriber(
+    nvmagic_register_subscriber(
         "end_event_test",
         Box::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
@@ -507,7 +504,7 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
     let inner = make_stream(items);
 
     let native = json!({"messages": []});
-    let handle = nvagentrt_llm_call(
+    let handle = nvmagic_llm_call(
         "test_llm",
         &native,
         None,
@@ -540,5 +537,5 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
     assert_eq!(arr[1]["token"], "b");
 
     drop(captured);
-    nvagentrt_deregister_subscriber("end_event_test").unwrap();
+    nvmagic_deregister_subscriber("end_event_test").unwrap();
 }

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "nvagentrt-ffi"
+name = "nvmagic-ffi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ license.workspace = true
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-nvagentrt-core = { path = "../core" }
+nvmagic-core = { path = "../core" }
 libc = "0.2"
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }

@@ -10,7 +10,7 @@
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use nvagentrt_core::Json;
+use nvmagic_core::Json;
 
 /// Wraps a streaming LLM response for consumption from JavaScript/TypeScript.
 ///
@@ -22,7 +22,7 @@ pub struct WasmLlmStream {
     /// underlying LLM stream. Wrapped in a `Mutex` to allow shared-ref
     /// `&self` calls from JavaScript.
     pub(crate) receiver:
-        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvagentrt_core::Result<Json>>>,
+        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvmagic_core::Result<Json>>>,
 }
 
 #[wasm_bindgen]

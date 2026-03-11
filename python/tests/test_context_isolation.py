@@ -5,20 +5,20 @@
 
 import asyncio
 
-import nvagentrt
+import nvmagic
 
 
 def test_create_scope_stack_returns_scope_stack():
     """create_scope_stack returns a ScopeStack instance."""
-    stack = nvagentrt.create_scope_stack()
-    assert isinstance(stack, nvagentrt.ScopeStack)
+    stack = nvmagic.create_scope_stack()
+    assert isinstance(stack, nvmagic.ScopeStack)
     assert repr(stack) == "<ScopeStack>"
 
 
 def test_get_scope_stack_returns_same_in_same_context():
     """get_scope_stack returns the same instance within the same context."""
-    s1 = nvagentrt.get_scope_stack()
-    s2 = nvagentrt.get_scope_stack()
+    s1 = nvmagic.get_scope_stack()
+    s2 = nvmagic.get_scope_stack()
     assert s1 is s2
 
 
@@ -31,8 +31,8 @@ def test_get_scope_stack_different_across_tasks():
         # But since the ContextVar hasn't been set yet at fork time,
         # each task creates its own when get_scope_stack is first called.
         # We need to reset the ContextVar in each task to test isolation.
-        nvagentrt._scope_stack_var.set(nvagentrt.create_scope_stack())
-        stack = nvagentrt.get_scope_stack()
+        nvmagic._scope_stack_var.set(nvmagic.create_scope_stack())
+        stack = nvmagic.get_scope_stack()
         results[name] = id(stack)
 
     async def main():
@@ -47,5 +47,5 @@ def test_get_scope_stack_different_across_tasks():
 
 def test_scope_stack_repr():
     """ScopeStack has a meaningful repr."""
-    stack = nvagentrt.create_scope_stack()
+    stack = nvmagic.create_scope_stack()
     assert "<ScopeStack>" in repr(stack)

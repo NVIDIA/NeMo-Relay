@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Public NAPI API functions for the NVAgentRT Node.js bindings.
+//! Public NAPI API functions for the NVMagic Node.js bindings.
 //!
 //! This module exposes the full agent runtime API to JavaScript/TypeScript:
 //! scope stack management, tool and LLM lifecycle operations, guardrail and
@@ -15,8 +15,8 @@ use napi_derive::napi;
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
-use nvagentrt_core as core;
-use nvagentrt_core::types as core_types;
+use nvmagic_core as core;
+use nvmagic_core::types as core_types;
 
 use crate::callable;
 use crate::convert::{opt_json, to_napi_err};
@@ -31,7 +31,7 @@ use crate::types::*;
 #[napi]
 pub fn create_scope_stack() -> JsScopeStack {
     JsScopeStack {
-        inner: nvagentrt_core::create_scope_stack(),
+        inner: nvmagic_core::create_scope_stack(),
     }
 }
 
@@ -39,14 +39,14 @@ pub fn create_scope_stack() -> JsScopeStack {
 #[napi]
 pub fn current_scope_stack() -> JsScopeStack {
     JsScopeStack {
-        inner: nvagentrt_core::current_scope_stack(),
+        inner: nvmagic_core::current_scope_stack(),
     }
 }
 
 /// Binds a scope stack to the current thread.
 #[napi]
 pub fn set_thread_scope_stack(stack: &JsScopeStack) {
-    nvagentrt_core::set_thread_scope_stack(stack.inner.clone());
+    nvmagic_core::set_thread_scope_stack(stack.inner.clone());
 }
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ pub fn set_thread_scope_stack(stack: &JsScopeStack) {
 /// Throws if the scope stack is empty.
 #[napi]
 pub fn get_handle() -> Result<JsScopeHandle> {
-    core::nvagentrt_get_handle()
+    core::nvmagic_get_handle()
         .map(JsScopeHandle::from)
         .map_err(to_napi_err)
 }
@@ -78,7 +78,7 @@ pub fn push_scope(
     attributes: Option<u32>,
 ) -> Result<JsScopeHandle> {
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    core::nvagentrt_push_scope(&name, scope_type.into(), handle.map(|h| &h.inner), attrs)
+    core::nvmagic_push_scope(&name, scope_type.into(), handle.map(|h| &h.inner), attrs)
         .map(JsScopeHandle::from)
         .map_err(to_napi_err)
 }
@@ -89,7 +89,7 @@ pub fn push_scope(
 /// Throws if the handle does not match the current top scope.
 #[napi]
 pub fn pop_scope(handle: &JsScopeHandle) -> Result<()> {
-    core::nvagentrt_pop_scope(&handle.inner.uuid).map_err(to_napi_err)
+    core::nvmagic_pop_scope(&handle.inner.uuid).map_err(to_napi_err)
 }
 
 /// Emit a custom mark event on the current scope.
@@ -103,7 +103,7 @@ pub fn event(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
-    core::nvagentrt_event(
+    core::nvmagic_event(
         &name,
         handle.map(|h| &h.inner),
         opt_json(data),
@@ -133,7 +133,7 @@ pub fn tool_call(
     tool_call_id: Option<String>,
 ) -> Result<JsToolHandle> {
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    core::nvagentrt_tool_call(
+    core::nvmagic_tool_call(
         &name,
         args,
         handle.map(|h| &h.inner),
@@ -157,7 +157,7 @@ pub fn tool_call_end(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
-    core::nvagentrt_tool_call_end(&handle.inner, result, opt_json(data), opt_json(metadata))
+    core::nvmagic_tool_call_end(&handle.inner, result, opt_json(data), opt_json(metadata))
         .map_err(to_napi_err)
 }
 
@@ -183,12 +183,12 @@ pub async fn tool_call_execute(
         .map(|h| h.inner.clone())
         .unwrap_or_else(core::task_scope_top);
     let exec_fn = callable::wrap_js_tool_exec_fn(func);
-    let default_fn: nvagentrt_core::ToolExecutionNextFn = Box::new(move |args| exec_fn(args));
-    let scope_stack = nvagentrt_core::current_scope_stack();
+    let default_fn: nvmagic_core::ToolExecutionNextFn = Box::new(move |args| exec_fn(args));
+    let scope_stack = nvmagic_core::current_scope_stack();
 
-    nvagentrt_core::TASK_SCOPE_STACK
+    nvmagic_core::TASK_SCOPE_STACK
         .scope(scope_stack, async move {
-            core::nvagentrt_tool_call_execute(
+            core::nvmagic_tool_call_execute(
                 &name,
                 args,
                 default_fn,
@@ -228,7 +228,7 @@ pub fn llm_call(
 ) -> Result<JsLLMHandle> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let to_request_fn = to_request.map(wrap_js_to_request);
-    core::nvagentrt_llm_call(
+    core::nvmagic_llm_call(
         &name,
         &native,
         handle.map(|h| &h.inner),
@@ -257,7 +257,7 @@ pub fn llm_call_end(
     to_response: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 ) -> Result<()> {
     let to_response_fn = to_response.map(wrap_js_to_response);
-    core::nvagentrt_llm_call_end(
+    core::nvmagic_llm_call_end(
         &handle.inner,
         response,
         opt_json(data),
@@ -293,14 +293,14 @@ pub async fn llm_call_execute(
         .map(|h| h.inner.clone())
         .unwrap_or_else(core::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
-    let default_fn: nvagentrt_core::LlmExecutionNextFn = Box::new(move |req| exec_fn(req));
+    let default_fn: nvmagic_core::LlmExecutionNextFn = Box::new(move |req| exec_fn(req));
     let to_request_fn = to_request.map(wrap_js_to_request);
     let to_response_fn = to_response.map(wrap_js_to_response);
-    let scope_stack = nvagentrt_core::current_scope_stack();
+    let scope_stack = nvmagic_core::current_scope_stack();
 
-    nvagentrt_core::TASK_SCOPE_STACK
+    nvmagic_core::TASK_SCOPE_STACK
         .scope(scope_stack, async move {
-            core::nvagentrt_llm_call_execute(
+            core::nvmagic_llm_call_execute(
                 &name,
                 native,
                 default_fn,
@@ -364,25 +364,25 @@ pub async fn llm_stream_call_execute(
     };
 
     // Bridge LlmExecutionFn -> LlmStreamExecutionNextFn (FnOnce)
-    let default_fn: nvagentrt_core::LlmStreamExecutionNextFn = Box::new(move |native| {
+    let default_fn: nvmagic_core::LlmStreamExecutionNextFn = Box::new(move |native| {
         let fut = exec_fn(native);
         Box::pin(async move {
             let result = fut.await?;
             let stream = tokio_stream::once(Ok(result));
             Ok(Box::pin(stream)
                 as std::pin::Pin<
-                    Box<dyn tokio_stream::Stream<Item = nvagentrt_core::Result<Json>> + Send>,
+                    Box<dyn tokio_stream::Stream<Item = nvmagic_core::Result<Json>> + Send>,
                 >)
         })
     });
 
     let to_request_fn = to_request.map(wrap_js_to_request);
     let to_response_fn = to_response.map(wrap_js_to_response);
-    let scope_stack = nvagentrt_core::current_scope_stack();
+    let scope_stack = nvmagic_core::current_scope_stack();
 
-    nvagentrt_core::TASK_SCOPE_STACK
+    nvmagic_core::TASK_SCOPE_STACK
         .scope(scope_stack, async move {
-            let rust_stream = core::nvagentrt_llm_stream_call_execute(
+            let rust_stream = core::nvmagic_llm_stream_call_execute(
                 &name,
                 native,
                 default_fn,
@@ -452,8 +452,8 @@ napi_guardrail_tool_api!(
     ///
     /// Returns `true` if a guardrail with that name was found and removed.
     deregister_tool_sanitize_request_guardrail,
-    core::nvagentrt_register_tool_sanitize_request_guardrail,
-    core::nvagentrt_deregister_tool_sanitize_request_guardrail,
+    core::nvmagic_register_tool_sanitize_request_guardrail,
+    core::nvmagic_deregister_tool_sanitize_request_guardrail,
     callable::wrap_js_tool_fn
 );
 
@@ -467,8 +467,8 @@ napi_guardrail_tool_api!(
     ///
     /// Returns `true` if a guardrail with that name was found and removed.
     deregister_tool_sanitize_response_guardrail,
-    core::nvagentrt_register_tool_sanitize_response_guardrail,
-    core::nvagentrt_deregister_tool_sanitize_response_guardrail,
+    core::nvmagic_register_tool_sanitize_response_guardrail,
+    core::nvmagic_deregister_tool_sanitize_response_guardrail,
     callable::wrap_js_tool_fn
 );
 
@@ -482,7 +482,7 @@ pub fn register_tool_conditional_execution_guardrail(
     priority: i32,
     guardrail: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nvagentrt_register_tool_conditional_execution_guardrail(
+    core::nvmagic_register_tool_conditional_execution_guardrail(
         &name,
         priority,
         callable::wrap_js_tool_conditional_fn(guardrail),
@@ -495,7 +495,7 @@ pub fn register_tool_conditional_execution_guardrail(
 /// Returns `true` if a guardrail with that name was found and removed.
 #[napi]
 pub fn deregister_tool_conditional_execution_guardrail(name: String) -> Result<bool> {
-    core::nvagentrt_deregister_tool_conditional_execution_guardrail(&name).map_err(to_napi_err)
+    core::nvmagic_deregister_tool_conditional_execution_guardrail(&name).map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -535,8 +535,8 @@ napi_intercept_tool_api!(
     ///
     /// Returns `true` if an intercept with that name was found and removed.
     deregister_tool_request_intercept,
-    core::nvagentrt_register_tool_request_intercept,
-    core::nvagentrt_deregister_tool_request_intercept,
+    core::nvmagic_register_tool_request_intercept,
+    core::nvmagic_deregister_tool_request_intercept,
     callable::wrap_js_tool_fn
 );
 
@@ -550,8 +550,8 @@ napi_intercept_tool_api!(
     ///
     /// Returns `true` if an intercept with that name was found and removed.
     deregister_tool_response_intercept,
-    core::nvagentrt_register_tool_response_intercept,
-    core::nvagentrt_deregister_tool_response_intercept,
+    core::nvmagic_register_tool_response_intercept,
+    core::nvmagic_deregister_tool_response_intercept,
     callable::wrap_js_tool_fn
 );
 
@@ -568,7 +568,7 @@ pub fn register_tool_execution_intercept(
     conditional: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nvagentrt_register_tool_execution_intercept(
+    core::nvmagic_register_tool_execution_intercept(
         &name,
         priority,
         callable::wrap_js_tool_exec_conditional_fn(conditional),
@@ -582,7 +582,7 @@ pub fn register_tool_execution_intercept(
 /// Returns `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_tool_execution_intercept(name: String) -> Result<bool> {
-    core::nvagentrt_deregister_tool_execution_intercept(&name).map_err(to_napi_err)
+    core::nvmagic_deregister_tool_execution_intercept(&name).map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -599,7 +599,7 @@ pub fn register_llm_sanitize_request_guardrail(
     priority: i32,
     guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nvagentrt_register_llm_sanitize_request_guardrail(
+    core::nvmagic_register_llm_sanitize_request_guardrail(
         &name,
         priority,
         callable::wrap_js_llm_sanitize_request_fn(guardrail),
@@ -612,7 +612,7 @@ pub fn register_llm_sanitize_request_guardrail(
 /// Returns `true` if a guardrail with that name was found and removed.
 #[napi]
 pub fn deregister_llm_sanitize_request_guardrail(name: String) -> Result<bool> {
-    core::nvagentrt_deregister_llm_sanitize_request_guardrail(&name).map_err(to_napi_err)
+    core::nvmagic_deregister_llm_sanitize_request_guardrail(&name).map_err(to_napi_err)
 }
 
 /// Register a guardrail that sanitizes LLM response data after execution.
@@ -626,7 +626,7 @@ pub fn register_llm_sanitize_response_guardrail(
     priority: i32,
     guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nvagentrt_register_llm_sanitize_response_guardrail(
+    core::nvmagic_register_llm_sanitize_response_guardrail(
         &name,
         priority,
         callable::wrap_js_llm_response_fn(guardrail),
@@ -639,7 +639,7 @@ pub fn register_llm_sanitize_response_guardrail(
 /// Returns `true` if a guardrail with that name was found and removed.
 #[napi]
 pub fn deregister_llm_sanitize_response_guardrail(name: String) -> Result<bool> {
-    core::nvagentrt_deregister_llm_sanitize_response_guardrail(&name).map_err(to_napi_err)
+    core::nvmagic_deregister_llm_sanitize_response_guardrail(&name).map_err(to_napi_err)
 }
 
 /// Register a guardrail that conditionally gates LLM execution.
@@ -652,7 +652,7 @@ pub fn register_llm_conditional_execution_guardrail(
     priority: i32,
     guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nvagentrt_register_llm_conditional_execution_guardrail(
+    core::nvmagic_register_llm_conditional_execution_guardrail(
         &name,
         priority,
         callable::wrap_js_llm_conditional_fn(guardrail),
@@ -665,7 +665,7 @@ pub fn register_llm_conditional_execution_guardrail(
 /// Returns `true` if a guardrail with that name was found and removed.
 #[napi]
 pub fn deregister_llm_conditional_execution_guardrail(name: String) -> Result<bool> {
-    core::nvagentrt_deregister_llm_conditional_execution_guardrail(&name).map_err(to_napi_err)
+    core::nvmagic_deregister_llm_conditional_execution_guardrail(&name).map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -684,7 +684,7 @@ pub fn register_llm_request_intercept(
     break_chain: bool,
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nvagentrt_register_llm_request_intercept(
+    core::nvmagic_register_llm_request_intercept(
         &name,
         priority,
         break_chain,
@@ -698,7 +698,7 @@ pub fn register_llm_request_intercept(
 /// Returns `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_llm_request_intercept(name: String) -> Result<bool> {
-    core::nvagentrt_deregister_llm_request_intercept(&name).map_err(to_napi_err)
+    core::nvmagic_deregister_llm_request_intercept(&name).map_err(to_napi_err)
 }
 
 /// Register an intercept that transforms LLM response data.
@@ -713,7 +713,7 @@ pub fn register_llm_response_intercept(
     break_chain: bool,
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nvagentrt_register_llm_response_intercept(
+    core::nvmagic_register_llm_response_intercept(
         &name,
         priority,
         break_chain,
@@ -727,7 +727,7 @@ pub fn register_llm_response_intercept(
 /// Returns `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_llm_response_intercept(name: String) -> Result<bool> {
-    core::nvagentrt_deregister_llm_response_intercept(&name).map_err(to_napi_err)
+    core::nvmagic_deregister_llm_response_intercept(&name).map_err(to_napi_err)
 }
 
 /// Register an intercept that transforms individual chunks in a streaming LLM response.
@@ -742,7 +742,7 @@ pub fn register_llm_stream_response_intercept(
     break_chain: bool,
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nvagentrt_register_llm_stream_response_intercept(
+    core::nvmagic_register_llm_stream_response_intercept(
         &name,
         priority,
         break_chain,
@@ -756,7 +756,7 @@ pub fn register_llm_stream_response_intercept(
 /// Returns `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_llm_stream_response_intercept(name: String) -> Result<bool> {
-    core::nvagentrt_deregister_llm_stream_response_intercept(&name).map_err(to_napi_err)
+    core::nvmagic_deregister_llm_stream_response_intercept(&name).map_err(to_napi_err)
 }
 
 /// Register an LLM execution intercept following the middleware chain pattern.
@@ -772,7 +772,7 @@ pub fn register_llm_execution_intercept(
     conditional: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nvagentrt_register_llm_execution_intercept(
+    core::nvmagic_register_llm_execution_intercept(
         &name,
         priority,
         callable::wrap_js_llm_exec_conditional_fn(conditional),
@@ -786,7 +786,7 @@ pub fn register_llm_execution_intercept(
 /// Returns `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_llm_execution_intercept(name: String) -> Result<bool> {
-    core::nvagentrt_deregister_llm_execution_intercept(&name).map_err(to_napi_err)
+    core::nvmagic_deregister_llm_execution_intercept(&name).map_err(to_napi_err)
 }
 
 /// Register a streaming LLM execution intercept following the middleware chain pattern.
@@ -802,7 +802,7 @@ pub fn register_llm_stream_execution_intercept(
     conditional: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nvagentrt_register_llm_stream_execution_intercept(
+    core::nvmagic_register_llm_stream_execution_intercept(
         &name,
         priority,
         callable::wrap_js_llm_exec_conditional_fn(conditional),
@@ -816,7 +816,7 @@ pub fn register_llm_stream_execution_intercept(
 /// Returns `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_llm_stream_execution_intercept(name: String) -> Result<bool> {
-    core::nvagentrt_deregister_llm_stream_execution_intercept(&name).map_err(to_napi_err)
+    core::nvmagic_deregister_llm_stream_execution_intercept(&name).map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -833,7 +833,7 @@ pub fn register_subscriber(
     name: String,
     callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nvagentrt_register_subscriber(&name, callable::wrap_js_event_subscriber(callback))
+    core::nvmagic_register_subscriber(&name, callable::wrap_js_event_subscriber(callback))
         .map_err(to_napi_err)
 }
 
@@ -842,7 +842,7 @@ pub fn register_subscriber(
 /// Returns `true` if a subscriber with that name was found and removed.
 #[napi]
 pub fn deregister_subscriber(name: String) -> Result<bool> {
-    core::nvagentrt_deregister_subscriber(&name).map_err(to_napi_err)
+    core::nvmagic_deregister_subscriber(&name).map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -853,28 +853,28 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 /// Returns the transformed arguments.
 #[napi]
 pub fn tool_request_intercepts(name: String, args: Json) -> Result<Json> {
-    core::nvagentrt_tool_request_intercepts(&name, args).map_err(to_napi_err)
+    core::nvmagic_tool_request_intercepts(&name, args).map_err(to_napi_err)
 }
 
 /// Run the registered tool conditional execution guardrail chain.
 /// Throws if any guardrail rejects.
 #[napi]
 pub fn tool_conditional_execution(name: String, args: Json) -> Result<()> {
-    core::nvagentrt_tool_conditional_execution(&name, &args).map_err(to_napi_err)
+    core::nvmagic_tool_conditional_execution(&name, &args).map_err(to_napi_err)
 }
 
 /// Run the registered tool response intercept chain on the given result.
 /// Returns the transformed result.
 #[napi]
 pub fn tool_response_intercepts(name: String, result: Json) -> Result<Json> {
-    core::nvagentrt_tool_response_intercepts(&name, result).map_err(to_napi_err)
+    core::nvmagic_tool_response_intercepts(&name, result).map_err(to_napi_err)
 }
 
 /// Run the registered LLM request intercept chain on the given native request.
 /// Returns the transformed native request as JSON.
 #[napi]
 pub fn llm_request_intercepts(native: Json) -> Result<Json> {
-    core::nvagentrt_llm_request_intercepts(native).map_err(to_napi_err)
+    core::nvmagic_llm_request_intercepts(native).map_err(to_napi_err)
 }
 
 /// Run the registered LLM conditional execution guardrail chain.
@@ -886,7 +886,7 @@ pub fn llm_conditional_execution(
     to_request: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 ) -> Result<()> {
     let to_request_fn = to_request.map(wrap_js_to_request);
-    core::nvagentrt_llm_conditional_execution(&native, to_request_fn.as_ref()).map_err(to_napi_err)
+    core::nvmagic_llm_conditional_execution(&native, to_request_fn.as_ref()).map_err(to_napi_err)
 }
 
 /// Run the registered LLM response intercept chain on the given response.
@@ -894,7 +894,7 @@ pub fn llm_conditional_execution(
 #[napi]
 pub fn llm_response_intercepts(response: &JsLLMResponse) -> Result<JsLLMResponse> {
     let core_response = response.inner.clone();
-    let result = core::nvagentrt_llm_response_intercepts(core_response).map_err(to_napi_err)?;
+    let result = core::nvmagic_llm_response_intercepts(core_response).map_err(to_napi_err)?;
     Ok(JsLLMResponse { inner: result })
 }
 
@@ -909,7 +909,7 @@ pub fn llm_response_intercepts(response: &JsLLMResponse) -> Result<JsLLMResponse
 /// When ready, call `exportJson()` to serialize the collected trajectory.
 #[napi]
 pub struct JsAtifExporter {
-    inner: nvagentrt_core::atif::AtifExporter,
+    inner: nvmagic_core::atif::AtifExporter,
 }
 
 #[napi]
@@ -925,7 +925,7 @@ impl JsAtifExporter {
         agent_version: String,
         model_name: Option<String>,
     ) -> napi::Result<Self> {
-        let agent_info = nvagentrt_core::atif::AtifAgentInfo {
+        let agent_info = nvmagic_core::atif::AtifAgentInfo {
             name: agent_name,
             version: agent_version,
             model_name,
@@ -933,7 +933,7 @@ impl JsAtifExporter {
             extra: None,
         };
         Ok(Self {
-            inner: nvagentrt_core::atif::AtifExporter::new(session_id, agent_info),
+            inner: nvmagic_core::atif::AtifExporter::new(session_id, agent_info),
         })
     }
 
@@ -943,7 +943,7 @@ impl JsAtifExporter {
     #[napi]
     pub fn register(&self, name: String) -> napi::Result<()> {
         let subscriber = self.inner.subscriber();
-        nvagentrt_core::nvagentrt_register_subscriber(&name, subscriber)
+        nvmagic_core::nvmagic_register_subscriber(&name, subscriber)
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
@@ -952,7 +952,7 @@ impl JsAtifExporter {
     /// Returns `true` if a subscriber with that name was found and removed.
     #[napi]
     pub fn deregister(&self, name: String) -> napi::Result<bool> {
-        nvagentrt_core::nvagentrt_deregister_subscriber(&name)
+        nvmagic_core::nvmagic_deregister_subscriber(&name)
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 

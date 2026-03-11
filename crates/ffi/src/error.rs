@@ -3,10 +3,10 @@
 
 //! Error handling for the FFI layer.
 //!
-//! This module defines the [`NvAgentRtStatus`] enum returned by every exported
+//! This module defines the [`NvMagicStatus`] enum returned by every exported
 //! FFI function, along with thread-local storage for human-readable error
 //! messages. After any non-`Ok` return, the caller should invoke
-//! [`nvagentrt_last_error`] on the same thread to obtain a diagnostic string.
+//! [`nvmagic_last_error`] on the same thread to obtain a diagnostic string.
 //! The error message remains valid until the next FFI call on that thread clears
 //! it via [`clear_last_error`].
 
@@ -15,16 +15,16 @@ use std::ffi::CString;
 
 use libc::c_char;
 
-use nvagentrt_core::AgentRtError;
+use nvmagic_core::MagicError;
 
 /// Status codes returned by all FFI functions.
 ///
-/// Every `extern "C"` function in this library returns an `NvAgentRtStatus`.
-/// On non-`Ok` returns, call [`nvagentrt_last_error`] on the same thread to
+/// Every `extern "C"` function in this library returns an `NvMagicStatus`.
+/// On non-`Ok` returns, call [`nvmagic_last_error`] on the same thread to
 /// retrieve a human-readable error message.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NvAgentRtStatus {
+pub enum NvMagicStatus {
     /// Operation completed successfully.
     Ok = 0,
     /// A resource with the given name already exists.
@@ -70,7 +70,7 @@ pub fn clear_last_error() {
 /// until the next FFI call on the same thread. Do **not** free the returned
 /// pointer.
 #[no_mangle]
-pub extern "C" fn nvagentrt_last_error() -> *const c_char {
+pub extern "C" fn nvmagic_last_error() -> *const c_char {
     LAST_ERROR.with(|cell| {
         cell.borrow()
             .as_ref()
@@ -79,21 +79,21 @@ pub extern "C" fn nvagentrt_last_error() -> *const c_char {
     })
 }
 
-impl From<&AgentRtError> for NvAgentRtStatus {
-    fn from(e: &AgentRtError) -> Self {
+impl From<&MagicError> for NvMagicStatus {
+    fn from(e: &MagicError) -> Self {
         match e {
-            AgentRtError::AlreadyExists(_) => NvAgentRtStatus::AlreadyExists,
-            AgentRtError::NotFound(_) => NvAgentRtStatus::NotFound,
-            AgentRtError::ScopeStackEmpty => NvAgentRtStatus::ScopeStackEmpty,
-            AgentRtError::GuardrailRejected(_) => NvAgentRtStatus::GuardrailRejected,
-            AgentRtError::Internal(_) => NvAgentRtStatus::Internal,
+            MagicError::AlreadyExists(_) => NvMagicStatus::AlreadyExists,
+            MagicError::NotFound(_) => NvMagicStatus::NotFound,
+            MagicError::ScopeStackEmpty => NvMagicStatus::ScopeStackEmpty,
+            MagicError::GuardrailRejected(_) => NvMagicStatus::GuardrailRejected,
+            MagicError::Internal(_) => NvMagicStatus::Internal,
         }
     }
 }
 
-/// Convert an `AgentRtError` to an `NvAgentRtStatus`, storing the error message
+/// Convert an `MagicError` to an `NvMagicStatus`, storing the error message
 /// in thread-local storage.
-pub fn status_from_error(e: &AgentRtError) -> NvAgentRtStatus {
+pub fn status_from_error(e: &MagicError) -> NvMagicStatus {
     set_last_error(&e.to_string());
-    NvAgentRtStatus::from(e)
+    NvMagicStatus::from(e)
 }

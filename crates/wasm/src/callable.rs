@@ -20,9 +20,9 @@ use serde_json::Value as Json;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use nvagentrt_core::types::{LLMRequest, LLMResponse};
-use nvagentrt_core::{
-    AgentRtError, LlmExecutionNextFn, LlmStreamExecutionNextFn, Result, ToolExecutionNextFn,
+use nvmagic_core::types::{LLMRequest, LLMResponse};
+use nvmagic_core::{
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, MagicError, Result, ToolExecutionNextFn,
 };
 
 use crate::convert::{js_to_json, json_to_js};
@@ -92,14 +92,14 @@ pub fn wrap_js_tool_exec_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| AgentRtError::Internal(format!("{e:?}"))),
-                            Err(e) => Err(AgentRtError::Internal(format!("{e:?}"))),
+                                .map_err(|e| MagicError::Internal(format!("{e:?}"))),
+                            Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| AgentRtError::Internal(format!("{e:?}")))
+                        js_to_json(&val).map_err(|e| MagicError::Internal(format!("{e:?}")))
                     }
                 }
-                Err(e) => Err(AgentRtError::Internal(format!("{e:?}"))),
+                Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
             }
         }))
     })
@@ -182,14 +182,14 @@ pub fn wrap_js_llm_exec_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| AgentRtError::Internal(format!("{e:?}"))),
-                            Err(e) => Err(AgentRtError::Internal(format!("{e:?}"))),
+                                .map_err(|e| MagicError::Internal(format!("{e:?}"))),
+                            Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| AgentRtError::Internal(format!("{e:?}")))
+                        js_to_json(&val).map_err(|e| MagicError::Internal(format!("{e:?}")))
                     }
                 }
-                Err(e) => Err(AgentRtError::Internal(format!("{e:?}"))),
+                Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
             }
         }))
     })
@@ -235,11 +235,9 @@ pub fn wrap_js_stream_response_intercept_fn(
 }
 
 /// Wrap a JS function for event subscriber: `(event) => void`.
-pub fn wrap_js_event_subscriber(
-    func: Function,
-) -> Box<dyn Fn(&nvagentrt_core::Event) + Send + Sync> {
+pub fn wrap_js_event_subscriber(func: Function) -> Box<dyn Fn(&nvmagic_core::Event) + Send + Sync> {
     let func = SendWrapper::new(func);
-    Box::new(move |event: &nvagentrt_core::Event| {
+    Box::new(move |event: &nvmagic_core::Event| {
         let wasm_event = WasmEvent::from(event);
         let js_event = wasm_event
             .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
@@ -281,14 +279,14 @@ pub fn wrap_js_tool_exec_intercept_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| AgentRtError::Internal(format!("{e:?}"))),
-                            Err(e) => Err(AgentRtError::Internal(format!("{e:?}"))),
+                                .map_err(|e| MagicError::Internal(format!("{e:?}"))),
+                            Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| AgentRtError::Internal(format!("{e:?}")))
+                        js_to_json(&val).map_err(|e| MagicError::Internal(format!("{e:?}")))
                     }
                 }
-                Err(e) => Err(AgentRtError::Internal(format!("{e:?}"))),
+                Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
             }
         }))
     })
@@ -327,14 +325,14 @@ pub fn wrap_js_llm_exec_intercept_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| AgentRtError::Internal(format!("{e:?}"))),
-                            Err(e) => Err(AgentRtError::Internal(format!("{e:?}"))),
+                                .map_err(|e| MagicError::Internal(format!("{e:?}"))),
+                            Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| AgentRtError::Internal(format!("{e:?}")))
+                        js_to_json(&val).map_err(|e| MagicError::Internal(format!("{e:?}")))
                     }
                 }
-                Err(e) => Err(AgentRtError::Internal(format!("{e:?}"))),
+                Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
             }
         }))
     })
@@ -373,14 +371,14 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| AgentRtError::Internal(format!("{e:?}")))?,
-                            Err(e) => return Err(AgentRtError::Internal(format!("{e:?}"))),
+                                .map_err(|e| MagicError::Internal(format!("{e:?}")))?,
+                            Err(e) => return Err(MagicError::Internal(format!("{e:?}"))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| AgentRtError::Internal(format!("{e:?}")))?
+                        js_to_json(&val).map_err(|e| MagicError::Internal(format!("{e:?}")))?
                     }
                 }
-                Err(e) => return Err(AgentRtError::Internal(format!("{e:?}"))),
+                Err(e) => return Err(MagicError::Internal(format!("{e:?}"))),
             };
             let stream = tokio_stream::once(Ok(val));
             Ok(Box::pin(stream)

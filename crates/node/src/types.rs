@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Type definitions for the NVAgentRT Node.js NAPI bindings.
+//! Type definitions for the NVMagic Node.js NAPI bindings.
 //!
 //! Contains enums, handle wrappers, request/response structures, event types,
 //! and attribute constants that are exposed to JavaScript/TypeScript consumers.
@@ -11,7 +11,7 @@ use napi_derive::napi;
 use serde::Serialize;
 use serde_json::Value as Json;
 
-use nvagentrt_core::types as core_types;
+use nvmagic_core::types as core_types;
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -109,7 +109,7 @@ impl From<core_types::EventType> for EventType {
 /// Handle to an isolated scope stack for per-request/per-task isolation.
 #[napi]
 pub struct JsScopeStack {
-    pub(crate) inner: nvagentrt_core::ScopeStackHandle,
+    pub(crate) inner: nvmagic_core::ScopeStackHandle,
 }
 
 #[napi]
@@ -118,13 +118,13 @@ impl JsScopeStack {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {
-            inner: nvagentrt_core::create_scope_stack(),
+            inner: nvmagic_core::create_scope_stack(),
         }
     }
 }
 
-impl From<nvagentrt_core::ScopeStackHandle> for JsScopeStack {
-    fn from(h: nvagentrt_core::ScopeStackHandle) -> Self {
+impl From<nvmagic_core::ScopeStackHandle> for JsScopeStack {
+    fn from(h: nvmagic_core::ScopeStackHandle) -> Self {
         Self { inner: h }
     }
 }

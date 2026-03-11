@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #![allow(clippy::type_complexity)]
-//! JavaScript callable wrappers for NVAgentRT callbacks.
+//! JavaScript callable wrappers for NVMagic callbacks.
 //!
 //! This module bridges JavaScript functions (received as NAPI `ThreadsafeFunction` values)
-//! into the Rust closure signatures expected by the NVAgentRT core runtime. Each wrapper
+//! into the Rust closure signatures expected by the NVMagic core runtime. Each wrapper
 //! handles serialization of arguments to/from JSON and manages cross-thread communication
 //! between the Rust async runtime and the Node.js event loop.
 
@@ -16,9 +16,9 @@ use std::sync::Arc;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use serde_json::Value as Json;
 
-use nvagentrt_core::types::{LLMRequest, LLMResponse};
-use nvagentrt_core::{
-    AgentRtError, LlmExecutionNextFn, LlmStreamExecutionNextFn, Result, ToolExecutionNextFn,
+use nvmagic_core::types::{LLMRequest, LLMResponse};
+use nvmagic_core::{
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, MagicError, Result, ToolExecutionNextFn,
 };
 
 use crate::types::JsEvent;
@@ -110,7 +110,7 @@ pub fn wrap_js_tool_exec_fn(
                     Ok(())
                 },
             );
-            rx.await.map_err(|e| AgentRtError::Internal(e.to_string()))
+            rx.await.map_err(|e| MagicError::Internal(e.to_string()))
         })
     })
 }
@@ -245,7 +245,7 @@ pub fn wrap_js_llm_exec_fn(
                     Ok(())
                 },
             );
-            rx.await.map_err(|e| AgentRtError::Internal(e.to_string()))
+            rx.await.map_err(|e| MagicError::Internal(e.to_string()))
         })
     })
 }
@@ -287,9 +287,9 @@ pub fn wrap_js_finalizer_fn(
 /// Wrap a JS function for event subscriber: `(event: JsEvent) => void`.
 pub fn wrap_js_event_subscriber(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(&nvagentrt_core::Event) + Send + Sync> {
+) -> Box<dyn Fn(&nvmagic_core::Event) + Send + Sync> {
     let func = Arc::new(func);
-    Box::new(move |event: &nvagentrt_core::Event| {
+    Box::new(move |event: &nvmagic_core::Event| {
         let event_json = serde_json::to_value(JsEvent::from(event)).unwrap_or(Json::Null);
         func.call(event_json, ThreadsafeFunctionCallMode::NonBlocking);
     })
@@ -329,7 +329,7 @@ pub fn wrap_js_tool_exec_intercept_fn(
                     Ok(())
                 },
             );
-            rx.await.map_err(|e| AgentRtError::Internal(e.to_string()))
+            rx.await.map_err(|e| MagicError::Internal(e.to_string()))
         })
     })
 }
@@ -357,7 +357,7 @@ pub fn wrap_js_llm_exec_intercept_fn(
                     Ok(())
                 },
             );
-            rx.await.map_err(|e| AgentRtError::Internal(e.to_string()))
+            rx.await.map_err(|e| MagicError::Internal(e.to_string()))
         })
     })
 }
@@ -396,9 +396,7 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
                     Ok(())
                 },
             );
-            let result = rx
-                .await
-                .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+            let result = rx.await.map_err(|e| MagicError::Internal(e.to_string()))?;
             let stream = tokio_stream::once(Ok(result));
             Ok(Box::pin(stream)
                 as Pin<

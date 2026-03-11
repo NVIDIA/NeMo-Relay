@@ -7,13 +7,13 @@
 //! and free functions for all types that cross the C FFI boundary. Each opaque
 //! struct wraps a corresponding core type and is heap-allocated; the C consumer
 //! sees only an opaque pointer. All returned C strings must be freed with
-//! [`crate::convert::nvagentrt_string_free`], and all handles must be freed
-//! with their corresponding `nvagentrt_*_free` function.
+//! [`crate::convert::nvmagic_string_free`], and all handles must be freed
+//! with their corresponding `nvmagic_*_free` function.
 
 use libc::c_char;
 use serde_json::Value as Json;
 
-use nvagentrt_core::types as core_types;
+use nvmagic_core::types as core_types;
 
 use crate::convert::{json_to_c_string, str_to_c_string};
 
@@ -35,9 +35,9 @@ pub struct FfiLLMResponse(pub core_types::LLMResponse);
 /// Opaque wrapper around a lifecycle event emitted by the runtime.
 pub struct FfiEvent(pub core_types::Event);
 /// Opaque handle to an isolated scope stack for per-request/per-task isolation.
-pub struct FfiScopeStack(pub nvagentrt_core::ScopeStackHandle);
+pub struct FfiScopeStack(pub nvmagic_core::ScopeStackHandle);
 /// Opaque ATIF exporter handle.
-pub struct FfiAtifExporter(pub nvagentrt_core::atif::AtifExporter);
+pub struct FfiAtifExporter(pub nvmagic_core::atif::AtifExporter);
 
 // ---------------------------------------------------------------------------
 // Enums exposed to C
@@ -46,7 +46,7 @@ pub struct FfiAtifExporter(pub nvagentrt_core::atif::AtifExporter);
 /// The type of scope in the agent execution hierarchy.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy)]
-pub enum NvAgentRtScopeType {
+pub enum NvMagicScopeType {
     /// Top-level agent scope.
     Agent = 0,
     /// Generic function scope.
@@ -71,38 +71,38 @@ pub enum NvAgentRtScopeType {
     Unknown = 10,
 }
 
-impl From<NvAgentRtScopeType> for core_types::ScopeType {
-    fn from(v: NvAgentRtScopeType) -> Self {
+impl From<NvMagicScopeType> for core_types::ScopeType {
+    fn from(v: NvMagicScopeType) -> Self {
         match v {
-            NvAgentRtScopeType::Agent => core_types::ScopeType::Agent,
-            NvAgentRtScopeType::Function => core_types::ScopeType::Function,
-            NvAgentRtScopeType::Tool => core_types::ScopeType::Tool,
-            NvAgentRtScopeType::Llm => core_types::ScopeType::Llm,
-            NvAgentRtScopeType::Retriever => core_types::ScopeType::Retriever,
-            NvAgentRtScopeType::Embedder => core_types::ScopeType::Embedder,
-            NvAgentRtScopeType::Reranker => core_types::ScopeType::Reranker,
-            NvAgentRtScopeType::Guardrail => core_types::ScopeType::Guardrail,
-            NvAgentRtScopeType::Evaluator => core_types::ScopeType::Evaluator,
-            NvAgentRtScopeType::Custom => core_types::ScopeType::Custom,
-            NvAgentRtScopeType::Unknown => core_types::ScopeType::Unknown,
+            NvMagicScopeType::Agent => core_types::ScopeType::Agent,
+            NvMagicScopeType::Function => core_types::ScopeType::Function,
+            NvMagicScopeType::Tool => core_types::ScopeType::Tool,
+            NvMagicScopeType::Llm => core_types::ScopeType::Llm,
+            NvMagicScopeType::Retriever => core_types::ScopeType::Retriever,
+            NvMagicScopeType::Embedder => core_types::ScopeType::Embedder,
+            NvMagicScopeType::Reranker => core_types::ScopeType::Reranker,
+            NvMagicScopeType::Guardrail => core_types::ScopeType::Guardrail,
+            NvMagicScopeType::Evaluator => core_types::ScopeType::Evaluator,
+            NvMagicScopeType::Custom => core_types::ScopeType::Custom,
+            NvMagicScopeType::Unknown => core_types::ScopeType::Unknown,
         }
     }
 }
 
-impl From<core_types::ScopeType> for NvAgentRtScopeType {
+impl From<core_types::ScopeType> for NvMagicScopeType {
     fn from(v: core_types::ScopeType) -> Self {
         match v {
-            core_types::ScopeType::Agent => NvAgentRtScopeType::Agent,
-            core_types::ScopeType::Function => NvAgentRtScopeType::Function,
-            core_types::ScopeType::Tool => NvAgentRtScopeType::Tool,
-            core_types::ScopeType::Llm => NvAgentRtScopeType::Llm,
-            core_types::ScopeType::Retriever => NvAgentRtScopeType::Retriever,
-            core_types::ScopeType::Embedder => NvAgentRtScopeType::Embedder,
-            core_types::ScopeType::Reranker => NvAgentRtScopeType::Reranker,
-            core_types::ScopeType::Guardrail => NvAgentRtScopeType::Guardrail,
-            core_types::ScopeType::Evaluator => NvAgentRtScopeType::Evaluator,
-            core_types::ScopeType::Custom => NvAgentRtScopeType::Custom,
-            core_types::ScopeType::Unknown => NvAgentRtScopeType::Unknown,
+            core_types::ScopeType::Agent => NvMagicScopeType::Agent,
+            core_types::ScopeType::Function => NvMagicScopeType::Function,
+            core_types::ScopeType::Tool => NvMagicScopeType::Tool,
+            core_types::ScopeType::Llm => NvMagicScopeType::Llm,
+            core_types::ScopeType::Retriever => NvMagicScopeType::Retriever,
+            core_types::ScopeType::Embedder => NvMagicScopeType::Embedder,
+            core_types::ScopeType::Reranker => NvMagicScopeType::Reranker,
+            core_types::ScopeType::Guardrail => NvMagicScopeType::Guardrail,
+            core_types::ScopeType::Evaluator => NvMagicScopeType::Evaluator,
+            core_types::ScopeType::Custom => NvMagicScopeType::Custom,
+            core_types::ScopeType::Unknown => NvMagicScopeType::Unknown,
         }
     }
 }
@@ -110,7 +110,7 @@ impl From<core_types::ScopeType> for NvAgentRtScopeType {
 /// The type of lifecycle event emitted by the runtime.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy)]
-pub enum NvAgentRtEventType {
+pub enum NvMagicEventType {
     /// A scope or operation has started.
     Start = 0,
     /// A scope or operation has ended.
@@ -119,12 +119,12 @@ pub enum NvAgentRtEventType {
     Mark = 2,
 }
 
-impl From<core_types::EventType> for NvAgentRtEventType {
+impl From<core_types::EventType> for NvMagicEventType {
     fn from(v: core_types::EventType) -> Self {
         match v {
-            core_types::EventType::Start => NvAgentRtEventType::Start,
-            core_types::EventType::End => NvAgentRtEventType::End,
-            core_types::EventType::Mark => NvAgentRtEventType::Mark,
+            core_types::EventType::Start => NvMagicEventType::Start,
+            core_types::EventType::End => NvMagicEventType::End,
+            core_types::EventType::Mark => NvMagicEventType::Mark,
         }
     }
 }
@@ -136,9 +136,9 @@ impl From<core_types::EventType> for NvAgentRtEventType {
 /// Free a scope handle previously returned by the runtime.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nvagentrt_*` function, or null.
+/// `ptr` must be a valid pointer returned by an `nvmagic_*` function, or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_scope_handle_free(ptr: *mut FfiScopeHandle) {
+pub unsafe extern "C" fn nvmagic_scope_handle_free(ptr: *mut FfiScopeHandle) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -147,9 +147,9 @@ pub unsafe extern "C" fn nvagentrt_scope_handle_free(ptr: *mut FfiScopeHandle) {
 /// Free a tool handle previously returned by the runtime.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nvagentrt_*` function, or null.
+/// `ptr` must be a valid pointer returned by an `nvmagic_*` function, or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_tool_handle_free(ptr: *mut FfiToolHandle) {
+pub unsafe extern "C" fn nvmagic_tool_handle_free(ptr: *mut FfiToolHandle) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -158,9 +158,9 @@ pub unsafe extern "C" fn nvagentrt_tool_handle_free(ptr: *mut FfiToolHandle) {
 /// Free an LLM handle previously returned by the runtime.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nvagentrt_*` function, or null.
+/// `ptr` must be a valid pointer returned by an `nvmagic_*` function, or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_llm_handle_free(ptr: *mut FfiLLMHandle) {
+pub unsafe extern "C" fn nvmagic_llm_handle_free(ptr: *mut FfiLLMHandle) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -169,9 +169,9 @@ pub unsafe extern "C" fn nvagentrt_llm_handle_free(ptr: *mut FfiLLMHandle) {
 /// Free an LLM request object.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nvagentrt_*` function, or null.
+/// `ptr` must be a valid pointer returned by an `nvmagic_*` function, or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_llm_request_free(ptr: *mut FfiLLMRequest) {
+pub unsafe extern "C" fn nvmagic_llm_request_free(ptr: *mut FfiLLMRequest) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -180,31 +180,31 @@ pub unsafe extern "C" fn nvagentrt_llm_request_free(ptr: *mut FfiLLMRequest) {
 /// Free an event object.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nvagentrt_*` function, or null.
+/// `ptr` must be a valid pointer returned by an `nvmagic_*` function, or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_event_free(ptr: *mut FfiEvent) {
+pub unsafe extern "C" fn nvmagic_event_free(ptr: *mut FfiEvent) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
 }
 
-/// Free a scope stack handle previously returned by `nvagentrt_scope_stack_create`.
+/// Free a scope stack handle previously returned by `nvmagic_scope_stack_create`.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by `nvagentrt_scope_stack_create`, or null.
+/// `ptr` must be a valid pointer returned by `nvmagic_scope_stack_create`, or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_scope_stack_free(ptr: *mut FfiScopeStack) {
+pub unsafe extern "C" fn nvmagic_scope_stack_free(ptr: *mut FfiScopeStack) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
 }
 
-/// Free an ATIF exporter handle previously returned by `nvagentrt_atif_exporter_create`.
+/// Free an ATIF exporter handle previously returned by `nvmagic_atif_exporter_create`.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by `nvagentrt_atif_exporter_create`, or null.
+/// `ptr` must be a valid pointer returned by `nvmagic_atif_exporter_create`, or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_atif_exporter_free(ptr: *mut FfiAtifExporter) {
+pub unsafe extern "C" fn nvmagic_atif_exporter_free(ptr: *mut FfiAtifExporter) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -215,12 +215,12 @@ pub unsafe extern "C" fn nvagentrt_atif_exporter_free(ptr: *mut FfiAtifExporter)
 // ---------------------------------------------------------------------------
 
 /// Return the UUID of a scope handle as a C string. Caller must free the result
-/// with `nvagentrt_string_free`. Returns null if `ptr` is null.
+/// with `nvmagic_string_free`. Returns null if `ptr` is null.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_scope_handle_uuid(ptr: *const FfiScopeHandle) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_scope_handle_uuid(ptr: *const FfiScopeHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -233,7 +233,7 @@ pub unsafe extern "C" fn nvagentrt_scope_handle_uuid(ptr: *const FfiScopeHandle)
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_scope_handle_name(ptr: *const FfiScopeHandle) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_scope_handle_name(ptr: *const FfiScopeHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -245,11 +245,11 @@ pub unsafe extern "C" fn nvagentrt_scope_handle_name(ptr: *const FfiScopeHandle)
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_scope_handle_scope_type(
+pub unsafe extern "C" fn nvmagic_scope_handle_scope_type(
     ptr: *const FfiScopeHandle,
-) -> NvAgentRtScopeType {
+) -> NvMagicScopeType {
     if ptr.is_null() {
-        return NvAgentRtScopeType::Unknown;
+        return NvMagicScopeType::Unknown;
     }
     unsafe { &*ptr }.0.scope_type.into()
 }
@@ -259,7 +259,7 @@ pub unsafe extern "C" fn nvagentrt_scope_handle_scope_type(
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_scope_handle_attributes(ptr: *const FfiScopeHandle) -> u32 {
+pub unsafe extern "C" fn nvmagic_scope_handle_attributes(ptr: *const FfiScopeHandle) -> u32 {
     if ptr.is_null() {
         return 0;
     }
@@ -267,12 +267,12 @@ pub unsafe extern "C" fn nvagentrt_scope_handle_attributes(ptr: *const FfiScopeH
 }
 
 /// Return the parent scope UUID as a C string, or null if there is no parent.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_scope_handle_parent_uuid(
+pub unsafe extern "C" fn nvmagic_scope_handle_parent_uuid(
     ptr: *const FfiScopeHandle,
 ) -> *mut c_char {
     if ptr.is_null() {
@@ -285,12 +285,12 @@ pub unsafe extern "C" fn nvagentrt_scope_handle_parent_uuid(
 }
 
 /// Return the scope data as a JSON C string, or null if no data is set.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_scope_handle_data(ptr: *const FfiScopeHandle) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_scope_handle_data(ptr: *const FfiScopeHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -301,14 +301,12 @@ pub unsafe extern "C" fn nvagentrt_scope_handle_data(ptr: *const FfiScopeHandle)
 }
 
 /// Return the scope metadata as a JSON C string, or null if no metadata is set.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_scope_handle_metadata(
-    ptr: *const FfiScopeHandle,
-) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_scope_handle_metadata(ptr: *const FfiScopeHandle) -> *mut c_char {
     match &unsafe { &*ptr }.0.metadata {
         Some(m) => json_to_c_string(m),
         None => std::ptr::null_mut(),
@@ -324,7 +322,7 @@ pub unsafe extern "C" fn nvagentrt_scope_handle_metadata(
 /// # Safety
 /// `ptr` must be a valid `FfiToolHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_tool_handle_uuid(ptr: *const FfiToolHandle) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_tool_handle_uuid(ptr: *const FfiToolHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -336,7 +334,7 @@ pub unsafe extern "C" fn nvagentrt_tool_handle_uuid(ptr: *const FfiToolHandle) -
 /// # Safety
 /// `ptr` must be a valid `FfiToolHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_tool_handle_name(ptr: *const FfiToolHandle) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_tool_handle_name(ptr: *const FfiToolHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -348,7 +346,7 @@ pub unsafe extern "C" fn nvagentrt_tool_handle_name(ptr: *const FfiToolHandle) -
 /// # Safety
 /// `ptr` must be a valid `FfiToolHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_tool_handle_attributes(ptr: *const FfiToolHandle) -> u32 {
+pub unsafe extern "C" fn nvmagic_tool_handle_attributes(ptr: *const FfiToolHandle) -> u32 {
     if ptr.is_null() {
         return 0;
     }
@@ -356,14 +354,12 @@ pub unsafe extern "C" fn nvagentrt_tool_handle_attributes(ptr: *const FfiToolHan
 }
 
 /// Return the parent scope UUID of a tool handle, or null if none.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiToolHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_tool_handle_parent_uuid(
-    ptr: *const FfiToolHandle,
-) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_tool_handle_parent_uuid(ptr: *const FfiToolHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -382,7 +378,7 @@ pub unsafe extern "C" fn nvagentrt_tool_handle_parent_uuid(
 /// # Safety
 /// `ptr` must be a valid `FfiLLMHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_llm_handle_uuid(ptr: *const FfiLLMHandle) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_llm_handle_uuid(ptr: *const FfiLLMHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -394,7 +390,7 @@ pub unsafe extern "C" fn nvagentrt_llm_handle_uuid(ptr: *const FfiLLMHandle) -> 
 /// # Safety
 /// `ptr` must be a valid `FfiLLMHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_llm_handle_name(ptr: *const FfiLLMHandle) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_llm_handle_name(ptr: *const FfiLLMHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -406,7 +402,7 @@ pub unsafe extern "C" fn nvagentrt_llm_handle_name(ptr: *const FfiLLMHandle) -> 
 /// # Safety
 /// `ptr` must be a valid `FfiLLMHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_llm_handle_attributes(ptr: *const FfiLLMHandle) -> u32 {
+pub unsafe extern "C" fn nvmagic_llm_handle_attributes(ptr: *const FfiLLMHandle) -> u32 {
     if ptr.is_null() {
         return 0;
     }
@@ -414,12 +410,12 @@ pub unsafe extern "C" fn nvagentrt_llm_handle_attributes(ptr: *const FfiLLMHandl
 }
 
 /// Return the parent scope UUID of an LLM handle, or null if none.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiLLMHandle` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_llm_handle_parent_uuid(ptr: *const FfiLLMHandle) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_llm_handle_parent_uuid(ptr: *const FfiLLMHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -434,7 +430,7 @@ pub unsafe extern "C" fn nvagentrt_llm_handle_parent_uuid(ptr: *const FfiLLMHand
 // ---------------------------------------------------------------------------
 
 /// Create a new LLM request object. Returns a heap-allocated `FfiLLMRequest`
-/// that must be freed with `nvagentrt_llm_request_free`. Returns null on
+/// that must be freed with `nvmagic_llm_request_free`. Returns null on
 /// invalid input.
 ///
 /// # Parameters
@@ -444,7 +440,7 @@ pub unsafe extern "C" fn nvagentrt_llm_handle_parent_uuid(ptr: *const FfiLLMHand
 /// # Safety
 /// All string arguments must be valid null-terminated C strings or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_llm_request_new(
+pub unsafe extern "C" fn nvmagic_llm_request_new(
     headers_json: *const c_char,
     content_json: *const c_char,
 ) -> *mut FfiLLMRequest {
@@ -465,7 +461,7 @@ pub unsafe extern "C" fn nvagentrt_llm_request_new(
 /// # Safety
 /// `ptr` must be a valid `FfiLLMRequest` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_llm_request_headers(ptr: *const FfiLLMRequest) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_llm_request_headers(ptr: *const FfiLLMRequest) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -477,7 +473,7 @@ pub unsafe extern "C" fn nvagentrt_llm_request_headers(ptr: *const FfiLLMRequest
 /// # Safety
 /// `ptr` must be a valid `FfiLLMRequest` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_llm_request_content(ptr: *const FfiLLMRequest) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_llm_request_content(ptr: *const FfiLLMRequest) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -491,9 +487,9 @@ pub unsafe extern "C" fn nvagentrt_llm_request_content(ptr: *const FfiLLMRequest
 /// Free an LLM response object.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nvagentrt_*` function, or null.
+/// `ptr` must be a valid pointer returned by an `nvmagic_*` function, or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_llm_response_free(ptr: *mut FfiLLMResponse) {
+pub unsafe extern "C" fn nvmagic_llm_response_free(ptr: *mut FfiLLMResponse) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -504,7 +500,7 @@ pub unsafe extern "C" fn nvagentrt_llm_response_free(ptr: *mut FfiLLMResponse) {
 /// # Safety
 /// `ptr` must be a valid `FfiLLMResponse` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_llm_response_data(ptr: *const FfiLLMResponse) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_llm_response_data(ptr: *const FfiLLMResponse) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -520,7 +516,7 @@ pub unsafe extern "C" fn nvagentrt_llm_response_data(ptr: *const FfiLLMResponse)
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_event_uuid(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_event_uuid(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -528,12 +524,12 @@ pub unsafe extern "C" fn nvagentrt_event_uuid(ptr: *const FfiEvent) -> *mut c_ch
 }
 
 /// Return the name of an event as a C string, or null if unnamed.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_event_name(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_event_name(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -548,20 +544,20 @@ pub unsafe extern "C" fn nvagentrt_event_name(ptr: *const FfiEvent) -> *mut c_ch
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_event_type(ptr: *const FfiEvent) -> NvAgentRtEventType {
+pub unsafe extern "C" fn nvmagic_event_type(ptr: *const FfiEvent) -> NvMagicEventType {
     if ptr.is_null() {
-        return NvAgentRtEventType::Mark;
+        return NvMagicEventType::Mark;
     }
     unsafe { &*ptr }.0.event_type.into()
 }
 
 /// Return the event data as a JSON C string, or null if no data is set.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_event_data(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_event_data(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -572,12 +568,12 @@ pub unsafe extern "C" fn nvagentrt_event_data(ptr: *const FfiEvent) -> *mut c_ch
 }
 
 /// Return the event metadata as a JSON C string, or null if no metadata is set.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_event_metadata(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_event_metadata(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -592,7 +588,7 @@ pub unsafe extern "C" fn nvagentrt_event_metadata(ptr: *const FfiEvent) -> *mut 
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_event_timestamp(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_event_timestamp(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -600,12 +596,12 @@ pub unsafe extern "C" fn nvagentrt_event_timestamp(ptr: *const FfiEvent) -> *mut
 }
 
 /// Return the event input as a JSON C string, or null if no input is set.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_event_input(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_event_input(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -616,12 +612,12 @@ pub unsafe extern "C" fn nvagentrt_event_input(ptr: *const FfiEvent) -> *mut c_c
 }
 
 /// Return the event output as a JSON C string, or null if no output is set.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_event_output(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_event_output(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -632,12 +628,12 @@ pub unsafe extern "C" fn nvagentrt_event_output(ptr: *const FfiEvent) -> *mut c_
 }
 
 /// Return the event model name as a C string, or null if no model name is set.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_event_model_name(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_event_model_name(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -648,12 +644,12 @@ pub unsafe extern "C" fn nvagentrt_event_model_name(ptr: *const FfiEvent) -> *mu
 }
 
 /// Return the event tool call ID as a C string, or null if no tool call ID is set.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_event_tool_call_id(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_event_tool_call_id(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -664,12 +660,12 @@ pub unsafe extern "C" fn nvagentrt_event_tool_call_id(ptr: *const FfiEvent) -> *
 }
 
 /// Return the event root UUID as a C string, or null if no root UUID is set.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_event_root_uuid(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_event_root_uuid(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -680,12 +676,12 @@ pub unsafe extern "C" fn nvagentrt_event_root_uuid(ptr: *const FfiEvent) -> *mut
 }
 
 /// Return the event parent UUID as a C string, or null if no parent UUID is set.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_event_parent_uuid(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_event_parent_uuid(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -696,12 +692,12 @@ pub unsafe extern "C" fn nvagentrt_event_parent_uuid(ptr: *const FfiEvent) -> *m
 }
 
 /// Return the event scope type as a C string, or null if no scope type is set.
-/// Caller must free the result with `nvagentrt_string_free`.
+/// Caller must free the result with `nvmagic_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_event_scope_type(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nvmagic_event_scope_type(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }

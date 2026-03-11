@@ -5,11 +5,11 @@
 
 use std::sync::Arc;
 
-use nvagentrt_core::context::{
+use nvmagic_core::context::{
     create_scope_stack, current_scope_stack, set_thread_scope_stack, TASK_SCOPE_STACK,
 };
-use nvagentrt_core::types::*;
-use nvagentrt_core::{task_scope_push, task_scope_top};
+use nvmagic_core::types::*;
+use nvmagic_core::{task_scope_push, task_scope_top};
 
 /// Two ScopeStackHandles push different scopes → verify independent.
 #[test]

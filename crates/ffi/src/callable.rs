@@ -7,7 +7,7 @@
 //! This module defines the callback signatures used by the C API for tool and
 //! LLM guardrails, intercepts, execution functions, and event subscribers. Each
 //! `pub type` alias corresponds to a C function pointer that appears in the
-//! generated `nvagentrt.h` header.
+//! generated `nvmagic.h` header.
 //!
 //! The `wrap_*` functions convert C callbacks (with opaque `user_data` pointers)
 //! into Rust closures (`Box<dyn Fn(...)>`) that the core runtime can invoke.
@@ -24,10 +24,10 @@ use libc::c_char;
 use serde_json::Value as Json;
 use tokio_stream::Stream;
 
-use nvagentrt_core::types::{
+use nvmagic_core::types::{
     IdentityConverter, LLMConverter, LLMRequest, LLMResponse, ToRequestFn, ToResponseFn,
 };
-use nvagentrt_core::{LlmExecutionNextFn, LlmStreamExecutionNextFn, Result, ToolExecutionNextFn};
+use nvmagic_core::{LlmExecutionNextFn, LlmStreamExecutionNextFn, Result, ToolExecutionNextFn};
 
 use crate::convert::json_to_c_string;
 use crate::types::{FfiEvent, FfiLLMRequest};
@@ -38,12 +38,12 @@ use crate::types::{FfiEvent, FfiLLMRequest};
 
 /// Optional destructor for user data passed to callbacks.
 /// Called when the runtime no longer needs the associated callback.
-pub type NvAgentRtFreeFn = Option<unsafe extern "C" fn(user_data: *mut libc::c_void)>;
+pub type NvMagicFreeFn = Option<unsafe extern "C" fn(user_data: *mut libc::c_void)>;
 
 /// Callback for tool request/response sanitization guardrails and intercepts.
 /// Receives tool name and arguments as JSON, returns sanitized arguments as JSON.
 /// The returned string must be allocated with `malloc` or equivalent.
-pub type NvAgentRtToolSanitizeCb = unsafe extern "C" fn(
+pub type NvMagicToolSanitizeCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     name: *const c_char,
     args_json: *const c_char,
@@ -52,7 +52,7 @@ pub type NvAgentRtToolSanitizeCb = unsafe extern "C" fn(
 /// Callback for tool conditional execution guardrails.
 /// Receives tool name and arguments as JSON.
 /// Returns NULL to allow execution, or an error message string to reject.
-pub type NvAgentRtToolConditionalCb = unsafe extern "C" fn(
+pub type NvMagicToolConditionalCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     name: *const c_char,
     args_json: *const c_char,
@@ -61,7 +61,7 @@ pub type NvAgentRtToolConditionalCb = unsafe extern "C" fn(
 /// Callback for tool execution intercept conditions.
 /// Receives tool name and arguments as JSON.
 /// Returns `true` if this intercept should handle the execution.
-pub type NvAgentRtToolExecConditionalCb = unsafe extern "C" fn(
+pub type NvMagicToolExecConditionalCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     name: *const c_char,
     args_json: *const c_char,
@@ -70,88 +70,88 @@ pub type NvAgentRtToolExecConditionalCb = unsafe extern "C" fn(
 /// Callback for tool execution (default callable). Receives arguments as JSON,
 /// returns result as JSON. The returned string must be allocated with `malloc`
 /// or equivalent.
-pub type NvAgentRtToolExecCb =
+pub type NvMagicToolExecCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, args_json: *const c_char) -> *mut c_char;
 
 /// Runtime-provided "next" callback for tool execution middleware chain.
 /// Call this from an intercept to invoke the next layer (or original function).
 /// `next_ctx` is an opaque pointer managed by the runtime.
-pub type NvAgentRtToolExecNextFn =
+pub type NvMagicToolExecNextFn =
     unsafe extern "C" fn(args_json: *const c_char, next_ctx: *mut libc::c_void) -> *mut c_char;
 
 /// Callback for tool execution intercepts. Receives arguments as JSON plus
 /// a `next` callback and its context. Call `next_fn(args, next_ctx)` to invoke
 /// the next layer in the middleware chain, or return directly to short-circuit.
-pub type NvAgentRtToolExecInterceptCb = unsafe extern "C" fn(
+pub type NvMagicToolExecInterceptCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     args_json: *const c_char,
-    next_fn: NvAgentRtToolExecNextFn,
+    next_fn: NvMagicToolExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char;
 
 /// Generic JSON-to-JSON callback, used for LLM response sanitization and intercepts.
 /// The returned string must be allocated with `malloc` or equivalent.
-pub type NvAgentRtJsonCb =
+pub type NvMagicJsonCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, json: *const c_char) -> *mut c_char;
 
 /// Callback for LLM request sanitization. Receives an `FfiLLMRequest` and returns
 /// a new (possibly modified) `FfiLLMRequest`. Return null to use defaults.
-pub type NvAgentRtLlmRequestCb = unsafe extern "C" fn(
+pub type NvMagicLlmRequestCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
 ) -> *mut FfiLLMRequest;
 
 /// Callback for LLM conditional execution guardrails.
 /// Returns NULL to allow execution, or an error message string to reject.
-pub type NvAgentRtLlmConditionalCb = unsafe extern "C" fn(
+pub type NvMagicLlmConditionalCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
 ) -> *mut c_char;
 
 /// Callback for LLM execution intercept conditions.
 /// Receives native JSON string. Returns `true` if this intercept should handle the execution.
-pub type NvAgentRtLlmExecConditionalCb =
+pub type NvMagicLlmExecConditionalCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, native_json: *const c_char) -> bool;
 
 /// Callback for LLM execution (default callable). Receives a native JSON C string,
 /// returns the response as a JSON C string.
-pub type NvAgentRtLlmExecCb =
+pub type NvMagicLlmExecCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, native_json: *const c_char) -> *mut c_char;
 
 /// Runtime-provided "next" callback for LLM execution middleware chain.
 /// Takes a native JSON C string, returns a response JSON C string.
-pub type NvAgentRtLlmExecNextFn =
+pub type NvMagicLlmExecNextFn =
     unsafe extern "C" fn(native_json: *const c_char, next_ctx: *mut libc::c_void) -> *mut c_char;
 
 /// Callback for LLM execution intercepts with middleware chain support.
 /// Receives native JSON C string plus a `next` callback and its context.
-pub type NvAgentRtLlmExecInterceptCb = unsafe extern "C" fn(
+pub type NvMagicLlmExecInterceptCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     native_json: *const c_char,
-    next_fn: NvAgentRtLlmExecNextFn,
+    next_fn: NvMagicLlmExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char;
 
 /// Callback for SSE stream response intercepts. Receives the SSE event serialized
 /// as a JSON C string and returns a (possibly modified) JSON C string.
-pub type NvAgentRtSseInterceptCb =
+pub type NvMagicSseInterceptCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, sse_json: *const c_char) -> *mut c_char;
 
 /// Callback for event subscribers. Invoked on each lifecycle event emitted by
 /// the runtime. The `FfiEvent` pointer is only valid for the duration of the call.
-pub type NvAgentRtEventSubscriberCb =
+pub type NvMagicEventSubscriberCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, event: *const FfiEvent);
 
 /// Callback for collecting intercepted stream chunks. Invoked with each chunk
 /// (after stream response intercepts have been applied) as a null-terminated
 /// C string. The string is only valid for the duration of the call.
-pub type NvAgentRtCollectorCb = unsafe extern "C" fn(chunk: *const c_char);
+pub type NvMagicCollectorCb = unsafe extern "C" fn(chunk: *const c_char);
 
 /// Callback for finalizing a collected stream. Invoked once when the stream is
 /// exhausted. Must return a JSON C string representing the aggregated response.
 /// The returned string must be allocated with `malloc` or equivalent; the
 /// runtime will free it.
-pub type NvAgentRtFinalizerCb = unsafe extern "C" fn() -> *mut c_char;
+pub type NvMagicFinalizerCb = unsafe extern "C" fn() -> *mut c_char;
 
 // ---------------------------------------------------------------------------
 // Shared user_data wrapper (ensures cleanup)
@@ -161,7 +161,7 @@ pub type NvAgentRtFinalizerCb = unsafe extern "C" fn() -> *mut c_char;
 /// Ensures the free function is called exactly once when dropped.
 struct UserData {
     ptr: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 }
 
 unsafe impl Send for UserData {}
@@ -177,7 +177,7 @@ impl Drop for UserData {
 
 fn make_user_data(
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> std::sync::Arc<UserData> {
     std::sync::Arc::new(UserData {
         ptr: user_data,
@@ -191,61 +191,61 @@ fn make_user_data(
 
 /// Wrap a C tool sanitize callback into a Rust closure for use by the core runtime.
 pub fn wrap_tool_sanitize_fn(
-    cb: NvAgentRtToolSanitizeCb,
+    cb: NvMagicToolSanitizeCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |name: &str, args: Json| {
         let c_name = CString::new(name).unwrap_or_default();
         let c_args = json_to_c_string(&args);
         let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nvagentrt_string_free_internal(c_args) };
+        unsafe { nvmagic_string_free_internal(c_args) };
         let result = ptr_to_json(result_ptr);
-        unsafe { nvagentrt_string_free_internal(result_ptr) };
+        unsafe { nvmagic_string_free_internal(result_ptr) };
         result
     })
 }
 
 /// Wrap a C tool conditional callback into a Rust closure for use by the core runtime.
 pub fn wrap_tool_conditional_fn(
-    cb: NvAgentRtToolConditionalCb,
+    cb: NvMagicToolConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Box<dyn Fn(&str, &Json) -> Option<String> + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |name: &str, args: &Json| {
         let c_name = CString::new(name).unwrap_or_default();
         let c_args = json_to_c_string(args);
         let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nvagentrt_string_free_internal(c_args) };
+        unsafe { nvmagic_string_free_internal(c_args) };
         let result = ptr_to_opt_string(result_ptr);
-        unsafe { nvagentrt_string_free_internal(result_ptr) };
+        unsafe { nvmagic_string_free_internal(result_ptr) };
         result
     })
 }
 
 /// Wrap a C tool execution conditional callback into a Rust closure.
 pub fn wrap_tool_exec_conditional_fn(
-    cb: NvAgentRtToolExecConditionalCb,
+    cb: NvMagicToolExecConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Box<dyn Fn(&str, &Json) -> bool + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |name: &str, args: &Json| {
         let c_name = CString::new(name).unwrap_or_default();
         let c_args = json_to_c_string(args);
         let result = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nvagentrt_string_free_internal(c_args) };
+        unsafe { nvmagic_string_free_internal(c_args) };
         result
     })
 }
 
 /// Wrap a C tool execution callback into an async Rust closure.
 pub fn wrap_tool_exec_fn(
-    cb: NvAgentRtToolExecCb,
+    cb: NvMagicToolExecCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |args: Json| {
@@ -253,9 +253,9 @@ pub fn wrap_tool_exec_fn(
         Box::pin(async move {
             let c_args = json_to_c_string(&args);
             let result_ptr = unsafe { cb(ud.ptr, c_args) };
-            unsafe { nvagentrt_string_free_internal(c_args) };
+            unsafe { nvmagic_string_free_internal(c_args) };
             let result = ptr_to_json(result_ptr);
-            unsafe { nvagentrt_string_free_internal(result_ptr) };
+            unsafe { nvmagic_string_free_internal(result_ptr) };
             Ok(result)
         })
     })
@@ -266,9 +266,9 @@ pub fn wrap_tool_exec_fn(
 /// The wrapper packages the Rust `ToolExecutionNextFn` into a C-callable
 /// `(next_fn, next_ctx)` pair and passes both to the C intercept callback.
 pub fn wrap_tool_exec_intercept_fn(
-    cb: NvAgentRtToolExecInterceptCb,
+    cb: NvMagicToolExecInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Arc<
     dyn Fn(Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
@@ -305,9 +305,9 @@ pub fn wrap_tool_exec_intercept_fn(
 
             let c_args = json_to_c_string(&args);
             let result_ptr = unsafe { cb(ud.ptr, c_args, tool_next_trampoline, next_ctx) };
-            unsafe { nvagentrt_string_free_internal(c_args) };
+            unsafe { nvmagic_string_free_internal(c_args) };
             let result = ptr_to_json(result_ptr);
-            unsafe { nvagentrt_string_free_internal(result_ptr) };
+            unsafe { nvmagic_string_free_internal(result_ptr) };
             Ok(result)
         })
     })
@@ -315,9 +315,9 @@ pub fn wrap_tool_exec_intercept_fn(
 
 /// Wrap a C LLM execution intercept callback into an `Arc<dyn Fn(Json, LlmExecutionNextFn) -> ...>`.
 pub fn wrap_llm_exec_intercept_fn(
-    cb: NvAgentRtLlmExecInterceptCb,
+    cb: NvMagicLlmExecInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Arc<
     dyn Fn(Json, LlmExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
@@ -353,9 +353,9 @@ pub fn wrap_llm_exec_intercept_fn(
 
             let c_native = json_to_c_string(&native);
             let result_ptr = unsafe { cb(ud.ptr, c_native, llm_next_trampoline, next_ctx) };
-            unsafe { nvagentrt_string_free_internal(c_native) };
+            unsafe { nvmagic_string_free_internal(c_native) };
             let result = ptr_to_json(result_ptr);
-            unsafe { nvagentrt_string_free_internal(result_ptr) };
+            unsafe { nvmagic_string_free_internal(result_ptr) };
             Ok(result)
         })
     })
@@ -365,9 +365,9 @@ pub fn wrap_llm_exec_intercept_fn(
 /// Since the C callback returns a single string (not a real stream), this wraps
 /// it as a single-item stream, same as `wrap_llm_stream_exec_fn`.
 pub fn wrap_llm_stream_exec_intercept_fn(
-    cb: NvAgentRtLlmExecInterceptCb,
+    cb: NvMagicLlmExecInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Arc<
     dyn Fn(
             Json,
@@ -396,9 +396,9 @@ pub fn wrap_llm_stream_exec_intercept_fn(
 
             let c_native = json_to_c_string(&native);
             let result_ptr = unsafe { cb(ud.ptr, c_native, noop_llm_next, std::ptr::null_mut()) };
-            unsafe { nvagentrt_string_free_internal(c_native) };
+            unsafe { nvmagic_string_free_internal(c_native) };
             let result = ptr_to_json(result_ptr);
-            unsafe { nvagentrt_string_free_internal(result_ptr) };
+            unsafe { nvmagic_string_free_internal(result_ptr) };
             let stream = tokio_stream::once(Ok(result));
             Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
         })
@@ -407,17 +407,17 @@ pub fn wrap_llm_stream_exec_intercept_fn(
 
 /// Wrap a generic C JSON callback into a Rust closure.
 pub fn wrap_json_fn(
-    cb: NvAgentRtJsonCb,
+    cb: NvMagicJsonCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |value: Json| {
         let c_json = json_to_c_string(&value);
         let result_ptr = unsafe { cb(ud.ptr, c_json) };
-        unsafe { nvagentrt_string_free_internal(c_json) };
+        unsafe { nvmagic_string_free_internal(c_json) };
         let result = ptr_to_json(result_ptr);
-        unsafe { nvagentrt_string_free_internal(result_ptr) };
+        unsafe { nvmagic_string_free_internal(result_ptr) };
         result
     })
 }
@@ -426,18 +426,18 @@ pub fn wrap_json_fn(
 /// The LLMResponse is serialized to a JSON string for the C callback, and the
 /// returned JSON string is deserialized back to LLMResponse.
 pub fn wrap_llm_response_fn(
-    cb: NvAgentRtJsonCb,
+    cb: NvMagicJsonCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Box<dyn Fn(LLMResponse) -> LLMResponse + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |response: LLMResponse| {
         let json_value = serde_json::to_value(&response).unwrap_or(Json::Null);
         let c_json = json_to_c_string(&json_value);
         let result_ptr = unsafe { cb(ud.ptr, c_json) };
-        unsafe { nvagentrt_string_free_internal(c_json) };
+        unsafe { nvmagic_string_free_internal(c_json) };
         let result_json = ptr_to_json(result_ptr);
-        unsafe { nvagentrt_string_free_internal(result_ptr) };
+        unsafe { nvmagic_string_free_internal(result_ptr) };
         // Try to deserialize as LLMResponse, fall back to wrapping in data field
         serde_json::from_value::<LLMResponse>(result_json.clone())
             .unwrap_or(LLMResponse { data: result_json })
@@ -446,9 +446,9 @@ pub fn wrap_llm_response_fn(
 
 /// Wrap a C LLM request sanitize callback into a Rust closure.
 pub fn wrap_llm_sanitize_request_fn(
-    cb: NvAgentRtLlmRequestCb,
+    cb: NvMagicLlmRequestCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |request: LLMRequest| {
@@ -471,16 +471,16 @@ pub fn wrap_llm_sanitize_request_fn(
 
 /// Wrap a C LLM conditional callback into a Rust closure.
 pub fn wrap_llm_conditional_fn(
-    cb: NvAgentRtLlmConditionalCb,
+    cb: NvMagicLlmConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Box<dyn Fn(&LLMRequest) -> Option<String> + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |request: &LLMRequest| {
         let ffi_req = FfiLLMRequest(request.clone());
         let result_ptr = unsafe { cb(ud.ptr, &ffi_req) };
         let result = ptr_to_opt_string(result_ptr);
-        unsafe { nvagentrt_string_free_internal(result_ptr) };
+        unsafe { nvmagic_string_free_internal(result_ptr) };
         result
     })
 }
@@ -488,15 +488,15 @@ pub fn wrap_llm_conditional_fn(
 /// Wrap a C LLM execution conditional callback into a Rust closure.
 /// The C callback receives the native Json serialized as a JSON string.
 pub fn wrap_llm_exec_conditional_fn(
-    cb: NvAgentRtLlmExecConditionalCb,
+    cb: NvMagicLlmExecConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Box<dyn Fn(&Json) -> bool + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |native: &Json| {
         let c_native = json_to_c_string(native);
         let result = unsafe { cb(ud.ptr, c_native) };
-        unsafe { nvagentrt_string_free_internal(c_native) };
+        unsafe { nvmagic_string_free_internal(c_native) };
         result
     })
 }
@@ -504,9 +504,9 @@ pub fn wrap_llm_exec_conditional_fn(
 /// Wrap a C LLM execution callback into an async Rust closure.
 /// The C callback receives native Json serialized as a JSON string.
 pub fn wrap_llm_exec_fn(
-    cb: NvAgentRtLlmExecCb,
+    cb: NvMagicLlmExecCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |native: Json| {
@@ -514,9 +514,9 @@ pub fn wrap_llm_exec_fn(
         Box::pin(async move {
             let c_native = json_to_c_string(&native);
             let result_ptr = unsafe { cb(ud.ptr, c_native) };
-            unsafe { nvagentrt_string_free_internal(c_native) };
+            unsafe { nvmagic_string_free_internal(c_native) };
             let result = ptr_to_json(result_ptr);
-            unsafe { nvagentrt_string_free_internal(result_ptr) };
+            unsafe { nvmagic_string_free_internal(result_ptr) };
             Ok(result)
         })
     })
@@ -526,9 +526,9 @@ pub fn wrap_llm_exec_fn(
 /// The C callback returns the full response as a single JSON string, which is emitted
 /// as a single-item stream of Json values.
 pub fn wrap_llm_stream_exec_fn(
-    cb: NvAgentRtLlmExecCb,
+    cb: NvMagicLlmExecCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Box<
     dyn Fn(
             Json,
@@ -546,9 +546,9 @@ pub fn wrap_llm_stream_exec_fn(
         Box::pin(async move {
             let c_native = json_to_c_string(&native);
             let result_ptr = unsafe { cb(ud.ptr, c_native) };
-            unsafe { nvagentrt_string_free_internal(c_native) };
+            unsafe { nvmagic_string_free_internal(c_native) };
             let result = ptr_to_json(result_ptr);
-            unsafe { nvagentrt_string_free_internal(result_ptr) };
+            unsafe { nvmagic_string_free_internal(result_ptr) };
             // The C callback returns the full response as a single JSON value for stream
             // We emit it as a single-item stream
             let stream = tokio_stream::once(Ok(result));
@@ -561,20 +561,20 @@ pub fn wrap_llm_stream_exec_fn(
 /// Json chunks. The Json value is serialized to a JSON string for the C callback,
 /// and the returned JSON string is deserialized back to Json.
 pub fn wrap_string_intercept_fn(
-    cb: NvAgentRtSseInterceptCb,
+    cb: NvMagicSseInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |chunk: Json| {
         let c_chunk = json_to_c_string(&chunk);
         let result_ptr = unsafe { cb(ud.ptr, c_chunk) };
-        unsafe { nvagentrt_string_free_internal(c_chunk) };
+        unsafe { nvmagic_string_free_internal(c_chunk) };
         if result_ptr.is_null() {
             return chunk;
         }
         let result = ptr_to_json(result_ptr);
-        unsafe { nvagentrt_string_free_internal(result_ptr) };
+        unsafe { nvmagic_string_free_internal(result_ptr) };
         result
     })
 }
@@ -587,13 +587,13 @@ pub fn wrap_string_intercept_fn(
 /// The caller must ensure `cb` remains valid for the lifetime of the returned
 /// closure. The C callback is invoked synchronously from the stream-consumption
 /// task.
-pub fn wrap_collector_fn(cb: NvAgentRtCollectorCb) -> Box<dyn FnMut(Json) + Send> {
-    // NvAgentRtCollectorCb is a plain `extern "C" fn` pointer (no user_data),
+pub fn wrap_collector_fn(cb: NvMagicCollectorCb) -> Box<dyn FnMut(Json) + Send> {
+    // NvMagicCollectorCb is a plain `extern "C" fn` pointer (no user_data),
     // which is Copy + Send, so it can be moved into the closure directly.
     Box::new(move |chunk: Json| {
         let c_chunk = json_to_c_string(&chunk);
         unsafe { cb(c_chunk) };
-        unsafe { nvagentrt_string_free_internal(c_chunk) };
+        unsafe { nvmagic_string_free_internal(c_chunk) };
     })
 }
 
@@ -605,23 +605,23 @@ pub fn wrap_collector_fn(cb: NvAgentRtCollectorCb) -> Box<dyn FnMut(Json) + Send
 /// The caller must ensure `cb` remains valid until the returned closure is
 /// invoked. The C callback must return a valid, heap-allocated JSON C string
 /// (or null, in which case `Json::Null` is returned).
-pub fn wrap_finalizer_fn(cb: NvAgentRtFinalizerCb) -> Box<dyn FnOnce() -> Json + Send> {
+pub fn wrap_finalizer_fn(cb: NvMagicFinalizerCb) -> Box<dyn FnOnce() -> Json + Send> {
     Box::new(move || {
         let result_ptr = unsafe { cb() };
         let result = ptr_to_json(result_ptr);
-        unsafe { nvagentrt_string_free_internal(result_ptr) };
+        unsafe { nvmagic_string_free_internal(result_ptr) };
         result
     })
 }
 
 /// Wrap a C event subscriber callback into a Rust closure.
 pub fn wrap_event_subscriber(
-    cb: NvAgentRtEventSubscriberCb,
+    cb: NvMagicEventSubscriberCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
-) -> Box<dyn Fn(&nvagentrt_core::Event) + Send + Sync> {
+    free_fn: NvMagicFreeFn,
+) -> Box<dyn Fn(&nvmagic_core::Event) + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(move |event: &nvagentrt_core::Event| {
+    Box::new(move |event: &nvmagic_core::Event| {
         let ffi_event = FfiEvent(event.clone());
         unsafe { cb(ud.ptr, &ffi_event) };
     })
@@ -651,7 +651,7 @@ fn ptr_to_opt_string(ptr: *mut c_char) -> Option<String> {
 }
 
 /// Internal helper to free C strings we allocated.
-unsafe fn nvagentrt_string_free_internal(ptr: *mut c_char) {
+unsafe fn nvmagic_string_free_internal(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(unsafe { CString::from_raw(ptr) });
     }
@@ -668,20 +668,20 @@ unsafe fn nvagentrt_string_free_internal(ptr: *mut c_char) {
 /// If the callback returns null or an unparseable result, the identity converter
 /// is used as a fallback.
 pub(crate) fn wrap_to_request_fn(
-    cb: NvAgentRtJsonCb,
+    cb: NvMagicJsonCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> ToRequestFn {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |native: &Json| {
         let c_json = json_to_c_string(native);
         let result_ptr = unsafe { cb(ud.ptr, c_json) };
-        unsafe { nvagentrt_string_free_internal(c_json) };
+        unsafe { nvmagic_string_free_internal(c_json) };
         if result_ptr.is_null() {
             return IdentityConverter.to_request(native);
         }
         let result_json = ptr_to_json(result_ptr);
-        unsafe { nvagentrt_string_free_internal(result_ptr) };
+        unsafe { nvmagic_string_free_internal(result_ptr) };
         serde_json::from_value::<LLMRequest>(result_json)
             .unwrap_or_else(|_| IdentityConverter.to_request(native))
     })
@@ -694,20 +694,20 @@ pub(crate) fn wrap_to_request_fn(
 /// If the callback returns null or an unparseable result, the identity converter
 /// is used as a fallback.
 pub(crate) fn wrap_to_response_fn(
-    cb: NvAgentRtJsonCb,
+    cb: NvMagicJsonCb,
     user_data: *mut libc::c_void,
-    free_fn: NvAgentRtFreeFn,
+    free_fn: NvMagicFreeFn,
 ) -> ToResponseFn {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |native: &Json| {
         let c_json = json_to_c_string(native);
         let result_ptr = unsafe { cb(ud.ptr, c_json) };
-        unsafe { nvagentrt_string_free_internal(c_json) };
+        unsafe { nvmagic_string_free_internal(c_json) };
         if result_ptr.is_null() {
             return IdentityConverter.to_response(native);
         }
         let result_json = ptr_to_json(result_ptr);
-        unsafe { nvagentrt_string_free_internal(result_ptr) };
+        unsafe { nvmagic_string_free_internal(result_ptr) };
         serde_json::from_value::<LLMResponse>(result_json)
             .unwrap_or_else(|_| IdentityConverter.to_response(native))
     })

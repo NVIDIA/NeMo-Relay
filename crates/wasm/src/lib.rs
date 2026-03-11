@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! WebAssembly bindings for the NVAgentRT agent runtime framework.
+//! WebAssembly bindings for the NVMagic agent runtime framework.
 //!
-//! This crate exposes the core NVAgentRT API to JavaScript/TypeScript via
+//! This crate exposes the core NVMagic API to JavaScript/TypeScript via
 //! `wasm-bindgen`. It provides scope management, tool and LLM lifecycle
 //! operations, guardrail/intercept registration, event subscriptions, and
 //! streaming LLM responses.

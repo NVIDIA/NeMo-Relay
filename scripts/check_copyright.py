@@ -46,7 +46,7 @@ SKIP_BASENAMES = frozenset(
         "LICENSE",
         "index.js",
         "index.d.ts",
-        "nvagentrt.h",
+        "nvmagic.h",
     }
 )
 

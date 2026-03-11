@@ -10,7 +10,7 @@ repos:
         entry: python3 scripts/check_copyright.py
         language: system
         files: '\.(rs|go|py|pyi|toml|yaml|yml|md|mjs|js|ts|h|sh)$|\.gitignore$'
-        exclude: '(index\.js|index\.d\.ts|nvagentrt\.h|node_modules/|target/|\.venv/|pkg/)$'
+        exclude: '(index\.js|index\.d\.ts|nvmagic\.h|node_modules/|target/|\.venv/|pkg/)$'
 
   # General file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -89,7 +89,7 @@ repos:
 
       - id: go-vet
         name: go vet
-        entry: bash -c 'cd go/nvagentrt && go vet ./...'
+        entry: bash -c 'cd go/nvmagic && go vet ./...'
         language: system
         types: [go]
         pass_filenames: false

@@ -10,10 +10,10 @@ use serde::Serialize;
 use serde_json::Value as Json;
 use wasm_bindgen::prelude::*;
 
-use nvagentrt_core::AgentRtError;
+use nvmagic_core::MagicError;
 
-/// Converts an `AgentRtError` into a `JsValue` string for use as a JS exception.
-pub fn to_js_err(e: AgentRtError) -> JsValue {
+/// Converts an `MagicError` into a `JsValue` string for use as a JS exception.
+pub fn to_js_err(e: MagicError) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 

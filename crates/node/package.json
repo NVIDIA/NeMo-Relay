@@ -1,11 +1,11 @@
 {
-  "name": "@nvagentrt/node",
+  "name": "@nvmagic/node",
   "version": "0.1.0",
-  "description": "NVAgentRT Node.js bindings via napi-rs",
+  "description": "NVMagic Node.js bindings via napi-rs",
   "main": "index.js",
   "types": "index.d.ts",
   "napi": {
-    "name": "nvagentrt",
+    "name": "nvmagic",
     "triples": {}
   },
   "scripts": {

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! WASM-friendly wrapper types and integer constants for the NVAgentRT runtime.
+//! WASM-friendly wrapper types and integer constants for the NVMagic runtime.
 //!
 //! Because `wasm_bindgen` does not support Rust enums with data or bitflags
 //! natively, this module re-exports scope types and attribute flags as plain
@@ -35,7 +35,7 @@
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use nvagentrt_core::types as core_types;
+use nvmagic_core::types as core_types;
 
 // ---------------------------------------------------------------------------
 // Enums (exposed as plain constants -- wasm_bindgen doesn't support const defs)
@@ -282,7 +282,7 @@ impl From<core_types::LLMHandle> for WasmLLMHandle {
 /// request and pass it to scope-stack-aware API variants.
 #[wasm_bindgen]
 pub struct WasmScopeStack {
-    pub(crate) inner: nvagentrt_core::ScopeStackHandle,
+    pub(crate) inner: nvmagic_core::ScopeStackHandle,
 }
 
 #[wasm_bindgen]
@@ -291,7 +291,7 @@ impl WasmScopeStack {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
-            inner: nvagentrt_core::create_scope_stack(),
+            inner: nvmagic_core::create_scope_stack(),
         }
     }
 }
@@ -302,8 +302,8 @@ impl Default for WasmScopeStack {
     }
 }
 
-impl From<nvagentrt_core::ScopeStackHandle> for WasmScopeStack {
-    fn from(h: nvagentrt_core::ScopeStackHandle) -> Self {
+impl From<nvmagic_core::ScopeStackHandle> for WasmScopeStack {
+    fn from(h: nvmagic_core::ScopeStackHandle) -> Self {
         Self { inner: h }
     }
 }

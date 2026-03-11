@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! C FFI layer for NVAgentRT.
+//! C FFI layer for NVMagic.
 //!
-//! This crate exposes the NVAgentRT core runtime as a C-compatible shared library.
+//! This crate exposes the NVMagic core runtime as a C-compatible shared library.
 //! It is consumed by the Go bindings via CGo and generates a C header file
-//! (`nvagentrt.h`) through `cbindgen`. All exported symbols use the `nvagentrt_`
+//! (`nvmagic.h`) through `cbindgen`. All exported symbols use the `nvmagic_`
 //! prefix.
 //!
 //! # Middleware Pipeline
@@ -23,8 +23,8 @@
 //!
 //! # Error Handling
 //!
-//! Every `extern "C"` function returns an [`error::NvAgentRtStatus`] code. On
-//! failure, call [`error::nvagentrt_last_error`] on the same thread to retrieve
+//! Every `extern "C"` function returns an [`error::NvMagicStatus`] code. On
+//! failure, call [`error::nvmagic_last_error`] on the same thread to retrieve
 //! a human-readable error description. The error is stored in thread-local
 //! storage and is valid until the next FFI call on that thread.
 //!
@@ -32,18 +32,18 @@
 //!
 //! All opaque handles (`FfiScopeHandle`, `FfiToolHandle`, `FfiLLMHandle`, etc.)
 //! are heap-allocated and must be freed through their corresponding
-//! `nvagentrt_*_free` functions. C strings returned by accessor functions must
-//! be freed with `nvagentrt_string_free`.
+//! `nvmagic_*_free` functions. C strings returned by accessor functions must
+//! be freed with `nvmagic_string_free`.
 //!
 //! # Modules
 //!
 //! - [`api`] -- Top-level FFI entry points (scope, tool, LLM, guardrail, intercept,
 //!   subscriber, ATIF exporter). Tool calls accept an optional `tool_call_id` and
 //!   LLM calls accept an optional `model_name` for ATIF trajectory correlation.
-//!   ATIF exporter functions (`nvagentrt_atif_exporter_*`) create, register,
+//!   ATIF exporter functions (`nvmagic_atif_exporter_*`) create, register,
 //!   export, and clear trajectory data.
 //! - [`types`] -- C-compatible struct and enum definitions, plus event accessor
-//!   functions (`nvagentrt_event_input`, `_output`, `_model_name`, `_tool_call_id`,
+//!   functions (`nvmagic_event_input`, `_output`, `_model_name`, `_tool_call_id`,
 //!   `_root_uuid`, `_parent_uuid`, `_scope_type`) and the `FfiAtifExporter`
 //!   opaque handle.
 //! - [`error`] -- Status codes and thread-local error storage.

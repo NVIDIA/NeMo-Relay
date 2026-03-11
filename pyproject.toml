@@ -6,14 +6,14 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "nvagentrt"
+name = "nvmagic"
 version = "0.1.0"
 requires-python = ">=3.11"
 
 [tool.maturin]
 manifest-path = "crates/python/Cargo.toml"
 python-source = "python"
-module-name = "nvagentrt._native"
+module-name = "nvmagic._native"
 features = ["pyo3/extension-module"]
 
 [dependency-groups]
@@ -36,9 +36,9 @@ testpaths = ["python/tests"]
 asyncio_mode = "auto"
 
 [tool.ty.analysis]
-# nvagentrt._native is a compiled Rust extension (built by maturin) that only
+# nvmagic._native is a compiled Rust extension (built by maturin) that only
 # exists after `uv sync` / `pip install -e .`. Suppress unresolved-import for it.
-allowed-unresolved-imports = ["nvagentrt._native", "pytest"]
+allowed-unresolved-imports = ["nvmagic._native", "pytest"]
 
 [tool.ruff]
 line-length = 120

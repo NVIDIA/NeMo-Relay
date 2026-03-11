@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for NVAgentRT typed wrappers with explicit Codec protocol."""
+"""Tests for NVMagic typed wrappers with explicit Codec protocol."""
 
 import dataclasses
 
-from nvagentrt import intercepts, typed
-from nvagentrt.typed import Codec, DataclassCodec, JsonPassthrough
+from nvmagic import intercepts, typed
+from nvmagic.typed import Codec, DataclassCodec, JsonPassthrough
 
 # ---------------------------------------------------------------------------
 # Test models

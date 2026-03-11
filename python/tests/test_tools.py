@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for NVAgentRT tool lifecycle, guardrails, and intercepts."""
+"""Tests for NVMagic tool lifecycle, guardrails, and intercepts."""
 
 import pytest
-from nvagentrt import (
+from nvmagic import (
     EventType,
     ScopeType,
     ToolAttributes,

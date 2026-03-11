@@ -609,7 +609,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nvagentrt-core"
+name = "nvmagic-core"
 version = "0.1.0"
 dependencies = [
  "bitflags",
@@ -624,12 +624,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "nvagentrt-ffi"
+name = "nvmagic-ffi"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
  "libc",
- "nvagentrt-core",
+ "nvmagic-core",
  "serde_json",
  "tokio",
  "tokio-stream",
@@ -637,13 +637,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "nvagentrt-node"
+name = "nvmagic-node"
 version = "0.1.0"
 dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
- "nvagentrt-core",
+ "nvmagic-core",
  "serde",
  "serde_json",
  "tokio",
@@ -652,11 +652,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nvagentrt-python"
+name = "nvmagic-python"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "nvagentrt-core",
+ "nvmagic-core",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",
@@ -668,11 +668,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nvagentrt-wasm"
+name = "nvmagic-wasm"
 version = "0.1.0"
 dependencies = [
  "js-sys",
- "nvagentrt-core",
+ "nvmagic-core",
  "send_wrapper",
  "serde",
  "serde-wasm-bindgen",

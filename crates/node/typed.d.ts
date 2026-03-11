@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Typed wrappers for NVAgentRT Node.js execute APIs.
+ * Typed wrappers for NVMagic Node.js execute APIs.
  *
  * Provides generic typed versions of `toolCallExecute` and `llmCallExecute`
  * that use explicit `Codec<T>` objects to serialize/deserialize at the API

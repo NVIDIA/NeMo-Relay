@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Typed wrappers for NVAgentRT WASM execute APIs.
+ * Typed wrappers for NVMagic WASM execute APIs.
  *
  * Provides generic typed versions of `toolCallExecute`, `llmCallExecute`,
  * and `llmStreamCallExecute` that use explicit `Codec<T>` objects to
@@ -22,7 +22,7 @@ import {
   toolCallExecute,
   llmCallExecute,
   llmStreamCallExecute,
-} from './pkg/nvagentrt_wasm.js';
+} from './pkg/nvmagic_wasm.js';
 
 /**
  * A passthrough codec that performs no conversion (identity).

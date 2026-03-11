@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Typed wrappers for NVAgentRT WASM execute APIs.
+ * Typed wrappers for NVMagic WASM execute APIs.
  *
  * Provides generic typed versions of `toolCallExecute`, `llmCallExecute`,
  * and `llmStreamCallExecute` that use explicit `Codec<T>` objects to
  * serialize/deserialize at the API boundary.
  */
 
-import { WasmScopeHandle, WasmLlmStream } from './pkg/nvagentrt_wasm';
+import { WasmScopeHandle, WasmLlmStream } from './pkg/nvmagic_wasm';
 
 /**
  * A codec that converts between a typed value `T` and a JSON-serializable

@@ -1,27 +1,27 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Public API for the NVAgentRT runtime.
+//! Public API for the NVMagic runtime.
 //!
 //! This module contains all top-level functions that language bindings and
 //! application code call. The API is organized into several groups:
 //!
-//! - **Scope operations** — [`nvagentrt_get_handle`], [`nvagentrt_push_scope`],
-//!   [`nvagentrt_pop_scope`], [`nvagentrt_event`]
-//! - **Tool lifecycle** — [`nvagentrt_tool_call`], [`nvagentrt_tool_call_end`],
-//!   [`nvagentrt_tool_call_execute`]
-//! - **LLM lifecycle** — [`nvagentrt_llm_call`], [`nvagentrt_llm_call_end`],
-//!   [`nvagentrt_llm_call_execute`], [`nvagentrt_llm_stream_call_execute`]
-//! - **Guardrail registration** — `nvagentrt_register_*_guardrail` /
-//!   `nvagentrt_deregister_*_guardrail` for tool and LLM sanitize/conditional guardrails
-//! - **Intercept registration** — `nvagentrt_register_*_intercept` /
-//!   `nvagentrt_deregister_*_intercept` for tool and LLM request/response/execution intercepts
-//! - **Subscriber registration** — [`nvagentrt_register_subscriber`],
-//!   [`nvagentrt_deregister_subscriber`]
-//! - **Standalone middleware chains** — [`nvagentrt_tool_request_intercepts`],
-//!   [`nvagentrt_tool_conditional_execution`], [`nvagentrt_tool_response_intercepts`],
-//!   [`nvagentrt_llm_request_intercepts`], [`nvagentrt_llm_conditional_execution`],
-//!   [`nvagentrt_llm_response_intercepts`]
+//! - **Scope operations** — [`nvmagic_get_handle`], [`nvmagic_push_scope`],
+//!   [`nvmagic_pop_scope`], [`nvmagic_event`]
+//! - **Tool lifecycle** — [`nvmagic_tool_call`], [`nvmagic_tool_call_end`],
+//!   [`nvmagic_tool_call_execute`]
+//! - **LLM lifecycle** — [`nvmagic_llm_call`], [`nvmagic_llm_call_end`],
+//!   [`nvmagic_llm_call_execute`], [`nvmagic_llm_stream_call_execute`]
+//! - **Guardrail registration** — `nvmagic_register_*_guardrail` /
+//!   `nvmagic_deregister_*_guardrail` for tool and LLM sanitize/conditional guardrails
+//! - **Intercept registration** — `nvmagic_register_*_intercept` /
+//!   `nvmagic_deregister_*_intercept` for tool and LLM request/response/execution intercepts
+//! - **Subscriber registration** — [`nvmagic_register_subscriber`],
+//!   [`nvmagic_deregister_subscriber`]
+//! - **Standalone middleware chains** — [`nvmagic_tool_request_intercepts`],
+//!   [`nvmagic_tool_conditional_execution`], [`nvmagic_tool_response_intercepts`],
+//!   [`nvmagic_llm_request_intercepts`], [`nvmagic_llm_conditional_execution`],
+//!   [`nvmagic_llm_response_intercepts`]
 //!
 //! All functions operate on the global context singleton returned by
 //! [`global_context`].
@@ -33,7 +33,7 @@ use tokio_stream::Stream;
 use uuid::Uuid;
 
 use crate::context::*;
-use crate::error::{AgentRtError, Result};
+use crate::error::{MagicError, Result};
 use crate::json::Json;
 use crate::stream::LlmStreamWrapper;
 use crate::types::*;
@@ -65,7 +65,7 @@ macro_rules! guardrail_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+                .map_err(|e| MagicError::Internal(e.to_string()))?;
             state
                 .$field
                 .register(
@@ -75,14 +75,14 @@ macro_rules! guardrail_registry_api {
                         guardrail,
                     },
                 )
-                .map_err(|e| AgentRtError::AlreadyExists(e))
+                .map_err(|e| MagicError::AlreadyExists(e))
         }
 
         pub fn $deregister_name(name: &str) -> Result<bool> {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+                .map_err(|e| MagicError::Internal(e.to_string()))?;
             Ok(state.$field.deregister(name))
         }
     };
@@ -99,7 +99,7 @@ macro_rules! intercept_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+                .map_err(|e| MagicError::Internal(e.to_string()))?;
             state
                 .$field
                 .register(
@@ -110,14 +110,14 @@ macro_rules! intercept_registry_api {
                         callable,
                     },
                 )
-                .map_err(|e| AgentRtError::AlreadyExists(e))
+                .map_err(|e| MagicError::AlreadyExists(e))
         }
 
         pub fn $deregister_name(name: &str) -> Result<bool> {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+                .map_err(|e| MagicError::Internal(e.to_string()))?;
             Ok(state.$field.deregister(name))
         }
     };
@@ -134,7 +134,7 @@ macro_rules! execution_intercept_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+                .map_err(|e| MagicError::Internal(e.to_string()))?;
             state
                 .$field
                 .register(
@@ -145,14 +145,14 @@ macro_rules! execution_intercept_registry_api {
                         callable,
                     },
                 )
-                .map_err(|e| AgentRtError::AlreadyExists(e))
+                .map_err(|e| MagicError::AlreadyExists(e))
         }
 
         pub fn $deregister_name(name: &str) -> Result<bool> {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+                .map_err(|e| MagicError::Internal(e.to_string()))?;
             Ok(state.$field.deregister(name))
         }
     };
@@ -162,20 +162,20 @@ macro_rules! execution_intercept_registry_api {
 // Tool guardrail registrations
 //
 // Each pair generates:
-//   - `nvagentrt_register_*`: registers a named guardrail with a priority.
+//   - `nvmagic_register_*`: registers a named guardrail with a priority.
 //     Returns AlreadyExists if the name is taken.
-//   - `nvagentrt_deregister_*`: removes a guardrail by name.
+//   - `nvmagic_deregister_*`: removes a guardrail by name.
 //     Returns Ok(true) if it existed, Ok(false) otherwise.
 // ---------------------------------------------------------------------------
 
 // Registers a tool request sanitize guardrail that transforms tool arguments before execution.
 // Callback signature: `(tool_name: &str, args: Json) -> Json`.
 //
-// Errors: Returns `AgentRtError::AlreadyExists` if a guardrail with the given name is already registered.
+// Errors: Returns `MagicError::AlreadyExists` if a guardrail with the given name is already registered.
 // deregister: Deregisters a tool request sanitize guardrail by name.
 guardrail_registry_api!(
-    nvagentrt_register_tool_sanitize_request_guardrail,
-    nvagentrt_deregister_tool_sanitize_request_guardrail,
+    nvmagic_register_tool_sanitize_request_guardrail,
+    nvmagic_deregister_tool_sanitize_request_guardrail,
     tool_sanitize_request_guardrails,
     ToolSanitizeFn
 );
@@ -184,8 +184,8 @@ guardrail_registry_api!(
 // Callback signature: `(tool_name: &str, result: Json) -> Json`.
 // deregister: Deregisters a tool response sanitize guardrail by name.
 guardrail_registry_api!(
-    nvagentrt_register_tool_sanitize_response_guardrail,
-    nvagentrt_deregister_tool_sanitize_response_guardrail,
+    nvmagic_register_tool_sanitize_response_guardrail,
+    nvmagic_deregister_tool_sanitize_response_guardrail,
     tool_sanitize_response_guardrails,
     ToolSanitizeFn
 );
@@ -195,8 +195,8 @@ guardrail_registry_api!(
 // Return `None` to allow, `Some(reason)` to reject.
 // deregister: Deregisters a tool conditional execution guardrail by name.
 guardrail_registry_api!(
-    nvagentrt_register_tool_conditional_execution_guardrail,
-    nvagentrt_deregister_tool_conditional_execution_guardrail,
+    nvmagic_register_tool_conditional_execution_guardrail,
+    nvmagic_deregister_tool_conditional_execution_guardrail,
     tool_conditional_execution_guardrails,
     ToolConditionalFn
 );
@@ -213,8 +213,8 @@ guardrail_registry_api!(
 // Set `break_chain = true` to prevent subsequent intercepts from running.
 // deregister: Deregisters a tool request intercept by name.
 intercept_registry_api!(
-    nvagentrt_register_tool_request_intercept,
-    nvagentrt_deregister_tool_request_intercept,
+    nvmagic_register_tool_request_intercept,
+    nvmagic_deregister_tool_request_intercept,
     tool_request_intercepts,
     ToolInterceptFn
 );
@@ -224,8 +224,8 @@ intercept_registry_api!(
 // Set `break_chain = true` to prevent subsequent intercepts from running.
 // deregister: Deregisters a tool response intercept by name.
 intercept_registry_api!(
-    nvagentrt_register_tool_response_intercept,
-    nvagentrt_deregister_tool_response_intercept,
+    nvmagic_register_tool_response_intercept,
+    nvmagic_deregister_tool_response_intercept,
     tool_response_intercepts,
     ToolInterceptFn
 );
@@ -236,8 +236,8 @@ intercept_registry_api!(
 // Call `next(args)` to continue the chain or skip it to short-circuit.
 // deregister: Deregisters a tool execution intercept by name.
 execution_intercept_registry_api!(
-    nvagentrt_register_tool_execution_intercept,
-    nvagentrt_deregister_tool_execution_intercept,
+    nvmagic_register_tool_execution_intercept,
+    nvmagic_deregister_tool_execution_intercept,
     tool_execution_intercepts,
     ToolExecutionConditionalFn,
     ToolExecutionFn
@@ -251,8 +251,8 @@ execution_intercept_registry_api!(
 // Callback signature: `(request: LLMRequest) -> LLMRequest`.
 // deregister: Deregisters an LLM request sanitize guardrail by name.
 guardrail_registry_api!(
-    nvagentrt_register_llm_sanitize_request_guardrail,
-    nvagentrt_deregister_llm_sanitize_request_guardrail,
+    nvmagic_register_llm_sanitize_request_guardrail,
+    nvmagic_deregister_llm_sanitize_request_guardrail,
     llm_sanitize_request_guardrails,
     LlmSanitizeRequestFn
 );
@@ -261,8 +261,8 @@ guardrail_registry_api!(
 // Callback signature: `(response: Json) -> Json`.
 // deregister: Deregisters an LLM response sanitize guardrail by name.
 guardrail_registry_api!(
-    nvagentrt_register_llm_sanitize_response_guardrail,
-    nvagentrt_deregister_llm_sanitize_response_guardrail,
+    nvmagic_register_llm_sanitize_response_guardrail,
+    nvmagic_deregister_llm_sanitize_response_guardrail,
     llm_sanitize_response_guardrails,
     LlmSanitizeResponseFn
 );
@@ -272,8 +272,8 @@ guardrail_registry_api!(
 // Return `None` to allow, `Some(reason)` to reject.
 // deregister: Deregisters an LLM conditional execution guardrail by name.
 guardrail_registry_api!(
-    nvagentrt_register_llm_conditional_execution_guardrail,
-    nvagentrt_deregister_llm_conditional_execution_guardrail,
+    nvmagic_register_llm_conditional_execution_guardrail,
+    nvmagic_deregister_llm_conditional_execution_guardrail,
     llm_conditional_execution_guardrails,
     LlmConditionalFn
 );
@@ -286,8 +286,8 @@ guardrail_registry_api!(
 // Callback signature: `(request: LLMRequest) -> LLMRequest`.
 // deregister: Deregisters an LLM request intercept by name.
 intercept_registry_api!(
-    nvagentrt_register_llm_request_intercept,
-    nvagentrt_deregister_llm_request_intercept,
+    nvmagic_register_llm_request_intercept,
+    nvmagic_deregister_llm_request_intercept,
     llm_request_intercepts,
     LlmRequestInterceptFn
 );
@@ -296,8 +296,8 @@ intercept_registry_api!(
 // Callback signature: `(response: Json) -> Json`.
 // deregister: Deregisters an LLM response intercept by name.
 intercept_registry_api!(
-    nvagentrt_register_llm_response_intercept,
-    nvagentrt_deregister_llm_response_intercept,
+    nvmagic_register_llm_response_intercept,
+    nvmagic_deregister_llm_response_intercept,
     llm_response_intercepts,
     LlmResponseInterceptFn
 );
@@ -306,8 +306,8 @@ intercept_registry_api!(
 // Callback signature: `(chunk: String) -> String`.
 // deregister: Deregisters an LLM stream response intercept by name.
 intercept_registry_api!(
-    nvagentrt_register_llm_stream_response_intercept,
-    nvagentrt_deregister_llm_stream_response_intercept,
+    nvmagic_register_llm_stream_response_intercept,
+    nvmagic_deregister_llm_stream_response_intercept,
     llm_stream_response_intercepts,
     LlmStreamResponseInterceptFn
 );
@@ -318,8 +318,8 @@ intercept_registry_api!(
 // Call `next(request)` to continue the chain or skip it to short-circuit.
 // deregister: Deregisters an LLM execution intercept by name.
 execution_intercept_registry_api!(
-    nvagentrt_register_llm_execution_intercept,
-    nvagentrt_deregister_llm_execution_intercept,
+    nvmagic_register_llm_execution_intercept,
+    nvmagic_deregister_llm_execution_intercept,
     llm_execution_intercepts,
     LlmExecutionConditionalFn,
     LlmExecutionFn
@@ -331,8 +331,8 @@ execution_intercept_registry_api!(
 // Call `next(request)` to continue the chain or skip it to short-circuit.
 // deregister: Deregisters an LLM streaming execution intercept by name.
 execution_intercept_registry_api!(
-    nvagentrt_register_llm_stream_execution_intercept,
-    nvagentrt_deregister_llm_stream_execution_intercept,
+    nvmagic_register_llm_stream_execution_intercept,
+    nvmagic_deregister_llm_stream_execution_intercept,
     llm_stream_execution_intercepts,
     LlmStreamExecutionConditionalFn,
     LlmStreamExecutionFn
@@ -344,15 +344,15 @@ execution_intercept_registry_api!(
 
 /// Registers a named event subscriber that will be called for every lifecycle event.
 ///
-/// Returns [`AgentRtError::AlreadyExists`] if a subscriber with the given name
+/// Returns [`MagicError::AlreadyExists`] if a subscriber with the given name
 /// is already registered.
-pub fn nvagentrt_register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()> {
+pub fn nvmagic_register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()> {
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
     if state.event_subscribers.contains_key(name) {
-        return Err(AgentRtError::AlreadyExists(format!(
+        return Err(MagicError::AlreadyExists(format!(
             "{name} subscriber already exists"
         )));
     }
@@ -361,11 +361,11 @@ pub fn nvagentrt_register_subscriber(name: &str, callback: EventSubscriberFn) ->
 }
 
 /// Deregisters an event subscriber by name. Returns `true` if it existed, `false` otherwise.
-pub fn nvagentrt_deregister_subscriber(name: &str) -> Result<bool> {
+pub fn nvmagic_deregister_subscriber(name: &str) -> Result<bool> {
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
     Ok(state.event_subscribers.remove(name).is_some())
 }
 
@@ -376,7 +376,7 @@ pub fn nvagentrt_deregister_subscriber(name: &str) -> Result<bool> {
 /// Returns a clone of the current top scope handle from the scope stack.
 ///
 /// Always succeeds because the root scope is always present.
-pub fn nvagentrt_get_handle() -> Result<ScopeHandle> {
+pub fn nvmagic_get_handle() -> Result<ScopeHandle> {
     Ok(task_scope_top())
 }
 
@@ -386,7 +386,7 @@ pub fn nvagentrt_get_handle() -> Result<ScopeHandle> {
 /// top of the scope stack is used as the parent.
 ///
 /// Returns the new [`ScopeHandle`].
-pub fn nvagentrt_push_scope(
+pub fn nvmagic_push_scope(
     name: &str,
     scope_type: ScopeType,
     parent: Option<&ScopeHandle>,
@@ -397,7 +397,7 @@ pub fn nvagentrt_push_scope(
     let ctx = global_context();
     let state = ctx
         .read()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
     let handle = state.create_scope_handle(name, parent_uuid, scope_type, attributes, root_uuid);
     task_scope_push(handle.clone());
     Ok(handle)
@@ -405,14 +405,14 @@ pub fn nvagentrt_push_scope(
 
 /// Removes a scope from the scope stack by UUID and emits an `End` event.
 ///
-/// Returns [`AgentRtError::NotFound`] if the UUID is not in the stack.
-pub fn nvagentrt_pop_scope(handle_uuid: &Uuid) -> Result<()> {
+/// Returns [`MagicError::NotFound`] if the UUID is not in the stack.
+pub fn nvmagic_pop_scope(handle_uuid: &Uuid) -> Result<()> {
     let root_uuid = current_root_uuid();
     let scope = task_scope_remove(handle_uuid)?;
     let ctx = global_context();
     let state = ctx
         .read()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
     state.end_scope_handle(&scope, root_uuid);
     Ok(())
 }
@@ -421,7 +421,7 @@ pub fn nvagentrt_pop_scope(handle_uuid: &Uuid) -> Result<()> {
 ///
 /// This is a lightweight way to record application-specific events (e.g.,
 /// checkpoints, metrics) without creating a scope or handle.
-pub fn nvagentrt_event(
+pub fn nvmagic_event(
     name: &str,
     parent: Option<&ScopeHandle>,
     data: Option<Json>,
@@ -432,7 +432,7 @@ pub fn nvagentrt_event(
     let ctx = global_context();
     let state = ctx
         .read()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
     state.create_event(name, parent_uuid, data, metadata, root_uuid);
     Ok(())
 }
@@ -445,8 +445,8 @@ pub fn nvagentrt_event(
 /// and emits a `Start` event.
 ///
 /// The sanitized arguments are stored in the event's `input` field.
-/// Call [`nvagentrt_tool_call_end`] when the tool completes.
-pub fn nvagentrt_tool_call(
+/// Call [`nvmagic_tool_call_end`] when the tool completes.
+pub fn nvmagic_tool_call(
     name: &str,
     args: Json,
     parent: Option<&ScopeHandle>,
@@ -460,7 +460,7 @@ pub fn nvagentrt_tool_call(
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
 
     let sanitized_args = state.tool_sanitize_request_chain(name, args);
 
@@ -479,7 +479,7 @@ pub fn nvagentrt_tool_call(
 /// Ends a tool call: runs response sanitize guardrails and emits an `End` event.
 ///
 /// The sanitized result is stored in the event's `output` field.
-pub fn nvagentrt_tool_call_end(
+pub fn nvmagic_tool_call_end(
     handle: &ToolHandle,
     result: Json,
     data: Option<Json>,
@@ -489,7 +489,7 @@ pub fn nvagentrt_tool_call_end(
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
 
     let sanitized_result = state.tool_sanitize_response_chain(&handle.name, result);
 
@@ -507,8 +507,8 @@ pub fn nvagentrt_tool_call_end(
 /// event is emitted (no `Start`/`End` pair).
 ///
 /// This is the high-level function that orchestrates the full middleware pipeline.
-/// Returns [`AgentRtError::GuardrailRejected`] if a conditional guardrail rejects the call.
-pub async fn nvagentrt_tool_call_execute(
+/// Returns [`MagicError::GuardrailRejected`] if a conditional guardrail rejects the call.
+pub async fn nvmagic_tool_call_execute(
     name: &str,
     args: Json,
     func: ToolExecutionNextFn,
@@ -522,7 +522,7 @@ pub async fn nvagentrt_tool_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+            .map_err(|e| MagicError::Internal(e.to_string()))?;
         if let Some(err) = state.tool_conditional_execution_chain(name, &args) {
             drop(state);
             let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
@@ -530,8 +530,8 @@ pub async fn nvagentrt_tool_call_execute(
                 obj.insert("rejected".into(), json!(true));
                 obj.insert("rejection_reason".into(), json!(&err));
             }
-            let _ = nvagentrt_event(name, parent.as_ref(), Some(rejection_data), metadata);
-            return Err(AgentRtError::GuardrailRejected(err));
+            let _ = nvmagic_event(name, parent.as_ref(), Some(rejection_data), metadata);
+            return Err(MagicError::GuardrailRejected(err));
         }
     }
 
@@ -540,12 +540,12 @@ pub async fn nvagentrt_tool_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+            .map_err(|e| MagicError::Internal(e.to_string()))?;
         state.tool_request_intercepts_chain(name, args)
     };
 
     // Tool call start
-    let handle = nvagentrt_tool_call(
+    let handle = nvmagic_tool_call(
         name,
         intercepted_args.clone(),
         parent.as_ref(),
@@ -560,7 +560,7 @@ pub async fn nvagentrt_tool_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+            .map_err(|e| MagicError::Internal(e.to_string()))?;
         state.tool_build_execution_chain(name, &intercepted_args, func)
     };
     let result = exec_future(intercepted_args).await?;
@@ -570,12 +570,12 @@ pub async fn nvagentrt_tool_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+            .map_err(|e| MagicError::Internal(e.to_string()))?;
         state.tool_response_intercepts_chain(name, result)
     };
 
     // Tool call end
-    nvagentrt_tool_call_end(&handle, result.clone(), data, metadata)?;
+    nvmagic_tool_call_end(&handle, result.clone(), data, metadata)?;
 
     Ok(result)
 }
@@ -590,9 +590,9 @@ pub async fn nvagentrt_tool_call_execute(
 /// The `native` parameter is the opaque Json payload in whatever format the
 /// LLM SDK uses. The converter derives a formal [`LLMRequest`] for guardrails.
 /// The sanitized request is stored in the event's `input` field.
-/// Call [`nvagentrt_llm_call_end`] when the LLM call completes.
+/// Call [`nvmagic_llm_call_end`] when the LLM call completes.
 #[allow(clippy::too_many_arguments)]
-pub fn nvagentrt_llm_call(
+pub fn nvmagic_llm_call(
     name: &str,
     native: &Json,
     parent: Option<&ScopeHandle>,
@@ -607,7 +607,7 @@ pub fn nvagentrt_llm_call(
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
 
     let formal_request = match to_request {
         Some(f) => f(native),
@@ -632,7 +632,7 @@ pub fn nvagentrt_llm_call(
 /// response sanitize guardrails, and emits an `End` event.
 ///
 /// The sanitized response data is stored in the event's `output` field.
-pub fn nvagentrt_llm_call_end(
+pub fn nvmagic_llm_call_end(
     handle: &LLMHandle,
     response: Json,
     data: Option<Json>,
@@ -643,7 +643,7 @@ pub fn nvagentrt_llm_call_end(
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
 
     let formal_response = match to_response {
         Some(f) => f(&response),
@@ -670,9 +670,9 @@ pub fn nvagentrt_llm_call_end(
 /// they gate on the unmodified input. On rejection, only a standalone `Mark`
 /// event is emitted (no `Start`/`End` pair).
 ///
-/// Returns [`AgentRtError::GuardrailRejected`] if a conditional guardrail rejects the call.
+/// Returns [`MagicError::GuardrailRejected`] if a conditional guardrail rejects the call.
 #[allow(clippy::too_many_arguments)]
-pub async fn nvagentrt_llm_call_execute(
+pub async fn nvmagic_llm_call_execute(
     name: &str,
     native: Json,
     func: LlmExecutionNextFn,
@@ -689,7 +689,7 @@ pub async fn nvagentrt_llm_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+            .map_err(|e| MagicError::Internal(e.to_string()))?;
         let formal_request = match &to_request {
             Some(f) => f(&native),
             None => IdentityConverter.to_request(&native),
@@ -701,8 +701,8 @@ pub async fn nvagentrt_llm_call_execute(
                 obj.insert("rejected".into(), json!(true));
                 obj.insert("rejection_reason".into(), json!(&err));
             }
-            let _ = nvagentrt_event(name, parent.as_ref(), Some(rejection_data), metadata);
-            return Err(AgentRtError::GuardrailRejected(err));
+            let _ = nvmagic_event(name, parent.as_ref(), Some(rejection_data), metadata);
+            return Err(MagicError::GuardrailRejected(err));
         }
     }
 
@@ -711,12 +711,12 @@ pub async fn nvagentrt_llm_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+            .map_err(|e| MagicError::Internal(e.to_string()))?;
         state.llm_request_intercepts_chain(native)
     };
 
     // LLM call start (converter + sanitize guardrails happen inside)
-    let handle = nvagentrt_llm_call(
+    let handle = nvmagic_llm_call(
         name,
         &intercepted_native,
         parent.as_ref(),
@@ -732,7 +732,7 @@ pub async fn nvagentrt_llm_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+            .map_err(|e| MagicError::Internal(e.to_string()))?;
         state.llm_build_execution_chain(&intercepted_native, func)
     };
     let response = exec_future(intercepted_native).await?;
@@ -742,7 +742,7 @@ pub async fn nvagentrt_llm_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+            .map_err(|e| MagicError::Internal(e.to_string()))?;
         let formal_response = match &to_response {
             Some(f) => f(&response),
             None => IdentityConverter.to_response(&response),
@@ -752,7 +752,7 @@ pub async fn nvagentrt_llm_call_execute(
     };
 
     // LLM call end (converter + sanitize response guardrails happen inside)
-    nvagentrt_llm_call_end(
+    nvmagic_llm_call_end(
         &handle,
         response.clone(),
         data,
@@ -765,7 +765,7 @@ pub async fn nvagentrt_llm_call_execute(
 
 /// Executes a complete streaming LLM call lifecycle.
 ///
-/// Similar to [`nvagentrt_llm_call_execute`] but returns a
+/// Similar to [`nvmagic_llm_call_execute`] but returns a
 /// [`Stream`] of Json chunks. Conditional execution guardrails run
 /// **before** request intercepts so that they gate on the unmodified
 /// input. On rejection, only a standalone `Mark` event is emitted
@@ -783,9 +783,9 @@ pub async fn nvagentrt_llm_call_execute(
 /// - `finalizer` — called once when the stream is exhausted; returns the
 ///   aggregated response as [`Json`].
 ///
-/// Returns [`AgentRtError::GuardrailRejected`] if a conditional guardrail rejects the call.
+/// Returns [`MagicError::GuardrailRejected`] if a conditional guardrail rejects the call.
 #[allow(clippy::too_many_arguments)]
-pub async fn nvagentrt_llm_stream_call_execute(
+pub async fn nvmagic_llm_stream_call_execute(
     name: &str,
     native: Json,
     func: LlmStreamExecutionNextFn,
@@ -804,7 +804,7 @@ pub async fn nvagentrt_llm_stream_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+            .map_err(|e| MagicError::Internal(e.to_string()))?;
         let formal_request = match &to_request {
             Some(f) => f(&native),
             None => IdentityConverter.to_request(&native),
@@ -816,8 +816,8 @@ pub async fn nvagentrt_llm_stream_call_execute(
                 obj.insert("rejected".into(), json!(true));
                 obj.insert("rejection_reason".into(), json!(&err));
             }
-            let _ = nvagentrt_event(name, parent.as_ref(), Some(rejection_data), metadata);
-            return Err(AgentRtError::GuardrailRejected(err));
+            let _ = nvmagic_event(name, parent.as_ref(), Some(rejection_data), metadata);
+            return Err(MagicError::GuardrailRejected(err));
         }
     }
 
@@ -826,12 +826,12 @@ pub async fn nvagentrt_llm_stream_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+            .map_err(|e| MagicError::Internal(e.to_string()))?;
         state.llm_request_intercepts_chain(native)
     };
 
     // LLM call start (converter + sanitize guardrails happen inside)
-    let handle = nvagentrt_llm_call(
+    let handle = nvmagic_llm_call(
         name,
         &intercepted_native,
         parent.as_ref(),
@@ -847,7 +847,7 @@ pub async fn nvagentrt_llm_stream_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+            .map_err(|e| MagicError::Internal(e.to_string()))?;
         state.llm_stream_build_execution_chain(&intercepted_native, func)
     };
     let raw_stream = exec_future(intercepted_native).await?;
@@ -873,27 +873,27 @@ pub async fn nvagentrt_llm_stream_call_execute(
 ///
 /// Returns the transformed arguments after all intercepts have been applied.
 /// This allows invoking request intercepts independently of the full
-/// [`nvagentrt_tool_call_execute`] pipeline.
-pub fn nvagentrt_tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
+/// [`nvmagic_tool_call_execute`] pipeline.
+pub fn nvmagic_tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
     Ok(state.tool_request_intercepts_chain(name, args))
 }
 
 /// Runs the registered tool conditional execution guardrail chain.
 ///
 /// Returns `Ok(())` if all guardrails pass, or
-/// [`Err(AgentRtError::GuardrailRejected(reason))`](AgentRtError::GuardrailRejected)
+/// [`Err(MagicError::GuardrailRejected(reason))`](MagicError::GuardrailRejected)
 /// if any guardrail rejects the call.
-pub fn nvagentrt_tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
+pub fn nvmagic_tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
     if let Some(err) = state.tool_conditional_execution_chain(name, args) {
-        return Err(AgentRtError::GuardrailRejected(err));
+        return Err(MagicError::GuardrailRejected(err));
     }
     Ok(())
 }
@@ -902,12 +902,12 @@ pub fn nvagentrt_tool_conditional_execution(name: &str, args: &Json) -> Result<(
 ///
 /// Returns the transformed result after all intercepts have been applied.
 /// This allows invoking response intercepts independently of the full
-/// [`nvagentrt_tool_call_execute`] pipeline.
-pub fn nvagentrt_tool_response_intercepts(name: &str, result: Json) -> Result<Json> {
+/// [`nvmagic_tool_call_execute`] pipeline.
+pub fn nvmagic_tool_response_intercepts(name: &str, result: Json) -> Result<Json> {
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
     Ok(state.tool_response_intercepts_chain(name, result))
 }
 
@@ -915,12 +915,12 @@ pub fn nvagentrt_tool_response_intercepts(name: &str, result: Json) -> Result<Js
 ///
 /// Returns the transformed native Json after all intercepts have been applied.
 /// This allows invoking request intercepts independently of the full
-/// [`nvagentrt_llm_call_execute`] pipeline.
-pub fn nvagentrt_llm_request_intercepts(native: Json) -> Result<Json> {
+/// [`nvmagic_llm_call_execute`] pipeline.
+pub fn nvmagic_llm_request_intercepts(native: Json) -> Result<Json> {
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
     Ok(state.llm_request_intercepts_chain(native))
 }
 
@@ -930,22 +930,22 @@ pub fn nvagentrt_llm_request_intercepts(native: Json) -> Result<Json> {
 /// then runs the conditional chain on it.
 ///
 /// Returns `Ok(())` if all guardrails pass, or
-/// [`Err(AgentRtError::GuardrailRejected(reason))`](AgentRtError::GuardrailRejected)
+/// [`Err(MagicError::GuardrailRejected(reason))`](MagicError::GuardrailRejected)
 /// if any guardrail rejects the call.
-pub fn nvagentrt_llm_conditional_execution(
+pub fn nvmagic_llm_conditional_execution(
     native: &Json,
     to_request: Option<&ToRequestFn>,
 ) -> Result<()> {
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
     let formal_request = match to_request {
         Some(f) => f(native),
         None => IdentityConverter.to_request(native),
     };
     if let Some(err) = state.llm_conditional_execution_chain(&formal_request) {
-        return Err(AgentRtError::GuardrailRejected(err));
+        return Err(MagicError::GuardrailRejected(err));
     }
     Ok(())
 }
@@ -954,12 +954,12 @@ pub fn nvagentrt_llm_conditional_execution(
 ///
 /// Returns the transformed response after all intercepts have been applied.
 /// This allows invoking response intercepts independently of the full
-/// [`nvagentrt_llm_call_execute`] pipeline.
-pub fn nvagentrt_llm_response_intercepts(response: LLMResponse) -> Result<LLMResponse> {
+/// [`nvmagic_llm_call_execute`] pipeline.
+pub fn nvmagic_llm_response_intercepts(response: LLMResponse) -> Result<LLMResponse> {
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        .map_err(|e| MagicError::Internal(e.to_string()))?;
     Ok(state.llm_response_intercepts_chain(response))
 }
 
@@ -978,7 +978,7 @@ mod tests {
     fn reset_global() {
         let ctx = global_context();
         let mut state = ctx.write().unwrap();
-        *state = NVAgentRTContextState::new();
+        *state = NVMagicContextState::new();
     }
 
     #[test]
@@ -987,21 +987,21 @@ mod tests {
         reset_global();
 
         // Root scope is always present
-        let root = nvagentrt_get_handle().unwrap();
+        let root = nvmagic_get_handle().unwrap();
         assert_eq!(root.name, "root");
 
-        let handle = nvagentrt_push_scope(
+        let handle = nvmagic_push_scope(
             "test_scope",
             ScopeType::Agent,
             None,
             ScopeAttributes::empty(),
         )
         .unwrap();
-        assert_eq!(nvagentrt_get_handle().unwrap().name, "test_scope");
-        nvagentrt_pop_scope(&handle.uuid).unwrap();
+        assert_eq!(nvmagic_get_handle().unwrap().name, "test_scope");
+        nvmagic_pop_scope(&handle.uuid).unwrap();
 
         // After pop, root scope is on top again
-        assert_eq!(nvagentrt_get_handle().unwrap().name, "root");
+        assert_eq!(nvmagic_get_handle().unwrap().name, "root");
     }
 
     #[test]
@@ -1010,7 +1010,7 @@ mod tests {
         reset_global();
         let count = Arc::new(AtomicU32::new(0));
         let c = count.clone();
-        nvagentrt_register_subscriber(
+        nvmagic_register_subscriber(
             "test_sub",
             Box::new(move |_| {
                 c.fetch_add(1, Ordering::SeqCst);
@@ -1019,37 +1019,37 @@ mod tests {
         .unwrap();
 
         // Duplicate should fail
-        assert!(nvagentrt_register_subscriber("test_sub", Box::new(|_| {}),).is_err());
+        assert!(nvmagic_register_subscriber("test_sub", Box::new(|_| {}),).is_err());
 
         // Push scope emits event
         let handle =
-            nvagentrt_push_scope("s", ScopeType::Function, None, ScopeAttributes::empty()).unwrap();
+            nvmagic_push_scope("s", ScopeType::Function, None, ScopeAttributes::empty()).unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 1);
 
-        nvagentrt_pop_scope(&handle.uuid).unwrap();
+        nvmagic_pop_scope(&handle.uuid).unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 2);
 
         // Deregister
-        assert!(nvagentrt_deregister_subscriber("test_sub").unwrap());
-        assert!(!nvagentrt_deregister_subscriber("test_sub").unwrap());
+        assert!(nvmagic_deregister_subscriber("test_sub").unwrap());
+        assert!(!nvmagic_deregister_subscriber("test_sub").unwrap());
     }
 
     #[test]
     fn test_tool_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_tool_sanitize_request_guardrail("g1", 10, Box::new(|_name, args| args))
+        nvmagic_register_tool_sanitize_request_guardrail("g1", 10, Box::new(|_name, args| args))
             .unwrap();
 
         // Duplicate fails
-        assert!(nvagentrt_register_tool_sanitize_request_guardrail(
+        assert!(nvmagic_register_tool_sanitize_request_guardrail(
             "g1",
             10,
             Box::new(|_name, args| args),
         )
         .is_err());
 
-        assert!(nvagentrt_deregister_tool_sanitize_request_guardrail("g1").unwrap());
+        assert!(nvmagic_deregister_tool_sanitize_request_guardrail("g1").unwrap());
     }
 
     // -- Scope hierarchy --
@@ -1059,32 +1059,32 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let s1 = nvagentrt_push_scope("level1", ScopeType::Agent, None, ScopeAttributes::empty())
-            .unwrap();
-        assert_eq!(nvagentrt_get_handle().unwrap().name, "level1");
+        let s1 =
+            nvmagic_push_scope("level1", ScopeType::Agent, None, ScopeAttributes::empty()).unwrap();
+        assert_eq!(nvmagic_get_handle().unwrap().name, "level1");
 
-        let s2 = nvagentrt_push_scope(
+        let s2 = nvmagic_push_scope(
             "level2",
             ScopeType::Function,
             Some(&s1),
             ScopeAttributes::empty(),
         )
         .unwrap();
-        assert_eq!(nvagentrt_get_handle().unwrap().name, "level2");
+        assert_eq!(nvmagic_get_handle().unwrap().name, "level2");
         assert_eq!(s2.parent_uuid, Some(s1.uuid));
 
-        nvagentrt_pop_scope(&s2.uuid).unwrap();
-        assert_eq!(nvagentrt_get_handle().unwrap().name, "level1");
+        nvmagic_pop_scope(&s2.uuid).unwrap();
+        assert_eq!(nvmagic_get_handle().unwrap().name, "level1");
 
-        nvagentrt_pop_scope(&s1.uuid).unwrap();
-        assert_eq!(nvagentrt_get_handle().unwrap().name, "root");
+        nvmagic_pop_scope(&s1.uuid).unwrap();
+        assert_eq!(nvmagic_get_handle().unwrap().name, "root");
     }
 
     #[test]
     fn test_pop_nonexistent_scope() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        let result = nvagentrt_pop_scope(&Uuid::new_v4());
+        let result = nvmagic_pop_scope(&Uuid::new_v4());
         assert!(result.is_err());
     }
 
@@ -1092,7 +1092,7 @@ mod tests {
     fn test_scope_attributes_propagated() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        let handle = nvagentrt_push_scope(
+        let handle = nvmagic_push_scope(
             "parallel_scope",
             ScopeType::Agent,
             None,
@@ -1101,7 +1101,7 @@ mod tests {
         .unwrap();
         assert!(handle.attributes.contains(ScopeAttributes::PARALLEL));
         assert!(handle.attributes.contains(ScopeAttributes::RELOCATABLE));
-        nvagentrt_pop_scope(&handle.uuid).unwrap();
+        nvmagic_pop_scope(&handle.uuid).unwrap();
     }
 
     // -- Event emission --
@@ -1113,7 +1113,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvagentrt_register_subscriber(
+        nvmagic_register_subscriber(
             "evt_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push((e.name.clone(), e.event_type));
@@ -1121,7 +1121,7 @@ mod tests {
         )
         .unwrap();
 
-        nvagentrt_event("my_mark", None, Some(json!({"x": 1})), None).unwrap();
+        nvmagic_event("my_mark", None, Some(json!({"x": 1})), None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1129,7 +1129,7 @@ mod tests {
         assert_eq!(captured[0].1, crate::types::EventType::Mark);
 
         drop(captured);
-        nvagentrt_deregister_subscriber("evt_test").unwrap();
+        nvmagic_deregister_subscriber("evt_test").unwrap();
     }
 
     // -- Tool lifecycle --
@@ -1141,7 +1141,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvagentrt_register_subscriber(
+        nvmagic_register_subscriber(
             "tool_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.event_type);
@@ -1149,7 +1149,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nvagentrt_tool_call(
+        let handle = nvmagic_tool_call(
             "my_tool",
             json!({"input": "data"}),
             None,
@@ -1161,7 +1161,7 @@ mod tests {
         .unwrap();
         assert_eq!(handle.name, "my_tool");
 
-        nvagentrt_tool_call_end(&handle, json!({"output": "result"}), None, None).unwrap();
+        nvmagic_tool_call_end(&handle, json!({"output": "result"}), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -1169,7 +1169,7 @@ mod tests {
         assert_eq!(captured[1], crate::types::EventType::End);
 
         drop(captured);
-        nvagentrt_deregister_subscriber("tool_test").unwrap();
+        nvmagic_deregister_subscriber("tool_test").unwrap();
     }
 
     #[test]
@@ -1178,7 +1178,7 @@ mod tests {
         reset_global();
 
         // Register a sanitizer that adds a field
-        nvagentrt_register_tool_sanitize_request_guardrail(
+        nvmagic_register_tool_sanitize_request_guardrail(
             "sanitizer",
             1,
             Box::new(|_name, mut args| {
@@ -1192,7 +1192,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvagentrt_register_subscriber(
+        nvmagic_register_subscriber(
             "tool_san_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1200,7 +1200,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nvagentrt_tool_call(
+        let handle = nvmagic_tool_call(
             "my_tool",
             json!({"input": "data"}),
             None,
@@ -1219,9 +1219,9 @@ mod tests {
         assert_eq!(input["input"], "data");
 
         drop(captured);
-        nvagentrt_tool_call_end(&handle, json!("ok"), None, None).unwrap();
-        nvagentrt_deregister_subscriber("tool_san_test").unwrap();
-        nvagentrt_deregister_tool_sanitize_request_guardrail("sanitizer").unwrap();
+        nvmagic_tool_call_end(&handle, json!("ok"), None, None).unwrap();
+        nvmagic_deregister_subscriber("tool_san_test").unwrap();
+        nvmagic_deregister_tool_sanitize_request_guardrail("sanitizer").unwrap();
     }
 
     #[test]
@@ -1229,7 +1229,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvagentrt_register_tool_sanitize_response_guardrail(
+        nvmagic_register_tool_sanitize_response_guardrail(
             "resp_sanitizer",
             1,
             Box::new(|_name, mut result| {
@@ -1244,7 +1244,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvagentrt_register_subscriber(
+        nvmagic_register_subscriber(
             "tool_resp_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1252,7 +1252,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nvagentrt_tool_call(
+        let handle = nvmagic_tool_call(
             "tool",
             json!({}),
             None,
@@ -1262,7 +1262,7 @@ mod tests {
             None,
         )
         .unwrap();
-        nvagentrt_tool_call_end(&handle, json!({"output": "raw"}), None, None).unwrap();
+        nvmagic_tool_call_end(&handle, json!({"output": "raw"}), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];
@@ -1271,8 +1271,8 @@ mod tests {
         assert_eq!(output["output"], "raw");
 
         drop(captured);
-        nvagentrt_deregister_subscriber("tool_resp_test").unwrap();
-        nvagentrt_deregister_tool_sanitize_response_guardrail("resp_sanitizer").unwrap();
+        nvmagic_deregister_subscriber("tool_resp_test").unwrap();
+        nvmagic_deregister_tool_sanitize_response_guardrail("resp_sanitizer").unwrap();
     }
 
     // -- Tool call execute (async) --
@@ -1285,7 +1285,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Box::new(|args| Box::pin(async move { Ok(json!({"result": args["input"]})) }));
 
-        let result = nvagentrt_tool_call_execute(
+        let result = nvmagic_tool_call_execute(
             "exec_tool",
             json!({"input": "hello"}),
             func,
@@ -1305,7 +1305,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvagentrt_register_tool_request_intercept(
+        nvmagic_register_tool_request_intercept(
             "req_intercept",
             1,
             false,
@@ -1320,7 +1320,7 @@ mod tests {
 
         let func: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
 
-        let result = nvagentrt_tool_call_execute(
+        let result = nvmagic_tool_call_execute(
             "tool",
             json!({"original": true}),
             func,
@@ -1335,7 +1335,7 @@ mod tests {
         assert_eq!(result["original"], true);
         assert_eq!(result["added_by_intercept"], true);
 
-        nvagentrt_deregister_tool_request_intercept("req_intercept").unwrap();
+        nvmagic_deregister_tool_request_intercept("req_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -1343,7 +1343,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvagentrt_register_tool_response_intercept(
+        nvmagic_register_tool_response_intercept(
             "resp_intercept",
             1,
             false,
@@ -1360,7 +1360,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async move { Ok(json!({"output": "raw"})) }));
 
-        let result = nvagentrt_tool_call_execute(
+        let result = nvmagic_tool_call_execute(
             "tool",
             json!({}),
             func,
@@ -1375,7 +1375,7 @@ mod tests {
         assert_eq!(result["output"], "raw");
         assert_eq!(result["response_intercepted"], true);
 
-        nvagentrt_deregister_tool_response_intercept("resp_intercept").unwrap();
+        nvmagic_deregister_tool_response_intercept("resp_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -1385,7 +1385,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvagentrt_register_subscriber(
+        nvmagic_register_subscriber(
             "tool_reject_sub",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1393,7 +1393,7 @@ mod tests {
         )
         .unwrap();
 
-        nvagentrt_register_tool_conditional_execution_guardrail(
+        nvmagic_register_tool_conditional_execution_guardrail(
             "blocker",
             1,
             Box::new(|_name, _args| Some("forbidden tool".into())),
@@ -1403,7 +1403,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async move { Ok(json!({"should_not_reach": true})) }));
 
-        let result = nvagentrt_tool_call_execute(
+        let result = nvmagic_tool_call_execute(
             "tool",
             json!({}),
             func,
@@ -1416,7 +1416,7 @@ mod tests {
 
         assert!(result.is_err());
         match result.unwrap_err() {
-            AgentRtError::GuardrailRejected(msg) => assert_eq!(msg, "forbidden tool"),
+            MagicError::GuardrailRejected(msg) => assert_eq!(msg, "forbidden tool"),
             e => panic!("expected GuardrailRejected, got {e:?}"),
         }
 
@@ -1429,8 +1429,8 @@ mod tests {
         assert_eq!(mark_data["rejection_reason"], "forbidden tool");
 
         drop(captured);
-        nvagentrt_deregister_subscriber("tool_reject_sub").unwrap();
-        nvagentrt_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
+        nvmagic_deregister_subscriber("tool_reject_sub").unwrap();
+        nvmagic_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
     }
 
     #[tokio::test]
@@ -1438,7 +1438,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvagentrt_register_tool_execution_intercept(
+        nvmagic_register_tool_execution_intercept(
             "exec_intercept",
             1,
             Box::new(|_name: &str, _args: &Json| true),
@@ -1452,7 +1452,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async move { Ok(json!({"from_original": true})) }));
 
-        let result = nvagentrt_tool_call_execute(
+        let result = nvmagic_tool_call_execute(
             "tool",
             json!({}),
             func,
@@ -1468,7 +1468,7 @@ mod tests {
         assert_eq!(result["from_intercept"], true);
         assert!(result.get("from_original").is_none());
 
-        nvagentrt_deregister_tool_execution_intercept("exec_intercept").unwrap();
+        nvmagic_deregister_tool_execution_intercept("exec_intercept").unwrap();
     }
 
     // -- LLM lifecycle --
@@ -1480,7 +1480,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvagentrt_register_subscriber(
+        nvmagic_register_subscriber(
             "llm_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.event_type);
@@ -1489,7 +1489,7 @@ mod tests {
         .unwrap();
 
         let native = json!({"messages": []});
-        let handle = nvagentrt_llm_call(
+        let handle = nvmagic_llm_call(
             "my_llm",
             &native,
             None,
@@ -1502,7 +1502,7 @@ mod tests {
         .unwrap();
         assert_eq!(handle.name, "my_llm");
 
-        nvagentrt_llm_call_end(&handle, json!({"response": "ok"}), None, None, None).unwrap();
+        nvmagic_llm_call_end(&handle, json!({"response": "ok"}), None, None, None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -1510,7 +1510,7 @@ mod tests {
         assert_eq!(captured[1], crate::types::EventType::End);
 
         drop(captured);
-        nvagentrt_deregister_subscriber("llm_test").unwrap();
+        nvmagic_deregister_subscriber("llm_test").unwrap();
     }
 
     #[test]
@@ -1518,7 +1518,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvagentrt_register_llm_sanitize_request_guardrail(
+        nvmagic_register_llm_sanitize_request_guardrail(
             "llm_sanitizer",
             1,
             Box::new(|mut req: LLMRequest| {
@@ -1530,7 +1530,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvagentrt_register_subscriber(
+        nvmagic_register_subscriber(
             "llm_san_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1539,7 +1539,7 @@ mod tests {
         .unwrap();
 
         let native = json!({"messages": []});
-        let handle = nvagentrt_llm_call(
+        let handle = nvmagic_llm_call(
             "llm",
             &native,
             None,
@@ -1558,9 +1558,9 @@ mod tests {
         assert_eq!(input["headers"]["X-Sanitized"], "true");
 
         drop(captured);
-        nvagentrt_llm_call_end(&handle, json!("ok"), None, None, None).unwrap();
-        nvagentrt_deregister_subscriber("llm_san_test").unwrap();
-        nvagentrt_deregister_llm_sanitize_request_guardrail("llm_sanitizer").unwrap();
+        nvmagic_llm_call_end(&handle, json!("ok"), None, None, None).unwrap();
+        nvmagic_deregister_subscriber("llm_san_test").unwrap();
+        nvmagic_deregister_llm_sanitize_request_guardrail("llm_sanitizer").unwrap();
     }
 
     #[tokio::test]
@@ -1573,7 +1573,7 @@ mod tests {
 
         let native = json!({"messages": [{"role": "user", "content": "hi"}]});
 
-        let result = nvagentrt_llm_call_execute(
+        let result = nvmagic_llm_call_execute(
             "llm",
             native.clone(),
             func,
@@ -1598,7 +1598,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvagentrt_register_subscriber(
+        nvmagic_register_subscriber(
             "llm_reject_sub",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1606,7 +1606,7 @@ mod tests {
         )
         .unwrap();
 
-        nvagentrt_register_llm_conditional_execution_guardrail(
+        nvmagic_register_llm_conditional_execution_guardrail(
             "llm_blocker",
             1,
             Box::new(|_req: &LLMRequest| Some("blocked by policy".into())),
@@ -1617,7 +1617,7 @@ mod tests {
 
         let native = json!({"messages": []});
 
-        let result = nvagentrt_llm_call_execute(
+        let result = nvmagic_llm_call_execute(
             "llm",
             native,
             func,
@@ -1633,7 +1633,7 @@ mod tests {
 
         assert!(result.is_err());
         match result.unwrap_err() {
-            AgentRtError::GuardrailRejected(msg) => assert_eq!(msg, "blocked by policy"),
+            MagicError::GuardrailRejected(msg) => assert_eq!(msg, "blocked by policy"),
             e => panic!("expected GuardrailRejected, got {e:?}"),
         }
 
@@ -1646,8 +1646,8 @@ mod tests {
         assert_eq!(mark_data["rejection_reason"], "blocked by policy");
 
         drop(captured);
-        nvagentrt_deregister_subscriber("llm_reject_sub").unwrap();
-        nvagentrt_deregister_llm_conditional_execution_guardrail("llm_blocker").unwrap();
+        nvmagic_deregister_subscriber("llm_reject_sub").unwrap();
+        nvmagic_deregister_llm_conditional_execution_guardrail("llm_blocker").unwrap();
     }
 
     #[tokio::test]
@@ -1655,7 +1655,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvagentrt_register_llm_request_intercept(
+        nvmagic_register_llm_request_intercept(
             "llm_req_intercept",
             1,
             false,
@@ -1675,7 +1675,7 @@ mod tests {
 
         let native = json!({"messages": []});
 
-        let result = nvagentrt_llm_call_execute(
+        let result = nvmagic_llm_call_execute(
             "llm",
             native,
             func,
@@ -1692,7 +1692,7 @@ mod tests {
 
         assert_eq!(result["saw_intercepted"], true);
 
-        nvagentrt_deregister_llm_request_intercept("llm_req_intercept").unwrap();
+        nvmagic_deregister_llm_request_intercept("llm_req_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -1700,7 +1700,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvagentrt_register_llm_response_intercept(
+        nvmagic_register_llm_response_intercept(
             "llm_resp_intercept",
             1,
             false,
@@ -1719,7 +1719,7 @@ mod tests {
 
         let native = json!({"messages": []});
 
-        let result = nvagentrt_llm_call_execute(
+        let result = nvmagic_llm_call_execute(
             "llm",
             native,
             func,
@@ -1737,7 +1737,7 @@ mod tests {
         assert_eq!(result["original"], true);
         assert_eq!(result["response_modified"], true);
 
-        nvagentrt_deregister_llm_response_intercept("llm_resp_intercept").unwrap();
+        nvmagic_deregister_llm_response_intercept("llm_resp_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -1745,7 +1745,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvagentrt_register_llm_execution_intercept(
+        nvmagic_register_llm_execution_intercept(
             "llm_exec_intercept",
             1,
             Box::new(|_native: &Json| true),
@@ -1761,7 +1761,7 @@ mod tests {
 
         let native = json!({"messages": []});
 
-        let result = nvagentrt_llm_call_execute(
+        let result = nvmagic_llm_call_execute(
             "llm",
             native,
             func,
@@ -1779,7 +1779,7 @@ mod tests {
         assert_eq!(result["from_intercept"], true);
         assert!(result.get("from_original").is_none());
 
-        nvagentrt_deregister_llm_execution_intercept("llm_exec_intercept").unwrap();
+        nvmagic_deregister_llm_execution_intercept("llm_exec_intercept").unwrap();
     }
 
     // -- All guardrail/intercept registration pairs --
@@ -1788,58 +1788,57 @@ mod tests {
     fn test_tool_sanitize_response_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r)).unwrap();
+        nvmagic_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r)).unwrap();
         assert!(
-            nvagentrt_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r))
+            nvmagic_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r))
                 .is_err()
         );
-        assert!(nvagentrt_deregister_tool_sanitize_response_guardrail("g1").unwrap());
-        assert!(!nvagentrt_deregister_tool_sanitize_response_guardrail("g1").unwrap());
+        assert!(nvmagic_deregister_tool_sanitize_response_guardrail("g1").unwrap());
+        assert!(!nvmagic_deregister_tool_sanitize_response_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_tool_conditional_execution_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_tool_conditional_execution_guardrail("g1", 1, Box::new(|_n, _a| None))
+        nvmagic_register_tool_conditional_execution_guardrail("g1", 1, Box::new(|_n, _a| None))
             .unwrap();
-        assert!(nvagentrt_register_tool_conditional_execution_guardrail(
+        assert!(nvmagic_register_tool_conditional_execution_guardrail(
             "g1",
             1,
             Box::new(|_n, _a| None)
         )
         .is_err());
-        assert!(nvagentrt_deregister_tool_conditional_execution_guardrail("g1").unwrap());
+        assert!(nvmagic_deregister_tool_conditional_execution_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_tool_request_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| a)).unwrap();
+        nvmagic_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| a)).unwrap();
         assert!(
-            nvagentrt_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| a)).is_err()
+            nvmagic_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| a)).is_err()
         );
-        assert!(nvagentrt_deregister_tool_request_intercept("i1").unwrap());
+        assert!(nvmagic_deregister_tool_request_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_tool_response_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_tool_response_intercept("i1", 1, false, Box::new(|_n, r| r)).unwrap();
+        nvmagic_register_tool_response_intercept("i1", 1, false, Box::new(|_n, r| r)).unwrap();
         assert!(
-            nvagentrt_register_tool_response_intercept("i1", 1, false, Box::new(|_n, r| r))
-                .is_err()
+            nvmagic_register_tool_response_intercept("i1", 1, false, Box::new(|_n, r| r)).is_err()
         );
-        assert!(nvagentrt_deregister_tool_response_intercept("i1").unwrap());
+        assert!(nvmagic_deregister_tool_response_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_tool_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_tool_execution_intercept(
+        nvmagic_register_tool_execution_intercept(
             "i1",
             1,
             Box::new(|_n: &str, _a: &Json| false),
@@ -1849,7 +1848,7 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(nvagentrt_register_tool_execution_intercept(
+        assert!(nvmagic_register_tool_execution_intercept(
             "i1",
             1,
             Box::new(|_n: &str, _a: &Json| false),
@@ -1861,83 +1860,76 @@ mod tests {
             ),
         )
         .is_err());
-        assert!(nvagentrt_deregister_tool_execution_intercept("i1").unwrap());
+        assert!(nvmagic_deregister_tool_execution_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_sanitize_request_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).unwrap();
-        assert!(
-            nvagentrt_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).is_err()
-        );
-        assert!(nvagentrt_deregister_llm_sanitize_request_guardrail("g1").unwrap());
+        nvmagic_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).unwrap();
+        assert!(nvmagic_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).is_err());
+        assert!(nvmagic_deregister_llm_sanitize_request_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_sanitize_response_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).unwrap();
+        nvmagic_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).unwrap();
         assert!(
-            nvagentrt_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).is_err()
+            nvmagic_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).is_err()
         );
-        assert!(nvagentrt_deregister_llm_sanitize_response_guardrail("g1").unwrap());
+        assert!(nvmagic_deregister_llm_sanitize_response_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_conditional_execution_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| None))
-            .unwrap();
-        assert!(nvagentrt_register_llm_conditional_execution_guardrail(
-            "g1",
-            1,
-            Box::new(|_r| None)
-        )
-        .is_err());
-        assert!(nvagentrt_deregister_llm_conditional_execution_guardrail("g1").unwrap());
+        nvmagic_register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| None)).unwrap();
+        assert!(
+            nvmagic_register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| None))
+                .is_err()
+        );
+        assert!(nvmagic_deregister_llm_conditional_execution_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_request_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_llm_request_intercept("i1", 1, false, Box::new(|r| r)).unwrap();
-        assert!(nvagentrt_register_llm_request_intercept("i1", 1, false, Box::new(|r| r)).is_err());
-        assert!(nvagentrt_deregister_llm_request_intercept("i1").unwrap());
+        nvmagic_register_llm_request_intercept("i1", 1, false, Box::new(|r| r)).unwrap();
+        assert!(nvmagic_register_llm_request_intercept("i1", 1, false, Box::new(|r| r)).is_err());
+        assert!(nvmagic_deregister_llm_request_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_response_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_llm_response_intercept("i1", 1, false, Box::new(|r| r)).unwrap();
-        assert!(
-            nvagentrt_register_llm_response_intercept("i1", 1, false, Box::new(|r| r)).is_err()
-        );
-        assert!(nvagentrt_deregister_llm_response_intercept("i1").unwrap());
+        nvmagic_register_llm_response_intercept("i1", 1, false, Box::new(|r| r)).unwrap();
+        assert!(nvmagic_register_llm_response_intercept("i1", 1, false, Box::new(|r| r)).is_err());
+        assert!(nvmagic_deregister_llm_response_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_stream_response_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_llm_stream_response_intercept("i1", 1, false, Box::new(|s| s)).unwrap();
+        nvmagic_register_llm_stream_response_intercept("i1", 1, false, Box::new(|s| s)).unwrap();
         assert!(
-            nvagentrt_register_llm_stream_response_intercept("i1", 1, false, Box::new(|s| s))
+            nvmagic_register_llm_stream_response_intercept("i1", 1, false, Box::new(|s| s))
                 .is_err()
         );
-        assert!(nvagentrt_deregister_llm_stream_response_intercept("i1").unwrap());
+        assert!(nvmagic_deregister_llm_stream_response_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_llm_execution_intercept(
+        nvmagic_register_llm_execution_intercept(
             "i1",
             1,
             Box::new(|_native: &Json| false),
@@ -1947,14 +1939,14 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(nvagentrt_deregister_llm_execution_intercept("i1").unwrap());
+        assert!(nvmagic_deregister_llm_execution_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_stream_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvagentrt_register_llm_stream_execution_intercept(
+        nvmagic_register_llm_stream_execution_intercept(
             "i1",
             1,
             Box::new(|_native: &Json| false),
@@ -1981,7 +1973,7 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(nvagentrt_deregister_llm_stream_execution_intercept("i1").unwrap());
+        assert!(nvmagic_deregister_llm_stream_execution_intercept("i1").unwrap());
     }
 
     // -- Deregister non-existent returns false --
@@ -1990,33 +1982,33 @@ mod tests {
     fn test_deregister_nonexistent_subscriber() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nvagentrt_deregister_subscriber("nonexistent").unwrap());
+        assert!(!nvmagic_deregister_subscriber("nonexistent").unwrap());
     }
 
     #[test]
     fn test_deregister_nonexistent_guardrails() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nvagentrt_deregister_tool_sanitize_request_guardrail("nope").unwrap());
-        assert!(!nvagentrt_deregister_tool_sanitize_response_guardrail("nope").unwrap());
-        assert!(!nvagentrt_deregister_tool_conditional_execution_guardrail("nope").unwrap());
-        assert!(!nvagentrt_deregister_llm_sanitize_request_guardrail("nope").unwrap());
-        assert!(!nvagentrt_deregister_llm_sanitize_response_guardrail("nope").unwrap());
-        assert!(!nvagentrt_deregister_llm_conditional_execution_guardrail("nope").unwrap());
+        assert!(!nvmagic_deregister_tool_sanitize_request_guardrail("nope").unwrap());
+        assert!(!nvmagic_deregister_tool_sanitize_response_guardrail("nope").unwrap());
+        assert!(!nvmagic_deregister_tool_conditional_execution_guardrail("nope").unwrap());
+        assert!(!nvmagic_deregister_llm_sanitize_request_guardrail("nope").unwrap());
+        assert!(!nvmagic_deregister_llm_sanitize_response_guardrail("nope").unwrap());
+        assert!(!nvmagic_deregister_llm_conditional_execution_guardrail("nope").unwrap());
     }
 
     #[test]
     fn test_deregister_nonexistent_intercepts() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nvagentrt_deregister_tool_request_intercept("nope").unwrap());
-        assert!(!nvagentrt_deregister_tool_response_intercept("nope").unwrap());
-        assert!(!nvagentrt_deregister_tool_execution_intercept("nope").unwrap());
-        assert!(!nvagentrt_deregister_llm_request_intercept("nope").unwrap());
-        assert!(!nvagentrt_deregister_llm_response_intercept("nope").unwrap());
-        assert!(!nvagentrt_deregister_llm_stream_response_intercept("nope").unwrap());
-        assert!(!nvagentrt_deregister_llm_execution_intercept("nope").unwrap());
-        assert!(!nvagentrt_deregister_llm_stream_execution_intercept("nope").unwrap());
+        assert!(!nvmagic_deregister_tool_request_intercept("nope").unwrap());
+        assert!(!nvmagic_deregister_tool_response_intercept("nope").unwrap());
+        assert!(!nvmagic_deregister_tool_execution_intercept("nope").unwrap());
+        assert!(!nvmagic_deregister_llm_request_intercept("nope").unwrap());
+        assert!(!nvmagic_deregister_llm_response_intercept("nope").unwrap());
+        assert!(!nvmagic_deregister_llm_stream_response_intercept("nope").unwrap());
+        assert!(!nvmagic_deregister_llm_execution_intercept("nope").unwrap());
+        assert!(!nvmagic_deregister_llm_stream_execution_intercept("nope").unwrap());
     }
 
     // -- LLM stream call execute --
@@ -2059,7 +2051,7 @@ mod tests {
             Json::Array(chunks.clone())
         });
 
-        let mut stream = nvagentrt_llm_stream_call_execute(
+        let mut stream = nvmagic_llm_stream_call_execute(
             "llm",
             native,
             func,
@@ -2094,7 +2086,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvagentrt_register_subscriber(
+        nvmagic_register_subscriber(
             "stream_reject_sub",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -2102,7 +2094,7 @@ mod tests {
         )
         .unwrap();
 
-        nvagentrt_register_llm_conditional_execution_guardrail(
+        nvmagic_register_llm_conditional_execution_guardrail(
             "stream_blocker",
             1,
             Box::new(|_req: &LLMRequest| Some("stream blocked".into())),
@@ -2131,7 +2123,7 @@ mod tests {
         let collector: Box<dyn FnMut(Json) + Send> = Box::new(|_| {});
         let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| Json::Null);
 
-        let result = nvagentrt_llm_stream_call_execute(
+        let result = nvmagic_llm_stream_call_execute(
             "llm",
             native,
             func,
@@ -2148,7 +2140,7 @@ mod tests {
         .await;
 
         match result {
-            Err(AgentRtError::GuardrailRejected(msg)) => assert_eq!(msg, "stream blocked"),
+            Err(MagicError::GuardrailRejected(msg)) => assert_eq!(msg, "stream blocked"),
             Err(e) => panic!("expected GuardrailRejected, got {e:?}"),
             Ok(_) => panic!("expected error, got Ok"),
         }
@@ -2162,8 +2154,8 @@ mod tests {
         assert_eq!(mark_data["rejection_reason"], "stream blocked");
 
         drop(captured);
-        nvagentrt_deregister_subscriber("stream_reject_sub").unwrap();
-        nvagentrt_deregister_llm_conditional_execution_guardrail("stream_blocker").unwrap();
+        nvmagic_deregister_subscriber("stream_reject_sub").unwrap();
+        nvmagic_deregister_llm_conditional_execution_guardrail("stream_blocker").unwrap();
     }
 
     // -- Tool call with explicit parent --
@@ -2174,9 +2166,8 @@ mod tests {
         reset_global();
 
         let scope =
-            nvagentrt_push_scope("parent", ScopeType::Agent, None, ScopeAttributes::empty())
-                .unwrap();
-        let handle = nvagentrt_tool_call(
+            nvmagic_push_scope("parent", ScopeType::Agent, None, ScopeAttributes::empty()).unwrap();
+        let handle = nvmagic_tool_call(
             "tool",
             json!({}),
             Some(&scope),
@@ -2188,8 +2179,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(handle.parent_uuid, Some(scope.uuid));
-        nvagentrt_tool_call_end(&handle, json!({}), None, None).unwrap();
-        nvagentrt_pop_scope(&scope.uuid).unwrap();
+        nvmagic_tool_call_end(&handle, json!({}), None, None).unwrap();
+        nvmagic_pop_scope(&scope.uuid).unwrap();
     }
 
     // -- LLM call with attributes --
@@ -2200,7 +2191,7 @@ mod tests {
         reset_global();
 
         let native = json!({"messages": []});
-        let handle = nvagentrt_llm_call(
+        let handle = nvmagic_llm_call(
             "llm",
             &native,
             None,
@@ -2214,7 +2205,7 @@ mod tests {
 
         assert!(handle.attributes.contains(LLMAttributes::STATELESS));
         assert!(handle.attributes.contains(LLMAttributes::STREAMING));
-        nvagentrt_llm_call_end(&handle, json!({}), None, None, None).unwrap();
+        nvmagic_llm_call_end(&handle, json!({}), None, None, None).unwrap();
     }
 
     // -- Standalone middleware chain tests --
@@ -2224,7 +2215,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvagentrt_register_tool_request_intercept(
+        nvmagic_register_tool_request_intercept(
             "add_field",
             10,
             false,
@@ -2237,11 +2228,11 @@ mod tests {
         )
         .unwrap();
 
-        let result = nvagentrt_tool_request_intercepts("tool", json!({"key": "value"})).unwrap();
+        let result = nvmagic_tool_request_intercepts("tool", json!({"key": "value"})).unwrap();
         assert_eq!(result["key"], "value");
         assert_eq!(result["injected"], true);
 
-        nvagentrt_deregister_tool_request_intercept("add_field").unwrap();
+        nvmagic_deregister_tool_request_intercept("add_field").unwrap();
     }
 
     #[test]
@@ -2250,7 +2241,7 @@ mod tests {
         reset_global();
 
         // No guardrails registered — should pass
-        assert!(nvagentrt_tool_conditional_execution("tool", &json!({})).is_ok());
+        assert!(nvmagic_tool_conditional_execution("tool", &json!({})).is_ok());
     }
 
     #[test]
@@ -2258,19 +2249,19 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvagentrt_register_tool_conditional_execution_guardrail(
+        nvmagic_register_tool_conditional_execution_guardrail(
             "blocker",
             1,
             Box::new(|_name, _args| Some("blocked".into())),
         )
         .unwrap();
 
-        match nvagentrt_tool_conditional_execution("tool", &json!({})) {
-            Err(AgentRtError::GuardrailRejected(msg)) => assert_eq!(msg, "blocked"),
+        match nvmagic_tool_conditional_execution("tool", &json!({})) {
+            Err(MagicError::GuardrailRejected(msg)) => assert_eq!(msg, "blocked"),
             other => panic!("expected GuardrailRejected, got {other:?}"),
         }
 
-        nvagentrt_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
+        nvmagic_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
     }
 
     #[test]
@@ -2278,7 +2269,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvagentrt_register_tool_response_intercept(
+        nvmagic_register_tool_response_intercept(
             "wrap",
             10,
             false,
@@ -2286,10 +2277,10 @@ mod tests {
         )
         .unwrap();
 
-        let result = nvagentrt_tool_response_intercepts("tool", json!("hello")).unwrap();
+        let result = nvmagic_tool_response_intercepts("tool", json!("hello")).unwrap();
         assert_eq!(result["wrapped"], "hello");
 
-        nvagentrt_deregister_tool_response_intercept("wrap").unwrap();
+        nvmagic_deregister_tool_response_intercept("wrap").unwrap();
     }
 
     #[test]
@@ -2297,7 +2288,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvagentrt_register_llm_request_intercept(
+        nvmagic_register_llm_request_intercept(
             "add_field",
             10,
             false,
@@ -2312,11 +2303,11 @@ mod tests {
         .unwrap();
 
         let native = json!({"messages": []});
-        let result = nvagentrt_llm_request_intercepts(native).unwrap();
+        let result = nvmagic_llm_request_intercepts(native).unwrap();
         assert_eq!(result["intercepted"], true);
         assert_eq!(result["messages"], json!([]));
 
-        nvagentrt_deregister_llm_request_intercept("add_field").unwrap();
+        nvmagic_deregister_llm_request_intercept("add_field").unwrap();
     }
 
     #[test]
@@ -2325,7 +2316,7 @@ mod tests {
         reset_global();
 
         let native = json!({"messages": []});
-        assert!(nvagentrt_llm_conditional_execution(&native, None).is_ok());
+        assert!(nvmagic_llm_conditional_execution(&native, None).is_ok());
     }
 
     #[test]
@@ -2333,7 +2324,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvagentrt_register_llm_conditional_execution_guardrail(
+        nvmagic_register_llm_conditional_execution_guardrail(
             "blocker",
             1,
             Box::new(|_req| Some("llm blocked".into())),
@@ -2341,12 +2332,12 @@ mod tests {
         .unwrap();
 
         let native = json!({"messages": []});
-        match nvagentrt_llm_conditional_execution(&native, None) {
-            Err(AgentRtError::GuardrailRejected(msg)) => assert_eq!(msg, "llm blocked"),
+        match nvmagic_llm_conditional_execution(&native, None) {
+            Err(MagicError::GuardrailRejected(msg)) => assert_eq!(msg, "llm blocked"),
             other => panic!("expected GuardrailRejected, got {other:?}"),
         }
 
-        nvagentrt_deregister_llm_conditional_execution_guardrail("blocker").unwrap();
+        nvmagic_deregister_llm_conditional_execution_guardrail("blocker").unwrap();
     }
 
     #[test]
@@ -2354,7 +2345,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvagentrt_register_llm_response_intercept(
+        nvmagic_register_llm_response_intercept(
             "tag",
             10,
             false,
@@ -2368,13 +2359,13 @@ mod tests {
         )
         .unwrap();
 
-        let result = nvagentrt_llm_response_intercepts(LLMResponse {
+        let result = nvmagic_llm_response_intercepts(LLMResponse {
             data: json!({"content": "hello"}),
         })
         .unwrap();
         assert_eq!(result.data["content"], "hello");
         assert_eq!(result.data["tagged"], true);
 
-        nvagentrt_deregister_llm_response_intercept("tag").unwrap();
+        nvmagic_deregister_llm_response_intercept("tag").unwrap();
     }
 }

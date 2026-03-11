@@ -11,7 +11,7 @@
 //!   an immovable root scope.
 //! - **Task-local and thread-local scope storage** — [`TASK_SCOPE_STACK`] for async
 //!   contexts, with a thread-local fallback for synchronous code.
-//! - **[`NVAgentRTContextState`]** — the central state object holding all registered
+//! - **[`NVMagicContextState`]** — the central state object holding all registered
 //!   middleware and subscribers, plus methods for chain execution and handle lifecycle.
 //! - **[`global_context`]** — returns the process-wide singleton context, lazily
 //!   initialized on first access.
@@ -25,7 +25,7 @@ use std::sync::{Arc, RwLock};
 use tokio_stream::Stream;
 use uuid::Uuid;
 
-use crate::error::{AgentRtError, Result};
+use crate::error::{MagicError, Result};
 use crate::json::{merge_json, Json};
 use crate::registry::SortedRegistry;
 use crate::types::*;
@@ -257,14 +257,14 @@ pub fn task_scope_push(handle: ScopeHandle) {
 
 /// Removes a scope handle by UUID from the current execution context's scope stack.
 ///
-/// Returns the removed handle on success, or [`AgentRtError::NotFound`] if the
+/// Returns the removed handle on success, or [`MagicError::NotFound`] if the
 /// UUID is not in the stack (or refers to the immovable root scope).
 pub fn task_scope_remove(uuid: &Uuid) -> Result<ScopeHandle> {
     let stack = current_scope_stack();
     let mut guard = stack.write().expect("scope stack lock poisoned");
     guard
         .remove(uuid)
-        .ok_or_else(|| AgentRtError::NotFound("scope handle not found".into()))
+        .ok_or_else(|| MagicError::NotFound("scope handle not found".into()))
 }
 
 // ---------------------------------------------------------------------------
@@ -279,8 +279,8 @@ pub fn task_scope_remove(uuid: &Uuid) -> Result<ScopeHandle> {
 /// lifecycle events.
 ///
 /// In production use, a single instance is held behind the [`global_context`]
-/// singleton (`Arc<RwLock<NVAgentRTContextState>>`).
-pub struct NVAgentRTContextState {
+/// singleton (`Arc<RwLock<NVMagicContextState>>`).
+pub struct NVMagicContextState {
     /// Registry of tool request sanitize guardrails.
     pub tool_sanitize_request_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
     /// Registry of tool response sanitize guardrails.
@@ -320,7 +320,7 @@ pub struct NVAgentRTContextState {
     pub event_subscribers: HashMap<String, EventSubscriberFn>,
 }
 
-impl NVAgentRTContextState {
+impl NVMagicContextState {
     /// Creates a new context state with empty registries and no subscribers.
     pub fn new() -> Self {
         Self {
@@ -780,7 +780,7 @@ impl NVAgentRTContextState {
     }
 }
 
-impl Default for NVAgentRTContextState {
+impl Default for NVMagicContextState {
     fn default() -> Self {
         Self::new()
     }
@@ -790,16 +790,16 @@ impl Default for NVAgentRTContextState {
 // Global singleton
 // ---------------------------------------------------------------------------
 
-static GLOBAL_CONTEXT: std::sync::OnceLock<Arc<RwLock<NVAgentRTContextState>>> =
+static GLOBAL_CONTEXT: std::sync::OnceLock<Arc<RwLock<NVMagicContextState>>> =
     std::sync::OnceLock::new();
 
-/// Returns the process-wide singleton [`NVAgentRTContextState`], lazily initialized.
+/// Returns the process-wide singleton [`NVMagicContextState`], lazily initialized.
 ///
 /// The returned `Arc<RwLock<...>>` can be cloned cheaply and shared across threads.
 /// All public API functions in [`crate::api`] use this internally.
-pub fn global_context() -> Arc<RwLock<NVAgentRTContextState>> {
+pub fn global_context() -> Arc<RwLock<NVMagicContextState>> {
     GLOBAL_CONTEXT
-        .get_or_init(|| Arc::new(RwLock::new(NVAgentRTContextState::new())))
+        .get_or_init(|| Arc::new(RwLock::new(NVMagicContextState::new())))
         .clone()
 }
 
@@ -814,7 +814,7 @@ mod tests {
         // Root scope is always present
         assert_eq!(task_scope_top().name, "root");
 
-        let ctx = NVAgentRTContextState::new();
+        let ctx = NVMagicContextState::new();
         let handle = ctx.create_scope_handle(
             "test",
             None,
@@ -837,7 +837,7 @@ mod tests {
     fn test_event_subscriber() {
         use std::sync::atomic::{AtomicU32, Ordering};
 
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         let count = Arc::new(AtomicU32::new(0));
         let count_clone = count.clone();
 
@@ -980,22 +980,22 @@ mod tests {
         let result = task_scope_remove(&Uuid::new_v4());
         assert!(result.is_err());
         match result.unwrap_err() {
-            AgentRtError::NotFound(msg) => assert!(msg.contains("not found")),
+            MagicError::NotFound(msg) => assert!(msg.contains("not found")),
             e => panic!("expected NotFound, got {e:?}"),
         }
     }
 
-    // -- NVAgentRTContextState tests --
+    // -- NVMagicContextState tests --
 
     #[test]
     fn test_context_state_new_empty() {
-        let ctx = NVAgentRTContextState::new();
+        let ctx = NVMagicContextState::new();
         assert!(ctx.event_subscribers.is_empty());
     }
 
     #[test]
     fn test_context_state_default() {
-        let ctx = NVAgentRTContextState::default();
+        let ctx = NVMagicContextState::default();
         assert!(ctx.event_subscribers.is_empty());
     }
 
@@ -1005,7 +1005,7 @@ mod tests {
     fn test_emit_event_multiple_subscribers() {
         use std::sync::atomic::{AtomicU32, Ordering};
 
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         let c1 = Arc::new(AtomicU32::new(0));
         let c2 = Arc::new(AtomicU32::new(0));
         let c1c = c1.clone();
@@ -1042,7 +1042,7 @@ mod tests {
 
     #[test]
     fn test_emit_event_no_subscribers() {
-        let ctx = NVAgentRTContextState::new();
+        let ctx = NVMagicContextState::new();
         // Should not panic with no subscribers
         let event = Event::new(
             None,
@@ -1063,7 +1063,7 @@ mod tests {
     fn test_create_event_emits_mark() {
         use std::sync::Mutex;
 
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let events_clone = events.clone();
 
@@ -1094,7 +1094,7 @@ mod tests {
     fn test_create_scope_handle_emits_start() {
         use std::sync::Mutex;
 
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1127,7 +1127,7 @@ mod tests {
     fn test_end_scope_handle_emits_end() {
         use std::sync::Mutex;
 
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1152,7 +1152,7 @@ mod tests {
     fn test_create_tool_handle_emits_start() {
         use std::sync::Mutex;
 
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1188,7 +1188,7 @@ mod tests {
     fn test_end_tool_handle_merges_data() {
         use std::sync::Mutex;
 
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1223,7 +1223,7 @@ mod tests {
     fn test_create_llm_handle_emits_start() {
         use std::sync::Mutex;
 
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1257,7 +1257,7 @@ mod tests {
     fn test_end_llm_handle_merges_metadata() {
         use std::sync::Mutex;
 
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1296,7 +1296,7 @@ mod tests {
 
     #[test]
     fn test_tool_sanitize_request_chain() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.tool_sanitize_request_guardrails
             .register(
                 "g1".into(),
@@ -1319,7 +1319,7 @@ mod tests {
 
     #[test]
     fn test_tool_sanitize_request_chain_multiple_priority_order() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.tool_sanitize_request_guardrails
             .register(
                 "g2".into(),
@@ -1356,7 +1356,7 @@ mod tests {
 
     #[test]
     fn test_tool_sanitize_response_chain() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.tool_sanitize_response_guardrails
             .register(
                 "g1".into(),
@@ -1380,7 +1380,7 @@ mod tests {
 
     #[test]
     fn test_tool_conditional_execution_chain_passes() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.tool_conditional_execution_guardrails
             .register(
                 "g1".into(),
@@ -1397,7 +1397,7 @@ mod tests {
 
     #[test]
     fn test_tool_conditional_execution_chain_rejects() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.tool_conditional_execution_guardrails
             .register(
                 "blocker".into(),
@@ -1414,7 +1414,7 @@ mod tests {
 
     #[test]
     fn test_tool_conditional_first_rejection_wins() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.tool_conditional_execution_guardrails
             .register(
                 "g1".into(),
@@ -1440,7 +1440,7 @@ mod tests {
 
     #[test]
     fn test_tool_request_intercepts_chain() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.tool_request_intercepts
             .register(
                 "i1".into(),
@@ -1465,7 +1465,7 @@ mod tests {
 
     #[test]
     fn test_tool_request_intercepts_chain_break() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.tool_request_intercepts
             .register(
                 "i1".into(),
@@ -1505,7 +1505,7 @@ mod tests {
 
     #[test]
     fn test_tool_response_intercepts_chain() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.tool_response_intercepts
             .register(
                 "i1".into(),
@@ -1525,7 +1525,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_no_intercepts() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         let default_fn: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
         let chain = ctx.tool_build_execution_chain("tool", &serde_json::json!({}), default_fn);
@@ -1535,7 +1535,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_conditional_false() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.tool_execution_intercepts
             .register(
                 "ei1".into(),
@@ -1562,7 +1562,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_conditional_true() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.tool_execution_intercepts
             .register(
                 "ei1".into(),
@@ -1589,7 +1589,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_calls_next() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.tool_execution_intercepts
             .register(
                 "ei1".into(),
@@ -1624,7 +1624,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_multiple_intercepts() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         // Lower priority = outermost wrapper
         ctx.tool_execution_intercepts
             .register(
@@ -1686,7 +1686,7 @@ mod tests {
 
     #[test]
     fn test_llm_sanitize_request_chain() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.llm_sanitize_request_guardrails
             .register(
                 "g1".into(),
@@ -1712,7 +1712,7 @@ mod tests {
 
     #[test]
     fn test_llm_sanitize_response_chain() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.llm_sanitize_response_guardrails
             .register(
                 "g1".into(),
@@ -1737,7 +1737,7 @@ mod tests {
 
     #[test]
     fn test_llm_conditional_execution_chain_passes() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.llm_conditional_execution_guardrails
             .register(
                 "g1".into(),
@@ -1757,7 +1757,7 @@ mod tests {
 
     #[test]
     fn test_llm_conditional_execution_chain_rejects() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.llm_conditional_execution_guardrails
             .register(
                 "blocker".into(),
@@ -1780,7 +1780,7 @@ mod tests {
 
     #[test]
     fn test_llm_request_intercepts_chain() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.llm_request_intercepts
             .register(
                 "i1".into(),
@@ -1806,7 +1806,7 @@ mod tests {
 
     #[test]
     fn test_llm_request_intercepts_break_chain() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.llm_request_intercepts
             .register(
                 "i1".into(),
@@ -1848,7 +1848,7 @@ mod tests {
 
     #[test]
     fn test_llm_response_intercepts_chain() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.llm_response_intercepts
             .register(
                 "i1".into(),
@@ -1875,7 +1875,7 @@ mod tests {
 
     #[test]
     fn test_llm_stream_response_intercepts_chain() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         ctx.llm_stream_response_intercepts
             .register(
                 "i1".into(),
@@ -1893,7 +1893,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_llm_build_execution_chain_no_intercepts() {
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         let native = serde_json::json!({"messages": []});
         let default_fn: LlmExecutionNextFn =
             Box::new(|_native| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
@@ -1905,7 +1905,7 @@ mod tests {
     #[tokio::test]
     async fn test_llm_stream_build_execution_chain_no_intercepts() {
         use futures::StreamExt;
-        let mut ctx = NVAgentRTContextState::new();
+        let mut ctx = NVMagicContextState::new();
         let native = serde_json::json!({"messages": []});
         let default_fn: LlmStreamExecutionNextFn = Box::new(|_native| {
             Box::pin(async {
@@ -1932,7 +1932,7 @@ mod tests {
     fn test_run_sanitize_chain_empty() {
         let mut reg: SortedRegistry<GuardrailEntry<Box<dyn Fn(i32) -> i32>>> =
             SortedRegistry::new(|e| e.priority);
-        let result = NVAgentRTContextState::run_sanitize_chain(&mut reg, 42);
+        let result = NVMagicContextState::run_sanitize_chain(&mut reg, 42);
         assert_eq!(result, 42);
     }
 
@@ -1956,7 +1956,7 @@ mod tests {
             },
         )
         .unwrap();
-        let result = NVAgentRTContextState::run_sanitize_chain(&mut reg, 5);
+        let result = NVMagicContextState::run_sanitize_chain(&mut reg, 5);
         // (5 + 1) * 2 = 12
         assert_eq!(result, 12);
     }
@@ -1981,7 +1981,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(NVAgentRTContextState::run_conditional_chain(&mut reg, &42).is_none());
+        assert!(NVMagicContextState::run_conditional_chain(&mut reg, &42).is_none());
     }
 
     #[test]
@@ -2005,7 +2005,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            NVAgentRTContextState::run_conditional_chain(&mut reg, &42),
+            NVMagicContextState::run_conditional_chain(&mut reg, &42),
             Some("err".into())
         );
     }
@@ -2032,7 +2032,7 @@ mod tests {
             },
         )
         .unwrap();
-        let result = NVAgentRTContextState::run_intercept_chain(&mut reg, 0);
+        let result = NVMagicContextState::run_intercept_chain(&mut reg, 0);
         assert_eq!(result, 110);
     }
 
@@ -2058,7 +2058,7 @@ mod tests {
             },
         )
         .unwrap();
-        let result = NVAgentRTContextState::run_intercept_chain(&mut reg, 0);
+        let result = NVMagicContextState::run_intercept_chain(&mut reg, 0);
         // Only 'a' runs, 'b' is skipped
         assert_eq!(result, 10);
     }
@@ -2067,7 +2067,7 @@ mod tests {
     fn test_run_intercept_chain_empty() {
         let mut reg: SortedRegistry<Intercept<Box<dyn Fn(i32) -> i32>>> =
             SortedRegistry::new(|e| e.priority);
-        let result = NVAgentRTContextState::run_intercept_chain(&mut reg, 42);
+        let result = NVMagicContextState::run_intercept_chain(&mut reg, 42);
         assert_eq!(result, 42);
     }
 }

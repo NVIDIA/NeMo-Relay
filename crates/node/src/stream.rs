@@ -18,7 +18,7 @@ use serde_json::Value as Json;
 #[napi]
 pub struct LlmStream {
     pub(crate) receiver:
-        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvagentrt_core::Result<Json>>>,
+        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvmagic_core::Result<Json>>>,
 }
 
 #[napi]
