@@ -9,6 +9,7 @@
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use serde_json::Value as Json;
 
 /// An async iterator over chunks from a streaming LLM response.
 ///
@@ -17,21 +18,21 @@ use napi_derive::napi;
 #[napi]
 pub struct LlmStream {
     pub(crate) receiver:
-        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvagentrt_core::Result<String>>>,
+        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvagentrt_core::Result<Json>>>,
 }
 
 #[napi]
 impl LlmStream {
     /// Retrieve the next chunk from the stream.
     ///
-    /// Returns the next string chunk, or `null` when the stream is exhausted.
+    /// Returns the next JSON chunk, or `null` when the stream is exhausted.
     /// Throws if the underlying stream encountered an error.
     #[napi]
-    pub async fn next(&self) -> Result<Option<String>> {
+    pub async fn next(&self) -> Result<Option<Json>> {
         let mut guard = self.receiver.lock().await;
         match guard.recv().await {
             None => Ok(None),
-            Some(Ok(text)) => Ok(Some(text)),
+            Some(Ok(value)) => Ok(Some(value)),
             Some(Err(e)) => Err(napi::Error::from_reason(e.to_string())),
         }
     }

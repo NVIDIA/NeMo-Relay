@@ -86,10 +86,10 @@ func DeregisterToolConditionalExecution(name string) error {
 
 // --- LLM Sanitize Request ---
 
-// RegisterLlmSanitizeRequest registers a guardrail that sanitizes LLM request
-// parameters (HTTP method, URL, headers, body) before the call is made. This is
-// a shorthand for [nvagentrt.RegisterLlmSanitizeRequestGuardrail].
-func RegisterLlmSanitizeRequest(name string, priority int32, fn nvagentrt.LLMRequestFunc) error {
+// RegisterLlmSanitizeRequest registers a guardrail that sanitizes the LLM
+// request JSON before the call is made. This is a shorthand for
+// [nvagentrt.RegisterLlmSanitizeRequestGuardrail].
+func RegisterLlmSanitizeRequest(name string, priority int32, fn nvagentrt.JSONFunc) error {
 	return nvagentrt.RegisterLlmSanitizeRequestGuardrail(name, priority, fn)
 }
 
@@ -102,9 +102,10 @@ func DeregisterLlmSanitizeRequest(name string) error {
 // --- LLM Sanitize Response ---
 
 // RegisterLlmSanitizeResponse registers a guardrail that sanitizes LLM response
-// JSON before it is returned to the caller. This is a shorthand for
+// data before it is returned to the caller. The callback receives serialized
+// LLMResponse JSON (containing a "data" field). This is a shorthand for
 // [nvagentrt.RegisterLlmSanitizeResponseGuardrail].
-func RegisterLlmSanitizeResponse(name string, priority int32, fn nvagentrt.JSONFunc) error {
+func RegisterLlmSanitizeResponse(name string, priority int32, fn nvagentrt.LLMResponseFunc) error {
 	return nvagentrt.RegisterLlmSanitizeResponseGuardrail(name, priority, fn)
 }
 

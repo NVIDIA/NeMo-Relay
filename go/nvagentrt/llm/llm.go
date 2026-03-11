@@ -10,12 +10,9 @@
 //
 //	import "github.com/nvidia/nvagentrt/go/nvagentrt/llm"
 //
-//	req := nvagentrt.NewLLMRequest("POST", "https://api.example.com/v1/chat",
-//	    map[string]interface{}{"Authorization": "Bearer tok"},
-//	    map[string]interface{}{"model": "gpt-4", "messages": []interface{}{}},
-//	)
-//	result, err := llm.Execute("chat", req,
-//	    func(method, url string, headers, body json.RawMessage) (json.RawMessage, error) {
+//	native := map[string]interface{}{"model": "gpt-4", "messages": []interface{}{}}
+//	result, err := llm.Execute("chat", native,
+//	    func(nativeJSON json.RawMessage) (json.RawMessage, error) {
 //	        // ... call the LLM API ...
 //	        return json.RawMessage(`{"choices":[]}`), nil
 //	    },
@@ -31,8 +28,8 @@ import (
 // Call starts an LLM call lifecycle and returns an [nvagentrt.LLMHandle],
 // emitting a Start event. End the call with [CallEnd]. This is a shorthand for
 // [nvagentrt.LlmCall].
-func Call(name string, request *nvagentrt.LLMRequest, opts ...nvagentrt.LLMCallOption) (*nvagentrt.LLMHandle, error) {
-	return nvagentrt.LlmCall(name, request, opts...)
+func Call(name string, native interface{}, opts ...nvagentrt.LLMCallOption) (*nvagentrt.LLMHandle, error) {
+	return nvagentrt.LlmCall(name, native, opts...)
 }
 
 // CallEnd completes an LLM call that was started with [Call], emitting an End
@@ -42,23 +39,25 @@ func CallEnd(handle *nvagentrt.LLMHandle, response json.RawMessage, opts ...nvag
 }
 
 // Execute runs a complete LLM call lifecycle with the full middleware pipeline
-// (request intercepts, guardrails, execution intercepts, fn, response
-// intercepts, response guardrails) and returns the final response JSON. This is
-// a shorthand for [nvagentrt.LlmCallExecute].
-func Execute(name string, request *nvagentrt.LLMRequest, fn nvagentrt.LLMExecutionFunc, opts ...nvagentrt.LLMCallOption) (json.RawMessage, error) {
-	return nvagentrt.LlmCallExecute(name, request, fn, opts...)
+// (conditional-execution guardrails, request intercepts, sanitize-request
+// guardrails, execution intercepts, fn, response intercepts, sanitize-response
+// guardrails) and returns the final response JSON. This is a shorthand for
+// [nvagentrt.LlmCallExecute].
+func Execute(name string, native interface{}, fn nvagentrt.LLMExecutionFunc, opts ...nvagentrt.LLMCallOption) (json.RawMessage, error) {
+	return nvagentrt.LlmCallExecute(name, native, fn, opts...)
 }
 
 // StreamExecute runs a streaming LLM call lifecycle with the full middleware
-// pipeline and returns an [nvagentrt.LlmStream] for consuming SSE chunks. This
-// is a shorthand for [nvagentrt.LlmStreamCallExecute].
+// pipeline (conditional-execution guardrails run first on the raw request) and
+// returns an [nvagentrt.LlmStream] for consuming JSON chunks. This is a
+// shorthand for [nvagentrt.LlmStreamCallExecute].
 //
-// The collector callback is invoked with each intercepted chunk string for
+// The collector callback is invoked with each intercepted chunk JSON for
 // accumulation. The finalizer callback is invoked once when the stream is
 // exhausted and must return a JSON string representing the aggregated response.
 // Pass nil for either to use the default no-op behavior.
-func StreamExecute(name string, request *nvagentrt.LLMRequest, fn nvagentrt.LLMExecutionFunc, collector nvagentrt.CollectorFunc, finalizer nvagentrt.FinalizerFunc, opts ...nvagentrt.LLMCallOption) (*nvagentrt.LlmStream, error) {
-	return nvagentrt.LlmStreamCallExecute(name, request, fn, collector, finalizer, opts...)
+func StreamExecute(name string, native interface{}, fn nvagentrt.LLMExecutionFunc, collector nvagentrt.CollectorFunc, finalizer nvagentrt.FinalizerFunc, opts ...nvagentrt.LLMCallOption) (*nvagentrt.LlmStream, error) {
+	return nvagentrt.LlmStreamCallExecute(name, native, fn, collector, finalizer, opts...)
 }
 
 // RequestIntercepts runs the registered LLM request intercept chain on the
@@ -70,9 +69,11 @@ func RequestIntercepts(request json.RawMessage) (json.RawMessage, error) {
 
 // ConditionalExecution runs the registered LLM conditional execution guardrail
 // chain. Returns nil if all guardrails pass, or an error with the rejection
-// reason if blocked. This is a shorthand for [nvagentrt.LlmConditionalExecution].
-func ConditionalExecution(request json.RawMessage) error {
-	return nvagentrt.LlmConditionalExecution(request)
+// reason if blocked. Optional [nvagentrt.LLMCallOption] values can supply a
+// [nvagentrt.WithLLMToRequest] converter. This is a shorthand for
+// [nvagentrt.LlmConditionalExecution].
+func ConditionalExecution(request json.RawMessage, opts ...nvagentrt.LLMCallOption) error {
+	return nvagentrt.LlmConditionalExecution(request, opts...)
 }
 
 // ResponseIntercepts runs the registered LLM response intercept chain on the

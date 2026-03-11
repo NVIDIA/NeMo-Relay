@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 const lib = require('../index.js');
 
 const {
-  ScopeType, JsLlmRequest,
+  ScopeType, JsLlmRequest, JsLlmResponse,
   SCOPE_ATTR_PARALLEL, SCOPE_ATTR_RELOCATABLE,
   TOOL_ATTR_LOCAL, LLM_ATTR_STATELESS, LLM_ATTR_STREAMING,
 } = lib;
@@ -48,10 +48,19 @@ describe('Type constants', () => {
 
 describe('JsLlmRequest', () => {
   it('construction and getters', () => {
-    const req = new JsLlmRequest({ method: 'POST', url: 'https://api.test.com', headers: { 'Content-Type': 'application/json' }, body: { model: 'gpt-4' } });
-    assert.equal(req.method, 'POST');
-    assert.equal(req.url, 'https://api.test.com');
+    const req = new JsLlmRequest({ headers: { 'Content-Type': 'application/json' }, content: { model: 'gpt-4' } });
     assert.deepEqual(req.headers, { 'Content-Type': 'application/json' });
-    assert.deepEqual(req.body, { model: 'gpt-4' });
+    assert.deepEqual(req.content, { model: 'gpt-4' });
+  });
+});
+
+// ===========================================================================
+// JsLlmResponse
+// ===========================================================================
+
+describe('JsLlmResponse', () => {
+  it('construction and getters', () => {
+    const resp = new JsLlmResponse({ data: { result: 'hello' } });
+    assert.deepEqual(resp.data, { result: 'hello' });
   });
 });

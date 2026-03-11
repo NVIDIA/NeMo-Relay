@@ -18,27 +18,30 @@ lower-priority intercepts run after this one.
 
     register_tool_execution(name, priority, conditional, fn)
         ``conditional(tool_name: str, args: Any) -> bool`` — return ``True``
-        to activate. ``fn`` is ``async (args: Any) -> Any`` — replacement
-        execution function.
+        to activate. ``fn`` is ``async (args: Any, next) -> Any`` — middleware
+        intercept. Call ``await next(args)`` to invoke the next intercept or
+        original implementation; skip calling ``next`` to short-circuit.
 
 **LLM intercepts** — callback signatures:
 
     register_llm_request(name, priority, break_chain, fn)
-        ``fn(request: LLMRequest) -> LLMRequest`` — transform LLM request.
+        ``fn(native: Any) -> Any`` — transform the opaque native payload.
 
     register_llm_response(name, priority, break_chain, fn)
-        ``fn(response: Any) -> Any`` — transform LLM response.
+        ``fn(response: LLMResponse) -> LLMResponse`` — transform LLM response.
 
     register_llm_stream_response(name, priority, break_chain, fn)
-        ``fn(chunk: str) -> str`` — transform each chunk.
+        ``fn(chunk: Any) -> Any`` — transform each Json chunk.
 
     register_llm_execution(name, priority, conditional, fn)
-        ``conditional(request: LLMRequest) -> bool``.
-        ``fn`` is ``async (request: LLMRequest) -> Any``.
+        ``conditional(native: Any) -> bool``.
+        ``fn`` is ``async (native: Any, next) -> Any`` — middleware
+        intercept. Call ``await next(native)`` to continue the chain.
 
     register_llm_stream_execution(name, priority, conditional, fn)
-        ``conditional(request: LLMRequest) -> bool``.
-        ``fn`` is ``async (request: LLMRequest) -> AsyncIterator[str]``.
+        ``conditional(native: Any) -> bool``.
+        ``fn`` is ``async (native: Any, next) -> AsyncIterator[Any]``
+        — middleware intercept. Call ``await next(native)`` to continue.
 
 Each ``register_*`` has a corresponding ``deregister_*`` that takes the name
 and returns ``True`` if an intercept was found and removed.
@@ -47,11 +50,11 @@ Example::
 
     import nvagentrt
 
-    def add_auth_header(request):
-        request.headers["Authorization"] = "Bearer ..."
-        return request
+    def add_field(native):
+        native["extra"] = "injected"
+        return native
 
-    nvagentrt.intercepts.register_llm_request("auth", 1, False, add_auth_header)
+    nvagentrt.intercepts.register_llm_request("extra", 1, False, add_field)
 """
 
 from nvagentrt._native import (

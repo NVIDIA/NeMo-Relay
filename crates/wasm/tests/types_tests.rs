@@ -59,36 +59,29 @@ fn test_scope_type_roundtrip() {
 #[wasm_bindgen_test]
 fn test_llm_request_construction() {
     let headers = empty_obj();
-    let body = parse_json(r#"{"model":"gpt-4"}"#);
-    let req = WasmLLMRequest::new(
-        "POST".into(),
-        "https://api.example.com/v1/chat".into(),
-        headers,
-        body,
-    )
-    .unwrap();
-    assert_eq!(req.method(), "POST");
-    assert_eq!(req.url(), "https://api.example.com/v1/chat");
+    let content = parse_json(r#"{"model":"gpt-4"}"#);
+    let req = WasmLLMRequest::new(headers, content).unwrap();
+
+    let h = req.headers();
+    assert!(h.is_object());
+
+    let c = req.content();
+    let model = js_sys::Reflect::get(&c, &"model".into()).unwrap();
+    assert_eq!(model.as_string().unwrap(), "gpt-4");
 }
 
 #[wasm_bindgen_test]
-fn test_llm_request_headers_and_body() {
+fn test_llm_request_headers_and_content() {
     let headers = js_sys::Object::new();
     js_sys::Reflect::set(&headers, &"Authorization".into(), &"Bearer tok".into()).unwrap();
-    let body = parse_json(r#"{"prompt":"hello"}"#);
-    let req = WasmLLMRequest::new(
-        "POST".into(),
-        "https://api.example.com".into(),
-        headers.into(),
-        body,
-    )
-    .unwrap();
+    let content = parse_json(r#"{"prompt":"hello"}"#);
+    let req = WasmLLMRequest::new(headers.into(), content).unwrap();
 
     let h = req.headers();
     let auth = js_sys::Reflect::get(&h, &"Authorization".into()).unwrap();
     assert_eq!(auth.as_string().unwrap(), "Bearer tok");
 
-    let b = req.body();
-    let prompt = js_sys::Reflect::get(&b, &"prompt".into()).unwrap();
+    let c = req.content();
+    let prompt = js_sys::Reflect::get(&c, &"prompt".into()).unwrap();
     assert_eq!(prompt.as_string().unwrap(), "hello");
 }

@@ -10,10 +10,8 @@ import (
 	"testing"
 )
 
-func makeRequest() *LLMRequest {
-	return NewLLMRequest("POST", "https://api.example.com",
-		map[string]interface{}{}, map[string]interface{}{"messages": []string{}},
-	)
+func makeNative() map[string]interface{} {
+	return map[string]interface{}{"messages": []string{}}
 }
 
 // ============================================================================
@@ -21,8 +19,8 @@ func makeRequest() *LLMRequest {
 // ============================================================================
 
 func TestLlmCallAndEnd(t *testing.T) {
-	req := makeRequest()
-	handle, err := LlmCall("my_llm", req)
+	native := makeNative()
+	handle, err := LlmCall("my_llm", native)
 	if err != nil {
 		t.Fatalf("LlmCall failed: %v", err)
 	}
@@ -43,8 +41,8 @@ func TestLlmCallAndEnd(t *testing.T) {
 }
 
 func TestLlmCallWithAttributes(t *testing.T) {
-	req := makeRequest()
-	handle, err := LlmCall("streaming_llm", req, WithLLMAttributes(LLMAttrStreaming))
+	native := makeNative()
+	handle, err := LlmCall("streaming_llm", native, WithLLMAttributes(LLMAttrStreaming))
 	if err != nil {
 		t.Fatalf("LlmCall failed: %v", err)
 	}
@@ -55,8 +53,8 @@ func TestLlmCallWithAttributes(t *testing.T) {
 }
 
 func TestLlmCallWithDataMetadata(t *testing.T) {
-	req := makeRequest()
-	handle, err := LlmCall("llm_dm", req,
+	native := makeNative()
+	handle, err := LlmCall("llm_dm", native,
 		WithLLMData(json.RawMessage(`{"custom": "data"}`)),
 		WithLLMMetadata(json.RawMessage(`{"trace": "xyz"}`)),
 	)
@@ -72,8 +70,8 @@ func TestLlmCallWithParent(t *testing.T) {
 	parent, _ := PushScope("llm_parent", ScopeTypeAgent)
 	defer PopScope(parent)
 
-	req := makeRequest()
-	handle, err := LlmCall("child_llm", req, WithLLMParent(parent))
+	native := makeNative()
+	handle, err := LlmCall("child_llm", native, WithLLMParent(parent))
 	if err != nil {
 		t.Fatalf("LlmCall failed: %v", err)
 	}
@@ -98,8 +96,8 @@ func TestLlmEvents(t *testing.T) {
 		mu.Unlock()
 	})
 
-	req := makeRequest()
-	handle, _ := LlmCall("evt_llm", req)
+	native := makeNative()
+	handle, _ := LlmCall("evt_llm", native)
 	LlmCallEnd(handle, json.RawMessage(`{}`))
 	DeregisterSubscriber("go_llm_evt")
 
@@ -115,10 +113,12 @@ func TestLlmEvents(t *testing.T) {
 // ============================================================================
 
 func TestLlmCallExecuteBasic(t *testing.T) {
-	req := makeRequest()
-	result, err := LlmCallExecute("exec_llm", req,
-		func(method, url string, headers, body json.RawMessage) (json.RawMessage, error) {
-			out, _ := json.Marshal(map[string]interface{}{"model": url})
+	native := makeNative()
+	result, err := LlmCallExecute("exec_llm", native,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			var input map[string]interface{}
+			json.Unmarshal(nativeJSON, &input)
+			out, _ := json.Marshal(map[string]interface{}{"received": true})
 			return out, nil
 		},
 	)
@@ -128,8 +128,8 @@ func TestLlmCallExecuteBasic(t *testing.T) {
 
 	var output map[string]interface{}
 	json.Unmarshal(result, &output)
-	if output["model"] != "https://api.example.com" {
-		t.Fatalf("expected url, got %v", output["model"])
+	if output["received"] != true {
+		t.Fatalf("expected received=true, got %v", output)
 	}
 }
 
@@ -139,8 +139,8 @@ func TestLlmCallExecuteBasic(t *testing.T) {
 
 func TestLlmSanitizeRequestGuardrail(t *testing.T) {
 	err := RegisterLlmSanitizeRequestGuardrail("go_llm_san_req", 1,
-		func(method, url string, headers, body json.RawMessage) (string, string, json.RawMessage, json.RawMessage) {
-			return method, url, headers, body
+		func(value json.RawMessage) json.RawMessage {
+			return value
 		},
 	)
 	if err != nil {
@@ -151,7 +151,7 @@ func TestLlmSanitizeRequestGuardrail(t *testing.T) {
 
 func TestLlmSanitizeResponseGuardrail(t *testing.T) {
 	err := RegisterLlmSanitizeResponseGuardrail("go_llm_san_resp", 1,
-		func(value json.RawMessage) json.RawMessage { return value },
+		func(responseJSON json.RawMessage) json.RawMessage { return responseJSON },
 	)
 	if err != nil {
 		t.Fatalf("register failed: %v", err)
@@ -161,7 +161,7 @@ func TestLlmSanitizeResponseGuardrail(t *testing.T) {
 
 func TestLlmConditionalExecutionGuardrail(t *testing.T) {
 	err := RegisterLlmConditionalExecutionGuardrail("go_llm_cond", 1,
-		func(method, url string, headers, body json.RawMessage) *string {
+		func(headers, content json.RawMessage) *string {
 			return nil // pass
 		},
 	)
@@ -173,13 +173,13 @@ func TestLlmConditionalExecutionGuardrail(t *testing.T) {
 
 func TestLlmDuplicateGuardrailFails(t *testing.T) {
 	RegisterLlmSanitizeRequestGuardrail("go_llm_dup", 1,
-		func(method, url string, headers, body json.RawMessage) (string, string, json.RawMessage, json.RawMessage) {
-			return method, url, headers, body
+		func(value json.RawMessage) json.RawMessage {
+			return value
 		},
 	)
 	err := RegisterLlmSanitizeRequestGuardrail("go_llm_dup", 1,
-		func(method, url string, headers, body json.RawMessage) (string, string, json.RawMessage, json.RawMessage) {
-			return method, url, headers, body
+		func(value json.RawMessage) json.RawMessage {
+			return value
 		},
 	)
 	if err == nil {
@@ -191,14 +191,14 @@ func TestLlmDuplicateGuardrailFails(t *testing.T) {
 func TestLlmConditionalBlocksExecution(t *testing.T) {
 	msg := "LLM blocked"
 	RegisterLlmConditionalExecutionGuardrail("go_llm_blocker", 1,
-		func(method, url string, headers, body json.RawMessage) *string {
+		func(headers, content json.RawMessage) *string {
 			return &msg
 		},
 	)
 
-	req := makeRequest()
-	_, err := LlmCallExecute("blocked_llm", req,
-		func(method, url string, headers, body json.RawMessage) (json.RawMessage, error) {
+	native := makeNative()
+	_, err := LlmCallExecute("blocked_llm", native,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
 			return json.RawMessage(`{"should": "not reach"}`), nil
 		},
 	)
@@ -218,8 +218,8 @@ func TestLlmConditionalBlocksExecution(t *testing.T) {
 
 func TestLlmRequestInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterLlmRequestIntercept("go_llm_req", 1, false,
-		func(method, url string, headers, body json.RawMessage) (string, string, json.RawMessage, json.RawMessage) {
-			return method, url, headers, body
+		func(value json.RawMessage) json.RawMessage {
+			return value
 		},
 	)
 	if err != nil {
@@ -230,7 +230,7 @@ func TestLlmRequestInterceptRegisterDeregister(t *testing.T) {
 
 func TestLlmResponseInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterLlmResponseIntercept("go_llm_resp", 1, false,
-		func(value json.RawMessage) json.RawMessage { return value },
+		func(responseJSON json.RawMessage) json.RawMessage { return responseJSON },
 	)
 	if err != nil {
 		t.Fatalf("register failed: %v", err)
@@ -240,7 +240,7 @@ func TestLlmResponseInterceptRegisterDeregister(t *testing.T) {
 
 func TestLlmStreamResponseInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterLlmStreamResponseIntercept("go_llm_sr", 1, false,
-		func(chunk string) string { return chunk },
+		func(chunkJSON json.RawMessage) json.RawMessage { return chunkJSON },
 	)
 	if err != nil {
 		t.Fatalf("register failed: %v", err)
@@ -250,9 +250,9 @@ func TestLlmStreamResponseInterceptRegisterDeregister(t *testing.T) {
 
 func TestLlmExecutionInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterLlmExecutionIntercept("go_llm_exec", 1,
-		func(method, url string, headers, body json.RawMessage) bool { return false },
-		func(method, url string, headers, body json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{}`), nil
+		func(nativeJSON json.RawMessage) bool { return false },
+		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			return next(nativeJSON)
 		},
 	)
 	if err != nil {
@@ -263,9 +263,9 @@ func TestLlmExecutionInterceptRegisterDeregister(t *testing.T) {
 
 func TestLlmStreamExecutionInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterLlmStreamExecutionIntercept("go_llm_sexec", 1,
-		func(method, url string, headers, body json.RawMessage) bool { return false },
-		func(method, url string, headers, body json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{}`), nil
+		func(nativeJSON json.RawMessage) bool { return false },
+		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			return next(nativeJSON)
 		},
 	)
 	if err != nil {
@@ -276,15 +276,22 @@ func TestLlmStreamExecutionInterceptRegisterDeregister(t *testing.T) {
 
 func TestLlmRequestInterceptModifies(t *testing.T) {
 	RegisterLlmRequestIntercept("go_llm_req_mod", 1, false,
-		func(method, url string, headers, body json.RawMessage) (string, string, json.RawMessage, json.RawMessage) {
-			return method, "https://intercepted.com", headers, body
+		func(value json.RawMessage) json.RawMessage {
+			var m map[string]interface{}
+			json.Unmarshal(value, &m)
+			m["intercepted"] = true
+			out, _ := json.Marshal(m)
+			return out
 		},
 	)
 
-	req := makeRequest()
-	result, err := LlmCallExecute("int_llm", req,
-		func(method, url string, headers, body json.RawMessage) (json.RawMessage, error) {
-			out, _ := json.Marshal(map[string]interface{}{"called_url": url})
+	native := makeNative()
+	result, err := LlmCallExecute("int_llm", native,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			// The native JSON should now contain the intercepted field
+			var m map[string]interface{}
+			json.Unmarshal(nativeJSON, &m)
+			out, _ := json.Marshal(map[string]interface{}{"saw_intercepted": m["intercepted"]})
 			return out, nil
 		},
 	)
@@ -294,8 +301,8 @@ func TestLlmRequestInterceptModifies(t *testing.T) {
 
 	var output map[string]interface{}
 	json.Unmarshal(result, &output)
-	if output["called_url"] != "https://intercepted.com" {
-		t.Fatalf("expected intercepted URL, got %v", output["called_url"])
+	if output["saw_intercepted"] != true {
+		t.Fatalf("expected saw_intercepted=true, got %v", output)
 	}
 
 	DeregisterLlmRequestIntercept("go_llm_req_mod")
@@ -303,18 +310,22 @@ func TestLlmRequestInterceptModifies(t *testing.T) {
 
 func TestLlmResponseInterceptModifies(t *testing.T) {
 	RegisterLlmResponseIntercept("go_llm_resp_mod", 1, false,
-		func(value json.RawMessage) json.RawMessage {
+		func(responseJSON json.RawMessage) json.RawMessage {
 			var m map[string]interface{}
-			json.Unmarshal(value, &m)
-			m["modified"] = true
+			json.Unmarshal(responseJSON, &m)
+			// responseJSON is {"data": ...}, modify the data
+			if data, ok := m["data"].(map[string]interface{}); ok {
+				data["modified"] = true
+				m["data"] = data
+			}
 			out, _ := json.Marshal(m)
 			return out
 		},
 	)
 
-	req := makeRequest()
-	result, err := LlmCallExecute("resp_llm", req,
-		func(method, url string, headers, body json.RawMessage) (json.RawMessage, error) {
+	native := makeNative()
+	result, err := LlmCallExecute("resp_llm", native,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
 			return json.RawMessage(`{"original": true}`), nil
 		},
 	)
@@ -333,15 +344,16 @@ func TestLlmResponseInterceptModifies(t *testing.T) {
 
 func TestLlmExecutionInterceptReplaces(t *testing.T) {
 	RegisterLlmExecutionIntercept("go_llm_exec_rep", 1,
-		func(method, url string, headers, body json.RawMessage) bool { return true },
-		func(method, url string, headers, body json.RawMessage) (json.RawMessage, error) {
+		func(nativeJSON json.RawMessage) bool { return true },
+		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			// Short-circuit: don't call next, return directly
 			return json.RawMessage(`{"from_intercept": true}`), nil
 		},
 	)
 
-	req := makeRequest()
-	result, err := LlmCallExecute("exec_llm_rep", req,
-		func(method, url string, headers, body json.RawMessage) (json.RawMessage, error) {
+	native := makeNative()
+	result, err := LlmCallExecute("exec_llm_rep", native,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
 			return json.RawMessage(`{"from_original": true}`), nil
 		},
 	)

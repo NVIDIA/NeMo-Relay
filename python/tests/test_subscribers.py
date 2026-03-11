@@ -7,7 +7,6 @@ import pytest
 from nvagentrt import (
     Event,
     EventType,
-    LLMRequest,
     ScopeType,
     llm,
     scope,
@@ -16,8 +15,8 @@ from nvagentrt import (
 )
 
 
-def make_request(url="https://api.example.com"):
-    return LLMRequest("POST", url, {}, {"messages": []})
+def make_native():
+    return {"messages": [], "model": "test-model"}
 
 
 class TestSubscribers:
@@ -79,8 +78,8 @@ class TestSubscriberEventDetails:
     def test_llm_events(self):
         events = []
         subscribers.register("py_llm_evt", lambda e: events.append(e))
-        req = make_request()
-        handle = llm.call("evt_llm", req)
+        native = make_native()
+        handle = llm.call("evt_llm", native)
         llm.call_end(handle, {"done": True})
         subscribers.deregister("py_llm_evt")
 
@@ -119,8 +118,8 @@ class TestHandleProperties:
         tools.call_end(handle, {})
 
     def test_llm_handle_all_properties(self):
-        req = make_request()
-        handle = llm.call("prop_llm", req, data={"d": 1}, metadata={"m": 2})
+        native = make_native()
+        handle = llm.call("prop_llm", native, data={"d": 1}, metadata={"m": 2})
         assert isinstance(handle.uuid, str)
         assert handle.name == "prop_llm"
         assert handle.data is not None

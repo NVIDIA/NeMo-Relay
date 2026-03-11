@@ -279,19 +279,15 @@ impl From<core_types::LLMHandle> for JsLLMHandle {
 /// Initialization object for constructing a `JsLLMRequest`.
 #[napi(object)]
 pub struct JsLLMRequestInit {
-    /// The HTTP method (e.g., "POST").
-    pub method: String,
-    /// The endpoint URL for the LLM API.
-    pub url: String,
-    /// HTTP headers as a JSON object of key-value string pairs.
+    /// Metadata key-value pairs (e.g., HTTP headers, SDK options).
     pub headers: serde_json::Value,
-    /// The request body as a JSON value.
-    pub body: serde_json::Value,
+    /// The request payload (e.g., messages, parameters).
+    pub content: serde_json::Value,
 }
 
-/// An LLM HTTP request, encapsulating method, URL, headers, and body.
+/// An LLM request, encapsulating headers and content.
 ///
-/// Construct via `new JsLLMRequest({ method, url, headers, body })`.
+/// Construct via `new JsLLMRequest({ headers, content })`.
 #[napi]
 pub struct JsLLMRequest {
     pub(crate) inner: core_types::LLMRequest,
@@ -308,36 +304,54 @@ impl JsLLMRequest {
         };
         Self {
             inner: core_types::LLMRequest {
-                method: init.method,
-                url: init.url,
                 headers,
-                body: init.body,
+                content: init.content,
             },
         }
     }
 
-    /// The HTTP method for this request.
-    #[napi(getter)]
-    pub fn method(&self) -> String {
-        self.inner.method.clone()
-    }
-
-    /// The endpoint URL for this request.
-    #[napi(getter)]
-    pub fn url(&self) -> String {
-        self.inner.url.clone()
-    }
-
-    /// The HTTP headers as a JSON object.
+    /// The metadata headers as a JSON object.
     #[napi(getter)]
     pub fn headers(&self) -> serde_json::Value {
         Json::Object(self.inner.headers.clone())
     }
 
-    /// The request body as a JSON value.
+    /// The request payload as a JSON value.
     #[napi(getter)]
-    pub fn body(&self) -> serde_json::Value {
-        self.inner.body.clone()
+    pub fn content(&self) -> serde_json::Value {
+        self.inner.content.clone()
+    }
+}
+
+/// Initialization object for constructing a `JsLLMResponse`.
+#[napi(object)]
+pub struct JsLLMResponseInit {
+    /// The response payload.
+    pub data: serde_json::Value,
+}
+
+/// An LLM response, encapsulating the response data.
+///
+/// Construct via `new JsLLMResponse({ data })`.
+#[napi]
+pub struct JsLLMResponse {
+    pub(crate) inner: core_types::LLMResponse,
+}
+
+#[napi]
+impl JsLLMResponse {
+    /// Create a new LLM response from the provided initialization fields.
+    #[napi(constructor)]
+    pub fn new(init: JsLLMResponseInit) -> Self {
+        Self {
+            inner: core_types::LLMResponse { data: init.data },
+        }
+    }
+
+    /// The response payload as a JSON value.
+    #[napi(getter)]
+    pub fn data(&self) -> serde_json::Value {
+        self.inner.data.clone()
     }
 }
 

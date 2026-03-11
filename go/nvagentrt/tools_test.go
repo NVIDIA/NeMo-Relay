@@ -254,7 +254,9 @@ func TestToolResponseInterceptRegisterDeregister(t *testing.T) {
 func TestToolExecutionInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterToolExecutionIntercept("go_exec_int", 1,
 		func(name string, args json.RawMessage) bool { return false },
-		func(args json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil },
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			return next(args)
+		},
 	)
 	if err != nil {
 		t.Fatalf("register failed: %v", err)
@@ -336,7 +338,8 @@ func TestToolResponseInterceptModifiesResult(t *testing.T) {
 func TestToolExecutionInterceptReplacesFunc(t *testing.T) {
 	RegisterToolExecutionIntercept("go_exec_replace", 1,
 		func(name string, args json.RawMessage) bool { return true },
-		func(args json.RawMessage) (json.RawMessage, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			// Short-circuit: don't call next, return directly
 			return json.RawMessage(`{"from_intercept": true}`), nil
 		},
 	)

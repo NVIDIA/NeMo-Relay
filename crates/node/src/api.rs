@@ -163,9 +163,10 @@ pub fn tool_call_end(
 
 /// Execute a tool call end-to-end with full lifecycle management.
 ///
-/// Combines `toolCall`, execution via `func`, and `toolCallEnd` into a single async operation.
-/// The `func` callback receives the (possibly intercepted) arguments as JSON and must return
-/// the tool result as JSON. All guardrails and intercepts are applied automatically.
+/// Runs conditional-execution guardrails (on raw args) → request intercepts →
+/// sanitize-request guardrails → execution intercepts → `func` → response
+/// intercepts → sanitize-response guardrails. On rejection, only a standalone
+/// Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned.
 /// Returns the final (possibly intercepted) tool result.
 #[napi]
 pub async fn tool_call_execute(
@@ -182,6 +183,7 @@ pub async fn tool_call_execute(
         .map(|h| h.inner.clone())
         .unwrap_or_else(core::task_scope_top);
     let exec_fn = callable::wrap_js_tool_exec_fn(func);
+    let default_fn: nvagentrt_core::ToolExecutionNextFn = Box::new(move |args| exec_fn(args));
     let scope_stack = nvagentrt_core::current_scope_stack();
 
     nvagentrt_core::TASK_SCOPE_STACK
@@ -189,7 +191,7 @@ pub async fn tool_call_execute(
             core::nvagentrt_tool_call_execute(
                 &name,
                 args,
-                exec_fn,
+                default_fn,
                 Some(parent),
                 attrs,
                 opt_json(data),
@@ -207,29 +209,34 @@ pub async fn tool_call_execute(
 
 /// Begin an LLM call, running request guardrails and intercepts.
 ///
-/// Registers an LLM invocation with the given provider `name` and `request`. Returns a
-/// `JsLLMHandle` that must be passed to `llmCallEnd()` when the response is received.
+/// Registers an LLM invocation with the given provider `name` and native request payload.
+/// Returns a `JsLLMHandle` that must be passed to `llmCallEnd()` when the response is received.
 /// Optional `handle` specifies the parent scope; `attributes` is a bitfield
-/// (e.g., `LLM_ATTR_STREAMING`).
+/// (e.g., `LLM_ATTR_STREAMING`). Optional `toRequest` converts native JSON to a formal
+/// `JsLLMRequest` for guardrails; defaults to the identity converter.
+#[allow(clippy::too_many_arguments)]
 #[napi]
 pub fn llm_call(
     name: String,
-    request: &JsLLMRequest,
+    native: Json,
     handle: Option<&JsScopeHandle>,
     attributes: Option<u32>,
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
+    to_request: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 ) -> Result<JsLLMHandle> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
+    let to_request_fn = to_request.map(wrap_js_to_request);
     core::nvagentrt_llm_call(
         &name,
-        &request.inner,
+        &native,
         handle.map(|h| &h.inner),
         attrs,
         opt_json(data),
         opt_json(metadata),
         model_name,
+        to_request_fn.as_ref(),
     )
     .map(JsLLMHandle::from)
     .map_err(to_napi_err)
@@ -238,54 +245,72 @@ pub fn llm_call(
 /// End an LLM call, running response guardrails and intercepts.
 ///
 /// Signals that the LLM call identified by `handle` has completed with the given `response`.
-/// Response guardrails and intercepts are applied to the response.
+/// Response guardrails and intercepts are applied to the response. Optional `toResponse`
+/// converts native JSON to a formal `JsLLMResponse` for guardrails; defaults to the
+/// identity converter.
 #[napi]
 pub fn llm_call_end(
     handle: &JsLLMHandle,
     response: Json,
     data: Option<Json>,
     metadata: Option<Json>,
+    to_response: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 ) -> Result<()> {
-    core::nvagentrt_llm_call_end(&handle.inner, response, opt_json(data), opt_json(metadata))
-        .map_err(to_napi_err)
+    let to_response_fn = to_response.map(wrap_js_to_response);
+    core::nvagentrt_llm_call_end(
+        &handle.inner,
+        response,
+        opt_json(data),
+        opt_json(metadata),
+        to_response_fn.as_ref(),
+    )
+    .map_err(to_napi_err)
 }
 
 /// Execute an LLM call end-to-end with full lifecycle management.
 ///
-/// Combines `llmCall`, execution via `func`, and `llmCallEnd` into a single async operation.
-/// The `func` callback receives the (possibly intercepted) request as JSON and must return
-/// the LLM response as JSON. All guardrails and intercepts are applied automatically.
+/// Runs conditional-execution guardrails (on raw request) → request intercepts →
+/// sanitize-request guardrails → execution intercepts → `func` → response
+/// intercepts → sanitize-response guardrails. On rejection, only a standalone
+/// Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned.
 /// Returns the final (possibly intercepted) LLM response.
 #[allow(clippy::too_many_arguments)]
 #[napi]
 pub async fn llm_call_execute(
     name: String,
-    request: &JsLLMRequest,
+    native: Json,
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
     handle: Option<&JsScopeHandle>,
     attributes: Option<u32>,
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
+    to_request: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
+    to_response: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 ) -> Result<Json> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent = handle
         .map(|h| h.inner.clone())
         .unwrap_or_else(core::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
+    let default_fn: nvagentrt_core::LlmExecutionNextFn = Box::new(move |req| exec_fn(req));
+    let to_request_fn = to_request.map(wrap_js_to_request);
+    let to_response_fn = to_response.map(wrap_js_to_response);
     let scope_stack = nvagentrt_core::current_scope_stack();
 
     nvagentrt_core::TASK_SCOPE_STACK
         .scope(scope_stack, async move {
             core::nvagentrt_llm_call_execute(
                 &name,
-                request.inner.clone(),
-                exec_fn,
+                native,
+                default_fn,
                 Some(parent),
                 attrs,
                 opt_json(data),
                 opt_json(metadata),
                 model_name,
+                to_request_fn,
+                to_response_fn,
             )
             .await
             .map_err(to_napi_err)
@@ -295,11 +320,12 @@ pub async fn llm_call_execute(
 
 /// Execute a streaming LLM call end-to-end with full lifecycle management.
 ///
-/// Similar to `llmCallExecute`, but returns an `LlmStream` whose `next()` method yields
-/// response chunks incrementally. The `func` callback receives the request as JSON and
-/// its response is streamed back. Stream-level intercepts are applied to each chunk.
+/// Like `llmCallExecute`, conditional-execution guardrails run first on the raw request.
+/// Returns an `LlmStream` whose `next()` method yields response chunks incrementally.
+/// The `func` callback receives the native request as JSON and its response is streamed back.
+/// Stream-level intercepts are applied to each chunk.
 ///
-/// The optional `collector` callback is invoked with each intercepted chunk string,
+/// The optional `collector` callback is invoked with each intercepted chunk as JSON,
 /// allowing the caller to accumulate chunks for aggregation. The optional `finalizer`
 /// callback is invoked once when the stream is exhausted and must return a JSON value
 /// representing the aggregated response.
@@ -307,15 +333,17 @@ pub async fn llm_call_execute(
 #[napi]
 pub async fn llm_stream_call_execute(
     name: String,
-    request: &JsLLMRequest,
+    native: Json,
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-    collector: Option<ThreadsafeFunction<String, ErrorStrategy::Fatal>>,
+    collector: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
     finalizer: Option<ThreadsafeFunction<(), ErrorStrategy::Fatal>>,
     handle: Option<&JsScopeHandle>,
     attributes: Option<u32>,
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
+    to_request: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
+    to_response: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 ) -> Result<LlmStream> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent = handle
@@ -325,9 +353,9 @@ pub async fn llm_stream_call_execute(
     // For stream execution, we need the stream-specific wrapper
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
 
-    let wrapped_collector: Box<dyn FnMut(String) + Send> = match collector {
+    let wrapped_collector: Box<dyn FnMut(Json) + Send> = match collector {
         Some(cb) => callable::wrap_js_collector_fn(cb),
-        None => Box::new(|_: String| {}),
+        None => Box::new(|_: Json| {}),
     };
 
     let wrapped_finalizer: Box<dyn FnOnce() -> Json + Send> = match finalizer {
@@ -335,31 +363,29 @@ pub async fn llm_stream_call_execute(
         None => Box::new(|| Json::Null),
     };
 
+    // Bridge LlmExecutionFn -> LlmStreamExecutionNextFn (FnOnce)
+    let default_fn: nvagentrt_core::LlmStreamExecutionNextFn = Box::new(move |native| {
+        let fut = exec_fn(native);
+        Box::pin(async move {
+            let result = fut.await?;
+            let stream = tokio_stream::once(Ok(result));
+            Ok(Box::pin(stream)
+                as std::pin::Pin<
+                    Box<dyn tokio_stream::Stream<Item = nvagentrt_core::Result<Json>> + Send>,
+                >)
+        })
+    });
+
+    let to_request_fn = to_request.map(wrap_js_to_request);
+    let to_response_fn = to_response.map(wrap_js_to_response);
     let scope_stack = nvagentrt_core::current_scope_stack();
 
     nvagentrt_core::TASK_SCOPE_STACK
         .scope(scope_stack, async move {
-            // Use the non-streaming execute and convert to a single-item stream wrapped in LlmStream
             let rust_stream = core::nvagentrt_llm_stream_call_execute(
                 &name,
-                request.inner.clone(),
-                // We need LlmStreamExecutionFn but we have LlmExecutionFn — create a bridge
-                Box::new(move |req| {
-                    let fut = exec_fn(req);
-                    Box::pin(async move {
-                        let result = fut.await?;
-                        let text = serde_json::to_string(&result)
-                            .map_err(|e| nvagentrt_core::AgentRtError::Internal(e.to_string()))?;
-                        let stream = tokio_stream::once(Ok(text));
-                        Ok(Box::pin(stream)
-                            as std::pin::Pin<
-                                Box<
-                                    dyn tokio_stream::Stream<Item = nvagentrt_core::Result<String>>
-                                        + Send,
-                                >,
-                            >)
-                    })
-                }),
+                native,
+                default_fn,
                 wrapped_collector,
                 wrapped_finalizer,
                 Some(parent),
@@ -367,6 +393,8 @@ pub async fn llm_stream_call_execute(
                 opt_json(data),
                 opt_json(metadata),
                 model_name,
+                to_request_fn,
+                to_response_fn,
             )
             .await
             .map_err(to_napi_err)?;
@@ -527,11 +555,12 @@ napi_intercept_tool_api!(
     callable::wrap_js_tool_fn
 );
 
-/// Register an intercept that can replace tool execution entirely.
+/// Register a tool execution intercept following the middleware chain pattern.
 ///
 /// The `conditional` callback receives `(toolName, args)` and returns `true` if this intercept
-/// should handle execution. If it matches, `callable` receives the args and returns the result
-/// instead of the original tool function.
+/// should handle execution. If it matches, `callable` receives the args and a `next` function.
+/// Call `next(args)` to invoke the next intercept or original implementation; skip calling
+/// `next` to short-circuit the chain.
 #[napi]
 pub fn register_tool_execution_intercept(
     name: String,
@@ -543,7 +572,7 @@ pub fn register_tool_execution_intercept(
         &name,
         priority,
         callable::wrap_js_tool_exec_conditional_fn(conditional),
-        callable::wrap_js_tool_exec_fn(callable),
+        callable::wrap_js_tool_exec_intercept_fn(callable),
     )
     .map_err(to_napi_err)
 }
@@ -588,8 +617,9 @@ pub fn deregister_llm_sanitize_request_guardrail(name: String) -> Result<bool> {
 
 /// Register a guardrail that sanitizes LLM response data after execution.
 ///
-/// The `guardrail` callback receives the LLM response as JSON and must return the sanitized response.
-/// Higher `priority` values run first. Throws if a guardrail with the same `name` already exists.
+/// The `guardrail` callback receives the LLM response as a `JsLLMResponse` and must return
+/// the sanitized response. Higher `priority` values run first. Throws if a guardrail with
+/// the same `name` already exists.
 #[napi]
 pub fn register_llm_sanitize_response_guardrail(
     name: String,
@@ -599,7 +629,7 @@ pub fn register_llm_sanitize_response_guardrail(
     core::nvagentrt_register_llm_sanitize_response_guardrail(
         &name,
         priority,
-        callable::wrap_js_json_fn(guardrail),
+        callable::wrap_js_llm_response_fn(guardrail),
     )
     .map_err(to_napi_err)
 }
@@ -644,7 +674,7 @@ pub fn deregister_llm_conditional_execution_guardrail(name: String) -> Result<bo
 
 /// Register an intercept that transforms LLM request data.
 ///
-/// The `callable` receives the LLM request as JSON and returns a transformed request.
+/// The `callable` receives the native LLM request as JSON and returns a transformed request.
 /// If `breakChain` is `true`, no lower-priority intercepts run after this one.
 /// Higher `priority` values run first.
 #[napi]
@@ -658,7 +688,7 @@ pub fn register_llm_request_intercept(
         &name,
         priority,
         break_chain,
-        callable::wrap_js_llm_sanitize_request_fn(callable),
+        callable::wrap_js_json_fn(callable),
     )
     .map_err(to_napi_err)
 }
@@ -673,7 +703,7 @@ pub fn deregister_llm_request_intercept(name: String) -> Result<bool> {
 
 /// Register an intercept that transforms LLM response data.
 ///
-/// The `callable` receives the LLM response as JSON and returns a transformed response.
+/// The `callable` receives the LLM response as a `JsLLMResponse` and returns a transformed response.
 /// If `breakChain` is `true`, no lower-priority intercepts run after this one.
 /// Higher `priority` values run first.
 #[napi]
@@ -687,7 +717,7 @@ pub fn register_llm_response_intercept(
         &name,
         priority,
         break_chain,
-        callable::wrap_js_json_fn(callable),
+        callable::wrap_js_llm_response_fn(callable),
     )
     .map_err(to_napi_err)
 }
@@ -702,7 +732,7 @@ pub fn deregister_llm_response_intercept(name: String) -> Result<bool> {
 
 /// Register an intercept that transforms individual chunks in a streaming LLM response.
 ///
-/// The `callable` receives each chunk as a string and returns the transformed chunk.
+/// The `callable` receives each chunk as a JSON value and returns the transformed chunk.
 /// If `breakChain` is `true`, no lower-priority intercepts run after this one.
 /// Higher `priority` values run first.
 #[napi]
@@ -710,13 +740,13 @@ pub fn register_llm_stream_response_intercept(
     name: String,
     priority: i32,
     break_chain: bool,
-    callable: ThreadsafeFunction<String, ErrorStrategy::Fatal>,
+    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
     core::nvagentrt_register_llm_stream_response_intercept(
         &name,
         priority,
         break_chain,
-        callable::wrap_js_string_intercept_fn(callable),
+        callable::wrap_js_json_fn(callable),
     )
     .map_err(to_napi_err)
 }
@@ -729,11 +759,12 @@ pub fn deregister_llm_stream_response_intercept(name: String) -> Result<bool> {
     core::nvagentrt_deregister_llm_stream_response_intercept(&name).map_err(to_napi_err)
 }
 
-/// Register an intercept that can replace LLM execution entirely.
+/// Register an LLM execution intercept following the middleware chain pattern.
 ///
 /// The `conditional` callback receives the LLM request as JSON and returns `true` if this
-/// intercept should handle execution. If it matches, `callable` receives the request and
-/// returns the response instead of the original LLM provider.
+/// intercept should handle execution. If it matches, `callable` receives the request and a
+/// `next` function. Call `next(request)` to invoke the next intercept or original
+/// implementation; skip calling `next` to short-circuit the chain.
 #[napi]
 pub fn register_llm_execution_intercept(
     name: String,
@@ -745,7 +776,7 @@ pub fn register_llm_execution_intercept(
         &name,
         priority,
         callable::wrap_js_llm_exec_conditional_fn(conditional),
-        callable::wrap_js_llm_exec_fn(callable),
+        callable::wrap_js_llm_exec_intercept_fn(callable),
     )
     .map_err(to_napi_err)
 }
@@ -758,11 +789,12 @@ pub fn deregister_llm_execution_intercept(name: String) -> Result<bool> {
     core::nvagentrt_deregister_llm_execution_intercept(&name).map_err(to_napi_err)
 }
 
-/// Register an intercept that can replace streaming LLM execution entirely.
+/// Register a streaming LLM execution intercept following the middleware chain pattern.
 ///
 /// The `conditional` callback receives the LLM request as JSON and returns `true` if this
-/// intercept should handle execution. If it matches, `callable` receives the request and
-/// its response is streamed back instead of the original LLM provider's stream.
+/// intercept should handle execution. If it matches, `callable` receives the request and a
+/// `next` function. Call `next(request)` to invoke the next intercept or original streaming
+/// implementation; skip calling `next` to short-circuit the chain.
 #[napi]
 pub fn register_llm_stream_execution_intercept(
     name: String,
@@ -770,27 +802,11 @@ pub fn register_llm_stream_execution_intercept(
     conditional: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    // Bridge LlmExecutionFn -> LlmStreamExecutionFn
-    let exec_fn = callable::wrap_js_llm_exec_fn(callable);
-    let stream_fn: nvagentrt_core::LlmStreamExecutionFn = Box::new(move |req| {
-        let fut = exec_fn(req);
-        Box::pin(async move {
-            let result = fut.await?;
-            let text = serde_json::to_string(&result)
-                .map_err(|e| nvagentrt_core::AgentRtError::Internal(e.to_string()))?;
-            let stream = tokio_stream::once(Ok(text));
-            Ok(Box::pin(stream)
-                as std::pin::Pin<
-                    Box<dyn tokio_stream::Stream<Item = nvagentrt_core::Result<String>> + Send>,
-                >)
-        })
-    });
-
     core::nvagentrt_register_llm_stream_execution_intercept(
         &name,
         priority,
         callable::wrap_js_llm_exec_conditional_fn(conditional),
-        stream_fn,
+        callable::wrap_js_llm_stream_exec_intercept_fn(callable),
     )
     .map_err(to_napi_err)
 }
@@ -854,27 +870,32 @@ pub fn tool_response_intercepts(name: String, result: Json) -> Result<Json> {
     core::nvagentrt_tool_response_intercepts(&name, result).map_err(to_napi_err)
 }
 
-/// Run the registered LLM request intercept chain on the given request.
-/// Returns the transformed request.
+/// Run the registered LLM request intercept chain on the given native request.
+/// Returns the transformed native request as JSON.
 #[napi]
-pub fn llm_request_intercepts(request: &JsLLMRequest) -> Result<JsLLMRequest> {
-    let result =
-        core::nvagentrt_llm_request_intercepts(request.inner.clone()).map_err(to_napi_err)?;
-    Ok(JsLLMRequest { inner: result })
+pub fn llm_request_intercepts(native: Json) -> Result<Json> {
+    core::nvagentrt_llm_request_intercepts(native).map_err(to_napi_err)
 }
 
 /// Run the registered LLM conditional execution guardrail chain.
-/// Throws if any guardrail rejects.
+/// Throws if any guardrail rejects. Optional `toRequest` converts native JSON to a formal
+/// `JsLLMRequest` for guardrails; defaults to the identity converter.
 #[napi]
-pub fn llm_conditional_execution(request: &JsLLMRequest) -> Result<()> {
-    core::nvagentrt_llm_conditional_execution(&request.inner).map_err(to_napi_err)
+pub fn llm_conditional_execution(
+    native: Json,
+    to_request: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
+) -> Result<()> {
+    let to_request_fn = to_request.map(wrap_js_to_request);
+    core::nvagentrt_llm_conditional_execution(&native, to_request_fn.as_ref()).map_err(to_napi_err)
 }
 
 /// Run the registered LLM response intercept chain on the given response.
 /// Returns the transformed response.
 #[napi]
-pub fn llm_response_intercepts(response: Json) -> Result<Json> {
-    core::nvagentrt_llm_response_intercepts(response).map_err(to_napi_err)
+pub fn llm_response_intercepts(response: &JsLLMResponse) -> Result<JsLLMResponse> {
+    let core_response = response.inner.clone();
+    let result = core::nvagentrt_llm_response_intercepts(core_response).map_err(to_napi_err)?;
+    Ok(JsLLMResponse { inner: result })
 }
 
 // ---------------------------------------------------------------------------
@@ -954,4 +975,59 @@ impl JsAtifExporter {
     pub fn clear(&self) {
         self.inner.clear();
     }
+}
+
+// ---------------------------------------------------------------------------
+// LLM converter helpers
+// ---------------------------------------------------------------------------
+
+use std::sync::Arc;
+
+/// Wraps a JS `toRequest` callback into a boxed `ToRequestFn`.
+fn wrap_js_to_request(
+    tsfn: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+) -> core_types::ToRequestFn {
+    let tsfn = Arc::new(tsfn);
+    Box::new(move |native: &Json| {
+        let func = tsfn.clone();
+        let native_clone = native.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        func.call_with_return_value(
+            native_clone,
+            napi::threadsafe_function::ThreadsafeFunctionCallMode::Blocking,
+            move |val: Json| {
+                let _ = tx.send(val);
+                Ok(())
+            },
+        );
+        let result = rx.recv().unwrap_or(Json::Null);
+        serde_json::from_value(result).unwrap_or_else(|_| core_types::LLMRequest {
+            headers: serde_json::Map::new(),
+            content: native.clone(),
+        })
+    })
+}
+
+/// Wraps a JS `toResponse` callback into a boxed `ToResponseFn`.
+fn wrap_js_to_response(
+    tsfn: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+) -> core_types::ToResponseFn {
+    let tsfn = Arc::new(tsfn);
+    Box::new(move |native: &Json| {
+        let func = tsfn.clone();
+        let native_clone = native.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        func.call_with_return_value(
+            native_clone,
+            napi::threadsafe_function::ThreadsafeFunctionCallMode::Blocking,
+            move |val: Json| {
+                let _ = tx.send(val);
+                Ok(())
+            },
+        );
+        let result = rx.recv().unwrap_or(Json::Null);
+        serde_json::from_value(result).unwrap_or_else(|_| core_types::LLMResponse {
+            data: native.clone(),
+        })
+    })
 }

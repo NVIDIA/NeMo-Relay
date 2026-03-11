@@ -18,14 +18,15 @@ use crate::convert::{json_to_py, opt_json_to_py, py_to_json};
 // LlmStream (async iterator)
 // ---------------------------------------------------------------------------
 
-/// An async iterator that yields SSE text chunks from a streaming LLM response.
+/// An async iterator that yields parsed JSON chunks from a streaming LLM response.
 ///
-/// Use ``async for chunk in stream:`` to consume chunks. Each chunk is a raw
-/// SSE text string. The stream automatically emits an End lifecycle event
-/// when exhausted.
+/// Use ``async for chunk in stream:`` to consume chunks. Each chunk is a
+/// Python object (converted from JSON). The stream automatically emits an
+/// End lifecycle event when exhausted.
 #[pyclass(name = "LlmStream")]
 pub struct PyLlmStream {
-    pub receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvagentrt_core::Result<String>>>,
+    pub receiver:
+        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvagentrt_core::Result<serde_json::Value>>>,
 }
 
 #[pymethods]
@@ -39,7 +40,7 @@ impl PyLlmStream {
         // Since PyLlmStream is behind a PyRef (shared), we use tokio::sync::Mutex.
         let receiver_ptr = &self.receiver
             as *const tokio::sync::Mutex<
-                tokio::sync::mpsc::Receiver<nvagentrt_core::Result<String>>,
+                tokio::sync::mpsc::Receiver<nvagentrt_core::Result<serde_json::Value>>,
             >;
         // SAFETY: The PyLlmStream outlives this future because Python holds a reference to it.
         // The tokio Mutex ensures exclusive access to the receiver.
@@ -51,7 +52,7 @@ impl PyLlmStream {
                 None => Err(PyErr::new::<pyo3::exceptions::PyStopAsyncIteration, _>(
                     "stream exhausted",
                 )),
-                Some(Ok(text)) => Ok(text),
+                Some(Ok(value)) => Python::attach(|py| json_to_py(py, &value)),
                 Some(Err(e)) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                     e.to_string(),
                 )),
@@ -582,13 +583,11 @@ impl From<core_types::LLMHandle> for PyLLMHandle {
 // LLMRequest
 // ---------------------------------------------------------------------------
 
-/// An HTTP-like request representing an outgoing LLM API call.
+/// An opaque request structure representing an outgoing LLM API call.
 ///
 /// Properties:
-///     method (str): HTTP method (typically "POST").
-///     url (str): The LLM API endpoint URL.
-///     headers (dict): HTTP headers.
-///     body (Any): The request body (typically a dict).
+///     headers (dict): Metadata key-value pairs.
+///     content (Any): The request payload.
 #[pyclass(name = "LLMRequest", from_py_object)]
 #[derive(Clone)]
 pub struct PyLLMRequest {
@@ -600,17 +599,10 @@ impl PyLLMRequest {
     /// Create a new LLMRequest.
     ///
     /// Args:
-    ///     method: HTTP method (e.g., "POST").
-    ///     url: The LLM API endpoint URL.
-    ///     headers: A dict of HTTP headers.
-    ///     body: The request body (any JSON-serializable object).
+    ///     headers: A dict of metadata key-value pairs.
+    ///     content: The request payload (any JSON-serializable object).
     #[new]
-    fn new(
-        method: String,
-        url: String,
-        headers: &Bound<'_, PyDict>,
-        body: &Bound<'_, PyAny>,
-    ) -> PyResult<Self> {
+    fn new(headers: &Bound<'_, PyDict>, content: &Bound<'_, PyAny>) -> PyResult<Self> {
         let headers_json = py_to_json(headers.as_any())?;
         let headers_map = match headers_json {
             serde_json::Value::Object(m) => m,
@@ -620,25 +612,13 @@ impl PyLLMRequest {
                 ))
             }
         };
-        let body_json = py_to_json(body)?;
+        let content_json = py_to_json(content)?;
         Ok(Self {
             inner: core_types::LLMRequest {
-                method,
-                url,
                 headers: headers_map,
-                body: body_json,
+                content: content_json,
             },
         })
-    }
-
-    #[getter]
-    fn method(&self) -> String {
-        self.inner.method.clone()
-    }
-
-    #[getter]
-    fn url(&self) -> String {
-        self.inner.url.clone()
     }
 
     #[getter]
@@ -647,15 +627,50 @@ impl PyLLMRequest {
     }
 
     #[getter]
-    fn body(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        json_to_py(py, &self.inner.body)
+    fn content(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(py, &self.inner.content)
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "LLMRequest(method='{}', url='{}')",
-            self.inner.method, self.inner.url
-        )
+        "LLMRequest(...)".to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LLMResponse
+// ---------------------------------------------------------------------------
+
+/// An opaque response structure representing an LLM API response.
+///
+/// Properties:
+///     data (Any): The response payload.
+#[pyclass(name = "LLMResponse", from_py_object)]
+#[derive(Clone)]
+pub struct PyLLMResponse {
+    pub inner: core_types::LLMResponse,
+}
+
+#[pymethods]
+impl PyLLMResponse {
+    /// Create a new LLMResponse.
+    ///
+    /// Args:
+    ///     data: The response payload (any JSON-serializable object).
+    #[new]
+    fn new(data: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let data_json = py_to_json(data)?;
+        Ok(Self {
+            inner: core_types::LLMResponse { data: data_json },
+        })
+    }
+
+    #[getter]
+    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(py, &self.inner.data)
+    }
+
+    fn __repr__(&self) -> String {
+        "LLMResponse(...)".to_string()
     }
 }
 
@@ -904,6 +919,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyToolHandle>()?;
     m.add_class::<PyLLMHandle>()?;
     m.add_class::<PyLLMRequest>()?;
+    m.add_class::<PyLLMResponse>()?;
     m.add_class::<PyEvent>()?;
     m.add_class::<PyAtifExporter>()?;
     Ok(())

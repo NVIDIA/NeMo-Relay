@@ -47,12 +47,15 @@ extern char* nvagentrt_llm_handle_parent_uuid(const FfiLLMHandle* ptr);
 extern void nvagentrt_llm_handle_free(FfiLLMHandle* ptr);
 
 // LLMRequest
-extern FfiLLMRequest* nvagentrt_llm_request_new(const char* method, const char* url, const char* headers_json, const char* body_json);
-extern char* nvagentrt_llm_request_method(const FfiLLMRequest* ptr);
-extern char* nvagentrt_llm_request_url(const FfiLLMRequest* ptr);
+extern FfiLLMRequest* nvagentrt_llm_request_new(const char* headers_json, const char* content_json);
 extern char* nvagentrt_llm_request_headers(const FfiLLMRequest* ptr);
-extern char* nvagentrt_llm_request_body(const FfiLLMRequest* ptr);
+extern char* nvagentrt_llm_request_content(const FfiLLMRequest* ptr);
 extern void nvagentrt_llm_request_free(FfiLLMRequest* ptr);
+
+// LLMResponse
+typedef struct FfiLLMResponse FfiLLMResponse;
+extern char* nvagentrt_llm_response_data(const FfiLLMResponse* ptr);
+extern void nvagentrt_llm_response_free(FfiLLMResponse* ptr);
 
 // Event accessors
 extern char* nvagentrt_event_uuid(const FfiEvent* ptr);
@@ -312,38 +315,34 @@ func (h *LLMHandle) ParentUUID() string {
 	return goStringOpt(C.nvagentrt_llm_handle_parent_uuid(h.ptr))
 }
 
-// LLMRequest wraps an opaque C pointer to an LLM request. It contains the HTTP
-// method, URL, headers, and body for an LLM API call. Create instances with
+// LLMRequest wraps an opaque C pointer to an LLM request. It contains the
+// headers and content for an LLM API call. Create instances with
 // [NewLLMRequest]. The underlying C resource is freed automatically via a Go
 // runtime finalizer.
 type LLMRequest struct {
 	ptr *C.FfiLLMRequest
 }
 
-// NewLLMRequest creates a new LLM request with the given HTTP method, URL,
-// headers map, and body. The headers and body parameters are serialized to JSON
+// NewLLMRequest creates a new LLM request with the given headers map and
+// content. The headers and content parameters are serialized to JSON
 // internally. Returns nil if the underlying C allocation fails.
 //
 // Example:
 //
-//	req := nvagentrt.NewLLMRequest("POST", "https://api.example.com/v1/chat",
+//	req := nvagentrt.NewLLMRequest(
 //	    map[string]interface{}{"Authorization": "Bearer tok"},
 //	    map[string]interface{}{"model": "gpt-4", "messages": []interface{}{}},
 //	)
-func NewLLMRequest(method, url string, headers map[string]interface{}, body interface{}) *LLMRequest {
+func NewLLMRequest(headers map[string]interface{}, content interface{}) *LLMRequest {
 	headersJSON, _ := json.Marshal(headers)
-	bodyJSON, _ := json.Marshal(body)
+	contentJSON, _ := json.Marshal(content)
 
-	cMethod := C.CString(method)
-	cURL := C.CString(url)
 	cHeaders := C.CString(string(headersJSON))
-	cBody := C.CString(string(bodyJSON))
-	defer C.free(unsafe.Pointer(cMethod))
-	defer C.free(unsafe.Pointer(cURL))
+	cContent := C.CString(string(contentJSON))
 	defer C.free(unsafe.Pointer(cHeaders))
-	defer C.free(unsafe.Pointer(cBody))
+	defer C.free(unsafe.Pointer(cContent))
 
-	ptr := C.nvagentrt_llm_request_new(cMethod, cURL, cHeaders, cBody)
+	ptr := C.nvagentrt_llm_request_new(cHeaders, cContent)
 	if ptr == nil {
 		return nil
 	}
@@ -357,20 +356,20 @@ func NewLLMRequest(method, url string, headers map[string]interface{}, body inte
 	return r
 }
 
-// Method returns the HTTP method (e.g., "POST") for this request.
-func (r *LLMRequest) Method() string { return goString(C.nvagentrt_llm_request_method(r.ptr)) }
-
-// URL returns the endpoint URL for this request.
-func (r *LLMRequest) URL() string { return goString(C.nvagentrt_llm_request_url(r.ptr)) }
-
 // Headers returns the request headers as a JSON object.
 func (r *LLMRequest) Headers() json.RawMessage {
 	return goJSONOpt(C.nvagentrt_llm_request_headers(r.ptr))
 }
 
-// Body returns the request body as raw JSON.
-func (r *LLMRequest) Body() json.RawMessage {
-	return goJSONOpt(C.nvagentrt_llm_request_body(r.ptr))
+// Content returns the request content as raw JSON.
+func (r *LLMRequest) Content() json.RawMessage {
+	return goJSONOpt(C.nvagentrt_llm_request_content(r.ptr))
+}
+
+// LLMResponse wraps an LLM response with a data field.
+type LLMResponse struct {
+	// Data holds the response payload as raw JSON.
+	Data json.RawMessage `json:"data"`
 }
 
 // Event wraps an opaque C pointer to a lifecycle event emitted by the runtime.

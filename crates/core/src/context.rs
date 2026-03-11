@@ -40,43 +40,73 @@ pub type ToolSanitizeFn = Box<dyn Fn(&str, Json) -> Json + Send + Sync>;
 pub type ToolConditionalFn = Box<dyn Fn(&str, &Json) -> Option<String> + Send + Sync>;
 /// Tool request/response intercept: `(tool_name, value) -> transformed`.
 pub type ToolInterceptFn = Box<dyn Fn(&str, Json) -> Json + Send + Sync>;
-/// Tool execution function: `(args) -> Future<Result<Json>>`.
-pub type ToolExecutionFn =
-    Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
+/// Tool execution "next" function (FnOnce — each chain link is single-use):
+/// `(args) -> Future<Result<Json>>`.
+pub type ToolExecutionNextFn =
+    Box<dyn FnOnce(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send>;
+/// Tool execution intercept function: `(args, next) -> Future<Result<Json>>`.
+/// Uses `Arc` because chain-building needs to clone it.
+pub type ToolExecutionFn = Arc<
+    dyn Fn(Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+        + Send
+        + Sync,
+>;
 /// Tool execution conditional: `(tool_name, args) -> should_intercept`.
 pub type ToolExecutionConditionalFn = Box<dyn Fn(&str, &Json) -> bool + Send + Sync>;
 
 /// LLM request sanitizer: `(request) -> sanitized_request`.
 pub type LlmSanitizeRequestFn = Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync>;
 /// LLM response sanitizer: `(response) -> sanitized_response`.
-pub type LlmSanitizeResponseFn = Box<dyn Fn(Json) -> Json + Send + Sync>;
+pub type LlmSanitizeResponseFn = Box<dyn Fn(LLMResponse) -> LLMResponse + Send + Sync>;
 /// LLM conditional execution guardrail: `(request) -> Option<rejection_reason>`.
 pub type LlmConditionalFn = Box<dyn Fn(&LLMRequest) -> Option<String> + Send + Sync>;
-/// LLM request intercept: `(request) -> transformed_request`.
-pub type LlmRequestInterceptFn = Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync>;
+/// LLM request intercept: `(native) -> transformed_native` (opaque Json).
+pub type LlmRequestInterceptFn = Box<dyn Fn(Json) -> Json + Send + Sync>;
 /// LLM response intercept: `(response) -> transformed_response`.
-pub type LlmResponseInterceptFn = Box<dyn Fn(Json) -> Json + Send + Sync>;
-/// LLM streaming response intercept: `(chunk) -> transformed_chunk`.
-pub type LlmStreamResponseInterceptFn = Box<dyn Fn(String) -> String + Send + Sync>;
-/// LLM execution function: `(request) -> Future<Result<Json>>`.
-pub type LlmExecutionFn =
-    Box<dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
-/// LLM execution conditional: `(request) -> should_intercept`.
-pub type LlmExecutionConditionalFn = Box<dyn Fn(&LLMRequest) -> bool + Send + Sync>;
-/// LLM streaming execution function: `(request) -> Future<Result<Stream<Item = Result<String>>>>`.
-pub type LlmStreamExecutionFn = Box<
-    dyn Fn(
-            LLMRequest,
+pub type LlmResponseInterceptFn = Box<dyn Fn(LLMResponse) -> LLMResponse + Send + Sync>;
+/// LLM streaming response intercept: `(chunk) -> transformed_chunk` (Json).
+pub type LlmStreamResponseInterceptFn = Box<dyn Fn(Json) -> Json + Send + Sync>;
+/// LLM execution "next" function (FnOnce — each chain link is single-use):
+/// `(native) -> Future<Result<Json>>`.
+pub type LlmExecutionNextFn =
+    Box<dyn FnOnce(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send>;
+/// LLM execution intercept function: `(native, next) -> Future<Result<Json>>`.
+/// Uses `Arc` because chain-building needs to clone it.
+pub type LlmExecutionFn = Arc<
+    dyn Fn(Json, LlmExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+        + Send
+        + Sync,
+>;
+/// LLM execution conditional: `(native) -> should_intercept`.
+pub type LlmExecutionConditionalFn = Box<dyn Fn(&Json) -> bool + Send + Sync>;
+/// LLM streaming execution "next" function (FnOnce):
+/// `(native) -> Future<Result<Stream<Item = Result<Json>>>>`.
+pub type LlmStreamExecutionNextFn = Box<
+    dyn FnOnce(
+            Json,
         ) -> Pin<
             Box<
-                dyn Future<Output = Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>>>
+                dyn Future<Output = Result<Pin<Box<dyn Stream<Item = Result<Json>> + Send>>>>
+                    + Send,
+            >,
+        > + Send,
+>;
+/// LLM streaming execution intercept function: `(native, next) -> Future<Result<Stream>>`.
+/// Uses `Arc` because chain-building needs to clone it.
+pub type LlmStreamExecutionFn = Arc<
+    dyn Fn(
+            Json,
+            LlmStreamExecutionNextFn,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<Pin<Box<dyn Stream<Item = Result<Json>> + Send>>>>
                     + Send,
             >,
         > + Send
         + Sync,
 >;
-/// LLM streaming execution conditional: `(request) -> should_intercept`.
-pub type LlmStreamExecutionConditionalFn = Box<dyn Fn(&LLMRequest) -> bool + Send + Sync>;
+/// LLM streaming execution conditional: `(native) -> should_intercept`.
+pub type LlmStreamExecutionConditionalFn = Box<dyn Fn(&Json) -> bool + Send + Sync>;
 
 /// Event subscriber callback: `(event) -> ()`. Called for every lifecycle event.
 pub type EventSubscriberFn = Box<dyn Fn(&Event) + Send + Sync>;
@@ -604,29 +634,32 @@ impl NVAgentRTContextState {
         v
     }
 
-    /// Find the matching tool execution intercept, or return None to use default.
-    /// Returns true if an intercept was found and its index.
-    pub fn tool_find_execution_intercept(&mut self, name: &str, args: &Json) -> bool {
-        for entry in self.tool_execution_intercepts.sorted_values() {
-            if (entry.conditional)(name, args) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Call the matching tool execution intercept. Must be called after tool_find_execution_intercept returned true.
-    pub fn tool_call_execution_intercept(
+    /// Build a middleware chain of all matching tool execution intercepts.
+    /// Returns a single `FnOnce` that, when called, runs through the chain
+    /// and ultimately calls `default_fn` if no intercept short-circuits.
+    ///
+    /// Intercepts are sorted by priority ascending. The lowest-priority
+    /// (first) matching intercept becomes the outermost wrapper.
+    pub fn tool_build_execution_chain(
         &mut self,
         name: &str,
-        args: Json,
-    ) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> {
-        for entry in self.tool_execution_intercepts.sorted_values() {
-            if (entry.conditional)(name, &args) {
-                return (entry.callable)(args);
-            }
+        args: &Json,
+        default_fn: ToolExecutionNextFn,
+    ) -> ToolExecutionNextFn {
+        let matching: Vec<Arc<_>> = self
+            .tool_execution_intercepts
+            .sorted_values()
+            .into_iter()
+            .filter(|e| (e.conditional)(name, args))
+            .map(|e| Arc::clone(&e.callable))
+            .collect();
+
+        let mut next = default_fn;
+        for callable in matching.into_iter().rev() {
+            let current_next = next;
+            next = Box::new(move |args| callable(args, current_next));
         }
-        unreachable!()
+        next
     }
 
     // -----------------------------------------------------------------------
@@ -643,7 +676,7 @@ impl NVAgentRTContextState {
     }
 
     /// Runs the LLM response sanitize guardrail chain, piping the response through each guardrail.
-    pub fn llm_sanitize_response_chain(&mut self, response: Json) -> Json {
+    pub fn llm_sanitize_response_chain(&mut self, response: LLMResponse) -> LLMResponse {
         let mut v = response;
         for entry in self.llm_sanitize_response_guardrails.sorted_values() {
             v = (entry.guardrail)(v);
@@ -661,9 +694,9 @@ impl NVAgentRTContextState {
         None
     }
 
-    /// Runs the LLM request intercept chain, piping the request through each intercept (with optional break).
-    pub fn llm_request_intercepts_chain(&mut self, request: LLMRequest) -> LLMRequest {
-        let mut v = request;
+    /// Runs the LLM request intercept chain on native Json, piping through each intercept (with optional break).
+    pub fn llm_request_intercepts_chain(&mut self, native: Json) -> Json {
+        let mut v = native;
         for entry in self.llm_request_intercepts.sorted_values() {
             v = (entry.callable)(v);
             if entry.break_chain {
@@ -674,7 +707,7 @@ impl NVAgentRTContextState {
     }
 
     /// Runs the LLM response intercept chain, piping the response through each intercept (with optional break).
-    pub fn llm_response_intercepts_chain(&mut self, response: Json) -> Json {
+    pub fn llm_response_intercepts_chain(&mut self, response: LLMResponse) -> LLMResponse {
         let mut v = response;
         for entry in self.llm_response_intercepts.sorted_values() {
             v = (entry.callable)(v);
@@ -685,8 +718,8 @@ impl NVAgentRTContextState {
         v
     }
 
-    /// Runs the LLM stream response intercept chain on a single chunk string.
-    pub fn llm_stream_response_intercepts_chain(&mut self, chunk: String) -> String {
+    /// Runs the LLM stream response intercept chain on a single chunk (Json).
+    pub fn llm_stream_response_intercepts_chain(&mut self, chunk: Json) -> Json {
         let mut v = chunk;
         for entry in self.llm_stream_response_intercepts.sorted_values() {
             v = (entry.callable)(v);
@@ -697,53 +730,53 @@ impl NVAgentRTContextState {
         v
     }
 
-    /// Checks if any LLM execution intercept matches the given request.
-    pub fn llm_find_execution_intercept(&mut self, request: &LLMRequest) -> bool {
-        for entry in self.llm_execution_intercepts.sorted_values() {
-            if (entry.conditional)(request) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Invokes the first matching LLM execution intercept. Must be called after `llm_find_execution_intercept` returned `true`.
-    pub fn llm_call_execution_intercept(
+    /// Build a middleware chain of all matching LLM execution intercepts.
+    /// Returns a single `FnOnce` that, when called, runs through the chain
+    /// and ultimately calls `default_fn` if no intercept short-circuits.
+    pub fn llm_build_execution_chain(
         &mut self,
-        request: LLMRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> {
-        for entry in self.llm_execution_intercepts.sorted_values() {
-            if (entry.conditional)(&request) {
-                return (entry.callable)(request);
-            }
+        native: &Json,
+        default_fn: LlmExecutionNextFn,
+    ) -> LlmExecutionNextFn {
+        let matching: Vec<Arc<_>> = self
+            .llm_execution_intercepts
+            .sorted_values()
+            .into_iter()
+            .filter(|e| (e.conditional)(native))
+            .map(|e| Arc::clone(&e.callable))
+            .collect();
+
+        let mut next = default_fn;
+        for callable in matching.into_iter().rev() {
+            let current_next = next;
+            next = Box::new(move |native| callable(native, current_next));
         }
-        unreachable!()
+        next
     }
 
-    /// Checks if any LLM streaming execution intercept matches the given request.
-    pub fn llm_stream_find_execution_intercept(&mut self, request: &LLMRequest) -> bool {
-        for entry in self.llm_stream_execution_intercepts.sorted_values() {
-            if (entry.conditional)(request) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Invokes the first matching LLM streaming execution intercept. Must be called after `llm_stream_find_execution_intercept` returned `true`.
+    /// Build a middleware chain of all matching LLM streaming execution intercepts.
+    /// Returns a single `FnOnce` that, when called, runs through the chain
+    /// and ultimately calls `default_fn` if no intercept short-circuits.
     #[allow(clippy::type_complexity)]
-    pub fn llm_stream_call_execution_intercept(
+    pub fn llm_stream_build_execution_chain(
         &mut self,
-        request: LLMRequest,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>>> + Send>,
-    > {
-        for entry in self.llm_stream_execution_intercepts.sorted_values() {
-            if (entry.conditional)(&request) {
-                return (entry.callable)(request);
-            }
+        native: &Json,
+        default_fn: LlmStreamExecutionNextFn,
+    ) -> LlmStreamExecutionNextFn {
+        let matching: Vec<Arc<_>> = self
+            .llm_stream_execution_intercepts
+            .sorted_values()
+            .into_iter()
+            .filter(|e| (e.conditional)(native))
+            .map(|e| Arc::clone(&e.callable))
+            .collect();
+
+        let mut next = default_fn;
+        for callable in matching.into_iter().rev() {
+            let current_next = next;
+            next = Box::new(move |native| callable(native, current_next));
         }
-        unreachable!()
+        next
     }
 }
 
@@ -1490,14 +1523,18 @@ mod tests {
         assert_eq!(result["wrapped"], "original");
     }
 
-    #[test]
-    fn test_tool_find_execution_intercept_none() {
+    #[tokio::test]
+    async fn test_tool_build_execution_chain_no_intercepts() {
         let mut ctx = NVAgentRTContextState::new();
-        assert!(!ctx.tool_find_execution_intercept("tool", &serde_json::json!({})));
+        let default_fn: ToolExecutionNextFn =
+            Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
+        let chain = ctx.tool_build_execution_chain("tool", &serde_json::json!({}), default_fn);
+        let result = chain(serde_json::json!({})).await.unwrap();
+        assert_eq!(result["default"], true);
     }
 
-    #[test]
-    fn test_tool_find_execution_intercept_conditional_false() {
+    #[tokio::test]
+    async fn test_tool_build_execution_chain_conditional_false() {
         let mut ctx = NVAgentRTContextState::new();
         ctx.tool_execution_intercepts
             .register(
@@ -1506,29 +1543,7 @@ mod tests {
                     priority: 1,
                     conditional: Box::new(|_name: &str, _args: &Json| false)
                         as ToolExecutionConditionalFn,
-                    callable: Box::new(|_args: Json| {
-                        Box::pin(async { Ok(serde_json::json!({})) })
-                            as std::pin::Pin<
-                                Box<dyn std::future::Future<Output = Result<Json>> + Send>,
-                            >
-                    }) as ToolExecutionFn,
-                },
-            )
-            .unwrap();
-        assert!(!ctx.tool_find_execution_intercept("tool", &serde_json::json!({})));
-    }
-
-    #[test]
-    fn test_tool_find_execution_intercept_conditional_true() {
-        let mut ctx = NVAgentRTContextState::new();
-        ctx.tool_execution_intercepts
-            .register(
-                "ei1".into(),
-                ExecutionIntercept {
-                    priority: 1,
-                    conditional: Box::new(|_name: &str, _args: &Json| true)
-                        as ToolExecutionConditionalFn,
-                    callable: Box::new(|_args: Json| {
+                    callable: Arc::new(|_args: Json, _next: ToolExecutionNextFn| {
                         Box::pin(async { Ok(serde_json::json!({"intercepted": true})) })
                             as std::pin::Pin<
                                 Box<dyn std::future::Future<Output = Result<Json>> + Send>,
@@ -1537,7 +1552,134 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(ctx.tool_find_execution_intercept("tool", &serde_json::json!({})));
+        let default_fn: ToolExecutionNextFn =
+            Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
+        let chain = ctx.tool_build_execution_chain("tool", &serde_json::json!({}), default_fn);
+        let result = chain(serde_json::json!({})).await.unwrap();
+        // Intercept conditional is false, so default should run
+        assert_eq!(result["default"], true);
+    }
+
+    #[tokio::test]
+    async fn test_tool_build_execution_chain_conditional_true() {
+        let mut ctx = NVAgentRTContextState::new();
+        ctx.tool_execution_intercepts
+            .register(
+                "ei1".into(),
+                ExecutionIntercept {
+                    priority: 1,
+                    conditional: Box::new(|_name: &str, _args: &Json| true)
+                        as ToolExecutionConditionalFn,
+                    callable: Arc::new(|_args: Json, _next: ToolExecutionNextFn| {
+                        Box::pin(async { Ok(serde_json::json!({"intercepted": true})) })
+                            as std::pin::Pin<
+                                Box<dyn std::future::Future<Output = Result<Json>> + Send>,
+                            >
+                    }) as ToolExecutionFn,
+                },
+            )
+            .unwrap();
+        let default_fn: ToolExecutionNextFn =
+            Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
+        let chain = ctx.tool_build_execution_chain("tool", &serde_json::json!({}), default_fn);
+        let result = chain(serde_json::json!({})).await.unwrap();
+        // Intercept conditional is true, so intercept should run (skipping next)
+        assert_eq!(result["intercepted"], true);
+    }
+
+    #[tokio::test]
+    async fn test_tool_build_execution_chain_calls_next() {
+        let mut ctx = NVAgentRTContextState::new();
+        ctx.tool_execution_intercepts
+            .register(
+                "ei1".into(),
+                ExecutionIntercept {
+                    priority: 1,
+                    conditional: Box::new(|_name: &str, _args: &Json| true)
+                        as ToolExecutionConditionalFn,
+                    callable: Arc::new(|args: Json, next: ToolExecutionNextFn| {
+                        Box::pin(async move {
+                            let mut result = next(args).await?;
+                            result
+                                .as_object_mut()
+                                .unwrap()
+                                .insert("wrapped".into(), serde_json::json!(true));
+                            Ok(result)
+                        })
+                            as std::pin::Pin<
+                                Box<dyn std::future::Future<Output = Result<Json>> + Send>,
+                            >
+                    }) as ToolExecutionFn,
+                },
+            )
+            .unwrap();
+        let default_fn: ToolExecutionNextFn =
+            Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
+        let chain = ctx.tool_build_execution_chain("tool", &serde_json::json!({}), default_fn);
+        let result = chain(serde_json::json!({})).await.unwrap();
+        // Intercept calls next, then wraps result
+        assert_eq!(result["default"], true);
+        assert_eq!(result["wrapped"], true);
+    }
+
+    #[tokio::test]
+    async fn test_tool_build_execution_chain_multiple_intercepts() {
+        let mut ctx = NVAgentRTContextState::new();
+        // Lower priority = outermost wrapper
+        ctx.tool_execution_intercepts
+            .register(
+                "outer".into(),
+                ExecutionIntercept {
+                    priority: 1,
+                    conditional: Box::new(|_name: &str, _args: &Json| true)
+                        as ToolExecutionConditionalFn,
+                    callable: Arc::new(|args: Json, next: ToolExecutionNextFn| {
+                        Box::pin(async move {
+                            let mut result = next(args).await?;
+                            result
+                                .as_object_mut()
+                                .unwrap()
+                                .insert("outer".into(), serde_json::json!(true));
+                            Ok(result)
+                        })
+                            as std::pin::Pin<
+                                Box<dyn std::future::Future<Output = Result<Json>> + Send>,
+                            >
+                    }) as ToolExecutionFn,
+                },
+            )
+            .unwrap();
+        ctx.tool_execution_intercepts
+            .register(
+                "inner".into(),
+                ExecutionIntercept {
+                    priority: 2,
+                    conditional: Box::new(|_name: &str, _args: &Json| true)
+                        as ToolExecutionConditionalFn,
+                    callable: Arc::new(|args: Json, next: ToolExecutionNextFn| {
+                        Box::pin(async move {
+                            let mut result = next(args).await?;
+                            result
+                                .as_object_mut()
+                                .unwrap()
+                                .insert("inner".into(), serde_json::json!(true));
+                            Ok(result)
+                        })
+                            as std::pin::Pin<
+                                Box<dyn std::future::Future<Output = Result<Json>> + Send>,
+                            >
+                    }) as ToolExecutionFn,
+                },
+            )
+            .unwrap();
+        let default_fn: ToolExecutionNextFn =
+            Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
+        let chain = ctx.tool_build_execution_chain("tool", &serde_json::json!({}), default_fn);
+        let result = chain(serde_json::json!({})).await.unwrap();
+        // Both intercepts call next, so all three flags should be set
+        assert_eq!(result["default"], true);
+        assert_eq!(result["inner"], true);
+        assert_eq!(result["outer"], true);
     }
 
     // -- LLM chain methods --
@@ -1551,7 +1693,8 @@ mod tests {
                 GuardrailEntry {
                     priority: 1,
                     guardrail: Box::new(|mut req: LLMRequest| {
-                        req.url = "https://sanitized.example.com".into();
+                        req.headers
+                            .insert("sanitized".into(), serde_json::json!(true));
                         req
                     }),
                 },
@@ -1559,14 +1702,12 @@ mod tests {
             .unwrap();
 
         let req = LLMRequest {
-            method: "POST".into(),
-            url: "https://original.example.com".into(),
             headers: serde_json::Map::new(),
-            body: serde_json::json!({}),
+            content: serde_json::json!({"messages": []}),
         };
         let result = ctx.llm_sanitize_request_chain(req);
-        assert_eq!(result.url, "https://sanitized.example.com");
-        assert_eq!(result.method, "POST");
+        assert_eq!(result.headers["sanitized"], true);
+        assert_eq!(result.content, serde_json::json!({"messages": []}));
     }
 
     #[test]
@@ -1577,8 +1718,9 @@ mod tests {
                 "g1".into(),
                 GuardrailEntry {
                     priority: 1,
-                    guardrail: Box::new(|mut resp: Json| {
-                        resp.as_object_mut()
+                    guardrail: Box::new(|mut resp: LLMResponse| {
+                        resp.data
+                            .as_object_mut()
                             .unwrap()
                             .insert("sanitized".into(), serde_json::json!(true));
                         resp
@@ -1587,8 +1729,10 @@ mod tests {
             )
             .unwrap();
 
-        let result = ctx.llm_sanitize_response_chain(serde_json::json!({"data": "test"}));
-        assert_eq!(result["sanitized"], true);
+        let result = ctx.llm_sanitize_response_chain(LLMResponse {
+            data: serde_json::json!({"data": "test"}),
+        });
+        assert_eq!(result.data["sanitized"], true);
     }
 
     #[test]
@@ -1605,10 +1749,8 @@ mod tests {
             .unwrap();
 
         let req = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com".into(),
             headers: serde_json::Map::new(),
-            body: serde_json::json!({}),
+            content: serde_json::json!({}),
         };
         assert!(ctx.llm_conditional_execution_chain(&req).is_none());
     }
@@ -1627,10 +1769,8 @@ mod tests {
             .unwrap();
 
         let req = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com".into(),
             headers: serde_json::Map::new(),
-            body: serde_json::json!({}),
+            content: serde_json::json!({}),
         };
         assert_eq!(
             ctx.llm_conditional_execution_chain(&req),
@@ -1647,23 +1787,21 @@ mod tests {
                 Intercept {
                     priority: 1,
                     break_chain: false,
-                    callable: Box::new(|mut req: LLMRequest| {
-                        req.headers
-                            .insert("X-Intercepted".into(), serde_json::json!("true"));
-                        req
+                    callable: Box::new(|mut native: Json| {
+                        native
+                            .as_object_mut()
+                            .unwrap()
+                            .insert("intercepted".into(), serde_json::json!(true));
+                        native
                     }),
                 },
             )
             .unwrap();
 
-        let req = LLMRequest {
-            method: "GET".into(),
-            url: "https://api.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: serde_json::json!(null),
-        };
-        let result = ctx.llm_request_intercepts_chain(req);
-        assert_eq!(result.headers["X-Intercepted"], "true");
+        let native = serde_json::json!({"messages": []});
+        let result = ctx.llm_request_intercepts_chain(native);
+        assert_eq!(result["intercepted"], true);
+        assert_eq!(result["messages"], serde_json::json!([]));
     }
 
     #[test]
@@ -1675,9 +1813,12 @@ mod tests {
                 Intercept {
                     priority: 1,
                     break_chain: true,
-                    callable: Box::new(|mut req: LLMRequest| {
-                        req.url = "https://intercepted1.com".into();
-                        req
+                    callable: Box::new(|mut native: Json| {
+                        native
+                            .as_object_mut()
+                            .unwrap()
+                            .insert("from_i1".into(), serde_json::json!(true));
+                        native
                     }),
                 },
             )
@@ -1688,22 +1829,21 @@ mod tests {
                 Intercept {
                     priority: 2,
                     break_chain: false,
-                    callable: Box::new(|mut req: LLMRequest| {
-                        req.url = "https://intercepted2.com".into();
-                        req
+                    callable: Box::new(|mut native: Json| {
+                        native
+                            .as_object_mut()
+                            .unwrap()
+                            .insert("from_i2".into(), serde_json::json!(true));
+                        native
                     }),
                 },
             )
             .unwrap();
 
-        let req = LLMRequest {
-            method: "POST".into(),
-            url: "https://original.com".into(),
-            headers: serde_json::Map::new(),
-            body: serde_json::json!({}),
-        };
-        let result = ctx.llm_request_intercepts_chain(req);
-        assert_eq!(result.url, "https://intercepted1.com");
+        let native = serde_json::json!({});
+        let result = ctx.llm_request_intercepts_chain(native);
+        assert_eq!(result["from_i1"], true);
+        assert!(result.get("from_i2").is_none());
     }
 
     #[test]
@@ -1715,8 +1855,9 @@ mod tests {
                 Intercept {
                     priority: 1,
                     break_chain: false,
-                    callable: Box::new(|mut resp: Json| {
-                        resp.as_object_mut()
+                    callable: Box::new(|mut resp: LLMResponse| {
+                        resp.data
+                            .as_object_mut()
                             .unwrap()
                             .insert("modified".into(), serde_json::json!(true));
                         resp
@@ -1725,9 +1866,11 @@ mod tests {
             )
             .unwrap();
 
-        let result = ctx.llm_response_intercepts_chain(serde_json::json!({"original": true}));
-        assert_eq!(result["modified"], true);
-        assert_eq!(result["original"], true);
+        let result = ctx.llm_response_intercepts_chain(LLMResponse {
+            data: serde_json::json!({"original": true}),
+        });
+        assert_eq!(result.data["modified"], true);
+        assert_eq!(result.data["original"], true);
     }
 
     #[test]
@@ -1739,37 +1882,48 @@ mod tests {
                 Intercept {
                     priority: 1,
                     break_chain: false,
-                    callable: Box::new(|chunk: String| format!("modified: {}", chunk)),
+                    callable: Box::new(|chunk: Json| serde_json::json!({"modified": chunk})),
                 },
             )
             .unwrap();
 
-        let result = ctx.llm_stream_response_intercepts_chain("original".to_string());
-        assert_eq!(result, "modified: original");
+        let result = ctx.llm_stream_response_intercepts_chain(serde_json::json!("original"));
+        assert_eq!(result["modified"], "original");
     }
 
-    #[test]
-    fn test_llm_find_execution_intercept_none() {
+    #[tokio::test]
+    async fn test_llm_build_execution_chain_no_intercepts() {
         let mut ctx = NVAgentRTContextState::new();
-        let req = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: serde_json::json!({}),
-        };
-        assert!(!ctx.llm_find_execution_intercept(&req));
+        let native = serde_json::json!({"messages": []});
+        let default_fn: LlmExecutionNextFn =
+            Box::new(|_native| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
+        let chain = ctx.llm_build_execution_chain(&native, default_fn);
+        let result = chain(native).await.unwrap();
+        assert_eq!(result["default"], true);
     }
 
-    #[test]
-    fn test_llm_stream_find_execution_intercept_none() {
+    #[tokio::test]
+    async fn test_llm_stream_build_execution_chain_no_intercepts() {
+        use futures::StreamExt;
         let mut ctx = NVAgentRTContextState::new();
-        let req = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: serde_json::json!({}),
-        };
-        assert!(!ctx.llm_stream_find_execution_intercept(&req));
+        let native = serde_json::json!({"messages": []});
+        let default_fn: LlmStreamExecutionNextFn = Box::new(|_native| {
+            Box::pin(async {
+                let stream: Pin<Box<dyn Stream<Item = Result<Json>> + Send>> =
+                    Box::pin(futures::stream::once(async {
+                        Ok(serde_json::json!({"token": "chunk"}))
+                    }));
+                Ok(stream)
+            })
+        });
+        let chain = ctx.llm_stream_build_execution_chain(&native, default_fn);
+        let stream = chain(native).await.unwrap();
+        let chunks: Vec<_> = stream.collect().await;
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(
+            chunks[0].as_ref().unwrap(),
+            &serde_json::json!({"token": "chunk"})
+        );
     }
 
     // -- Generic chain runners --

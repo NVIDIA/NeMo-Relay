@@ -61,33 +61,38 @@ func TestLLMAttributeConstants(t *testing.T) {
 // ============================================================================
 
 func TestNewLLMRequest(t *testing.T) {
-	req := NewLLMRequest("POST", "https://api.example.com",
+	req := NewLLMRequest(
 		map[string]interface{}{"Authorization": "Bearer token"},
 		map[string]interface{}{"messages": []string{}},
 	)
 	if req == nil {
 		t.Fatal("NewLLMRequest returned nil")
 	}
-	if req.Method() != "POST" {
-		t.Fatalf("expected POST, got %s", req.Method())
-	}
-	if req.URL() != "https://api.example.com" {
-		t.Fatalf("expected URL, got %s", req.URL())
-	}
 	if req.Headers() == nil {
 		t.Fatal("headers is nil")
 	}
-	if req.Body() == nil {
-		t.Fatal("body is nil")
+	if req.Content() == nil {
+		t.Fatal("content is nil")
 	}
 }
 
 func TestNewLLMRequestEmptyHeaders(t *testing.T) {
-	req := NewLLMRequest("GET", "https://api.example.com", map[string]interface{}{}, map[string]interface{}{})
+	req := NewLLMRequest(map[string]interface{}{}, map[string]interface{}{})
 	if req == nil {
 		t.Fatal("returned nil")
 	}
-	if req.Method() != "GET" {
-		t.Fatalf("expected GET, got %s", req.Method())
+	if req.Headers() == nil {
+		t.Fatal("headers is nil")
+	}
+}
+
+// ============================================================================
+// LLMResponse
+// ============================================================================
+
+func TestLLMResponse(t *testing.T) {
+	resp := LLMResponse{Data: []byte(`{"choices": []}`)}
+	if resp.Data == nil {
+		t.Fatal("data is nil")
 	}
 }

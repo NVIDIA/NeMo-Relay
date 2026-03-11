@@ -16,10 +16,12 @@ Functions:
         End a manual tool call. Records the result and emits an ``End`` event.
 
     execute(name, args, func, *, handle=None, attributes=None, data=None, metadata=None)
-        Execute a tool call through the full middleware pipeline (request
-        intercepts → sanitize-request guardrails → conditional-execution
-        guardrails → execution intercepts → *func* → response intercepts →
-        sanitize-response guardrails). Returns an awaitable of the final result.
+        Execute a tool call through the full middleware pipeline (conditional-
+        execution guardrails on raw args → request intercepts →
+        sanitize-request guardrails → execution intercepts → *func* →
+        response intercepts → sanitize-response guardrails). On rejection,
+        only a standalone Mark event is emitted and ``GuardrailRejected`` is
+        raised. Returns an awaitable of the final result.
 
     request_intercepts(name, args)
         Run the registered tool request intercept chain on the given arguments.

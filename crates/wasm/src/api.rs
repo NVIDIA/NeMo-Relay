@@ -162,10 +162,12 @@ pub fn nvagentrt_tool_call_end(
     .map_err(to_js_err)
 }
 
-/// Executes a full tool call lifecycle: begin, execute the provided function, and end.
+/// Executes a full tool call lifecycle through the middleware pipeline.
 ///
-/// This is a convenience wrapper that combines `toolCall`, invocation of `func`,
-/// and `toolCallEnd` into a single async operation. Returns the tool result as JSON.
+/// Runs conditional-execution guardrails (on raw args) → request intercepts →
+/// sanitize-request guardrails → execution intercepts → `func` → response
+/// intercepts → sanitize-response guardrails. On rejection, only a standalone
+/// Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned.
 ///
 /// - `name` - Tool name.
 /// - `args` - JSON arguments to the tool.
@@ -190,11 +192,12 @@ pub async fn nvagentrt_tool_call_execute(
         .map(|h| h.inner)
         .unwrap_or_else(nvagentrt_core::task_scope_top);
     let exec_fn = callable::wrap_js_tool_exec_fn(func);
+    let default_fn: nvagentrt_core::ToolExecutionNextFn = Box::new(move |args| exec_fn(args));
 
     let result = nvagentrt_core::nvagentrt_tool_call_execute(
         name,
         args_json,
-        exec_fn,
+        default_fn,
         Some(parent_handle),
         attrs,
         opt_js_to_json(&data)?,
@@ -215,30 +218,38 @@ pub async fn nvagentrt_tool_call_execute(
 /// Runs request guardrails and intercepts on the request before returning.
 ///
 /// - `name` - LLM provider/model name.
-/// - `request` - The LLM request containing method, URL, headers, and body.
+/// - `native` - The native LLM request as a JSON value.
 /// - `parent` - Optional parent scope handle.
 /// - `attributes` - Optional bitfield of LLM attribute flags.
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
+/// - `model_name` - Optional model name string.
+/// - `to_request` - Optional JS function `(native) => { headers, content }` to convert
+///   native JSON to a formal LLMRequest.
+#[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmCall")]
 pub fn nvagentrt_llm_call(
     name: &str,
-    request: &WasmLLMRequest,
+    native: JsValue,
     parent: Option<WasmScopeHandle>,
     attributes: Option<u32>,
     data: JsValue,
     metadata: JsValue,
     model_name: Option<String>,
+    to_request: Option<Function>,
 ) -> Result<WasmLLMHandle, JsValue> {
+    let native_json = js_to_json(&native)?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
+    let to_req = to_request.map(wrap_wasm_to_request);
     nvagentrt_core::nvagentrt_llm_call(
         name,
-        &request.inner,
+        &native_json,
         parent.as_ref().map(|h| &h.inner),
         attrs,
         opt_js_to_json(&data)?,
         opt_js_to_json(&metadata)?,
         model_name,
+        to_req.as_ref(),
     )
     .map(WasmLLMHandle::from)
     .map_err(to_js_err)
@@ -250,62 +261,78 @@ pub fn nvagentrt_llm_call(
 /// - `response` - JSON response from the LLM.
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
+/// - `to_response` - Optional JS function `(native) => { data }` to convert
+///   native JSON to a formal LLMResponse.
 #[wasm_bindgen(js_name = "llmCallEnd")]
 pub fn nvagentrt_llm_call_end(
     handle: &WasmLLMHandle,
     response: JsValue,
     data: JsValue,
     metadata: JsValue,
+    to_response: Option<Function>,
 ) -> Result<(), JsValue> {
     let response_json = js_to_json(&response)?;
+    let to_resp = to_response.map(wrap_wasm_to_response);
     nvagentrt_core::nvagentrt_llm_call_end(
         &handle.inner,
         response_json,
         opt_js_to_json(&data)?,
         opt_js_to_json(&metadata)?,
+        to_resp.as_ref(),
     )
     .map_err(to_js_err)
 }
 
-/// Executes a full LLM call lifecycle: begin, execute the provided function, and end.
+/// Executes a full LLM call lifecycle through the middleware pipeline.
 ///
-/// This is a convenience wrapper that combines `llmCall`, invocation of `func`,
-/// and `llmCallEnd` into a single async operation. Returns the LLM response as JSON.
+/// Runs conditional-execution guardrails (on raw request) → request intercepts →
+/// sanitize-request guardrails → execution intercepts → `func` → response
+/// intercepts → sanitize-response guardrails. On rejection, only a standalone
+/// Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned.
 ///
 /// - `name` - LLM provider/model name.
-/// - `request` - The LLM request containing method, URL, headers, and body.
-/// - `func` - JavaScript function `(request) => result | Promise<result>` to execute.
+/// - `native` - The native LLM request as a JSON value.
+/// - `func` - JavaScript function `(native) => result | Promise<result>` to execute.
 /// - `parent` - Optional parent scope handle.
 /// - `attributes` - Optional bitfield of LLM attribute flags.
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
+/// - `model_name` - Optional model name string.
+/// - `to_request` - Optional JS function `(native) => { headers, content }`.
+/// - `to_response` - Optional JS function `(native) => { data }`.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmCallExecute")]
 pub async fn nvagentrt_llm_call_execute(
     name: &str,
-    request: &WasmLLMRequest,
+    native: JsValue,
     func: Function,
     parent: Option<WasmScopeHandle>,
     attributes: Option<u32>,
     data: JsValue,
     metadata: JsValue,
     model_name: Option<String>,
+    to_request: Option<Function>,
+    to_response: Option<Function>,
 ) -> Result<JsValue, JsValue> {
+    let native_json = js_to_json(&native)?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
         .unwrap_or_else(nvagentrt_core::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
+    let default_fn: nvagentrt_core::LlmExecutionNextFn = Box::new(move |native| exec_fn(native));
 
     let result = nvagentrt_core::nvagentrt_llm_call_execute(
         name,
-        request.inner.clone(),
-        exec_fn,
+        native_json,
+        default_fn,
         Some(parent_handle),
         attrs,
         opt_js_to_json(&data)?,
         opt_js_to_json(&metadata)?,
         model_name,
+        to_request.map(wrap_wasm_to_request),
+        to_response.map(wrap_wasm_to_response),
     )
     .await
     .map_err(to_js_err)?;
@@ -313,28 +340,31 @@ pub async fn nvagentrt_llm_call_execute(
     Ok(json_to_js(&result))
 }
 
-/// Executes a streaming LLM call lifecycle: begin, execute the provided function,
-/// and stream back chunks with full middleware pipeline support.
+/// Executes a streaming LLM call lifecycle through the middleware pipeline.
 ///
-/// Returns a `WasmLlmStream` whose `next()` method yields response chunks
-/// incrementally. Stream-level intercepts are applied to each chunk.
+/// Like `llmCallExecute`, conditional-execution guardrails run first on the raw
+/// request. Returns a `WasmLlmStream` whose `next()` method yields response
+/// chunks incrementally. Stream-level intercepts are applied to each chunk.
 ///
 /// - `name` - LLM provider/model name.
-/// - `request` - The LLM request containing method, URL, headers, and body.
-/// - `func` - JavaScript function `(request) => result | Promise<result>` to execute.
+/// - `native` - The native LLM request as a JSON value.
+/// - `func` - JavaScript function `(native) => result | Promise<result>` to execute.
 /// - `collector` - Optional JavaScript function `(chunk) => void` called with each
-///   intercepted chunk for accumulation.
+///   intercepted Json chunk for accumulation.
 /// - `finalizer` - Optional JavaScript function `() => object` called once when the
 ///   stream is exhausted to produce the aggregated response.
 /// - `parent` - Optional parent scope handle.
 /// - `attributes` - Optional bitfield of LLM attribute flags.
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
+/// - `model_name` - Optional model name string.
+/// - `to_request` - Optional JS function `(native) => { headers, content }`.
+/// - `to_response` - Optional JS function `(native) => { data }`.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmStreamCallExecute")]
 pub async fn nvagentrt_llm_stream_call_execute(
     name: &str,
-    request: &WasmLLMRequest,
+    native: JsValue,
     func: Function,
     collector: Option<Function>,
     finalizer: Option<Function>,
@@ -343,16 +373,19 @@ pub async fn nvagentrt_llm_stream_call_execute(
     data: JsValue,
     metadata: JsValue,
     model_name: Option<String>,
+    to_request: Option<Function>,
+    to_response: Option<Function>,
 ) -> Result<WasmLlmStream, JsValue> {
+    let native_json = js_to_json(&native)?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
         .unwrap_or_else(nvagentrt_core::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
 
-    let wrapped_collector: Box<dyn FnMut(String) + Send> = match collector {
+    let wrapped_collector: Box<dyn FnMut(serde_json::Value) + Send> = match collector {
         Some(cb) => callable::wrap_js_collector_fn(cb),
-        None => Box::new(|_: String| {}),
+        None => Box::new(|_: serde_json::Value| {}),
     };
 
     let wrapped_finalizer: Box<dyn FnOnce() -> serde_json::Value + Send> = match finalizer {
@@ -360,23 +393,26 @@ pub async fn nvagentrt_llm_stream_call_execute(
         None => Box::new(|| serde_json::Value::Null),
     };
 
+    // Bridge LlmExecutionFn -> LlmStreamExecutionNextFn (FnOnce)
+    let default_fn: nvagentrt_core::LlmStreamExecutionNextFn = Box::new(move |native| {
+        let fut = exec_fn(native);
+        Box::pin(async move {
+            let result = fut.await?;
+            let stream = tokio_stream::once(Ok(result));
+            Ok(Box::pin(stream)
+                as std::pin::Pin<
+                    Box<
+                        dyn tokio_stream::Stream<Item = nvagentrt_core::Result<serde_json::Value>>
+                            + Send,
+                    >,
+                >)
+        })
+    });
+
     let rust_stream = nvagentrt_core::nvagentrt_llm_stream_call_execute(
         name,
-        request.inner.clone(),
-        // Bridge LlmExecutionFn -> LlmStreamExecutionFn
-        Box::new(move |req| {
-            let fut = exec_fn(req);
-            Box::pin(async move {
-                let result = fut.await?;
-                let text = serde_json::to_string(&result)
-                    .map_err(|e| nvagentrt_core::AgentRtError::Internal(e.to_string()))?;
-                let stream = tokio_stream::once(Ok(text));
-                Ok(Box::pin(stream)
-                    as std::pin::Pin<
-                        Box<dyn tokio_stream::Stream<Item = nvagentrt_core::Result<String>> + Send>,
-                    >)
-            })
-        }),
+        native_json,
+        default_fn,
         wrapped_collector,
         wrapped_finalizer,
         Some(parent_handle),
@@ -384,6 +420,8 @@ pub async fn nvagentrt_llm_stream_call_execute(
         opt_js_to_json(&data)?,
         opt_js_to_json(&metadata)?,
         model_name,
+        to_request.map(wrap_wasm_to_request),
+        to_response.map(wrap_wasm_to_response),
     )
     .await
     .map_err(to_js_err)?;
@@ -555,12 +593,13 @@ pub fn deregister_tool_response_intercept(name: &str) -> Result<bool, JsValue> {
     nvagentrt_core::nvagentrt_deregister_tool_response_intercept(name).map_err(to_js_err)
 }
 
-/// Registers an intercept that can replace tool execution entirely.
+/// Registers a tool execution intercept following the middleware chain pattern.
 ///
 /// - `name` - Unique intercept name.
 /// - `priority` - Execution priority (lower runs first).
 /// - `conditional` - JS function `(name, args) => boolean` that decides whether to intercept.
-/// - `exec_fn` - JS function `(args) => result | Promise<result>` used as the replacement execution.
+/// - `exec_fn` - JS function `(args, next) => result | Promise<result>` — intercept function.
+///   Call `await next(args)` to invoke the next intercept or original implementation.
 #[wasm_bindgen(js_name = "registerToolExecutionIntercept")]
 pub fn register_tool_execution_intercept(
     name: &str,
@@ -572,7 +611,7 @@ pub fn register_tool_execution_intercept(
         name,
         priority,
         callable::wrap_js_tool_exec_conditional_fn(conditional),
-        callable::wrap_js_tool_exec_fn(exec_fn),
+        callable::wrap_js_tool_exec_intercept_fn(exec_fn),
     )
     .map_err(to_js_err)
 }
@@ -628,7 +667,7 @@ pub fn register_llm_sanitize_response_guardrail(
     nvagentrt_core::nvagentrt_register_llm_sanitize_response_guardrail(
         name,
         priority,
-        callable::wrap_js_json_fn(guardrail),
+        callable::wrap_js_llm_response_fn(guardrail),
     )
     .map_err(to_js_err)
 }
@@ -674,12 +713,12 @@ pub fn deregister_llm_conditional_execution_guardrail(name: &str) -> Result<bool
 
 // LLM intercepts
 
-/// Registers an intercept that transforms LLM request data.
+/// Registers an intercept that transforms LLM request data (native Json).
 ///
 /// - `name` - Unique intercept name.
 /// - `priority` - Execution priority (lower runs first).
 /// - `break_chain` - If `true`, stops further intercepts from running after this one.
-/// - `func` - JS function `(request) => transformedRequest`.
+/// - `func` - JS function `(native) => transformedNative`.
 #[wasm_bindgen(js_name = "registerLlmRequestIntercept")]
 pub fn register_llm_request_intercept(
     name: &str,
@@ -691,7 +730,7 @@ pub fn register_llm_request_intercept(
         name,
         priority,
         break_chain,
-        callable::wrap_js_llm_sanitize_request_fn(func),
+        callable::wrap_js_json_fn(func),
     )
     .map_err(to_js_err)
 }
@@ -721,7 +760,7 @@ pub fn register_llm_response_intercept(
         name,
         priority,
         break_chain,
-        callable::wrap_js_json_fn(func),
+        callable::wrap_js_llm_response_fn(func),
     )
     .map_err(to_js_err)
 }
@@ -739,7 +778,7 @@ pub fn deregister_llm_response_intercept(name: &str) -> Result<bool, JsValue> {
 /// - `name` - Unique intercept name.
 /// - `priority` - Execution priority (lower runs first).
 /// - `break_chain` - If `true`, stops further intercepts from running after this one.
-/// - `func` - JS function `(chunk) => transformedChunk`.
+/// - `func` - JS function `(chunk) => transformedChunk` (Json).
 #[wasm_bindgen(js_name = "registerLlmStreamResponseIntercept")]
 pub fn register_llm_stream_response_intercept(
     name: &str,
@@ -751,7 +790,7 @@ pub fn register_llm_stream_response_intercept(
         name,
         priority,
         break_chain,
-        callable::wrap_js_string_intercept_fn(func),
+        callable::wrap_js_stream_response_intercept_fn(func),
     )
     .map_err(to_js_err)
 }
@@ -764,12 +803,13 @@ pub fn deregister_llm_stream_response_intercept(name: &str) -> Result<bool, JsVa
     nvagentrt_core::nvagentrt_deregister_llm_stream_response_intercept(name).map_err(to_js_err)
 }
 
-/// Registers an intercept that can replace LLM execution entirely.
+/// Registers an LLM execution intercept following the middleware chain pattern.
 ///
 /// - `name` - Unique intercept name.
 /// - `priority` - Execution priority (lower runs first).
-/// - `conditional` - JS function `(request) => boolean` that decides whether to intercept.
-/// - `exec_fn` - JS function `(request) => result | Promise<result>` used as the replacement execution.
+/// - `conditional` - JS function `(native) => boolean` that decides whether to intercept.
+/// - `exec_fn` - JS function `(native, next) => result | Promise<result>` — intercept function.
+///   Call `await next(native)` to invoke the next intercept or original implementation.
 #[wasm_bindgen(js_name = "registerLlmExecutionIntercept")]
 pub fn register_llm_execution_intercept(
     name: &str,
@@ -781,7 +821,7 @@ pub fn register_llm_execution_intercept(
         name,
         priority,
         callable::wrap_js_llm_exec_conditional_fn(conditional),
-        callable::wrap_js_llm_exec_fn(exec_fn),
+        callable::wrap_js_llm_exec_intercept_fn(exec_fn),
     )
     .map_err(to_js_err)
 }
@@ -794,14 +834,15 @@ pub fn deregister_llm_execution_intercept(name: &str) -> Result<bool, JsValue> {
     nvagentrt_core::nvagentrt_deregister_llm_execution_intercept(name).map_err(to_js_err)
 }
 
-/// Registers an intercept that can replace streaming LLM execution entirely.
+/// Registers a streaming LLM execution intercept following the middleware chain pattern.
 ///
 /// The execution function result is wrapped into a single-item stream internally.
 ///
 /// - `name` - Unique intercept name.
 /// - `priority` - Execution priority (lower runs first).
-/// - `conditional` - JS function `(request) => boolean` that decides whether to intercept.
-/// - `exec_fn` - JS function `(request) => result | Promise<result>` used as the replacement execution.
+/// - `conditional` - JS function `(native) => boolean` that decides whether to intercept.
+/// - `exec_fn` - JS function `(native, next) => result | Promise<result>` — intercept function.
+///   Call `await next(native)` to invoke the next intercept or original streaming implementation.
 #[wasm_bindgen(js_name = "registerLlmStreamExecutionIntercept")]
 pub fn register_llm_stream_execution_intercept(
     name: &str,
@@ -809,25 +850,11 @@ pub fn register_llm_stream_execution_intercept(
     conditional: Function,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    let exec = callable::wrap_js_llm_exec_fn(exec_fn);
-    let stream_fn: nvagentrt_core::LlmStreamExecutionFn = Box::new(move |req| {
-        let fut = exec(req);
-        Box::pin(async move {
-            let result = fut.await?;
-            let text = serde_json::to_string(&result)
-                .map_err(|e| nvagentrt_core::AgentRtError::Internal(e.to_string()))?;
-            let stream = tokio_stream::once(Ok(text));
-            Ok(Box::pin(stream)
-                as std::pin::Pin<
-                    Box<dyn tokio_stream::Stream<Item = nvagentrt_core::Result<String>> + Send>,
-                >)
-        })
-    });
     nvagentrt_core::nvagentrt_register_llm_stream_execution_intercept(
         name,
         priority,
         callable::wrap_js_llm_exec_conditional_fn(conditional),
-        stream_fn,
+        callable::wrap_js_llm_stream_exec_intercept_fn(exec_fn),
     )
     .map_err(to_js_err)
 }
@@ -926,29 +953,38 @@ pub fn nvagentrt_tool_response_intercepts_wasm(
     Ok(json_to_js(&transformed))
 }
 
-/// Runs the registered LLM request intercept chain on the given request.
+/// Runs the registered LLM request intercept chain on the given native Json.
 #[wasm_bindgen(js_name = "llmRequestIntercepts")]
-pub fn nvagentrt_llm_request_intercepts_wasm(
-    request: &WasmLLMRequest,
-) -> Result<WasmLLMRequest, JsValue> {
-    let result = nvagentrt_core::nvagentrt_llm_request_intercepts(request.inner.clone())
-        .map_err(to_js_err)?;
-    Ok(WasmLLMRequest { inner: result })
+pub fn nvagentrt_llm_request_intercepts_wasm(native: JsValue) -> Result<JsValue, JsValue> {
+    let native_json = js_to_json(&native)?;
+    let result =
+        nvagentrt_core::nvagentrt_llm_request_intercepts(native_json).map_err(to_js_err)?;
+    Ok(json_to_js(&result))
 }
 
 /// Runs the registered LLM conditional execution guardrail chain.
+///
+/// - `native` - The native LLM request as a JSON value.
+/// - `to_request` - Optional JS function `(native) => { headers, content }`.
 #[wasm_bindgen(js_name = "llmConditionalExecution")]
-pub fn nvagentrt_llm_conditional_execution_wasm(request: &WasmLLMRequest) -> Result<(), JsValue> {
-    nvagentrt_core::nvagentrt_llm_conditional_execution(&request.inner).map_err(to_js_err)
+pub fn nvagentrt_llm_conditional_execution_wasm(
+    native: JsValue,
+    to_request: Option<Function>,
+) -> Result<(), JsValue> {
+    let native_json = js_to_json(&native)?;
+    let to_req = to_request.map(wrap_wasm_to_request);
+    nvagentrt_core::nvagentrt_llm_conditional_execution(&native_json, to_req.as_ref())
+        .map_err(to_js_err)
 }
 
 /// Runs the registered LLM response intercept chain on the given response.
 #[wasm_bindgen(js_name = "llmResponseIntercepts")]
-pub fn nvagentrt_llm_response_intercepts_wasm(response: JsValue) -> Result<JsValue, JsValue> {
-    let response_json = js_to_json(&response)?;
-    let transformed =
-        nvagentrt_core::nvagentrt_llm_response_intercepts(response_json).map_err(to_js_err)?;
-    Ok(json_to_js(&transformed))
+pub fn nvagentrt_llm_response_intercepts_wasm(
+    response: &WasmLLMResponse,
+) -> Result<WasmLLMResponse, JsValue> {
+    let result = nvagentrt_core::nvagentrt_llm_response_intercepts(response.inner.clone())
+        .map_err(to_js_err)?;
+    Ok(WasmLLMResponse { inner: result })
 }
 
 // ---------------------------------------------------------------------------
@@ -1010,4 +1046,61 @@ impl WasmAtifExporter {
     pub fn clear(&self) {
         self.inner.clear();
     }
+}
+
+// ---------------------------------------------------------------------------
+// LLM converter helpers
+// ---------------------------------------------------------------------------
+
+/// Wrapper around a JS `Function` that is `Send + Sync` for WASM's
+/// single-threaded execution model.
+struct SendSyncFunction(send_wrapper::SendWrapper<Function>);
+
+// Safety: WASM is single-threaded; SendWrapper ensures the inner Function is
+// only accessed from the main thread where it was created.
+unsafe impl Send for SendSyncFunction {}
+unsafe impl Sync for SendSyncFunction {}
+
+/// Wraps an optional JS `to_request` function into a boxed `ToRequestFn`.
+fn wrap_wasm_to_request(func: Function) -> nvagentrt_core::ToRequestFn {
+    let wrapper = SendSyncFunction(send_wrapper::SendWrapper::new(func));
+    Box::new(move |native: &serde_json::Value| {
+        let js_native = json_to_js(native);
+        match wrapper.0.call1(&JsValue::NULL, &js_native) {
+            Ok(result) => {
+                let result_json = js_to_json(&result).unwrap_or(serde_json::Value::Null);
+                serde_json::from_value(result_json).unwrap_or_else(|_| {
+                    nvagentrt_core::types::LLMRequest {
+                        headers: serde_json::Map::new(),
+                        content: native.clone(),
+                    }
+                })
+            }
+            Err(_) => nvagentrt_core::types::LLMRequest {
+                headers: serde_json::Map::new(),
+                content: native.clone(),
+            },
+        }
+    })
+}
+
+/// Wraps an optional JS `to_response` function into a boxed `ToResponseFn`.
+fn wrap_wasm_to_response(func: Function) -> nvagentrt_core::ToResponseFn {
+    let wrapper = SendSyncFunction(send_wrapper::SendWrapper::new(func));
+    Box::new(move |native: &serde_json::Value| {
+        let js_native = json_to_js(native);
+        match wrapper.0.call1(&JsValue::NULL, &js_native) {
+            Ok(result) => {
+                let result_json = js_to_json(&result).unwrap_or(serde_json::Value::Null);
+                serde_json::from_value(result_json).unwrap_or_else(|_| {
+                    nvagentrt_core::types::LLMResponse {
+                        data: native.clone(),
+                    }
+                })
+            }
+            Err(_) => nvagentrt_core::types::LLMResponse {
+                data: native.clone(),
+            },
+        }
+    })
 }

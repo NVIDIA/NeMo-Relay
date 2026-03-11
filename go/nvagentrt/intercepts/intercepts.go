@@ -10,9 +10,9 @@
 // Intercept categories for both tools and LLMs:
 //   - Request: transforms request arguments/parameters; supports breakChain.
 //   - Response: transforms response data; supports breakChain.
-//   - Execution: conditionally replaces the entire call implementation.
+//   - Execution: middleware chain — each intercept receives a next function.
 //   - StreamResponse (LLM only): transforms individual SSE events mid-stream.
-//   - StreamExecution (LLM only): replaces the streaming call implementation.
+//   - StreamExecution (LLM only): middleware chain for streaming calls.
 //
 // When breakChain is true on a request or response intercept, no lower-priority
 // intercepts in the chain are invoked after it.
@@ -71,11 +71,12 @@ func DeregisterToolResponse(name string) error {
 
 // --- Tool Execution ---
 
-// RegisterToolExecution registers an intercept that can replace tool execution
-// entirely. The condFn callback is evaluated first; if it returns true, execFn
-// is called instead of the original tool implementation. This is a shorthand
-// for [nvagentrt.RegisterToolExecutionIntercept].
-func RegisterToolExecution(name string, priority int32, condFn nvagentrt.ToolExecConditionalFunc, execFn nvagentrt.ToolExecutionFunc) error {
+// RegisterToolExecution registers a tool execution intercept following the
+// middleware chain pattern. The condFn callback is evaluated first; if it
+// returns true, execFn is called with args and a next function. Call next to
+// continue the chain or skip it to short-circuit. This is a shorthand for
+// [nvagentrt.RegisterToolExecutionIntercept].
+func RegisterToolExecution(name string, priority int32, condFn nvagentrt.ToolExecConditionalFunc, execFn nvagentrt.ToolExecutionInterceptFunc) error {
 	return nvagentrt.RegisterToolExecutionIntercept(name, priority, condFn, execFn)
 }
 
@@ -87,11 +88,10 @@ func DeregisterToolExecution(name string) error {
 
 // --- LLM Request ---
 
-// RegisterLlmRequest registers an intercept that transforms LLM request
-// parameters (HTTP method, URL, headers, body). When breakChain is true, no
-// lower-priority intercepts run after this one. This is a shorthand for
-// [nvagentrt.RegisterLlmRequestIntercept].
-func RegisterLlmRequest(name string, priority int32, breakChain bool, fn nvagentrt.LLMRequestFunc) error {
+// RegisterLlmRequest registers an intercept that transforms the LLM request
+// JSON. When breakChain is true, no lower-priority intercepts run after this
+// one. This is a shorthand for [nvagentrt.RegisterLlmRequestIntercept].
+func RegisterLlmRequest(name string, priority int32, breakChain bool, fn nvagentrt.JSONFunc) error {
 	return nvagentrt.RegisterLlmRequestIntercept(name, priority, breakChain, fn)
 }
 
@@ -103,10 +103,11 @@ func DeregisterLlmRequest(name string) error {
 
 // --- LLM Response ---
 
-// RegisterLlmResponse registers an intercept that transforms LLM response JSON.
+// RegisterLlmResponse registers an intercept that transforms LLM response data.
+// The callback receives serialized LLMResponse JSON (containing a "data" field).
 // When breakChain is true, no lower-priority intercepts run after this one.
 // This is a shorthand for [nvagentrt.RegisterLlmResponseIntercept].
-func RegisterLlmResponse(name string, priority int32, breakChain bool, fn nvagentrt.JSONFunc) error {
+func RegisterLlmResponse(name string, priority int32, breakChain bool, fn nvagentrt.LLMResponseFunc) error {
 	return nvagentrt.RegisterLlmResponseIntercept(name, priority, breakChain, fn)
 }
 
@@ -119,10 +120,10 @@ func DeregisterLlmResponse(name string) error {
 // --- LLM Stream Response ---
 
 // RegisterLlmStreamResponse registers an intercept that transforms individual
-// chunks during a streaming LLM response. When breakChain is true, no
+// JSON chunks during a streaming LLM response. When breakChain is true, no
 // lower-priority intercepts run after this one. This is a shorthand for
 // [nvagentrt.RegisterLlmStreamResponseIntercept].
-func RegisterLlmStreamResponse(name string, priority int32, breakChain bool, fn nvagentrt.StringInterceptFunc) error {
+func RegisterLlmStreamResponse(name string, priority int32, breakChain bool, fn nvagentrt.ChunkInterceptFunc) error {
 	return nvagentrt.RegisterLlmStreamResponseIntercept(name, priority, breakChain, fn)
 }
 
@@ -134,11 +135,12 @@ func DeregisterLlmStreamResponse(name string) error {
 
 // --- LLM Execution ---
 
-// RegisterLlmExecution registers an intercept that can replace LLM execution
-// entirely. The condFn callback is evaluated first; if it returns true, execFn
-// is called instead of the original LLM implementation. This is a shorthand
+// RegisterLlmExecution registers an LLM execution intercept following the
+// middleware chain pattern. The condFn callback is evaluated first; if it
+// returns true, execFn is called with the request and a next function. Call
+// next to continue the chain or skip it to short-circuit. This is a shorthand
 // for [nvagentrt.RegisterLlmExecutionIntercept].
-func RegisterLlmExecution(name string, priority int32, condFn nvagentrt.LLMExecConditionalFunc, execFn nvagentrt.LLMExecutionFunc) error {
+func RegisterLlmExecution(name string, priority int32, condFn nvagentrt.LLMExecConditionalFunc, execFn nvagentrt.LLMExecutionInterceptFunc) error {
 	return nvagentrt.RegisterLlmExecutionIntercept(name, priority, condFn, execFn)
 }
 
@@ -150,11 +152,12 @@ func DeregisterLlmExecution(name string) error {
 
 // --- LLM Stream Execution ---
 
-// RegisterLlmStreamExecution registers an intercept that can replace streaming
-// LLM execution entirely. The condFn callback is evaluated first; if it returns
-// true, execFn is called instead of the original streaming implementation. This
+// RegisterLlmStreamExecution registers a streaming LLM execution intercept
+// following the middleware chain pattern. The condFn callback is evaluated
+// first; if it returns true, execFn is called with the request and a next
+// function. Call next to continue the chain or skip it to short-circuit. This
 // is a shorthand for [nvagentrt.RegisterLlmStreamExecutionIntercept].
-func RegisterLlmStreamExecution(name string, priority int32, condFn nvagentrt.LLMExecConditionalFunc, execFn nvagentrt.LLMExecutionFunc) error {
+func RegisterLlmStreamExecution(name string, priority int32, condFn nvagentrt.LLMExecConditionalFunc, execFn nvagentrt.LLMExecutionInterceptFunc) error {
 	return nvagentrt.RegisterLlmStreamExecutionIntercept(name, priority, condFn, execFn)
 }
 

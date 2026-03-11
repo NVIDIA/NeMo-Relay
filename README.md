@@ -111,8 +111,8 @@ flowchart TB
 
     subgraph Execution
         direction TB
-        RequestIntercepts[/Request Intercepts/]
         ConditionalExecutionGuardrails{{Conditional-Execution Guardrail}}
+        RequestIntercepts[/Request Intercepts/]
         RaiseException[Raise Exception]
         subgraph Invocation
             direction TB
@@ -141,14 +141,16 @@ flowchart TB
     Response([Response])
 
 
-    Request -->|Request| RequestIntercepts
-    RequestIntercepts -->|Transformed Request| SanitizeRequestGuardrails
-    RequestIntercepts -->|Transformed Request| ConditionalExecutionGuardrails
+    Request --> ConditionalExecutionGuardrails
+    RequestIntercepts -->|Transformed Request| SanitizeRequestGuardrails & Invocation
     ConditionalExecutionGuardrails -->|"(rejected)"| EventSubscribers
     ConditionalExecutionGuardrails -->|"(rejected)"| RaiseException
-    ConditionalExecutionGuardrails -->|"(passed)" Transformed Request| Invocation
-    HasExecutionIntercept -->|Yes| ExecutionIntercepts
+    ConditionalExecutionGuardrails -->|"(passed)" | RequestIntercepts
+
     HasExecutionIntercept -->|No| DefaultCallable
+    HasExecutionIntercept -->|Yes| ExecutionIntercepts
+    ExecutionIntercepts -.->|chain=yes| HasExecutionIntercept
+    ExecutionIntercepts -.->|chain=no| DefaultCallable
 
     Invocation -->|Response| ResponseIntercepts
     ResponseIntercepts -->|Transformed Response| SanitizeResponseGuardrails

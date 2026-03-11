@@ -28,34 +28,29 @@ fn make_llm_handle(name: &str) -> LLMHandle {
     LLMHandle::new(name.to_string(), LLMAttributes::STREAMING, None, None, None)
 }
 
-fn make_stream(items: Vec<Result<String>>) -> Pin<Box<dyn Stream<Item = Result<String>> + Send>> {
+fn make_stream(items: Vec<Result<Json>>) -> Pin<Box<dyn Stream<Item = Result<Json>> + Send>> {
     Box::pin(tokio_stream::iter(items))
 }
 
-/// Helper that creates a collector/finalizer pair backed by a shared `Vec<String>`.
+/// Helper that creates a collector/finalizer pair backed by a shared `Vec<Json>`.
 ///
 /// Returns `(collector, finalizer, collected_chunks)` where `collected_chunks`
 /// can be inspected after the stream is consumed.
 #[allow(clippy::type_complexity)]
 fn make_collector_finalizer() -> (
-    Box<dyn FnMut(String) + Send>,
+    Box<dyn FnMut(Json) + Send>,
     Box<dyn FnOnce() -> Json + Send>,
-    Arc<Mutex<Vec<String>>>,
+    Arc<Mutex<Vec<Json>>>,
 ) {
-    let collected = Arc::new(Mutex::new(Vec::<String>::new()));
+    let collected = Arc::new(Mutex::new(Vec::<Json>::new()));
     let cc = collected.clone();
-    let collector: Box<dyn FnMut(String) + Send> = Box::new(move |chunk| {
+    let collector: Box<dyn FnMut(Json) + Send> = Box::new(move |chunk| {
         cc.lock().unwrap().push(chunk);
     });
     let fc = collected.clone();
     let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(move || {
         let chunks = fc.lock().unwrap();
-        Json::Array(
-            chunks
-                .iter()
-                .filter_map(|s| serde_json::from_str(s).ok())
-                .collect(),
-        )
+        Json::Array(chunks.clone())
     });
     (collector, finalizer, collected)
 }
@@ -65,14 +60,11 @@ async fn test_stream_wrapper_basic_chunks() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    let items = vec![
-        Ok("{\"token\": \"hello\"}".to_string()),
-        Ok("{\"token\": \"world\"}".to_string()),
-    ];
+    let items = vec![Ok(json!({"token": "hello"})), Ok(json!({"token": "world"}))];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let mut chunks = Vec::new();
     while let Some(item) = wrapper.next().await {
@@ -80,8 +72,8 @@ async fn test_stream_wrapper_basic_chunks() {
     }
 
     assert_eq!(chunks.len(), 2);
-    assert_eq!(chunks[0], "{\"token\": \"hello\"}");
-    assert_eq!(chunks[1], "{\"token\": \"world\"}");
+    assert_eq!(chunks[0]["token"], "hello");
+    assert_eq!(chunks[1]["token"], "world");
 }
 
 #[tokio::test]
@@ -89,12 +81,12 @@ async fn test_stream_wrapper_passthrough() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    // Any string content should pass through unchanged
-    let items = vec![Ok("data: partial".to_string()), Ok("more data".to_string())];
+    // Any Json content should pass through unchanged
+    let items = vec![Ok(json!("data: partial")), Ok(json!("more data"))];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let mut chunks = Vec::new();
     while let Some(item) = wrapper.next().await {
@@ -102,8 +94,8 @@ async fn test_stream_wrapper_passthrough() {
     }
 
     assert_eq!(chunks.len(), 2);
-    assert_eq!(chunks[0], "data: partial");
-    assert_eq!(chunks[1], "more data");
+    assert_eq!(chunks[0], json!("data: partial"));
+    assert_eq!(chunks[1], json!("more data"));
 }
 
 #[tokio::test]
@@ -111,10 +103,10 @@ async fn test_stream_wrapper_empty_stream() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    let inner: Pin<Box<dyn Stream<Item = Result<String>> + Send>> = Box::pin(tokio_stream::empty());
+    let inner: Pin<Box<dyn Stream<Item = Result<Json>> + Send>> = Box::pin(tokio_stream::empty());
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let mut count = 0;
     while let Some(_item) = wrapper.next().await {
@@ -128,11 +120,11 @@ async fn test_stream_wrapper_single_chunk() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    let items = vec![Ok("only chunk".to_string())];
+    let items = vec![Ok(json!("only chunk"))];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let mut chunks = Vec::new();
     while let Some(item) = wrapper.next().await {
@@ -140,7 +132,7 @@ async fn test_stream_wrapper_single_chunk() {
     }
 
     assert_eq!(chunks.len(), 1);
-    assert_eq!(chunks[0], "only chunk");
+    assert_eq!(chunks[0], json!("only chunk"));
 }
 
 #[tokio::test]
@@ -148,20 +140,20 @@ async fn test_stream_wrapper_with_intercept() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    // Register a stream response intercept that transforms strings
+    // Register a stream response intercept that transforms Json chunks
     nvagentrt_register_llm_stream_response_intercept(
         "test_stream_intercept",
         1,
         false,
-        Box::new(|chunk: String| format!("[intercepted] {}", chunk)),
+        Box::new(|chunk: Json| json!({"intercepted": chunk})),
     )
     .unwrap();
 
-    let items = vec![Ok("original".to_string())];
+    let items = vec![Ok(json!("original"))];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let mut chunks = Vec::new();
     while let Some(item) = wrapper.next().await {
@@ -169,7 +161,7 @@ async fn test_stream_wrapper_with_intercept() {
     }
 
     assert_eq!(chunks.len(), 1);
-    assert_eq!(chunks[0], "[intercepted] original");
+    assert_eq!(chunks[0]["intercepted"], "original");
 
     nvagentrt_deregister_llm_stream_response_intercept("test_stream_intercept").unwrap();
 }
@@ -183,7 +175,7 @@ async fn test_stream_wrapper_intercept_chain() {
         "intercept_a",
         1,
         false,
-        Box::new(|chunk: String| format!("A({})", chunk)),
+        Box::new(|chunk: Json| json!({"A": chunk})),
     )
     .unwrap();
 
@@ -191,19 +183,19 @@ async fn test_stream_wrapper_intercept_chain() {
         "intercept_b",
         2,
         false,
-        Box::new(|chunk: String| format!("B({})", chunk)),
+        Box::new(|chunk: Json| json!({"B": chunk})),
     )
     .unwrap();
 
-    let items = vec![Ok("x".to_string())];
+    let items = vec![Ok(json!("x"))];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let chunk = wrapper.next().await.unwrap().unwrap();
     // A runs first (priority 1), then B (priority 2)
-    assert_eq!(chunk, "B(A(x))");
+    assert_eq!(chunk, json!({"B": {"A": "x"}}));
 
     nvagentrt_deregister_llm_stream_response_intercept("intercept_a").unwrap();
     nvagentrt_deregister_llm_stream_response_intercept("intercept_b").unwrap();
@@ -224,21 +216,17 @@ async fn test_stream_wrapper_emits_end_event() {
     )
     .unwrap();
 
-    let items = vec![Ok("{\"token\": \"hi\"}".to_string())];
+    let items = vec![Ok(json!({"token": "hi"}))];
     let inner = make_stream(items);
 
     // Use the real API to create the handle so events are properly tracked
-    let request = LLMRequest {
-        method: "POST".into(),
-        url: "https://api.example.com".into(),
-        headers: serde_json::Map::new(),
-        body: json!({}),
-    };
+    let native = json!({"messages": []});
     let handle = nvagentrt_llm_call(
         "test_llm",
-        &request,
+        &native,
         None,
         LLMAttributes::STREAMING,
+        None,
         None,
         None,
         None,
@@ -246,7 +234,7 @@ async fn test_stream_wrapper_emits_end_event() {
     .unwrap();
 
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     // Consume the stream
     while let Some(_item) = wrapper.next().await {}
@@ -267,8 +255,8 @@ async fn test_stream_wrapper_error_propagation() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    let items: Vec<Result<String>> = vec![
-        Ok("good chunk".to_string()),
+    let items: Vec<Result<Json>> = vec![
+        Ok(json!("good chunk")),
         Err(nvagentrt_core::AgentRtError::Internal(
             "stream error".into(),
         )),
@@ -276,11 +264,11 @@ async fn test_stream_wrapper_error_propagation() {
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let first = wrapper.next().await.unwrap();
     assert!(first.is_ok());
-    assert_eq!(first.unwrap(), "good chunk");
+    assert_eq!(first.unwrap(), json!("good chunk"));
 
     let second = wrapper.next().await.unwrap();
     assert!(second.is_err());
@@ -291,14 +279,11 @@ async fn test_stream_wrapper_json_chunks() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    let items = vec![
-        Ok("{\"token\": \"hello\"}".to_string()),
-        Ok("{\"token\": \"world\"}".to_string()),
-    ];
+    let items = vec![Ok(json!({"token": "hello"})), Ok(json!({"token": "world"}))];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let mut chunks = Vec::new();
     while let Some(item) = wrapper.next().await {
@@ -306,31 +291,8 @@ async fn test_stream_wrapper_json_chunks() {
     }
 
     assert_eq!(chunks.len(), 2);
-    // Verify chunks are valid JSON
-    let _: serde_json::Value = serde_json::from_str(&chunks[0]).unwrap();
-    let _: serde_json::Value = serde_json::from_str(&chunks[1]).unwrap();
-}
-
-#[tokio::test]
-async fn test_stream_wrapper_non_json_chunks() {
-    let _lock = TEST_MUTEX.lock().unwrap();
-    reset_global();
-
-    // Non-JSON chunks should pass through; they just won't appear in aggregated response
-    let items = vec![Ok("plain text".to_string()), Ok("more text".to_string())];
-    let inner = make_stream(items);
-    let handle = make_llm_handle("test_llm");
-    let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
-
-    let mut chunks = Vec::new();
-    while let Some(item) = wrapper.next().await {
-        chunks.push(item.unwrap());
-    }
-
-    assert_eq!(chunks.len(), 2);
-    assert_eq!(chunks[0], "plain text");
-    assert_eq!(chunks[1], "more text");
+    assert_eq!(chunks[0]["token"], "hello");
+    assert_eq!(chunks[1]["token"], "world");
 }
 
 #[tokio::test]
@@ -339,23 +301,23 @@ async fn test_stream_wrapper_collector_receives_all_chunks() {
     reset_global();
 
     let items = vec![
-        Ok("chunk1".to_string()),
-        Ok("chunk2".to_string()),
-        Ok("chunk3".to_string()),
+        Ok(json!("chunk1")),
+        Ok(json!("chunk2")),
+        Ok(json!("chunk3")),
     ];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     // Consume the stream
     while let Some(_item) = wrapper.next().await {}
 
     let chunks = collected.lock().unwrap();
     assert_eq!(chunks.len(), 3);
-    assert_eq!(chunks[0], "chunk1");
-    assert_eq!(chunks[1], "chunk2");
-    assert_eq!(chunks[2], "chunk3");
+    assert_eq!(chunks[0], json!("chunk1"));
+    assert_eq!(chunks[1], json!("chunk2"));
+    assert_eq!(chunks[2], json!("chunk3"));
 }
 
 #[tokio::test]
@@ -366,15 +328,15 @@ async fn test_stream_wrapper_finalizer_called_on_exhaustion() {
     let finalizer_called = Arc::new(Mutex::new(false));
     let fc = finalizer_called.clone();
 
-    let items = vec![Ok("chunk".to_string())];
+    let items = vec![Ok(json!("chunk"))];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
-    let collector: Box<dyn FnMut(String) + Send> = Box::new(|_| {});
+    let collector: Box<dyn FnMut(Json) + Send> = Box::new(|_| {});
     let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(move || {
         *fc.lock().unwrap() = true;
         json!({"finalized": true})
     });
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     // Finalizer should not be called yet
     assert!(!*finalizer_called.lock().unwrap());
@@ -387,17 +349,20 @@ async fn test_stream_wrapper_finalizer_called_on_exhaustion() {
 }
 
 #[tokio::test]
-async fn test_stream_wrapper_response_intercepts_on_aggregated() {
+async fn test_stream_wrapper_response_intercepts_not_applied_to_aggregated() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    // Register a response intercept that adds a field to the aggregated response
+    // Register a response intercept that adds a field to the aggregated response.
+    // In the streaming path, response intercepts should NOT be applied to the
+    // finalized aggregate — only sanitize response guardrails run for observability.
     nvagentrt_register_llm_response_intercept(
         "resp_intercept",
         1,
         false,
-        Box::new(|mut resp: Json| {
-            resp.as_object_mut()
+        Box::new(|mut resp: LLMResponse| {
+            resp.data
+                .as_object_mut()
                 .unwrap()
                 .insert("intercepted".into(), json!(true));
             resp
@@ -415,35 +380,32 @@ async fn test_stream_wrapper_response_intercepts_on_aggregated() {
     )
     .unwrap();
 
-    let items = vec![Ok("{\"token\": \"hi\"}".to_string())];
+    let items = vec![Ok(json!({"token": "hi"}))];
     let inner = make_stream(items);
 
-    let request = LLMRequest {
-        method: "POST".into(),
-        url: "https://api.example.com".into(),
-        headers: serde_json::Map::new(),
-        body: json!({}),
-    };
+    let native = json!({"messages": []});
     let handle = nvagentrt_llm_call(
         "test_llm",
-        &request,
+        &native,
         None,
         LLMAttributes::STREAMING,
+        None,
         None,
         None,
         None,
     )
     .unwrap();
 
-    let collector: Box<dyn FnMut(String) + Send> = Box::new(|_| {});
+    let collector: Box<dyn FnMut(Json) + Send> = Box::new(|_| {});
     let finalizer: Box<dyn FnOnce() -> Json + Send> =
         Box::new(|| json!({"aggregated": "response"}));
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     // Consume the stream
     while let Some(_item) = wrapper.next().await {}
 
-    // The END event should contain the response-intercepted output
+    // The END event should contain the finalizer output WITHOUT response intercepts applied.
+    // Only sanitize response guardrails run on the aggregated response in the streaming path.
     let captured = events.lock().unwrap();
     let end_event = captured
         .iter()
@@ -451,7 +413,8 @@ async fn test_stream_wrapper_response_intercepts_on_aggregated() {
         .unwrap();
     let output = end_event.output.as_ref().unwrap();
     assert_eq!(output["aggregated"], "response");
-    assert_eq!(output["intercepted"], true);
+    // Response intercept should NOT have added the "intercepted" field
+    assert!(output.get("intercepted").is_none());
 
     drop(captured);
     nvagentrt_deregister_subscriber("resp_intercept_test").unwrap();
@@ -468,15 +431,15 @@ async fn test_stream_wrapper_collector_receives_intercepted_chunks() {
         "prefix_intercept",
         1,
         false,
-        Box::new(|chunk: String| format!("[prefix] {}", chunk)),
+        Box::new(|chunk: Json| json!({"prefixed": chunk})),
     )
     .unwrap();
 
-    let items = vec![Ok("original".to_string())];
+    let items = vec![Ok(json!("original"))];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     // Consume the stream
     while let Some(_item) = wrapper.next().await {}
@@ -484,7 +447,7 @@ async fn test_stream_wrapper_collector_receives_intercepted_chunks() {
     // Collector should have received the intercepted (post-stream-intercept) value
     let chunks = collected.lock().unwrap();
     assert_eq!(chunks.len(), 1);
-    assert_eq!(chunks[0], "[prefix] original");
+    assert_eq!(chunks[0]["prefixed"], "original");
 
     nvagentrt_deregister_llm_stream_response_intercept("prefix_intercept").unwrap();
 }
@@ -499,18 +462,18 @@ async fn test_stream_wrapper_error_skips_collector_finalizer() {
     let finalizer_called = Arc::new(Mutex::new(false));
     let fc = finalizer_called.clone();
 
-    let items: Vec<Result<String>> =
+    let items: Vec<Result<Json>> =
         vec![Err(nvagentrt_core::AgentRtError::Internal("error".into()))];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
-    let collector: Box<dyn FnMut(String) + Send> = Box::new(move |_| {
+    let collector: Box<dyn FnMut(Json) + Send> = Box::new(move |_| {
         *cc.lock().unwrap() += 1;
     });
     let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(move || {
         *fc.lock().unwrap() = true;
         Json::Null
     });
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     // Consume the error
     let result = wrapper.next().await.unwrap();
@@ -540,23 +503,16 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
     )
     .unwrap();
 
-    let items = vec![
-        Ok("{\"token\": \"a\"}".to_string()),
-        Ok("{\"token\": \"b\"}".to_string()),
-    ];
+    let items = vec![Ok(json!({"token": "a"})), Ok(json!({"token": "b"}))];
     let inner = make_stream(items);
 
-    let request = LLMRequest {
-        method: "POST".into(),
-        url: "https://api.example.com".into(),
-        headers: serde_json::Map::new(),
-        body: json!({}),
-    };
+    let native = json!({"messages": []});
     let handle = nvagentrt_llm_call(
         "test_llm",
-        &request,
+        &native,
         None,
         LLMAttributes::STREAMING,
+        None,
         None,
         None,
         None,
@@ -564,7 +520,7 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
     .unwrap();
 
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     // Consume the stream
     while let Some(_item) = wrapper.next().await {}
@@ -576,7 +532,7 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
         .find(|e| e.event_type == EventType::End)
         .unwrap();
     let output = end_event.output.as_ref().unwrap();
-    // The default finalizer collects JSON-parseable chunks into an array
+    // The default finalizer collects chunks into an array
     assert!(output.is_array());
     let arr = output.as_array().unwrap();
     assert_eq!(arr.len(), 2);

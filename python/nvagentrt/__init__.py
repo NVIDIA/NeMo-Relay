@@ -18,8 +18,8 @@ calls. The core is written in Rust; this package exposes the full API to Python.
     result = await nvagentrt.tools.execute("search", {"q": "hello"}, my_tool_fn)
 
     # Execute an LLM call through the middleware pipeline
-    req = nvagentrt.LLMRequest("POST", "https://api.example.com/chat", {}, body)
-    resp = await nvagentrt.llm.execute("gpt-4", req, my_llm_fn)
+    native = {"messages": [{"role": "user", "content": "hello"}]}
+    resp = await nvagentrt.llm.execute("gpt-4", native, my_llm_fn)
 
     # Register guardrails and intercepts
     nvagentrt.guardrails.register_tool_sanitize_request("pii-filter", 10, sanitizer)
@@ -42,12 +42,12 @@ Types (available at top level):
     ScopeAttributes, ToolAttributes, LLMAttributes,
     ScopeType, EventType,
     ScopeHandle, ToolHandle, LLMHandle,
-    LLMRequest, Event, AtifExporter
+    LLMRequest, LLMResponse, Event, AtifExporter
 """
 
 import contextvars
 
-from nvagentrt import guardrails, intercepts, llm, scope, subscribers, tools
+from nvagentrt import guardrails, intercepts, llm, scope, subscribers, tools, typed
 from nvagentrt._native import (
     # ATIF exporter
     AtifExporter,
@@ -56,6 +56,7 @@ from nvagentrt._native import (
     LLMAttributes,
     LLMHandle,
     LLMRequest,
+    LLMResponse,
     # Types (always at top level)
     ScopeAttributes,
     ScopeHandle,
@@ -89,6 +90,7 @@ __all__ = [
     "guardrails",
     "intercepts",
     "subscribers",
+    "typed",
     # Scope stack isolation
     "ScopeStack",
     "create_scope_stack",
@@ -103,6 +105,7 @@ __all__ = [
     "ToolHandle",
     "LLMHandle",
     "LLMRequest",
+    "LLMResponse",
     "Event",
     "AtifExporter",
 ]

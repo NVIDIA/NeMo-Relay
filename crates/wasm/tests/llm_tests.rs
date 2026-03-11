@@ -18,10 +18,8 @@ fn parse_json(s: &str) -> JsValue {
     js_sys::JSON::parse(s).unwrap()
 }
 
-fn make_llm_request(method: &str, url: &str) -> WasmLLMRequest {
-    let headers = js_sys::Object::new();
-    let body = parse_json(r#"{}"#);
-    WasmLLMRequest::new(method.into(), url.into(), headers.into(), body).unwrap()
+fn make_native() -> JsValue {
+    parse_json(r#"{"messages":[],"model":"test-model"}"#)
 }
 
 // ===========================================================================
@@ -30,14 +28,15 @@ fn make_llm_request(method: &str, url: &str) -> WasmLLMRequest {
 
 #[wasm_bindgen_test]
 fn test_llm_call_and_end() {
-    let req = make_llm_request("POST", "https://api.test.com");
+    let native = make_native();
     let handle = nvagentrt_llm_call(
         "test_llm",
-        &req,
+        native,
         None,
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
         None,
     )
     .unwrap();
@@ -45,47 +44,49 @@ fn test_llm_call_and_end() {
     assert!(!handle.uuid().is_empty());
 
     let response = parse_json(r#"{"choices":[{"text":"hello"}]}"#);
-    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
+    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_call_with_attributes() {
-    let req = make_llm_request("POST", "https://api.test.com");
+    let native = make_native();
     let handle = nvagentrt_llm_call(
         "attr_llm",
-        &req,
+        native,
         None,
         Some(LLM_STATELESS | LLM_STREAMING),
         JsValue::NULL,
         JsValue::NULL,
+        None,
         None,
     )
     .unwrap();
     assert_eq!(handle.attributes(), LLM_STATELESS | LLM_STREAMING);
 
     let response = parse_json(r#"{}"#);
-    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
+    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_call_with_parent() {
     let scope = nvagentrt_push_scope("llm_parent", SCOPE_TYPE_AGENT, None, None).unwrap();
     let scope_uuid = scope.uuid();
-    let req = make_llm_request("POST", "https://api.test.com");
+    let native = make_native();
     let handle = nvagentrt_llm_call(
         "parented_llm",
-        &req,
+        native,
         Some(scope),
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
         None,
     )
     .unwrap();
     assert_eq!(handle.parent_uuid().unwrap(), scope_uuid);
 
     let response = parse_json(r#"{}"#);
-    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
+    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
 
     let current = nvagentrt_get_handle().unwrap();
     nvagentrt_pop_scope(&current).unwrap();
@@ -93,14 +94,15 @@ fn test_llm_call_with_parent() {
 
 #[wasm_bindgen_test]
 fn test_llm_call_with_data_metadata() {
-    let req = make_llm_request("POST", "https://api.test.com");
+    let native = make_native();
     let data = parse_json(r#"{"info":"llm_test"}"#);
     let meta = parse_json(r#"{"version":"2.0"}"#);
-    let handle = nvagentrt_llm_call("data_llm", &req, None, None, data, meta, None).unwrap();
+    let handle =
+        nvagentrt_llm_call("data_llm", native, None, None, data, meta, None, None).unwrap();
 
     let response = parse_json(r#"{}"#);
     let end_data = parse_json(r#"{"tokens":100}"#);
-    nvagentrt_llm_call_end(&handle, response, end_data, JsValue::NULL).unwrap();
+    nvagentrt_llm_call_end(&handle, response, end_data, JsValue::NULL, None).unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -109,19 +111,20 @@ fn test_llm_call_generates_events() {
     let cb = js_fn1("event", "globalThis.__llm_events.push(event)");
     register_subscriber("wasm_llm_evt_sub", cb).unwrap();
 
-    let req = make_llm_request("POST", "https://api.test.com");
+    let native = make_native();
     let handle = nvagentrt_llm_call(
         "evt_llm",
-        &req,
+        native,
         None,
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
         None,
     )
     .unwrap();
     let response = parse_json(r#"{}"#);
-    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
+    nvagentrt_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
 
     let events = js_sys::eval("globalThis.__llm_events").unwrap();
     let arr = js_sys::Array::from(&events);
@@ -140,16 +143,18 @@ fn test_llm_call_generates_events() {
 
 #[wasm_bindgen_test]
 async fn test_llm_execute_basic() {
-    let func = js_fn1("request", "return {response: 'hello from llm'}");
-    let req = make_llm_request("POST", "https://api.test.com");
+    let func = js_fn1("native", "return {response: 'hello from llm'}");
+    let native = make_native();
     let result = nvagentrt_llm_call_execute(
         "exec_llm",
-        &req,
+        native,
         func,
         None,
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
+        None,
         None,
     )
     .await
@@ -161,16 +166,18 @@ async fn test_llm_execute_basic() {
 
 #[wasm_bindgen_test]
 async fn test_llm_execute_promise() {
-    let func = js_fn1("request", "return Promise.resolve({async: true})");
-    let req = make_llm_request("POST", "https://api.test.com");
+    let func = js_fn1("native", "return Promise.resolve({async: true})");
+    let native = make_native();
     let result = nvagentrt_llm_call_execute(
         "async_llm",
-        &req,
+        native,
         func,
         None,
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
+        None,
         None,
     )
     .await
@@ -186,10 +193,7 @@ async fn test_llm_execute_promise() {
 
 #[wasm_bindgen_test]
 fn test_llm_sanitize_request_guardrail() {
-    let guardrail = js_fn1(
-        "request",
-        "request.url = 'https://sanitized.com'; return request",
-    );
+    let guardrail = js_fn1("request", "request.extra = 'sanitized'; return request");
     register_llm_sanitize_request_guardrail("wasm_llm_san_req", 10, guardrail).unwrap();
     deregister_llm_sanitize_request_guardrail("wasm_llm_san_req").unwrap();
 }
@@ -231,10 +235,7 @@ fn test_duplicate_llm_guardrail_fails() {
 
 #[wasm_bindgen_test]
 fn test_llm_request_intercept() {
-    let func = js_fn1(
-        "request",
-        "request.url = 'https://intercepted.com'; return request",
-    );
+    let func = js_fn1("native", "native.intercepted = true; return native");
     register_llm_request_intercept("wasm_llm_req_int", 10, false, func).unwrap();
     deregister_llm_request_intercept("wasm_llm_req_int").unwrap();
 }
@@ -248,38 +249,38 @@ fn test_llm_response_intercept() {
 
 #[wasm_bindgen_test]
 fn test_llm_execution_intercept() {
-    let cond = js_fn1("request", "return true");
-    let exec = js_fn1("request", "return {replaced: true}");
+    let cond = js_fn1("native", "return true");
+    let exec = js_fn1("native", "return {replaced: true}");
     register_llm_execution_intercept("wasm_llm_exec_int", 10, cond, exec).unwrap();
     deregister_llm_execution_intercept("wasm_llm_exec_int").unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_stream_response_intercept() {
-    let func = js_fn1("event", "return event");
+    let func = js_fn1("chunk", "return chunk");
     register_llm_stream_response_intercept("wasm_llm_sse_int", 10, false, func).unwrap();
     deregister_llm_stream_response_intercept("wasm_llm_sse_int").unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_stream_execution_intercept() {
-    let cond = js_fn1("request", "return true");
-    let exec = js_fn1("request", "return {stream_result: true}");
+    let cond = js_fn1("native", "return true");
+    let exec = js_fn1("native", "return {stream_result: true}");
     register_llm_stream_execution_intercept("wasm_llm_stream_exec", 10, cond, exec).unwrap();
     deregister_llm_stream_execution_intercept("wasm_llm_stream_exec").unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_request_intercept_break_chain() {
-    let func = js_fn1("request", "return request");
+    let func = js_fn1("native", "return native");
     register_llm_request_intercept("wasm_llm_break", 10, true, func).unwrap();
     deregister_llm_request_intercept("wasm_llm_break").unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_duplicate_llm_intercept_fails() {
-    let f1 = js_fn1("request", "return request");
-    let f2 = js_fn1("request", "return request");
+    let f1 = js_fn1("native", "return native");
+    let f2 = js_fn1("native", "return native");
     register_llm_request_intercept("wasm_llm_dup_int", 10, false, f1).unwrap();
     let result = register_llm_request_intercept("wasm_llm_dup_int", 20, false, f2);
     assert!(result.is_err());
@@ -288,29 +289,31 @@ fn test_duplicate_llm_intercept_fails() {
 
 #[wasm_bindgen_test]
 async fn test_llm_request_intercept_modifies_request() {
-    let intercept = js_fn1(
-        "request",
-        "request.url = 'https://modified.com'; return request",
-    );
+    let intercept = js_fn1("native", "native.intercepted = true; return native");
     register_llm_request_intercept("wasm_llm_req_mod", 10, false, intercept).unwrap();
 
-    let func = js_fn1("request", "return {url: request.url}");
-    let req = make_llm_request("POST", "https://original.com");
+    let func = js_fn1(
+        "native",
+        "return {saw_intercepted: native.intercepted || false}",
+    );
+    let native = make_native();
     let result = nvagentrt_llm_call_execute(
         "mod_llm",
-        &req,
+        native,
         func,
         None,
         None,
         JsValue::NULL,
         JsValue::NULL,
         None,
+        None,
+        None,
     )
     .await
     .unwrap();
 
-    let url = js_sys::Reflect::get(&result, &"url".into()).unwrap();
-    assert_eq!(url.as_string().unwrap(), "https://modified.com");
+    let saw = js_sys::Reflect::get(&result, &"saw_intercepted".into()).unwrap();
+    assert!(saw.as_bool().unwrap());
 
     deregister_llm_request_intercept("wasm_llm_req_mod").unwrap();
 }
@@ -323,16 +326,18 @@ async fn test_llm_response_intercept_modifies_response() {
     );
     register_llm_response_intercept("wasm_llm_resp_mod", 10, false, intercept).unwrap();
 
-    let func = js_fn1("request", "return {value: 'test'}");
-    let req = make_llm_request("POST", "https://api.test.com");
+    let func = js_fn1("native", "return {value: 'test'}");
+    let native = make_native();
     let result = nvagentrt_llm_call_execute(
         "resp_mod_llm",
-        &req,
+        native,
         func,
         None,
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
+        None,
         None,
     )
     .await
@@ -346,20 +351,22 @@ async fn test_llm_response_intercept_modifies_response() {
 
 #[wasm_bindgen_test]
 async fn test_llm_execution_intercept_replaces_func() {
-    let cond = js_fn1("request", "return true");
-    let intercept_exec = js_fn1("request", "return {replaced: true}");
+    let cond = js_fn1("native", "return true");
+    let intercept_exec = js_fn1("native", "return {replaced: true}");
     register_llm_execution_intercept("wasm_llm_exec_repl", 10, cond, intercept_exec).unwrap();
 
-    let original = js_fn1("request", "return {original: true}");
-    let req = make_llm_request("POST", "https://api.test.com");
+    let original = js_fn1("native", "return {original: true}");
+    let native = make_native();
     let result = nvagentrt_llm_call_execute(
         "repl_llm",
-        &req,
+        native,
         original,
         None,
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
+        None,
         None,
     )
     .await

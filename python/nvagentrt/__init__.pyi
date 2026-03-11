@@ -10,6 +10,8 @@ all types exported from the native Rust extension and all API functions.
 import contextvars
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
+from nvagentrt import typed as typed
+
 Json = Any
 """Type alias for JSON-serializable Python objects (dicts, lists, strings, numbers, etc.)."""
 
@@ -240,42 +242,49 @@ class LLMHandle:
 # ---------------------------------------------------------------------------
 
 class LLMRequest:
-    """Describes an HTTP request to an LLM provider.
+    """An opaque LLM request derived from the native payload via the converter.
 
-    Passed to ``llm.call()``, ``llm.execute()``, and ``llm.stream_execute()``.
+    Used by guardrails for structured access. Intercepts and execution
+    operate on the native ``Json`` representation directly.
     """
 
     def __init__(
         self,
-        method: str,
-        url: str,
         headers: dict[str, Any],
-        body: Json,
+        content: Json,
     ) -> None:
         """Create an LLM request.
 
         Args:
-            method: HTTP method (e.g. ``"POST"``).
-            url: Endpoint URL.
-            headers: HTTP headers as a dict.
-            body: JSON-serializable request body.
+            headers: Metadata key-value pairs.
+            content: The request payload.
         """
         ...
     @property
-    def method(self) -> str:
-        """HTTP method."""
-        ...
-    @property
-    def url(self) -> str:
-        """Endpoint URL."""
-        ...
-    @property
     def headers(self) -> dict[str, Any]:
-        """HTTP headers."""
+        """Metadata key-value pairs."""
         ...
     @property
-    def body(self) -> Json:
-        """Request body."""
+    def content(self) -> Json:
+        """The request payload."""
+        ...
+
+class LLMResponse:
+    """An opaque LLM response derived from the native payload via the converter.
+
+    Used by response guardrails and response intercepts for structured access.
+    """
+
+    def __init__(self, data: Json) -> None:
+        """Create an LLM response.
+
+        Args:
+            data: The response payload.
+        """
+        ...
+    @property
+    def data(self) -> Json:
+        """The response payload."""
         ...
 
 class Event:
@@ -372,17 +381,17 @@ class ScopeStack:
     def __repr__(self) -> str: ...
 
 class LlmStream:
-    """An async iterator of SSE text chunks from a streaming LLM response.
+    """An async iterator of Json chunks from a streaming LLM response.
 
     Returned by ``llm.stream_execute()``. Use with ``async for``::
 
-        stream = await nvagentrt.llm.stream_execute("model", req, fn)
+        stream = await nvagentrt.llm.stream_execute("model", native, fn, collector, finalizer)
         async for chunk in stream:
-            print(chunk, end="")
+            process(chunk)
     """
 
-    def __aiter__(self) -> AsyncIterator[str]: ...
-    async def __anext__(self) -> str: ...
+    def __aiter__(self) -> AsyncIterator[Json]: ...
+    async def __anext__(self) -> Json: ...
 
 # ---------------------------------------------------------------------------
 # Scope stack creation
@@ -497,6 +506,12 @@ def nvagentrt_tool_call_execute(
 ) -> Awaitable[Json]:
     """Execute a tool call through the full middleware pipeline.
 
+    Runs conditional-execution guardrails (on raw args) → request intercepts →
+    sanitize-request guardrails → execution intercepts → func → response
+    intercepts → sanitize-response guardrails. On rejection, only a standalone
+    ``Mark`` event is emitted (no ``Start``/``End`` pair) and
+    ``GuardrailRejected`` is raised.
+
     Args:
         name: Tool name.
         args: Tool arguments.
@@ -517,15 +532,20 @@ def nvagentrt_tool_call_execute(
 
 def nvagentrt_llm_call(
     name: str,
-    request: LLMRequest,
+    native: Json,
     *,
     handle: Optional[ScopeHandle] = None,
     attributes: Optional[LLMAttributes] = None,
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
     model_name: Optional[str] = None,
+    to_request: Optional[Callable[[Json], Json]] = None,
 ) -> LLMHandle:
     """Begin an LLM call manually.
+
+    Args:
+        name: Model/provider name.
+        native: The native LLM request payload (any JSON-serializable value).
 
     Returns an ``LLMHandle`` that must be passed to ``nvagentrt_llm_call_end``.
     Emits a Start event.
@@ -538,27 +558,37 @@ def nvagentrt_llm_call_end(
     *,
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
+    to_response: Optional[Callable[[Json], Json]] = None,
 ) -> None:
     """End a manual LLM call. Records the response and emits an End event."""
     ...
 
 def nvagentrt_llm_call_execute(
     name: str,
-    request: LLMRequest,
-    func: Callable[[LLMRequest], Awaitable[Json]],
+    native: Json,
+    func: Callable[[Json], Awaitable[Json]],
     *,
     handle: Optional[ScopeHandle] = None,
     attributes: Optional[LLMAttributes] = None,
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
     model_name: Optional[str] = None,
+    to_request: Optional[Callable[[Json], Json]] = None,
+    to_response: Optional[Callable[[Json], Json]] = None,
 ) -> Awaitable[Json]:
     """Execute an LLM call through the full middleware pipeline.
 
+    Runs conditional-execution guardrails (on formal request derived via
+    converter) → request intercepts (on opaque native Json) →
+    sanitize-request guardrails → execution intercepts → func → response
+    intercepts → sanitize-response guardrails. On rejection, only a standalone
+    ``Mark`` event is emitted (no ``Start``/``End`` pair) and
+    ``GuardrailRejected`` is raised.
+
     Args:
         name: Model/provider name.
-        request: The LLM request.
-        func: Async callable ``(request) -> response``.
+        native: The native LLM request payload (any JSON-serializable value).
+        func: Async callable ``(native) -> response``.
         handle: Optional parent scope handle.
         attributes: Optional ``LLMAttributes`` bitflags.
         data: Optional application data.
@@ -571,9 +601,9 @@ def nvagentrt_llm_call_execute(
 
 async def nvagentrt_llm_stream_call_execute(
     name: str,
-    request: LLMRequest,
-    func: Callable[[LLMRequest], AsyncIterator[str]],
-    collector: Callable[[str], None],
+    native: Json,
+    func: Callable[[Json], AsyncIterator[Json]],
+    collector: Callable[[Json], None],
     finalizer: Callable[[], Any],
     *,
     handle: Optional[ScopeHandle] = None,
@@ -581,25 +611,32 @@ async def nvagentrt_llm_stream_call_execute(
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
     model_name: Optional[str] = None,
+    to_request: Optional[Callable[[Json], Json]] = None,
+    to_response: Optional[Callable[[Json], Json]] = None,
 ) -> LlmStream:
     """Execute a streaming LLM call through the full middleware pipeline.
 
+    Like ``nvagentrt_llm_call_execute``, conditional-execution guardrails run
+    first on the formal request derived via the converter. On rejection, only
+    a standalone ``Mark`` event is emitted (no ``Start``/``End`` pair) and
+    ``GuardrailRejected`` is raised.
+
     Args:
         name: Model/provider name.
-        request: The LLM request.
-        func: Async callable ``(request) -> AsyncIterator[str]`` returning SSE chunks.
-        collector: A callable ``(chunk: str) -> None`` invoked with each
+        native: The native LLM request payload (any JSON-serializable value).
+        func: Async callable ``(native) -> AsyncIterator[Json]`` returning
+            Json chunks.
+        collector: A callable ``(chunk: Json) -> None`` invoked with each
             intercepted chunk after stream response intercepts have been applied.
         finalizer: A callable ``() -> Any`` invoked once when the stream is
-            exhausted. Its return value is the aggregated response (converted
-            to JSON).
+            exhausted. Its return value is the aggregated response.
         handle: Optional parent scope handle.
         attributes: Optional ``LLMAttributes`` bitflags.
         data: Optional application data.
         metadata: Optional metadata.
 
     Returns:
-        An ``LlmStream`` async iterator of SSE text chunks.
+        An ``LlmStream`` async iterator of Json chunks.
     """
     ...
 
@@ -628,24 +665,29 @@ def nvagentrt_tool_response_intercepts(name: str, result: Json) -> Json:
     """
     ...
 
-def nvagentrt_llm_request_intercepts(request: LLMRequest) -> LLMRequest:
-    """Run the registered LLM request intercept chain.
+def nvagentrt_llm_request_intercepts(native: Json) -> Json:
+    """Run the registered LLM request intercept chain on the native payload.
 
-    Returns the transformed request.
+    Returns the transformed native Json.
     """
     ...
 
-def nvagentrt_llm_conditional_execution(request: LLMRequest) -> None:
+def nvagentrt_llm_conditional_execution(
+    native: Json,
+    *,
+    to_request: Optional[Callable[[Json], Json]] = None,
+) -> None:
     """Run the registered LLM conditional execution guardrail chain.
 
-    Raises ``RuntimeError`` if any guardrail rejects.
+    Derives a formal ``LLMRequest`` via the converter and runs conditional
+    guardrails on it. Raises ``RuntimeError`` if any guardrail rejects.
     """
     ...
 
-def nvagentrt_llm_response_intercepts(response: Json) -> Json:
+def nvagentrt_llm_response_intercepts(response: LLMResponse) -> LLMResponse:
     """Run the registered LLM response intercept chain.
 
-    Returns the transformed response.
+    Returns the transformed ``LLMResponse``.
     """
     ...
 
@@ -732,12 +774,14 @@ def nvagentrt_register_tool_execution_intercept(
     name: str,
     priority: int,
     conditional: Callable[[str, Json], bool],
-    callable: Callable[[Json], Awaitable[Json]],
+    callable: Callable[[Json, Callable[[Json], Awaitable[Json]]], Awaitable[Json]],
 ) -> None:
-    """Register a tool execution intercept.
+    """Register a tool execution intercept (middleware chain pattern).
 
     ``conditional``: ``(tool_name, args) -> bool`` — activates this intercept.
-    ``callable``: ``async (args) -> result`` — replacement execution function.
+    ``callable``: ``async (args, next) -> result`` — intercept function.
+    Call ``await next(args)`` to invoke the next intercept or original
+    implementation. Skip calling ``next`` to short-circuit the chain.
     """
     ...
 
@@ -763,11 +807,11 @@ def nvagentrt_deregister_llm_sanitize_request_guardrail(name: str) -> bool:
     ...
 
 def nvagentrt_register_llm_sanitize_response_guardrail(
-    name: str, priority: int, guardrail: Callable[[Json], Json]
+    name: str, priority: int, guardrail: Callable[[LLMResponse], LLMResponse]
 ) -> None:
     """Register an LLM sanitize-response guardrail.
 
-    Callback: ``(response) -> sanitized_response``.
+    Callback: ``(response: LLMResponse) -> LLMResponse``.
     """
     ...
 
@@ -796,11 +840,11 @@ def nvagentrt_register_llm_request_intercept(
     name: str,
     priority: int,
     break_chain: bool,
-    callable: Callable[[LLMRequest], LLMRequest],
+    callable: Callable[[Json], Json],
 ) -> None:
     """Register an LLM request intercept.
 
-    Callback: ``(request) -> transformed_request``.
+    Callback: ``(native) -> transformed_native`` — operates on opaque Json.
     """
     ...
 
@@ -812,11 +856,11 @@ def nvagentrt_register_llm_response_intercept(
     name: str,
     priority: int,
     break_chain: bool,
-    callable: Callable[[Json], Json],
+    callable: Callable[[LLMResponse], LLMResponse],
 ) -> None:
     """Register an LLM response intercept.
 
-    Callback: ``(response) -> transformed_response``.
+    Callback: ``(response: LLMResponse) -> LLMResponse``.
     """
     ...
 
@@ -828,11 +872,11 @@ def nvagentrt_register_llm_stream_response_intercept(
     name: str,
     priority: int,
     break_chain: bool,
-    callable: Callable[[str], str],
+    callable: Callable[[Json], Json],
 ) -> None:
     """Register an LLM stream-response intercept.
 
-    Callback: ``(chunk) -> transformed_chunk`` — applied to each chunk.
+    Callback: ``(chunk: Json) -> Json`` — applied to each Json chunk.
     """
     ...
 
@@ -843,13 +887,15 @@ def nvagentrt_deregister_llm_stream_response_intercept(name: str) -> bool:
 def nvagentrt_register_llm_execution_intercept(
     name: str,
     priority: int,
-    conditional: Callable[[LLMRequest], bool],
-    callable: Callable[[LLMRequest], Awaitable[Json]],
+    conditional: Callable[[Json], bool],
+    callable: Callable[[Json, Callable[[Json], Awaitable[Json]]], Awaitable[Json]],
 ) -> None:
-    """Register an LLM execution intercept.
+    """Register an LLM execution intercept (middleware chain pattern).
 
-    ``conditional``: ``(request) -> bool`` — activates this intercept.
-    ``callable``: ``async (request) -> response`` — replacement execution function.
+    ``conditional``: ``(native) -> bool`` — activates this intercept.
+    ``callable``: ``async (native, next) -> response`` — intercept function.
+    Call ``await next(native)`` to invoke the next intercept or original
+    implementation. Skip calling ``next`` to short-circuit the chain.
     """
     ...
 
@@ -860,14 +906,15 @@ def nvagentrt_deregister_llm_execution_intercept(name: str) -> bool:
 def nvagentrt_register_llm_stream_execution_intercept(
     name: str,
     priority: int,
-    conditional: Callable[[LLMRequest], bool],
-    callable: Callable[[LLMRequest], AsyncIterator[str]],
+    conditional: Callable[[Json], bool],
+    callable: Callable[[Json, Callable[[Json], Awaitable[AsyncIterator[Json]]]], Awaitable[AsyncIterator[Json]]],
 ) -> None:
-    """Register an LLM stream-execution intercept.
+    """Register an LLM stream-execution intercept (middleware chain pattern).
 
-    ``conditional``: ``(request) -> bool`` — activates this intercept.
-    ``callable``: ``async (request) -> AsyncIterator[str]`` — replacement
-    streaming execution function.
+    ``conditional``: ``(native) -> bool`` — activates this intercept.
+    ``callable``: ``async (native, next) -> AsyncIterator[Json]`` — intercept
+    function. Call ``await next(native)`` to invoke the next intercept or
+    original streaming implementation. Skip calling ``next`` to short-circuit.
     """
     ...
 

@@ -75,7 +75,7 @@ wasm-pack build crates/wasm              # Produces pkg/ with .wasm, .js, .d.ts
 - **Error handling**: `Result<T>` with `AgentRtError` enum (AlreadyExists, NotFound, ScopeStackEmpty, GuardrailRejected, Internal)
 - **Async**: tokio runtime, `Pin<Box<dyn Future>>` for async ops
 - **JSON**: `Json = serde_json::Value` type alias throughout
-- **Middleware**: Priority-based `SortedRegistry<T>` with lazy re-sort; guardrails sanitize/gate, intercepts transform/replace
+- **Middleware**: Priority-based `SortedRegistry<T>` with lazy re-sort; guardrails sanitize/gate, request/response intercepts transform, execution intercepts follow middleware chain pattern with `next` parameter
 - **Context propagation**: `tokio::task_local` for async, thread-local for sync; Python uses `contextvars.ContextVar`; all bindings expose `create_scope_stack`/`current_scope_stack`/`set_thread_scope_stack` for per-request isolation
 - **License**: Apache-2.0; SPDX headers required on all source files
 - **Dependencies audited**: via `deny.toml` (cargo-deny)
@@ -85,7 +85,7 @@ wasm-pack build crates/wasm              # Produces pkg/ with .wasm, .js, .d.ts
 ## Architecture Patterns
 
 - **Scope stack**: Hierarchical scopes with UUID handles; root scope always present. Each binding exposes scope stack isolation for concurrent/multi-tenant use.
-- **Intercept chains**: Priority-ordered, optional `break_chain` short-circuit
+- **Intercept chains**: Priority-ordered; request/response intercepts support optional `break_chain` short-circuit; execution intercepts use middleware chain pattern — each receives a `next` function to call the next intercept or the original callable
 - **Stream wrapping**: `LlmStreamWrapper` buffers/parses SSE events, applies intercepts mid-stream
 - **Event subscription**: Observer pattern with named subscribers
 - **Event lifecycle fields**: `Event` carries typed fields (`input`, `output`, `model_name`, `tool_call_id`, `root_uuid`) populated by the runtime. `input`/`output` hold post-guardrail data; `model_name` and `tool_call_id` are set via API params on `nvagentrt_llm_call` and `nvagentrt_tool_call` respectively; `root_uuid` identifies the root scope for concurrent agent isolation.

@@ -25,7 +25,7 @@ dev = [
 ]
 test = [
     "pytest>=8",
-    "pytest-asyncio>=0.26"
+    "pytest-asyncio>=0.26",
 ]
 
 [tool.uv]
@@ -38,7 +38,7 @@ asyncio_mode = "auto"
 [tool.ty.analysis]
 # nvagentrt._native is a compiled Rust extension (built by maturin) that only
 # exists after `uv sync` / `pip install -e .`. Suppress unresolved-import for it.
-allowed-unresolved-imports = ["nvagentrt._native"]
+allowed-unresolved-imports = ["nvagentrt._native", "pytest"]
 
 [tool.ruff]
 line-length = 120

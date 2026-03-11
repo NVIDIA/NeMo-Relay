@@ -291,8 +291,12 @@ pub unsafe extern "C" fn nvagentrt_tool_call_end(
     }
 }
 
-/// Execute a tool call end-to-end: begin, invoke the callback, apply guardrails
-/// and intercepts, then end. Blocks the calling thread until completion.
+/// Execute a tool call end-to-end: run conditional-execution guardrails (on raw
+/// args), then request intercepts, sanitize-request guardrails, execution
+/// intercepts, the callback, response intercepts, and sanitize-response
+/// guardrails. On rejection, only a standalone Mark event is emitted (no
+/// Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
+/// thread until completion.
 ///
 /// # Parameters
 /// - `name`: Null-terminated tool name.
@@ -351,12 +355,13 @@ pub unsafe extern "C" fn nvagentrt_tool_call_execute(
     };
 
     let exec_fn = wrap_tool_exec_fn(func, func_user_data, func_free);
+    let default_fn: nvagentrt_core::ToolExecutionNextFn = Box::new(move |args| exec_fn(args));
 
     let result = tokio_runtime().block_on(async {
         core::nvagentrt_tool_call_execute(
             &name,
             args,
-            exec_fn,
+            default_fn,
             parent_handle,
             attrs,
             data,
@@ -382,35 +387,45 @@ pub unsafe extern "C" fn nvagentrt_tool_call_execute(
 ///
 /// # Parameters
 /// - `name`: Null-terminated LLM provider name.
-/// - `request`: The LLM request object (created via `nvagentrt_llm_request_new`).
+/// - `native_json`: The native request payload as a JSON C string.
 /// - `parent`: Optional parent scope handle, or null.
 /// - `attributes`: Bitfield of LLM attributes.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `model_name`: Optional LLM model identifier, or null.
+/// - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
+/// - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
+/// - `to_request_free`: Optional destructor for `to_request_ud`.
 /// - `out`: On success, receives a heap-allocated `FfiLLMHandle`.
 ///
 /// # Safety
-/// `name`, `request`, and `out` must be valid, non-null pointers.
+/// `name`, `native_json`, and `out` must be valid, non-null pointers.
 #[no_mangle]
 pub unsafe extern "C" fn nvagentrt_llm_call(
     name: *const c_char,
-    request: *const FfiLLMRequest,
+    native_json: *const c_char,
     parent: *const FfiScopeHandle,
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
     model_name: *const c_char,
+    to_request_cb: Option<NvAgentRtJsonCb>,
+    to_request_ud: *mut libc::c_void,
+    to_request_free: NvAgentRtFreeFn,
     out: *mut *mut FfiLLMHandle,
 ) -> NvAgentRtStatus {
     clear_last_error();
-    if out.is_null() || request.is_null() {
+    if out.is_null() {
         set_last_error("null pointer argument");
         return NvAgentRtStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
+    };
+    let native = match c_str_to_json(native_json) {
+        Some(n) => n,
+        None => return NvAgentRtStatus::InvalidJson,
     };
     let parent_ref = if parent.is_null() {
         None
@@ -434,15 +449,17 @@ pub unsafe extern "C" fn nvagentrt_llm_call(
             Err(status) => return status,
         }
     };
+    let to_request = to_request_cb.map(|cb| wrap_to_request_fn(cb, to_request_ud, to_request_free));
 
     match core::nvagentrt_llm_call(
         &name,
-        &unsafe { &*request }.0,
+        &native,
         parent_ref,
         attrs,
         data,
         metadata,
         model_name_opt,
+        to_request.as_ref(),
     ) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiLLMHandle(h))) };
@@ -459,6 +476,9 @@ pub unsafe extern "C" fn nvagentrt_llm_call(
 /// - `response_json`: LLM response as a JSON C string.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
+/// - `to_response_cb`: Optional callback to convert native JSON to `LLMResponse`, or null.
+/// - `to_response_ud`: Opaque pointer passed to `to_response_cb`.
+/// - `to_response_free`: Optional destructor for `to_response_ud`.
 ///
 /// # Safety
 /// `handle` and `response_json` must be valid, non-null pointers.
@@ -468,6 +488,9 @@ pub unsafe extern "C" fn nvagentrt_llm_call_end(
     response_json: *const c_char,
     data_json: *const c_char,
     metadata_json: *const c_char,
+    to_response_cb: Option<NvAgentRtJsonCb>,
+    to_response_ud: *mut libc::c_void,
+    to_response_free: NvAgentRtFreeFn,
 ) -> NvAgentRtStatus {
     clear_last_error();
     if handle.is_null() {
@@ -486,19 +509,31 @@ pub unsafe extern "C" fn nvagentrt_llm_call_end(
         Some(m) => m,
         None => return NvAgentRtStatus::InvalidJson,
     };
+    let to_response =
+        to_response_cb.map(|cb| wrap_to_response_fn(cb, to_response_ud, to_response_free));
 
-    match core::nvagentrt_llm_call_end(&unsafe { &*handle }.0, response, data, metadata) {
+    match core::nvagentrt_llm_call_end(
+        &unsafe { &*handle }.0,
+        response,
+        data,
+        metadata,
+        to_response.as_ref(),
+    ) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
 
-/// Execute an LLM call end-to-end: begin, invoke the callback, apply guardrails
-/// and intercepts, then end. Blocks the calling thread until completion.
+/// Execute an LLM call end-to-end: run conditional-execution guardrails (on raw
+/// request), then request intercepts, sanitize-request guardrails, execution
+/// intercepts, the callback, response intercepts, and sanitize-response
+/// guardrails. On rejection, only a standalone Mark event is emitted (no
+/// Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
+/// thread until completion.
 ///
 /// # Parameters
 /// - `name`: Null-terminated LLM provider name.
-/// - `request`: The LLM request object.
+/// - `native_json`: The native request payload as a JSON C string.
 /// - `func`: C callback that performs the actual LLM call.
 /// - `func_user_data`: Opaque pointer passed to `func`.
 /// - `func_free`: Optional destructor for `func_user_data`.
@@ -507,15 +542,21 @@ pub unsafe extern "C" fn nvagentrt_llm_call_end(
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `model_name`: Optional LLM model identifier, or null.
+/// - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
+/// - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
+/// - `to_request_free`: Optional destructor for `to_request_ud`.
+/// - `to_response_cb`: Optional callback to convert native JSON to `LLMResponse`, or null.
+/// - `to_response_ud`: Opaque pointer passed to `to_response_cb`.
+/// - `to_response_free`: Optional destructor for `to_response_ud`.
 /// - `out`: On success, receives the response as a JSON C string. Caller must
 ///   free with `nvagentrt_string_free`.
 ///
 /// # Safety
-/// `name`, `request`, and `out` must be valid, non-null pointers.
+/// `name`, `native_json`, and `out` must be valid, non-null pointers.
 #[no_mangle]
 pub unsafe extern "C" fn nvagentrt_llm_call_execute(
     name: *const c_char,
-    request: *const FfiLLMRequest,
+    native_json: *const c_char,
     func: NvAgentRtLlmExecCb,
     func_user_data: *mut libc::c_void,
     func_free: NvAgentRtFreeFn,
@@ -524,10 +565,16 @@ pub unsafe extern "C" fn nvagentrt_llm_call_execute(
     data_json: *const c_char,
     metadata_json: *const c_char,
     model_name: *const c_char,
+    to_request_cb: Option<NvAgentRtJsonCb>,
+    to_request_ud: *mut libc::c_void,
+    to_request_free: NvAgentRtFreeFn,
+    to_response_cb: Option<NvAgentRtJsonCb>,
+    to_response_ud: *mut libc::c_void,
+    to_response_free: NvAgentRtFreeFn,
     out: *mut *mut c_char,
 ) -> NvAgentRtStatus {
     clear_last_error();
-    if out.is_null() || request.is_null() {
+    if out.is_null() {
         set_last_error("null pointer argument");
         return NvAgentRtStatus::NullPointer;
     }
@@ -535,7 +582,10 @@ pub unsafe extern "C" fn nvagentrt_llm_call_execute(
         Ok(s) => s,
         Err(status) => return status,
     };
-    let req = unsafe { &*request }.0.clone();
+    let native = match c_str_to_json(native_json) {
+        Some(n) => n,
+        None => return NvAgentRtStatus::InvalidJson,
+    };
     let parent_handle = if parent.is_null() {
         None
     } else {
@@ -558,19 +608,25 @@ pub unsafe extern "C" fn nvagentrt_llm_call_execute(
             Err(status) => return status,
         }
     };
+    let to_request = to_request_cb.map(|cb| wrap_to_request_fn(cb, to_request_ud, to_request_free));
+    let to_response =
+        to_response_cb.map(|cb| wrap_to_response_fn(cb, to_response_ud, to_response_free));
 
     let exec_fn = wrap_llm_exec_fn(func, func_user_data, func_free);
+    let default_fn: nvagentrt_core::LlmExecutionNextFn = Box::new(move |native| exec_fn(native));
 
     let result = tokio_runtime().block_on(async {
         core::nvagentrt_llm_call_execute(
             &name,
-            req,
-            exec_fn,
+            native,
+            default_fn,
             parent_handle,
             attrs,
             data,
             metadata,
             model_name_opt,
+            to_request,
+            to_response,
         )
         .await
     });
@@ -591,20 +647,22 @@ pub unsafe extern "C" fn nvagentrt_llm_call_execute(
 /// Opaque stream handle for consuming LLM streaming responses chunk by chunk.
 /// Use `nvagentrt_stream_next` to poll and `nvagentrt_stream_free` to release.
 pub struct FfiStream {
-    receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvagentrt_core::Result<String>>>,
+    receiver:
+        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvagentrt_core::Result<serde_json::Value>>>,
 }
 
-/// Execute a streaming LLM call end-to-end. Returns a stream handle that can
-/// be polled with `nvagentrt_stream_next`. Blocks until the stream is set up.
+/// Execute a streaming LLM call end-to-end. Conditional-execution guardrails
+/// run first on the raw request. Returns a stream handle that can be polled
+/// with `nvagentrt_stream_next`. Blocks until the stream is set up.
 ///
 /// # Parameters
 /// - `name`: Null-terminated LLM provider name.
-/// - `request`: The LLM request object.
+/// - `native_json`: The native request payload as a JSON C string.
 /// - `func`: C callback that performs the actual LLM call.
 /// - `func_user_data`: Opaque pointer passed to `func`.
 /// - `func_free`: Optional destructor for `func_user_data`.
-/// - `collector`: Callback invoked with each intercepted chunk string. May be
-///   null, in which case chunks are not collected.
+/// - `collector`: Callback invoked with each intercepted chunk as a JSON string.
+///   May be null, in which case chunks are not collected.
 /// - `finalizer`: Callback invoked once when the stream is exhausted to produce
 ///   the aggregated response as a JSON C string. May be null, in which case the
 ///   finalizer returns `Json::Null`.
@@ -613,15 +671,21 @@ pub struct FfiStream {
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `model_name`: Optional LLM model identifier, or null.
+/// - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
+/// - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
+/// - `to_request_free`: Optional destructor for `to_request_ud`.
+/// - `to_response_cb`: Optional callback to convert native JSON to `LLMResponse`, or null.
+/// - `to_response_ud`: Opaque pointer passed to `to_response_cb`.
+/// - `to_response_free`: Optional destructor for `to_response_ud`.
 /// - `out`: On success, receives a heap-allocated `FfiStream`.
 ///
 /// # Safety
-/// `name`, `request`, and `out` must be valid, non-null pointers. `collector`
+/// `name`, `native_json`, and `out` must be valid, non-null pointers. `collector`
 /// and `finalizer` may be null.
 #[no_mangle]
 pub unsafe extern "C" fn nvagentrt_llm_stream_call_execute(
     name: *const c_char,
-    request: *const FfiLLMRequest,
+    native_json: *const c_char,
     func: NvAgentRtLlmExecCb,
     func_user_data: *mut libc::c_void,
     func_free: NvAgentRtFreeFn,
@@ -632,10 +696,16 @@ pub unsafe extern "C" fn nvagentrt_llm_stream_call_execute(
     data_json: *const c_char,
     metadata_json: *const c_char,
     model_name: *const c_char,
+    to_request_cb: Option<NvAgentRtJsonCb>,
+    to_request_ud: *mut libc::c_void,
+    to_request_free: NvAgentRtFreeFn,
+    to_response_cb: Option<NvAgentRtJsonCb>,
+    to_response_ud: *mut libc::c_void,
+    to_response_free: NvAgentRtFreeFn,
     out: *mut *mut FfiStream,
 ) -> NvAgentRtStatus {
     clear_last_error();
-    if out.is_null() || request.is_null() {
+    if out.is_null() {
         set_last_error("null pointer argument");
         return NvAgentRtStatus::NullPointer;
     }
@@ -643,7 +713,10 @@ pub unsafe extern "C" fn nvagentrt_llm_stream_call_execute(
         Ok(s) => s,
         Err(status) => return status,
     };
-    let req = unsafe { &*request }.0.clone();
+    let native = match c_str_to_json(native_json) {
+        Some(n) => n,
+        None => return NvAgentRtStatus::InvalidJson,
+    };
     let parent_handle = if parent.is_null() {
         None
     } else {
@@ -666,12 +739,17 @@ pub unsafe extern "C" fn nvagentrt_llm_stream_call_execute(
             Err(status) => return status,
         }
     };
+    let to_request = to_request_cb.map(|cb| wrap_to_request_fn(cb, to_request_ud, to_request_free));
+    let to_response =
+        to_response_cb.map(|cb| wrap_to_response_fn(cb, to_response_ud, to_response_free));
 
     let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
+    let default_fn: nvagentrt_core::LlmStreamExecutionNextFn =
+        Box::new(move |native| exec_fn(native));
 
-    let wrapped_collector: Box<dyn FnMut(String) + Send> = match collector {
+    let wrapped_collector: Box<dyn FnMut(serde_json::Value) + Send> = match collector {
         Some(cb) => wrap_collector_fn(cb),
-        None => Box::new(|_: String| {}),
+        None => Box::new(|_: serde_json::Value| {}),
     };
 
     let wrapped_finalizer: Box<dyn FnOnce() -> serde_json::Value + Send> = match finalizer {
@@ -682,8 +760,8 @@ pub unsafe extern "C" fn nvagentrt_llm_stream_call_execute(
     let result = tokio_runtime().block_on(async {
         core::nvagentrt_llm_stream_call_execute(
             &name,
-            req,
-            exec_fn,
+            native,
+            default_fn,
             wrapped_collector,
             wrapped_finalizer,
             parent_handle,
@@ -691,6 +769,8 @@ pub unsafe extern "C" fn nvagentrt_llm_stream_call_execute(
             data,
             metadata,
             model_name_opt,
+            to_request,
+            to_response,
         )
         .await
     });
@@ -742,8 +822,8 @@ pub unsafe extern "C" fn nvagentrt_stream_next(
     });
     match result {
         None => 0, // stream done
-        Some(Ok(text)) => {
-            unsafe { *out_chunk = str_to_c_string(&text) };
+        Some(Ok(chunk)) => {
+            unsafe { *out_chunk = json_to_c_string(&chunk) };
             1
         }
         Some(Err(e)) => {
@@ -1011,8 +1091,11 @@ ffi_intercept_tool_api!(
     wrap_tool_sanitize_fn
 );
 
-/// Register a tool execution intercept. When the condition callback returns true,
-/// the execution callback replaces the default tool execution.
+/// Register a tool execution intercept following the middleware chain pattern.
+/// When the condition callback returns true, the execution callback is included
+/// in the chain. The callback receives `(args, next_fn, next_ctx)` — call
+/// `next_fn(args, next_ctx)` to invoke the next intercept or the original
+/// tool function, or skip calling it to short-circuit.
 ///
 /// # Parameters
 /// - `name`: Unique intercept name.
@@ -1020,7 +1103,7 @@ ffi_intercept_tool_api!(
 /// - `cond_cb`: Condition callback that decides if this intercept applies.
 /// - `cond_user_data`: Opaque pointer for the condition callback.
 /// - `cond_free`: Optional destructor for `cond_user_data`.
-/// - `exec_cb`: Execution callback that replaces the tool call.
+/// - `exec_cb`: Middleware callback receiving args and a next function.
 /// - `exec_user_data`: Opaque pointer for the execution callback.
 /// - `exec_free`: Optional destructor for `exec_user_data`.
 ///
@@ -1033,7 +1116,7 @@ pub unsafe extern "C" fn nvagentrt_register_tool_execution_intercept(
     cond_cb: NvAgentRtToolExecConditionalCb,
     cond_user_data: *mut libc::c_void,
     cond_free: NvAgentRtFreeFn,
-    exec_cb: NvAgentRtToolExecCb,
+    exec_cb: NvAgentRtToolExecInterceptCb,
     exec_user_data: *mut libc::c_void,
     exec_free: NvAgentRtFreeFn,
 ) -> NvAgentRtStatus {
@@ -1043,7 +1126,7 @@ pub unsafe extern "C" fn nvagentrt_register_tool_execution_intercept(
         Err(status) => return status,
     };
     let cond = wrap_tool_exec_conditional_fn(cond_cb, cond_user_data, cond_free);
-    let exec = wrap_tool_exec_fn(exec_cb, exec_user_data, exec_free);
+    let exec = wrap_tool_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
     match core::nvagentrt_register_tool_execution_intercept(&name, priority, cond, exec) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
@@ -1124,71 +1207,56 @@ pub unsafe extern "C" fn nvagentrt_deregister_llm_sanitize_request_guardrail(
     }
 }
 
-macro_rules! ffi_guardrail_json_api {
-    ($(#[$reg_doc:meta])* $register_name:ident,
-     $(#[$dereg_doc:meta])* $deregister_name:ident,
-     $core_register:path, $core_deregister:path) => {
-        $(#[$reg_doc])*
-        #[no_mangle]
-        pub unsafe extern "C" fn $register_name(
-            name: *const c_char,
-            priority: i32,
-            cb: NvAgentRtJsonCb,
-            user_data: *mut libc::c_void,
-            free_fn: NvAgentRtFreeFn,
-        ) -> NvAgentRtStatus {
-            clear_last_error();
-            let name = match c_str_to_string(name) {
-                Ok(s) => s,
-                Err(status) => return status,
-            };
-            let wrapped = wrap_json_fn(cb, user_data, free_fn);
-            match $core_register(&name, priority, wrapped) {
-                Ok(()) => NvAgentRtStatus::Ok,
-                Err(e) => status_from_error(&e),
-            }
-        }
-
-        $(#[$dereg_doc])*
-        #[no_mangle]
-        pub unsafe extern "C" fn $deregister_name(
-            name: *const c_char,
-        ) -> NvAgentRtStatus {
-            clear_last_error();
-            let name = match c_str_to_string(name) {
-                Ok(s) => s,
-                Err(status) => return status,
-            };
-            match $core_deregister(&name) {
-                Ok(_) => NvAgentRtStatus::Ok,
-                Err(e) => status_from_error(&e),
-            }
-        }
+/// Register an LLM response sanitization guardrail. The callback can inspect
+/// and modify the LLM response after it is received.
+///
+/// # Parameters
+/// - `name`: Unique guardrail name.
+/// - `priority`: Execution priority (lower runs first).
+/// - `cb`: JSON-to-JSON callback that receives LLMResponse JSON and returns sanitized JSON.
+/// - `user_data`: Opaque pointer passed to `cb`.
+/// - `free_fn`: Optional destructor for `user_data`.
+///
+/// # Safety
+/// `name` must be a valid C string. `cb` must be a valid function pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_register_llm_sanitize_response_guardrail(
+    name: *const c_char,
+    priority: i32,
+    cb: NvAgentRtJsonCb,
+    user_data: *mut libc::c_void,
+    free_fn: NvAgentRtFreeFn,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
     };
+    let wrapped = wrap_llm_response_fn(cb, user_data, free_fn);
+    match core::nvagentrt_register_llm_sanitize_response_guardrail(&name, priority, wrapped) {
+        Ok(()) => NvAgentRtStatus::Ok,
+        Err(e) => status_from_error(&e),
+    }
 }
 
-ffi_guardrail_json_api!(
-    /// Register an LLM response sanitization guardrail. The callback can inspect
-    /// and modify the LLM response JSON after it is received.
-    ///
-    /// # Parameters
-    /// - `name`: Unique guardrail name.
-    /// - `priority`: Execution priority (lower runs first).
-    /// - `cb`: JSON-to-JSON callback that receives response JSON and returns sanitized JSON.
-    /// - `user_data`: Opaque pointer passed to `cb`.
-    /// - `free_fn`: Optional destructor for `user_data`.
-    ///
-    /// # Safety
-    /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nvagentrt_register_llm_sanitize_response_guardrail,
-    /// Deregister an LLM response sanitization guardrail by name.
-    ///
-    /// # Safety
-    /// `name` must be a valid C string.
-    nvagentrt_deregister_llm_sanitize_response_guardrail,
-    core::nvagentrt_register_llm_sanitize_response_guardrail,
-    core::nvagentrt_deregister_llm_sanitize_response_guardrail
-);
+/// Deregister an LLM response sanitization guardrail by name.
+///
+/// # Safety
+/// `name` must be a valid C string.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_deregister_llm_sanitize_response_guardrail(
+    name: *const c_char,
+) -> NvAgentRtStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    match core::nvagentrt_deregister_llm_sanitize_response_guardrail(&name) {
+        Ok(_) => NvAgentRtStatus::Ok,
+        Err(e) => status_from_error(&e),
+    }
+}
 
 /// Register an LLM conditional execution guardrail. The callback decides
 /// whether an LLM call should proceed.
@@ -1245,14 +1313,14 @@ pub unsafe extern "C" fn nvagentrt_deregister_llm_conditional_execution_guardrai
 // LLM intercept registrations
 // ---------------------------------------------------------------------------
 
-/// Register an LLM request intercept. The callback can transform the request
-/// before it reaches the LLM provider.
+/// Register an LLM request intercept. The callback can transform the native
+/// request JSON before it reaches the LLM provider.
 ///
 /// # Parameters
 /// - `name`: Unique intercept name.
 /// - `priority`: Execution priority (lower runs first).
 /// - `break_chain`: If true, stop processing further intercepts after this one.
-/// - `cb`: Request transform callback.
+/// - `cb`: JSON transform callback (receives/returns native JSON C string).
 /// - `user_data`: Opaque pointer passed to `cb`.
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
@@ -1263,7 +1331,7 @@ pub unsafe extern "C" fn nvagentrt_register_llm_request_intercept(
     name: *const c_char,
     priority: i32,
     break_chain: bool,
-    cb: NvAgentRtLlmRequestCb,
+    cb: NvAgentRtJsonCb,
     user_data: *mut libc::c_void,
     free_fn: NvAgentRtFreeFn,
 ) -> NvAgentRtStatus {
@@ -1272,7 +1340,7 @@ pub unsafe extern "C" fn nvagentrt_register_llm_request_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    let wrapped = wrap_llm_sanitize_request_fn(cb, user_data, free_fn);
+    let wrapped = wrap_json_fn(cb, user_data, free_fn);
     match core::nvagentrt_register_llm_request_intercept(&name, priority, break_chain, wrapped) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
@@ -1298,14 +1366,14 @@ pub unsafe extern "C" fn nvagentrt_deregister_llm_request_intercept(
     }
 }
 
-/// Register an LLM response intercept. The callback can transform the response
-/// JSON after it is received from the LLM provider.
+/// Register an LLM response intercept. The callback can transform the
+/// LLM response after it is received from the LLM provider.
 ///
 /// # Parameters
 /// - `name`: Unique intercept name.
 /// - `priority`: Execution priority (lower runs first).
 /// - `break_chain`: If true, stop processing further intercepts after this one.
-/// - `cb`: JSON transform callback.
+/// - `cb`: JSON transform callback (receives/returns LLMResponse as JSON C string).
 /// - `user_data`: Opaque pointer passed to `cb`.
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
@@ -1325,7 +1393,7 @@ pub unsafe extern "C" fn nvagentrt_register_llm_response_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    let wrapped = wrap_json_fn(cb, user_data, free_fn);
+    let wrapped = wrap_llm_response_fn(cb, user_data, free_fn);
     match core::nvagentrt_register_llm_response_intercept(&name, priority, break_chain, wrapped) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
@@ -1409,8 +1477,11 @@ pub unsafe extern "C" fn nvagentrt_deregister_llm_stream_response_intercept(
     }
 }
 
-/// Register an LLM execution intercept. When the condition callback returns true,
-/// the execution callback replaces the default LLM call.
+/// Register an LLM execution intercept following the middleware chain pattern.
+/// When the condition callback returns true, the execution callback is included
+/// in the chain. The callback receives `(request, next_fn, next_ctx)` — call
+/// `next_fn(request, next_ctx)` to invoke the next intercept or the original
+/// LLM call, or skip calling it to short-circuit.
 ///
 /// # Parameters
 /// - `name`: Unique intercept name.
@@ -1418,7 +1489,7 @@ pub unsafe extern "C" fn nvagentrt_deregister_llm_stream_response_intercept(
 /// - `cond_cb`: Condition callback.
 /// - `cond_user_data`: Opaque pointer for the condition callback.
 /// - `cond_free`: Optional destructor for `cond_user_data`.
-/// - `exec_cb`: Execution callback.
+/// - `exec_cb`: Middleware callback receiving request and a next function.
 /// - `exec_user_data`: Opaque pointer for the execution callback.
 /// - `exec_free`: Optional destructor for `exec_user_data`.
 ///
@@ -1431,7 +1502,7 @@ pub unsafe extern "C" fn nvagentrt_register_llm_execution_intercept(
     cond_cb: NvAgentRtLlmExecConditionalCb,
     cond_user_data: *mut libc::c_void,
     cond_free: NvAgentRtFreeFn,
-    exec_cb: NvAgentRtLlmExecCb,
+    exec_cb: NvAgentRtLlmExecInterceptCb,
     exec_user_data: *mut libc::c_void,
     exec_free: NvAgentRtFreeFn,
 ) -> NvAgentRtStatus {
@@ -1441,7 +1512,7 @@ pub unsafe extern "C" fn nvagentrt_register_llm_execution_intercept(
         Err(status) => return status,
     };
     let cond = wrap_llm_exec_conditional_fn(cond_cb, cond_user_data, cond_free);
-    let exec = wrap_llm_exec_fn(exec_cb, exec_user_data, exec_free);
+    let exec = wrap_llm_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
     match core::nvagentrt_register_llm_execution_intercept(&name, priority, cond, exec) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
@@ -1467,8 +1538,11 @@ pub unsafe extern "C" fn nvagentrt_deregister_llm_execution_intercept(
     }
 }
 
-/// Register an LLM streaming execution intercept. When the condition callback
-/// returns true, the execution callback replaces the default streaming LLM call.
+/// Register an LLM streaming execution intercept following the middleware chain
+/// pattern. When the condition callback returns true, the execution callback is
+/// included in the chain. The callback receives `(request, next_fn, next_ctx)` —
+/// call `next_fn(request, next_ctx)` to invoke the next intercept or the original
+/// streaming LLM call, or skip calling it to short-circuit.
 ///
 /// # Parameters
 /// - `name`: Unique intercept name.
@@ -1476,7 +1550,7 @@ pub unsafe extern "C" fn nvagentrt_deregister_llm_execution_intercept(
 /// - `cond_cb`: Condition callback.
 /// - `cond_user_data`: Opaque pointer for the condition callback.
 /// - `cond_free`: Optional destructor for `cond_user_data`.
-/// - `exec_cb`: Execution callback.
+/// - `exec_cb`: Middleware callback receiving request and a next function.
 /// - `exec_user_data`: Opaque pointer for the execution callback.
 /// - `exec_free`: Optional destructor for `exec_user_data`.
 ///
@@ -1489,7 +1563,7 @@ pub unsafe extern "C" fn nvagentrt_register_llm_stream_execution_intercept(
     cond_cb: NvAgentRtLlmExecConditionalCb,
     cond_user_data: *mut libc::c_void,
     cond_free: NvAgentRtFreeFn,
-    exec_cb: NvAgentRtLlmExecCb,
+    exec_cb: NvAgentRtLlmExecInterceptCb,
     exec_user_data: *mut libc::c_void,
     exec_free: NvAgentRtFreeFn,
 ) -> NvAgentRtStatus {
@@ -1499,7 +1573,7 @@ pub unsafe extern "C" fn nvagentrt_register_llm_stream_execution_intercept(
         Err(status) => return status,
     };
     let cond = wrap_llm_exec_conditional_fn(cond_cb, cond_user_data, cond_free);
-    let exec = wrap_llm_stream_exec_fn(exec_cb, exec_user_data, exec_free);
+    let exec = wrap_llm_stream_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
     match core::nvagentrt_register_llm_stream_execution_intercept(&name, priority, cond, exec) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
@@ -1923,10 +1997,10 @@ pub unsafe extern "C" fn nvagentrt_tool_response_intercepts(
     }
 }
 
-/// Run the registered LLM request intercept chain on the given request.
+/// Run the registered LLM request intercept chain on the given native request.
 ///
 /// # Parameters
-/// - `request_json`: LLM request as a JSON C string (serialized LLMRequest).
+/// - `native_json`: Native LLM request as a JSON C string.
 /// - `out`: On success, receives the transformed JSON string (caller must free
 ///   with `nvagentrt_string_free`).
 ///
@@ -1934,29 +2008,19 @@ pub unsafe extern "C" fn nvagentrt_tool_response_intercepts(
 /// All pointers must be valid. `out` must be non-null.
 #[no_mangle]
 pub unsafe extern "C" fn nvagentrt_llm_request_intercepts(
-    request_json: *const c_char,
+    native_json: *const c_char,
     out: *mut *mut c_char,
 ) -> NvAgentRtStatus {
     clear_last_error();
-    let request_str = match c_str_to_string(request_json) {
-        Ok(s) => s,
-        Err(status) => return status,
+    let native = match c_str_to_json(native_json) {
+        Some(j) => j,
+        None => return NvAgentRtStatus::InvalidJson,
     };
-    let request: core::LLMRequest = match serde_json::from_str(&request_str) {
-        Ok(r) => r,
-        Err(_) => return NvAgentRtStatus::InvalidJson,
-    };
-    match core::nvagentrt_llm_request_intercepts(request) {
-        Ok(result) => match serde_json::to_string(&result) {
-            Ok(json_str) => {
-                unsafe { *out = str_to_c_string(&json_str) };
-                NvAgentRtStatus::Ok
-            }
-            Err(e) => {
-                set_last_error(&format!("failed to serialize LLMRequest: {e}"));
-                NvAgentRtStatus::Internal
-            }
-        },
+    match core::nvagentrt_llm_request_intercepts(native) {
+        Ok(transformed) => {
+            unsafe { *out = json_to_c_string(&transformed) };
+            NvAgentRtStatus::Ok
+        }
         Err(e) => status_from_error(&e),
     }
 }
@@ -1967,24 +2031,27 @@ pub unsafe extern "C" fn nvagentrt_llm_request_intercepts(
 /// `NvAgentRtStatus::GuardrailRejected` if blocked.
 ///
 /// # Parameters
-/// - `request_json`: LLM request as a JSON C string (serialized LLMRequest).
+/// - `native_json`: Native LLM request as a JSON C string.
+/// - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
+/// - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
+/// - `to_request_free`: Optional destructor for `to_request_ud`.
 ///
 /// # Safety
 /// All pointers must be valid.
 #[no_mangle]
 pub unsafe extern "C" fn nvagentrt_llm_conditional_execution(
-    request_json: *const c_char,
+    native_json: *const c_char,
+    to_request_cb: Option<NvAgentRtJsonCb>,
+    to_request_ud: *mut libc::c_void,
+    to_request_free: NvAgentRtFreeFn,
 ) -> NvAgentRtStatus {
     clear_last_error();
-    let request_str = match c_str_to_string(request_json) {
-        Ok(s) => s,
-        Err(status) => return status,
+    let native = match c_str_to_json(native_json) {
+        Some(j) => j,
+        None => return NvAgentRtStatus::InvalidJson,
     };
-    let request: core::LLMRequest = match serde_json::from_str(&request_str) {
-        Ok(r) => r,
-        Err(_) => return NvAgentRtStatus::InvalidJson,
-    };
-    match core::nvagentrt_llm_conditional_execution(&request) {
+    let to_request = to_request_cb.map(|cb| wrap_to_request_fn(cb, to_request_ud, to_request_free));
+    match core::nvagentrt_llm_conditional_execution(&native, to_request.as_ref()) {
         Ok(()) => NvAgentRtStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1993,7 +2060,7 @@ pub unsafe extern "C" fn nvagentrt_llm_conditional_execution(
 /// Run the registered LLM response intercept chain on the given response.
 ///
 /// # Parameters
-/// - `response_json`: LLM response as a JSON C string.
+/// - `response_json`: LLM response as a JSON C string (serialized LLMResponse).
 /// - `out`: On success, receives the transformed JSON string (caller must free
 ///   with `nvagentrt_string_free`).
 ///
@@ -2005,15 +2072,25 @@ pub unsafe extern "C" fn nvagentrt_llm_response_intercepts(
     out: *mut *mut c_char,
 ) -> NvAgentRtStatus {
     clear_last_error();
-    let response = match c_str_to_json(response_json) {
-        Some(r) => r,
-        None => return NvAgentRtStatus::InvalidJson,
+    let response_str = match c_str_to_string(response_json) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    let response: core_types::LLMResponse = match serde_json::from_str(&response_str) {
+        Ok(r) => r,
+        Err(_) => return NvAgentRtStatus::InvalidJson,
     };
     match core::nvagentrt_llm_response_intercepts(response) {
-        Ok(transformed) => {
-            unsafe { *out = json_to_c_string(&transformed) };
-            NvAgentRtStatus::Ok
-        }
+        Ok(transformed) => match serde_json::to_string(&transformed) {
+            Ok(json_str) => {
+                unsafe { *out = str_to_c_string(&json_str) };
+                NvAgentRtStatus::Ok
+            }
+            Err(e) => {
+                set_last_error(&format!("failed to serialize LLMResponse: {e}"));
+                NvAgentRtStatus::Internal
+            }
+        },
         Err(e) => status_from_error(&e),
     }
 }

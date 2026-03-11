@@ -32,6 +32,7 @@ typedef struct FfiScopeStack FfiScopeStack;
 typedef struct FfiToolHandle FfiToolHandle;
 typedef struct FfiLLMHandle FfiLLMHandle;
 typedef struct FfiLLMRequest FfiLLMRequest;
+typedef struct FfiLLMResponse FfiLLMResponse;
 typedef struct FfiEvent FfiEvent;
 typedef struct FfiStream FfiStream;
 
@@ -56,30 +57,54 @@ extern int32_t nvagentrt_tool_call_execute(
 	const char* data_json, const char* metadata_json,
 	char** out);
 
-// LLM lifecycle
-extern int32_t nvagentrt_llm_call(const char* name, const FfiLLMRequest* request, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* model_name, FfiLLMHandle** out);
-extern int32_t nvagentrt_llm_call_end(const FfiLLMHandle* handle, const char* response_json, const char* data_json, const char* metadata_json);
+// LLM lifecycle (converter callbacks are nullable NvAgentRtJsonCb function pointers)
+// Option<fn_ptr> in Rust is ABI-compatible with a nullable function pointer.
+// We define the Option struct explicitly so CGo can pass it by value correctly.
+typedef char* (*NvAgentRtJsonCb)(void* user_data, const char* json);
+typedef struct Option_NvAgentRtJsonCb { NvAgentRtJsonCb cb; } Option_NvAgentRtJsonCb;
+typedef void (*NvAgentRtCollectorCb)(const char* chunk_json);
+typedef struct Option_NvAgentRtCollectorCb { NvAgentRtCollectorCb cb; } Option_NvAgentRtCollectorCb;
+typedef char* (*NvAgentRtFinalizerCb)();
+typedef struct Option_NvAgentRtFinalizerCb { NvAgentRtFinalizerCb cb; } Option_NvAgentRtFinalizerCb;
+
+static inline Option_NvAgentRtJsonCb makeOptJsonCb(NvAgentRtJsonCb cb) {
+	Option_NvAgentRtJsonCb opt = { cb };
+	return opt;
+}
+static inline Option_NvAgentRtCollectorCb makeOptCollectorCb(NvAgentRtCollectorCb cb) {
+	Option_NvAgentRtCollectorCb opt = { cb };
+	return opt;
+}
+static inline Option_NvAgentRtFinalizerCb makeOptFinalizerCb(NvAgentRtFinalizerCb cb) {
+	Option_NvAgentRtFinalizerCb opt = { cb };
+	return opt;
+}
+
+extern int32_t nvagentrt_llm_call(const char* name, const char* native_json, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* model_name, Option_NvAgentRtJsonCb to_request_cb, void* to_request_ud, NvAgentRtFreeFn to_request_free, FfiLLMHandle** out);
+extern int32_t nvagentrt_llm_call_end(const FfiLLMHandle* handle, const char* response_json, const char* data_json, const char* metadata_json, Option_NvAgentRtJsonCb to_response_cb, void* to_response_ud, NvAgentRtFreeFn to_response_free);
 
 // LLM call execute
-typedef char* (*NvAgentRtLlmExecFn)(void* user_data, const FfiLLMRequest* request);
+typedef char* (*NvAgentRtLlmExecFn)(void* user_data, const char* native_json);
 extern int32_t nvagentrt_llm_call_execute(
-	const char* name, const FfiLLMRequest* request,
+	const char* name, const char* native_json,
 	NvAgentRtLlmExecFn func_cb, void* func_user_data, NvAgentRtFreeFn func_free,
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
 	const char* model_name,
+	Option_NvAgentRtJsonCb to_request_cb, void* to_request_ud, NvAgentRtFreeFn to_request_free,
+	Option_NvAgentRtJsonCb to_response_cb, void* to_response_ud, NvAgentRtFreeFn to_response_free,
 	char** out);
 
 // LLM stream execute
-typedef void (*NvAgentRtCollectorFn)(const char* chunk);
-typedef char* (*NvAgentRtFinalizerFn)();
 extern int32_t nvagentrt_llm_stream_call_execute(
-	const char* name, const FfiLLMRequest* request,
+	const char* name, const char* native_json,
 	NvAgentRtLlmExecFn func_cb, void* func_user_data, NvAgentRtFreeFn func_free,
-	NvAgentRtCollectorFn collector, NvAgentRtFinalizerFn finalizer,
+	Option_NvAgentRtCollectorCb collector, Option_NvAgentRtFinalizerCb finalizer,
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
 	const char* model_name,
+	Option_NvAgentRtJsonCb to_request_cb, void* to_request_ud, NvAgentRtFreeFn to_request_free,
+	Option_NvAgentRtJsonCb to_response_cb, void* to_response_ud, NvAgentRtFreeFn to_response_free,
 	FfiStream** out);
 
 // Tool guardrails
@@ -100,36 +125,44 @@ extern int32_t nvagentrt_register_tool_response_intercept(const char* name, int3
 extern int32_t nvagentrt_deregister_tool_response_intercept(const char* name);
 
 typedef _Bool (*NvAgentRtToolExecConditionalFn)(void* user_data, const char* name, const char* args_json);
-extern int32_t nvagentrt_register_tool_execution_intercept(const char* name, int32_t priority, NvAgentRtToolExecConditionalFn cond_cb, void* cond_user_data, NvAgentRtFreeFn cond_free, NvAgentRtToolExecFn exec_cb, void* exec_user_data, NvAgentRtFreeFn exec_free);
+// Middleware chain intercept callback types (must be declared before use in externs)
+typedef char* (*NvAgentRtToolExecNextFn)(const char* args_json, void* next_ctx);
+typedef char* (*NvAgentRtToolExecInterceptCb)(void* user_data, const char* args_json, NvAgentRtToolExecNextFn next_fn, void* next_ctx);
+extern int32_t nvagentrt_register_tool_execution_intercept(const char* name, int32_t priority, NvAgentRtToolExecConditionalFn cond_cb, void* cond_user_data, NvAgentRtFreeFn cond_free, NvAgentRtToolExecInterceptCb exec_cb, void* exec_user_data, NvAgentRtFreeFn exec_free);
 extern int32_t nvagentrt_deregister_tool_execution_intercept(const char* name);
 
 // LLM guardrails
-typedef FfiLLMRequest* (*NvAgentRtLlmRequestFn)(void* user_data, const FfiLLMRequest* request);
+typedef char* (*NvAgentRtLlmRequestFn)(void* user_data, const char* native_json);
 extern int32_t nvagentrt_register_llm_sanitize_request_guardrail(const char* name, int32_t priority, NvAgentRtLlmRequestFn cb, void* user_data, NvAgentRtFreeFn free_fn);
 extern int32_t nvagentrt_deregister_llm_sanitize_request_guardrail(const char* name);
 
-typedef char* (*NvAgentRtJsonFn)(void* user_data, const char* json);
-extern int32_t nvagentrt_register_llm_sanitize_response_guardrail(const char* name, int32_t priority, NvAgentRtJsonFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+typedef char* (*NvAgentRtLlmResponseFn)(void* user_data, const char* response_json);
+extern int32_t nvagentrt_register_llm_sanitize_response_guardrail(const char* name, int32_t priority, NvAgentRtLlmResponseFn cb, void* user_data, NvAgentRtFreeFn free_fn);
 extern int32_t nvagentrt_deregister_llm_sanitize_response_guardrail(const char* name);
 
-typedef char* (*NvAgentRtLlmConditionalFn)(void* user_data, const FfiLLMRequest* request);
+typedef char* (*NvAgentRtJsonFn)(void* user_data, const char* json);
+
+typedef char* (*NvAgentRtLlmConditionalFn)(void* user_data, const char* native_json);
 extern int32_t nvagentrt_register_llm_conditional_execution_guardrail(const char* name, int32_t priority, NvAgentRtLlmConditionalFn cb, void* user_data, NvAgentRtFreeFn free_fn);
 extern int32_t nvagentrt_deregister_llm_conditional_execution_guardrail(const char* name);
 
 // LLM intercepts
-extern int32_t nvagentrt_register_llm_request_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtLlmRequestFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+extern int32_t nvagentrt_register_llm_request_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtJsonFn cb, void* user_data, NvAgentRtFreeFn free_fn);
 extern int32_t nvagentrt_deregister_llm_request_intercept(const char* name);
-extern int32_t nvagentrt_register_llm_response_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtJsonFn cb, void* user_data, NvAgentRtFreeFn free_fn);
+extern int32_t nvagentrt_register_llm_response_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtLlmResponseFn cb, void* user_data, NvAgentRtFreeFn free_fn);
 extern int32_t nvagentrt_deregister_llm_response_intercept(const char* name);
 
-typedef char* (*NvAgentRtSseInterceptFn)(void* user_data, const char* sse_json);
+typedef char* (*NvAgentRtSseInterceptFn)(void* user_data, const char* chunk_json);
 extern int32_t nvagentrt_register_llm_stream_response_intercept(const char* name, int32_t priority, _Bool break_chain, NvAgentRtSseInterceptFn cb, void* user_data, NvAgentRtFreeFn free_fn);
 extern int32_t nvagentrt_deregister_llm_stream_response_intercept(const char* name);
 
-typedef _Bool (*NvAgentRtLlmExecConditionalFn)(void* user_data, const FfiLLMRequest* request);
-extern int32_t nvagentrt_register_llm_execution_intercept(const char* name, int32_t priority, NvAgentRtLlmExecConditionalFn cond_cb, void* cond_user_data, NvAgentRtFreeFn cond_free, NvAgentRtLlmExecFn exec_cb, void* exec_user_data, NvAgentRtFreeFn exec_free);
+typedef _Bool (*NvAgentRtLlmExecConditionalFn)(void* user_data, const char* native_json);
+typedef char* (*NvAgentRtLlmExecNextFn)(const char* native_json, void* next_ctx);
+typedef char* (*NvAgentRtLlmExecInterceptCb)(void* user_data, const char* native_json, NvAgentRtLlmExecNextFn next_fn, void* next_ctx);
+
+extern int32_t nvagentrt_register_llm_execution_intercept(const char* name, int32_t priority, NvAgentRtLlmExecConditionalFn cond_cb, void* cond_user_data, NvAgentRtFreeFn cond_free, NvAgentRtLlmExecInterceptCb exec_cb, void* exec_user_data, NvAgentRtFreeFn exec_free);
 extern int32_t nvagentrt_deregister_llm_execution_intercept(const char* name);
-extern int32_t nvagentrt_register_llm_stream_execution_intercept(const char* name, int32_t priority, NvAgentRtLlmExecConditionalFn cond_cb, void* cond_user_data, NvAgentRtFreeFn cond_free, NvAgentRtLlmExecFn exec_cb, void* exec_user_data, NvAgentRtFreeFn exec_free);
+extern int32_t nvagentrt_register_llm_stream_execution_intercept(const char* name, int32_t priority, NvAgentRtLlmExecConditionalFn cond_cb, void* cond_user_data, NvAgentRtFreeFn cond_free, NvAgentRtLlmExecInterceptCb exec_cb, void* exec_user_data, NvAgentRtFreeFn exec_free);
 extern int32_t nvagentrt_deregister_llm_stream_execution_intercept(const char* name);
 
 // Subscribers
@@ -142,7 +175,7 @@ extern int32_t nvagentrt_tool_request_intercepts(const char* name, const char* a
 extern int32_t nvagentrt_tool_conditional_execution(const char* name, const char* args_json);
 extern int32_t nvagentrt_tool_response_intercepts(const char* name, const char* result_json, char** out);
 extern int32_t nvagentrt_llm_request_intercepts(const char* request_json, char** out);
-extern int32_t nvagentrt_llm_conditional_execution(const char* request_json);
+extern int32_t nvagentrt_llm_conditional_execution(const char* request_json, Option_NvAgentRtJsonCb to_request_cb, void* to_request_ud, NvAgentRtFreeFn to_request_free);
 extern int32_t nvagentrt_llm_response_intercepts(const char* response_json, char** out);
 
 // Error
@@ -172,11 +205,16 @@ extern char* goToolExecTrampoline(void*, const char*);
 extern char* goJSONTrampoline(void*, const char*);
 extern void goEventSubscriberTrampoline(void*, const FfiEvent*);
 extern void goFreeTrampoline(void*);
-extern FfiLLMRequest* goLlmRequestTrampoline(void*, const FfiLLMRequest*);
-extern char* goLlmConditionalTrampoline(void*, const FfiLLMRequest*);
-extern _Bool goLlmExecConditionalTrampoline(void*, const FfiLLMRequest*);
-extern char* goLlmExecTrampoline(void*, const FfiLLMRequest*);
-extern char* goStringInterceptTrampoline(void*, const char*);
+extern char* goLlmRequestTrampoline(void*, const char*);
+extern char* goLlmResponseTrampoline(void*, const char*);
+extern char* goLlmConditionalTrampoline(void*, const char*);
+extern _Bool goLlmExecConditionalTrampoline(void*, const char*);
+extern char* goLlmExecTrampoline(void*, const char*);
+extern char* goToolExecInterceptTrampoline(void*, const char*, NvAgentRtToolExecNextFn, void*);
+extern char* goLlmExecInterceptTrampoline(void*, const char*, NvAgentRtLlmExecNextFn, void*);
+extern char* goChunkInterceptTrampoline(void*, const char*);
+extern char* goToRequestTrampoline(void*, const char*);
+extern char* goToResponseTrampoline(void*, const char*);
 extern void goCollectorTrampoline(const char*);
 extern char* goFinalizerTrampoline();
 */
@@ -473,12 +511,13 @@ func ToolCallEnd(handle *ToolHandle, result json.RawMessage, opts ...ToolCallOpt
 	return checkStatus(C.nvagentrt_tool_call_end(handle.ptr, cResult, o.data, o.metadata))
 }
 
-// ToolCallExecute runs a complete tool call lifecycle: it emits a Start event,
-// runs the full middleware pipeline (request intercepts, sanitize-request
-// guardrails, conditional-execution guardrails, execution intercepts, the
-// provided fn, response intercepts, sanitize-response guardrails), emits an
-// End event, and returns the final result JSON. This is the recommended
-// high-level API for tool invocations.
+// ToolCallExecute runs a complete tool call lifecycle through the full
+// middleware pipeline: conditional-execution guardrails (on raw args),
+// request intercepts, sanitize-request guardrails, execution intercepts,
+// the provided fn, response intercepts, sanitize-response guardrails.
+// On rejection, only a standalone Mark event is emitted (no Start/End pair)
+// and GuardrailRejected is returned. This is the recommended high-level API
+// for tool invocations.
 func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, opts ...ToolCallOption) (json.RawMessage, error) {
 	o := &toolCallOptions{}
 	for _, opt := range opts {
@@ -521,6 +560,12 @@ type llmCallOptions struct {
 	data       *C.char
 	metadata   *C.char
 	modelName  *C.char
+
+	// Per-call converter callbacks (nullable).
+	toRequest    LLMToRequestFunc
+	toRequestID  unsafe.Pointer // closure registry ID for toRequest
+	toResponse   LLMToResponseFunc
+	toResponseID unsafe.Pointer // closure registry ID for toResponse
 }
 
 // LLMCallOption is a functional option that configures optional parameters for
@@ -574,6 +619,37 @@ func WithLLMModelName(name string) LLMCallOption {
 	}
 }
 
+// WithLLMToRequest sets a per-call converter function that transforms native
+// LLM JSON into an LLMRequest JSON representation. This converter is applied
+// during call start ([LlmCall], [LlmCallExecute], [LlmStreamCallExecute]) and
+// during conditional execution ([LlmConditionalExecution]) to convert the
+// provider-specific request format into the canonical LLMRequest used by
+// guardrails and intercepts. Pass nil or omit to use the default identity
+// conversion.
+func WithLLMToRequest(fn LLMToRequestFunc) LLMCallOption {
+	return func(o *llmCallOptions) {
+		o.toRequest = fn
+		if fn != nil {
+			o.toRequestID = registerClosure(fn)
+		}
+	}
+}
+
+// WithLLMToResponse sets a per-call converter function that transforms native
+// LLM JSON into an LLMResponse JSON representation. This converter is applied
+// during call end ([LlmCallEnd], [LlmCallExecute], [LlmStreamCallExecute])
+// to convert the provider-specific response format into the canonical
+// LLMResponse used by guardrails and intercepts. Pass nil or omit to use the
+// default identity conversion.
+func WithLLMToResponse(fn LLMToResponseFunc) LLMCallOption {
+	return func(o *llmCallOptions) {
+		o.toResponse = fn
+		if fn != nil {
+			o.toResponseID = registerClosure(fn)
+		}
+	}
+}
+
 func freeLLMOpts(o *llmCallOptions) {
 	if o.data != nil {
 		C.free(unsafe.Pointer(o.data))
@@ -584,6 +660,27 @@ func freeLLMOpts(o *llmCallOptions) {
 	if o.modelName != nil {
 		C.free(unsafe.Pointer(o.modelName))
 	}
+	// Note: converter callback closure IDs (toRequestID, toResponseID) are
+	// NOT freed here. They are passed to C along with goFreeTrampoline, and
+	// C calls the free function when it is done with the callback.
+}
+
+// toRequestCParams returns the C callback triple for the to_request converter.
+// Returns a zero Option_NvAgentRtJsonCb (None) when no converter is set.
+func (o *llmCallOptions) toRequestCParams() (C.Option_NvAgentRtJsonCb, unsafe.Pointer, C.NvAgentRtFreeFn) {
+	if o.toRequest == nil {
+		return C.makeOptJsonCb(nil), nil, nil
+	}
+	return C.makeOptJsonCb(C.NvAgentRtJsonCb(C.goToRequestTrampoline)), o.toRequestID, C.NvAgentRtFreeFn(C.goFreeTrampoline)
+}
+
+// toResponseCParams returns the C callback triple for the to_response converter.
+// Returns a zero Option_NvAgentRtJsonCb (None) when no converter is set.
+func (o *llmCallOptions) toResponseCParams() (C.Option_NvAgentRtJsonCb, unsafe.Pointer, C.NvAgentRtFreeFn) {
+	if o.toResponse == nil {
+		return C.makeOptJsonCb(nil), nil, nil
+	}
+	return C.makeOptJsonCb(C.NvAgentRtJsonCb(C.goToResponseTrampoline)), o.toResponseID, C.NvAgentRtFreeFn(C.goFreeTrampoline)
 }
 
 // LlmCall starts an LLM call lifecycle and returns an [LLMHandle]. This emits a
@@ -592,20 +689,30 @@ func freeLLMOpts(o *llmCallOptions) {
 // the full lifecycle automatically, use [LlmCallExecute] or
 // [LlmStreamCallExecute] instead.
 //
-// The name identifies the LLM provider/model, and request contains the HTTP
-// request parameters. Optional parameters can be set via [LLMCallOption] values.
-func LlmCall(name string, request *LLMRequest, opts ...LLMCallOption) (*LLMHandle, error) {
+// The name identifies the LLM provider/model, and native is any JSON-serializable
+// value representing the native LLM request payload. Optional parameters can be
+// set via [LLMCallOption] values.
+func LlmCall(name string, native interface{}, opts ...LLMCallOption) (*LLMHandle, error) {
 	o := &llmCallOptions{}
 	for _, opt := range opts {
 		opt(o)
 	}
 	defer freeLLMOpts(o)
 
+	nativeJSON, err := json.Marshal(native)
+	if err != nil {
+		return nil, err
+	}
+
 	cName := C.CString(name)
+	cNative := C.CString(string(nativeJSON))
 	defer C.free(unsafe.Pointer(cName))
+	defer C.free(unsafe.Pointer(cNative))
+
+	toReqCb, toReqUD, toReqFree := o.toRequestCParams()
 
 	var out *C.FfiLLMHandle
-	status := C.nvagentrt_llm_call(cName, request.ptr, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.modelName, &out)
+	status := C.nvagentrt_llm_call(cName, cNative, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.modelName, toReqCb, toReqUD, toReqFree, &out)
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}
@@ -625,36 +732,51 @@ func LlmCallEnd(handle *LLMHandle, response json.RawMessage, opts ...LLMCallOpti
 	cResponse := C.CString(string(response))
 	defer C.free(unsafe.Pointer(cResponse))
 
-	return checkStatus(C.nvagentrt_llm_call_end(handle.ptr, cResponse, o.data, o.metadata))
+	toRespCb, toRespUD, toRespFree := o.toResponseCParams()
+
+	return checkStatus(C.nvagentrt_llm_call_end(handle.ptr, cResponse, o.data, o.metadata, toRespCb, toRespUD, toRespFree))
 }
 
-// LlmCallExecute runs a complete LLM call lifecycle: it emits a Start event,
-// runs the full middleware pipeline (request intercepts, sanitize-request
-// guardrails, conditional-execution guardrails, execution intercepts, the
-// provided fn, response intercepts, sanitize-response guardrails), emits an
-// End event, and returns the final response JSON. This is the recommended
-// high-level API for non-streaming LLM invocations.
-func LlmCallExecute(name string, request *LLMRequest, fn LLMExecutionFunc, opts ...LLMCallOption) (json.RawMessage, error) {
+// LlmCallExecute runs a complete LLM call lifecycle through the full
+// middleware pipeline: conditional-execution guardrails (on raw request),
+// request intercepts, sanitize-request guardrails, execution intercepts,
+// the provided fn, response intercepts, sanitize-response guardrails.
+// On rejection, only a standalone Mark event is emitted (no Start/End pair)
+// and GuardrailRejected is returned. This is the recommended high-level API
+// for non-streaming LLM invocations.
+func LlmCallExecute(name string, native interface{}, fn LLMExecutionFunc, opts ...LLMCallOption) (json.RawMessage, error) {
 	o := &llmCallOptions{}
 	for _, opt := range opts {
 		opt(o)
 	}
 	defer freeLLMOpts(o)
 
+	nativeJSON, err := json.Marshal(native)
+	if err != nil {
+		return nil, err
+	}
+
 	id := registerClosure(fn)
 
 	cName := C.CString(name)
+	cNative := C.CString(string(nativeJSON))
 	defer C.free(unsafe.Pointer(cName))
+	defer C.free(unsafe.Pointer(cNative))
+
+	toReqCb, toReqUD, toReqFree := o.toRequestCParams()
+	toRespCb, toRespUD, toRespFree := o.toResponseCParams()
 
 	var out *C.char
 	status := C.nvagentrt_llm_call_execute(
-		cName, request.ptr,
+		cName, cNative,
 		C.NvAgentRtLlmExecFn(C.goLlmExecTrampoline),
 		id,
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
 		o.parent, C.uint32_t(o.attributes),
 		o.data, o.metadata,
 		o.modelName,
+		toReqCb, toReqUD, toReqFree,
+		toRespCb, toRespUD, toRespFree,
 		&out,
 	)
 	if err := checkStatus(status); err != nil {
@@ -666,28 +788,36 @@ func LlmCallExecute(name string, request *LLMRequest, fn LLMExecutionFunc, opts 
 }
 
 // LlmStreamCallExecute runs a streaming LLM call lifecycle. Like
-// [LlmCallExecute], it runs the full middleware pipeline, but instead of
-// returning a single response JSON, it returns an [LlmStream] that yields
-// individual SSE (Server-Sent Event) chunks. Stream response intercepts are
-// applied to each chunk as it is consumed. The caller must call [LlmStream.Next]
-// repeatedly until [io.EOF] is returned, then call [LlmStream.Close].
+// [LlmCallExecute], conditional-execution guardrails run first on the raw
+// request. If accepted, it runs the remaining middleware pipeline and returns
+// an [LlmStream] that yields individual SSE (Server-Sent Event) chunks.
+// Stream response intercepts are applied to each chunk as it is consumed.
+// The caller must call [LlmStream.Next] repeatedly until [io.EOF] is
+// returned, then call [LlmStream.Close].
 //
 // The optional collector callback is invoked with each intercepted chunk string,
 // allowing the caller to accumulate chunks for aggregation. The optional
 // finalizer callback is invoked once when the stream is exhausted and must
 // return a JSON string representing the aggregated response. Pass nil for
 // either to use the default no-op behavior.
-func LlmStreamCallExecute(name string, request *LLMRequest, fn LLMExecutionFunc, collector CollectorFunc, finalizer FinalizerFunc, opts ...LLMCallOption) (*LlmStream, error) {
+func LlmStreamCallExecute(name string, native interface{}, fn LLMExecutionFunc, collector CollectorFunc, finalizer FinalizerFunc, opts ...LLMCallOption) (*LlmStream, error) {
 	o := &llmCallOptions{}
 	for _, opt := range opts {
 		opt(o)
 	}
 	defer freeLLMOpts(o)
 
+	nativeJSON, err := json.Marshal(native)
+	if err != nil {
+		return nil, err
+	}
+
 	id := registerClosure(fn)
 
 	cName := C.CString(name)
+	cNative := C.CString(string(nativeJSON))
 	defer C.free(unsafe.Pointer(cName))
+	defer C.free(unsafe.Pointer(cNative))
 
 	// Set the active collector/finalizer for the duration of the blocking FFI call.
 	// The C collector/finalizer callbacks are plain function pointers (no user_data),
@@ -704,19 +834,26 @@ func LlmStreamCallExecute(name string, request *LLMRequest, fn LLMExecutionFunc,
 		collectorMu.Unlock()
 	}()
 
-	var cCollector C.NvAgentRtCollectorFn
+	var cCollector C.Option_NvAgentRtCollectorCb
 	if collector != nil {
-		cCollector = C.NvAgentRtCollectorFn(C.goCollectorTrampoline)
+		cCollector = C.makeOptCollectorCb(C.NvAgentRtCollectorCb(C.goCollectorTrampoline))
+	} else {
+		cCollector = C.makeOptCollectorCb(nil)
 	}
 
-	var cFinalizer C.NvAgentRtFinalizerFn
+	var cFinalizer C.Option_NvAgentRtFinalizerCb
 	if finalizer != nil {
-		cFinalizer = C.NvAgentRtFinalizerFn(C.goFinalizerTrampoline)
+		cFinalizer = C.makeOptFinalizerCb(C.NvAgentRtFinalizerCb(C.goFinalizerTrampoline))
+	} else {
+		cFinalizer = C.makeOptFinalizerCb(nil)
 	}
+
+	toReqCb, toReqUD, toReqFree := o.toRequestCParams()
+	toRespCb, toRespUD, toRespFree := o.toResponseCParams()
 
 	var out *C.FfiStream
 	status := C.nvagentrt_llm_stream_call_execute(
-		cName, request.ptr,
+		cName, cNative,
 		C.NvAgentRtLlmExecFn(C.goLlmExecTrampoline),
 		id,
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
@@ -725,6 +862,8 @@ func LlmStreamCallExecute(name string, request *LLMRequest, fn LLMExecutionFunc,
 		o.parent, C.uint32_t(o.attributes),
 		o.data, o.metadata,
 		o.modelName,
+		toReqCb, toReqUD, toReqFree,
+		toRespCb, toRespUD, toRespFree,
 		&out,
 	)
 	if err := checkStatus(status); err != nil {
@@ -866,10 +1005,12 @@ func DeregisterToolResponseIntercept(name string) error {
 	return checkStatus(C.nvagentrt_deregister_tool_response_intercept(cName))
 }
 
-// RegisterToolExecutionIntercept registers an intercept that can replace tool
-// execution entirely. The condFn callback is evaluated first; if it returns
-// true, execFn is called instead of the original tool implementation.
-func RegisterToolExecutionIntercept(name string, priority int32, condFn ToolExecConditionalFunc, execFn ToolExecutionFunc) error {
+// RegisterToolExecutionIntercept registers an execution intercept following
+// the middleware chain pattern. The condFn callback is evaluated first; if it
+// returns true, execFn is called with the args and a `next` function. Call
+// `next` to invoke the next intercept or original implementation; skip calling
+// `next` to short-circuit the chain.
+func RegisterToolExecutionIntercept(name string, priority int32, condFn ToolExecConditionalFunc, execFn ToolExecutionInterceptFunc) error {
 	condID := registerClosure(condFn)
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
@@ -879,7 +1020,7 @@ func RegisterToolExecutionIntercept(name string, priority int32, condFn ToolExec
 		C.NvAgentRtToolExecConditionalFn(C.goToolExecConditionalTrampoline),
 		condID,
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
-		C.NvAgentRtToolExecFn(C.goToolExecTrampoline),
+		C.NvAgentRtToolExecInterceptCb(C.goToolExecInterceptTrampoline),
 		execID,
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
 	))
@@ -898,11 +1039,10 @@ func DeregisterToolExecutionIntercept(name string) error {
 // ---------------------------------------------------------------------------
 
 // RegisterLlmSanitizeRequestGuardrail registers a guardrail that sanitizes LLM
-// request parameters (HTTP method, URL, headers, and body) before the call is
-// made. The callback receives these fields and must return the (possibly
-// modified) versions. Guardrails are invoked in priority order (lower values
-// run first).
-func RegisterLlmSanitizeRequestGuardrail(name string, priority int32, fn LLMRequestFunc) error {
+// request JSON before the call is made. The callback receives the native request
+// JSON and must return the (possibly modified) JSON. Guardrails are invoked in
+// priority order (lower values run first).
+func RegisterLlmSanitizeRequestGuardrail(name string, priority int32, fn JSONFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
@@ -923,16 +1063,17 @@ func DeregisterLlmSanitizeRequestGuardrail(name string) error {
 }
 
 // RegisterLlmSanitizeResponseGuardrail registers a guardrail that sanitizes
-// LLM response JSON before it is returned to the caller. The callback receives
-// the response JSON and must return the (possibly modified) JSON. Guardrails are
-// invoked in priority order (lower values run first).
-func RegisterLlmSanitizeResponseGuardrail(name string, priority int32, fn JSONFunc) error {
+// LLM response data before it is returned to the caller. The callback receives
+// the serialized LLMResponse JSON (containing a "data" field) and must return
+// the (possibly modified) response JSON. Guardrails are invoked in priority
+// order (lower values run first).
+func RegisterLlmSanitizeResponseGuardrail(name string, priority int32, fn LLMResponseFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nvagentrt_register_llm_sanitize_response_guardrail(
 		cName, C.int32_t(priority),
-		C.NvAgentRtJsonFn(C.goJSONTrampoline),
+		C.NvAgentRtLlmResponseFn(C.goLlmResponseTrampoline),
 		id,
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
 	))
@@ -972,17 +1113,17 @@ func DeregisterLlmConditionalExecutionGuardrail(name string) error {
 	return checkStatus(C.nvagentrt_deregister_llm_conditional_execution_guardrail(cName))
 }
 
-// RegisterLlmRequestIntercept registers an intercept that transforms LLM
-// request parameters (HTTP method, URL, headers, body) before the call is made.
-// Intercepts run in priority order (lower values first). When breakChain is
-// true, no lower-priority intercepts in the chain are invoked after this one.
-func RegisterLlmRequestIntercept(name string, priority int32, breakChain bool, fn LLMRequestFunc) error {
+// RegisterLlmRequestIntercept registers an intercept that transforms the LLM
+// request JSON before the call is made. Intercepts run in priority order (lower
+// values first). When breakChain is true, no lower-priority intercepts in the
+// chain are invoked after this one.
+func RegisterLlmRequestIntercept(name string, priority int32, breakChain bool, fn JSONFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nvagentrt_register_llm_request_intercept(
 		cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NvAgentRtLlmRequestFn(C.goLlmRequestTrampoline),
+		C.NvAgentRtJsonFn(C.goJSONTrampoline),
 		id,
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
 	))
@@ -996,17 +1137,19 @@ func DeregisterLlmRequestIntercept(name string) error {
 	return checkStatus(C.nvagentrt_deregister_llm_request_intercept(cName))
 }
 
-// RegisterLlmResponseIntercept registers an intercept that transforms LLM
-// response JSON after the LLM returns. Intercepts run in priority order (lower
-// values first). When breakChain is true, no lower-priority intercepts in the
-// chain are invoked after this one.
-func RegisterLlmResponseIntercept(name string, priority int32, breakChain bool, fn JSONFunc) error {
+// RegisterLlmResponseIntercept registers an intercept that transforms the LLM
+// response after the LLM returns. The callback receives the serialized
+// LLMResponse JSON (containing a "data" field) and must return the (possibly
+// modified) response JSON. Intercepts run in priority order (lower values
+// first). When breakChain is true, no lower-priority intercepts in the chain
+// are invoked after this one.
+func RegisterLlmResponseIntercept(name string, priority int32, breakChain bool, fn LLMResponseFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nvagentrt_register_llm_response_intercept(
 		cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NvAgentRtJsonFn(C.goJSONTrampoline),
+		C.NvAgentRtLlmResponseFn(C.goLlmResponseTrampoline),
 		id,
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
 	))
@@ -1022,16 +1165,16 @@ func DeregisterLlmResponseIntercept(name string) error {
 
 // RegisterLlmStreamResponseIntercept registers an intercept that transforms
 // individual chunks during a streaming LLM response. The callback receives
-// each chunk as a string and must return the (possibly modified) chunk.
+// each chunk as JSON and must return the (possibly modified) chunk JSON.
 // Intercepts run in priority order (lower values first). When breakChain is
 // true, no lower-priority intercepts are invoked after this one.
-func RegisterLlmStreamResponseIntercept(name string, priority int32, breakChain bool, fn StringInterceptFunc) error {
+func RegisterLlmStreamResponseIntercept(name string, priority int32, breakChain bool, fn ChunkInterceptFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nvagentrt_register_llm_stream_response_intercept(
 		cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NvAgentRtSseInterceptFn(C.goStringInterceptTrampoline),
+		C.NvAgentRtSseInterceptFn(C.goChunkInterceptTrampoline),
 		id,
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
 	))
@@ -1045,10 +1188,12 @@ func DeregisterLlmStreamResponseIntercept(name string) error {
 	return checkStatus(C.nvagentrt_deregister_llm_stream_response_intercept(cName))
 }
 
-// RegisterLlmExecutionIntercept registers an intercept that can replace LLM
-// execution entirely. The condFn callback is evaluated first; if it returns
-// true, execFn is called instead of the original LLM implementation.
-func RegisterLlmExecutionIntercept(name string, priority int32, condFn LLMExecConditionalFunc, execFn LLMExecutionFunc) error {
+// RegisterLlmExecutionIntercept registers an execution intercept following
+// the middleware chain pattern. The condFn callback is evaluated first; if it
+// returns true, execFn is called with the request parameters and a `next`
+// function. Call `next` to invoke the next intercept or original
+// implementation; skip calling `next` to short-circuit the chain.
+func RegisterLlmExecutionIntercept(name string, priority int32, condFn LLMExecConditionalFunc, execFn LLMExecutionInterceptFunc) error {
 	condID := registerClosure(condFn)
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
@@ -1058,7 +1203,7 @@ func RegisterLlmExecutionIntercept(name string, priority int32, condFn LLMExecCo
 		C.NvAgentRtLlmExecConditionalFn(C.goLlmExecConditionalTrampoline),
 		condID,
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
-		C.NvAgentRtLlmExecFn(C.goLlmExecTrampoline),
+		C.NvAgentRtLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
 		execID,
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
 	))
@@ -1072,10 +1217,12 @@ func DeregisterLlmExecutionIntercept(name string) error {
 	return checkStatus(C.nvagentrt_deregister_llm_execution_intercept(cName))
 }
 
-// RegisterLlmStreamExecutionIntercept registers an intercept that can replace
-// streaming LLM execution entirely. The condFn callback is evaluated first;
-// if it returns true, execFn is called instead of the original implementation.
-func RegisterLlmStreamExecutionIntercept(name string, priority int32, condFn LLMExecConditionalFunc, execFn LLMExecutionFunc) error {
+// RegisterLlmStreamExecutionIntercept registers an execution intercept for
+// streaming LLM calls following the middleware chain pattern. The condFn
+// callback is evaluated first; if it returns true, execFn is called with the
+// request parameters and a `next` function. Call `next` to invoke the next
+// intercept or original implementation; skip calling `next` to short-circuit.
+func RegisterLlmStreamExecutionIntercept(name string, priority int32, condFn LLMExecConditionalFunc, execFn LLMExecutionInterceptFunc) error {
 	condID := registerClosure(condFn)
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
@@ -1085,7 +1232,7 @@ func RegisterLlmStreamExecutionIntercept(name string, priority int32, condFn LLM
 		C.NvAgentRtLlmExecConditionalFn(C.goLlmExecConditionalTrampoline),
 		condID,
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
-		C.NvAgentRtLlmExecFn(C.goLlmExecTrampoline),
+		C.NvAgentRtLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
 		execID,
 		C.NvAgentRtFreeFn(C.goFreeTrampoline),
 	))
@@ -1315,17 +1462,27 @@ func LlmRequestIntercepts(request json.RawMessage) (json.RawMessage, error) {
 
 // LlmConditionalExecution runs the registered LLM conditional execution
 // guardrail chain. Returns nil if all guardrails pass, or an error with the
-// rejection reason if blocked.
-func LlmConditionalExecution(request json.RawMessage) error {
+// rejection reason if blocked. Optional [LLMCallOption] values can supply a
+// [WithLLMToRequest] converter for the guardrail to operate on.
+func LlmConditionalExecution(request json.RawMessage, opts ...LLMCallOption) error {
+	o := &llmCallOptions{}
+	for _, opt := range opts {
+		opt(o)
+	}
+	defer freeLLMOpts(o)
+
 	cRequest := C.CString(string(request))
 	defer C.free(unsafe.Pointer(cRequest))
 
-	status := C.nvagentrt_llm_conditional_execution(cRequest)
+	toReqCb, toReqUD, toReqFree := o.toRequestCParams()
+
+	status := C.nvagentrt_llm_conditional_execution(cRequest, toReqCb, toReqUD, toReqFree)
 	return checkStatus(status)
 }
 
 // LlmResponseIntercepts runs the registered LLM response intercept chain on
-// the given response and returns the transformed response.
+// the given response and returns the transformed response. The response JSON
+// should be a serialized LLMResponse (containing a "data" field).
 func LlmResponseIntercepts(response json.RawMessage) (json.RawMessage, error) {
 	cResponse := C.CString(string(response))
 	defer C.free(unsafe.Pointer(cResponse))

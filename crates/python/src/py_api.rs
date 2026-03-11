@@ -10,6 +10,7 @@
 
 use nvagentrt_core as core;
 use nvagentrt_core::types as core_types;
+use nvagentrt_core::types::LLMConverter;
 use pyo3::prelude::*;
 use tokio_stream::StreamExt;
 
@@ -190,10 +191,11 @@ fn nvagentrt_tool_call_end(
 
 /// Execute a tool call through the full middleware pipeline.
 ///
-/// Runs request intercepts → sanitize-request guardrails →
-/// conditional-execution guardrails → execution intercepts → the supplied
+/// Runs conditional-execution guardrails (on raw args) → request intercepts →
+/// sanitize-request guardrails → execution intercepts → the supplied
 /// function → response intercepts → sanitize-response guardrails, then
-/// returns the final result.
+/// returns the final result. On rejection, only a standalone ``Mark`` event
+/// is emitted (no ``Start``/``End`` pair) and ``GuardrailRejected`` is raised.
 ///
 /// Args:
 ///     name: Tool name.
@@ -226,6 +228,8 @@ fn nvagentrt_tool_call_execute<'py>(
     let data_json = opt_py_to_json(data)?;
     let metadata_json = opt_py_to_json(metadata)?;
     let exec_fn = py_callable::wrap_py_tool_exec_fn(func);
+    // Wrap the Fn-returning default callable into a FnOnce (ToolExecutionNextFn)
+    let default_fn: nvagentrt_core::ToolExecutionNextFn = Box::new(move |args| exec_fn(args));
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
 
     let scope_stack = nvagentrt_core::current_scope_stack();
@@ -235,7 +239,7 @@ fn nvagentrt_tool_call_execute<'py>(
                 let result = core::nvagentrt_tool_call_execute(
                     &name,
                     args_json,
-                    exec_fn,
+                    default_fn,
                     Some(parent_handle),
                     attrs,
                     data_json,
@@ -260,7 +264,7 @@ fn nvagentrt_tool_call_execute<'py>(
 ///
 /// Args:
 ///     name: Model/provider name.
-///     request: An ``LLMRequest`` describing the HTTP call.
+///     native: The native request payload (any JSON-serializable dict).
 ///     handle: Optional parent scope handle.
 ///     attributes: Optional ``LLMAttributes`` bitflags.
 ///     data: Optional JSON-serializable application data.
@@ -268,30 +272,35 @@ fn nvagentrt_tool_call_execute<'py>(
 ///
 /// Returns:
 ///     An ``LLMHandle`` that must be passed to ``llm_call_end``.
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (name, request, *, handle=None, attributes=None, data=None, metadata=None, model_name=None))]
+#[pyo3(signature = (name, native, *, handle=None, attributes=None, data=None, metadata=None, model_name=None, to_request=None))]
 fn nvagentrt_llm_call(
     name: &str,
-    request: &PyLLMRequest,
+    native: &Bound<'_, PyAny>,
     handle: Option<PyScopeHandle>,
     attributes: Option<PyLLMAttributes>,
     data: Option<&Bound<'_, PyAny>>,
     metadata: Option<&Bound<'_, PyAny>>,
     model_name: Option<String>,
+    to_request: Option<Py<PyAny>>,
 ) -> PyResult<PyLLMHandle> {
+    let native_json = py_to_json(native)?;
     let attrs = attributes
         .map(|a| a.inner)
         .unwrap_or(core_types::LLMAttributes::empty());
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
+    let to_req = to_request.map(wrap_py_to_request);
     core::nvagentrt_llm_call(
         name,
-        &request.inner,
+        &native_json,
         handle.as_ref().map(|h| &h.inner),
         attrs,
         data,
         metadata,
         model_name,
+        to_req.as_ref(),
     )
     .map(PyLLMHandle::from)
     .map_err(to_py_err)
@@ -305,30 +314,40 @@ fn nvagentrt_llm_call(
 ///     data: Optional JSON-serializable application data.
 ///     metadata: Optional JSON-serializable metadata.
 #[pyfunction]
-#[pyo3(signature = (handle, response, *, data=None, metadata=None))]
+#[pyo3(signature = (handle, response, *, data=None, metadata=None, to_response=None))]
 fn nvagentrt_llm_call_end(
     handle: &PyLLMHandle,
     response: &Bound<'_, PyAny>,
     data: Option<&Bound<'_, PyAny>>,
     metadata: Option<&Bound<'_, PyAny>>,
+    to_response: Option<Py<PyAny>>,
 ) -> PyResult<()> {
     let response_json = py_to_json(response)?;
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
-    core::nvagentrt_llm_call_end(&handle.inner, response_json, data, metadata).map_err(to_py_err)
+    let to_resp = to_response.map(wrap_py_to_response);
+    core::nvagentrt_llm_call_end(
+        &handle.inner,
+        response_json,
+        data,
+        metadata,
+        to_resp.as_ref(),
+    )
+    .map_err(to_py_err)
 }
 
 /// Execute an LLM call through the full middleware pipeline.
 ///
-/// Runs request intercepts → sanitize-request guardrails →
-/// conditional-execution guardrails → execution intercepts → the supplied
+/// Runs conditional-execution guardrails (on raw request) → request intercepts →
+/// sanitize-request guardrails → execution intercepts → the supplied
 /// function → response intercepts → sanitize-response guardrails, then
-/// returns the final response.
+/// returns the final response. On rejection, only a standalone ``Mark`` event
+/// is emitted (no ``Start``/``End`` pair) and ``GuardrailRejected`` is raised.
 ///
 /// Args:
 ///     name: Model/provider name.
-///     request: An ``LLMRequest`` describing the HTTP call.
-///     func: An async callable ``(LLMRequest) -> response`` that performs the LLM call.
+///     native: The native request payload (any JSON-serializable dict).
+///     func: An async callable ``(dict) -> dict`` that performs the LLM call.
 ///     handle: Optional parent scope handle.
 ///     attributes: Optional ``LLMAttributes`` bitflags.
 ///     data: Optional JSON-serializable application data.
@@ -337,26 +356,32 @@ fn nvagentrt_llm_call_end(
 /// Returns:
 ///     An awaitable that resolves to the (possibly transformed) LLM response.
 #[pyfunction]
-#[pyo3(signature = (name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None))]
+#[pyo3(signature = (name, native, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None, to_request=None, to_response=None))]
 #[allow(clippy::too_many_arguments)]
 fn nvagentrt_llm_call_execute<'py>(
     py: Python<'py>,
     name: String,
-    request: PyLLMRequest,
+    native: &Bound<'py, PyAny>,
     func: Py<PyAny>,
     handle: Option<PyScopeHandle>,
     attributes: Option<PyLLMAttributes>,
     data: Option<&Bound<'py, PyAny>>,
     metadata: Option<&Bound<'py, PyAny>>,
     model_name: Option<String>,
+    to_request: Option<Py<PyAny>>,
+    to_response: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    let native_json = py_to_json(native)?;
     let attrs = attributes
         .map(|a| a.inner)
         .unwrap_or(core_types::LLMAttributes::empty());
     let data_json = opt_py_to_json(data)?;
     let metadata_json = opt_py_to_json(metadata)?;
     let exec_fn = py_callable::wrap_py_llm_exec_fn(func);
+    let default_fn: nvagentrt_core::LlmExecutionNextFn = Box::new(move |req| exec_fn(req));
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
+    let to_req = to_request.map(wrap_py_to_request);
+    let to_resp = to_response.map(wrap_py_to_response);
 
     let scope_stack = nvagentrt_core::current_scope_stack();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -364,13 +389,15 @@ fn nvagentrt_llm_call_execute<'py>(
             .scope(scope_stack, async move {
                 let result = core::nvagentrt_llm_call_execute(
                     &name,
-                    request.inner,
-                    exec_fn,
+                    native_json,
+                    default_fn,
                     Some(parent_handle),
                     attrs,
                     data_json,
                     metadata_json,
                     model_name,
+                    to_req,
+                    to_resp,
                 )
                 .await
                 .map_err(to_py_err)?;
@@ -382,16 +409,17 @@ fn nvagentrt_llm_call_execute<'py>(
 
 /// Execute a streaming LLM call through the full middleware pipeline.
 ///
-/// Like ``llm_call_execute`` but the execution function returns an async
-/// iterator of SSE chunks. The runtime wraps the stream with
+/// Like ``llm_call_execute``, conditional-execution guardrails run first on
+/// the raw request. If accepted, the execution function returns an async
+/// iterator of JSON chunks. The runtime wraps the stream with
 /// ``LlmStreamWrapper`` so that stream-response intercepts can inspect or
-/// transform each SSE event in flight.
+/// transform each chunk in flight.
 ///
 /// Args:
 ///     name: Model/provider name.
-///     request: An ``LLMRequest`` describing the HTTP call.
-///     func: An async callable ``(LLMRequest) -> AsyncIterator[str]`` that returns raw SSE text chunks.
-///     collector: A callable ``(str) -> None`` invoked with each intercepted chunk
+///     native: The native request payload (any JSON-serializable dict).
+///     func: An async callable ``(dict) -> AsyncIterator[Any]`` that returns JSON chunks.
+///     collector: A callable ``(Any) -> None`` invoked with each intercepted chunk
 ///         (after stream response intercepts have been applied).
 ///     finalizer: A callable ``() -> Any`` invoked once when the stream is exhausted.
 ///         Its return value is the aggregated response (converted to JSON).
@@ -401,14 +429,14 @@ fn nvagentrt_llm_call_execute<'py>(
 ///     metadata: Optional JSON-serializable metadata.
 ///
 /// Returns:
-///     An awaitable that resolves to an ``LlmStream`` async iterator of SSE text chunks.
+///     An awaitable that resolves to an ``LlmStream`` async iterator of JSON chunks.
 #[pyfunction]
-#[pyo3(signature = (name, request, func, collector, finalizer, *, handle=None, attributes=None, data=None, metadata=None, model_name=None))]
+#[pyo3(signature = (name, native, func, collector, finalizer, *, handle=None, attributes=None, data=None, metadata=None, model_name=None, to_request=None, to_response=None))]
 #[allow(clippy::too_many_arguments)]
 fn nvagentrt_llm_stream_call_execute<'py>(
     py: Python<'py>,
     name: String,
-    request: PyLLMRequest,
+    native: &Bound<'py, PyAny>,
     func: Py<PyAny>,
     collector: Py<PyAny>,
     finalizer: Py<PyAny>,
@@ -417,16 +445,22 @@ fn nvagentrt_llm_stream_call_execute<'py>(
     data: Option<&Bound<'py, PyAny>>,
     metadata: Option<&Bound<'py, PyAny>>,
     model_name: Option<String>,
+    to_request: Option<Py<PyAny>>,
+    to_response: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    let native_json = py_to_json(native)?;
     let attrs = attributes
         .map(|a| a.inner)
         .unwrap_or(core_types::LLMAttributes::empty());
     let data_json = opt_py_to_json(data)?;
     let metadata_json = opt_py_to_json(metadata)?;
     let exec_fn = py_callable::wrap_py_llm_stream_exec_fn(func);
+    let default_fn: nvagentrt_core::LlmStreamExecutionNextFn = Box::new(move |req| exec_fn(req));
     let collector_fn = py_callable::wrap_py_collector_fn(collector);
     let finalizer_fn = py_callable::wrap_py_finalizer_fn(finalizer);
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
+    let to_req = to_request.map(wrap_py_to_request);
+    let to_resp = to_response.map(wrap_py_to_response);
 
     let scope_stack = nvagentrt_core::current_scope_stack();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -434,8 +468,8 @@ fn nvagentrt_llm_stream_call_execute<'py>(
             .scope(scope_stack, async move {
                 let rust_stream = core::nvagentrt_llm_stream_call_execute(
                     &name,
-                    request.inner,
-                    exec_fn,
+                    native_json,
+                    default_fn,
                     collector_fn,
                     finalizer_fn,
                     Some(parent_handle),
@@ -443,12 +477,15 @@ fn nvagentrt_llm_stream_call_execute<'py>(
                     data_json,
                     metadata_json,
                     model_name,
+                    to_req,
+                    to_resp,
                 )
                 .await
                 .map_err(to_py_err)?;
 
                 // Spawn a tokio task that drains the Rust stream into an mpsc channel
-                let (tx, rx) = tokio::sync::mpsc::channel::<nvagentrt_core::Result<String>>(32);
+                let (tx, rx) =
+                    tokio::sync::mpsc::channel::<nvagentrt_core::Result<serde_json::Value>>(32);
                 tokio::spawn(async move {
                     let mut stream = rust_stream;
                     while let Some(item) = stream.next().await {
@@ -602,7 +639,7 @@ fn nvagentrt_register_tool_execution_intercept(
         name,
         priority,
         py_callable::wrap_py_tool_exec_conditional_fn(conditional),
-        py_callable::wrap_py_tool_exec_fn(callable),
+        py_callable::wrap_py_tool_exec_intercept_fn(callable),
     )
     .map_err(to_py_err)
 }
@@ -640,32 +677,28 @@ fn nvagentrt_deregister_llm_sanitize_request_guardrail(name: &str) -> PyResult<b
     core::nvagentrt_deregister_llm_sanitize_request_guardrail(name).map_err(to_py_err)
 }
 
-/// Macro that generates a register/deregister pair for guardrails
-/// whose callback signature is `(json: Any) -> Any`.
-macro_rules! py_guardrail_json_api {
-    ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
-        #[pyfunction]
-        fn $register_name(name: &str, priority: i32, guardrail: Py<PyAny>) -> PyResult<()> {
-            $core_register(name, priority, py_callable::wrap_py_json_fn(guardrail))
-                .map_err(to_py_err)
-        }
-
-        #[pyfunction]
-        fn $deregister_name(name: &str) -> PyResult<bool> {
-            $core_deregister(name).map_err(to_py_err)
-        }
-    };
+/// Register an LLM sanitize-response guardrail.
+///
+/// Callback: ``(response: LLMResponse) -> LLMResponse`` — returns a sanitized response.
+#[pyfunction]
+fn nvagentrt_register_llm_sanitize_response_guardrail(
+    name: &str,
+    priority: i32,
+    guardrail: Py<PyAny>,
+) -> PyResult<()> {
+    core::nvagentrt_register_llm_sanitize_response_guardrail(
+        name,
+        priority,
+        py_callable::wrap_py_llm_sanitize_response_fn(guardrail),
+    )
+    .map_err(to_py_err)
 }
 
-// Register an LLM sanitize-response guardrail.
-//
-// Callback: ``(response: Any) -> Any`` — returns a sanitized response.
-py_guardrail_json_api!(
-    nvagentrt_register_llm_sanitize_response_guardrail,
-    nvagentrt_deregister_llm_sanitize_response_guardrail,
-    core::nvagentrt_register_llm_sanitize_response_guardrail,
-    core::nvagentrt_deregister_llm_sanitize_response_guardrail
-);
+/// Remove a previously registered LLM sanitize-response guardrail.
+#[pyfunction]
+fn nvagentrt_deregister_llm_sanitize_response_guardrail(name: &str) -> PyResult<bool> {
+    core::nvagentrt_deregister_llm_sanitize_response_guardrail(name).map_err(to_py_err)
+}
 
 /// Register an LLM conditional-execution guardrail.
 ///
@@ -697,7 +730,7 @@ fn nvagentrt_deregister_llm_conditional_execution_guardrail(name: &str) -> PyRes
 
 /// Register an LLM request intercept.
 ///
-/// Callback: ``(request: LLMRequest) -> LLMRequest`` — transforms the request.
+/// Callback: ``(native: Any) -> Any`` — transforms the native request payload.
 /// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
 #[pyfunction]
 fn nvagentrt_register_llm_request_intercept(
@@ -723,7 +756,7 @@ fn nvagentrt_deregister_llm_request_intercept(name: &str) -> PyResult<bool> {
 
 /// Register an LLM response intercept.
 ///
-/// Callback: ``(response: Any) -> Any`` — transforms the LLM response.
+/// Callback: ``(response: LLMResponse) -> LLMResponse`` — transforms the LLM response.
 /// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
 #[pyfunction]
 fn nvagentrt_register_llm_response_intercept(
@@ -736,7 +769,7 @@ fn nvagentrt_register_llm_response_intercept(
         name,
         priority,
         break_chain,
-        py_callable::wrap_py_json_fn(callable),
+        py_callable::wrap_py_llm_response_intercept_fn(callable),
     )
     .map_err(to_py_err)
 }
@@ -749,7 +782,7 @@ fn nvagentrt_deregister_llm_response_intercept(name: &str) -> PyResult<bool> {
 
 /// Register an LLM stream-response intercept.
 ///
-/// Callback: ``(chunk: str) -> str`` — transforms each chunk in a stream.
+/// Callback: ``(chunk: Any) -> Any`` — transforms each JSON chunk in a stream.
 /// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
 #[pyfunction]
 fn nvagentrt_register_llm_stream_response_intercept(
@@ -762,7 +795,7 @@ fn nvagentrt_register_llm_stream_response_intercept(
         name,
         priority,
         break_chain,
-        py_callable::wrap_py_string_intercept_fn(callable),
+        py_callable::wrap_py_json_fn(callable),
     )
     .map_err(to_py_err)
 }
@@ -775,10 +808,10 @@ fn nvagentrt_deregister_llm_stream_response_intercept(name: &str) -> PyResult<bo
 
 /// Register an LLM execution intercept that can replace the LLM call.
 ///
-/// ``conditional``: ``(request: LLMRequest) -> bool`` — return ``True``
+/// ``conditional``: ``(native: Any) -> bool`` — return ``True``
 /// to activate this intercept for the given call.
 ///
-/// ``callable``: ``async (request: LLMRequest) -> Any`` — replacement execution function.
+/// ``callable``: ``async (native: Any, next) -> Any`` — replacement execution function.
 #[pyfunction]
 fn nvagentrt_register_llm_execution_intercept(
     name: &str,
@@ -790,7 +823,7 @@ fn nvagentrt_register_llm_execution_intercept(
         name,
         priority,
         py_callable::wrap_py_llm_exec_conditional_fn(conditional),
-        py_callable::wrap_py_llm_exec_fn(callable),
+        py_callable::wrap_py_llm_exec_intercept_fn(callable),
     )
     .map_err(to_py_err)
 }
@@ -803,10 +836,10 @@ fn nvagentrt_deregister_llm_execution_intercept(name: &str) -> PyResult<bool> {
 
 /// Register an LLM stream-execution intercept that can replace the streaming LLM call.
 ///
-/// ``conditional``: ``(request: LLMRequest) -> bool`` — return ``True``
+/// ``conditional``: ``(native: Any) -> bool`` — return ``True``
 /// to activate this intercept for the given call.
 ///
-/// ``callable``: ``async (request: LLMRequest) -> AsyncIterator[str]`` —
+/// ``callable``: ``async (native: Any, next) -> AsyncIterator[Any]`` —
 /// replacement streaming execution function.
 #[pyfunction]
 fn nvagentrt_register_llm_stream_execution_intercept(
@@ -819,7 +852,7 @@ fn nvagentrt_register_llm_stream_execution_intercept(
         name,
         priority,
         py_callable::wrap_py_llm_exec_conditional_fn(conditional),
-        py_callable::wrap_py_llm_stream_exec_fn(callable),
+        py_callable::wrap_py_llm_stream_exec_intercept_fn(callable),
     )
     .map_err(to_py_err)
 }
@@ -828,6 +861,42 @@ fn nvagentrt_register_llm_stream_execution_intercept(
 #[pyfunction]
 fn nvagentrt_deregister_llm_stream_execution_intercept(name: &str) -> PyResult<bool> {
     core::nvagentrt_deregister_llm_stream_execution_intercept(name).map_err(to_py_err)
+}
+
+// ---------------------------------------------------------------------------
+// Per-call converter helpers
+// ---------------------------------------------------------------------------
+
+/// Wrap a Python callable into a boxed `ToRequestFn`.
+///
+/// The Python callable should accept a single JSON-serializable argument and
+/// return an `LLMRequest`-compatible dict.
+fn wrap_py_to_request(py_fn: Py<PyAny>) -> core_types::ToRequestFn {
+    Box::new(move |native: &serde_json::Value| {
+        Python::attach(|py| {
+            let py_val = pythonize::pythonize(py, native).unwrap();
+            let result = py_fn.call1(py, (py_val,)).unwrap();
+            let json_val: serde_json::Value = pythonize::depythonize(result.bind(py)).unwrap();
+            serde_json::from_value(json_val)
+                .unwrap_or_else(|_| core_types::IdentityConverter.to_request(native))
+        })
+    })
+}
+
+/// Wrap a Python callable into a boxed `ToResponseFn`.
+///
+/// The Python callable should accept a single JSON-serializable argument and
+/// return an `LLMResponse`-compatible dict.
+fn wrap_py_to_response(py_fn: Py<PyAny>) -> core_types::ToResponseFn {
+    Box::new(move |native: &serde_json::Value| {
+        Python::attach(|py| {
+            let py_val = pythonize::pythonize(py, native).unwrap();
+            let result = py_fn.call1(py, (py_val,)).unwrap();
+            let json_val: serde_json::Value = pythonize::depythonize(result.bind(py)).unwrap();
+            serde_json::from_value(json_val)
+                .unwrap_or_else(|_| core_types::IdentityConverter.to_response(native))
+        })
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -890,20 +959,23 @@ fn nvagentrt_tool_response_intercepts<'py>(
     json_to_py(py, &transformed)
 }
 
-/// Run the registered LLM request intercept chain on the given request.
+/// Run the registered LLM request intercept chain on the given native request.
 ///
-/// Returns the transformed request after all intercepts have been applied.
+/// Returns the transformed native request after all intercepts have been applied.
 ///
 /// Args:
-///     request: The ``LLMRequest`` to transform.
+///     native: The native request payload (any JSON-serializable object).
 ///
 /// Returns:
-///     A new ``LLMRequest`` with intercepts applied.
+///     The (possibly transformed) native request.
 #[pyfunction]
-fn nvagentrt_llm_request_intercepts(request: &PyLLMRequest) -> PyResult<PyLLMRequest> {
-    let result =
-        core::nvagentrt_llm_request_intercepts(request.inner.clone()).map_err(to_py_err)?;
-    Ok(PyLLMRequest { inner: result })
+fn nvagentrt_llm_request_intercepts<'py>(
+    py: Python<'py>,
+    native: &Bound<'py, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let native_json = py_to_json(native)?;
+    let result = core::nvagentrt_llm_request_intercepts(native_json).map_err(to_py_err)?;
+    json_to_py(py, &result)
 }
 
 /// Run the registered LLM conditional execution guardrail chain.
@@ -911,10 +983,16 @@ fn nvagentrt_llm_request_intercepts(request: &PyLLMRequest) -> PyResult<PyLLMReq
 /// Raises ``RuntimeError`` with the rejection reason if any guardrail rejects.
 ///
 /// Args:
-///     request: The ``LLMRequest`` to check.
+///     native: The native request payload (any JSON-serializable object).
 #[pyfunction]
-fn nvagentrt_llm_conditional_execution(request: &PyLLMRequest) -> PyResult<()> {
-    core::nvagentrt_llm_conditional_execution(&request.inner).map_err(to_py_err)
+#[pyo3(signature = (native, *, to_request=None))]
+fn nvagentrt_llm_conditional_execution(
+    native: &Bound<'_, PyAny>,
+    to_request: Option<Py<PyAny>>,
+) -> PyResult<()> {
+    let native_json = py_to_json(native)?;
+    let to_req = to_request.map(wrap_py_to_request);
+    core::nvagentrt_llm_conditional_execution(&native_json, to_req.as_ref()).map_err(to_py_err)
 }
 
 /// Run the registered LLM response intercept chain on the given response.
@@ -922,18 +1000,14 @@ fn nvagentrt_llm_conditional_execution(request: &PyLLMRequest) -> PyResult<()> {
 /// Returns the transformed response after all intercepts have been applied.
 ///
 /// Args:
-///     response: The LLM response (any JSON-serializable object).
+///     response: An ``LLMResponse`` to transform.
 ///
 /// Returns:
-///     The (possibly transformed) response.
+///     A new ``LLMResponse`` with intercepts applied.
 #[pyfunction]
-fn nvagentrt_llm_response_intercepts<'py>(
-    py: Python<'py>,
-    response: &Bound<'py, PyAny>,
-) -> PyResult<Py<PyAny>> {
-    let response_json = py_to_json(response)?;
-    let transformed = core::nvagentrt_llm_response_intercepts(response_json).map_err(to_py_err)?;
-    json_to_py(py, &transformed)
+fn nvagentrt_llm_response_intercepts(response: PyLLMResponse) -> PyResult<PyLLMResponse> {
+    let result = core::nvagentrt_llm_response_intercepts(response.inner).map_err(to_py_err)?;
+    Ok(PyLLMResponse { inner: result })
 }
 
 // ---------------------------------------------------------------------------

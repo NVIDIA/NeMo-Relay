@@ -183,7 +183,7 @@ class TestToolIntercepts:
             "py_exec_int",
             1,
             lambda name, args: False,
-            lambda args: {"intercepted": True},
+            lambda args, next: {"intercepted": True},
         )
         assert intercepts.deregister_tool_execution("py_exec_int")
 
@@ -232,7 +232,7 @@ class TestToolInterceptsAsync:
             "py_exec_replace",
             1,
             lambda name, args: True,
-            lambda args: {"from_intercept": True},
+            lambda args, next: {"from_intercept": True},
         )
 
         def original_func(args):

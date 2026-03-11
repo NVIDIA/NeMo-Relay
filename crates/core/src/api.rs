@@ -230,9 +230,10 @@ intercept_registry_api!(
     ToolInterceptFn
 );
 
-// Registers a tool execution intercept that conditionally replaces the tool's execution function.
+// Registers a tool execution intercept following the middleware chain pattern.
 // The `conditional` is checked first: `(tool_name: &str, args: &Json) -> bool`.
-// If it returns `true`, the `callable` is used instead: `(args: Json) -> Future<Result<Json>>`.
+// If it returns `true`, the `callable` is invoked: `(args: Json, next: ToolExecutionNextFn) -> Future<Result<Json>>`.
+// Call `next(args)` to continue the chain or skip it to short-circuit.
 // deregister: Deregisters a tool execution intercept by name.
 execution_intercept_registry_api!(
     nvagentrt_register_tool_execution_intercept,
@@ -311,9 +312,10 @@ intercept_registry_api!(
     LlmStreamResponseInterceptFn
 );
 
-// Registers an LLM execution intercept that conditionally replaces the LLM execution function.
+// Registers an LLM execution intercept following the middleware chain pattern.
 // The `conditional` is checked first: `(request: &LLMRequest) -> bool`.
-// If it returns `true`, the `callable` is used: `(request: LLMRequest) -> Future<Result<Json>>`.
+// If it returns `true`, the `callable` is invoked: `(request: LLMRequest, next: LlmExecutionNextFn) -> Future<Result<Json>>`.
+// Call `next(request)` to continue the chain or skip it to short-circuit.
 // deregister: Deregisters an LLM execution intercept by name.
 execution_intercept_registry_api!(
     nvagentrt_register_llm_execution_intercept,
@@ -323,9 +325,10 @@ execution_intercept_registry_api!(
     LlmExecutionFn
 );
 
-// Registers an LLM streaming execution intercept that conditionally replaces the stream execution function.
+// Registers an LLM streaming execution intercept following the middleware chain pattern.
 // The `conditional` is checked first: `(request: &LLMRequest) -> bool`.
-// If it returns `true`, the `callable` is used: `(request: LLMRequest) -> Future<Result<Stream>>`.
+// If it returns `true`, the `callable` is invoked: `(request: LLMRequest, next: LlmStreamExecutionNextFn) -> Future<Result<Stream>>`.
+// Call `next(request)` to continue the chain or skip it to short-circuit.
 // deregister: Deregisters an LLM streaming execution intercept by name.
 execution_intercept_registry_api!(
     nvagentrt_register_llm_stream_execution_intercept,
@@ -494,21 +497,44 @@ pub fn nvagentrt_tool_call_end(
     Ok(())
 }
 
-/// Executes a complete tool call lifecycle: request intercepts, sanitize guardrails,
-/// conditional guardrails, execution (with optional execution intercept override),
-/// response intercepts, and sanitize response guardrails.
+/// Executes a complete tool call lifecycle: conditional guardrails (on the raw
+/// request), request intercepts, sanitize guardrails, execution (with middleware
+/// chain of execution intercepts), response intercepts, and sanitize response
+/// guardrails.
+///
+/// Conditional execution guardrails run **before** request intercepts so that
+/// they gate on the unmodified input. On rejection, only a standalone `Mark`
+/// event is emitted (no `Start`/`End` pair).
 ///
 /// This is the high-level function that orchestrates the full middleware pipeline.
 /// Returns [`AgentRtError::GuardrailRejected`] if a conditional guardrail rejects the call.
 pub async fn nvagentrt_tool_call_execute(
     name: &str,
     args: Json,
-    func: ToolExecutionFn,
+    func: ToolExecutionNextFn,
     parent: Option<ScopeHandle>,
     attributes: ToolAttributes,
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<Json> {
+    // Conditional guardrails — run on the raw args before any transformation
+    {
+        let ctx = global_context();
+        let mut state = ctx
+            .write()
+            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        if let Some(err) = state.tool_conditional_execution_chain(name, &args) {
+            drop(state);
+            let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
+            if let Some(obj) = rejection_data.as_object_mut() {
+                obj.insert("rejected".into(), json!(true));
+                obj.insert("rejection_reason".into(), json!(&err));
+            }
+            let _ = nvagentrt_event(name, parent.as_ref(), Some(rejection_data), metadata);
+            return Err(AgentRtError::GuardrailRejected(err));
+        }
+    }
+
     // Request intercepts
     let intercepted_args = {
         let ctx = global_context();
@@ -529,37 +555,15 @@ pub async fn nvagentrt_tool_call_execute(
         None,
     )?;
 
-    // Conditional guardrails
-    {
-        let ctx = global_context();
-        let mut state = ctx
-            .write()
-            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
-        if let Some(err) = state.tool_conditional_execution_chain(name, &intercepted_args) {
-            drop(state);
-            let mut rejection_data = data.unwrap_or_else(|| json!({}));
-            if let Some(obj) = rejection_data.as_object_mut() {
-                obj.insert("rejected".into(), json!(true));
-                obj.insert("rejection_reason".into(), json!(&err));
-            }
-            let _ = nvagentrt_tool_call_end(&handle, json!(null), Some(rejection_data), metadata);
-            return Err(AgentRtError::GuardrailRejected(err));
-        }
-    }
-
-    // Execution chain — find intercept under lock, release, then await
+    // Execution chain — build middleware chain under lock, release, then await
     let exec_future = {
         let ctx = global_context();
         let mut state = ctx
             .write()
             .map_err(|e| AgentRtError::Internal(e.to_string()))?;
-        if state.tool_find_execution_intercept(name, &intercepted_args) {
-            state.tool_call_execution_intercept(name, intercepted_args)
-        } else {
-            func(intercepted_args)
-        }
+        state.tool_build_execution_chain(name, &intercepted_args, func)
     };
-    let result = exec_future.await?;
+    let result = exec_future(intercepted_args).await?;
 
     // Response intercepts
     let result = {
@@ -580,19 +584,23 @@ pub async fn nvagentrt_tool_call_execute(
 // LLM lifecycle
 // ---------------------------------------------------------------------------
 
-/// Begins an LLM call: runs request sanitize guardrails, creates an LLM handle,
-/// and emits a `Start` event.
+/// Begins an LLM call: derives a formal request via the converter, runs
+/// request sanitize guardrails, creates an LLM handle, and emits a `Start` event.
 ///
+/// The `native` parameter is the opaque Json payload in whatever format the
+/// LLM SDK uses. The converter derives a formal [`LLMRequest`] for guardrails.
 /// The sanitized request is stored in the event's `input` field.
 /// Call [`nvagentrt_llm_call_end`] when the LLM call completes.
+#[allow(clippy::too_many_arguments)]
 pub fn nvagentrt_llm_call(
     name: &str,
-    request: &LLMRequest,
+    native: &Json,
     parent: Option<&ScopeHandle>,
     attributes: LLMAttributes,
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
+    to_request: Option<&ToRequestFn>,
 ) -> Result<LLMHandle> {
     let parent_uuid = resolve_parent_uuid(parent);
     let root_uuid = current_root_uuid();
@@ -601,7 +609,11 @@ pub fn nvagentrt_llm_call(
         .write()
         .map_err(|e| AgentRtError::Internal(e.to_string()))?;
 
-    let sanitized_request = state.llm_sanitize_request_chain(request.clone());
+    let formal_request = match to_request {
+        Some(f) => f(native),
+        None => IdentityConverter.to_request(native),
+    };
+    let sanitized_request = state.llm_sanitize_request_chain(formal_request);
     let input = serde_json::to_value(&sanitized_request).unwrap_or(Json::Null);
 
     Ok(state.create_llm_handle(
@@ -616,14 +628,16 @@ pub fn nvagentrt_llm_call(
     ))
 }
 
-/// Ends an LLM call: runs response sanitize guardrails and emits an `End` event.
+/// Ends an LLM call: converts the response via the LLM converter, runs
+/// response sanitize guardrails, and emits an `End` event.
 ///
-/// The sanitized response is stored in the event's `output` field.
+/// The sanitized response data is stored in the event's `output` field.
 pub fn nvagentrt_llm_call_end(
     handle: &LLMHandle,
     response: Json,
     data: Option<Json>,
     metadata: Option<Json>,
+    to_response: Option<&ToResponseFn>,
 ) -> Result<()> {
     let root_uuid = current_root_uuid();
     let ctx = global_context();
@@ -631,79 +645,97 @@ pub fn nvagentrt_llm_call_end(
         .write()
         .map_err(|e| AgentRtError::Internal(e.to_string()))?;
 
-    let sanitized_response = state.llm_sanitize_response_chain(response);
+    let formal_response = match to_response {
+        Some(f) => f(&response),
+        None => IdentityConverter.to_response(&response),
+    };
+    let sanitized_response = state.llm_sanitize_response_chain(formal_response);
 
-    state.end_llm_handle(handle, data, metadata, Some(sanitized_response), root_uuid);
+    state.end_llm_handle(
+        handle,
+        data,
+        metadata,
+        Some(sanitized_response.data),
+        root_uuid,
+    );
     Ok(())
 }
 
-/// Executes a complete non-streaming LLM call lifecycle: request intercepts,
-/// sanitize guardrails, conditional guardrails, execution (with optional intercept
-/// override), response intercepts, and sanitize response guardrails.
+/// Executes a complete non-streaming LLM call lifecycle: conditional guardrails
+/// (on the formal request derived via converter), request intercepts (on opaque
+/// native Json), sanitize guardrails (on formal request), execution (with optional
+/// intercept override), response intercepts, and sanitize response guardrails.
+///
+/// Conditional execution guardrails run **before** request intercepts so that
+/// they gate on the unmodified input. On rejection, only a standalone `Mark`
+/// event is emitted (no `Start`/`End` pair).
 ///
 /// Returns [`AgentRtError::GuardrailRejected`] if a conditional guardrail rejects the call.
 #[allow(clippy::too_many_arguments)]
 pub async fn nvagentrt_llm_call_execute(
     name: &str,
-    request: LLMRequest,
-    func: LlmExecutionFn,
+    native: Json,
+    func: LlmExecutionNextFn,
     parent: Option<ScopeHandle>,
     attributes: LLMAttributes,
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
+    to_request: Option<ToRequestFn>,
+    to_response: Option<ToResponseFn>,
 ) -> Result<Json> {
-    // Request intercepts
-    let intercepted_request = {
-        let ctx = global_context();
-        let mut state = ctx
-            .write()
-            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
-        state.llm_request_intercepts_chain(request)
-    };
-
-    // LLM call start
-    let handle = nvagentrt_llm_call(
-        name,
-        &intercepted_request,
-        parent.as_ref(),
-        attributes,
-        data.clone(),
-        metadata.clone(),
-        model_name,
-    )?;
-
-    // Conditional guardrails
+    // Conditional guardrails — derive formal request and check
     {
         let ctx = global_context();
         let mut state = ctx
             .write()
             .map_err(|e| AgentRtError::Internal(e.to_string()))?;
-        if let Some(err) = state.llm_conditional_execution_chain(&intercepted_request) {
+        let formal_request = match &to_request {
+            Some(f) => f(&native),
+            None => IdentityConverter.to_request(&native),
+        };
+        if let Some(err) = state.llm_conditional_execution_chain(&formal_request) {
             drop(state);
-            let mut rejection_data = data.unwrap_or_else(|| json!({}));
+            let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
             if let Some(obj) = rejection_data.as_object_mut() {
                 obj.insert("rejected".into(), json!(true));
                 obj.insert("rejection_reason".into(), json!(&err));
             }
-            let _ = nvagentrt_llm_call_end(&handle, json!(null), Some(rejection_data), metadata);
+            let _ = nvagentrt_event(name, parent.as_ref(), Some(rejection_data), metadata);
             return Err(AgentRtError::GuardrailRejected(err));
         }
     }
 
-    // Execution chain — find intercept under lock, release, then await
+    // Request intercepts (on opaque native Json)
+    let intercepted_native = {
+        let ctx = global_context();
+        let mut state = ctx
+            .write()
+            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        state.llm_request_intercepts_chain(native)
+    };
+
+    // LLM call start (converter + sanitize guardrails happen inside)
+    let handle = nvagentrt_llm_call(
+        name,
+        &intercepted_native,
+        parent.as_ref(),
+        attributes,
+        data.clone(),
+        metadata.clone(),
+        model_name,
+        to_request.as_ref(),
+    )?;
+
+    // Execution chain — build middleware chain under lock, release, then await
     let exec_future = {
         let ctx = global_context();
         let mut state = ctx
             .write()
             .map_err(|e| AgentRtError::Internal(e.to_string()))?;
-        if state.llm_find_execution_intercept(&intercepted_request) {
-            state.llm_call_execution_intercept(intercepted_request)
-        } else {
-            func(intercepted_request)
-        }
+        state.llm_build_execution_chain(&intercepted_native, func)
     };
-    let response = exec_future.await?;
+    let response = exec_future(intercepted_native).await?;
 
     // Response intercepts
     let response = {
@@ -711,11 +743,22 @@ pub async fn nvagentrt_llm_call_execute(
         let mut state = ctx
             .write()
             .map_err(|e| AgentRtError::Internal(e.to_string()))?;
-        state.llm_response_intercepts_chain(response)
+        let formal_response = match &to_response {
+            Some(f) => f(&response),
+            None => IdentityConverter.to_response(&response),
+        };
+        let intercepted = state.llm_response_intercepts_chain(formal_response);
+        intercepted.data
     };
 
-    // LLM call end
-    nvagentrt_llm_call_end(&handle, response.clone(), data, metadata)?;
+    // LLM call end (converter + sanitize response guardrails happen inside)
+    nvagentrt_llm_call_end(
+        &handle,
+        response.clone(),
+        data,
+        metadata,
+        to_response.as_ref(),
+    )?;
 
     Ok(response)
 }
@@ -723,15 +766,19 @@ pub async fn nvagentrt_llm_call_execute(
 /// Executes a complete streaming LLM call lifecycle.
 ///
 /// Similar to [`nvagentrt_llm_call_execute`] but returns a
-/// [`Stream`] of text chunks. The returned stream is
-/// wrapped in [`LlmStreamWrapper`] which applies per-chunk stream
-/// response intercepts, feeds each intercepted chunk to the `collector`,
-/// and on stream exhaustion calls the `finalizer` to produce the
-/// aggregated response. That response then flows through response
-/// intercepts and sanitize response guardrails before the `End` event
+/// [`Stream`] of Json chunks. Conditional execution guardrails run
+/// **before** request intercepts so that they gate on the unmodified
+/// input. On rejection, only a standalone `Mark` event is emitted
+/// (no `Start`/`End` pair).
+///
+/// The returned stream is wrapped in [`LlmStreamWrapper`] which applies
+/// per-chunk stream response intercepts, feeds each intercepted chunk to
+/// the `collector`, and on stream exhaustion calls the `finalizer` to
+/// produce the aggregated response. That response then flows through the
+/// LLM converter and sanitize response guardrails before the `End` event
 /// is emitted.
 ///
-/// - `collector` — called with each intercepted chunk; use this to
+/// - `collector` — called with each intercepted chunk (Json); use this to
 ///   accumulate streaming tokens or forward them to another sink.
 /// - `finalizer` — called once when the stream is exhausted; returns the
 ///   aggregated response as [`Json`].
@@ -740,70 +787,81 @@ pub async fn nvagentrt_llm_call_execute(
 #[allow(clippy::too_many_arguments)]
 pub async fn nvagentrt_llm_stream_call_execute(
     name: &str,
-    request: LLMRequest,
-    func: LlmStreamExecutionFn,
-    collector: Box<dyn FnMut(String) + Send>,
+    native: Json,
+    func: LlmStreamExecutionNextFn,
+    collector: Box<dyn FnMut(Json) + Send>,
     finalizer: Box<dyn FnOnce() -> Json + Send>,
     parent: Option<ScopeHandle>,
     attributes: LLMAttributes,
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
-) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
-    // Request intercepts
-    let intercepted_request = {
-        let ctx = global_context();
-        let mut state = ctx
-            .write()
-            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
-        state.llm_request_intercepts_chain(request)
-    };
-
-    // LLM call start
-    let handle = nvagentrt_llm_call(
-        name,
-        &intercepted_request,
-        parent.as_ref(),
-        attributes,
-        data.clone(),
-        metadata.clone(),
-        model_name,
-    )?;
-
-    // Conditional guardrails
+    to_request: Option<ToRequestFn>,
+    to_response: Option<ToResponseFn>,
+) -> Result<Pin<Box<dyn Stream<Item = Result<Json>> + Send>>> {
+    // Conditional guardrails — derive formal request and check
     {
         let ctx = global_context();
         let mut state = ctx
             .write()
             .map_err(|e| AgentRtError::Internal(e.to_string()))?;
-        if let Some(err) = state.llm_conditional_execution_chain(&intercepted_request) {
+        let formal_request = match &to_request {
+            Some(f) => f(&native),
+            None => IdentityConverter.to_request(&native),
+        };
+        if let Some(err) = state.llm_conditional_execution_chain(&formal_request) {
             drop(state);
-            let mut rejection_data = data.unwrap_or_else(|| json!({}));
+            let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
             if let Some(obj) = rejection_data.as_object_mut() {
                 obj.insert("rejected".into(), json!(true));
                 obj.insert("rejection_reason".into(), json!(&err));
             }
-            let _ = nvagentrt_llm_call_end(&handle, json!(null), Some(rejection_data), metadata);
+            let _ = nvagentrt_event(name, parent.as_ref(), Some(rejection_data), metadata);
             return Err(AgentRtError::GuardrailRejected(err));
         }
     }
 
-    // Stream execution chain — find intercept under lock, release, then await
+    // Request intercepts (on opaque native Json)
+    let intercepted_native = {
+        let ctx = global_context();
+        let mut state = ctx
+            .write()
+            .map_err(|e| AgentRtError::Internal(e.to_string()))?;
+        state.llm_request_intercepts_chain(native)
+    };
+
+    // LLM call start (converter + sanitize guardrails happen inside)
+    let handle = nvagentrt_llm_call(
+        name,
+        &intercepted_native,
+        parent.as_ref(),
+        attributes,
+        data.clone(),
+        metadata.clone(),
+        model_name,
+        to_request.as_ref(),
+    )?;
+
+    // Stream execution chain — build middleware chain under lock, release, then await
     let exec_future = {
         let ctx = global_context();
         let mut state = ctx
             .write()
             .map_err(|e| AgentRtError::Internal(e.to_string()))?;
-        if state.llm_stream_find_execution_intercept(&intercepted_request) {
-            state.llm_stream_call_execution_intercept(intercepted_request)
-        } else {
-            func(intercepted_request)
-        }
+        state.llm_stream_build_execution_chain(&intercepted_native, func)
     };
-    let raw_stream = exec_future.await?;
+    let raw_stream = exec_future(intercepted_native).await?;
 
     // Wrap in LlmStreamWrapper which handles intercepts, collector/finalizer, and END event
-    let wrapper = LlmStreamWrapper::new(raw_stream, handle, collector, finalizer, data, metadata);
+    let wrapper = LlmStreamWrapper::new(
+        raw_stream,
+        handle,
+        collector,
+        finalizer,
+        to_response,
+        data,
+        metadata,
+    );
     Ok(Box::pin(wrapper))
 }
 
@@ -853,30 +911,40 @@ pub fn nvagentrt_tool_response_intercepts(name: &str, result: Json) -> Result<Js
     Ok(state.tool_response_intercepts_chain(name, result))
 }
 
-/// Runs the registered LLM request intercept chain on the given request.
+/// Runs the registered LLM request intercept chain on the given native Json.
 ///
-/// Returns the transformed request after all intercepts have been applied.
+/// Returns the transformed native Json after all intercepts have been applied.
 /// This allows invoking request intercepts independently of the full
 /// [`nvagentrt_llm_call_execute`] pipeline.
-pub fn nvagentrt_llm_request_intercepts(request: LLMRequest) -> Result<LLMRequest> {
+pub fn nvagentrt_llm_request_intercepts(native: Json) -> Result<Json> {
     let ctx = global_context();
     let mut state = ctx
         .write()
         .map_err(|e| AgentRtError::Internal(e.to_string()))?;
-    Ok(state.llm_request_intercepts_chain(request))
+    Ok(state.llm_request_intercepts_chain(native))
 }
 
 /// Runs the registered LLM conditional execution guardrail chain.
 ///
+/// Derives a formal [`LLMRequest`] from the native Json via the converter,
+/// then runs the conditional chain on it.
+///
 /// Returns `Ok(())` if all guardrails pass, or
 /// [`Err(AgentRtError::GuardrailRejected(reason))`](AgentRtError::GuardrailRejected)
 /// if any guardrail rejects the call.
-pub fn nvagentrt_llm_conditional_execution(request: &LLMRequest) -> Result<()> {
+pub fn nvagentrt_llm_conditional_execution(
+    native: &Json,
+    to_request: Option<&ToRequestFn>,
+) -> Result<()> {
     let ctx = global_context();
     let mut state = ctx
         .write()
         .map_err(|e| AgentRtError::Internal(e.to_string()))?;
-    if let Some(err) = state.llm_conditional_execution_chain(request) {
+    let formal_request = match to_request {
+        Some(f) => f(native),
+        None => IdentityConverter.to_request(native),
+    };
+    if let Some(err) = state.llm_conditional_execution_chain(&formal_request) {
         return Err(AgentRtError::GuardrailRejected(err));
     }
     Ok(())
@@ -887,7 +955,7 @@ pub fn nvagentrt_llm_conditional_execution(request: &LLMRequest) -> Result<()> {
 /// Returns the transformed response after all intercepts have been applied.
 /// This allows invoking response intercepts independently of the full
 /// [`nvagentrt_llm_call_execute`] pipeline.
-pub fn nvagentrt_llm_response_intercepts(response: Json) -> Result<Json> {
+pub fn nvagentrt_llm_response_intercepts(response: LLMResponse) -> Result<LLMResponse> {
     let ctx = global_context();
     let mut state = ctx
         .write()
@@ -1214,7 +1282,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let func: ToolExecutionFn =
+        let func: ToolExecutionNextFn =
             Box::new(|args| Box::pin(async move { Ok(json!({"result": args["input"]})) }));
 
         let result = nvagentrt_tool_call_execute(
@@ -1250,7 +1318,7 @@ mod tests {
         )
         .unwrap();
 
-        let func: ToolExecutionFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+        let func: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
 
         let result = nvagentrt_tool_call_execute(
             "tool",
@@ -1289,7 +1357,7 @@ mod tests {
         )
         .unwrap();
 
-        let func: ToolExecutionFn =
+        let func: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async move { Ok(json!({"output": "raw"})) }));
 
         let result = nvagentrt_tool_call_execute(
@@ -1332,7 +1400,7 @@ mod tests {
         )
         .unwrap();
 
-        let func: ToolExecutionFn =
+        let func: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async move { Ok(json!({"should_not_reach": true})) }));
 
         let result = nvagentrt_tool_call_execute(
@@ -1352,14 +1420,13 @@ mod tests {
             e => panic!("expected GuardrailRejected, got {e:?}"),
         }
 
-        // Verify paired START/END events with rejection data
+        // Verify standalone Mark event with rejection data (no Start/End pair)
         let captured = events.lock().unwrap();
-        assert_eq!(captured.len(), 2);
-        assert_eq!(captured[0].event_type, crate::types::EventType::Start);
-        assert_eq!(captured[1].event_type, crate::types::EventType::End);
-        let end_data = captured[1].data.as_ref().unwrap();
-        assert_eq!(end_data["rejected"], true);
-        assert_eq!(end_data["rejection_reason"], "forbidden tool");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].event_type, crate::types::EventType::Mark);
+        let mark_data = captured[0].data.as_ref().unwrap();
+        assert_eq!(mark_data["rejected"], true);
+        assert_eq!(mark_data["rejection_reason"], "forbidden tool");
 
         drop(captured);
         nvagentrt_deregister_subscriber("tool_reject_sub").unwrap();
@@ -1375,14 +1442,14 @@ mod tests {
             "exec_intercept",
             1,
             Box::new(|_name: &str, _args: &Json| true),
-            Box::new(|_args: Json| {
+            Arc::new(|_args: Json, _next: ToolExecutionNextFn| {
                 Box::pin(async move { Ok(json!({"from_intercept": true})) })
                     as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>
             }),
         )
         .unwrap();
 
-        let func: ToolExecutionFn =
+        let func: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async move { Ok(json!({"from_original": true})) }));
 
         let result = nvagentrt_tool_call_execute(
@@ -1421,17 +1488,13 @@ mod tests {
         )
         .unwrap();
 
-        let request = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com/v1/chat".into(),
-            headers: serde_json::Map::new(),
-            body: json!({"messages": []}),
-        };
+        let native = json!({"messages": []});
         let handle = nvagentrt_llm_call(
             "my_llm",
-            &request,
+            &native,
             None,
             LLMAttributes::empty(),
+            None,
             None,
             None,
             None,
@@ -1439,7 +1502,7 @@ mod tests {
         .unwrap();
         assert_eq!(handle.name, "my_llm");
 
-        nvagentrt_llm_call_end(&handle, json!({"response": "ok"}), None, None).unwrap();
+        nvagentrt_llm_call_end(&handle, json!({"response": "ok"}), None, None, None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -1475,17 +1538,13 @@ mod tests {
         )
         .unwrap();
 
-        let request = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: json!({}),
-        };
+        let native = json!({"messages": []});
         let handle = nvagentrt_llm_call(
             "llm",
-            &request,
+            &native,
             None,
             LLMAttributes::empty(),
+            None,
             None,
             None,
             None,
@@ -1499,7 +1558,7 @@ mod tests {
         assert_eq!(input["headers"]["X-Sanitized"], "true");
 
         drop(captured);
-        nvagentrt_llm_call_end(&handle, json!("ok"), None, None).unwrap();
+        nvagentrt_llm_call_end(&handle, json!("ok"), None, None, None).unwrap();
         nvagentrt_deregister_subscriber("llm_san_test").unwrap();
         nvagentrt_deregister_llm_sanitize_request_guardrail("llm_sanitizer").unwrap();
     }
@@ -1509,22 +1568,19 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let func: LlmExecutionFn =
-            Box::new(|req: LLMRequest| Box::pin(async move { Ok(json!({"model": req.url})) }));
+        let func: LlmExecutionNextFn =
+            Box::new(|native: Json| Box::pin(async move { Ok(json!({"echo": native})) }));
 
-        let request = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: json!({}),
-        };
+        let native = json!({"messages": [{"role": "user", "content": "hi"}]});
 
         let result = nvagentrt_llm_call_execute(
             "llm",
-            request,
+            native.clone(),
             func,
             None,
             LLMAttributes::empty(),
+            None,
+            None,
             None,
             None,
             None,
@@ -1532,7 +1588,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(result["model"], "https://api.example.com");
+        assert_eq!(result["echo"], native);
     }
 
     #[tokio::test]
@@ -1557,21 +1613,18 @@ mod tests {
         )
         .unwrap();
 
-        let func: LlmExecutionFn = Box::new(|_req| Box::pin(async move { Ok(json!({})) }));
+        let func: LlmExecutionNextFn = Box::new(|_native| Box::pin(async move { Ok(json!({})) }));
 
-        let request = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: json!({}),
-        };
+        let native = json!({"messages": []});
 
         let result = nvagentrt_llm_call_execute(
             "llm",
-            request,
+            native,
             func,
             None,
             LLMAttributes::empty(),
+            None,
+            None,
             None,
             None,
             None,
@@ -1584,14 +1637,13 @@ mod tests {
             e => panic!("expected GuardrailRejected, got {e:?}"),
         }
 
-        // Verify paired START/END events with rejection data
+        // Verify standalone Mark event with rejection data (no Start/End pair)
         let captured = events.lock().unwrap();
-        assert_eq!(captured.len(), 2);
-        assert_eq!(captured[0].event_type, crate::types::EventType::Start);
-        assert_eq!(captured[1].event_type, crate::types::EventType::End);
-        let end_data = captured[1].data.as_ref().unwrap();
-        assert_eq!(end_data["rejected"], true);
-        assert_eq!(end_data["rejection_reason"], "blocked by policy");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].event_type, crate::types::EventType::Mark);
+        let mark_data = captured[0].data.as_ref().unwrap();
+        assert_eq!(mark_data["rejected"], true);
+        assert_eq!(mark_data["rejection_reason"], "blocked by policy");
 
         drop(captured);
         nvagentrt_deregister_subscriber("llm_reject_sub").unwrap();
@@ -1607,29 +1659,30 @@ mod tests {
             "llm_req_intercept",
             1,
             false,
-            Box::new(|mut req: LLMRequest| {
-                req.url = "https://intercepted.example.com".into();
-                req
+            Box::new(|mut native: Json| {
+                native
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("intercepted".into(), json!(true));
+                native
             }),
         )
         .unwrap();
 
-        let func: LlmExecutionFn =
-            Box::new(|req: LLMRequest| Box::pin(async move { Ok(json!({"called_url": req.url})) }));
+        let func: LlmExecutionNextFn = Box::new(|native: Json| {
+            Box::pin(async move { Ok(json!({"saw_intercepted": native["intercepted"]})) })
+        });
 
-        let request = LLMRequest {
-            method: "POST".into(),
-            url: "https://original.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: json!({}),
-        };
+        let native = json!({"messages": []});
 
         let result = nvagentrt_llm_call_execute(
             "llm",
-            request,
+            native,
             func,
             None,
             LLMAttributes::empty(),
+            None,
+            None,
             None,
             None,
             None,
@@ -1637,7 +1690,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(result["called_url"], "https://intercepted.example.com");
+        assert_eq!(result["saw_intercepted"], true);
 
         nvagentrt_deregister_llm_request_intercept("llm_req_intercept").unwrap();
     }
@@ -1651,8 +1704,9 @@ mod tests {
             "llm_resp_intercept",
             1,
             false,
-            Box::new(|mut resp: Json| {
-                resp.as_object_mut()
+            Box::new(|mut resp: LLMResponse| {
+                resp.data
+                    .as_object_mut()
                     .unwrap()
                     .insert("response_modified".into(), json!(true));
                 resp
@@ -1660,22 +1714,19 @@ mod tests {
         )
         .unwrap();
 
-        let func: LlmExecutionFn =
-            Box::new(|_req| Box::pin(async move { Ok(json!({"original": true})) }));
+        let func: LlmExecutionNextFn =
+            Box::new(|_native| Box::pin(async move { Ok(json!({"original": true})) }));
 
-        let request = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: json!({}),
-        };
+        let native = json!({"messages": []});
 
         let result = nvagentrt_llm_call_execute(
             "llm",
-            request,
+            native,
             func,
             None,
             LLMAttributes::empty(),
+            None,
+            None,
             None,
             None,
             None,
@@ -1697,30 +1748,27 @@ mod tests {
         nvagentrt_register_llm_execution_intercept(
             "llm_exec_intercept",
             1,
-            Box::new(|_req: &LLMRequest| true),
-            Box::new(|_req: LLMRequest| {
+            Box::new(|_native: &Json| true),
+            Arc::new(|_native: Json, _next: LlmExecutionNextFn| {
                 Box::pin(async move { Ok(json!({"from_intercept": true})) })
                     as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>
             }),
         )
         .unwrap();
 
-        let func: LlmExecutionFn =
-            Box::new(|_req| Box::pin(async move { Ok(json!({"from_original": true})) }));
+        let func: LlmExecutionNextFn =
+            Box::new(|_native| Box::pin(async move { Ok(json!({"from_original": true})) }));
 
-        let request = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: json!({}),
-        };
+        let native = json!({"messages": []});
 
         let result = nvagentrt_llm_call_execute(
             "llm",
-            request,
+            native,
             func,
             None,
             LLMAttributes::empty(),
+            None,
+            None,
             None,
             None,
             None,
@@ -1795,7 +1843,7 @@ mod tests {
             "i1",
             1,
             Box::new(|_n: &str, _a: &Json| false),
-            Box::new(|a: Json| {
+            Arc::new(|a: Json, _next: ToolExecutionNextFn| {
                 Box::pin(async move { Ok(a) })
                     as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>
             }),
@@ -1805,8 +1853,12 @@ mod tests {
             "i1",
             1,
             Box::new(|_n: &str, _a: &Json| false),
-            Box::new(|a: Json| Box::pin(async move { Ok(a) })
-                as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>),
+            Arc::new(
+                |a: Json, _next: ToolExecutionNextFn| Box::pin(async move { Ok(a) })
+                    as Pin<
+                        Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>,
+                    >
+            ),
         )
         .is_err());
         assert!(nvagentrt_deregister_tool_execution_intercept("i1").unwrap());
@@ -1888,8 +1940,8 @@ mod tests {
         nvagentrt_register_llm_execution_intercept(
             "i1",
             1,
-            Box::new(|_r: &LLMRequest| false),
-            Box::new(|_r: LLMRequest| {
+            Box::new(|_native: &Json| false),
+            Arc::new(|_native: Json, _next: LlmExecutionNextFn| {
                 Box::pin(async move { Ok(json!({})) })
                     as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>
             }),
@@ -1905,10 +1957,10 @@ mod tests {
         nvagentrt_register_llm_stream_execution_intercept(
             "i1",
             1,
-            Box::new(|_r: &LLMRequest| false),
-            Box::new(|_r: LLMRequest| {
+            Box::new(|_native: &Json| false),
+            Arc::new(|_native: Json, _next: LlmStreamExecutionNextFn| {
                 Box::pin(async move {
-                    let stream: Pin<Box<dyn Stream<Item = crate::error::Result<String>> + Send>> =
+                    let stream: Pin<Box<dyn Stream<Item = crate::error::Result<Json>> + Send>> =
                         Box::pin(tokio_stream::empty());
                     Ok(stream)
                 })
@@ -1918,7 +1970,7 @@ mod tests {
                                     Output = crate::error::Result<
                                         Pin<
                                             Box<
-                                                dyn Stream<Item = crate::error::Result<String>>
+                                                dyn Stream<Item = crate::error::Result<Json>>
                                                     + Send,
                                             >,
                                         >,
@@ -1976,13 +2028,10 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let func: LlmStreamExecutionFn = Box::new(|_req: LLMRequest| {
+        let func: LlmStreamExecutionNextFn = Box::new(|_native: Json| {
             Box::pin(async move {
-                let items = vec![
-                    Ok("data: {\"token\": \"hello\"}\n\n".to_string()),
-                    Ok("data: {\"token\": \"world\"}\n\n".to_string()),
-                ];
-                let stream: Pin<Box<dyn Stream<Item = crate::error::Result<String>> + Send>> =
+                let items = vec![Ok(json!({"token": "hello"})), Ok(json!({"token": "world"}))];
+                let stream: Pin<Box<dyn Stream<Item = crate::error::Result<Json>> + Send>> =
                     Box::pin(tokio_stream::iter(items));
                 Ok(stream)
             })
@@ -1990,46 +2039,36 @@ mod tests {
                     Box<
                         dyn std::future::Future<
                                 Output = crate::error::Result<
-                                    Pin<
-                                        Box<dyn Stream<Item = crate::error::Result<String>> + Send>,
-                                    >,
+                                    Pin<Box<dyn Stream<Item = crate::error::Result<Json>> + Send>>,
                                 >,
                             > + Send,
                     >,
                 >
         });
 
-        let request = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: json!({}),
-        };
+        let native = json!({"messages": []});
 
         let collected = Arc::new(Mutex::new(Vec::new()));
         let cc = collected.clone();
-        let collector: Box<dyn FnMut(String) + Send> = Box::new(move |chunk| {
+        let collector: Box<dyn FnMut(Json) + Send> = Box::new(move |chunk| {
             cc.lock().unwrap().push(chunk);
         });
         let fc = collected.clone();
         let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(move || {
             let chunks = fc.lock().unwrap();
-            Json::Array(
-                chunks
-                    .iter()
-                    .filter_map(|s| serde_json::from_str(s).ok())
-                    .collect(),
-            )
+            Json::Array(chunks.clone())
         });
 
         let mut stream = nvagentrt_llm_stream_call_execute(
             "llm",
-            request,
+            native,
             func,
             collector,
             finalizer,
             None,
             LLMAttributes::STREAMING,
+            None,
+            None,
             None,
             None,
             None,
@@ -2044,6 +2083,8 @@ mod tests {
 
         // Should have received 2 chunks
         assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0]["token"], "hello");
+        assert_eq!(chunks[1]["token"], "world");
     }
 
     #[tokio::test]
@@ -2068,9 +2109,9 @@ mod tests {
         )
         .unwrap();
 
-        let func: LlmStreamExecutionFn = Box::new(|_req: LLMRequest| {
+        let func: LlmStreamExecutionNextFn = Box::new(|_native: Json| {
             Box::pin(async move {
-                let stream: Pin<Box<dyn Stream<Item = crate::error::Result<String>> + Send>> =
+                let stream: Pin<Box<dyn Stream<Item = crate::error::Result<Json>> + Send>> =
                     Box::pin(tokio_stream::empty());
                 Ok(stream)
             })
@@ -2078,33 +2119,28 @@ mod tests {
                     Box<
                         dyn std::future::Future<
                                 Output = crate::error::Result<
-                                    Pin<
-                                        Box<dyn Stream<Item = crate::error::Result<String>> + Send>,
-                                    >,
+                                    Pin<Box<dyn Stream<Item = crate::error::Result<Json>> + Send>>,
                                 >,
                             > + Send,
                     >,
                 >
         });
 
-        let request = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: json!({}),
-        };
+        let native = json!({"messages": []});
 
-        let collector: Box<dyn FnMut(String) + Send> = Box::new(|_| {});
+        let collector: Box<dyn FnMut(Json) + Send> = Box::new(|_| {});
         let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| Json::Null);
 
         let result = nvagentrt_llm_stream_call_execute(
             "llm",
-            request,
+            native,
             func,
             collector,
             finalizer,
             None,
             LLMAttributes::STREAMING,
+            None,
+            None,
             None,
             None,
             None,
@@ -2117,14 +2153,13 @@ mod tests {
             Ok(_) => panic!("expected error, got Ok"),
         }
 
-        // Verify paired START/END events with rejection data
+        // Verify standalone Mark event with rejection data (no Start/End pair)
         let captured = events.lock().unwrap();
-        assert_eq!(captured.len(), 2);
-        assert_eq!(captured[0].event_type, crate::types::EventType::Start);
-        assert_eq!(captured[1].event_type, crate::types::EventType::End);
-        let end_data = captured[1].data.as_ref().unwrap();
-        assert_eq!(end_data["rejected"], true);
-        assert_eq!(end_data["rejection_reason"], "stream blocked");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].event_type, crate::types::EventType::Mark);
+        let mark_data = captured[0].data.as_ref().unwrap();
+        assert_eq!(mark_data["rejected"], true);
+        assert_eq!(mark_data["rejection_reason"], "stream blocked");
 
         drop(captured);
         nvagentrt_deregister_subscriber("stream_reject_sub").unwrap();
@@ -2164,26 +2199,22 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let request = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: json!({}),
-        };
+        let native = json!({"messages": []});
         let handle = nvagentrt_llm_call(
             "llm",
-            &request,
+            &native,
             None,
             LLMAttributes::STATELESS | LLMAttributes::STREAMING,
             Some(json!({"custom": "data"})),
             Some(json!({"meta": "info"})),
+            None,
             None,
         )
         .unwrap();
 
         assert!(handle.attributes.contains(LLMAttributes::STATELESS));
         assert!(handle.attributes.contains(LLMAttributes::STREAMING));
-        nvagentrt_llm_call_end(&handle, json!({}), None, None).unwrap();
+        nvagentrt_llm_call_end(&handle, json!({}), None, None, None).unwrap();
     }
 
     // -- Standalone middleware chain tests --
@@ -2267,26 +2298,25 @@ mod tests {
         reset_global();
 
         nvagentrt_register_llm_request_intercept(
-            "rewrite_url",
+            "add_field",
             10,
             false,
-            Box::new(|mut req| {
-                req.url = "https://new.example.com".into();
-                req
+            Box::new(|mut native| {
+                native
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("intercepted".into(), json!(true));
+                native
             }),
         )
         .unwrap();
 
-        let request = LLMRequest {
-            method: "POST".into(),
-            url: "https://old.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: json!({}),
-        };
-        let result = nvagentrt_llm_request_intercepts(request).unwrap();
-        assert_eq!(result.url, "https://new.example.com");
+        let native = json!({"messages": []});
+        let result = nvagentrt_llm_request_intercepts(native).unwrap();
+        assert_eq!(result["intercepted"], true);
+        assert_eq!(result["messages"], json!([]));
 
-        nvagentrt_deregister_llm_request_intercept("rewrite_url").unwrap();
+        nvagentrt_deregister_llm_request_intercept("add_field").unwrap();
     }
 
     #[test]
@@ -2294,13 +2324,8 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let request = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: json!({}),
-        };
-        assert!(nvagentrt_llm_conditional_execution(&request).is_ok());
+        let native = json!({"messages": []});
+        assert!(nvagentrt_llm_conditional_execution(&native, None).is_ok());
     }
 
     #[test]
@@ -2315,13 +2340,8 @@ mod tests {
         )
         .unwrap();
 
-        let request = LLMRequest {
-            method: "POST".into(),
-            url: "https://api.example.com".into(),
-            headers: serde_json::Map::new(),
-            body: json!({}),
-        };
-        match nvagentrt_llm_conditional_execution(&request) {
+        let native = json!({"messages": []});
+        match nvagentrt_llm_conditional_execution(&native, None) {
             Err(AgentRtError::GuardrailRejected(msg)) => assert_eq!(msg, "llm blocked"),
             other => panic!("expected GuardrailRejected, got {other:?}"),
         }
@@ -2339,17 +2359,21 @@ mod tests {
             10,
             false,
             Box::new(|mut resp| {
-                if let Some(obj) = resp.as_object_mut() {
-                    obj.insert("tagged".into(), json!(true));
-                }
+                resp.data
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("tagged".into(), json!(true));
                 resp
             }),
         )
         .unwrap();
 
-        let result = nvagentrt_llm_response_intercepts(json!({"content": "hello"})).unwrap();
-        assert_eq!(result["content"], "hello");
-        assert_eq!(result["tagged"], true);
+        let result = nvagentrt_llm_response_intercepts(LLMResponse {
+            data: json!({"content": "hello"}),
+        })
+        .unwrap();
+        assert_eq!(result.data["content"], "hello");
+        assert_eq!(result.data["tagged"], true);
 
         nvagentrt_deregister_llm_response_intercept("tag").unwrap();
     }

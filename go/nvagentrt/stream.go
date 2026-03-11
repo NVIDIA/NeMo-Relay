@@ -16,6 +16,7 @@ extern void nvagentrt_string_free(char* ptr);
 import "C"
 
 import (
+	"encoding/json"
 	"io"
 	"runtime"
 )
@@ -61,13 +62,13 @@ func newLlmStream(ptr *C.FfiStream) *LlmStream {
 	return s
 }
 
-// Next returns the next SSE chunk from the stream as a string. It returns
+// Next returns the next chunk from the stream as a JSON value. It returns
 // [io.EOF] when the stream is exhausted and all chunks have been consumed.
 // Any registered stream response intercepts are applied to each chunk before
 // it is returned. If the stream has already been closed, Next returns io.EOF.
-func (s *LlmStream) Next() (string, error) {
+func (s *LlmStream) Next() (json.RawMessage, error) {
 	if s.closed || s.ptr == nil {
-		return "", io.EOF
+		return nil, io.EOF
 	}
 
 	var chunk *C.char
@@ -78,13 +79,13 @@ func (s *LlmStream) Next() (string, error) {
 		// Chunk available
 		text := C.GoString(chunk)
 		C.nvagentrt_string_free(chunk)
-		return text, nil
+		return json.RawMessage(text), nil
 	case 0:
 		// Stream done
-		return "", io.EOF
+		return nil, io.EOF
 	default:
 		// Error
-		return "", lastError()
+		return nil, lastError()
 	}
 }
 

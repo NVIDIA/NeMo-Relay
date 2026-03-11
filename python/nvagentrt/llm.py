@@ -6,65 +6,79 @@
 Provides both manual and managed LLM-call workflows, including streaming.
 
 Functions:
-    call(name, request, *, handle=None, attributes=None, data=None, metadata=None, model_name=None)
-        Begin an LLM call manually. Returns an ``LLMHandle`` that must later
-        be passed to ``call_end``. Emits a ``Start`` event. The optional
-        ``model_name`` identifies the LLM model and is propagated to events
-        for ATIF trajectory export.
+    call(name, native, *, handle=None, attributes=None, data=None, metadata=None, model_name=None)
+        Begin an LLM call manually.
+
+        Returns an ``LLMHandle`` that must later be passed to ``call_end``. Emits a ``Start`` event.
+        The optional ``model_name`` identifies the LLM model and is propagated to events for ATIF trajectory export.
 
     call_end(handle, response, *, data=None, metadata=None)
         End a manual LLM call. Records the response and emits an ``End`` event.
 
-    execute(name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None)
-        Execute an LLM call through the full middleware pipeline (request
-        intercepts -> sanitize-request guardrails -> conditional-execution
-        guardrails -> execution intercepts -> *func* -> response intercepts ->
-        sanitize-response guardrails). Returns an awaitable of the final response.
-        The optional ``model_name`` is propagated to events for ATIF trajectory export.
+    execute(name, native, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None)
+        Execute an LLM call through the full middleware pipeline:
 
-    stream_execute(name, request, func, collector, finalizer, *, handle=None,
+        - conditional-execution guardrails (on formal request derived via converter)
+        - request intercepts (on opaque native Json)
+        - sanitize-request guardrails (on formal request)
+        - execution intercepts
+        - *func*
+        - response intercepts
+        - sanitize-response guardrails
+
+        On rejection, only a standalone Mark event is emitted (no Start/End
+        pair) and ``GuardrailRejected`` is raised.
+
+        Returns an awaitable of the final response. The optional ``model_name`` is propagated to events
+        for ATIF trajectory export.
+
+    stream_execute(name, native, func, collector, finalizer, *, handle=None,
             attributes=None, data=None, metadata=None, model_name=None)
-        Like ``execute`` but the execution function returns an async iterator
-        of SSE text chunks. The ``collector`` callable is invoked with each
-        intercepted chunk (after stream response intercepts). The ``finalizer``
-        callable is invoked once when the stream is exhausted and returns the
-        aggregated response as a JSON-serializable value. Returns an awaitable
-        ``LlmStream`` that can be iterated with ``async for``.
-        Stream-response intercepts are applied to each SSE event in flight.
+        Like ``execute``, conditional-execution guardrails run first on the
+        formal request derived via the converter. The execution function returns
+        an async iterator of Json chunks.
 
-    request_intercepts(request)
-        Run the registered LLM request intercept chain on the given request.
-        Returns the transformed ``LLMRequest``.
+        The ``collector`` callable is invoked with each intercepted Json chunk (after stream response intercepts).
 
-    conditional_execution(request)
+        The ``finalizer`` callable is invoked once when the stream is exhausted and returns the
+        aggregated response as a JSON-serializable value.
+
+        Returns an awaitable ``LlmStream`` that can be iterated with ``async for``.
+        Stream-response intercepts are applied to each chunk in flight.
+
+    request_intercepts(native)
+        Run the registered LLM request intercept chain on the given native payload.
+        Returns the transformed native Json.
+
+    conditional_execution(native)
         Run the registered LLM conditional execution guardrail chain.
         Raises ``RuntimeError`` if any guardrail rejects.
 
     response_intercepts(response)
         Run the registered LLM response intercept chain on the given response.
-        Returns the transformed response.
+        Returns the transformed ``LLMResponse``.
 
 Example::
 
     import nvagentrt
 
-    req = nvagentrt.LLMRequest("POST", "https://api.example.com/chat", {}, body)
+    native = {"messages": [{"role": "user", "content": "hello"}]}
 
     # Non-streaming
-    resp = await nvagentrt.llm.execute("gpt-4", req, my_llm_fn)
+    resp = await nvagentrt.llm.execute("gpt-4", native, my_llm_fn)
 
     # Streaming with collector/finalizer
     chunks = []
-    def collect(chunk: str) -> None:
+    def collect(chunk) -> None:
         chunks.append(chunk)
     def finalize() -> dict:
-        return {"content": "".join(chunks)}
+        return {"chunks": chunks}
 
     stream = await nvagentrt.llm.stream_execute(
-        "gpt-4", req, my_stream_fn, collect, finalize,
+        "gpt-4", native, my_stream_fn, collect, finalize,
     )
     async for chunk in stream:
-        print(chunk, end="")
+        process(chunk)
 """
 
 from nvagentrt._native import (

@@ -100,18 +100,15 @@ class TestLLMAttributes:
 
 class TestLLMRequest:
     def test_constructor(self):
-        req = LLMRequest("POST", "https://api.example.com", {"Authorization": "Bearer token"}, {"messages": []})
-        assert req.method == "POST"
-        assert req.url == "https://api.example.com"
+        req = LLMRequest({"Authorization": "Bearer token"}, {"messages": []})
         assert req.headers == {"Authorization": "Bearer token"}
-        assert req.body == {"messages": []}
+        assert req.content == {"messages": []}
 
     def test_empty_headers(self):
-        req = LLMRequest("GET", "https://api.example.com", {}, {"q": "test"})
+        req = LLMRequest({}, {"q": "test"})
         assert req.headers == {}
 
     def test_repr(self):
-        req = LLMRequest("POST", "https://api.example.com", {}, {})
+        req = LLMRequest({}, {"model": "gpt-4"})
         r = repr(req)
-        assert "POST" in r
-        assert "api.example.com" in r
+        assert "LLMRequest" in r

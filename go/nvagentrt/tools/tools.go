@@ -39,9 +39,10 @@ func CallEnd(handle *nvagentrt.ToolHandle, result json.RawMessage, opts ...nvage
 }
 
 // Execute runs a complete tool call lifecycle with the full middleware pipeline
-// (request intercepts, guardrails, execution intercepts, fn, response
-// intercepts, response guardrails) and returns the final result JSON. This is
-// a shorthand for [nvagentrt.ToolCallExecute].
+// (conditional-execution guardrails, request intercepts, sanitize-request
+// guardrails, execution intercepts, fn, response intercepts, sanitize-response
+// guardrails) and returns the final result JSON. This is a shorthand for
+// [nvagentrt.ToolCallExecute].
 func Execute(name string, args json.RawMessage, fn nvagentrt.ToolExecutionFunc, opts ...nvagentrt.ToolCallOption) (json.RawMessage, error) {
 	return nvagentrt.ToolCallExecute(name, args, fn, opts...)
 }

@@ -28,8 +28,10 @@ pub struct FfiScopeHandle(pub core_types::ScopeHandle);
 pub struct FfiToolHandle(pub core_types::ToolHandle);
 /// Opaque handle representing an active LLM call.
 pub struct FfiLLMHandle(pub core_types::LLMHandle);
-/// Opaque wrapper around an LLM HTTP request (method, URL, headers, body).
+/// Opaque wrapper around an LLM request (headers, content).
 pub struct FfiLLMRequest(pub core_types::LLMRequest);
+/// Opaque wrapper around an LLM response (data).
+pub struct FfiLLMResponse(pub core_types::LLMResponse);
 /// Opaque wrapper around a lifecycle event emitted by the runtime.
 pub struct FfiEvent(pub core_types::Event);
 /// Opaque handle to an isolated scope stack for per-request/per-task isolation.
@@ -436,64 +438,26 @@ pub unsafe extern "C" fn nvagentrt_llm_handle_parent_uuid(ptr: *const FfiLLMHand
 /// invalid input.
 ///
 /// # Parameters
-/// - `method`: HTTP method (e.g., "POST").
-/// - `url`: The endpoint URL.
-/// - `headers_json`: JSON object of HTTP headers, or null.
-/// - `body_json`: JSON request body, or null.
+/// - `headers_json`: JSON object of headers/metadata, or null.
+/// - `content_json`: JSON request content payload, or null.
 ///
 /// # Safety
 /// All string arguments must be valid null-terminated C strings or null.
 #[no_mangle]
 pub unsafe extern "C" fn nvagentrt_llm_request_new(
-    method: *const c_char,
-    url: *const c_char,
     headers_json: *const c_char,
-    body_json: *const c_char,
+    content_json: *const c_char,
 ) -> *mut FfiLLMRequest {
-    let method = match crate::convert::c_str_to_string(method) {
-        Ok(s) => s,
-        Err(_) => return std::ptr::null_mut(),
-    };
-    let url = match crate::convert::c_str_to_string(url) {
-        Ok(s) => s,
-        Err(_) => return std::ptr::null_mut(),
-    };
     let headers = match crate::convert::c_str_to_json(headers_json) {
         Some(Json::Object(m)) => m,
         _ => serde_json::Map::new(),
     };
-    let body = crate::convert::c_str_to_json(body_json).unwrap_or(Json::Null);
+    let content = crate::convert::c_str_to_json(content_json).unwrap_or(Json::Null);
 
     Box::into_raw(Box::new(FfiLLMRequest(core_types::LLMRequest {
-        method,
-        url,
         headers,
-        body,
+        content,
     })))
-}
-
-/// Return the HTTP method of an LLM request as a C string. Caller must free the result.
-///
-/// # Safety
-/// `ptr` must be a valid `FfiLLMRequest` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nvagentrt_llm_request_method(ptr: *const FfiLLMRequest) -> *mut c_char {
-    if ptr.is_null() {
-        return std::ptr::null_mut();
-    }
-    str_to_c_string(&unsafe { &*ptr }.0.method)
-}
-
-/// Return the URL of an LLM request as a C string. Caller must free the result.
-///
-/// # Safety
-/// `ptr` must be a valid `FfiLLMRequest` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nvagentrt_llm_request_url(ptr: *const FfiLLMRequest) -> *mut c_char {
-    if ptr.is_null() {
-        return std::ptr::null_mut();
-    }
-    str_to_c_string(&unsafe { &*ptr }.0.url)
 }
 
 /// Return the headers of an LLM request as a JSON C string. Caller must free the result.
@@ -508,16 +472,43 @@ pub unsafe extern "C" fn nvagentrt_llm_request_headers(ptr: *const FfiLLMRequest
     json_to_c_string(&Json::Object(unsafe { &*ptr }.0.headers.clone()))
 }
 
-/// Return the body of an LLM request as a JSON C string. Caller must free the result.
+/// Return the content of an LLM request as a JSON C string. Caller must free the result.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiLLMRequest` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvagentrt_llm_request_body(ptr: *const FfiLLMRequest) -> *mut c_char {
+pub unsafe extern "C" fn nvagentrt_llm_request_content(ptr: *const FfiLLMRequest) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
-    json_to_c_string(&unsafe { &*ptr }.0.body)
+    json_to_c_string(&unsafe { &*ptr }.0.content)
+}
+
+// ---------------------------------------------------------------------------
+// LLMResponse construction + accessors
+// ---------------------------------------------------------------------------
+
+/// Free an LLM response object.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by an `nvagentrt_*` function, or null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_llm_response_free(ptr: *mut FfiLLMResponse) {
+    if !ptr.is_null() {
+        drop(unsafe { Box::from_raw(ptr) });
+    }
+}
+
+/// Return the data of an LLM response as a JSON C string. Caller must free the result.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiLLMResponse` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn nvagentrt_llm_response_data(ptr: *const FfiLLMResponse) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    json_to_c_string(&unsafe { &*ptr }.0.data)
 }
 
 // ---------------------------------------------------------------------------

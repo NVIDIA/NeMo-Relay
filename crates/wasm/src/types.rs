@@ -312,12 +312,12 @@ impl From<nvagentrt_core::ScopeStackHandle> for WasmScopeStack {
 // LLMRequest
 // ---------------------------------------------------------------------------
 
-/// Represents an outbound LLM HTTP request with method, URL, headers, and body.
+/// Represents an outbound LLM request with headers and content.
 ///
-/// Construct via `new WasmLLMRequest(method, url, headers, body)` from JavaScript.
+/// Construct via `new WasmLLMRequest(headers, content)` from JavaScript.
 #[wasm_bindgen]
 pub struct WasmLLMRequest {
-    /// The underlying core `LLMRequest` containing method, URL, headers, and body.
+    /// The underlying core `LLMRequest` containing headers and content.
     pub(crate) inner: core_types::LLMRequest,
 }
 
@@ -325,21 +325,14 @@ pub struct WasmLLMRequest {
 impl WasmLLMRequest {
     /// Creates a new LLM request.
     ///
-    /// - `method` - HTTP method (e.g. `"POST"`).
-    /// - `url` - Request URL.
-    /// - `headers` - JSON object of HTTP headers.
-    /// - `body` - JSON request body.
+    /// - `headers` - JSON object of metadata key-value pairs.
+    /// - `content` - JSON request payload.
     #[wasm_bindgen(constructor)]
-    pub fn new(
-        method: String,
-        url: String,
-        headers: JsValue,
-        body: JsValue,
-    ) -> Result<WasmLLMRequest, JsValue> {
+    pub fn new(headers: JsValue, content: JsValue) -> Result<WasmLLMRequest, JsValue> {
         let headers_json: serde_json::Value = serde_wasm_bindgen::from_value(headers)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        let body_json: serde_json::Value =
-            serde_wasm_bindgen::from_value(body).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let content_json: serde_json::Value = serde_wasm_bindgen::from_value(content)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
         let headers_map = match headers_json {
             serde_json::Value::Object(m) => m,
@@ -348,27 +341,13 @@ impl WasmLLMRequest {
 
         Ok(Self {
             inner: core_types::LLMRequest {
-                method,
-                url,
                 headers: headers_map,
-                body: body_json,
+                content: content_json,
             },
         })
     }
 
-    /// Returns the HTTP method of this request.
-    #[wasm_bindgen(getter)]
-    pub fn method(&self) -> String {
-        self.inner.method.clone()
-    }
-
-    /// Returns the URL of this request.
-    #[wasm_bindgen(getter)]
-    pub fn url(&self) -> String {
-        self.inner.url.clone()
-    }
-
-    /// Returns the HTTP headers as a JSON object.
+    /// Returns the headers as a JSON object.
     #[wasm_bindgen(getter)]
     pub fn headers(&self) -> JsValue {
         self.inner
@@ -377,13 +356,76 @@ impl WasmLLMRequest {
             .unwrap_or(JsValue::NULL)
     }
 
-    /// Returns the request body as a JSON value.
+    /// Sets the headers from a JSON object.
+    #[wasm_bindgen(setter)]
+    pub fn set_headers(&mut self, headers: JsValue) {
+        if let Ok(serde_json::Value::Object(m)) =
+            serde_wasm_bindgen::from_value::<serde_json::Value>(headers)
+        {
+            self.inner.headers = m;
+        }
+    }
+
+    /// Returns the request content as a JSON value.
     #[wasm_bindgen(getter)]
-    pub fn body(&self) -> JsValue {
+    pub fn content(&self) -> JsValue {
         self.inner
-            .body
+            .content
             .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
             .unwrap_or(JsValue::NULL)
+    }
+
+    /// Sets the request content from a JSON value.
+    #[wasm_bindgen(setter)]
+    pub fn set_content(&mut self, content: JsValue) {
+        if let Ok(val) = serde_wasm_bindgen::from_value::<serde_json::Value>(content) {
+            self.inner.content = val;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LLMResponse
+// ---------------------------------------------------------------------------
+
+/// Represents an LLM API response.
+///
+/// Construct via `new WasmLLMResponse(data)` from JavaScript.
+#[wasm_bindgen]
+pub struct WasmLLMResponse {
+    /// The underlying core `LLMResponse` containing the response data.
+    pub(crate) inner: core_types::LLMResponse,
+}
+
+#[wasm_bindgen]
+impl WasmLLMResponse {
+    /// Creates a new LLM response.
+    ///
+    /// - `data` - JSON response payload.
+    #[wasm_bindgen(constructor)]
+    pub fn new(data: JsValue) -> Result<WasmLLMResponse, JsValue> {
+        let data_json: serde_json::Value =
+            serde_wasm_bindgen::from_value(data).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(Self {
+            inner: core_types::LLMResponse { data: data_json },
+        })
+    }
+
+    /// Returns the response data as a JSON value.
+    #[wasm_bindgen(getter)]
+    pub fn data(&self) -> JsValue {
+        self.inner
+            .data
+            .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+            .unwrap_or(JsValue::NULL)
+    }
+
+    /// Sets the response data from a JSON value.
+    #[wasm_bindgen(setter)]
+    pub fn set_data(&mut self, data: JsValue) {
+        if let Ok(val) = serde_wasm_bindgen::from_value::<serde_json::Value>(data) {
+            self.inner.data = val;
+        }
     }
 }
 

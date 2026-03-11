@@ -140,9 +140,14 @@ typedef struct FfiEvent FfiEvent;
 typedef struct FfiLLMHandle FfiLLMHandle;
 
 /**
- * Opaque wrapper around an LLM HTTP request (method, URL, headers, body).
+ * Opaque wrapper around an LLM request (headers, content).
  */
 typedef struct FfiLLMRequest FfiLLMRequest;
+
+/**
+ * Opaque wrapper around an LLM response (data).
+ */
+typedef struct FfiLLMResponse FfiLLMResponse;
 
 /**
  * Opaque handle representing an active execution scope.
@@ -169,9 +174,12 @@ typedef struct Option_NvAgentRtCollectorCb Option_NvAgentRtCollectorCb;
 
 typedef struct Option_NvAgentRtFinalizerCb Option_NvAgentRtFinalizerCb;
 
+typedef struct Option_NvAgentRtJsonCb Option_NvAgentRtJsonCb;
+
 /**
- * Callback for tool execution. Receives arguments as JSON, returns result as JSON.
- * The returned string must be allocated with `malloc` or equivalent.
+ * Callback for tool execution (default callable). Receives arguments as JSON,
+ * returns result as JSON. The returned string must be allocated with `malloc`
+ * or equivalent.
  */
 typedef char *(*NvAgentRtToolExecCb)(void *user_data, const char *args_json);
 
@@ -182,10 +190,10 @@ typedef char *(*NvAgentRtToolExecCb)(void *user_data, const char *args_json);
 typedef void (*NvAgentRtFreeFn)(void *user_data);
 
 /**
- * Callback for LLM execution. Receives an `FfiLLMRequest`, returns the response
- * as a JSON C string. The returned string must be allocated with `malloc` or equivalent.
+ * Callback for LLM execution (default callable). Receives a native JSON C string,
+ * returns the response as a JSON C string.
  */
-typedef char *(*NvAgentRtLlmExecCb)(void *user_data, const struct FfiLLMRequest *request);
+typedef char *(*NvAgentRtLlmExecCb)(void *user_data, const char *native_json);
 
 /**
  * Callback for tool conditional execution guardrails.
@@ -204,6 +212,23 @@ typedef bool (*NvAgentRtToolExecConditionalCb)(void *user_data,
                                                const char *args_json);
 
 /**
+ * Runtime-provided "next" callback for tool execution middleware chain.
+ * Call this from an intercept to invoke the next layer (or original function).
+ * `next_ctx` is an opaque pointer managed by the runtime.
+ */
+typedef char *(*NvAgentRtToolExecNextFn)(const char *args_json, void *next_ctx);
+
+/**
+ * Callback for tool execution intercepts. Receives arguments as JSON plus
+ * a `next` callback and its context. Call `next_fn(args, next_ctx)` to invoke
+ * the next layer in the middleware chain, or return directly to short-circuit.
+ */
+typedef char *(*NvAgentRtToolExecInterceptCb)(void *user_data,
+                                              const char *args_json,
+                                              NvAgentRtToolExecNextFn next_fn,
+                                              void *next_ctx);
+
+/**
  * Callback for LLM request sanitization. Receives an `FfiLLMRequest` and returns
  * a new (possibly modified) `FfiLLMRequest`. Return null to use defaults.
  */
@@ -211,16 +236,16 @@ typedef struct FfiLLMRequest *(*NvAgentRtLlmRequestCb)(void *user_data,
                                                        const struct FfiLLMRequest *request);
 
 /**
- * Callback for LLM conditional execution guardrails.
- * Returns NULL to allow execution, or an error message string to reject.
- */
-typedef char *(*NvAgentRtLlmConditionalCb)(void *user_data, const struct FfiLLMRequest *request);
-
-/**
  * Generic JSON-to-JSON callback, used for LLM response sanitization and intercepts.
  * The returned string must be allocated with `malloc` or equivalent.
  */
 typedef char *(*NvAgentRtJsonCb)(void *user_data, const char *json);
+
+/**
+ * Callback for LLM conditional execution guardrails.
+ * Returns NULL to allow execution, or an error message string to reject.
+ */
+typedef char *(*NvAgentRtLlmConditionalCb)(void *user_data, const struct FfiLLMRequest *request);
 
 /**
  * Callback for SSE stream response intercepts. Receives the SSE event serialized
@@ -230,9 +255,24 @@ typedef char *(*NvAgentRtSseInterceptCb)(void *user_data, const char *sse_json);
 
 /**
  * Callback for LLM execution intercept conditions.
- * Returns `true` if this intercept should handle the execution.
+ * Receives native JSON string. Returns `true` if this intercept should handle the execution.
  */
-typedef bool (*NvAgentRtLlmExecConditionalCb)(void *user_data, const struct FfiLLMRequest *request);
+typedef bool (*NvAgentRtLlmExecConditionalCb)(void *user_data, const char *native_json);
+
+/**
+ * Runtime-provided "next" callback for LLM execution middleware chain.
+ * Takes a native JSON C string, returns a response JSON C string.
+ */
+typedef char *(*NvAgentRtLlmExecNextFn)(const char *native_json, void *next_ctx);
+
+/**
+ * Callback for LLM execution intercepts with middleware chain support.
+ * Receives native JSON C string plus a `next` callback and its context.
+ */
+typedef char *(*NvAgentRtLlmExecInterceptCb)(void *user_data,
+                                             const char *native_json,
+                                             NvAgentRtLlmExecNextFn next_fn,
+                                             void *next_ctx);
 
 /**
  * Callback for event subscribers. Invoked on each lifecycle event emitted by
@@ -342,8 +382,12 @@ NvAgentRtStatus nvagentrt_tool_call_end(const struct FfiToolHandle *handle,
                                         const char *metadata_json);
 
 /**
- * Execute a tool call end-to-end: begin, invoke the callback, apply guardrails
- * and intercepts, then end. Blocks the calling thread until completion.
+ * Execute a tool call end-to-end: run conditional-execution guardrails (on raw
+ * args), then request intercepts, sanitize-request guardrails, execution
+ * intercepts, the callback, response intercepts, and sanitize-response
+ * guardrails. On rejection, only a standalone Mark event is emitted (no
+ * Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
+ * thread until completion.
  *
  * # Parameters
  * - `name`: Null-terminated tool name.
@@ -377,24 +421,30 @@ NvAgentRtStatus nvagentrt_tool_call_execute(const char *name,
  *
  * # Parameters
  * - `name`: Null-terminated LLM provider name.
- * - `request`: The LLM request object (created via `nvagentrt_llm_request_new`).
+ * - `native_json`: The native request payload as a JSON C string.
  * - `parent`: Optional parent scope handle, or null.
  * - `attributes`: Bitfield of LLM attributes.
  * - `data_json`: Optional JSON data, or null.
  * - `metadata_json`: Optional JSON metadata, or null.
  * - `model_name`: Optional LLM model identifier, or null.
+ * - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
+ * - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
+ * - `to_request_free`: Optional destructor for `to_request_ud`.
  * - `out`: On success, receives a heap-allocated `FfiLLMHandle`.
  *
  * # Safety
- * `name`, `request`, and `out` must be valid, non-null pointers.
+ * `name`, `native_json`, and `out` must be valid, non-null pointers.
  */
 NvAgentRtStatus nvagentrt_llm_call(const char *name,
-                                   const struct FfiLLMRequest *request,
+                                   const char *native_json,
                                    const struct FfiScopeHandle *parent,
                                    uint32_t attributes,
                                    const char *data_json,
                                    const char *metadata_json,
                                    const char *model_name,
+                                   struct Option_NvAgentRtJsonCb to_request_cb,
+                                   void *to_request_ud,
+                                   NvAgentRtFreeFn to_request_free,
                                    struct FfiLLMHandle **out);
 
 /**
@@ -405,6 +455,9 @@ NvAgentRtStatus nvagentrt_llm_call(const char *name,
  * - `response_json`: LLM response as a JSON C string.
  * - `data_json`: Optional JSON data, or null.
  * - `metadata_json`: Optional JSON metadata, or null.
+ * - `to_response_cb`: Optional callback to convert native JSON to `LLMResponse`, or null.
+ * - `to_response_ud`: Opaque pointer passed to `to_response_cb`.
+ * - `to_response_free`: Optional destructor for `to_response_ud`.
  *
  * # Safety
  * `handle` and `response_json` must be valid, non-null pointers.
@@ -412,15 +465,22 @@ NvAgentRtStatus nvagentrt_llm_call(const char *name,
 NvAgentRtStatus nvagentrt_llm_call_end(const struct FfiLLMHandle *handle,
                                        const char *response_json,
                                        const char *data_json,
-                                       const char *metadata_json);
+                                       const char *metadata_json,
+                                       struct Option_NvAgentRtJsonCb to_response_cb,
+                                       void *to_response_ud,
+                                       NvAgentRtFreeFn to_response_free);
 
 /**
- * Execute an LLM call end-to-end: begin, invoke the callback, apply guardrails
- * and intercepts, then end. Blocks the calling thread until completion.
+ * Execute an LLM call end-to-end: run conditional-execution guardrails (on raw
+ * request), then request intercepts, sanitize-request guardrails, execution
+ * intercepts, the callback, response intercepts, and sanitize-response
+ * guardrails. On rejection, only a standalone Mark event is emitted (no
+ * Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
+ * thread until completion.
  *
  * # Parameters
  * - `name`: Null-terminated LLM provider name.
- * - `request`: The LLM request object.
+ * - `native_json`: The native request payload as a JSON C string.
  * - `func`: C callback that performs the actual LLM call.
  * - `func_user_data`: Opaque pointer passed to `func`.
  * - `func_free`: Optional destructor for `func_user_data`.
@@ -429,14 +489,20 @@ NvAgentRtStatus nvagentrt_llm_call_end(const struct FfiLLMHandle *handle,
  * - `data_json`: Optional JSON data, or null.
  * - `metadata_json`: Optional JSON metadata, or null.
  * - `model_name`: Optional LLM model identifier, or null.
+ * - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
+ * - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
+ * - `to_request_free`: Optional destructor for `to_request_ud`.
+ * - `to_response_cb`: Optional callback to convert native JSON to `LLMResponse`, or null.
+ * - `to_response_ud`: Opaque pointer passed to `to_response_cb`.
+ * - `to_response_free`: Optional destructor for `to_response_ud`.
  * - `out`: On success, receives the response as a JSON C string. Caller must
  *   free with `nvagentrt_string_free`.
  *
  * # Safety
- * `name`, `request`, and `out` must be valid, non-null pointers.
+ * `name`, `native_json`, and `out` must be valid, non-null pointers.
  */
 NvAgentRtStatus nvagentrt_llm_call_execute(const char *name,
-                                           const struct FfiLLMRequest *request,
+                                           const char *native_json,
                                            NvAgentRtLlmExecCb func,
                                            void *func_user_data,
                                            NvAgentRtFreeFn func_free,
@@ -445,20 +511,27 @@ NvAgentRtStatus nvagentrt_llm_call_execute(const char *name,
                                            const char *data_json,
                                            const char *metadata_json,
                                            const char *model_name,
+                                           struct Option_NvAgentRtJsonCb to_request_cb,
+                                           void *to_request_ud,
+                                           NvAgentRtFreeFn to_request_free,
+                                           struct Option_NvAgentRtJsonCb to_response_cb,
+                                           void *to_response_ud,
+                                           NvAgentRtFreeFn to_response_free,
                                            char **out);
 
 /**
- * Execute a streaming LLM call end-to-end. Returns a stream handle that can
- * be polled with `nvagentrt_stream_next`. Blocks until the stream is set up.
+ * Execute a streaming LLM call end-to-end. Conditional-execution guardrails
+ * run first on the raw request. Returns a stream handle that can be polled
+ * with `nvagentrt_stream_next`. Blocks until the stream is set up.
  *
  * # Parameters
  * - `name`: Null-terminated LLM provider name.
- * - `request`: The LLM request object.
+ * - `native_json`: The native request payload as a JSON C string.
  * - `func`: C callback that performs the actual LLM call.
  * - `func_user_data`: Opaque pointer passed to `func`.
  * - `func_free`: Optional destructor for `func_user_data`.
- * - `collector`: Callback invoked with each intercepted chunk string. May be
- *   null, in which case chunks are not collected.
+ * - `collector`: Callback invoked with each intercepted chunk as a JSON string.
+ *   May be null, in which case chunks are not collected.
  * - `finalizer`: Callback invoked once when the stream is exhausted to produce
  *   the aggregated response as a JSON C string. May be null, in which case the
  *   finalizer returns `Json::Null`.
@@ -467,14 +540,20 @@ NvAgentRtStatus nvagentrt_llm_call_execute(const char *name,
  * - `data_json`: Optional JSON data, or null.
  * - `metadata_json`: Optional JSON metadata, or null.
  * - `model_name`: Optional LLM model identifier, or null.
+ * - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
+ * - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
+ * - `to_request_free`: Optional destructor for `to_request_ud`.
+ * - `to_response_cb`: Optional callback to convert native JSON to `LLMResponse`, or null.
+ * - `to_response_ud`: Opaque pointer passed to `to_response_cb`.
+ * - `to_response_free`: Optional destructor for `to_response_ud`.
  * - `out`: On success, receives a heap-allocated `FfiStream`.
  *
  * # Safety
- * `name`, `request`, and `out` must be valid, non-null pointers. `collector`
+ * `name`, `native_json`, and `out` must be valid, non-null pointers. `collector`
  * and `finalizer` may be null.
  */
 NvAgentRtStatus nvagentrt_llm_stream_call_execute(const char *name,
-                                                  const struct FfiLLMRequest *request,
+                                                  const char *native_json,
                                                   NvAgentRtLlmExecCb func,
                                                   void *func_user_data,
                                                   NvAgentRtFreeFn func_free,
@@ -485,6 +564,12 @@ NvAgentRtStatus nvagentrt_llm_stream_call_execute(const char *name,
                                                   const char *data_json,
                                                   const char *metadata_json,
                                                   const char *model_name,
+                                                  struct Option_NvAgentRtJsonCb to_request_cb,
+                                                  void *to_request_ud,
+                                                  NvAgentRtFreeFn to_request_free,
+                                                  struct Option_NvAgentRtJsonCb to_response_cb,
+                                                  void *to_response_ud,
+                                                  NvAgentRtFreeFn to_response_free,
                                                   struct FfiStream **out);
 
 /**
@@ -540,8 +625,11 @@ NvAgentRtStatus nvagentrt_register_tool_conditional_execution_guardrail(const ch
 NvAgentRtStatus nvagentrt_deregister_tool_conditional_execution_guardrail(const char *name);
 
 /**
- * Register a tool execution intercept. When the condition callback returns true,
- * the execution callback replaces the default tool execution.
+ * Register a tool execution intercept following the middleware chain pattern.
+ * When the condition callback returns true, the execution callback is included
+ * in the chain. The callback receives `(args, next_fn, next_ctx)` — call
+ * `next_fn(args, next_ctx)` to invoke the next intercept or the original
+ * tool function, or skip calling it to short-circuit.
  *
  * # Parameters
  * - `name`: Unique intercept name.
@@ -549,7 +637,7 @@ NvAgentRtStatus nvagentrt_deregister_tool_conditional_execution_guardrail(const 
  * - `cond_cb`: Condition callback that decides if this intercept applies.
  * - `cond_user_data`: Opaque pointer for the condition callback.
  * - `cond_free`: Optional destructor for `cond_user_data`.
- * - `exec_cb`: Execution callback that replaces the tool call.
+ * - `exec_cb`: Middleware callback receiving args and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *
@@ -561,7 +649,7 @@ NvAgentRtStatus nvagentrt_register_tool_execution_intercept(const char *name,
                                                             NvAgentRtToolExecConditionalCb cond_cb,
                                                             void *cond_user_data,
                                                             NvAgentRtFreeFn cond_free,
-                                                            NvAgentRtToolExecCb exec_cb,
+                                                            NvAgentRtToolExecInterceptCb exec_cb,
                                                             void *exec_user_data,
                                                             NvAgentRtFreeFn exec_free);
 
@@ -602,6 +690,34 @@ NvAgentRtStatus nvagentrt_register_llm_sanitize_request_guardrail(const char *na
 NvAgentRtStatus nvagentrt_deregister_llm_sanitize_request_guardrail(const char *name);
 
 /**
+ * Register an LLM response sanitization guardrail. The callback can inspect
+ * and modify the LLM response after it is received.
+ *
+ * # Parameters
+ * - `name`: Unique guardrail name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `cb`: JSON-to-JSON callback that receives LLMResponse JSON and returns sanitized JSON.
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * # Safety
+ * `name` must be a valid C string. `cb` must be a valid function pointer.
+ */
+NvAgentRtStatus nvagentrt_register_llm_sanitize_response_guardrail(const char *name,
+                                                                   int32_t priority,
+                                                                   NvAgentRtJsonCb cb,
+                                                                   void *user_data,
+                                                                   NvAgentRtFreeFn free_fn);
+
+/**
+ * Deregister an LLM response sanitization guardrail by name.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NvAgentRtStatus nvagentrt_deregister_llm_sanitize_response_guardrail(const char *name);
+
+/**
  * Register an LLM conditional execution guardrail. The callback decides
  * whether an LLM call should proceed.
  *
@@ -630,14 +746,14 @@ NvAgentRtStatus nvagentrt_register_llm_conditional_execution_guardrail(const cha
 NvAgentRtStatus nvagentrt_deregister_llm_conditional_execution_guardrail(const char *name);
 
 /**
- * Register an LLM request intercept. The callback can transform the request
- * before it reaches the LLM provider.
+ * Register an LLM request intercept. The callback can transform the native
+ * request JSON before it reaches the LLM provider.
  *
  * # Parameters
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
  * - `break_chain`: If true, stop processing further intercepts after this one.
- * - `cb`: Request transform callback.
+ * - `cb`: JSON transform callback (receives/returns native JSON C string).
  * - `user_data`: Opaque pointer passed to `cb`.
  * - `free_fn`: Optional destructor for `user_data`.
  *
@@ -647,7 +763,7 @@ NvAgentRtStatus nvagentrt_deregister_llm_conditional_execution_guardrail(const c
 NvAgentRtStatus nvagentrt_register_llm_request_intercept(const char *name,
                                                          int32_t priority,
                                                          bool break_chain,
-                                                         NvAgentRtLlmRequestCb cb,
+                                                         NvAgentRtJsonCb cb,
                                                          void *user_data,
                                                          NvAgentRtFreeFn free_fn);
 
@@ -660,14 +776,14 @@ NvAgentRtStatus nvagentrt_register_llm_request_intercept(const char *name,
 NvAgentRtStatus nvagentrt_deregister_llm_request_intercept(const char *name);
 
 /**
- * Register an LLM response intercept. The callback can transform the response
- * JSON after it is received from the LLM provider.
+ * Register an LLM response intercept. The callback can transform the
+ * LLM response after it is received from the LLM provider.
  *
  * # Parameters
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
  * - `break_chain`: If true, stop processing further intercepts after this one.
- * - `cb`: JSON transform callback.
+ * - `cb`: JSON transform callback (receives/returns LLMResponse as JSON C string).
  * - `user_data`: Opaque pointer passed to `cb`.
  * - `free_fn`: Optional destructor for `user_data`.
  *
@@ -720,8 +836,11 @@ NvAgentRtStatus nvagentrt_register_llm_stream_response_intercept(const char *nam
 NvAgentRtStatus nvagentrt_deregister_llm_stream_response_intercept(const char *name);
 
 /**
- * Register an LLM execution intercept. When the condition callback returns true,
- * the execution callback replaces the default LLM call.
+ * Register an LLM execution intercept following the middleware chain pattern.
+ * When the condition callback returns true, the execution callback is included
+ * in the chain. The callback receives `(request, next_fn, next_ctx)` — call
+ * `next_fn(request, next_ctx)` to invoke the next intercept or the original
+ * LLM call, or skip calling it to short-circuit.
  *
  * # Parameters
  * - `name`: Unique intercept name.
@@ -729,7 +848,7 @@ NvAgentRtStatus nvagentrt_deregister_llm_stream_response_intercept(const char *n
  * - `cond_cb`: Condition callback.
  * - `cond_user_data`: Opaque pointer for the condition callback.
  * - `cond_free`: Optional destructor for `cond_user_data`.
- * - `exec_cb`: Execution callback.
+ * - `exec_cb`: Middleware callback receiving request and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *
@@ -741,7 +860,7 @@ NvAgentRtStatus nvagentrt_register_llm_execution_intercept(const char *name,
                                                            NvAgentRtLlmExecConditionalCb cond_cb,
                                                            void *cond_user_data,
                                                            NvAgentRtFreeFn cond_free,
-                                                           NvAgentRtLlmExecCb exec_cb,
+                                                           NvAgentRtLlmExecInterceptCb exec_cb,
                                                            void *exec_user_data,
                                                            NvAgentRtFreeFn exec_free);
 
@@ -754,8 +873,11 @@ NvAgentRtStatus nvagentrt_register_llm_execution_intercept(const char *name,
 NvAgentRtStatus nvagentrt_deregister_llm_execution_intercept(const char *name);
 
 /**
- * Register an LLM streaming execution intercept. When the condition callback
- * returns true, the execution callback replaces the default streaming LLM call.
+ * Register an LLM streaming execution intercept following the middleware chain
+ * pattern. When the condition callback returns true, the execution callback is
+ * included in the chain. The callback receives `(request, next_fn, next_ctx)` —
+ * call `next_fn(request, next_ctx)` to invoke the next intercept or the original
+ * streaming LLM call, or skip calling it to short-circuit.
  *
  * # Parameters
  * - `name`: Unique intercept name.
@@ -763,7 +885,7 @@ NvAgentRtStatus nvagentrt_deregister_llm_execution_intercept(const char *name);
  * - `cond_cb`: Condition callback.
  * - `cond_user_data`: Opaque pointer for the condition callback.
  * - `cond_free`: Optional destructor for `cond_user_data`.
- * - `exec_cb`: Execution callback.
+ * - `exec_cb`: Middleware callback receiving request and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *
@@ -775,7 +897,7 @@ NvAgentRtStatus nvagentrt_register_llm_stream_execution_intercept(const char *na
                                                                   NvAgentRtLlmExecConditionalCb cond_cb,
                                                                   void *cond_user_data,
                                                                   NvAgentRtFreeFn cond_free,
-                                                                  NvAgentRtLlmExecCb exec_cb,
+                                                                  NvAgentRtLlmExecInterceptCb exec_cb,
                                                                   void *exec_user_data,
                                                                   NvAgentRtFreeFn exec_free);
 
@@ -964,17 +1086,17 @@ NvAgentRtStatus nvagentrt_tool_response_intercepts(const char *name,
                                                    char **out);
 
 /**
- * Run the registered LLM request intercept chain on the given request.
+ * Run the registered LLM request intercept chain on the given native request.
  *
  * # Parameters
- * - `request_json`: LLM request as a JSON C string (serialized LLMRequest).
+ * - `native_json`: Native LLM request as a JSON C string.
  * - `out`: On success, receives the transformed JSON string (caller must free
  *   with `nvagentrt_string_free`).
  *
  * # Safety
  * All pointers must be valid. `out` must be non-null.
  */
-NvAgentRtStatus nvagentrt_llm_request_intercepts(const char *request_json, char **out);
+NvAgentRtStatus nvagentrt_llm_request_intercepts(const char *native_json, char **out);
 
 /**
  * Run the registered LLM conditional execution guardrail chain.
@@ -983,18 +1105,24 @@ NvAgentRtStatus nvagentrt_llm_request_intercepts(const char *request_json, char 
  * `NvAgentRtStatus::GuardrailRejected` if blocked.
  *
  * # Parameters
- * - `request_json`: LLM request as a JSON C string (serialized LLMRequest).
+ * - `native_json`: Native LLM request as a JSON C string.
+ * - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
+ * - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
+ * - `to_request_free`: Optional destructor for `to_request_ud`.
  *
  * # Safety
  * All pointers must be valid.
  */
-NvAgentRtStatus nvagentrt_llm_conditional_execution(const char *request_json);
+NvAgentRtStatus nvagentrt_llm_conditional_execution(const char *native_json,
+                                                    struct Option_NvAgentRtJsonCb to_request_cb,
+                                                    void *to_request_ud,
+                                                    NvAgentRtFreeFn to_request_free);
 
 /**
  * Run the registered LLM response intercept chain on the given response.
  *
  * # Parameters
- * - `response_json`: LLM response as a JSON C string.
+ * - `response_json`: LLM response as a JSON C string (serialized LLMResponse).
  * - `out`: On success, receives the transformed JSON string (caller must free
  *   with `nvagentrt_string_free`).
  *
@@ -1212,34 +1340,13 @@ char *nvagentrt_llm_handle_parent_uuid(const struct FfiLLMHandle *ptr);
  * invalid input.
  *
  * # Parameters
- * - `method`: HTTP method (e.g., "POST").
- * - `url`: The endpoint URL.
- * - `headers_json`: JSON object of HTTP headers, or null.
- * - `body_json`: JSON request body, or null.
+ * - `headers_json`: JSON object of headers/metadata, or null.
+ * - `content_json`: JSON request content payload, or null.
  *
  * # Safety
  * All string arguments must be valid null-terminated C strings or null.
  */
-struct FfiLLMRequest *nvagentrt_llm_request_new(const char *method,
-                                                const char *url,
-                                                const char *headers_json,
-                                                const char *body_json);
-
-/**
- * Return the HTTP method of an LLM request as a C string. Caller must free the result.
- *
- * # Safety
- * `ptr` must be a valid `FfiLLMRequest` pointer or null.
- */
-char *nvagentrt_llm_request_method(const struct FfiLLMRequest *ptr);
-
-/**
- * Return the URL of an LLM request as a C string. Caller must free the result.
- *
- * # Safety
- * `ptr` must be a valid `FfiLLMRequest` pointer or null.
- */
-char *nvagentrt_llm_request_url(const struct FfiLLMRequest *ptr);
+struct FfiLLMRequest *nvagentrt_llm_request_new(const char *headers_json, const char *content_json);
 
 /**
  * Return the headers of an LLM request as a JSON C string. Caller must free the result.
@@ -1250,12 +1357,28 @@ char *nvagentrt_llm_request_url(const struct FfiLLMRequest *ptr);
 char *nvagentrt_llm_request_headers(const struct FfiLLMRequest *ptr);
 
 /**
- * Return the body of an LLM request as a JSON C string. Caller must free the result.
+ * Return the content of an LLM request as a JSON C string. Caller must free the result.
  *
  * # Safety
  * `ptr` must be a valid `FfiLLMRequest` pointer or null.
  */
-char *nvagentrt_llm_request_body(const struct FfiLLMRequest *ptr);
+char *nvagentrt_llm_request_content(const struct FfiLLMRequest *ptr);
+
+/**
+ * Free an LLM response object.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by an `nvagentrt_*` function, or null.
+ */
+void nvagentrt_llm_response_free(struct FfiLLMResponse *ptr);
+
+/**
+ * Return the data of an LLM response as a JSON C string. Caller must free the result.
+ *
+ * # Safety
+ * `ptr` must be a valid `FfiLLMResponse` pointer or null.
+ */
+char *nvagentrt_llm_response_data(const struct FfiLLMResponse *ptr);
 
 /**
  * Return the UUID of an event as a C string. Caller must free the result.
