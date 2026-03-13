@@ -97,11 +97,6 @@ async def amain() -> None:
         print("Error: set NVIDIA_API_KEY environment variable", file=sys.stderr)
         sys.exit(1)
 
-    # Initialize NVMagic scope stack and capture the root scope UUID.
-    nvmagic.get_scope_stack()
-    root_handle = nvmagic.scope.get_handle()
-    root_uuid = root_handle.uuid
-
     # Register the console logging subscriber.
     nvmagic.subscribers.register("console-logger", log_event)
 
@@ -110,12 +105,13 @@ async def amain() -> None:
         "example-session",
         "example-agent",
         "0.1.0",
-        model_name="nvidia/nemotron-3-nano-30b-a3b",
+        model_name="my-agent",
     )
     exporter.register("atif-exporter")
 
     # Push a top-level agent scope.
     agent_scope = nvmagic.scope.push("example-agent", nvmagic.ScopeType.Agent)
+    agent_root_uuid = agent_scope.uuid
 
     # Create the LLM and agent.
     llm = ChatNVIDIA(model="nvidia/nemotron-3-nano-30b-a3b")
@@ -131,8 +127,10 @@ async def amain() -> None:
     print("\n--- Final response ---\n")
     print(result["messages"][-1].content)
 
+    nvmagic.scope.pop(agent_scope)
+
     # Export ATIF trajectory filtered to this agent's root scope.
-    trajectory = exporter.export(root_uuid)
+    trajectory = exporter.export(agent_root_uuid)
     trajectory_path = "trajectory.json"
     with open(trajectory_path, "w") as f:
         json.dump(trajectory, f, indent=2, default=str)
@@ -141,7 +139,6 @@ async def amain() -> None:
     print(f"  steps:  {len(trajectory.get('steps', []))}")
 
     # Clean up.
-    nvmagic.scope.pop(agent_scope)
     exporter.deregister("atif-exporter")
     nvmagic.subscribers.deregister("console-logger")
 

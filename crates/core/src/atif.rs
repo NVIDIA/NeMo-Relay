@@ -9,6 +9,7 @@
 //! The [`AtifExporter`] registers as an event subscriber, collects all events,
 //! and can export them as an [`AtifTrajectory`] via [`AtifExporter::export`].
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -182,15 +183,48 @@ impl AtifExporter {
 
     /// Exports collected events as an [`AtifTrajectory`].
     ///
-    /// When `root_uuid` is provided, only events matching that root are included
-    /// (for concurrent agent isolation). When `None`, all events are exported.
-    pub fn export(&self, root_uuid: Option<Uuid>) -> AtifTrajectory {
+    /// When `scope_uuid` is provided, only events belonging to that scope or
+    /// any of its descendants are included. This allows filtering by any scope
+    /// in the hierarchy — not just the auto-created root scope. When `None`,
+    /// all events are exported.
+    pub fn export(&self, scope_uuid: Option<Uuid>) -> AtifTrajectory {
         let state = self.state.lock().unwrap();
-        let filtered_events: Vec<&Event> = if let Some(root) = root_uuid {
+        let filtered_events: Vec<&Event> = if let Some(target) = scope_uuid {
+            // Build a set of UUIDs that are the target or descendants of it.
+            // An event belongs to the target scope if:
+            //   - Its parent_uuid is the target, OR
+            //   - Its parent_uuid is already a known descendant
+            // Also match events whose root_uuid equals the target (backwards compat).
+            let mut included: HashSet<Uuid> = HashSet::new();
+            included.insert(target);
+
+            // First pass: discover descendant scope UUIDs by walking Start events
+            // in timestamp order. A Start event with parent_uuid in the included
+            // set means its uuid is also a descendant.
+            let mut sorted: Vec<&Event> = state.events.iter().collect();
+            sorted.sort_by_key(|e| e.timestamp);
+            for event in &sorted {
+                if event.event_type == EventType::Start {
+                    if let Some(parent) = event.parent_uuid {
+                        if included.contains(&parent) {
+                            included.insert(event.uuid);
+                        }
+                    }
+                }
+            }
+
+            // Second pass: include events whose parent_uuid or uuid is in the
+            // descendant set, OR whose root_uuid matches the target.
             state
                 .events
                 .iter()
-                .filter(|e| e.root_uuid == Some(root))
+                .filter(|e| {
+                    e.root_uuid == Some(target)
+                        || included.contains(&e.uuid)
+                        || e.parent_uuid
+                            .map(|p| included.contains(&p))
+                            .unwrap_or(false)
+                })
                 .collect()
         } else {
             state.events.iter().collect()
@@ -1036,6 +1070,100 @@ mod tests {
         // Export without filter
         let traj_all = exporter.export(None);
         assert_eq!(traj_all.steps.len(), 4);
+    }
+
+    #[test]
+    fn test_exporter_hierarchy_filtering() {
+        // Filtering by an agent scope UUID should include events from that scope
+        // and all its descendants (LLM calls, tool calls parented under it).
+        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+
+        let root_uuid = Uuid::new_v4(); // auto-created root scope
+        let agent_uuid = Uuid::new_v4(); // user-pushed agent scope
+
+        // Agent scope Start (parent = root)
+        let agent_start = Event::builder(agent_uuid, EventType::Start)
+            .name("my-agent")
+            .scope_type(ScopeType::Agent)
+            .parent_uuid(Some(root_uuid))
+            .root_uuid(Some(root_uuid))
+            .build();
+
+        // LLM call under agent (parent = agent)
+        let llm_uuid = Uuid::new_v4();
+        let llm_start = Event::builder(llm_uuid, EventType::Start)
+            .scope_type(ScopeType::Llm)
+            .input(Some(
+                json!({"messages": [{"role": "user", "content": "hi"}]}),
+            ))
+            .parent_uuid(Some(agent_uuid))
+            .root_uuid(Some(root_uuid))
+            .build();
+        let llm_end = Event::builder(llm_uuid, EventType::End)
+            .scope_type(ScopeType::Llm)
+            .output(Some(json!({"content": "hello!", "role": "assistant"})))
+            .parent_uuid(Some(agent_uuid))
+            .root_uuid(Some(root_uuid))
+            .build();
+
+        // Tool call under LLM (parent = llm)
+        let tool_uuid = Uuid::new_v4();
+        let tool_start = Event::builder(tool_uuid, EventType::Start)
+            .name("search")
+            .scope_type(ScopeType::Tool)
+            .input(Some(json!({"q": "test"})))
+            .parent_uuid(Some(llm_uuid))
+            .root_uuid(Some(root_uuid))
+            .build();
+        let tool_end = Event::builder(tool_uuid, EventType::End)
+            .name("search")
+            .scope_type(ScopeType::Tool)
+            .output(Some(json!("result")))
+            .tool_call_id(Some("c1".to_string()))
+            .parent_uuid(Some(llm_uuid))
+            .root_uuid(Some(root_uuid))
+            .build();
+
+        // Unrelated event from a different agent (parent = different root)
+        let other_uuid = Uuid::new_v4();
+        let other_root = Uuid::new_v4();
+        let unrelated = Event::builder(other_uuid, EventType::Start)
+            .scope_type(ScopeType::Llm)
+            .input(Some(json!("other agent")))
+            .parent_uuid(Some(other_root))
+            .root_uuid(Some(other_root))
+            .build();
+
+        {
+            let mut state = exporter.state.lock().unwrap();
+            state.events.extend([
+                agent_start,
+                llm_start,
+                llm_end,
+                tool_start,
+                tool_end,
+                unrelated,
+            ]);
+        }
+
+        // Filter by agent_uuid — should get LLM + tool events (descendants),
+        // plus the agent Start itself
+        let traj = exporter.export(Some(agent_uuid));
+        // agent Start is scope (skipped), LLM start → user, LLM end → agent,
+        // tool start → skipped, tool end → observation
+        assert_eq!(traj.steps.len(), 3);
+        assert_eq!(traj.steps[0].source, "user");
+        assert_eq!(traj.steps[1].source, "agent");
+        assert_eq!(traj.steps[2].source, "system");
+
+        // Filter by root_uuid — should get everything except the unrelated event
+        let traj_root = exporter.export(Some(root_uuid));
+        // Same 3 steps + agent Start/End scope events (skipped) = still 3
+        assert_eq!(traj_root.steps.len(), 3);
+
+        // No filter — should get all events including unrelated
+        let traj_all = exporter.export(None);
+        assert_eq!(traj_all.steps.len(), 4); // +1 user step from unrelated LLM start
     }
 
     #[test]

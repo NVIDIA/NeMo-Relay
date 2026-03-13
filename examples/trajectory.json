@@ -1,74 +1,31 @@
 {
   "agent": {
-    "model_name": "nvidia/nemotron-3-nano-30b-a3b",
+    "model_name": "my-agent",
     "name": "example-agent",
     "version": "0.1.0"
   },
   "final_metrics": {
-    "completion_tokens": 485,
-    "prompt_tokens": 881
+    "completion_tokens": 374,
+    "prompt_tokens": 913
   },
   "schema_version": "ATIF-v1.6",
   "session_id": "example-session",
   "steps": [
     {
-      "message": {
-        "max_tokens": 1024,
-        "messages": [
-          {
-            "content": "What is the weather and population of San Francisco?",
-            "role": "user"
-          }
-        ],
-        "model": "nvidia/nemotron-3-nano-30b-a3b",
-        "stream": false,
-        "tools": [
-          {
-            "function": {
-              "description": "Get the current weather for a city.",
-              "name": "get_weather",
-              "parameters": {
-                "properties": {
-                  "city": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "city"
-                ],
-                "type": "object"
-              }
-            },
-            "type": "function"
-          },
-          {
-            "function": {
-              "description": "Get the approximate population of a city.",
-              "name": "get_population",
-              "parameters": {
-                "properties": {
-                  "city": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "city"
-                ],
-                "type": "object"
-              }
-            },
-            "type": "function"
-          }
-        ]
-      },
+      "message": [
+        {
+          "content": "What is the weather and population of San Francisco?",
+          "role": "user"
+        }
+      ],
       "model_name": "nvidia/nemotron-3-nano-30b-a3b",
       "source": "user",
       "step_id": 1,
-      "timestamp": "2026-03-13T15:53:20.452159+00:00"
+      "timestamp": "2026-03-13T18:01:59.155049+00:00"
     },
     {
       "message": {
-        "reasoning": "Okay, the user is asking for both the weather and population of San Francisco. Let me check the tools available. There's get_weather and get_population functions. Both require the city parameter. Since the user specified San Francisco, I need to call both functions with the city set to \"San Francisco\". First, I'll call get_weather for the weather info. Then, I'll call get_population for the population data. I should make sure each function is called correctly with the right parameter. Let me structure the tool calls accordingly.\n",
+        "reasoning": "Okay, the user is asking about both the weather and population of San Francisco. Let me check the available tools. There's get_weather for weather data and get_population for population info. I need to call both functions with the city parameter set to San Francisco. First, I'll get the weather using get_weather, then get the population with get_population. Since both functions require the city name, I'll structure two separate tool calls. Make sure each is in the correct JSON format within the tool_call tags. Let me verify the parameters again. Both require \"city\" as a string, so specifying \"San Francisco\" should work for both. Alright, let's make the calls.\n",
         "role": "assistant",
         "tool_calls": [
           {
@@ -76,7 +33,7 @@
               "arguments": "{\"city\": \"San Francisco\"}",
               "name": "get_weather"
             },
-            "id": "chatcmpl-tool-a2d4c5c90011db1e",
+            "id": "chatcmpl-tool-afc590431a96f121",
             "type": "function"
           },
           {
@@ -84,59 +41,33 @@
               "arguments": "{\"city\": \"San Francisco\"}",
               "name": "get_population"
             },
-            "id": "chatcmpl-tool-a20806ddcc93b3b4",
+            "id": "chatcmpl-tool-8cf82ff2c22491ca",
             "type": "function"
           }
         ]
       },
       "metrics": {
-        "completion_tokens": 161,
+        "completion_tokens": 193,
         "prompt_tokens": 342
       },
       "model_name": "nvidia/nemotron-3-nano-30b-a3b",
       "source": "agent",
       "step_id": 2,
-      "timestamp": "2026-03-13T15:53:21.345044+00:00",
+      "timestamp": "2026-03-13T18:02:00.008727+00:00",
       "tool_calls": [
         {
-          "arguments": "{\"city\": \"San Francisco\"}",
+          "arguments": {
+            "city": "San Francisco"
+          },
           "function_name": "get_weather",
-          "tool_call_id": "chatcmpl-tool-a2d4c5c90011db1e"
+          "tool_call_id": "chatcmpl-tool-afc590431a96f121"
         },
         {
-          "arguments": "{\"city\": \"San Francisco\"}",
-          "function_name": "get_population",
-          "tool_call_id": "chatcmpl-tool-a20806ddcc93b3b4"
-        }
-      ]
-    },
-    {
-      "message": null,
-      "source": "agent",
-      "step_id": 3,
-      "timestamp": "2026-03-13T15:53:21.347379+00:00",
-      "tool_calls": [
-        {
           "arguments": {
             "city": "San Francisco"
           },
           "function_name": "get_population",
-          "tool_call_id": "ddc35fa6-12a1-4bd7-9a58-09c27b790600"
-        }
-      ]
-    },
-    {
-      "message": null,
-      "source": "agent",
-      "step_id": 4,
-      "timestamp": "2026-03-13T15:53:21.347439+00:00",
-      "tool_calls": [
-        {
-          "arguments": {
-            "city": "San Francisco"
-          },
-          "function_name": "get_weather",
-          "tool_call_id": "c7207baf-9ba3-4c28-b070-e22ca2979f63"
+          "tool_call_id": "chatcmpl-tool-8cf82ff2c22491ca"
         }
       ]
     },
@@ -145,126 +76,75 @@
       "observation": {
         "results": [
           {
-            "content": "873,965"
-          }
-        ]
-      },
-      "source": "system",
-      "step_id": 5,
-      "timestamp": "2026-03-13T15:53:21.347666+00:00"
-    },
-    {
-      "message": null,
-      "observation": {
-        "results": [
-          {
-            "content": "62\u00b0F, foggy"
-          }
-        ]
-      },
-      "source": "system",
-      "step_id": 6,
-      "timestamp": "2026-03-13T15:53:21.347758+00:00"
-    },
-    {
-      "message": {
-        "max_tokens": 1024,
-        "messages": [
-          {
-            "content": "What is the weather and population of San Francisco?",
-            "role": "user"
-          },
-          {
-            "content": null,
-            "reasoning": "Okay, the user is asking for both the weather and population of San Francisco. Let me check the tools available. There's get_weather and get_population functions. Both require the city parameter. Since the user specified San Francisco, I need to call both functions with the city set to \"San Francisco\". First, I'll call get_weather for the weather info. Then, I'll call get_population for the population data. I should make sure each function is called correctly with the right parameter. Let me structure the tool calls accordingly.\n",
-            "reasoning_content": "Okay, the user is asking for both the weather and population of San Francisco. Let me check the tools available. There's get_weather and get_population functions. Both require the city parameter. Since the user specified San Francisco, I need to call both functions with the city set to \"San Francisco\". First, I'll call get_weather for the weather info. Then, I'll call get_population for the population data. I should make sure each function is called correctly with the right parameter. Let me structure the tool calls accordingly.\n",
-            "role": "assistant",
-            "tool_calls": [
-              {
-                "function": {
-                  "arguments": "{\"city\": \"San Francisco\"}",
-                  "name": "get_weather"
-                },
-                "id": "chatcmpl-tool-a2d4c5c90011db1e",
-                "type": "function"
-              },
-              {
-                "function": {
-                  "arguments": "{\"city\": \"San Francisco\"}",
-                  "name": "get_population"
-                },
-                "id": "chatcmpl-tool-a20806ddcc93b3b4",
-                "type": "function"
-              }
-            ]
+            "content": "873,965",
+            "source_call_id": "chatcmpl-tool-8cf82ff2c22491ca"
           },
           {
             "content": "62\u00b0F, foggy",
-            "role": "tool",
-            "tool_call_id": "chatcmpl-tool-a2d4c5c90011db1e"
-          },
-          {
-            "content": "873,965",
-            "role": "tool",
-            "tool_call_id": "chatcmpl-tool-a20806ddcc93b3b4"
-          }
-        ],
-        "model": "nvidia/nemotron-3-nano-30b-a3b",
-        "stream": false,
-        "tools": [
-          {
-            "function": {
-              "description": "Get the current weather for a city.",
-              "name": "get_weather",
-              "parameters": {
-                "properties": {
-                  "city": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "city"
-                ],
-                "type": "object"
-              }
-            },
-            "type": "function"
-          },
-          {
-            "function": {
-              "description": "Get the approximate population of a city.",
-              "name": "get_population",
-              "parameters": {
-                "properties": {
-                  "city": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "city"
-                ],
-                "type": "object"
-              }
-            },
-            "type": "function"
+            "source_call_id": "chatcmpl-tool-afc590431a96f121"
           }
         ]
       },
-      "model_name": "nvidia/nemotron-3-nano-30b-a3b",
-      "source": "user",
-      "step_id": 7,
-      "timestamp": "2026-03-13T15:53:21.350308+00:00"
+      "source": "system",
+      "step_id": 3,
+      "timestamp": "2026-03-13T18:02:00.013963+00:00"
     },
     {
-      "message": "\nThe current weather in San Francisco is **62\u00b0F, foggy**.  \nThe approximate population of San Francisco is **873,965**.  \n\nLet me know if you need additional details!",
+      "message": [
+        {
+          "content": "What is the weather and population of San Francisco?",
+          "role": "user"
+        },
+        {
+          "content": null,
+          "reasoning": "Okay, the user is asking about both the weather and population of San Francisco. Let me check the available tools. There's get_weather for weather data and get_population for population info. I need to call both functions with the city parameter set to San Francisco. First, I'll get the weather using get_weather, then get the population with get_population. Since both functions require the city name, I'll structure two separate tool calls. Make sure each is in the correct JSON format within the tool_call tags. Let me verify the parameters again. Both require \"city\" as a string, so specifying \"San Francisco\" should work for both. Alright, let's make the calls.\n",
+          "reasoning_content": "Okay, the user is asking about both the weather and population of San Francisco. Let me check the available tools. There's get_weather for weather data and get_population for population info. I need to call both functions with the city parameter set to San Francisco. First, I'll get the weather using get_weather, then get the population with get_population. Since both functions require the city name, I'll structure two separate tool calls. Make sure each is in the correct JSON format within the tool_call tags. Let me verify the parameters again. Both require \"city\" as a string, so specifying \"San Francisco\" should work for both. Alright, let's make the calls.\n",
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "function": {
+                "arguments": "{\"city\": \"San Francisco\"}",
+                "name": "get_weather"
+              },
+              "id": "chatcmpl-tool-afc590431a96f121",
+              "type": "function"
+            },
+            {
+              "function": {
+                "arguments": "{\"city\": \"San Francisco\"}",
+                "name": "get_population"
+              },
+              "id": "chatcmpl-tool-8cf82ff2c22491ca",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "62\u00b0F, foggy",
+          "role": "tool",
+          "tool_call_id": "chatcmpl-tool-afc590431a96f121"
+        },
+        {
+          "content": "873,965",
+          "role": "tool",
+          "tool_call_id": "chatcmpl-tool-8cf82ff2c22491ca"
+        }
+      ],
+      "model_name": "nvidia/nemotron-3-nano-30b-a3b",
+      "source": "user",
+      "step_id": 4,
+      "timestamp": "2026-03-13T18:02:00.020462+00:00"
+    },
+    {
+      "message": "\nThe current weather in San Francisco is **62\u00b0F, foggy**.  \nThe approximate population of San Francisco is **873,965**.",
       "metrics": {
-        "completion_tokens": 324,
-        "prompt_tokens": 539
+        "completion_tokens": 181,
+        "prompt_tokens": 571
       },
       "model_name": "nvidia/nemotron-3-nano-30b-a3b",
       "source": "agent",
-      "step_id": 8,
-      "timestamp": "2026-03-13T15:53:22.560425+00:00"
+      "step_id": 5,
+      "timestamp": "2026-03-13T18:02:00.998477+00:00"
     }
   ]
 }
