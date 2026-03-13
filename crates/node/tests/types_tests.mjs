@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 const lib = require('../index.js');
 
 const {
-  ScopeType, JsLlmRequest, JsLlmResponse,
+  ScopeType, JsLlmRequest,
   SCOPE_ATTR_PARALLEL, SCOPE_ATTR_RELOCATABLE,
   TOOL_ATTR_LOCAL, LLM_ATTR_STATELESS, LLM_ATTR_STREAMING,
 } = lib;
@@ -51,16 +51,5 @@ describe('JsLlmRequest', () => {
     const req = new JsLlmRequest({ headers: { 'Content-Type': 'application/json' }, content: { model: 'gpt-4' } });
     assert.deepEqual(req.headers, { 'Content-Type': 'application/json' });
     assert.deepEqual(req.content, { model: 'gpt-4' });
-  });
-});
-
-// ===========================================================================
-// JsLlmResponse
-// ===========================================================================
-
-describe('JsLlmResponse', () => {
-  it('construction and getters', () => {
-    const resp = new JsLlmResponse({ data: { result: 'hello' } });
-    assert.deepEqual(resp.data, { result: 'hello' });
   });
 });

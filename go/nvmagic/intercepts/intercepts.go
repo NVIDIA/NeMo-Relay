@@ -71,12 +71,11 @@ func DeregisterToolResponse(name string) error {
 // --- Tool Execution ---
 
 // RegisterToolExecution registers a tool execution intercept following the
-// middleware chain pattern. The condFn callback is evaluated first; if it
-// returns true, execFn is called with args and a next function. Call next to
-// continue the chain or skip it to short-circuit. This is a shorthand for
-// [nvmagic.RegisterToolExecutionIntercept].
-func RegisterToolExecution(name string, priority int32, condFn nvmagic.ToolExecConditionalFunc, execFn nvmagic.ToolExecutionInterceptFunc) error {
-	return nvmagic.RegisterToolExecutionIntercept(name, priority, condFn, execFn)
+// middleware chain pattern. execFn is called with args and a next function.
+// Call next to continue the chain or skip it to short-circuit. This is a
+// shorthand for [nvmagic.RegisterToolExecutionIntercept].
+func RegisterToolExecution(name string, priority int32, execFn nvmagic.ToolExecutionInterceptFunc) error {
+	return nvmagic.RegisterToolExecutionIntercept(name, priority, execFn)
 }
 
 // DeregisterToolExecution removes a tool execution intercept by name. This is a
@@ -88,9 +87,9 @@ func DeregisterToolExecution(name string) error {
 // --- LLM Request ---
 
 // RegisterLlmRequest registers an intercept that transforms the LLM request
-// JSON. When breakChain is true, no lower-priority intercepts run after this
-// one. This is a shorthand for [nvmagic.RegisterLlmRequestIntercept].
-func RegisterLlmRequest(name string, priority int32, breakChain bool, fn nvmagic.JSONFunc) error {
+// (headers and content). When breakChain is true, no lower-priority intercepts
+// run after this one. This is a shorthand for [nvmagic.RegisterLlmRequestIntercept].
+func RegisterLlmRequest(name string, priority int32, breakChain bool, fn nvmagic.LLMRequestFunc) error {
 	return nvmagic.RegisterLlmRequestIntercept(name, priority, breakChain, fn)
 }
 
@@ -103,12 +102,11 @@ func DeregisterLlmRequest(name string) error {
 // --- LLM Execution ---
 
 // RegisterLlmExecution registers an LLM execution intercept following the
-// middleware chain pattern. The condFn callback is evaluated first; if it
-// returns true, execFn is called with the request and a next function. Call
-// next to continue the chain or skip it to short-circuit. This is a shorthand
-// for [nvmagic.RegisterLlmExecutionIntercept].
-func RegisterLlmExecution(name string, priority int32, condFn nvmagic.LLMExecConditionalFunc, execFn nvmagic.LLMExecutionInterceptFunc) error {
-	return nvmagic.RegisterLlmExecutionIntercept(name, priority, condFn, execFn)
+// middleware chain pattern. execFn is called with the request and a next
+// function. Call next to continue the chain or skip it to short-circuit. This
+// is a shorthand for [nvmagic.RegisterLlmExecutionIntercept].
+func RegisterLlmExecution(name string, priority int32, execFn nvmagic.LLMExecutionInterceptFunc) error {
+	return nvmagic.RegisterLlmExecutionIntercept(name, priority, execFn)
 }
 
 // DeregisterLlmExecution removes an LLM execution intercept by name. This is a
@@ -120,12 +118,11 @@ func DeregisterLlmExecution(name string) error {
 // --- LLM Stream Execution ---
 
 // RegisterLlmStreamExecution registers a streaming LLM execution intercept
-// following the middleware chain pattern. The condFn callback is evaluated
-// first; if it returns true, execFn is called with the request and a next
-// function. Call next to continue the chain or skip it to short-circuit. This
-// is a shorthand for [nvmagic.RegisterLlmStreamExecutionIntercept].
-func RegisterLlmStreamExecution(name string, priority int32, condFn nvmagic.LLMExecConditionalFunc, execFn nvmagic.LLMExecutionInterceptFunc) error {
-	return nvmagic.RegisterLlmStreamExecutionIntercept(name, priority, condFn, execFn)
+// following the middleware chain pattern. execFn is called with the request and
+// a next function. Call next to continue the chain or skip it to short-circuit.
+// This is a shorthand for [nvmagic.RegisterLlmStreamExecutionIntercept].
+func RegisterLlmStreamExecution(name string, priority int32, execFn nvmagic.LLMExecutionInterceptFunc) error {
+	return nvmagic.RegisterLlmStreamExecutionIntercept(name, priority, execFn)
 }
 
 // DeregisterLlmStreamExecution removes an LLM stream execution intercept by

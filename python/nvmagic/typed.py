@@ -45,7 +45,7 @@ import typing
 from typing import Any, AsyncIterator, Awaitable, Callable, Generic, TypeVar, overload
 
 from nvmagic import llm, tools
-from nvmagic._native import LlmStream, ScopeHandle
+from nvmagic._native import LLMRequest, LlmStream, ScopeHandle
 
 Json = Any
 
@@ -311,8 +311,8 @@ async def tool_execute(
 @overload
 async def llm_execute(
     name: str,
-    native: Json,
-    func: Callable[[Json], Awaitable[TResponse]],
+    request: LLMRequest,
+    func: Callable[[LLMRequest], Awaitable[TResponse]],
     response_codec: Codec[TResponse],
     *,
     handle: ScopeHandle | None = None,
@@ -326,8 +326,8 @@ async def llm_execute(
 @overload
 async def llm_execute(
     name: str,
-    native: Json,
-    func: Callable[[Json], TResponse],
+    request: LLMRequest,
+    func: Callable[[LLMRequest], TResponse],
     response_codec: Codec[TResponse],
     *,
     handle: ScopeHandle | None = None,
@@ -340,8 +340,8 @@ async def llm_execute(
 
 async def llm_execute(
     name: str,
-    native: Json,
-    func: Callable[[Json], TResponse] | Callable[[Json], Awaitable[TResponse]],
+    request: LLMRequest,
+    func: Callable[[LLMRequest], TResponse] | Callable[[LLMRequest], Awaitable[TResponse]],
     response_codec: Codec[TResponse],
     *,
     handle: ScopeHandle | None = None,
@@ -352,13 +352,13 @@ async def llm_execute(
 ) -> TResponse:
     """Execute an LLM call with explicit codec-based response deserialization.
 
-    The native request is an opaque JSON payload (dict). The response
+    The request is an ``LLMRequest`` with headers and content. The response
     is converted via *response_codec*.
 
     Args:
         name: Model/provider name.
-        native: The native LLM request payload (opaque JSON dict).
-        func: Async or sync callable ``(native) -> typed_response``.
+        request: The ``LLMRequest`` object.
+        func: Async or sync callable ``(LLMRequest) -> typed_response``.
         response_codec: Codec for response serialization/deserialization.
         handle: Optional parent scope handle.
         attributes: Optional ``LLMAttributes`` bitflags.
@@ -370,15 +370,15 @@ async def llm_execute(
         The typed LLM response (deserialized from JSON via *response_codec*).
     """
 
-    async def _json_func(native_inner: Json) -> Json:
-        result: TResponse | Awaitable[TResponse] = func(native_inner)
+    async def _json_func(request_inner: LLMRequest) -> Json:
+        result: TResponse | Awaitable[TResponse] = func(request_inner)
         if isinstance(result, Awaitable):
             result = await result  # type: ignore[assignment]
         return response_codec.to_json(typing.cast(TResponse, result))
 
     json_result = await llm.execute(
         name,
-        native,
+        request,
         _json_func,
         handle=handle,
         attributes=attributes,
@@ -391,8 +391,8 @@ async def llm_execute(
 
 async def llm_stream_execute(
     name: str,
-    native: Json,
-    func: Callable[[Json], AsyncIterator[TResponseChunk]],
+    request: LLMRequest,
+    func: Callable[[LLMRequest], AsyncIterator[TResponseChunk]],
     collector: Callable[[TResponseChunk], None],
     finalizer: Callable[[], TResponse],
     chunk_codec: Codec[TResponseChunk],
@@ -418,7 +418,7 @@ async def llm_stream_execute(
 
     Args:
         name: Model/provider name.
-        native: The native LLM request payload (opaque JSON dict).
+        request: The ``LLMRequest`` object.
         func: Async callable returning an ``AsyncIterator[TResponseChunk]``
             of typed chunks.
         collector: Called with each typed chunk (after intercepts and
@@ -439,8 +439,8 @@ async def llm_stream_execute(
         An ``LlmStream`` async iterator of JSON chunks.
     """
 
-    async def _json_func(native_inner: Json) -> AsyncIterator[Json]:
-        async for typed_chunk in func(native_inner):
+    async def _json_func(request_inner: LLMRequest) -> AsyncIterator[Json]:
+        async for typed_chunk in func(request_inner):
             yield chunk_codec.to_json(typed_chunk)
 
     def _json_collector(json_chunk: Json) -> None:
@@ -451,7 +451,7 @@ async def llm_stream_execute(
 
     return await llm.stream_execute(
         name,
-        native,
+        request,
         _json_func,
         _json_collector,
         _json_finalizer,

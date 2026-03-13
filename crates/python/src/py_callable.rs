@@ -11,11 +11,11 @@ use pyo3::prelude::*;
 use serde_json::Value as Json;
 use tokio_stream::Stream;
 
-use nvmagic_core::types::{LLMRequest, LLMResponse};
+use nvmagic_core::types::LLMRequest;
 use nvmagic_core::{LlmExecutionNextFn, LlmStreamExecutionNextFn, MagicError, ToolExecutionNextFn};
 
 use crate::convert::{json_to_py, py_to_json};
-use crate::py_types::{PyLLMRequest, PyLLMResponse};
+use crate::py_types::PyLLMRequest;
 
 /// Wrap a Python callable `(str, Json) -> Json` for tool sanitize/intercept fns.
 pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
@@ -46,21 +46,6 @@ pub fn wrap_py_tool_conditional_fn(
             } else {
                 Some(bound.extract::<String>().expect("Expected str or None"))
             }
-        })
-    })
-}
-
-/// Wrap a Python callable `(str, Json) -> bool` for tool execution conditional.
-pub fn wrap_py_tool_exec_conditional_fn(
-    py_fn: Py<PyAny>,
-) -> Box<dyn Fn(&str, &Json) -> bool + Send + Sync> {
-    Box::new(move |name: &str, args: &Json| {
-        Python::attach(|py| {
-            let py_args = json_to_py(py, args).expect("json_to_py failed");
-            let result = py_fn
-                .call1(py, (name, py_args))
-                .expect("Python callable failed");
-            result.extract::<bool>(py).expect("Expected bool")
         })
     })
 }
@@ -157,16 +142,11 @@ struct PyLlmNextFn {
 
 #[pymethods]
 impl PyLlmNextFn {
-    fn __call__<'py>(
-        &self,
-        py: Python<'py>,
-        native: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn __call__<'py>(&self, py: Python<'py>, request: PyLLMRequest) -> PyResult<Bound<'py, PyAny>> {
         let next = self.inner.lock().unwrap().take().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err("next() called more than once")
         })?;
-        let json_native = py_to_json(native)?;
-        let future = next(json_native);
+        let future = next(request.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let result = future
                 .await
@@ -184,16 +164,11 @@ struct PyLlmStreamNextFn {
 
 #[pymethods]
 impl PyLlmStreamNextFn {
-    fn __call__<'py>(
-        &self,
-        py: Python<'py>,
-        native: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn __call__<'py>(&self, py: Python<'py>, request: PyLLMRequest) -> PyResult<Bound<'py, PyAny>> {
         let next = self.inner.lock().unwrap().take().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err("next() called more than once")
         })?;
-        let json_native = py_to_json(native)?;
-        let future = next(json_native);
+        let future = next(request.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let rust_stream = future
                 .await
@@ -286,26 +261,25 @@ pub fn wrap_py_tool_exec_intercept_fn(
     })
 }
 
-/// Wrap a Python callable `(dict, next) -> dict` for LLM execution intercepts.
+/// Wrap a Python callable `(LLMRequest, next) -> dict` for LLM execution intercepts.
 pub fn wrap_py_llm_exec_intercept_fn(
     py_fn: Py<PyAny>,
 ) -> Arc<
     dyn Fn(
-            Json,
+            LLMRequest,
             LlmExecutionNextFn,
         ) -> Pin<Box<dyn Future<Output = nvmagic_core::Result<Json>> + Send>>
         + Send
         + Sync,
 > {
     let py_fn = Arc::new(py_fn);
-    Arc::new(move |native: Json, next: LlmExecutionNextFn| {
+    Arc::new(move |request: LLMRequest, next: LlmExecutionNextFn| {
         let py_fn = py_fn.clone();
         Box::pin(async move {
             let outcome: nvmagic_core::Result<
                 Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
             > = Python::attach(|py| {
-                let py_native = json_to_py(py, &native)
-                    .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
+                let py_req = PyLLMRequest { inner: request };
                 let py_next = PyLlmNextFn {
                     inner: std::sync::Mutex::new(Some(next)),
                 };
@@ -313,7 +287,10 @@ pub fn wrap_py_llm_exec_intercept_fn(
                     .call1(
                         py,
                         (
-                            py_native,
+                            py_req
+                                .into_pyobject(py)
+                                .map_err(|e| MagicError::Internal(e.to_string()))?
+                                .into_any(),
                             py_next
                                 .into_pyobject(py)
                                 .map_err(|e| MagicError::Internal(e.to_string()))?
@@ -353,12 +330,12 @@ pub fn wrap_py_llm_exec_intercept_fn(
     })
 }
 
-/// Wrap a Python callable `(dict, next) -> AsyncIterator[Any]` for LLM stream execution intercepts.
+/// Wrap a Python callable `(LLMRequest, next) -> AsyncIterator[Any]` for LLM stream execution intercepts.
 pub fn wrap_py_llm_stream_exec_intercept_fn(
     py_fn: Py<PyAny>,
 ) -> Arc<
     dyn Fn(
-            Json,
+            LLMRequest,
             LlmStreamExecutionNextFn,
         ) -> Pin<
             Box<
@@ -372,13 +349,12 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
         + Sync,
 > {
     let py_fn = Arc::new(py_fn);
-    Arc::new(move |native: Json, next: LlmStreamExecutionNextFn| {
+    Arc::new(move |request: LLMRequest, next: LlmStreamExecutionNextFn| {
         let py_fn = py_fn.clone();
         Box::pin(async move {
             // Call the Python function to get the async iterator object
             let async_iter: Py<PyAny> = Python::attach(|py| {
-                let py_native = json_to_py(py, &native)
-                    .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
+                let py_req = PyLLMRequest { inner: request };
                 let py_next = PyLlmStreamNextFn {
                     inner: std::sync::Mutex::new(Some(next)),
                 };
@@ -386,7 +362,10 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                     .call1(
                         py,
                         (
-                            py_native,
+                            py_req
+                                .into_pyobject(py)
+                                .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?
+                                .into_any(),
                             py_next
                                 .into_pyobject(py)
                                 .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?
@@ -490,17 +469,6 @@ pub fn wrap_py_llm_sanitize_request_fn(
     })
 }
 
-/// Wrap a Python callable `(Json) -> Json` for LLM sanitize response / response intercepts.
-pub fn wrap_py_json_fn(py_fn: Py<PyAny>) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
-    Box::new(move |value: Json| {
-        Python::attach(|py| {
-            let py_val = json_to_py(py, &value).expect("json_to_py failed");
-            let result = py_fn.call1(py, (py_val,)).expect("Python callable failed");
-            py_to_json(result.bind(py)).expect("py_to_json failed")
-        })
-    })
-}
-
 /// Wrap a Python callable `(LLMRequest) -> Optional[str]` for LLM conditional guardrails.
 pub fn wrap_py_llm_conditional_fn(
     py_fn: Py<PyAny>,
@@ -521,47 +489,43 @@ pub fn wrap_py_llm_conditional_fn(
     })
 }
 
-/// Wrap a Python callable `(dict) -> dict` for LLM request intercepts.
-/// Request intercepts now operate on opaque Json, not LLMRequest.
+/// Wrap a Python callable `(LLMRequest) -> LLMRequest` for LLM request intercepts.
 pub fn wrap_py_llm_request_intercept_fn(
     py_fn: Py<PyAny>,
-) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
-    wrap_py_json_fn(py_fn)
-}
-
-/// Wrap a Python callable `(dict) -> bool` for LLM execution conditional.
-pub fn wrap_py_llm_exec_conditional_fn(
-    py_fn: Py<PyAny>,
-) -> Box<dyn Fn(&Json) -> bool + Send + Sync> {
-    Box::new(move |native: &Json| {
+) -> Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync> {
+    Box::new(move |request: LLMRequest| {
         Python::attach(|py| {
-            let py_native = json_to_py(py, native).expect("json_to_py failed");
+            let py_req = PyLLMRequest { inner: request };
             let result = py_fn
-                .call1(py, (py_native,))
-                .expect("Python callable failed");
-            result.extract::<bool>(py).expect("Expected bool")
+                .call1(py, (py_req,))
+                .expect("request intercept failed");
+            result
+                .extract::<PyLLMRequest>(py)
+                .expect("Expected LLMRequest")
+                .inner
         })
     })
 }
 
-/// Wrap a Python callable `(dict) -> dict` for LLM execution.
+/// Wrap a Python callable `(LLMRequest) -> dict` for LLM execution.
 /// Supports both sync and async Python callables.
 pub fn wrap_py_llm_exec_fn(
     py_fn: Py<PyAny>,
 ) -> Box<
-    dyn Fn(Json) -> Pin<Box<dyn Future<Output = nvmagic_core::Result<Json>> + Send>> + Send + Sync,
+    dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = nvmagic_core::Result<Json>> + Send>>
+        + Send
+        + Sync,
 > {
     let py_fn = std::sync::Arc::new(py_fn);
-    Box::new(move |native: Json| {
+    Box::new(move |request: LLMRequest| {
         let py_fn = py_fn.clone();
         Box::pin(async move {
             let outcome: nvmagic_core::Result<
                 Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
             > = Python::attach(|py| {
-                let py_native = json_to_py(py, &native)
-                    .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
+                let py_req = PyLLMRequest { inner: request };
                 let result = py_fn
-                    .call1(py, (py_native,))
+                    .call1(py, (py_req,))
                     .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
 
                 let bound = result.bind(py);
@@ -595,13 +559,13 @@ pub fn wrap_py_llm_exec_fn(
     })
 }
 
-/// Wrap a Python async generator `(dict) -> AsyncIterator[Any]` for LLM stream execution.
+/// Wrap a Python async generator `(LLMRequest) -> AsyncIterator[Any]` for LLM stream execution.
 /// Returns a future that resolves to a `Stream<Item = Result<Json>>`.
 pub fn wrap_py_llm_stream_exec_fn(
     py_fn: Py<PyAny>,
 ) -> Box<
     dyn Fn(
-            Json,
+            LLMRequest,
         ) -> Pin<
             Box<
                 dyn Future<
@@ -614,15 +578,14 @@ pub fn wrap_py_llm_stream_exec_fn(
         + Sync,
 > {
     let py_fn = std::sync::Arc::new(py_fn);
-    Box::new(move |native: Json| {
+    Box::new(move |request: LLMRequest| {
         let py_fn = py_fn.clone();
         Box::pin(async move {
             // Call the Python function to get the async iterator object
             let async_iter: Py<PyAny> = Python::attach(|py| {
-                let py_native = json_to_py(py, &native)
-                    .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
+                let py_req = PyLLMRequest { inner: request };
                 py_fn
-                    .call1(py, (py_native,))
+                    .call1(py, (py_req,))
                     .map_err(|e: PyErr| MagicError::Internal(e.to_string()))
             })?;
 
@@ -743,18 +706,15 @@ pub fn wrap_py_finalizer_fn(py_fn: Py<PyAny>) -> Box<dyn FnOnce() -> Json + Send
     })
 }
 
-/// Wrap a Python callable `(LLMResponse) -> LLMResponse` for LLM sanitize response guardrails.
+/// Wrap a Python callable `(dict) -> dict` for LLM sanitize response guardrails.
 pub fn wrap_py_llm_sanitize_response_fn(
     py_fn: Py<PyAny>,
-) -> Box<dyn Fn(LLMResponse) -> LLMResponse + Send + Sync> {
-    Box::new(move |response: LLMResponse| {
+) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
+    Box::new(move |response: Json| {
         Python::attach(|py| {
-            let py_resp = PyLLMResponse { inner: response };
+            let py_resp = json_to_py(py, &response).expect("json_to_py failed");
             let result = py_fn.call1(py, (py_resp,)).expect("Python callable failed");
-            result
-                .extract::<PyLLMResponse>(py)
-                .expect("Expected LLMResponse")
-                .inner
+            py_to_json(result.bind(py)).expect("py_to_json failed")
         })
     })
 }

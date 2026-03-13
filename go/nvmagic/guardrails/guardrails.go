@@ -87,9 +87,9 @@ func DeregisterToolConditionalExecution(name string) error {
 // --- LLM Sanitize Request ---
 
 // RegisterLlmSanitizeRequest registers a guardrail that sanitizes the LLM
-// request JSON before the call is made. This is a shorthand for
-// [nvmagic.RegisterLlmSanitizeRequestGuardrail].
-func RegisterLlmSanitizeRequest(name string, priority int32, fn nvmagic.JSONFunc) error {
+// request data (headers and content) before the call is made. This is a
+// shorthand for [nvmagic.RegisterLlmSanitizeRequestGuardrail].
+func RegisterLlmSanitizeRequest(name string, priority int32, fn nvmagic.LLMRequestFunc) error {
 	return nvmagic.RegisterLlmSanitizeRequestGuardrail(name, priority, fn)
 }
 
@@ -102,8 +102,8 @@ func DeregisterLlmSanitizeRequest(name string) error {
 // --- LLM Sanitize Response ---
 
 // RegisterLlmSanitizeResponse registers a guardrail that sanitizes LLM response
-// data before it is returned to the caller. The callback receives serialized
-// LLMResponse JSON (containing a "data" field). This is a shorthand for
+// data before it is returned to the caller. The callback receives the response
+// as plain JSON. This is a shorthand for
 // [nvmagic.RegisterLlmSanitizeResponseGuardrail].
 func RegisterLlmSanitizeResponse(name string, priority int32, fn nvmagic.LLMResponseFunc) error {
 	return nvmagic.RegisterLlmSanitizeResponseGuardrail(name, priority, fn)

@@ -85,14 +85,3 @@ func TestNewLLMRequestEmptyHeaders(t *testing.T) {
 		t.Fatal("headers is nil")
 	}
 }
-
-// ============================================================================
-// LLMResponse
-// ============================================================================
-
-func TestLLMResponse(t *testing.T) {
-	resp := LLMResponse{Data: []byte(`{"choices": []}`)}
-	if resp.Data == nil {
-		t.Fatal("data is nil")
-	}
-}

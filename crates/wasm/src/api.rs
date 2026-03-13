@@ -219,38 +219,35 @@ pub async fn nvmagic_tool_call_execute(
 /// Runs request guardrails and intercepts on the request before returning.
 ///
 /// - `name` - LLM provider/model name.
-/// - `native` - The native LLM request as a JSON value.
+/// - `request` - The LLM request as a JSON value with `{ headers, content }` shape.
 /// - `parent` - Optional parent scope handle.
 /// - `attributes` - Optional bitfield of LLM attribute flags.
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 /// - `model_name` - Optional model name string.
-/// - `to_request` - Optional JS function `(native) => { headers, content }` to convert
-///   native JSON to a formal LLMRequest.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmCall")]
 pub fn nvmagic_llm_call(
     name: &str,
-    native: JsValue,
+    request: JsValue,
     parent: Option<WasmScopeHandle>,
     attributes: Option<u32>,
     data: JsValue,
     metadata: JsValue,
     model_name: Option<String>,
-    to_request: Option<Function>,
 ) -> Result<WasmLLMHandle, JsValue> {
-    let native_json = js_to_json(&native)?;
+    let request_json = js_to_json(&request)?;
+    let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
+        .map_err(|e| to_js_err(nvmagic_core::MagicError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    let to_req = to_request.map(wrap_wasm_to_request);
     nvmagic_core::nvmagic_llm_call(
         name,
-        &native_json,
+        &llm_request,
         parent.as_ref().map(|h| &h.inner),
         attrs,
         opt_js_to_json(&data)?,
         opt_js_to_json(&metadata)?,
         model_name,
-        to_req.as_ref(),
     )
     .map(WasmLLMHandle::from)
     .map_err(to_js_err)
@@ -262,24 +259,19 @@ pub fn nvmagic_llm_call(
 /// - `response` - JSON response from the LLM.
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
-/// - `to_response` - Optional JS function `(native) => { data }` to convert
-///   native JSON to a formal LLMResponse.
 #[wasm_bindgen(js_name = "llmCallEnd")]
 pub fn nvmagic_llm_call_end(
     handle: &WasmLLMHandle,
     response: JsValue,
     data: JsValue,
     metadata: JsValue,
-    to_response: Option<Function>,
 ) -> Result<(), JsValue> {
     let response_json = js_to_json(&response)?;
-    let to_resp = to_response.map(wrap_wasm_to_response);
     nvmagic_core::nvmagic_llm_call_end(
         &handle.inner,
         response_json,
         opt_js_to_json(&data)?,
         opt_js_to_json(&metadata)?,
-        to_resp.as_ref(),
     )
     .map_err(to_js_err)
 }
@@ -292,48 +284,44 @@ pub fn nvmagic_llm_call_end(
 /// Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned.
 ///
 /// - `name` - LLM provider/model name.
-/// - `native` - The native LLM request as a JSON value.
-/// - `func` - JavaScript function `(native) => result | Promise<result>` to execute.
+/// - `request` - The LLM request as a JSON value with `{ headers, content }` shape.
+/// - `func` - JavaScript function `(request) => result | Promise<result>` to execute.
 /// - `parent` - Optional parent scope handle.
 /// - `attributes` - Optional bitfield of LLM attribute flags.
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 /// - `model_name` - Optional model name string.
-/// - `to_request` - Optional JS function `(native) => { headers, content }`.
-/// - `to_response` - Optional JS function `(native) => { data }`.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmCallExecute")]
 pub async fn nvmagic_llm_call_execute(
     name: &str,
-    native: JsValue,
+    request: JsValue,
     func: Function,
     parent: Option<WasmScopeHandle>,
     attributes: Option<u32>,
     data: JsValue,
     metadata: JsValue,
     model_name: Option<String>,
-    to_request: Option<Function>,
-    to_response: Option<Function>,
 ) -> Result<JsValue, JsValue> {
-    let native_json = js_to_json(&native)?;
+    let request_json = js_to_json(&request)?;
+    let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
+        .map_err(|e| to_js_err(nvmagic_core::MagicError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
         .unwrap_or_else(nvmagic_core::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
-    let default_fn: nvmagic_core::LlmExecutionNextFn = Box::new(move |native| exec_fn(native));
+    let default_fn: nvmagic_core::LlmExecutionNextFn = Box::new(move |request| exec_fn(request));
 
     let result = nvmagic_core::nvmagic_llm_call_execute(
         name,
-        native_json,
+        llm_request,
         default_fn,
         Some(parent_handle),
         attrs,
         opt_js_to_json(&data)?,
         opt_js_to_json(&metadata)?,
         model_name,
-        to_request.map(wrap_wasm_to_request),
-        to_response.map(wrap_wasm_to_response),
     )
     .await
     .map_err(to_js_err)?;
@@ -348,8 +336,8 @@ pub async fn nvmagic_llm_call_execute(
 /// chunks incrementally. Stream-level intercepts are applied to each chunk.
 ///
 /// - `name` - LLM provider/model name.
-/// - `native` - The native LLM request as a JSON value.
-/// - `func` - JavaScript function `(native) => result | Promise<result>` to execute.
+/// - `request` - The LLM request as a JSON value with `{ headers, content }` shape.
+/// - `func` - JavaScript function `(request) => result | Promise<result>` to execute.
 /// - `collector` - Optional JavaScript function `(chunk) => void` called with each
 ///   intercepted Json chunk for accumulation.
 /// - `finalizer` - Optional JavaScript function `() => object` called once when the
@@ -359,13 +347,11 @@ pub async fn nvmagic_llm_call_execute(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 /// - `model_name` - Optional model name string.
-/// - `to_request` - Optional JS function `(native) => { headers, content }`.
-/// - `to_response` - Optional JS function `(native) => { data }`.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmStreamCallExecute")]
 pub async fn nvmagic_llm_stream_call_execute(
     name: &str,
-    native: JsValue,
+    request: JsValue,
     func: Function,
     collector: Option<Function>,
     finalizer: Option<Function>,
@@ -374,10 +360,10 @@ pub async fn nvmagic_llm_stream_call_execute(
     data: JsValue,
     metadata: JsValue,
     model_name: Option<String>,
-    to_request: Option<Function>,
-    to_response: Option<Function>,
 ) -> Result<WasmLlmStream, JsValue> {
-    let native_json = js_to_json(&native)?;
+    let request_json = js_to_json(&request)?;
+    let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
+        .map_err(|e| to_js_err(nvmagic_core::MagicError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
@@ -395,8 +381,8 @@ pub async fn nvmagic_llm_stream_call_execute(
     };
 
     // Bridge LlmExecutionFn -> LlmStreamExecutionNextFn (FnOnce)
-    let default_fn: nvmagic_core::LlmStreamExecutionNextFn = Box::new(move |native| {
-        let fut = exec_fn(native);
+    let default_fn: nvmagic_core::LlmStreamExecutionNextFn = Box::new(move |request| {
+        let fut = exec_fn(request);
         Box::pin(async move {
             let result = fut.await?;
             let stream = tokio_stream::once(Ok(result));
@@ -412,7 +398,7 @@ pub async fn nvmagic_llm_stream_call_execute(
 
     let rust_stream = nvmagic_core::nvmagic_llm_stream_call_execute(
         name,
-        native_json,
+        llm_request,
         default_fn,
         wrapped_collector,
         wrapped_finalizer,
@@ -421,8 +407,6 @@ pub async fn nvmagic_llm_stream_call_execute(
         opt_js_to_json(&data)?,
         opt_js_to_json(&metadata)?,
         model_name,
-        to_request.map(wrap_wasm_to_request),
-        to_response.map(wrap_wasm_to_response),
     )
     .await
     .map_err(to_js_err)?;
@@ -597,20 +581,17 @@ pub fn deregister_tool_response_intercept(name: &str) -> Result<bool, JsValue> {
 ///
 /// - `name` - Unique intercept name.
 /// - `priority` - Execution priority (lower runs first).
-/// - `conditional` - JS function `(name, args) => boolean` that decides whether to intercept.
 /// - `exec_fn` - JS function `(args, next) => result | Promise<result>` — intercept function.
 ///   Call `await next(args)` to invoke the next intercept or original implementation.
 #[wasm_bindgen(js_name = "registerToolExecutionIntercept")]
 pub fn register_tool_execution_intercept(
     name: &str,
     priority: i32,
-    conditional: Function,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
     nvmagic_core::nvmagic_register_tool_execution_intercept(
         name,
         priority,
-        callable::wrap_js_tool_exec_conditional_fn(conditional),
         callable::wrap_js_tool_exec_intercept_fn(exec_fn),
     )
     .map_err(to_js_err)
@@ -712,12 +693,12 @@ pub fn deregister_llm_conditional_execution_guardrail(name: &str) -> Result<bool
 
 // LLM intercepts
 
-/// Registers an intercept that transforms LLM request data (native Json).
+/// Registers an intercept that transforms LLM request data (`LLMRequest`).
 ///
 /// - `name` - Unique intercept name.
 /// - `priority` - Execution priority (lower runs first).
 /// - `break_chain` - If `true`, stops further intercepts from running after this one.
-/// - `func` - JS function `(native) => transformedNative`.
+/// - `func` - JS function `(request) => transformedRequest`.
 #[wasm_bindgen(js_name = "registerLlmRequestIntercept")]
 pub fn register_llm_request_intercept(
     name: &str,
@@ -729,7 +710,7 @@ pub fn register_llm_request_intercept(
         name,
         priority,
         break_chain,
-        callable::wrap_js_json_fn(func),
+        callable::wrap_js_llm_request_intercept_fn(func),
     )
     .map_err(to_js_err)
 }
@@ -746,20 +727,17 @@ pub fn deregister_llm_request_intercept(name: &str) -> Result<bool, JsValue> {
 ///
 /// - `name` - Unique intercept name.
 /// - `priority` - Execution priority (lower runs first).
-/// - `conditional` - JS function `(native) => boolean` that decides whether to intercept.
 /// - `exec_fn` - JS function `(native, next) => result | Promise<result>` — intercept function.
 ///   Call `await next(native)` to invoke the next intercept or original implementation.
 #[wasm_bindgen(js_name = "registerLlmExecutionIntercept")]
 pub fn register_llm_execution_intercept(
     name: &str,
     priority: i32,
-    conditional: Function,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
     nvmagic_core::nvmagic_register_llm_execution_intercept(
         name,
         priority,
-        callable::wrap_js_llm_exec_conditional_fn(conditional),
         callable::wrap_js_llm_exec_intercept_fn(exec_fn),
     )
     .map_err(to_js_err)
@@ -779,20 +757,17 @@ pub fn deregister_llm_execution_intercept(name: &str) -> Result<bool, JsValue> {
 ///
 /// - `name` - Unique intercept name.
 /// - `priority` - Execution priority (lower runs first).
-/// - `conditional` - JS function `(native) => boolean` that decides whether to intercept.
 /// - `exec_fn` - JS function `(native, next) => result | Promise<result>` — intercept function.
 ///   Call `await next(native)` to invoke the next intercept or original streaming implementation.
 #[wasm_bindgen(js_name = "registerLlmStreamExecutionIntercept")]
 pub fn register_llm_stream_execution_intercept(
     name: &str,
     priority: i32,
-    conditional: Function,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
     nvmagic_core::nvmagic_register_llm_stream_execution_intercept(
         name,
         priority,
-        callable::wrap_js_llm_exec_conditional_fn(conditional),
         callable::wrap_js_llm_stream_exec_intercept_fn(exec_fn),
     )
     .map_err(to_js_err)
@@ -886,27 +861,27 @@ pub fn nvmagic_tool_response_intercepts_wasm(
     Ok(json_to_js(&transformed))
 }
 
-/// Runs the registered LLM request intercept chain on the given native Json.
+/// Runs the registered LLM request intercept chain on the given `LLMRequest`.
 #[wasm_bindgen(js_name = "llmRequestIntercepts")]
-pub fn nvmagic_llm_request_intercepts_wasm(native: JsValue) -> Result<JsValue, JsValue> {
-    let native_json = js_to_json(&native)?;
-    let result = nvmagic_core::nvmagic_llm_request_intercepts(native_json).map_err(to_js_err)?;
-    Ok(json_to_js(&result))
+pub fn nvmagic_llm_request_intercepts_wasm(request: JsValue) -> Result<JsValue, JsValue> {
+    let request_json = js_to_json(&request)?;
+    let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
+        .map_err(|e| to_js_err(nvmagic_core::MagicError::Internal(e.to_string())))?;
+    let result = nvmagic_core::nvmagic_llm_request_intercepts(llm_request).map_err(to_js_err)?;
+    let result_json = serde_json::to_value(&result)
+        .map_err(|e| to_js_err(nvmagic_core::MagicError::Internal(e.to_string())))?;
+    Ok(json_to_js(&result_json))
 }
 
 /// Runs the registered LLM conditional execution guardrail chain.
 ///
-/// - `native` - The native LLM request as a JSON value.
-/// - `to_request` - Optional JS function `(native) => { headers, content }`.
+/// - `request` - The LLM request as a JSON value with `{ headers, content }` shape.
 #[wasm_bindgen(js_name = "llmConditionalExecution")]
-pub fn nvmagic_llm_conditional_execution_wasm(
-    native: JsValue,
-    to_request: Option<Function>,
-) -> Result<(), JsValue> {
-    let native_json = js_to_json(&native)?;
-    let to_req = to_request.map(wrap_wasm_to_request);
-    nvmagic_core::nvmagic_llm_conditional_execution(&native_json, to_req.as_ref())
-        .map_err(to_js_err)
+pub fn nvmagic_llm_conditional_execution_wasm(request: JsValue) -> Result<(), JsValue> {
+    let request_json = js_to_json(&request)?;
+    let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
+        .map_err(|e| to_js_err(nvmagic_core::MagicError::Internal(e.to_string())))?;
+    nvmagic_core::nvmagic_llm_conditional_execution(&llm_request).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -968,61 +943,4 @@ impl WasmAtifExporter {
     pub fn clear(&self) {
         self.inner.clear();
     }
-}
-
-// ---------------------------------------------------------------------------
-// LLM converter helpers
-// ---------------------------------------------------------------------------
-
-/// Wrapper around a JS `Function` that is `Send + Sync` for WASM's
-/// single-threaded execution model.
-struct SendSyncFunction(send_wrapper::SendWrapper<Function>);
-
-// Safety: WASM is single-threaded; SendWrapper ensures the inner Function is
-// only accessed from the main thread where it was created.
-unsafe impl Send for SendSyncFunction {}
-unsafe impl Sync for SendSyncFunction {}
-
-/// Wraps an optional JS `to_request` function into a boxed `ToRequestFn`.
-fn wrap_wasm_to_request(func: Function) -> nvmagic_core::ToRequestFn {
-    let wrapper = SendSyncFunction(send_wrapper::SendWrapper::new(func));
-    Box::new(move |native: &serde_json::Value| {
-        let js_native = json_to_js(native);
-        match wrapper.0.call1(&JsValue::NULL, &js_native) {
-            Ok(result) => {
-                let result_json = js_to_json(&result).unwrap_or(serde_json::Value::Null);
-                serde_json::from_value(result_json).unwrap_or_else(|_| {
-                    nvmagic_core::types::LLMRequest {
-                        headers: serde_json::Map::new(),
-                        content: native.clone(),
-                    }
-                })
-            }
-            Err(_) => nvmagic_core::types::LLMRequest {
-                headers: serde_json::Map::new(),
-                content: native.clone(),
-            },
-        }
-    })
-}
-
-/// Wraps an optional JS `to_response` function into a boxed `ToResponseFn`.
-fn wrap_wasm_to_response(func: Function) -> nvmagic_core::ToResponseFn {
-    let wrapper = SendSyncFunction(send_wrapper::SendWrapper::new(func));
-    Box::new(move |native: &serde_json::Value| {
-        let js_native = json_to_js(native);
-        match wrapper.0.call1(&JsValue::NULL, &js_native) {
-            Ok(result) => {
-                let result_json = js_to_json(&result).unwrap_or(serde_json::Value::Null);
-                serde_json::from_value(result_json).unwrap_or_else(|_| {
-                    nvmagic_core::types::LLMResponse {
-                        data: native.clone(),
-                    }
-                })
-            }
-            Err(_) => nvmagic_core::types::LLMResponse {
-                data: native.clone(),
-            },
-        }
-    })
 }

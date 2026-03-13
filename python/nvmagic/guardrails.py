@@ -24,7 +24,7 @@ and responses. They are priority-ordered (ascending) and registered by name.
         ``fn(request: LLMRequest) -> LLMRequest`` — sanitize the LLM request.
 
     register_llm_sanitize_response(name, priority, fn)
-        ``fn(response: LLMResponse) -> LLMResponse`` — sanitize the LLM response.
+        ``fn(response: dict) -> dict`` — sanitize the LLM response.
 
     register_llm_conditional_execution(name, priority, fn)
         ``fn(request: LLMRequest) -> Optional[str]`` — return ``None``

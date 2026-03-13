@@ -7,6 +7,7 @@ import pytest
 from nvmagic import (
     Event,
     EventType,
+    LLMRequest,
     ScopeType,
     llm,
     scope,
@@ -15,8 +16,8 @@ from nvmagic import (
 )
 
 
-def make_native():
-    return {"messages": [], "model": "test-model"}
+def make_request():
+    return LLMRequest({}, {"messages": [], "model": "test-model"})
 
 
 class TestSubscribers:
@@ -78,8 +79,8 @@ class TestSubscriberEventDetails:
     def test_llm_events(self):
         events = []
         subscribers.register("py_llm_evt", lambda e: events.append(e))
-        native = make_native()
-        handle = llm.call("evt_llm", native)
+        request = make_request()
+        handle = llm.call("evt_llm", request)
         llm.call_end(handle, {"done": True})
         subscribers.deregister("py_llm_evt")
 
@@ -118,8 +119,8 @@ class TestHandleProperties:
         tools.call_end(handle, {})
 
     def test_llm_handle_all_properties(self):
-        native = make_native()
-        handle = llm.call("prop_llm", native, data={"d": 1}, metadata={"m": 2})
+        request = make_request()
+        handle = llm.call("prop_llm", request, data={"d": 1}, metadata={"m": 2})
         assert isinstance(handle.uuid, str)
         assert handle.name == "prop_llm"
         assert handle.data is not None

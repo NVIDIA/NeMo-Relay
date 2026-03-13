@@ -74,19 +74,19 @@ export declare function typedToolExecute<TArgs, TResult>(
 /**
  * Execute an LLM call with explicit codec-based typed response deserialization.
  *
- * The native request is an opaque JSON payload. The response is converted via
- * `responseCodec`.
+ * The request is an `LLMRequest` object ({headers, content}). The response
+ * is converted via `responseCodec`.
  *
  * @param name - Model/provider name.
- * @param native - The native LLM request payload (plain JSON object).
+ * @param request - The LLM request object ({headers, content}).
  * @param func - The LLM implementation.
  * @param responseCodec - Codec for response serialization/deserialization.
  * @param options - Optional scope handle, attributes, data, metadata, modelName.
  */
 export declare function typedLlmExecute<TResponse>(
   name: string,
-  native: any,
-  func: (native: any) => Promise<TResponse>,
+  request: any,
+  func: (request: any) => Promise<TResponse>,
   responseCodec: Codec<TResponse>,
   options?: TypedLlmExecuteOptions,
 ): Promise<TResponse>;
@@ -110,8 +110,8 @@ export interface TypedLlmStreamExecuteOptions {
  */
 export declare function typedLlmStreamExecute<TChunk, TResponse>(
   name: string,
-  native: any,
-  func: (native: any) => AsyncIterable<TChunk>,
+  request: any,
+  func: (request: any) => AsyncIterable<TChunk>,
   collector: (chunk: TChunk) => void,
   finalizer: () => TResponse,
   chunkCodec: Codec<TChunk>,

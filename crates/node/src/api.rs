@@ -9,8 +9,12 @@
 //! All functions are annotated with `#[napi]` and their doc comments appear
 //! in the generated `index.d.ts` TypeScript definitions.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex as StdMutex;
+
 use napi::bindgen_prelude::*;
-use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction};
+use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
@@ -22,6 +26,41 @@ use crate::callable;
 use crate::convert::{opt_json, to_napi_err};
 use crate::stream::LlmStream;
 use crate::types::*;
+
+// ---------------------------------------------------------------------------
+// Stream channel registry — enables JS async generators to push chunks to Rust
+// ---------------------------------------------------------------------------
+
+static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(0);
+
+type StreamSender = tokio::sync::mpsc::UnboundedSender<nvmagic_core::Result<Json>>;
+
+static STREAM_CHANNELS: std::sync::LazyLock<StdMutex<HashMap<u64, StreamSender>>> =
+    std::sync::LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+fn register_stream_channel(id: u64, tx: StreamSender) {
+    STREAM_CHANNELS.lock().unwrap().insert(id, tx);
+}
+
+/// Push a chunk into the stream identified by `streamId`.
+/// Called from JavaScript during async generator iteration.
+#[napi]
+pub fn push_stream_chunk(stream_id: f64, chunk: Json) -> bool {
+    let id = stream_id as u64;
+    if let Some(tx) = STREAM_CHANNELS.lock().unwrap().get(&id) {
+        tx.send(Ok(chunk)).is_ok()
+    } else {
+        false
+    }
+}
+
+/// Signal that a stream is complete. Drops the sender so the Rust
+/// receiver sees the channel as closed.
+#[napi]
+pub fn end_stream(stream_id: f64) {
+    let id = stream_id as u64;
+    STREAM_CHANNELS.lock().unwrap().remove(&id);
+}
 
 // ---------------------------------------------------------------------------
 // Scope stack isolation
@@ -209,34 +248,33 @@ pub async fn tool_call_execute(
 
 /// Begin an LLM call, running request guardrails and intercepts.
 ///
-/// Registers an LLM invocation with the given provider `name` and native request payload.
-/// Returns a `JsLLMHandle` that must be passed to `llmCallEnd()` when the response is received.
-/// Optional `handle` specifies the parent scope; `attributes` is a bitfield
-/// (e.g., `LLM_ATTR_STREAMING`). Optional `toRequest` converts native JSON to a formal
-/// `JsLLMRequest` for guardrails; defaults to the identity converter.
+/// Registers an LLM invocation with the given provider `name` and request payload.
+/// The `request` should be a JSON object with `headers` and `content` fields matching
+/// the `LLMRequest` schema. Returns a `JsLLMHandle` that must be passed to `llmCallEnd()`
+/// when the response is received. Optional `handle` specifies the parent scope; `attributes`
+/// is a bitfield (e.g., `LLM_ATTR_STREAMING`).
 #[allow(clippy::too_many_arguments)]
 #[napi]
 pub fn llm_call(
     name: String,
-    native: Json,
+    request: Json,
     handle: Option<&JsScopeHandle>,
     attributes: Option<u32>,
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
-    to_request: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 ) -> Result<JsLLMHandle> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    let to_request_fn = to_request.map(wrap_js_to_request);
+    let llm_request: core_types::LLMRequest = serde_json::from_value(request)
+        .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
     core::nvmagic_llm_call(
         &name,
-        &native,
+        &llm_request,
         handle.map(|h| &h.inner),
         attrs,
         opt_json(data),
         opt_json(metadata),
         model_name,
-        to_request_fn.as_ref(),
     )
     .map(JsLLMHandle::from)
     .map_err(to_napi_err)
@@ -245,26 +283,16 @@ pub fn llm_call(
 /// End an LLM call, running response guardrails and intercepts.
 ///
 /// Signals that the LLM call identified by `handle` has completed with the given `response`.
-/// Response guardrails and intercepts are applied to the response. Optional `toResponse`
-/// converts native JSON to a formal `JsLLMResponse` for guardrails; defaults to the
-/// identity converter.
+/// Response guardrails and intercepts are applied to the response.
 #[napi]
 pub fn llm_call_end(
     handle: &JsLLMHandle,
     response: Json,
     data: Option<Json>,
     metadata: Option<Json>,
-    to_response: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 ) -> Result<()> {
-    let to_response_fn = to_response.map(wrap_js_to_response);
-    core::nvmagic_llm_call_end(
-        &handle.inner,
-        response,
-        opt_json(data),
-        opt_json(metadata),
-        to_response_fn.as_ref(),
-    )
-    .map_err(to_napi_err)
+    core::nvmagic_llm_call_end(&handle.inner, response, opt_json(data), opt_json(metadata))
+        .map_err(to_napi_err)
 }
 
 /// Execute an LLM call end-to-end with full lifecycle management.
@@ -273,44 +301,41 @@ pub fn llm_call_end(
 /// sanitize-request guardrails → execution intercepts → `func` → response
 /// intercepts → sanitize-response guardrails. On rejection, only a standalone
 /// Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned.
-/// Returns the final (possibly intercepted) LLM response.
+/// The `request` should be a JSON object with `headers` and `content` fields matching
+/// the `LLMRequest` schema. Returns the final (possibly intercepted) LLM response.
 #[allow(clippy::too_many_arguments)]
 #[napi]
 pub async fn llm_call_execute(
     name: String,
-    native: Json,
+    request: Json,
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
     handle: Option<&JsScopeHandle>,
     attributes: Option<u32>,
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
-    to_request: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
-    to_response: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 ) -> Result<Json> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent = handle
         .map(|h| h.inner.clone())
         .unwrap_or_else(core::task_scope_top);
+    let llm_request: core_types::LLMRequest = serde_json::from_value(request)
+        .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
     let default_fn: nvmagic_core::LlmExecutionNextFn = Box::new(move |req| exec_fn(req));
-    let to_request_fn = to_request.map(wrap_js_to_request);
-    let to_response_fn = to_response.map(wrap_js_to_response);
     let scope_stack = nvmagic_core::current_scope_stack();
 
     nvmagic_core::TASK_SCOPE_STACK
         .scope(scope_stack, async move {
             core::nvmagic_llm_call_execute(
                 &name,
-                native,
+                llm_request,
                 default_fn,
                 Some(parent),
                 attrs,
                 opt_json(data),
                 opt_json(metadata),
                 model_name,
-                to_request_fn,
-                to_response_fn,
             )
             .await
             .map_err(to_napi_err)
@@ -322,8 +347,10 @@ pub async fn llm_call_execute(
 ///
 /// Like `llmCallExecute`, conditional-execution guardrails run first on the raw request.
 /// Returns an `LlmStream` whose `next()` method yields response chunks incrementally.
-/// The `func` callback receives the native request as JSON and its response is streamed back.
+/// The `func` callback receives the request as JSON and its response is streamed back.
 /// Stream-level intercepts are applied to each chunk.
+/// The `request` should be a JSON object with `headers` and `content` fields matching
+/// the `LLMRequest` schema.
 ///
 /// The optional `collector` callback is invoked with each intercepted chunk as JSON,
 /// allowing the caller to accumulate chunks for aggregation. The optional `finalizer`
@@ -333,7 +360,7 @@ pub async fn llm_call_execute(
 #[napi]
 pub async fn llm_stream_call_execute(
     name: String,
-    native: Json,
+    request: Json,
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
     collector: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
     finalizer: Option<ThreadsafeFunction<(), ErrorStrategy::Fatal>>,
@@ -342,16 +369,13 @@ pub async fn llm_stream_call_execute(
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
-    to_request: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
-    to_response: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 ) -> Result<LlmStream> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent = handle
         .map(|h| h.inner.clone())
         .unwrap_or_else(core::task_scope_top);
-
-    // For stream execution, we need the stream-specific wrapper
-    let exec_fn = callable::wrap_js_llm_exec_fn(func);
+    let llm_request: core_types::LLMRequest = serde_json::from_value(request)
+        .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
 
     let wrapped_collector: Box<dyn FnMut(Json) + Send> = match collector {
         Some(cb) => callable::wrap_js_collector_fn(cb),
@@ -363,28 +387,44 @@ pub async fn llm_stream_call_execute(
         None => Box::new(|| Json::Null),
     };
 
-    // Bridge LlmExecutionFn -> LlmStreamExecutionNextFn (FnOnce)
-    let default_fn: nvmagic_core::LlmStreamExecutionNextFn = Box::new(move |native| {
-        let fut = exec_fn(native);
-        Box::pin(async move {
-            let result = fut.await?;
-            let stream = tokio_stream::once(Ok(result));
-            Ok(Box::pin(stream)
-                as std::pin::Pin<
-                    Box<dyn tokio_stream::Stream<Item = nvmagic_core::Result<Json>> + Send>,
-                >)
-        })
-    });
+    // Push-based stream bridge: JS iterates the async generator on the
+    // event loop and pushes each chunk into Rust via `pushStreamChunk`.
+    // We create an unbounded channel here and pass the stream ID to JS
+    // so it knows where to send chunks.
+    let func = std::sync::Arc::new(func);
+    let default_fn: nvmagic_core::LlmStreamExecutionNextFn =
+        Box::new(move |req: core_types::LLMRequest| {
+            let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            register_stream_channel(stream_id, tx);
 
-    let to_request_fn = to_request.map(wrap_js_to_request);
-    let to_response_fn = to_response.map(wrap_js_to_response);
+            // Serialize the LLMRequest to JSON and wrap with streamId so JS can extract both
+            let req_json = serde_json::to_value(&req).unwrap_or(Json::Null);
+            let wrapper = serde_json::json!({
+                "__nvmagic_native": req_json,
+                "__nvmagic_stream_id": stream_id,
+            });
+
+            // NonBlocking: queue the call on the JS event loop and return immediately.
+            // The JS function starts async iteration and pushes chunks via pushStreamChunk.
+            func.call(wrapper, ThreadsafeFunctionCallMode::NonBlocking);
+
+            Box::pin(async move {
+                let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+                Ok(Box::pin(stream)
+                    as std::pin::Pin<
+                        Box<dyn tokio_stream::Stream<Item = nvmagic_core::Result<Json>> + Send>,
+                    >)
+            })
+        });
+
     let scope_stack = nvmagic_core::current_scope_stack();
 
     nvmagic_core::TASK_SCOPE_STACK
         .scope(scope_stack, async move {
             let rust_stream = core::nvmagic_llm_stream_call_execute(
                 &name,
-                native,
+                llm_request,
                 default_fn,
                 wrapped_collector,
                 wrapped_finalizer,
@@ -393,8 +433,6 @@ pub async fn llm_stream_call_execute(
                 opt_json(data),
                 opt_json(metadata),
                 model_name,
-                to_request_fn,
-                to_response_fn,
             )
             .await
             .map_err(to_napi_err)?;
@@ -557,21 +595,18 @@ napi_intercept_tool_api!(
 
 /// Register a tool execution intercept following the middleware chain pattern.
 ///
-/// The `conditional` callback receives `(toolName, args)` and returns `true` if this intercept
-/// should handle execution. If it matches, `callable` receives the args and a `next` function.
-/// Call `next(args)` to invoke the next intercept or original implementation; skip calling
-/// `next` to short-circuit the chain.
+/// The `callable` receives the args and a `next` function. Call `next(args)` to invoke
+/// the next intercept or original implementation; skip calling `next` to short-circuit
+/// the chain.
 #[napi]
 pub fn register_tool_execution_intercept(
     name: String,
     priority: i32,
-    conditional: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
     core::nvmagic_register_tool_execution_intercept(
         &name,
         priority,
-        callable::wrap_js_tool_exec_conditional_fn(conditional),
         callable::wrap_js_tool_exec_intercept_fn(callable),
     )
     .map_err(to_napi_err)
@@ -617,9 +652,9 @@ pub fn deregister_llm_sanitize_request_guardrail(name: String) -> Result<bool> {
 
 /// Register a guardrail that sanitizes LLM response data after execution.
 ///
-/// The `guardrail` callback receives the LLM response as a `JsLLMResponse` and must return
-/// the sanitized response. Higher `priority` values run first. Throws if a guardrail with
-/// the same `name` already exists.
+/// The `guardrail` callback receives the LLM response as a JSON value and must return
+/// the sanitized response as JSON. Higher `priority` values run first. Throws if a guardrail
+/// with the same `name` already exists.
 #[napi]
 pub fn register_llm_sanitize_response_guardrail(
     name: String,
@@ -674,7 +709,7 @@ pub fn deregister_llm_conditional_execution_guardrail(name: String) -> Result<bo
 
 /// Register an intercept that transforms LLM request data.
 ///
-/// The `callable` receives the native LLM request as JSON and returns a transformed request.
+/// The `callable` receives the `LLMRequest` (as JSON) and returns a transformed request.
 /// If `breakChain` is `true`, no lower-priority intercepts run after this one.
 /// Higher `priority` values run first.
 #[napi]
@@ -688,7 +723,7 @@ pub fn register_llm_request_intercept(
         &name,
         priority,
         break_chain,
-        callable::wrap_js_json_fn(callable),
+        callable::wrap_js_llm_request_intercept_fn(callable),
     )
     .map_err(to_napi_err)
 }
@@ -703,21 +738,18 @@ pub fn deregister_llm_request_intercept(name: String) -> Result<bool> {
 
 /// Register an LLM execution intercept following the middleware chain pattern.
 ///
-/// The `conditional` callback receives the LLM request as JSON and returns `true` if this
-/// intercept should handle execution. If it matches, `callable` receives the request and a
-/// `next` function. Call `next(request)` to invoke the next intercept or original
-/// implementation; skip calling `next` to short-circuit the chain.
+/// The `callable` receives the request and a `next` function. Call `next(request)` to
+/// invoke the next intercept or original implementation; skip calling `next` to
+/// short-circuit the chain.
 #[napi]
 pub fn register_llm_execution_intercept(
     name: String,
     priority: i32,
-    conditional: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
     core::nvmagic_register_llm_execution_intercept(
         &name,
         priority,
-        callable::wrap_js_llm_exec_conditional_fn(conditional),
         callable::wrap_js_llm_exec_intercept_fn(callable),
     )
     .map_err(to_napi_err)
@@ -733,21 +765,18 @@ pub fn deregister_llm_execution_intercept(name: String) -> Result<bool> {
 
 /// Register a streaming LLM execution intercept following the middleware chain pattern.
 ///
-/// The `conditional` callback receives the LLM request as JSON and returns `true` if this
-/// intercept should handle execution. If it matches, `callable` receives the request and a
-/// `next` function. Call `next(request)` to invoke the next intercept or original streaming
-/// implementation; skip calling `next` to short-circuit the chain.
+/// The `callable` receives the request and a `next` function. Call `next(request)` to
+/// invoke the next intercept or original streaming implementation; skip calling `next`
+/// to short-circuit the chain.
 #[napi]
 pub fn register_llm_stream_execution_intercept(
     name: String,
     priority: i32,
-    conditional: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
     core::nvmagic_register_llm_stream_execution_intercept(
         &name,
         priority,
-        callable::wrap_js_llm_exec_conditional_fn(conditional),
         callable::wrap_js_llm_stream_exec_intercept_fn(callable),
     )
     .map_err(to_napi_err)
@@ -812,23 +841,26 @@ pub fn tool_response_intercepts(name: String, result: Json) -> Result<Json> {
     core::nvmagic_tool_response_intercepts(&name, result).map_err(to_napi_err)
 }
 
-/// Run the registered LLM request intercept chain on the given native request.
-/// Returns the transformed native request as JSON.
+/// Run the registered LLM request intercept chain on the given request.
+/// The `request` should be a JSON object with `headers` and `content` fields matching
+/// the `LLMRequest` schema. Returns the transformed request as JSON.
 #[napi]
-pub fn llm_request_intercepts(native: Json) -> Result<Json> {
-    core::nvmagic_llm_request_intercepts(native).map_err(to_napi_err)
+pub fn llm_request_intercepts(request: Json) -> Result<Json> {
+    let llm_request: core_types::LLMRequest = serde_json::from_value(request)
+        .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
+    core::nvmagic_llm_request_intercepts(llm_request)
+        .map(|r| serde_json::to_value(&r).unwrap_or(Json::Null))
+        .map_err(to_napi_err)
 }
 
 /// Run the registered LLM conditional execution guardrail chain.
-/// Throws if any guardrail rejects. Optional `toRequest` converts native JSON to a formal
-/// `JsLLMRequest` for guardrails; defaults to the identity converter.
+/// Throws if any guardrail rejects. The `request` should be a JSON object with `headers`
+/// and `content` fields matching the `LLMRequest` schema.
 #[napi]
-pub fn llm_conditional_execution(
-    native: Json,
-    to_request: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
-) -> Result<()> {
-    let to_request_fn = to_request.map(wrap_js_to_request);
-    core::nvmagic_llm_conditional_execution(&native, to_request_fn.as_ref()).map_err(to_napi_err)
+pub fn llm_conditional_execution(request: Json) -> Result<()> {
+    let llm_request: core_types::LLMRequest = serde_json::from_value(request)
+        .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
+    core::nvmagic_llm_conditional_execution(&llm_request).map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -908,59 +940,4 @@ impl JsAtifExporter {
     pub fn clear(&self) {
         self.inner.clear();
     }
-}
-
-// ---------------------------------------------------------------------------
-// LLM converter helpers
-// ---------------------------------------------------------------------------
-
-use std::sync::Arc;
-
-/// Wraps a JS `toRequest` callback into a boxed `ToRequestFn`.
-fn wrap_js_to_request(
-    tsfn: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> core_types::ToRequestFn {
-    let tsfn = Arc::new(tsfn);
-    Box::new(move |native: &Json| {
-        let func = tsfn.clone();
-        let native_clone = native.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        func.call_with_return_value(
-            native_clone,
-            napi::threadsafe_function::ThreadsafeFunctionCallMode::Blocking,
-            move |val: Json| {
-                let _ = tx.send(val);
-                Ok(())
-            },
-        );
-        let result = rx.recv().unwrap_or(Json::Null);
-        serde_json::from_value(result).unwrap_or_else(|_| core_types::LLMRequest {
-            headers: serde_json::Map::new(),
-            content: native.clone(),
-        })
-    })
-}
-
-/// Wraps a JS `toResponse` callback into a boxed `ToResponseFn`.
-fn wrap_js_to_response(
-    tsfn: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> core_types::ToResponseFn {
-    let tsfn = Arc::new(tsfn);
-    Box::new(move |native: &Json| {
-        let func = tsfn.clone();
-        let native_clone = native.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        func.call_with_return_value(
-            native_clone,
-            napi::threadsafe_function::ThreadsafeFunctionCallMode::Blocking,
-            move |val: Json| {
-                let _ = tx.send(val);
-                Ok(())
-            },
-        );
-        let result = rx.recv().unwrap_or(Json::Null);
-        serde_json::from_value(result).unwrap_or_else(|_| core_types::LLMResponse {
-            data: native.clone(),
-        })
-    })
 }

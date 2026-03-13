@@ -260,81 +260,18 @@ impl LLMHandle {
 // LLMRequest
 // ---------------------------------------------------------------------------
 
-/// An opaque request structure representing an outgoing LLM API call.
+/// The canonical request representation that flows through the entire LLM
+/// middleware pipeline: intercepts, guardrails, and execution functions.
 ///
-/// This is the canonical request representation passed through the LLM
-/// guardrail pipeline. The `headers` field carries generic metadata
-/// (not necessarily HTTP headers), and `content` holds the payload in
-/// whatever format the LLM SDK uses.
-///
-/// Intercepts operate on the native `Json` representation directly;
-/// `LLMRequest` is only used by guardrails for structured access.
+/// The `headers` field carries generic metadata (e.g., HTTP headers, SDK
+/// options) and `content` holds the payload in whatever format the LLM SDK
+/// uses. Intercepts and guardrails can read and modify both fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMRequest {
     /// Metadata key-value pairs (e.g., HTTP headers, SDK options).
     pub headers: serde_json::Map<String, Json>,
     /// The request payload (e.g., messages, parameters).
     pub content: Json,
-}
-
-/// An opaque response structure representing an LLM API response.
-///
-/// This is the canonical response representation passed through the LLM
-/// response guardrail and intercept pipelines.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LLMResponse {
-    /// The response payload.
-    pub data: Json,
-}
-
-/// Trait for converting between native (opaque `Json`) and formal types.
-///
-/// Users who need guardrails to access structured fields can implement this
-/// trait to derive [`LLMRequest`] and [`LLMResponse`] from their SDK-specific
-/// native format. The default [`IdentityConverter`] simply wraps the native
-/// value as `content` / `data`.
-pub trait LLMConverter: Send + Sync {
-    /// Derives a formal [`LLMRequest`] from the native request payload.
-    fn to_request(&self, native: &Json) -> LLMRequest;
-    /// Derives a formal [`LLMResponse`] from the native response payload.
-    fn to_response(&self, native: &Json) -> LLMResponse;
-}
-
-/// Default converter that passes native `Json` through as-is.
-///
-/// - `to_request` → `LLMRequest { headers: {}, content: native.clone() }`
-/// - `to_response` → `LLMResponse { data: native.clone() }`
-pub struct IdentityConverter;
-
-impl LLMConverter for IdentityConverter {
-    fn to_request(&self, native: &Json) -> LLMRequest {
-        LLMRequest {
-            headers: serde_json::Map::new(),
-            content: native.clone(),
-        }
-    }
-
-    fn to_response(&self, native: &Json) -> LLMResponse {
-        LLMResponse {
-            data: native.clone(),
-        }
-    }
-}
-
-/// A boxed closure that converts native Json to a formal [`LLMRequest`].
-pub type ToRequestFn = Box<dyn Fn(&Json) -> LLMRequest + Send + Sync>;
-
-/// A boxed closure that converts native Json to a formal [`LLMResponse`].
-pub type ToResponseFn = Box<dyn Fn(&Json) -> LLMResponse + Send + Sync>;
-
-/// Returns a [`ToRequestFn`] that uses the [`IdentityConverter`].
-pub fn identity_to_request() -> ToRequestFn {
-    Box::new(|native| IdentityConverter.to_request(native))
-}
-
-/// Returns a [`ToResponseFn`] that uses the [`IdentityConverter`].
-pub fn identity_to_response() -> ToResponseFn {
-    Box::new(|native| IdentityConverter.to_response(native))
 }
 
 // ---------------------------------------------------------------------------
@@ -654,28 +591,6 @@ mod tests {
         assert_eq!(req.content, deserialized.content);
     }
 
-    #[test]
-    fn test_llm_response_serde() {
-        let resp = LLMResponse {
-            data: json!({"choices": [{"text": "hello"}]}),
-        };
-        let json_str = serde_json::to_string(&resp).unwrap();
-        let deserialized: LLMResponse = serde_json::from_str(&json_str).unwrap();
-        assert_eq!(resp.data, deserialized.data);
-    }
-
-    #[test]
-    fn test_identity_converter() {
-        let converter = IdentityConverter;
-        let native = json!({"messages": [{"role": "user", "content": "hi"}]});
-        let req = converter.to_request(&native);
-        assert!(req.headers.is_empty());
-        assert_eq!(req.content, native);
-
-        let resp = converter.to_response(&native);
-        assert_eq!(resp.data, native);
-    }
-
     // -- Event --
 
     #[test]
@@ -870,16 +785,14 @@ pub struct Intercept<F> {
 
 /// An execution intercept that participates in a middleware chain.
 ///
-/// The `conditional` function is checked first; if it returns `true`, the
-/// `callable` is included in the middleware chain. Each callable receives a
-/// `next` function to invoke the next matching intercept or the original
-/// execution path. Multiple intercepts compose in priority order.
-pub struct ExecutionIntercept<C, F> {
+/// Each callable receives a `next` function to invoke the next intercept or the
+/// original execution path. If the intercept does not want to apply, it should
+/// simply call `next(args)` directly to pass through. Multiple intercepts
+/// compose in priority order.
+pub struct ExecutionIntercept<F> {
     /// Sort priority (lower = checked first).
     pub priority: i32,
-    /// A predicate that determines whether this intercept should handle the call.
-    pub conditional: C,
-    /// The replacement execution function, invoked if `conditional` returns `true`.
+    /// The execution function. Call `next` to continue the chain or skip it to short-circuit.
     pub callable: F,
 }
 

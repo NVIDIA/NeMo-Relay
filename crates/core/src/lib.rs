@@ -64,11 +64,10 @@ pub use api::*;
 pub use context::{
     create_scope_stack, current_scope_stack, global_context, set_thread_scope_stack,
     task_scope_push, task_scope_remove, task_scope_top, EventSubscriberFn, LlmConditionalFn,
-    LlmExecutionConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn,
-    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionConditionalFn,
-    LlmStreamExecutionFn, LlmStreamExecutionNextFn, NVMagicContextState, ScopeStack,
-    ScopeStackHandle, ToolConditionalFn, ToolExecutionConditionalFn, ToolExecutionFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn, TASK_SCOPE_STACK,
+    LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
+    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn, NVMagicContextState,
+    ScopeStack, ScopeStackHandle, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn, TASK_SCOPE_STACK,
 };
 pub use error::{MagicError, Result};
 pub use json::{merge_json, Json};

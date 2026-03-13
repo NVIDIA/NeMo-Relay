@@ -86,7 +86,7 @@ async function typedToolExecute(name, args, func, argsCodec, resultCodec, option
  *
  * @template TResponse
  * @param {string} name - Model/provider name.
- * @param {*} native - The native LLM request payload (plain JSON object).
+ * @param {*} request - The LLM request object ({headers, content}).
  * @param {function(*): Promise<TResponse>} func - The LLM implementation.
  * @param {Codec<TResponse>} responseCodec - Codec for serializing/deserializing the response.
  * @param {object} [options] - Optional parameters.
@@ -133,7 +133,7 @@ async function typedLlmExecute(name, request, func, responseCodec, options) {
  * @template TChunk
  * @template TResponse
  * @param {string} name - Model/provider name.
- * @param {*} native - The native LLM request payload (plain JSON object).
+ * @param {*} request - The LLM request object ({headers, content}).
  * @param {function(*): AsyncIterable<TChunk>} func - The streaming LLM implementation.
  * @param {function(TChunk): void} collector - Called with each typed chunk after intercepts.
  * @param {function(): TResponse} finalizer - Called once when the stream is exhausted.
@@ -147,14 +147,25 @@ async function typedLlmExecute(name, request, func, responseCodec, options) {
  * @param {string} [options.modelName] - Model name for ATIF export.
  * @returns {Promise<LlmStream>}
  */
-async function typedLlmStreamExecute(name, native, func, collector, finalizer, chunkCodec, responseCodec, options) {
+async function typedLlmStreamExecute(name, request, func, collector, finalizer, chunkCodec, responseCodec, options) {
   const opts = options || {};
 
-  // Wrap func: convert typed chunks to JSON
-  const jsonFunc = async function*(nativeInner) {
-    for await (const typedChunk of func(nativeInner)) {
-      yield chunkCodec.toJson(typedChunk);
-    }
+  // Push-based stream bridge: NAPI cannot resolve JS Promises from
+  // call_with_return_value, so the JS side drives async generator iteration
+  // and pushes each chunk into Rust via the exported pushStreamChunk function.
+  // The request and stream ID are passed as a wrapper object.
+  const jsonFunc = (wrapper) => {
+    const req = wrapper.__nvmagic_native;
+    const streamId = wrapper.__nvmagic_stream_id;
+    (async () => {
+      try {
+        for await (const typedChunk of func(req)) {
+          lib.pushStreamChunk(streamId, chunkCodec.toJson(typedChunk));
+        }
+      } finally {
+        lib.endStream(streamId);
+      }
+    })();
   };
 
   // Wrap collector: convert JSON chunks back to typed
@@ -169,7 +180,7 @@ async function typedLlmStreamExecute(name, native, func, collector, finalizer, c
 
   return await lib.llmStreamCallExecute(
     name,
-    native,
+    request,
     jsonFunc,
     jsonCollector,
     jsonFinalizer,

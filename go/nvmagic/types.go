@@ -52,11 +52,6 @@ extern char* nvmagic_llm_request_headers(const FfiLLMRequest* ptr);
 extern char* nvmagic_llm_request_content(const FfiLLMRequest* ptr);
 extern void nvmagic_llm_request_free(FfiLLMRequest* ptr);
 
-// LLMResponse
-typedef struct FfiLLMResponse FfiLLMResponse;
-extern char* nvmagic_llm_response_data(const FfiLLMResponse* ptr);
-extern void nvmagic_llm_response_free(FfiLLMResponse* ptr);
-
 // Event accessors
 extern char* nvmagic_event_uuid(const FfiEvent* ptr);
 extern char* nvmagic_event_name(const FfiEvent* ptr);
@@ -364,12 +359,6 @@ func (r *LLMRequest) Headers() json.RawMessage {
 // Content returns the request content as raw JSON.
 func (r *LLMRequest) Content() json.RawMessage {
 	return goJSONOpt(C.nvmagic_llm_request_content(r.ptr))
-}
-
-// LLMResponse wraps an LLM response with a data field.
-type LLMResponse struct {
-	// Data holds the response payload as raw JSON.
-	Data json.RawMessage `json:"data"`
 }
 
 // Event wraps an opaque C pointer to a lifecycle event emitted by the runtime.

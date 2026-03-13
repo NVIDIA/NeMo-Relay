@@ -127,7 +127,7 @@ describe('Tool intercepts', () => {
   });
 
   it('execution intercept register/deregister', () => {
-    registerToolExecutionIntercept('node_tool_exec_int', 10, (name, args) => true, (args) => ({ intercepted: true }));
+    registerToolExecutionIntercept('node_tool_exec_int', 10, (args) => ({ intercepted: true }));
     deregisterToolExecutionIntercept('node_tool_exec_int');
   });
 
@@ -157,7 +157,7 @@ describe('Tool intercepts', () => {
   });
 
   it('execution intercept replaces func', async () => {
-    registerToolExecutionIntercept('node_tool_exec_repl', 10, (name, args) => true, (args) => ({ replaced: true }));
+    registerToolExecutionIntercept('node_tool_exec_repl', 10, (args) => ({ replaced: true }));
     const result = await toolCallExecute('replaced_tool', {}, (args) => ({ original: true }), null, null, null, null);
     assert.equal(result.replaced, true);
     deregisterToolExecutionIntercept('node_tool_exec_repl');

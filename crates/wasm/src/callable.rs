@@ -20,7 +20,7 @@ use serde_json::Value as Json;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use nvmagic_core::types::{LLMRequest, LLMResponse};
+use nvmagic_core::types::LLMRequest;
 use nvmagic_core::{
     LlmExecutionNextFn, LlmStreamExecutionNextFn, MagicError, Result, ToolExecutionNextFn,
 };
@@ -62,21 +62,6 @@ pub fn wrap_js_tool_conditional_fn(
     })
 }
 
-/// Wrap a JS function `(name, args) => boolean` for tool exec conditional.
-pub fn wrap_js_tool_exec_conditional_fn(
-    func: Function,
-) -> Box<dyn Fn(&str, &Json) -> bool + Send + Sync> {
-    let func = SendWrapper::new(func);
-    Box::new(move |name: &str, args: &Json| {
-        let js_name = JsValue::from_str(name);
-        let js_args = json_to_js(args);
-        match func.call2(&JsValue::NULL, &js_name, &js_args) {
-            Ok(result) => result.as_bool().unwrap_or(false),
-            Err(_) => false,
-        }
-    })
-}
-
 /// Wrap a JS function `(args) => result | Promise<result>` for tool execution.
 pub fn wrap_js_tool_exec_fn(
     func: Function,
@@ -105,14 +90,23 @@ pub fn wrap_js_tool_exec_fn(
     })
 }
 
-/// Wrap a JS function `(value) => value` for JSON transform.
-pub fn wrap_js_json_fn(func: Function) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
+/// Wrap a JS function `(request) => request` for LLM request intercept.
+///
+/// Takes an `LLMRequest`, passes it to JS as a JSON object, and
+/// deserializes the result back into an `LLMRequest`.
+pub fn wrap_js_llm_request_intercept_fn(
+    func: Function,
+) -> Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync> {
     let func = SendWrapper::new(func);
-    Box::new(move |value: Json| {
-        let js_val = json_to_js(&value);
-        match func.call1(&JsValue::NULL, &js_val) {
-            Ok(result) => js_to_json(&result).unwrap_or(Json::Null),
-            Err(_) => Json::Null,
+    Box::new(move |request: LLMRequest| {
+        let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+        let js_req = json_to_js(&req_json);
+        match func.call1(&JsValue::NULL, &js_req) {
+            Ok(result) => {
+                let result_json = js_to_json(&result).unwrap_or(Json::Null);
+                serde_json::from_value(result_json).unwrap_or(request)
+            }
+            Err(_) => request,
         }
     })
 }
@@ -156,25 +150,16 @@ pub fn wrap_js_llm_conditional_fn(
     })
 }
 
-/// Wrap a JS function for LLM exec conditional: `(native) => boolean`.
-pub fn wrap_js_llm_exec_conditional_fn(func: Function) -> Box<dyn Fn(&Json) -> bool + Send + Sync> {
-    let func = SendWrapper::new(func);
-    Box::new(move |native: &Json| {
-        let js_val = json_to_js(native);
-        match func.call1(&JsValue::NULL, &js_val) {
-            Ok(result) => result.as_bool().unwrap_or(false),
-            Err(_) => false,
-        }
-    })
-}
-
-/// Wrap a JS function for LLM execution: `(native) => result | Promise<result>`.
+/// Wrap a JS function for LLM execution: `(request) => result | Promise<result>`.
+///
+/// The `LLMRequest` is serialized to JSON before passing to JS.
 pub fn wrap_js_llm_exec_fn(
     func: Function,
-) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
+) -> Box<dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
     let func = SendWrapper::new(func);
-    Box::new(move |native: Json| {
-        let js_val = json_to_js(&native);
+    Box::new(move |request: LLMRequest| {
+        let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+        let js_val = json_to_js(&req_json);
         let result = func.call1(&JsValue::NULL, &js_val);
         Box::pin(SendWrapper::new(async move {
             match result {
@@ -278,24 +263,27 @@ pub fn wrap_js_tool_exec_intercept_fn(
     })
 }
 
-/// Wrap a JS function `(native, next) => result | Promise<result>` for LLM execution intercept.
+/// Wrap a JS function `(request, next) => result | Promise<result>` for LLM execution intercept.
 ///
-/// The `next` parameter passed to JS is a one-shot function `(native) => Promise<result>`
-/// that invokes the next layer in the middleware chain.
+/// The `next` parameter passed to JS is a one-shot function `(request) => Promise<result>`
+/// that invokes the next layer in the middleware chain. The `LLMRequest` is serialized to
+/// JSON before passing to JS; when JS calls `next`, the argument is deserialized back.
 pub fn wrap_js_llm_exec_intercept_fn(
     func: Function,
 ) -> Arc<
-    dyn Fn(Json, LlmExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+    dyn Fn(LLMRequest, LlmExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
         + Sync,
 > {
     let func = SendWrapper::new(func);
-    Arc::new(move |native: Json, next: LlmExecutionNextFn| {
-        let js_native = json_to_js(&native);
+    Arc::new(move |request: LLMRequest, next: LlmExecutionNextFn| {
+        let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+        let js_request = json_to_js(&req_json);
         let js_next =
             wasm_bindgen::closure::Closure::once_into_js(move |next_val: JsValue| -> JsValue {
-                let native_json = js_to_json(&next_val).unwrap_or(Json::Null);
-                let future = next(native_json);
+                let next_json = js_to_json(&next_val).unwrap_or(Json::Null);
+                let next_request: LLMRequest = serde_json::from_value(next_json).unwrap_or(request);
+                let future = next(next_request);
                 wasm_bindgen_futures::future_to_promise(async move {
                     let result = future
                         .await
@@ -304,7 +292,7 @@ pub fn wrap_js_llm_exec_intercept_fn(
                 })
                 .into()
             });
-        let result = func.call2(&JsValue::NULL, &js_native, &js_next);
+        let result = func.call2(&JsValue::NULL, &js_request, &js_next);
         Box::pin(SendWrapper::new(async move {
             match result {
                 Ok(val) => {
@@ -324,15 +312,16 @@ pub fn wrap_js_llm_exec_intercept_fn(
     })
 }
 
-/// Wrap a JS function `(native, next) => result | Promise<result>` for LLM stream execution intercept.
+/// Wrap a JS function `(request, next) => result | Promise<result>` for LLM stream execution intercept.
 ///
 /// The intercept callable produces a single JSON result which is wrapped into a
-/// single-item stream internally.
+/// single-item stream internally. The `LLMRequest` is serialized to JSON before
+/// passing to JS.
 pub fn wrap_js_llm_stream_exec_intercept_fn(
     func: Function,
 ) -> Arc<
     dyn Fn(
-            Json,
+            LLMRequest,
             LlmStreamExecutionNextFn,
         ) -> Pin<
             Box<
@@ -346,51 +335,47 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
         + Sync,
 > {
     let func = SendWrapper::new(func);
-    Arc::new(move |native: Json, _next: LlmStreamExecutionNextFn| {
-        // For stream execution intercepts, we ignore `next` and produce a single-item stream
-        // from the JS function's result, matching the existing WASM stream execution pattern.
-        let js_val = json_to_js(&native);
-        let result = func.call1(&JsValue::NULL, &js_val);
-        Box::pin(SendWrapper::new(async move {
-            let val = match result {
-                Ok(val) => {
-                    if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
-                        match JsFuture::from(promise.clone()).await {
-                            Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| MagicError::Internal(format!("{e:?}")))?,
-                            Err(e) => return Err(MagicError::Internal(format!("{e:?}"))),
+    Arc::new(
+        move |request: LLMRequest, _next: LlmStreamExecutionNextFn| {
+            // For stream execution intercepts, we ignore `next` and produce a single-item stream
+            // from the JS function's result, matching the existing WASM stream execution pattern.
+            let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+            let js_val = json_to_js(&req_json);
+            let result = func.call1(&JsValue::NULL, &js_val);
+            Box::pin(SendWrapper::new(async move {
+                let val = match result {
+                    Ok(val) => {
+                        if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
+                            match JsFuture::from(promise.clone()).await {
+                                Ok(resolved) => js_to_json(&resolved)
+                                    .map_err(|e| MagicError::Internal(format!("{e:?}")))?,
+                                Err(e) => return Err(MagicError::Internal(format!("{e:?}"))),
+                            }
+                        } else {
+                            js_to_json(&val).map_err(|e| MagicError::Internal(format!("{e:?}")))?
                         }
-                    } else {
-                        js_to_json(&val).map_err(|e| MagicError::Internal(format!("{e:?}")))?
                     }
-                }
-                Err(e) => return Err(MagicError::Internal(format!("{e:?}"))),
-            };
-            let stream = tokio_stream::once(Ok(val));
-            Ok(Box::pin(stream)
-                as Pin<
-                    Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>,
-                >)
-        }))
-    })
+                    Err(e) => return Err(MagicError::Internal(format!("{e:?}"))),
+                };
+                let stream = tokio_stream::once(Ok(val));
+                Ok(Box::pin(stream)
+                    as Pin<
+                        Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>,
+                    >)
+            }))
+        },
+    )
 }
 
-/// Wrap a JS function for LLM response intercept: `(response) => response`.
+/// Wrap a JS function for LLM sanitize response: `(response) => response`.
 ///
-/// Takes an `LLMResponse`, passes it to JS as a JSON object, and
-/// deserializes the result back into an `LLMResponse`.
-pub fn wrap_js_llm_response_fn(
-    func: Function,
-) -> Box<dyn Fn(LLMResponse) -> LLMResponse + Send + Sync> {
+/// Takes a `Json` value, passes it to JS, and deserializes the result back.
+pub fn wrap_js_llm_response_fn(func: Function) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
     let func = SendWrapper::new(func);
-    Box::new(move |response: LLMResponse| {
-        let resp_json = serde_json::to_value(&response).unwrap_or(Json::Null);
-        let js_resp = json_to_js(&resp_json);
+    Box::new(move |response: Json| {
+        let js_resp = json_to_js(&response);
         match func.call1(&JsValue::NULL, &js_resp) {
-            Ok(result) => {
-                let result_json = js_to_json(&result).unwrap_or(Json::Null);
-                serde_json::from_value(result_json).unwrap_or(response)
-            }
+            Ok(result) => js_to_json(&result).unwrap_or(response),
             Err(_) => response,
         }
     })

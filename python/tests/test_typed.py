@@ -5,7 +5,7 @@
 
 import dataclasses
 
-from nvmagic import intercepts, typed
+from nvmagic import LLMRequest, intercepts, typed
 from nvmagic.typed import Codec, DataclassCodec, JsonPassthrough
 
 # ---------------------------------------------------------------------------
@@ -285,18 +285,18 @@ llm_response_codec = DataclassCodec(LLMResponse)
 dc_llm_response_codec = DataclassCodec(DcLLMResponse)
 
 
-def make_native():
-    return {"messages": [], "model": "test-model"}
+def make_request():
+    return LLMRequest({}, {"messages": [], "model": "test-model"})
 
 
 class TestTypedLlmExecute:
     async def test_dataclass_response(self):
-        async def call_llm(native) -> LLMResponse:
+        async def call_llm(request) -> LLMResponse:
             return LLMResponse(text="hello", tokens=5)
 
         result = await typed.llm_execute(
             "gpt-4",
-            make_native(),
+            make_request(),
             call_llm,
             llm_response_codec,
         )
@@ -305,12 +305,12 @@ class TestTypedLlmExecute:
         assert result.tokens == 5
 
     async def test_alternate_dataclass_response(self):
-        async def call_llm(native) -> DcLLMResponse:
+        async def call_llm(request) -> DcLLMResponse:
             return DcLLMResponse(content="world")
 
         result = await typed.llm_execute(
             "model",
-            make_native(),
+            make_request(),
             call_llm,
             dc_llm_response_codec,
         )
@@ -320,24 +320,24 @@ class TestTypedLlmExecute:
     async def test_passthrough(self):
         """With JsonPassthrough codec, dicts pass through."""
 
-        async def call_llm(native) -> dict:
+        async def call_llm(request) -> dict:
             return {"response": "ok"}
 
         result = await typed.llm_execute(
             "model",
-            make_native(),
+            make_request(),
             call_llm,
             passthrough,
         )
         assert result == {"response": "ok"}
 
     async def test_sync_func(self):
-        def call_llm(native) -> LLMResponse:
+        def call_llm(request) -> LLMResponse:
             return LLMResponse(text="sync", tokens=1)
 
         result = await typed.llm_execute(
             "sync_model",
-            make_native(),
+            make_request(),
             call_llm,
             llm_response_codec,
         )
@@ -345,12 +345,12 @@ class TestTypedLlmExecute:
         assert result.text == "sync"
 
     async def test_with_model_name(self):
-        async def call_llm(native) -> LLMResponse:
+        async def call_llm(request) -> LLMResponse:
             return LLMResponse(text="named", tokens=2)
 
         result = await typed.llm_execute(
             "provider",
-            make_native(),
+            make_request(),
             call_llm,
             llm_response_codec,
             model_name="gpt-4-turbo",
@@ -365,7 +365,7 @@ class TestTypedLlmExecute:
 
 class TestTypedLlmStreamExecute:
     async def test_stream_passthrough(self):
-        def stream_func(native):
+        def stream_func(request):
             async def gen():
                 yield {"token": "hello"}
                 yield {"token": "world"}
@@ -380,10 +380,10 @@ class TestTypedLlmStreamExecute:
         def finalizer():
             return {"chunks": collected}
 
-        native = make_native()
+        request = make_request()
         stream = await typed.llm_stream_execute(
             "stream_model",
-            native,
+            request,
             stream_func,
             collector,
             finalizer,
@@ -400,7 +400,7 @@ class TestTypedLlmStreamExecute:
     async def test_stream_dataclass_codec(self):
         """Streaming with DataclassCodec produces typed dataclass instances."""
 
-        def stream_func(native):
+        def stream_func(request):
             async def gen():
                 yield StreamChunk(token="hello")
                 yield StreamChunk(token="world")
@@ -415,10 +415,10 @@ class TestTypedLlmStreamExecute:
         def finalizer():
             return StreamResponse(chunks=[c.token for c in collected])
 
-        native = make_native()
+        request = make_request()
         stream = await typed.llm_stream_execute(
             "dc_stream",
-            native,
+            request,
             stream_func,
             collector,
             finalizer,
@@ -441,7 +441,7 @@ class TestTypedLlmStreamExecute:
     async def test_stream_custom_codec(self):
         """Streaming with a custom Codec subclass encodes/decodes correctly."""
 
-        def stream_func(native):
+        def stream_func(request):
             async def gen():
                 yield "alpha"
                 yield "beta"
@@ -456,10 +456,10 @@ class TestTypedLlmStreamExecute:
         def finalizer():
             return len(collected)
 
-        native = make_native()
+        request = make_request()
         stream = await typed.llm_stream_execute(
             "custom_stream",
-            native,
+            request,
             stream_func,
             collector,
             finalizer,
@@ -504,12 +504,12 @@ class TestTypedLlmExecuteCustomCodec:
     async def test_sync_func_custom_codec(self):
         """Sync LLM function with a fully custom Codec subclass."""
 
-        def call_llm(native) -> int:
+        def call_llm(request) -> int:
             return 42
 
         result = await typed.llm_execute(
             "custom_llm",
-            make_native(),
+            make_request(),
             call_llm,
             sum_codec,
         )

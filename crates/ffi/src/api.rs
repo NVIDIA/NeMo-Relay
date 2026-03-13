@@ -387,15 +387,13 @@ pub unsafe extern "C" fn nvmagic_tool_call_execute(
 ///
 /// # Parameters
 /// - `name`: Null-terminated LLM provider name.
-/// - `native_json`: The native request payload as a JSON C string.
+/// - `native_json`: The request payload as a JSON C string representing an
+///   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
 /// - `parent`: Optional parent scope handle, or null.
 /// - `attributes`: Bitfield of LLM attributes.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `model_name`: Optional LLM model identifier, or null.
-/// - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
-/// - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
-/// - `to_request_free`: Optional destructor for `to_request_ud`.
 /// - `out`: On success, receives a heap-allocated `FfiLLMHandle`.
 ///
 /// # Safety
@@ -409,9 +407,6 @@ pub unsafe extern "C" fn nvmagic_llm_call(
     data_json: *const c_char,
     metadata_json: *const c_char,
     model_name: *const c_char,
-    to_request_cb: Option<NvMagicJsonCb>,
-    to_request_ud: *mut libc::c_void,
-    to_request_free: NvMagicFreeFn,
     out: *mut *mut FfiLLMHandle,
 ) -> NvMagicStatus {
     clear_last_error();
@@ -426,6 +421,13 @@ pub unsafe extern "C" fn nvmagic_llm_call(
     let native = match c_str_to_json(native_json) {
         Some(n) => n,
         None => return NvMagicStatus::InvalidJson,
+    };
+    let request: core_types::LLMRequest = match serde_json::from_value(native) {
+        Ok(r) => r,
+        Err(_) => {
+            set_last_error("failed to parse native_json as LLMRequest");
+            return NvMagicStatus::InvalidJson;
+        }
     };
     let parent_ref = if parent.is_null() {
         None
@@ -449,17 +451,15 @@ pub unsafe extern "C" fn nvmagic_llm_call(
             Err(status) => return status,
         }
     };
-    let to_request = to_request_cb.map(|cb| wrap_to_request_fn(cb, to_request_ud, to_request_free));
 
     match core::nvmagic_llm_call(
         &name,
-        &native,
+        &request,
         parent_ref,
         attrs,
         data,
         metadata,
         model_name_opt,
-        to_request.as_ref(),
     ) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiLLMHandle(h))) };
@@ -476,9 +476,6 @@ pub unsafe extern "C" fn nvmagic_llm_call(
 /// - `response_json`: LLM response as a JSON C string.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
-/// - `to_response_cb`: Optional callback to convert native JSON to `LLMResponse`, or null.
-/// - `to_response_ud`: Opaque pointer passed to `to_response_cb`.
-/// - `to_response_free`: Optional destructor for `to_response_ud`.
 ///
 /// # Safety
 /// `handle` and `response_json` must be valid, non-null pointers.
@@ -488,9 +485,6 @@ pub unsafe extern "C" fn nvmagic_llm_call_end(
     response_json: *const c_char,
     data_json: *const c_char,
     metadata_json: *const c_char,
-    to_response_cb: Option<NvMagicJsonCb>,
-    to_response_ud: *mut libc::c_void,
-    to_response_free: NvMagicFreeFn,
 ) -> NvMagicStatus {
     clear_last_error();
     if handle.is_null() {
@@ -509,16 +503,8 @@ pub unsafe extern "C" fn nvmagic_llm_call_end(
         Some(m) => m,
         None => return NvMagicStatus::InvalidJson,
     };
-    let to_response =
-        to_response_cb.map(|cb| wrap_to_response_fn(cb, to_response_ud, to_response_free));
 
-    match core::nvmagic_llm_call_end(
-        &unsafe { &*handle }.0,
-        response,
-        data,
-        metadata,
-        to_response.as_ref(),
-    ) {
+    match core::nvmagic_llm_call_end(&unsafe { &*handle }.0, response, data, metadata) {
         Ok(()) => NvMagicStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -533,7 +519,8 @@ pub unsafe extern "C" fn nvmagic_llm_call_end(
 ///
 /// # Parameters
 /// - `name`: Null-terminated LLM provider name.
-/// - `native_json`: The native request payload as a JSON C string.
+/// - `native_json`: The request payload as a JSON C string representing an
+///   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
 /// - `func`: C callback that performs the actual LLM call.
 /// - `func_user_data`: Opaque pointer passed to `func`.
 /// - `func_free`: Optional destructor for `func_user_data`.
@@ -542,12 +529,6 @@ pub unsafe extern "C" fn nvmagic_llm_call_end(
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `model_name`: Optional LLM model identifier, or null.
-/// - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
-/// - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
-/// - `to_request_free`: Optional destructor for `to_request_ud`.
-/// - `to_response_cb`: Optional callback to convert native JSON to `LLMResponse`, or null.
-/// - `to_response_ud`: Opaque pointer passed to `to_response_cb`.
-/// - `to_response_free`: Optional destructor for `to_response_ud`.
 /// - `out`: On success, receives the response as a JSON C string. Caller must
 ///   free with `nvmagic_string_free`.
 ///
@@ -565,12 +546,6 @@ pub unsafe extern "C" fn nvmagic_llm_call_execute(
     data_json: *const c_char,
     metadata_json: *const c_char,
     model_name: *const c_char,
-    to_request_cb: Option<NvMagicJsonCb>,
-    to_request_ud: *mut libc::c_void,
-    to_request_free: NvMagicFreeFn,
-    to_response_cb: Option<NvMagicJsonCb>,
-    to_response_ud: *mut libc::c_void,
-    to_response_free: NvMagicFreeFn,
     out: *mut *mut c_char,
 ) -> NvMagicStatus {
     clear_last_error();
@@ -585,6 +560,13 @@ pub unsafe extern "C" fn nvmagic_llm_call_execute(
     let native = match c_str_to_json(native_json) {
         Some(n) => n,
         None => return NvMagicStatus::InvalidJson,
+    };
+    let request: core_types::LLMRequest = match serde_json::from_value(native) {
+        Ok(r) => r,
+        Err(_) => {
+            set_last_error("failed to parse native_json as LLMRequest");
+            return NvMagicStatus::InvalidJson;
+        }
     };
     let parent_handle = if parent.is_null() {
         None
@@ -608,25 +590,20 @@ pub unsafe extern "C" fn nvmagic_llm_call_execute(
             Err(status) => return status,
         }
     };
-    let to_request = to_request_cb.map(|cb| wrap_to_request_fn(cb, to_request_ud, to_request_free));
-    let to_response =
-        to_response_cb.map(|cb| wrap_to_response_fn(cb, to_response_ud, to_response_free));
 
     let exec_fn = wrap_llm_exec_fn(func, func_user_data, func_free);
-    let default_fn: nvmagic_core::LlmExecutionNextFn = Box::new(move |native| exec_fn(native));
+    let default_fn: nvmagic_core::LlmExecutionNextFn = Box::new(move |request| exec_fn(request));
 
     let result = tokio_runtime().block_on(async {
         core::nvmagic_llm_call_execute(
             &name,
-            native,
+            request,
             default_fn,
             parent_handle,
             attrs,
             data,
             metadata,
             model_name_opt,
-            to_request,
-            to_response,
         )
         .await
     });
@@ -657,7 +634,8 @@ pub struct FfiStream {
 ///
 /// # Parameters
 /// - `name`: Null-terminated LLM provider name.
-/// - `native_json`: The native request payload as a JSON C string.
+/// - `native_json`: The request payload as a JSON C string representing an
+///   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
 /// - `func`: C callback that performs the actual LLM call.
 /// - `func_user_data`: Opaque pointer passed to `func`.
 /// - `func_free`: Optional destructor for `func_user_data`.
@@ -671,12 +649,6 @@ pub struct FfiStream {
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `model_name`: Optional LLM model identifier, or null.
-/// - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
-/// - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
-/// - `to_request_free`: Optional destructor for `to_request_ud`.
-/// - `to_response_cb`: Optional callback to convert native JSON to `LLMResponse`, or null.
-/// - `to_response_ud`: Opaque pointer passed to `to_response_cb`.
-/// - `to_response_free`: Optional destructor for `to_response_ud`.
 /// - `out`: On success, receives a heap-allocated `FfiStream`.
 ///
 /// # Safety
@@ -696,12 +668,6 @@ pub unsafe extern "C" fn nvmagic_llm_stream_call_execute(
     data_json: *const c_char,
     metadata_json: *const c_char,
     model_name: *const c_char,
-    to_request_cb: Option<NvMagicJsonCb>,
-    to_request_ud: *mut libc::c_void,
-    to_request_free: NvMagicFreeFn,
-    to_response_cb: Option<NvMagicJsonCb>,
-    to_response_ud: *mut libc::c_void,
-    to_response_free: NvMagicFreeFn,
     out: *mut *mut FfiStream,
 ) -> NvMagicStatus {
     clear_last_error();
@@ -716,6 +682,13 @@ pub unsafe extern "C" fn nvmagic_llm_stream_call_execute(
     let native = match c_str_to_json(native_json) {
         Some(n) => n,
         None => return NvMagicStatus::InvalidJson,
+    };
+    let request: core_types::LLMRequest = match serde_json::from_value(native) {
+        Ok(r) => r,
+        Err(_) => {
+            set_last_error("failed to parse native_json as LLMRequest");
+            return NvMagicStatus::InvalidJson;
+        }
     };
     let parent_handle = if parent.is_null() {
         None
@@ -739,13 +712,10 @@ pub unsafe extern "C" fn nvmagic_llm_stream_call_execute(
             Err(status) => return status,
         }
     };
-    let to_request = to_request_cb.map(|cb| wrap_to_request_fn(cb, to_request_ud, to_request_free));
-    let to_response =
-        to_response_cb.map(|cb| wrap_to_response_fn(cb, to_response_ud, to_response_free));
 
     let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
     let default_fn: nvmagic_core::LlmStreamExecutionNextFn =
-        Box::new(move |native| exec_fn(native));
+        Box::new(move |request| exec_fn(request));
 
     let wrapped_collector: Box<dyn FnMut(serde_json::Value) + Send> = match collector {
         Some(cb) => wrap_collector_fn(cb),
@@ -760,7 +730,7 @@ pub unsafe extern "C" fn nvmagic_llm_stream_call_execute(
     let result = tokio_runtime().block_on(async {
         core::nvmagic_llm_stream_call_execute(
             &name,
-            native,
+            request,
             default_fn,
             wrapped_collector,
             wrapped_finalizer,
@@ -769,8 +739,6 @@ pub unsafe extern "C" fn nvmagic_llm_stream_call_execute(
             data,
             metadata,
             model_name_opt,
-            to_request,
-            to_response,
         )
         .await
     });
@@ -1092,17 +1060,13 @@ ffi_intercept_tool_api!(
 );
 
 /// Register a tool execution intercept following the middleware chain pattern.
-/// When the condition callback returns true, the execution callback is included
-/// in the chain. The callback receives `(args, next_fn, next_ctx)` — call
+/// The callback receives `(args, next_fn, next_ctx)` — call
 /// `next_fn(args, next_ctx)` to invoke the next intercept or the original
 /// tool function, or skip calling it to short-circuit.
 ///
 /// # Parameters
 /// - `name`: Unique intercept name.
 /// - `priority`: Execution priority (lower runs first).
-/// - `cond_cb`: Condition callback that decides if this intercept applies.
-/// - `cond_user_data`: Opaque pointer for the condition callback.
-/// - `cond_free`: Optional destructor for `cond_user_data`.
 /// - `exec_cb`: Middleware callback receiving args and a next function.
 /// - `exec_user_data`: Opaque pointer for the execution callback.
 /// - `exec_free`: Optional destructor for `exec_user_data`.
@@ -1113,9 +1077,6 @@ ffi_intercept_tool_api!(
 pub unsafe extern "C" fn nvmagic_register_tool_execution_intercept(
     name: *const c_char,
     priority: i32,
-    cond_cb: NvMagicToolExecConditionalCb,
-    cond_user_data: *mut libc::c_void,
-    cond_free: NvMagicFreeFn,
     exec_cb: NvMagicToolExecInterceptCb,
     exec_user_data: *mut libc::c_void,
     exec_free: NvMagicFreeFn,
@@ -1125,9 +1086,8 @@ pub unsafe extern "C" fn nvmagic_register_tool_execution_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    let cond = wrap_tool_exec_conditional_fn(cond_cb, cond_user_data, cond_free);
     let exec = wrap_tool_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nvmagic_register_tool_execution_intercept(&name, priority, cond, exec) {
+    match core::nvmagic_register_tool_execution_intercept(&name, priority, exec) {
         Ok(()) => NvMagicStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1213,7 +1173,7 @@ pub unsafe extern "C" fn nvmagic_deregister_llm_sanitize_request_guardrail(
 /// # Parameters
 /// - `name`: Unique guardrail name.
 /// - `priority`: Execution priority (lower runs first).
-/// - `cb`: JSON-to-JSON callback that receives LLMResponse JSON and returns sanitized JSON.
+/// - `cb`: JSON-to-JSON callback that receives the response JSON and returns sanitized JSON.
 /// - `user_data`: Opaque pointer passed to `cb`.
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
@@ -1313,14 +1273,14 @@ pub unsafe extern "C" fn nvmagic_deregister_llm_conditional_execution_guardrail(
 // LLM intercept registrations
 // ---------------------------------------------------------------------------
 
-/// Register an LLM request intercept. The callback can transform the native
-/// request JSON before it reaches the LLM provider.
+/// Register an LLM request intercept. The callback can transform the
+/// `LLMRequest` before it reaches the LLM provider.
 ///
 /// # Parameters
 /// - `name`: Unique intercept name.
 /// - `priority`: Execution priority (lower runs first).
 /// - `break_chain`: If true, stop processing further intercepts after this one.
-/// - `cb`: JSON transform callback (receives/returns native JSON C string).
+/// - `cb`: LLM request transform callback (receives/returns `FfiLLMRequest`).
 /// - `user_data`: Opaque pointer passed to `cb`.
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
@@ -1331,7 +1291,7 @@ pub unsafe extern "C" fn nvmagic_register_llm_request_intercept(
     name: *const c_char,
     priority: i32,
     break_chain: bool,
-    cb: NvMagicJsonCb,
+    cb: NvMagicLlmRequestCb,
     user_data: *mut libc::c_void,
     free_fn: NvMagicFreeFn,
 ) -> NvMagicStatus {
@@ -1340,7 +1300,7 @@ pub unsafe extern "C" fn nvmagic_register_llm_request_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    let wrapped = wrap_json_fn(cb, user_data, free_fn);
+    let wrapped = wrap_llm_request_intercept_fn(cb, user_data, free_fn);
     match core::nvmagic_register_llm_request_intercept(&name, priority, break_chain, wrapped) {
         Ok(()) => NvMagicStatus::Ok,
         Err(e) => status_from_error(&e),
@@ -1367,17 +1327,13 @@ pub unsafe extern "C" fn nvmagic_deregister_llm_request_intercept(
 }
 
 /// Register an LLM execution intercept following the middleware chain pattern.
-/// When the condition callback returns true, the execution callback is included
-/// in the chain. The callback receives `(request, next_fn, next_ctx)` — call
+/// The callback receives `(request, next_fn, next_ctx)` — call
 /// `next_fn(request, next_ctx)` to invoke the next intercept or the original
 /// LLM call, or skip calling it to short-circuit.
 ///
 /// # Parameters
 /// - `name`: Unique intercept name.
 /// - `priority`: Execution priority (lower runs first).
-/// - `cond_cb`: Condition callback.
-/// - `cond_user_data`: Opaque pointer for the condition callback.
-/// - `cond_free`: Optional destructor for `cond_user_data`.
 /// - `exec_cb`: Middleware callback receiving request and a next function.
 /// - `exec_user_data`: Opaque pointer for the execution callback.
 /// - `exec_free`: Optional destructor for `exec_user_data`.
@@ -1388,9 +1344,6 @@ pub unsafe extern "C" fn nvmagic_deregister_llm_request_intercept(
 pub unsafe extern "C" fn nvmagic_register_llm_execution_intercept(
     name: *const c_char,
     priority: i32,
-    cond_cb: NvMagicLlmExecConditionalCb,
-    cond_user_data: *mut libc::c_void,
-    cond_free: NvMagicFreeFn,
     exec_cb: NvMagicLlmExecInterceptCb,
     exec_user_data: *mut libc::c_void,
     exec_free: NvMagicFreeFn,
@@ -1400,9 +1353,8 @@ pub unsafe extern "C" fn nvmagic_register_llm_execution_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    let cond = wrap_llm_exec_conditional_fn(cond_cb, cond_user_data, cond_free);
     let exec = wrap_llm_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nvmagic_register_llm_execution_intercept(&name, priority, cond, exec) {
+    match core::nvmagic_register_llm_execution_intercept(&name, priority, exec) {
         Ok(()) => NvMagicStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1428,17 +1380,13 @@ pub unsafe extern "C" fn nvmagic_deregister_llm_execution_intercept(
 }
 
 /// Register an LLM streaming execution intercept following the middleware chain
-/// pattern. When the condition callback returns true, the execution callback is
-/// included in the chain. The callback receives `(request, next_fn, next_ctx)` —
-/// call `next_fn(request, next_ctx)` to invoke the next intercept or the original
+/// pattern. The callback receives `(request, next_fn, next_ctx)` — call
+/// `next_fn(request, next_ctx)` to invoke the next intercept or the original
 /// streaming LLM call, or skip calling it to short-circuit.
 ///
 /// # Parameters
 /// - `name`: Unique intercept name.
 /// - `priority`: Execution priority (lower runs first).
-/// - `cond_cb`: Condition callback.
-/// - `cond_user_data`: Opaque pointer for the condition callback.
-/// - `cond_free`: Optional destructor for `cond_user_data`.
 /// - `exec_cb`: Middleware callback receiving request and a next function.
 /// - `exec_user_data`: Opaque pointer for the execution callback.
 /// - `exec_free`: Optional destructor for `exec_user_data`.
@@ -1449,9 +1397,6 @@ pub unsafe extern "C" fn nvmagic_deregister_llm_execution_intercept(
 pub unsafe extern "C" fn nvmagic_register_llm_stream_execution_intercept(
     name: *const c_char,
     priority: i32,
-    cond_cb: NvMagicLlmExecConditionalCb,
-    cond_user_data: *mut libc::c_void,
-    cond_free: NvMagicFreeFn,
     exec_cb: NvMagicLlmExecInterceptCb,
     exec_user_data: *mut libc::c_void,
     exec_free: NvMagicFreeFn,
@@ -1461,9 +1406,8 @@ pub unsafe extern "C" fn nvmagic_register_llm_stream_execution_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    let cond = wrap_llm_exec_conditional_fn(cond_cb, cond_user_data, cond_free);
     let exec = wrap_llm_stream_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nvmagic_register_llm_stream_execution_intercept(&name, priority, cond, exec) {
+    match core::nvmagic_register_llm_stream_execution_intercept(&name, priority, exec) {
         Ok(()) => NvMagicStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1882,12 +1826,13 @@ pub unsafe extern "C" fn nvmagic_tool_response_intercepts(
     }
 }
 
-/// Run the registered LLM request intercept chain on the given native request.
+/// Run the registered LLM request intercept chain on the given request.
 ///
 /// # Parameters
-/// - `native_json`: Native LLM request as a JSON C string.
+/// - `native_json`: The request payload as a JSON C string representing an
+///   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
 /// - `out`: On success, receives the transformed JSON string (caller must free
-///   with `nvmagic_string_free`).
+///   with `nvmagic_string_free`). The output is a serialized `LLMRequest`.
 ///
 /// # Safety
 /// All pointers must be valid. `out` must be non-null.
@@ -1901,9 +1846,17 @@ pub unsafe extern "C" fn nvmagic_llm_request_intercepts(
         Some(j) => j,
         None => return NvMagicStatus::InvalidJson,
     };
-    match core::nvmagic_llm_request_intercepts(native) {
+    let request: core_types::LLMRequest = match serde_json::from_value(native) {
+        Ok(r) => r,
+        Err(_) => {
+            set_last_error("failed to parse native_json as LLMRequest");
+            return NvMagicStatus::InvalidJson;
+        }
+    };
+    match core::nvmagic_llm_request_intercepts(request) {
         Ok(transformed) => {
-            unsafe { *out = json_to_c_string(&transformed) };
+            let result_json = serde_json::to_value(&transformed).unwrap_or(serde_json::Value::Null);
+            unsafe { *out = json_to_c_string(&result_json) };
             NvMagicStatus::Ok
         }
         Err(e) => status_from_error(&e),
@@ -1916,27 +1869,28 @@ pub unsafe extern "C" fn nvmagic_llm_request_intercepts(
 /// `NvMagicStatus::GuardrailRejected` if blocked.
 ///
 /// # Parameters
-/// - `native_json`: Native LLM request as a JSON C string.
-/// - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
-/// - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
-/// - `to_request_free`: Optional destructor for `to_request_ud`.
+/// - `native_json`: The request payload as a JSON C string representing an
+///   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
 ///
 /// # Safety
 /// All pointers must be valid.
 #[no_mangle]
 pub unsafe extern "C" fn nvmagic_llm_conditional_execution(
     native_json: *const c_char,
-    to_request_cb: Option<NvMagicJsonCb>,
-    to_request_ud: *mut libc::c_void,
-    to_request_free: NvMagicFreeFn,
 ) -> NvMagicStatus {
     clear_last_error();
     let native = match c_str_to_json(native_json) {
         Some(j) => j,
         None => return NvMagicStatus::InvalidJson,
     };
-    let to_request = to_request_cb.map(|cb| wrap_to_request_fn(cb, to_request_ud, to_request_free));
-    match core::nvmagic_llm_conditional_execution(&native, to_request.as_ref()) {
+    let request: core_types::LLMRequest = match serde_json::from_value(native) {
+        Ok(r) => r,
+        Err(_) => {
+            set_last_error("failed to parse native_json as LLMRequest");
+            return NvMagicStatus::InvalidJson;
+        }
+    };
+    match core::nvmagic_llm_conditional_execution(&request) {
         Ok(()) => NvMagicStatus::Ok,
         Err(e) => status_from_error(&e),
     }

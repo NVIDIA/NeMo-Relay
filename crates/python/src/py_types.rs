@@ -637,44 +637,6 @@ impl PyLLMRequest {
 }
 
 // ---------------------------------------------------------------------------
-// LLMResponse
-// ---------------------------------------------------------------------------
-
-/// An opaque response structure representing an LLM API response.
-///
-/// Properties:
-///     data (Any): The response payload.
-#[pyclass(name = "LLMResponse", from_py_object)]
-#[derive(Clone)]
-pub struct PyLLMResponse {
-    pub inner: core_types::LLMResponse,
-}
-
-#[pymethods]
-impl PyLLMResponse {
-    /// Create a new LLMResponse.
-    ///
-    /// Args:
-    ///     data: The response payload (any JSON-serializable object).
-    #[new]
-    fn new(data: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let data_json = py_to_json(data)?;
-        Ok(Self {
-            inner: core_types::LLMResponse { data: data_json },
-        })
-    }
-
-    #[getter]
-    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        json_to_py(py, &self.inner.data)
-    }
-
-    fn __repr__(&self) -> String {
-        "LLMResponse(...)".to_string()
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Event
 // ---------------------------------------------------------------------------
 
@@ -919,7 +881,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyToolHandle>()?;
     m.add_class::<PyLLMHandle>()?;
     m.add_class::<PyLLMRequest>()?;
-    m.add_class::<PyLLMResponse>()?;
     m.add_class::<PyEvent>()?;
     m.add_class::<PyAtifExporter>()?;
     Ok(())

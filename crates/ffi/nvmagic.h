@@ -145,11 +145,6 @@ typedef struct FfiLLMHandle FfiLLMHandle;
 typedef struct FfiLLMRequest FfiLLMRequest;
 
 /**
- * Opaque wrapper around an LLM response (data).
- */
-typedef struct FfiLLMResponse FfiLLMResponse;
-
-/**
  * Opaque handle representing an active execution scope.
  */
 typedef struct FfiScopeHandle FfiScopeHandle;
@@ -173,8 +168,6 @@ typedef struct FfiToolHandle FfiToolHandle;
 typedef struct Option_NvMagicCollectorCb Option_NvMagicCollectorCb;
 
 typedef struct Option_NvMagicFinalizerCb Option_NvMagicFinalizerCb;
-
-typedef struct Option_NvMagicJsonCb Option_NvMagicJsonCb;
 
 /**
  * Callback for tool execution (default callable). Receives arguments as JSON,
@@ -201,15 +194,6 @@ typedef char *(*NvMagicLlmExecCb)(void *user_data, const char *native_json);
  * Returns NULL to allow execution, or an error message string to reject.
  */
 typedef char *(*NvMagicToolConditionalCb)(void *user_data, const char *name, const char *args_json);
-
-/**
- * Callback for tool execution intercept conditions.
- * Receives tool name and arguments as JSON.
- * Returns `true` if this intercept should handle the execution.
- */
-typedef bool (*NvMagicToolExecConditionalCb)(void *user_data,
-                                             const char *name,
-                                             const char *args_json);
 
 /**
  * Runtime-provided "next" callback for tool execution middleware chain.
@@ -246,12 +230,6 @@ typedef char *(*NvMagicJsonCb)(void *user_data, const char *json);
  * Returns NULL to allow execution, or an error message string to reject.
  */
 typedef char *(*NvMagicLlmConditionalCb)(void *user_data, const struct FfiLLMRequest *request);
-
-/**
- * Callback for LLM execution intercept conditions.
- * Receives native JSON string. Returns `true` if this intercept should handle the execution.
- */
-typedef bool (*NvMagicLlmExecConditionalCb)(void *user_data, const char *native_json);
 
 /**
  * Runtime-provided "next" callback for LLM execution middleware chain.
@@ -415,15 +393,13 @@ NvMagicStatus nvmagic_tool_call_execute(const char *name,
  *
  * # Parameters
  * - `name`: Null-terminated LLM provider name.
- * - `native_json`: The native request payload as a JSON C string.
+ * - `native_json`: The request payload as a JSON C string representing an
+ *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
  * - `parent`: Optional parent scope handle, or null.
  * - `attributes`: Bitfield of LLM attributes.
  * - `data_json`: Optional JSON data, or null.
  * - `metadata_json`: Optional JSON metadata, or null.
  * - `model_name`: Optional LLM model identifier, or null.
- * - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
- * - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
- * - `to_request_free`: Optional destructor for `to_request_ud`.
  * - `out`: On success, receives a heap-allocated `FfiLLMHandle`.
  *
  * # Safety
@@ -436,9 +412,6 @@ NvMagicStatus nvmagic_llm_call(const char *name,
                                const char *data_json,
                                const char *metadata_json,
                                const char *model_name,
-                               struct Option_NvMagicJsonCb to_request_cb,
-                               void *to_request_ud,
-                               NvMagicFreeFn to_request_free,
                                struct FfiLLMHandle **out);
 
 /**
@@ -449,9 +422,6 @@ NvMagicStatus nvmagic_llm_call(const char *name,
  * - `response_json`: LLM response as a JSON C string.
  * - `data_json`: Optional JSON data, or null.
  * - `metadata_json`: Optional JSON metadata, or null.
- * - `to_response_cb`: Optional callback to convert native JSON to `LLMResponse`, or null.
- * - `to_response_ud`: Opaque pointer passed to `to_response_cb`.
- * - `to_response_free`: Optional destructor for `to_response_ud`.
  *
  * # Safety
  * `handle` and `response_json` must be valid, non-null pointers.
@@ -459,10 +429,7 @@ NvMagicStatus nvmagic_llm_call(const char *name,
 NvMagicStatus nvmagic_llm_call_end(const struct FfiLLMHandle *handle,
                                    const char *response_json,
                                    const char *data_json,
-                                   const char *metadata_json,
-                                   struct Option_NvMagicJsonCb to_response_cb,
-                                   void *to_response_ud,
-                                   NvMagicFreeFn to_response_free);
+                                   const char *metadata_json);
 
 /**
  * Execute an LLM call end-to-end: run conditional-execution guardrails (on raw
@@ -474,7 +441,8 @@ NvMagicStatus nvmagic_llm_call_end(const struct FfiLLMHandle *handle,
  *
  * # Parameters
  * - `name`: Null-terminated LLM provider name.
- * - `native_json`: The native request payload as a JSON C string.
+ * - `native_json`: The request payload as a JSON C string representing an
+ *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
  * - `func`: C callback that performs the actual LLM call.
  * - `func_user_data`: Opaque pointer passed to `func`.
  * - `func_free`: Optional destructor for `func_user_data`.
@@ -483,12 +451,6 @@ NvMagicStatus nvmagic_llm_call_end(const struct FfiLLMHandle *handle,
  * - `data_json`: Optional JSON data, or null.
  * - `metadata_json`: Optional JSON metadata, or null.
  * - `model_name`: Optional LLM model identifier, or null.
- * - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
- * - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
- * - `to_request_free`: Optional destructor for `to_request_ud`.
- * - `to_response_cb`: Optional callback to convert native JSON to `LLMResponse`, or null.
- * - `to_response_ud`: Opaque pointer passed to `to_response_cb`.
- * - `to_response_free`: Optional destructor for `to_response_ud`.
  * - `out`: On success, receives the response as a JSON C string. Caller must
  *   free with `nvmagic_string_free`.
  *
@@ -505,12 +467,6 @@ NvMagicStatus nvmagic_llm_call_execute(const char *name,
                                        const char *data_json,
                                        const char *metadata_json,
                                        const char *model_name,
-                                       struct Option_NvMagicJsonCb to_request_cb,
-                                       void *to_request_ud,
-                                       NvMagicFreeFn to_request_free,
-                                       struct Option_NvMagicJsonCb to_response_cb,
-                                       void *to_response_ud,
-                                       NvMagicFreeFn to_response_free,
                                        char **out);
 
 /**
@@ -520,7 +476,8 @@ NvMagicStatus nvmagic_llm_call_execute(const char *name,
  *
  * # Parameters
  * - `name`: Null-terminated LLM provider name.
- * - `native_json`: The native request payload as a JSON C string.
+ * - `native_json`: The request payload as a JSON C string representing an
+ *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
  * - `func`: C callback that performs the actual LLM call.
  * - `func_user_data`: Opaque pointer passed to `func`.
  * - `func_free`: Optional destructor for `func_user_data`.
@@ -534,12 +491,6 @@ NvMagicStatus nvmagic_llm_call_execute(const char *name,
  * - `data_json`: Optional JSON data, or null.
  * - `metadata_json`: Optional JSON metadata, or null.
  * - `model_name`: Optional LLM model identifier, or null.
- * - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
- * - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
- * - `to_request_free`: Optional destructor for `to_request_ud`.
- * - `to_response_cb`: Optional callback to convert native JSON to `LLMResponse`, or null.
- * - `to_response_ud`: Opaque pointer passed to `to_response_cb`.
- * - `to_response_free`: Optional destructor for `to_response_ud`.
  * - `out`: On success, receives a heap-allocated `FfiStream`.
  *
  * # Safety
@@ -558,12 +509,6 @@ NvMagicStatus nvmagic_llm_stream_call_execute(const char *name,
                                               const char *data_json,
                                               const char *metadata_json,
                                               const char *model_name,
-                                              struct Option_NvMagicJsonCb to_request_cb,
-                                              void *to_request_ud,
-                                              NvMagicFreeFn to_request_free,
-                                              struct Option_NvMagicJsonCb to_response_cb,
-                                              void *to_response_ud,
-                                              NvMagicFreeFn to_response_free,
                                               struct FfiStream **out);
 
 /**
@@ -620,17 +565,13 @@ NvMagicStatus nvmagic_deregister_tool_conditional_execution_guardrail(const char
 
 /**
  * Register a tool execution intercept following the middleware chain pattern.
- * When the condition callback returns true, the execution callback is included
- * in the chain. The callback receives `(args, next_fn, next_ctx)` — call
+ * The callback receives `(args, next_fn, next_ctx)` — call
  * `next_fn(args, next_ctx)` to invoke the next intercept or the original
  * tool function, or skip calling it to short-circuit.
  *
  * # Parameters
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `cond_cb`: Condition callback that decides if this intercept applies.
- * - `cond_user_data`: Opaque pointer for the condition callback.
- * - `cond_free`: Optional destructor for `cond_user_data`.
  * - `exec_cb`: Middleware callback receiving args and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
@@ -640,9 +581,6 @@ NvMagicStatus nvmagic_deregister_tool_conditional_execution_guardrail(const char
  */
 NvMagicStatus nvmagic_register_tool_execution_intercept(const char *name,
                                                         int32_t priority,
-                                                        NvMagicToolExecConditionalCb cond_cb,
-                                                        void *cond_user_data,
-                                                        NvMagicFreeFn cond_free,
                                                         NvMagicToolExecInterceptCb exec_cb,
                                                         void *exec_user_data,
                                                         NvMagicFreeFn exec_free);
@@ -690,7 +628,7 @@ NvMagicStatus nvmagic_deregister_llm_sanitize_request_guardrail(const char *name
  * # Parameters
  * - `name`: Unique guardrail name.
  * - `priority`: Execution priority (lower runs first).
- * - `cb`: JSON-to-JSON callback that receives LLMResponse JSON and returns sanitized JSON.
+ * - `cb`: JSON-to-JSON callback that receives the response JSON and returns sanitized JSON.
  * - `user_data`: Opaque pointer passed to `cb`.
  * - `free_fn`: Optional destructor for `user_data`.
  *
@@ -740,14 +678,14 @@ NvMagicStatus nvmagic_register_llm_conditional_execution_guardrail(const char *n
 NvMagicStatus nvmagic_deregister_llm_conditional_execution_guardrail(const char *name);
 
 /**
- * Register an LLM request intercept. The callback can transform the native
- * request JSON before it reaches the LLM provider.
+ * Register an LLM request intercept. The callback can transform the
+ * `LLMRequest` before it reaches the LLM provider.
  *
  * # Parameters
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
  * - `break_chain`: If true, stop processing further intercepts after this one.
- * - `cb`: JSON transform callback (receives/returns native JSON C string).
+ * - `cb`: LLM request transform callback (receives/returns `FfiLLMRequest`).
  * - `user_data`: Opaque pointer passed to `cb`.
  * - `free_fn`: Optional destructor for `user_data`.
  *
@@ -757,7 +695,7 @@ NvMagicStatus nvmagic_deregister_llm_conditional_execution_guardrail(const char 
 NvMagicStatus nvmagic_register_llm_request_intercept(const char *name,
                                                      int32_t priority,
                                                      bool break_chain,
-                                                     NvMagicJsonCb cb,
+                                                     NvMagicLlmRequestCb cb,
                                                      void *user_data,
                                                      NvMagicFreeFn free_fn);
 
@@ -771,17 +709,13 @@ NvMagicStatus nvmagic_deregister_llm_request_intercept(const char *name);
 
 /**
  * Register an LLM execution intercept following the middleware chain pattern.
- * When the condition callback returns true, the execution callback is included
- * in the chain. The callback receives `(request, next_fn, next_ctx)` — call
+ * The callback receives `(request, next_fn, next_ctx)` — call
  * `next_fn(request, next_ctx)` to invoke the next intercept or the original
  * LLM call, or skip calling it to short-circuit.
  *
  * # Parameters
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `cond_cb`: Condition callback.
- * - `cond_user_data`: Opaque pointer for the condition callback.
- * - `cond_free`: Optional destructor for `cond_user_data`.
  * - `exec_cb`: Middleware callback receiving request and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
@@ -791,9 +725,6 @@ NvMagicStatus nvmagic_deregister_llm_request_intercept(const char *name);
  */
 NvMagicStatus nvmagic_register_llm_execution_intercept(const char *name,
                                                        int32_t priority,
-                                                       NvMagicLlmExecConditionalCb cond_cb,
-                                                       void *cond_user_data,
-                                                       NvMagicFreeFn cond_free,
                                                        NvMagicLlmExecInterceptCb exec_cb,
                                                        void *exec_user_data,
                                                        NvMagicFreeFn exec_free);
@@ -808,17 +739,13 @@ NvMagicStatus nvmagic_deregister_llm_execution_intercept(const char *name);
 
 /**
  * Register an LLM streaming execution intercept following the middleware chain
- * pattern. When the condition callback returns true, the execution callback is
- * included in the chain. The callback receives `(request, next_fn, next_ctx)` —
- * call `next_fn(request, next_ctx)` to invoke the next intercept or the original
+ * pattern. The callback receives `(request, next_fn, next_ctx)` — call
+ * `next_fn(request, next_ctx)` to invoke the next intercept or the original
  * streaming LLM call, or skip calling it to short-circuit.
  *
  * # Parameters
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `cond_cb`: Condition callback.
- * - `cond_user_data`: Opaque pointer for the condition callback.
- * - `cond_free`: Optional destructor for `cond_user_data`.
  * - `exec_cb`: Middleware callback receiving request and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
@@ -828,9 +755,6 @@ NvMagicStatus nvmagic_deregister_llm_execution_intercept(const char *name);
  */
 NvMagicStatus nvmagic_register_llm_stream_execution_intercept(const char *name,
                                                               int32_t priority,
-                                                              NvMagicLlmExecConditionalCb cond_cb,
-                                                              void *cond_user_data,
-                                                              NvMagicFreeFn cond_free,
                                                               NvMagicLlmExecInterceptCb exec_cb,
                                                               void *exec_user_data,
                                                               NvMagicFreeFn exec_free);
@@ -1018,12 +942,13 @@ NvMagicStatus nvmagic_tool_response_intercepts(const char *name,
                                                char **out);
 
 /**
- * Run the registered LLM request intercept chain on the given native request.
+ * Run the registered LLM request intercept chain on the given request.
  *
  * # Parameters
- * - `native_json`: Native LLM request as a JSON C string.
+ * - `native_json`: The request payload as a JSON C string representing an
+ *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
  * - `out`: On success, receives the transformed JSON string (caller must free
- *   with `nvmagic_string_free`).
+ *   with `nvmagic_string_free`). The output is a serialized `LLMRequest`.
  *
  * # Safety
  * All pointers must be valid. `out` must be non-null.
@@ -1037,18 +962,13 @@ NvMagicStatus nvmagic_llm_request_intercepts(const char *native_json, char **out
  * `NvMagicStatus::GuardrailRejected` if blocked.
  *
  * # Parameters
- * - `native_json`: Native LLM request as a JSON C string.
- * - `to_request_cb`: Optional callback to convert native JSON to `LLMRequest`, or null.
- * - `to_request_ud`: Opaque pointer passed to `to_request_cb`.
- * - `to_request_free`: Optional destructor for `to_request_ud`.
+ * - `native_json`: The request payload as a JSON C string representing an
+ *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
  *
  * # Safety
  * All pointers must be valid.
  */
-NvMagicStatus nvmagic_llm_conditional_execution(const char *native_json,
-                                                struct Option_NvMagicJsonCb to_request_cb,
-                                                void *to_request_ud,
-                                                NvMagicFreeFn to_request_free);
+NvMagicStatus nvmagic_llm_conditional_execution(const char *native_json);
 
 /**
  * Free a C string previously returned by any `nvmagic_*` accessor function.
@@ -1282,22 +1202,6 @@ char *nvmagic_llm_request_headers(const struct FfiLLMRequest *ptr);
  * `ptr` must be a valid `FfiLLMRequest` pointer or null.
  */
 char *nvmagic_llm_request_content(const struct FfiLLMRequest *ptr);
-
-/**
- * Free an LLM response object.
- *
- * # Safety
- * `ptr` must be a valid pointer returned by an `nvmagic_*` function, or null.
- */
-void nvmagic_llm_response_free(struct FfiLLMResponse *ptr);
-
-/**
- * Return the data of an LLM response as a JSON C string. Caller must free the result.
- *
- * # Safety
- * `ptr` must be a valid `FfiLLMResponse` pointer or null.
- */
-char *nvmagic_llm_response_data(const struct FfiLLMResponse *ptr);
 
 /**
  * Return the UUID of an event as a C string. Caller must free the result.

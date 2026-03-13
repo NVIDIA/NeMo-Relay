@@ -16,7 +16,7 @@ use std::sync::Arc;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use serde_json::Value as Json;
 
-use nvmagic_core::types::{LLMRequest, LLMResponse};
+use nvmagic_core::types::LLMRequest;
 use nvmagic_core::{
     LlmExecutionNextFn, LlmStreamExecutionNextFn, MagicError, Result, ToolExecutionNextFn,
 };
@@ -71,28 +71,6 @@ pub fn wrap_js_tool_conditional_fn(
     })
 }
 
-/// Wrap a JS function `(name: string, args: object) => boolean` for tool exec conditional.
-pub fn wrap_js_tool_exec_conditional_fn(
-    func: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(&str, &Json) -> bool + Send + Sync> {
-    let func = Arc::new(func);
-    Box::new(move |name: &str, args: &Json| {
-        let func = func.clone();
-        let name = name.to_string();
-        let args = args.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        func.call_with_return_value(
-            (name, args),
-            ThreadsafeFunctionCallMode::Blocking,
-            move |val: Json| {
-                let _ = tx.send(val.as_bool().unwrap_or(false));
-                Ok(())
-            },
-        );
-        rx.recv().unwrap_or(false)
-    })
-}
-
 /// Wrap a JS function `(args: object) => object` for tool execution.
 pub fn wrap_js_tool_exec_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
@@ -115,23 +93,29 @@ pub fn wrap_js_tool_exec_fn(
     })
 }
 
-/// Wrap a JS function `(value: object) => object` for JSON transform (LLM request intercepts, etc.).
-pub fn wrap_js_json_fn(
+/// Wrap a JS function `(request: object) => object` for LLM request intercepts.
+///
+/// The JS callback receives the `LLMRequest` serialized as a plain JSON object
+/// (`{ headers, content }`) and must return the same shape. The returned JSON is
+/// deserialized back into an `LLMRequest`.
+pub fn wrap_js_llm_request_intercept_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
+) -> Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync> {
     let func = Arc::new(func);
-    Box::new(move |value: Json| {
+    Box::new(move |request: LLMRequest| {
         let func = func.clone();
+        let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
         let (tx, rx) = std::sync::mpsc::channel();
         func.call_with_return_value(
-            value,
+            req_json,
             ThreadsafeFunctionCallMode::Blocking,
             move |val: Json| {
                 let _ = tx.send(val);
                 Ok(())
             },
         );
-        rx.recv().unwrap_or(Json::Null)
+        let result = rx.recv().unwrap_or(Json::Null);
+        serde_json::from_value(result).unwrap_or(request)
     })
 }
 
@@ -158,26 +142,23 @@ pub fn wrap_js_llm_sanitize_request_fn(
     })
 }
 
-/// Wrap a JS function for LLM sanitize response: `(response: JsLLMResponse) => JsLLMResponse`.
-/// Since ThreadsafeFunction requires serde-serializable args, we serialize the response as JSON.
+/// Wrap a JS function for LLM sanitize response: `(response: Json) => Json`.
 pub fn wrap_js_llm_response_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(LLMResponse) -> LLMResponse + Send + Sync> {
+) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
     let func = Arc::new(func);
-    Box::new(move |response: LLMResponse| {
+    Box::new(move |response: Json| {
         let func = func.clone();
-        let resp_json = serde_json::to_value(&response).unwrap_or(Json::Null);
         let (tx, rx) = std::sync::mpsc::channel();
         func.call_with_return_value(
-            resp_json,
+            response,
             ThreadsafeFunctionCallMode::Blocking,
             move |val: Json| {
                 let _ = tx.send(val);
                 Ok(())
             },
         );
-        let result = rx.recv().unwrap_or(Json::Null);
-        serde_json::from_value(result).unwrap_or(response)
+        rx.recv().unwrap_or(Json::Null)
     })
 }
 
@@ -207,38 +188,21 @@ pub fn wrap_js_llm_conditional_fn(
     })
 }
 
-/// Wrap a JS function for LLM exec conditional: `(native: object) => boolean`.
-pub fn wrap_js_llm_exec_conditional_fn(
-    func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(&Json) -> bool + Send + Sync> {
-    let func = Arc::new(func);
-    Box::new(move |native: &Json| {
-        let func = func.clone();
-        let native_clone = native.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        func.call_with_return_value(
-            native_clone,
-            ThreadsafeFunctionCallMode::Blocking,
-            move |val: Json| {
-                let _ = tx.send(val.as_bool().unwrap_or(false));
-                Ok(())
-            },
-        );
-        rx.recv().unwrap_or(false)
-    })
-}
-
-/// Wrap a JS function for LLM execution: `(native: object) => object`.
+/// Wrap a JS function for LLM execution: `(request: object) => object`.
+///
+/// The JS callback receives the `LLMRequest` serialized as a plain JSON object
+/// and returns the response as JSON.
 pub fn wrap_js_llm_exec_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
+) -> Box<dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
     let func = Arc::new(func);
-    Box::new(move |native: Json| {
+    Box::new(move |request: LLMRequest| {
         let func = func.clone();
+        let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
         Box::pin(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
             func.call_with_return_value(
-                native,
+                req_json,
                 ThreadsafeFunctionCallMode::Blocking,
                 move |val: Json| {
                     let _ = tx.send(val);
@@ -334,23 +298,25 @@ pub fn wrap_js_tool_exec_intercept_fn(
     })
 }
 
-/// Wrap a JS function `(native, next) => result` for LLM execution intercept.
+/// Wrap a JS function `(request, next) => result` for LLM execution intercept.
 ///
 /// See `wrap_js_tool_exec_intercept_fn` for the `next` parameter discussion.
+/// The JS callback receives the `LLMRequest` serialized as a plain JSON object.
 pub fn wrap_js_llm_exec_intercept_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Arc<
-    dyn Fn(Json, LlmExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+    dyn Fn(LLMRequest, LlmExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
         + Sync,
 > {
     let func = Arc::new(func);
-    Arc::new(move |native: Json, _next: LlmExecutionNextFn| {
+    Arc::new(move |request: LLMRequest, _next: LlmExecutionNextFn| {
         let func = func.clone();
+        let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
         Box::pin(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
             func.call_with_return_value(
-                native,
+                req_json,
                 ThreadsafeFunctionCallMode::Blocking,
                 move |val: Json| {
                     let _ = tx.send(val);
@@ -362,15 +328,16 @@ pub fn wrap_js_llm_exec_intercept_fn(
     })
 }
 
-/// Wrap a JS function `(native, next) => result` for LLM stream execution intercept.
+/// Wrap a JS function `(request, next) => result` for LLM stream execution intercept.
 ///
 /// The intercept callable produces a single JSON result which is wrapped into a
-/// single-item stream internally.
+/// single-item stream internally. The JS callback receives the `LLMRequest`
+/// serialized as a plain JSON object.
 pub fn wrap_js_llm_stream_exec_intercept_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Arc<
     dyn Fn(
-            Json,
+            LLMRequest,
             LlmStreamExecutionNextFn,
         ) -> Pin<
             Box<
@@ -384,24 +351,27 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
         + Sync,
 > {
     let func = Arc::new(func);
-    Arc::new(move |native: Json, _next: LlmStreamExecutionNextFn| {
-        let func = func.clone();
-        Box::pin(async move {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            func.call_with_return_value(
-                native,
-                ThreadsafeFunctionCallMode::Blocking,
-                move |val: Json| {
-                    let _ = tx.send(val);
-                    Ok(())
-                },
-            );
-            let result = rx.await.map_err(|e| MagicError::Internal(e.to_string()))?;
-            let stream = tokio_stream::once(Ok(result));
-            Ok(Box::pin(stream)
-                as Pin<
-                    Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>,
-                >)
-        })
-    })
+    Arc::new(
+        move |request: LLMRequest, _next: LlmStreamExecutionNextFn| {
+            let func = func.clone();
+            let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+            Box::pin(async move {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                func.call_with_return_value(
+                    req_json,
+                    ThreadsafeFunctionCallMode::Blocking,
+                    move |val: Json| {
+                        let _ = tx.send(val);
+                        Ok(())
+                    },
+                );
+                let result = rx.await.map_err(|e| MagicError::Internal(e.to_string()))?;
+                let stream = tokio_stream::once(Ok(result));
+                Ok(Box::pin(stream)
+                    as Pin<
+                        Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>,
+                    >)
+            })
+        },
+    )
 }

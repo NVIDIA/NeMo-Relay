@@ -323,38 +323,6 @@ impl JsLLMRequest {
     }
 }
 
-/// Initialization object for constructing a `JsLLMResponse`.
-#[napi(object)]
-pub struct JsLLMResponseInit {
-    /// The response payload.
-    pub data: serde_json::Value,
-}
-
-/// An LLM response, encapsulating the response data.
-///
-/// Construct via `new JsLLMResponse({ data })`.
-#[napi]
-pub struct JsLLMResponse {
-    pub(crate) inner: core_types::LLMResponse,
-}
-
-#[napi]
-impl JsLLMResponse {
-    /// Create a new LLM response from the provided initialization fields.
-    #[napi(constructor)]
-    pub fn new(init: JsLLMResponseInit) -> Self {
-        Self {
-            inner: core_types::LLMResponse { data: init.data },
-        }
-    }
-
-    /// The response payload as a JSON value.
-    #[napi(getter)]
-    pub fn data(&self) -> serde_json::Value {
-        self.inner.data.clone()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Event (read-only, for subscribers)
 // ---------------------------------------------------------------------------

@@ -123,27 +123,15 @@ macro_rules! intercept_registry_api {
 }
 
 macro_rules! execution_intercept_registry_api {
-    ($register_name:ident, $deregister_name:ident, $field:ident, $cond_type:ty, $fn_type:ty) => {
-        pub fn $register_name(
-            name: &str,
-            priority: i32,
-            conditional: $cond_type,
-            callable: $fn_type,
-        ) -> Result<()> {
+    ($register_name:ident, $deregister_name:ident, $field:ident, $fn_type:ty) => {
+        pub fn $register_name(name: &str, priority: i32, callable: $fn_type) -> Result<()> {
             let ctx = global_context();
             let mut state = ctx
                 .write()
                 .map_err(|e| MagicError::Internal(e.to_string()))?;
             state
                 .$field
-                .register(
-                    name.to_string(),
-                    ExecutionIntercept {
-                        priority,
-                        conditional,
-                        callable,
-                    },
-                )
+                .register(name.to_string(), ExecutionIntercept { priority, callable })
                 .map_err(|e| MagicError::AlreadyExists(e))
         }
 
@@ -230,15 +218,13 @@ intercept_registry_api!(
 );
 
 // Registers a tool execution intercept following the middleware chain pattern.
-// The `conditional` is checked first: `(tool_name: &str, args: &Json) -> bool`.
-// If it returns `true`, the `callable` is invoked: `(args: Json, next: ToolExecutionNextFn) -> Future<Result<Json>>`.
+// The `callable` is invoked: `(args: Json, next: ToolExecutionNextFn) -> Future<Result<Json>>`.
 // Call `next(args)` to continue the chain or skip it to short-circuit.
 // deregister: Deregisters a tool execution intercept by name.
 execution_intercept_registry_api!(
     nvmagic_register_tool_execution_intercept,
     nvmagic_deregister_tool_execution_intercept,
     tool_execution_intercepts,
-    ToolExecutionConditionalFn,
     ToolExecutionFn
 );
 
@@ -292,28 +278,24 @@ intercept_registry_api!(
 );
 
 // Registers an LLM execution intercept following the middleware chain pattern.
-// The `conditional` is checked first: `(request: &LLMRequest) -> bool`.
-// If it returns `true`, the `callable` is invoked: `(request: LLMRequest, next: LlmExecutionNextFn) -> Future<Result<Json>>`.
-// Call `next(request)` to continue the chain or skip it to short-circuit.
+// The `callable` is invoked: `(native: Json, next: LlmExecutionNextFn) -> Future<Result<Json>>`.
+// Call `next(native)` to continue the chain or skip it to short-circuit.
 // deregister: Deregisters an LLM execution intercept by name.
 execution_intercept_registry_api!(
     nvmagic_register_llm_execution_intercept,
     nvmagic_deregister_llm_execution_intercept,
     llm_execution_intercepts,
-    LlmExecutionConditionalFn,
     LlmExecutionFn
 );
 
 // Registers an LLM streaming execution intercept following the middleware chain pattern.
-// The `conditional` is checked first: `(request: &LLMRequest) -> bool`.
-// If it returns `true`, the `callable` is invoked: `(request: LLMRequest, next: LlmStreamExecutionNextFn) -> Future<Result<Stream>>`.
-// Call `next(request)` to continue the chain or skip it to short-circuit.
+// The `callable` is invoked: `(native: Json, next: LlmStreamExecutionNextFn) -> Future<Result<Stream>>`.
+// Call `next(native)` to continue the chain or skip it to short-circuit.
 // deregister: Deregisters an LLM streaming execution intercept by name.
 execution_intercept_registry_api!(
     nvmagic_register_llm_stream_execution_intercept,
     nvmagic_deregister_llm_stream_execution_intercept,
     llm_stream_execution_intercepts,
-    LlmStreamExecutionConditionalFn,
     LlmStreamExecutionFn
 );
 
@@ -540,7 +522,7 @@ pub async fn nvmagic_tool_call_execute(
         let mut state = ctx
             .write()
             .map_err(|e| MagicError::Internal(e.to_string()))?;
-        state.tool_build_execution_chain(name, &intercepted_args, func)
+        state.tool_build_execution_chain(func)
     };
     let result = exec_future(intercepted_args).await?;
 
@@ -563,23 +545,20 @@ pub async fn nvmagic_tool_call_execute(
 // LLM lifecycle
 // ---------------------------------------------------------------------------
 
-/// Begins an LLM call: derives a formal request via the converter, runs
-/// request sanitize guardrails, creates an LLM handle, and emits a `Start` event.
+/// Begins an LLM call: runs request sanitize guardrails on the [`LLMRequest`],
+/// creates an LLM handle, and emits a `Start` event.
 ///
-/// The `native` parameter is the opaque Json payload in whatever format the
-/// LLM SDK uses. The converter derives a formal [`LLMRequest`] for guardrails.
 /// The sanitized request is stored in the event's `input` field.
 /// Call [`nvmagic_llm_call_end`] when the LLM call completes.
 #[allow(clippy::too_many_arguments)]
 pub fn nvmagic_llm_call(
     name: &str,
-    native: &Json,
+    request: &LLMRequest,
     parent: Option<&ScopeHandle>,
     attributes: LLMAttributes,
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
-    to_request: Option<&ToRequestFn>,
 ) -> Result<LLMHandle> {
     let parent_uuid = resolve_parent_uuid(parent);
     let root_uuid = current_root_uuid();
@@ -588,11 +567,7 @@ pub fn nvmagic_llm_call(
         .write()
         .map_err(|e| MagicError::Internal(e.to_string()))?;
 
-    let formal_request = match to_request {
-        Some(f) => f(native),
-        None => IdentityConverter.to_request(native),
-    };
-    let sanitized_request = state.llm_sanitize_request_chain(formal_request);
+    let sanitized_request = state.llm_sanitize_request_chain(request.clone());
     let input = serde_json::to_value(&sanitized_request).unwrap_or(Json::Null);
 
     Ok(state.create_llm_handle(
@@ -607,8 +582,7 @@ pub fn nvmagic_llm_call(
     ))
 }
 
-/// Ends an LLM call: converts the response via the LLM converter, runs
-/// response sanitize guardrails, and emits an `End` event.
+/// Ends an LLM call: runs response sanitize guardrails and emits an `End` event.
 ///
 /// The sanitized response data is stored in the event's `output` field.
 pub fn nvmagic_llm_call_end(
@@ -616,7 +590,6 @@ pub fn nvmagic_llm_call_end(
     response: Json,
     data: Option<Json>,
     metadata: Option<Json>,
-    to_response: Option<&ToResponseFn>,
 ) -> Result<()> {
     let root_uuid = current_root_uuid();
     let ctx = global_context();
@@ -624,56 +597,40 @@ pub fn nvmagic_llm_call_end(
         .write()
         .map_err(|e| MagicError::Internal(e.to_string()))?;
 
-    let formal_response = match to_response {
-        Some(f) => f(&response),
-        None => IdentityConverter.to_response(&response),
-    };
-    let sanitized_response = state.llm_sanitize_response_chain(formal_response);
+    let sanitized_response = state.llm_sanitize_response_chain(response);
 
-    state.end_llm_handle(
-        handle,
-        data,
-        metadata,
-        Some(sanitized_response.data),
-        root_uuid,
-    );
+    state.end_llm_handle(handle, data, metadata, Some(sanitized_response), root_uuid);
     Ok(())
 }
 
-/// Executes a complete non-streaming LLM call lifecycle: conditional guardrails
-/// (on the formal request derived via converter), request intercepts (on opaque
-/// native Json), sanitize guardrails (on formal request), execution (with optional
-/// intercept override), response intercepts, and sanitize response guardrails.
+/// Executes a complete non-streaming LLM call lifecycle: conditional guardrails,
+/// request intercepts, sanitize guardrails, execution (with optional intercept
+/// override), and sanitize response guardrails.
 ///
-/// Conditional execution guardrails run **before** request intercepts so that
-/// they gate on the unmodified input. On rejection, only a standalone `Mark`
-/// event is emitted (no `Start`/`End` pair).
+/// The entire pipeline operates on [`LLMRequest`]. Conditional execution
+/// guardrails run **before** request intercepts so that they gate on the
+/// unmodified input. On rejection, only a standalone `Mark` event is emitted
+/// (no `Start`/`End` pair).
 ///
 /// Returns [`MagicError::GuardrailRejected`] if a conditional guardrail rejects the call.
 #[allow(clippy::too_many_arguments)]
 pub async fn nvmagic_llm_call_execute(
     name: &str,
-    native: Json,
+    request: LLMRequest,
     func: LlmExecutionNextFn,
     parent: Option<ScopeHandle>,
     attributes: LLMAttributes,
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
-    to_request: Option<ToRequestFn>,
-    to_response: Option<ToResponseFn>,
 ) -> Result<Json> {
-    // Conditional guardrails — derive formal request and check
+    // Conditional guardrails — check on unmodified request
     {
         let ctx = global_context();
         let mut state = ctx
             .write()
             .map_err(|e| MagicError::Internal(e.to_string()))?;
-        let formal_request = match &to_request {
-            Some(f) => f(&native),
-            None => IdentityConverter.to_request(&native),
-        };
-        if let Some(err) = state.llm_conditional_execution_chain(&formal_request) {
+        if let Some(err) = state.llm_conditional_execution_chain(&request) {
             drop(state);
             let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
             if let Some(obj) = rejection_data.as_object_mut() {
@@ -685,25 +642,24 @@ pub async fn nvmagic_llm_call_execute(
         }
     }
 
-    // Request intercepts (on opaque native Json)
-    let intercepted_native = {
+    // Request intercepts
+    let intercepted_request = {
         let ctx = global_context();
         let mut state = ctx
             .write()
             .map_err(|e| MagicError::Internal(e.to_string()))?;
-        state.llm_request_intercepts_chain(native)
+        state.llm_request_intercepts_chain(request)
     };
 
-    // LLM call start (converter + sanitize guardrails happen inside)
+    // LLM call start (sanitize guardrails happen inside)
     let handle = nvmagic_llm_call(
         name,
-        &intercepted_native,
+        &intercepted_request,
         parent.as_ref(),
         attributes,
         data.clone(),
         metadata.clone(),
         model_name,
-        to_request.as_ref(),
     )?;
 
     // Execution chain — build middleware chain under lock, release, then await
@@ -712,18 +668,12 @@ pub async fn nvmagic_llm_call_execute(
         let mut state = ctx
             .write()
             .map_err(|e| MagicError::Internal(e.to_string()))?;
-        state.llm_build_execution_chain(&intercepted_native, func)
+        state.llm_build_execution_chain(func)
     };
-    let response = exec_future(intercepted_native).await?;
+    let response = exec_future(intercepted_request).await?;
 
-    // LLM call end (converter + sanitize response guardrails happen inside)
-    nvmagic_llm_call_end(
-        &handle,
-        response.clone(),
-        data,
-        metadata,
-        to_response.as_ref(),
-    )?;
+    // LLM call end (sanitize response guardrails happen inside)
+    nvmagic_llm_call_end(&handle, response.clone(), data, metadata)?;
 
     Ok(response)
 }
@@ -736,15 +686,14 @@ pub async fn nvmagic_llm_call_execute(
 /// input. On rejection, only a standalone `Mark` event is emitted
 /// (no `Start`/`End` pair).
 ///
-/// The returned stream is wrapped in [`LlmStreamWrapper`] which applies
-/// per-chunk stream response intercepts, feeds each intercepted chunk to
-/// the `collector`, and on stream exhaustion calls the `finalizer` to
-/// produce the aggregated response. That response then flows through the
-/// LLM converter and sanitize response guardrails before the `End` event
+/// The returned stream is wrapped in [`LlmStreamWrapper`] which feeds
+/// each chunk to the `collector`, and on stream exhaustion calls the
+/// `finalizer` to produce the aggregated response. That response then
+/// flows through sanitize response guardrails before the `End` event
 /// is emitted.
 ///
-/// - `collector` — called with each intercepted chunk (Json); use this to
-///   accumulate streaming tokens or forward them to another sink.
+/// - `collector` — called with each chunk (Json); use this to accumulate
+///   streaming tokens or forward them to another sink.
 /// - `finalizer` — called once when the stream is exhausted; returns the
 ///   aggregated response as [`Json`].
 ///
@@ -752,7 +701,7 @@ pub async fn nvmagic_llm_call_execute(
 #[allow(clippy::too_many_arguments)]
 pub async fn nvmagic_llm_stream_call_execute(
     name: &str,
-    native: Json,
+    request: LLMRequest,
     func: LlmStreamExecutionNextFn,
     collector: Box<dyn FnMut(Json) + Send>,
     finalizer: Box<dyn FnOnce() -> Json + Send>,
@@ -761,20 +710,14 @@ pub async fn nvmagic_llm_stream_call_execute(
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
-    to_request: Option<ToRequestFn>,
-    to_response: Option<ToResponseFn>,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<Json>> + Send>>> {
-    // Conditional guardrails — derive formal request and check
+    // Conditional guardrails — check on unmodified request
     {
         let ctx = global_context();
         let mut state = ctx
             .write()
             .map_err(|e| MagicError::Internal(e.to_string()))?;
-        let formal_request = match &to_request {
-            Some(f) => f(&native),
-            None => IdentityConverter.to_request(&native),
-        };
-        if let Some(err) = state.llm_conditional_execution_chain(&formal_request) {
+        if let Some(err) = state.llm_conditional_execution_chain(&request) {
             drop(state);
             let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
             if let Some(obj) = rejection_data.as_object_mut() {
@@ -786,25 +729,24 @@ pub async fn nvmagic_llm_stream_call_execute(
         }
     }
 
-    // Request intercepts (on opaque native Json)
-    let intercepted_native = {
+    // Request intercepts
+    let intercepted_request = {
         let ctx = global_context();
         let mut state = ctx
             .write()
             .map_err(|e| MagicError::Internal(e.to_string()))?;
-        state.llm_request_intercepts_chain(native)
+        state.llm_request_intercepts_chain(request)
     };
 
-    // LLM call start (converter + sanitize guardrails happen inside)
+    // LLM call start (sanitize guardrails happen inside)
     let handle = nvmagic_llm_call(
         name,
-        &intercepted_native,
+        &intercepted_request,
         parent.as_ref(),
         attributes,
         data.clone(),
         metadata.clone(),
         model_name,
-        to_request.as_ref(),
     )?;
 
     // Stream execution chain — build middleware chain under lock, release, then await
@@ -813,20 +755,12 @@ pub async fn nvmagic_llm_stream_call_execute(
         let mut state = ctx
             .write()
             .map_err(|e| MagicError::Internal(e.to_string()))?;
-        state.llm_stream_build_execution_chain(&intercepted_native, func)
+        state.llm_stream_build_execution_chain(func)
     };
-    let raw_stream = exec_future(intercepted_native).await?;
+    let raw_stream = exec_future(intercepted_request).await?;
 
-    // Wrap in LlmStreamWrapper which handles intercepts, collector/finalizer, and END event
-    let wrapper = LlmStreamWrapper::new(
-        raw_stream,
-        handle,
-        collector,
-        finalizer,
-        to_response,
-        data,
-        metadata,
-    );
+    // Wrap in LlmStreamWrapper which handles collector/finalizer and END event
+    let wrapper = LlmStreamWrapper::new(raw_stream, handle, collector, finalizer, data, metadata);
     Ok(Box::pin(wrapper))
 }
 
@@ -876,40 +810,30 @@ pub fn nvmagic_tool_response_intercepts(name: &str, result: Json) -> Result<Json
     Ok(state.tool_response_intercepts_chain(name, result))
 }
 
-/// Runs the registered LLM request intercept chain on the given native Json.
+/// Runs the registered LLM request intercept chain on the given [`LLMRequest`].
 ///
-/// Returns the transformed native Json after all intercepts have been applied.
+/// Returns the transformed [`LLMRequest`] after all intercepts have been applied.
 /// This allows invoking request intercepts independently of the full
 /// [`nvmagic_llm_call_execute`] pipeline.
-pub fn nvmagic_llm_request_intercepts(native: Json) -> Result<Json> {
+pub fn nvmagic_llm_request_intercepts(request: LLMRequest) -> Result<LLMRequest> {
     let ctx = global_context();
     let mut state = ctx
         .write()
         .map_err(|e| MagicError::Internal(e.to_string()))?;
-    Ok(state.llm_request_intercepts_chain(native))
+    Ok(state.llm_request_intercepts_chain(request))
 }
 
 /// Runs the registered LLM conditional execution guardrail chain.
 ///
-/// Derives a formal [`LLMRequest`] from the native Json via the converter,
-/// then runs the conditional chain on it.
-///
 /// Returns `Ok(())` if all guardrails pass, or
 /// [`Err(MagicError::GuardrailRejected(reason))`](MagicError::GuardrailRejected)
 /// if any guardrail rejects the call.
-pub fn nvmagic_llm_conditional_execution(
-    native: &Json,
-    to_request: Option<&ToRequestFn>,
-) -> Result<()> {
+pub fn nvmagic_llm_conditional_execution(request: &LLMRequest) -> Result<()> {
     let ctx = global_context();
     let mut state = ctx
         .write()
         .map_err(|e| MagicError::Internal(e.to_string()))?;
-    let formal_request = match to_request {
-        Some(f) => f(native),
-        None => IdentityConverter.to_request(native),
-    };
-    if let Some(err) = state.llm_conditional_execution_chain(&formal_request) {
+    if let Some(err) = state.llm_conditional_execution_chain(request) {
         return Err(MagicError::GuardrailRejected(err));
     }
     Ok(())
@@ -1393,7 +1317,6 @@ mod tests {
         nvmagic_register_tool_execution_intercept(
             "exec_intercept",
             1,
-            Box::new(|_name: &str, _args: &Json| true),
             Arc::new(|_args: Json, _next: ToolExecutionNextFn| {
                 Box::pin(async move { Ok(json!({"from_intercept": true})) })
                     as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>
@@ -1440,13 +1363,15 @@ mod tests {
         )
         .unwrap();
 
-        let native = json!({"messages": []});
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
         let handle = nvmagic_llm_call(
             "my_llm",
-            &native,
+            &request,
             None,
             LLMAttributes::empty(),
-            None,
             None,
             None,
             None,
@@ -1454,7 +1379,7 @@ mod tests {
         .unwrap();
         assert_eq!(handle.name, "my_llm");
 
-        nvmagic_llm_call_end(&handle, json!({"response": "ok"}), None, None, None).unwrap();
+        nvmagic_llm_call_end(&handle, json!({"response": "ok"}), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -1490,13 +1415,15 @@ mod tests {
         )
         .unwrap();
 
-        let native = json!({"messages": []});
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
         let handle = nvmagic_llm_call(
             "llm",
-            &native,
+            &request,
             None,
             LLMAttributes::empty(),
-            None,
             None,
             None,
             None,
@@ -1510,7 +1437,7 @@ mod tests {
         assert_eq!(input["headers"]["X-Sanitized"], "true");
 
         drop(captured);
-        nvmagic_llm_call_end(&handle, json!("ok"), None, None, None).unwrap();
+        nvmagic_llm_call_end(&handle, json!("ok"), None, None).unwrap();
         nvmagic_deregister_subscriber("llm_san_test").unwrap();
         nvmagic_deregister_llm_sanitize_request_guardrail("llm_sanitizer").unwrap();
     }
@@ -1521,18 +1448,20 @@ mod tests {
         reset_global();
 
         let func: LlmExecutionNextFn =
-            Box::new(|native: Json| Box::pin(async move { Ok(json!({"echo": native})) }));
+            Box::new(|req: LLMRequest| Box::pin(async move { Ok(json!({"echo": req.content})) }));
 
-        let native = json!({"messages": [{"role": "user", "content": "hi"}]});
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": [{"role": "user", "content": "hi"}]}),
+        };
+        let content = request.content.clone();
 
         let result = nvmagic_llm_call_execute(
             "llm",
-            native.clone(),
+            request,
             func,
             None,
             LLMAttributes::empty(),
-            None,
-            None,
             None,
             None,
             None,
@@ -1540,7 +1469,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(result["echo"], native);
+        assert_eq!(result["echo"], content);
     }
 
     #[tokio::test]
@@ -1565,18 +1494,19 @@ mod tests {
         )
         .unwrap();
 
-        let func: LlmExecutionNextFn = Box::new(|_native| Box::pin(async move { Ok(json!({})) }));
+        let func: LlmExecutionNextFn = Box::new(|_req| Box::pin(async move { Ok(json!({})) }));
 
-        let native = json!({"messages": []});
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
 
         let result = nvmagic_llm_call_execute(
             "llm",
-            native,
+            request,
             func,
             None,
             LLMAttributes::empty(),
-            None,
-            None,
             None,
             None,
             None,
@@ -1611,30 +1541,33 @@ mod tests {
             "llm_req_intercept",
             1,
             false,
-            Box::new(|mut native: Json| {
-                native
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("intercepted".into(), json!(true));
-                native
+            Box::new(|mut req: LLMRequest| {
+                req.headers.insert("intercepted".into(), json!(true));
+                req
             }),
         )
         .unwrap();
 
-        let func: LlmExecutionNextFn = Box::new(|native: Json| {
-            Box::pin(async move { Ok(json!({"saw_intercepted": native["intercepted"]})) })
+        let func: LlmExecutionNextFn = Box::new(|req: LLMRequest| {
+            let saw = req
+                .headers
+                .get("intercepted")
+                .cloned()
+                .unwrap_or(Json::Null);
+            Box::pin(async move { Ok(json!({"saw_intercepted": saw})) })
         });
 
-        let native = json!({"messages": []});
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
 
         let result = nvmagic_llm_call_execute(
             "llm",
-            native,
+            request,
             func,
             None,
             LLMAttributes::empty(),
-            None,
-            None,
             None,
             None,
             None,
@@ -1655,8 +1588,7 @@ mod tests {
         nvmagic_register_llm_execution_intercept(
             "llm_exec_intercept",
             1,
-            Box::new(|_native: &Json| true),
-            Arc::new(|_native: Json, _next: LlmExecutionNextFn| {
+            Arc::new(|_req: LLMRequest, _next: LlmExecutionNextFn| {
                 Box::pin(async move { Ok(json!({"from_intercept": true})) })
                     as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>
             }),
@@ -1664,18 +1596,19 @@ mod tests {
         .unwrap();
 
         let func: LlmExecutionNextFn =
-            Box::new(|_native| Box::pin(async move { Ok(json!({"from_original": true})) }));
+            Box::new(|_req| Box::pin(async move { Ok(json!({"from_original": true})) }));
 
-        let native = json!({"messages": []});
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
 
         let result = nvmagic_llm_call_execute(
             "llm",
-            native,
+            request,
             func,
             None,
             LLMAttributes::empty(),
-            None,
-            None,
             None,
             None,
             None,
@@ -1748,7 +1681,6 @@ mod tests {
         nvmagic_register_tool_execution_intercept(
             "i1",
             1,
-            Box::new(|_n: &str, _a: &Json| false),
             Arc::new(|a: Json, _next: ToolExecutionNextFn| {
                 Box::pin(async move { Ok(a) })
                     as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>
@@ -1758,7 +1690,6 @@ mod tests {
         assert!(nvmagic_register_tool_execution_intercept(
             "i1",
             1,
-            Box::new(|_n: &str, _a: &Json| false),
             Arc::new(
                 |a: Json, _next: ToolExecutionNextFn| Box::pin(async move { Ok(a) })
                     as Pin<
@@ -1818,8 +1749,7 @@ mod tests {
         nvmagic_register_llm_execution_intercept(
             "i1",
             1,
-            Box::new(|_native: &Json| false),
-            Arc::new(|_native: Json, _next: LlmExecutionNextFn| {
+            Arc::new(|_request: LLMRequest, _next: LlmExecutionNextFn| {
                 Box::pin(async move { Ok(json!({})) })
                     as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>
             }),
@@ -1835,8 +1765,7 @@ mod tests {
         nvmagic_register_llm_stream_execution_intercept(
             "i1",
             1,
-            Box::new(|_native: &Json| false),
-            Arc::new(|_native: Json, _next: LlmStreamExecutionNextFn| {
+            Arc::new(|_request: LLMRequest, _next: LlmStreamExecutionNextFn| {
                 Box::pin(async move {
                     let stream: Pin<Box<dyn Stream<Item = crate::error::Result<Json>> + Send>> =
                         Box::pin(tokio_stream::empty());
@@ -1904,7 +1833,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let func: LlmStreamExecutionNextFn = Box::new(|_native: Json| {
+        let func: LlmStreamExecutionNextFn = Box::new(|_request: LLMRequest| {
             Box::pin(async move {
                 let items = vec![Ok(json!({"token": "hello"})), Ok(json!({"token": "world"}))];
                 let stream: Pin<Box<dyn Stream<Item = crate::error::Result<Json>> + Send>> =
@@ -1922,7 +1851,10 @@ mod tests {
                 >
         });
 
-        let native = json!({"messages": []});
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
 
         let collected = Arc::new(Mutex::new(Vec::new()));
         let cc = collected.clone();
@@ -1937,14 +1869,12 @@ mod tests {
 
         let mut stream = nvmagic_llm_stream_call_execute(
             "llm",
-            native,
+            request,
             func,
             collector,
             finalizer,
             None,
             LLMAttributes::STREAMING,
-            None,
-            None,
             None,
             None,
             None,
@@ -1985,7 +1915,7 @@ mod tests {
         )
         .unwrap();
 
-        let func: LlmStreamExecutionNextFn = Box::new(|_native: Json| {
+        let func: LlmStreamExecutionNextFn = Box::new(|_request: LLMRequest| {
             Box::pin(async move {
                 let stream: Pin<Box<dyn Stream<Item = crate::error::Result<Json>> + Send>> =
                     Box::pin(tokio_stream::empty());
@@ -2002,21 +1932,22 @@ mod tests {
                 >
         });
 
-        let native = json!({"messages": []});
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
 
         let collector: Box<dyn FnMut(Json) + Send> = Box::new(|_| {});
         let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| Json::Null);
 
         let result = nvmagic_llm_stream_call_execute(
             "llm",
-            native,
+            request,
             func,
             collector,
             finalizer,
             None,
             LLMAttributes::STREAMING,
-            None,
-            None,
             None,
             None,
             None,
@@ -2074,22 +2005,24 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let native = json!({"messages": []});
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
         let handle = nvmagic_llm_call(
             "llm",
-            &native,
+            &request,
             None,
             LLMAttributes::STATELESS | LLMAttributes::STREAMING,
             Some(json!({"custom": "data"})),
             Some(json!({"meta": "info"})),
-            None,
             None,
         )
         .unwrap();
 
         assert!(handle.attributes.contains(LLMAttributes::STATELESS));
         assert!(handle.attributes.contains(LLMAttributes::STREAMING));
-        nvmagic_llm_call_end(&handle, json!({}), None, None, None).unwrap();
+        nvmagic_llm_call_end(&handle, json!({}), None, None).unwrap();
     }
 
     // -- Standalone middleware chain tests --
@@ -2176,20 +2109,24 @@ mod tests {
             "add_field",
             10,
             false,
-            Box::new(|mut native| {
-                native
+            Box::new(|mut request: LLMRequest| {
+                request
+                    .content
                     .as_object_mut()
                     .unwrap()
                     .insert("intercepted".into(), json!(true));
-                native
+                request
             }),
         )
         .unwrap();
 
-        let native = json!({"messages": []});
-        let result = nvmagic_llm_request_intercepts(native).unwrap();
-        assert_eq!(result["intercepted"], true);
-        assert_eq!(result["messages"], json!([]));
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
+        let result = nvmagic_llm_request_intercepts(request).unwrap();
+        assert_eq!(result.content["intercepted"], true);
+        assert_eq!(result.content["messages"], json!([]));
 
         nvmagic_deregister_llm_request_intercept("add_field").unwrap();
     }
@@ -2199,8 +2136,11 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let native = json!({"messages": []});
-        assert!(nvmagic_llm_conditional_execution(&native, None).is_ok());
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
+        assert!(nvmagic_llm_conditional_execution(&request).is_ok());
     }
 
     #[test]
@@ -2215,8 +2155,11 @@ mod tests {
         )
         .unwrap();
 
-        let native = json!({"messages": []});
-        match nvmagic_llm_conditional_execution(&native, None) {
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
+        match nvmagic_llm_conditional_execution(&request) {
             Err(MagicError::GuardrailRejected(msg)) => assert_eq!(msg, "llm blocked"),
             other => panic!("expected GuardrailRejected, got {other:?}"),
         }

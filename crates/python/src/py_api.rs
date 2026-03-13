@@ -10,7 +10,6 @@
 
 use nvmagic_core as core;
 use nvmagic_core::types as core_types;
-use nvmagic_core::types::LLMConverter;
 use pyo3::prelude::*;
 use tokio_stream::StreamExt;
 
@@ -263,7 +262,7 @@ fn nvmagic_tool_call_execute<'py>(
 ///
 /// Args:
 ///     name: Model/provider name.
-///     native: The native request payload (any JSON-serializable dict).
+///     request: An ``LLMRequest`` with headers and content.
 ///     handle: Optional parent scope handle.
 ///     attributes: Optional ``LLMAttributes`` bitflags.
 ///     data: Optional JSON-serializable application data.
@@ -273,33 +272,29 @@ fn nvmagic_tool_call_execute<'py>(
 ///     An ``LLMHandle`` that must be passed to ``llm_call_end``.
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (name, native, *, handle=None, attributes=None, data=None, metadata=None, model_name=None, to_request=None))]
+#[pyo3(signature = (name, request, *, handle=None, attributes=None, data=None, metadata=None, model_name=None))]
 fn nvmagic_llm_call(
     name: &str,
-    native: &Bound<'_, PyAny>,
+    request: PyLLMRequest,
     handle: Option<PyScopeHandle>,
     attributes: Option<PyLLMAttributes>,
     data: Option<&Bound<'_, PyAny>>,
     metadata: Option<&Bound<'_, PyAny>>,
     model_name: Option<String>,
-    to_request: Option<Py<PyAny>>,
 ) -> PyResult<PyLLMHandle> {
-    let native_json = py_to_json(native)?;
     let attrs = attributes
         .map(|a| a.inner)
         .unwrap_or(core_types::LLMAttributes::empty());
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
-    let to_req = to_request.map(wrap_py_to_request);
     core::nvmagic_llm_call(
         name,
-        &native_json,
+        &request.inner,
         handle.as_ref().map(|h| &h.inner),
         attrs,
         data,
         metadata,
         model_name,
-        to_req.as_ref(),
     )
     .map(PyLLMHandle::from)
     .map_err(to_py_err)
@@ -313,26 +308,17 @@ fn nvmagic_llm_call(
 ///     data: Optional JSON-serializable application data.
 ///     metadata: Optional JSON-serializable metadata.
 #[pyfunction]
-#[pyo3(signature = (handle, response, *, data=None, metadata=None, to_response=None))]
+#[pyo3(signature = (handle, response, *, data=None, metadata=None))]
 fn nvmagic_llm_call_end(
     handle: &PyLLMHandle,
     response: &Bound<'_, PyAny>,
     data: Option<&Bound<'_, PyAny>>,
     metadata: Option<&Bound<'_, PyAny>>,
-    to_response: Option<Py<PyAny>>,
 ) -> PyResult<()> {
     let response_json = py_to_json(response)?;
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
-    let to_resp = to_response.map(wrap_py_to_response);
-    core::nvmagic_llm_call_end(
-        &handle.inner,
-        response_json,
-        data,
-        metadata,
-        to_resp.as_ref(),
-    )
-    .map_err(to_py_err)
+    core::nvmagic_llm_call_end(&handle.inner, response_json, data, metadata).map_err(to_py_err)
 }
 
 /// Execute an LLM call through the full middleware pipeline.
@@ -345,8 +331,8 @@ fn nvmagic_llm_call_end(
 ///
 /// Args:
 ///     name: Model/provider name.
-///     native: The native request payload (any JSON-serializable dict).
-///     func: An async callable ``(dict) -> dict`` that performs the LLM call.
+///     request: An ``LLMRequest`` with headers and content.
+///     func: An async callable ``(LLMRequest) -> dict`` that performs the LLM call.
 ///     handle: Optional parent scope handle.
 ///     attributes: Optional ``LLMAttributes`` bitflags.
 ///     data: Optional JSON-serializable application data.
@@ -355,22 +341,19 @@ fn nvmagic_llm_call_end(
 /// Returns:
 ///     An awaitable that resolves to the (possibly transformed) LLM response.
 #[pyfunction]
-#[pyo3(signature = (name, native, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None, to_request=None, to_response=None))]
+#[pyo3(signature = (name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None))]
 #[allow(clippy::too_many_arguments)]
 fn nvmagic_llm_call_execute<'py>(
     py: Python<'py>,
     name: String,
-    native: &Bound<'py, PyAny>,
+    request: PyLLMRequest,
     func: Py<PyAny>,
     handle: Option<PyScopeHandle>,
     attributes: Option<PyLLMAttributes>,
     data: Option<&Bound<'py, PyAny>>,
     metadata: Option<&Bound<'py, PyAny>>,
     model_name: Option<String>,
-    to_request: Option<Py<PyAny>>,
-    to_response: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let native_json = py_to_json(native)?;
     let attrs = attributes
         .map(|a| a.inner)
         .unwrap_or(core_types::LLMAttributes::empty());
@@ -379,8 +362,6 @@ fn nvmagic_llm_call_execute<'py>(
     let exec_fn = py_callable::wrap_py_llm_exec_fn(func);
     let default_fn: nvmagic_core::LlmExecutionNextFn = Box::new(move |req| exec_fn(req));
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
-    let to_req = to_request.map(wrap_py_to_request);
-    let to_resp = to_response.map(wrap_py_to_response);
 
     let scope_stack = nvmagic_core::current_scope_stack();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -388,15 +369,13 @@ fn nvmagic_llm_call_execute<'py>(
             .scope(scope_stack, async move {
                 let result = core::nvmagic_llm_call_execute(
                     &name,
-                    native_json,
+                    request.inner,
                     default_fn,
                     Some(parent_handle),
                     attrs,
                     data_json,
                     metadata_json,
                     model_name,
-                    to_req,
-                    to_resp,
                 )
                 .await
                 .map_err(to_py_err)?;
@@ -416,8 +395,8 @@ fn nvmagic_llm_call_execute<'py>(
 ///
 /// Args:
 ///     name: Model/provider name.
-///     native: The native request payload (any JSON-serializable dict).
-///     func: An async callable ``(dict) -> AsyncIterator[Any]`` that returns JSON chunks.
+///     request: An ``LLMRequest`` with headers and content.
+///     func: An async callable ``(LLMRequest) -> AsyncIterator[Any]`` that returns JSON chunks.
 ///     collector: A callable ``(Any) -> None`` invoked with each intercepted chunk
 ///         (after stream response intercepts have been applied).
 ///     finalizer: A callable ``() -> Any`` invoked once when the stream is exhausted.
@@ -430,12 +409,12 @@ fn nvmagic_llm_call_execute<'py>(
 /// Returns:
 ///     An awaitable that resolves to an ``LlmStream`` async iterator of JSON chunks.
 #[pyfunction]
-#[pyo3(signature = (name, native, func, collector, finalizer, *, handle=None, attributes=None, data=None, metadata=None, model_name=None, to_request=None, to_response=None))]
+#[pyo3(signature = (name, request, func, collector, finalizer, *, handle=None, attributes=None, data=None, metadata=None, model_name=None))]
 #[allow(clippy::too_many_arguments)]
 fn nvmagic_llm_stream_call_execute<'py>(
     py: Python<'py>,
     name: String,
-    native: &Bound<'py, PyAny>,
+    request: PyLLMRequest,
     func: Py<PyAny>,
     collector: Py<PyAny>,
     finalizer: Py<PyAny>,
@@ -444,10 +423,7 @@ fn nvmagic_llm_stream_call_execute<'py>(
     data: Option<&Bound<'py, PyAny>>,
     metadata: Option<&Bound<'py, PyAny>>,
     model_name: Option<String>,
-    to_request: Option<Py<PyAny>>,
-    to_response: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let native_json = py_to_json(native)?;
     let attrs = attributes
         .map(|a| a.inner)
         .unwrap_or(core_types::LLMAttributes::empty());
@@ -458,8 +434,6 @@ fn nvmagic_llm_stream_call_execute<'py>(
     let collector_fn = py_callable::wrap_py_collector_fn(collector);
     let finalizer_fn = py_callable::wrap_py_finalizer_fn(finalizer);
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
-    let to_req = to_request.map(wrap_py_to_request);
-    let to_resp = to_response.map(wrap_py_to_response);
 
     let scope_stack = nvmagic_core::current_scope_stack();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -467,7 +441,7 @@ fn nvmagic_llm_stream_call_execute<'py>(
             .scope(scope_stack, async move {
                 let rust_stream = core::nvmagic_llm_stream_call_execute(
                     &name,
-                    native_json,
+                    request.inner,
                     default_fn,
                     collector_fn,
                     finalizer_fn,
@@ -476,8 +450,6 @@ fn nvmagic_llm_stream_call_execute<'py>(
                     data_json,
                     metadata_json,
                     model_name,
-                    to_req,
-                    to_resp,
                 )
                 .await
                 .map_err(to_py_err)?;
@@ -623,21 +595,18 @@ py_intercept_tool_api!(
 
 /// Register a tool execution intercept that can replace the tool function.
 ///
-/// ``conditional``: ``(tool_name: str, args: Any) -> bool`` — return ``True``
-/// to activate this intercept for the given call.
-///
-/// ``callable``: ``async (args: Any) -> Any`` — replacement execution function.
+/// ``callable``: ``async (args: Any, next) -> Any`` — middleware intercept function.
+/// Call ``await next(args)`` to invoke the next intercept or original
+/// implementation; skip calling ``next`` to short-circuit.
 #[pyfunction]
 fn nvmagic_register_tool_execution_intercept(
     name: &str,
     priority: i32,
-    conditional: Py<PyAny>,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
     core::nvmagic_register_tool_execution_intercept(
         name,
         priority,
-        py_callable::wrap_py_tool_exec_conditional_fn(conditional),
         py_callable::wrap_py_tool_exec_intercept_fn(callable),
     )
     .map_err(to_py_err)
@@ -678,7 +647,7 @@ fn nvmagic_deregister_llm_sanitize_request_guardrail(name: &str) -> PyResult<boo
 
 /// Register an LLM sanitize-response guardrail.
 ///
-/// Callback: ``(response: LLMResponse) -> LLMResponse`` — returns a sanitized response.
+/// Callback: ``(response: dict) -> dict`` — returns a sanitized response.
 #[pyfunction]
 fn nvmagic_register_llm_sanitize_response_guardrail(
     name: &str,
@@ -729,7 +698,7 @@ fn nvmagic_deregister_llm_conditional_execution_guardrail(name: &str) -> PyResul
 
 /// Register an LLM request intercept.
 ///
-/// Callback: ``(native: Any) -> Any`` — transforms the native request payload.
+/// Callback: ``(request: LLMRequest) -> LLMRequest`` — transforms the LLM request.
 /// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
 #[pyfunction]
 fn nvmagic_register_llm_request_intercept(
@@ -755,21 +724,18 @@ fn nvmagic_deregister_llm_request_intercept(name: &str) -> PyResult<bool> {
 
 /// Register an LLM execution intercept that can replace the LLM call.
 ///
-/// ``conditional``: ``(native: Any) -> bool`` — return ``True``
-/// to activate this intercept for the given call.
-///
-/// ``callable``: ``async (native: Any, next) -> Any`` — replacement execution function.
+/// ``callable``: ``async (native: Any, next) -> Any`` — middleware intercept function.
+/// Call ``await next(native)`` to invoke the next intercept or original
+/// implementation; skip calling ``next`` to short-circuit.
 #[pyfunction]
 fn nvmagic_register_llm_execution_intercept(
     name: &str,
     priority: i32,
-    conditional: Py<PyAny>,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
     core::nvmagic_register_llm_execution_intercept(
         name,
         priority,
-        py_callable::wrap_py_llm_exec_conditional_fn(conditional),
         py_callable::wrap_py_llm_exec_intercept_fn(callable),
     )
     .map_err(to_py_err)
@@ -783,22 +749,19 @@ fn nvmagic_deregister_llm_execution_intercept(name: &str) -> PyResult<bool> {
 
 /// Register an LLM stream-execution intercept that can replace the streaming LLM call.
 ///
-/// ``conditional``: ``(native: Any) -> bool`` — return ``True``
-/// to activate this intercept for the given call.
-///
 /// ``callable``: ``async (native: Any, next) -> AsyncIterator[Any]`` —
-/// replacement streaming execution function.
+/// middleware streaming intercept function.
+/// Call ``await next(native)`` to invoke the next intercept or original
+/// streaming implementation; skip calling ``next`` to short-circuit.
 #[pyfunction]
 fn nvmagic_register_llm_stream_execution_intercept(
     name: &str,
     priority: i32,
-    conditional: Py<PyAny>,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
     core::nvmagic_register_llm_stream_execution_intercept(
         name,
         priority,
-        py_callable::wrap_py_llm_exec_conditional_fn(conditional),
         py_callable::wrap_py_llm_stream_exec_intercept_fn(callable),
     )
     .map_err(to_py_err)
@@ -808,42 +771,6 @@ fn nvmagic_register_llm_stream_execution_intercept(
 #[pyfunction]
 fn nvmagic_deregister_llm_stream_execution_intercept(name: &str) -> PyResult<bool> {
     core::nvmagic_deregister_llm_stream_execution_intercept(name).map_err(to_py_err)
-}
-
-// ---------------------------------------------------------------------------
-// Per-call converter helpers
-// ---------------------------------------------------------------------------
-
-/// Wrap a Python callable into a boxed `ToRequestFn`.
-///
-/// The Python callable should accept a single JSON-serializable argument and
-/// return an `LLMRequest`-compatible dict.
-fn wrap_py_to_request(py_fn: Py<PyAny>) -> core_types::ToRequestFn {
-    Box::new(move |native: &serde_json::Value| {
-        Python::attach(|py| {
-            let py_val = pythonize::pythonize(py, native).unwrap();
-            let result = py_fn.call1(py, (py_val,)).unwrap();
-            let json_val: serde_json::Value = pythonize::depythonize(result.bind(py)).unwrap();
-            serde_json::from_value(json_val)
-                .unwrap_or_else(|_| core_types::IdentityConverter.to_request(native))
-        })
-    })
-}
-
-/// Wrap a Python callable into a boxed `ToResponseFn`.
-///
-/// The Python callable should accept a single JSON-serializable argument and
-/// return an `LLMResponse`-compatible dict.
-fn wrap_py_to_response(py_fn: Py<PyAny>) -> core_types::ToResponseFn {
-    Box::new(move |native: &serde_json::Value| {
-        Python::attach(|py| {
-            let py_val = pythonize::pythonize(py, native).unwrap();
-            let result = py_fn.call1(py, (py_val,)).unwrap();
-            let json_val: serde_json::Value = pythonize::depythonize(result.bind(py)).unwrap();
-            serde_json::from_value(json_val)
-                .unwrap_or_else(|_| core_types::IdentityConverter.to_response(native))
-        })
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -906,23 +833,19 @@ fn nvmagic_tool_response_intercepts<'py>(
     json_to_py(py, &transformed)
 }
 
-/// Run the registered LLM request intercept chain on the given native request.
+/// Run the registered LLM request intercept chain on the given request.
 ///
-/// Returns the transformed native request after all intercepts have been applied.
+/// Returns the transformed request after all intercepts have been applied.
 ///
 /// Args:
-///     native: The native request payload (any JSON-serializable object).
+///     request: An ``LLMRequest`` object.
 ///
 /// Returns:
-///     The (possibly transformed) native request.
+///     The (possibly transformed) ``LLMRequest``.
 #[pyfunction]
-fn nvmagic_llm_request_intercepts<'py>(
-    py: Python<'py>,
-    native: &Bound<'py, PyAny>,
-) -> PyResult<Py<PyAny>> {
-    let native_json = py_to_json(native)?;
-    let result = core::nvmagic_llm_request_intercepts(native_json).map_err(to_py_err)?;
-    json_to_py(py, &result)
+fn nvmagic_llm_request_intercepts(request: PyLLMRequest) -> PyResult<PyLLMRequest> {
+    let result = core::nvmagic_llm_request_intercepts(request.inner).map_err(to_py_err)?;
+    Ok(PyLLMRequest { inner: result })
 }
 
 /// Run the registered LLM conditional execution guardrail chain.
@@ -930,16 +853,10 @@ fn nvmagic_llm_request_intercepts<'py>(
 /// Raises ``RuntimeError`` with the rejection reason if any guardrail rejects.
 ///
 /// Args:
-///     native: The native request payload (any JSON-serializable object).
+///     request: An ``LLMRequest`` object.
 #[pyfunction]
-#[pyo3(signature = (native, *, to_request=None))]
-fn nvmagic_llm_conditional_execution(
-    native: &Bound<'_, PyAny>,
-    to_request: Option<Py<PyAny>>,
-) -> PyResult<()> {
-    let native_json = py_to_json(native)?;
-    let to_req = to_request.map(wrap_py_to_request);
-    core::nvmagic_llm_conditional_execution(&native_json, to_req.as_ref()).map_err(to_py_err)
+fn nvmagic_llm_conditional_execution(request: PyLLMRequest) -> PyResult<()> {
+    core::nvmagic_llm_conditional_execution(&request.inner).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------

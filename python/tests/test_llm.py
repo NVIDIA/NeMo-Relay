@@ -8,7 +8,6 @@ from nvmagic import (
     LLMAttributes,
     LLMHandle,
     LLMRequest,
-    LLMResponse,
     ScopeType,
     guardrails,
     intercepts,
@@ -17,29 +16,29 @@ from nvmagic import (
 )
 
 
-def make_native():
-    return {"messages": [], "model": "test-model"}
+def make_request():
+    return LLMRequest({}, {"messages": [], "model": "test-model"})
 
 
 class TestLLM:
     def test_call_and_call_end(self):
-        native = make_native()
-        handle = llm.call("my_llm", native)
+        request = make_request()
+        handle = llm.call("my_llm", request)
         assert isinstance(handle, LLMHandle)
         assert handle.name == "my_llm"
         llm.call_end(handle, {"response": "ok"})
 
     def test_call_with_attributes(self):
-        native = make_native()
+        request = make_request()
         attrs = LLMAttributes(LLMAttributes.STREAMING)
-        handle = llm.call("streaming_llm", native, attributes=attrs)
+        handle = llm.call("streaming_llm", request, attributes=attrs)
         llm.call_end(handle, {})
 
     def test_call_with_data_metadata(self):
-        native = make_native()
+        request = make_request()
         handle = llm.call(
             "llm_dm",
-            native,
+            request,
             data={"custom": "data"},
             metadata={"trace": "xyz"},
         )
@@ -47,8 +46,8 @@ class TestLLM:
 
     def test_call_with_parent(self):
         parent = scope.push("llm_parent", ScopeType.Agent)
-        native = make_native()
-        handle = llm.call("child_llm", native, handle=parent)
+        request = make_request()
+        handle = llm.call("child_llm", request, handle=parent)
         assert handle.parent_uuid == parent.uuid
         llm.call_end(handle, {})
         scope.pop(parent)
@@ -56,39 +55,39 @@ class TestLLM:
 
 class TestLLMAsync:
     async def test_execute_basic(self):
-        # LLM execute receives native Json dict, not an LLMRequest object
-        def func(native):
-            return {"model": native["model"]}
+        # LLM execute receives an LLMRequest object
+        def func(request):
+            return {"model": request.content["model"]}
 
-        native = make_native()
-        result = await llm.execute("exec_llm", native, func)
+        request = make_request()
+        result = await llm.execute("exec_llm", request, func)
         assert result["model"] == "test-model"
 
     async def test_execute_with_sync_func(self):
-        def func(native):
-            return {"echoed_messages": native["messages"]}
+        def func(request):
+            return {"echoed_messages": request.content["messages"]}
 
-        native = make_native()
-        result = await llm.execute("sync_llm", native, func)
+        request = make_request()
+        result = await llm.execute("sync_llm", request, func)
         assert result["echoed_messages"] == []
 
     async def test_execute_async_func(self):
         """llm.execute should accept async functions."""
 
-        async def func(native):
-            return {"model": native["model"], "async": True}
+        async def func(request):
+            return {"model": request.content["model"], "async": True}
 
-        native = make_native()
-        result = await llm.execute("async_exec_llm", native, func)
+        request = make_request()
+        result = await llm.execute("async_exec_llm", request, func)
         assert result["model"] == "test-model"
         assert result["async"] is True
 
     async def test_execute_async_func_with_messages(self):
-        async def func(native):
-            return {"messages": native["messages"]}
+        async def func(request):
+            return {"messages": request.content["messages"]}
 
-        native = make_native()
-        result = await llm.execute("async_method_llm", native, func)
+        request = make_request()
+        result = await llm.execute("async_method_llm", request, func)
         assert result["messages"] == []
 
 
@@ -105,10 +104,9 @@ class TestLLMGuardrails:
 
     def test_sanitize_response_guardrail(self):
         def sanitizer(response):
-            # response is an LLMResponse object
-            data = response.data
-            data["cleaned"] = True
-            return LLMResponse(data)
+            # response is a plain dict
+            response["cleaned"] = True
+            return response
 
         guardrails.register_llm_sanitize_response("py_llm_san_resp", 1, sanitizer)
         guardrails.deregister_llm_sanitize_response("py_llm_san_resp")
@@ -136,34 +134,33 @@ class TestLLMGuardrailsAsync:
     async def test_conditional_blocks_execution(self):
         guardrails.register_llm_conditional_execution("py_llm_blocker", 1, lambda req: "LLM blocked")
 
-        def func(native):
+        def func(request):
             return {"should": "not reach"}
 
-        native = make_native()
+        request = make_request()
         with pytest.raises(RuntimeError, match="guardrail rejected"):
-            await llm.execute("blocked_llm", native, func)
+            await llm.execute("blocked_llm", request, func)
 
         guardrails.deregister_llm_conditional_execution("py_llm_blocker")
 
 
 class TestLLMIntercepts:
     def test_request_intercept(self):
-        # Request intercepts now operate on opaque Json (dicts), not LLMRequest
-        intercepts.register_llm_request("py_llm_req", 1, False, lambda native: native)
+        # Request intercepts now operate on LLMRequest
+        intercepts.register_llm_request("py_llm_req", 1, False, lambda request: request)
         assert intercepts.deregister_llm_request("py_llm_req")
 
     def test_execution_intercept(self):
-        # Execution intercepts now take native Json, not LLMRequest
+        # Execution intercepts now take LLMRequest
         intercepts.register_llm_execution(
             "py_llm_exec",
             1,
-            lambda native: False,
-            lambda native, next: {"intercepted": True},
+            lambda request, next: {"intercepted": True},
         )
         assert intercepts.deregister_llm_execution("py_llm_exec")
 
     def test_stream_execution_intercept(self):
-        def stream_fn(native, next):
+        def stream_fn(request, next):
             async def gen():
                 yield {"token": "test"}
 
@@ -172,7 +169,6 @@ class TestLLMIntercepts:
         intercepts.register_llm_stream_execution(
             "py_llm_sexec",
             1,
-            lambda native: False,
             stream_fn,
         )
         assert intercepts.deregister_llm_stream_execution("py_llm_sexec")
@@ -188,18 +184,19 @@ class TestLLMIntercepts:
 
 class TestLLMInterceptsAsync:
     async def test_request_intercept_modifies(self):
-        def intercept_fn(native):
-            # Request intercepts now operate on opaque Json
-            native["intercepted"] = True
-            return native
+        def intercept_fn(request):
+            # Request intercepts now operate on LLMRequest
+            content = request.content
+            content["intercepted"] = True
+            return LLMRequest(request.headers, content)
 
         intercepts.register_llm_request("py_llm_req_mod", 1, False, intercept_fn)
 
-        def func(native):
-            return {"saw_intercepted": native.get("intercepted", False)}
+        def func(request):
+            return {"saw_intercepted": request.content.get("intercepted", False)}
 
-        native = make_native()
-        result = await llm.execute("int_llm", native, func)
+        request = make_request()
+        result = await llm.execute("int_llm", request, func)
         assert result["saw_intercepted"] is True
 
         intercepts.deregister_llm_request("py_llm_req_mod")
@@ -208,15 +205,14 @@ class TestLLMInterceptsAsync:
         intercepts.register_llm_execution(
             "py_llm_exec_rep",
             1,
-            lambda native: True,
-            lambda native, next: {"from_intercept": True},
+            lambda request, next: {"from_intercept": True},
         )
 
-        def original_func(native):
+        def original_func(request):
             return {"from_original": True}
 
-        native = make_native()
-        result = await llm.execute("exec_llm", native, original_func)
+        request = make_request()
+        result = await llm.execute("exec_llm", request, original_func)
         assert result["from_intercept"] is True
         assert "from_original" not in result
 
@@ -225,8 +221,8 @@ class TestLLMInterceptsAsync:
 
 class TestLLMStreaming:
     async def test_stream_execute(self):
-        # Stream functions now take native Json and return async iterator of Json
-        def stream_func(native):
+        # Stream functions now take LLMRequest and return async iterator of Json
+        def stream_func(request):
             async def gen():
                 yield {"token": "hello"}
                 yield {"token": "world"}
@@ -241,8 +237,8 @@ class TestLLMStreaming:
         def finalizer():
             return {"chunks": collected}
 
-        native = make_native()
-        stream = await llm.stream_execute("stream_llm", native, stream_func, collector, finalizer)
+        request = make_request()
+        stream = await llm.stream_execute("stream_llm", request, stream_func, collector, finalizer)
         chunks = []
         async for chunk in stream:
             chunks.append(chunk)

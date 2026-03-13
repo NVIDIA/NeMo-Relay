@@ -24,9 +24,7 @@ use libc::c_char;
 use serde_json::Value as Json;
 use tokio_stream::Stream;
 
-use nvmagic_core::types::{
-    IdentityConverter, LLMConverter, LLMRequest, LLMResponse, ToRequestFn, ToResponseFn,
-};
+use nvmagic_core::types::LLMRequest;
 use nvmagic_core::{LlmExecutionNextFn, LlmStreamExecutionNextFn, Result, ToolExecutionNextFn};
 
 use crate::convert::json_to_c_string;
@@ -57,15 +55,6 @@ pub type NvMagicToolConditionalCb = unsafe extern "C" fn(
     name: *const c_char,
     args_json: *const c_char,
 ) -> *mut c_char;
-
-/// Callback for tool execution intercept conditions.
-/// Receives tool name and arguments as JSON.
-/// Returns `true` if this intercept should handle the execution.
-pub type NvMagicToolExecConditionalCb = unsafe extern "C" fn(
-    user_data: *mut libc::c_void,
-    name: *const c_char,
-    args_json: *const c_char,
-) -> bool;
 
 /// Callback for tool execution (default callable). Receives arguments as JSON,
 /// returns result as JSON. The returned string must be allocated with `malloc`
@@ -107,11 +96,6 @@ pub type NvMagicLlmConditionalCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
 ) -> *mut c_char;
-
-/// Callback for LLM execution intercept conditions.
-/// Receives native JSON string. Returns `true` if this intercept should handle the execution.
-pub type NvMagicLlmExecConditionalCb =
-    unsafe extern "C" fn(user_data: *mut libc::c_void, native_json: *const c_char) -> bool;
 
 /// Callback for LLM execution (default callable). Receives a native JSON C string,
 /// returns the response as a JSON C string.
@@ -220,22 +204,6 @@ pub fn wrap_tool_conditional_fn(
     })
 }
 
-/// Wrap a C tool execution conditional callback into a Rust closure.
-pub fn wrap_tool_exec_conditional_fn(
-    cb: NvMagicToolExecConditionalCb,
-    user_data: *mut libc::c_void,
-    free_fn: NvMagicFreeFn,
-) -> Box<dyn Fn(&str, &Json) -> bool + Send + Sync> {
-    let ud = make_user_data(user_data, free_fn);
-    Box::new(move |name: &str, args: &Json| {
-        let c_name = CString::new(name).unwrap_or_default();
-        let c_args = json_to_c_string(args);
-        let result = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nvmagic_string_free_internal(c_args) };
-        result
-    })
-}
-
 /// Wrap a C tool execution callback into an async Rust closure.
 pub fn wrap_tool_exec_fn(
     cb: NvMagicToolExecCb,
@@ -308,47 +276,55 @@ pub fn wrap_tool_exec_intercept_fn(
     })
 }
 
-/// Wrap a C LLM execution intercept callback into an `Arc<dyn Fn(Json, LlmExecutionNextFn) -> ...>`.
+/// Wrap a C LLM execution intercept callback into an `Arc<dyn Fn(LLMRequest, LlmExecutionNextFn) -> ...>`.
 pub fn wrap_llm_exec_intercept_fn(
     cb: NvMagicLlmExecInterceptCb,
     user_data: *mut libc::c_void,
     free_fn: NvMagicFreeFn,
 ) -> Arc<
-    dyn Fn(Json, LlmExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+    dyn Fn(LLMRequest, LlmExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
         + Sync,
 > {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |native: Json, next: LlmExecutionNextFn| {
+    Arc::new(move |request: LLMRequest, next: LlmExecutionNextFn| {
         let ud = ud.clone();
         Box::pin(async move {
             let next_box = Box::new(next);
             let next_ctx = Box::into_raw(next_box) as *mut libc::c_void;
 
             /// C trampoline that calls the boxed Rust next fn.
-            /// Takes a native JSON string, deserializes to Json, calls the Rust LlmExecutionNextFn.
+            /// Takes a JSON string representing an LLMRequest, deserializes it,
+            /// and calls the Rust LlmExecutionNextFn.
             unsafe extern "C" fn llm_next_trampoline(
                 native_json: *const c_char,
                 next_ctx: *mut libc::c_void,
             ) -> *mut c_char {
                 let next = unsafe { Box::from_raw(next_ctx as *mut LlmExecutionNextFn) };
-                let native = if native_json.is_null() {
-                    Json::Null
+                let request = if native_json.is_null() {
+                    LLMRequest {
+                        headers: serde_json::Map::new(),
+                        content: Json::Null,
+                    }
                 } else {
                     let s = unsafe { CStr::from_ptr(native_json) }.to_string_lossy();
-                    serde_json::from_str(&s).unwrap_or(Json::Null)
+                    serde_json::from_str::<LLMRequest>(&s).unwrap_or(LLMRequest {
+                        headers: serde_json::Map::new(),
+                        content: Json::Null,
+                    })
                 };
                 let handle = tokio::runtime::Handle::current();
-                let result = handle.block_on(next(native));
+                let result = handle.block_on(next(request));
                 match result {
                     Ok(json) => json_to_c_string(&json),
                     Err(_) => std::ptr::null_mut(),
                 }
             }
 
-            let c_native = json_to_c_string(&native);
-            let result_ptr = unsafe { cb(ud.ptr, c_native, llm_next_trampoline, next_ctx) };
-            unsafe { nvmagic_string_free_internal(c_native) };
+            let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+            let c_request = json_to_c_string(&request_json);
+            let result_ptr = unsafe { cb(ud.ptr, c_request, llm_next_trampoline, next_ctx) };
+            unsafe { nvmagic_string_free_internal(c_request) };
             let result = ptr_to_json(result_ptr);
             unsafe { nvmagic_string_free_internal(result_ptr) };
             Ok(result)
@@ -365,7 +341,7 @@ pub fn wrap_llm_stream_exec_intercept_fn(
     free_fn: NvMagicFreeFn,
 ) -> Arc<
     dyn Fn(
-            Json,
+            LLMRequest,
             LlmStreamExecutionNextFn,
         ) -> Pin<
             Box<
@@ -376,28 +352,32 @@ pub fn wrap_llm_stream_exec_intercept_fn(
         + Sync,
 > {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |native: Json, _next: LlmStreamExecutionNextFn| {
-        let ud = ud.clone();
-        Box::pin(async move {
-            // For stream intercepts from C, we ignore next and just call the C callback
-            // with a no-op next (the C API doesn't support chaining streams easily)
+    Arc::new(
+        move |request: LLMRequest, _next: LlmStreamExecutionNextFn| {
+            let ud = ud.clone();
+            Box::pin(async move {
+                // For stream intercepts from C, we ignore next and just call the C callback
+                // with a no-op next (the C API doesn't support chaining streams easily)
 
-            unsafe extern "C" fn noop_llm_next(
-                _native_json: *const c_char,
-                _next_ctx: *mut libc::c_void,
-            ) -> *mut c_char {
-                std::ptr::null_mut()
-            }
+                unsafe extern "C" fn noop_llm_next(
+                    _native_json: *const c_char,
+                    _next_ctx: *mut libc::c_void,
+                ) -> *mut c_char {
+                    std::ptr::null_mut()
+                }
 
-            let c_native = json_to_c_string(&native);
-            let result_ptr = unsafe { cb(ud.ptr, c_native, noop_llm_next, std::ptr::null_mut()) };
-            unsafe { nvmagic_string_free_internal(c_native) };
-            let result = ptr_to_json(result_ptr);
-            unsafe { nvmagic_string_free_internal(result_ptr) };
-            let stream = tokio_stream::once(Ok(result));
-            Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
-        })
-    })
+                let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+                let c_request = json_to_c_string(&request_json);
+                let result_ptr =
+                    unsafe { cb(ud.ptr, c_request, noop_llm_next, std::ptr::null_mut()) };
+                unsafe { nvmagic_string_free_internal(c_request) };
+                let result = ptr_to_json(result_ptr);
+                unsafe { nvmagic_string_free_internal(result_ptr) };
+                let stream = tokio_stream::once(Ok(result));
+                Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
+            })
+        },
+    )
 }
 
 /// Wrap a generic C JSON callback into a Rust closure.
@@ -417,25 +397,48 @@ pub fn wrap_json_fn(
     })
 }
 
-/// Wrap a C JSON callback into a `Fn(LLMResponse) -> LLMResponse` closure.
-/// The LLMResponse is serialized to a JSON string for the C callback, and the
-/// returned JSON string is deserialized back to LLMResponse.
+/// Wrap a C LLM request intercept callback into a `Fn(LLMRequest) -> LLMRequest` closure.
+/// The `LLMRequest` is serialized to a JSON string for the C callback, and the
+/// returned JSON string is deserialized back to `LLMRequest`.
+pub fn wrap_llm_request_intercept_fn(
+    cb: NvMagicLlmRequestCb,
+    user_data: *mut libc::c_void,
+    free_fn: NvMagicFreeFn,
+) -> Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync> {
+    let ud = make_user_data(user_data, free_fn);
+    Box::new(move |request: LLMRequest| {
+        let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
+        let result_ptr = unsafe { cb(ud.ptr, ffi_req) };
+        // Free the input request
+        unsafe { drop(Box::from_raw(ffi_req)) };
+        if result_ptr.is_null() {
+            LLMRequest {
+                headers: serde_json::Map::new(),
+                content: Json::Null,
+            }
+        } else {
+            let result = unsafe { Box::from_raw(result_ptr) };
+            result.0
+        }
+    })
+}
+
+/// Wrap a C JSON callback into a `Fn(Json) -> Json` closure for LLM response
+/// sanitization. The callback receives the response as a JSON string and
+/// returns the (possibly modified) JSON string.
 pub fn wrap_llm_response_fn(
     cb: NvMagicJsonCb,
     user_data: *mut libc::c_void,
     free_fn: NvMagicFreeFn,
-) -> Box<dyn Fn(LLMResponse) -> LLMResponse + Send + Sync> {
+) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(move |response: LLMResponse| {
-        let json_value = serde_json::to_value(&response).unwrap_or(Json::Null);
-        let c_json = json_to_c_string(&json_value);
+    Box::new(move |response: Json| {
+        let c_json = json_to_c_string(&response);
         let result_ptr = unsafe { cb(ud.ptr, c_json) };
         unsafe { nvmagic_string_free_internal(c_json) };
         let result_json = ptr_to_json(result_ptr);
         unsafe { nvmagic_string_free_internal(result_ptr) };
-        // Try to deserialize as LLMResponse, fall back to wrapping in data field
-        serde_json::from_value::<LLMResponse>(result_json.clone())
-            .unwrap_or(LLMResponse { data: result_json })
+        result_json
     })
 }
 
@@ -480,36 +483,21 @@ pub fn wrap_llm_conditional_fn(
     })
 }
 
-/// Wrap a C LLM execution conditional callback into a Rust closure.
-/// The C callback receives the native Json serialized as a JSON string.
-pub fn wrap_llm_exec_conditional_fn(
-    cb: NvMagicLlmExecConditionalCb,
-    user_data: *mut libc::c_void,
-    free_fn: NvMagicFreeFn,
-) -> Box<dyn Fn(&Json) -> bool + Send + Sync> {
-    let ud = make_user_data(user_data, free_fn);
-    Box::new(move |native: &Json| {
-        let c_native = json_to_c_string(native);
-        let result = unsafe { cb(ud.ptr, c_native) };
-        unsafe { nvmagic_string_free_internal(c_native) };
-        result
-    })
-}
-
 /// Wrap a C LLM execution callback into an async Rust closure.
-/// The C callback receives native Json serialized as a JSON string.
+/// The C callback receives an `LLMRequest` serialized as a JSON string.
 pub fn wrap_llm_exec_fn(
     cb: NvMagicLlmExecCb,
     user_data: *mut libc::c_void,
     free_fn: NvMagicFreeFn,
-) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
+) -> Box<dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(move |native: Json| {
+    Box::new(move |request: LLMRequest| {
         let ud = ud.clone();
         Box::pin(async move {
-            let c_native = json_to_c_string(&native);
-            let result_ptr = unsafe { cb(ud.ptr, c_native) };
-            unsafe { nvmagic_string_free_internal(c_native) };
+            let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+            let c_request = json_to_c_string(&request_json);
+            let result_ptr = unsafe { cb(ud.ptr, c_request) };
+            unsafe { nvmagic_string_free_internal(c_request) };
             let result = ptr_to_json(result_ptr);
             unsafe { nvmagic_string_free_internal(result_ptr) };
             Ok(result)
@@ -526,7 +514,7 @@ pub fn wrap_llm_stream_exec_fn(
     free_fn: NvMagicFreeFn,
 ) -> Box<
     dyn Fn(
-            Json,
+            LLMRequest,
         ) -> Pin<
             Box<
                 dyn Future<Output = Result<Pin<Box<dyn Stream<Item = Result<Json>> + Send>>>>
@@ -536,12 +524,13 @@ pub fn wrap_llm_stream_exec_fn(
         + Sync,
 > {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(move |native: Json| {
+    Box::new(move |request: LLMRequest| {
         let ud = ud.clone();
         Box::pin(async move {
-            let c_native = json_to_c_string(&native);
-            let result_ptr = unsafe { cb(ud.ptr, c_native) };
-            unsafe { nvmagic_string_free_internal(c_native) };
+            let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+            let c_request = json_to_c_string(&request_json);
+            let result_ptr = unsafe { cb(ud.ptr, c_request) };
+            unsafe { nvmagic_string_free_internal(c_request) };
             let result = ptr_to_json(result_ptr);
             unsafe { nvmagic_string_free_internal(result_ptr) };
             // The C callback returns the full response as a single JSON value for stream
@@ -628,60 +617,4 @@ unsafe fn nvmagic_string_free_internal(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(unsafe { CString::from_raw(ptr) });
     }
-}
-
-// ---------------------------------------------------------------------------
-// Per-call LLM converter wrappers
-// ---------------------------------------------------------------------------
-
-/// Wrap an FFI callback triple into a [`ToRequestFn`].
-///
-/// The C callback receives the native JSON payload as a C string and must return
-/// a heap-allocated JSON C string representing a serialized [`LLMRequest`].
-/// If the callback returns null or an unparseable result, the identity converter
-/// is used as a fallback.
-pub(crate) fn wrap_to_request_fn(
-    cb: NvMagicJsonCb,
-    user_data: *mut libc::c_void,
-    free_fn: NvMagicFreeFn,
-) -> ToRequestFn {
-    let ud = make_user_data(user_data, free_fn);
-    Box::new(move |native: &Json| {
-        let c_json = json_to_c_string(native);
-        let result_ptr = unsafe { cb(ud.ptr, c_json) };
-        unsafe { nvmagic_string_free_internal(c_json) };
-        if result_ptr.is_null() {
-            return IdentityConverter.to_request(native);
-        }
-        let result_json = ptr_to_json(result_ptr);
-        unsafe { nvmagic_string_free_internal(result_ptr) };
-        serde_json::from_value::<LLMRequest>(result_json)
-            .unwrap_or_else(|_| IdentityConverter.to_request(native))
-    })
-}
-
-/// Wrap an FFI callback triple into a [`ToResponseFn`].
-///
-/// The C callback receives the native JSON payload as a C string and must return
-/// a heap-allocated JSON C string representing a serialized [`LLMResponse`].
-/// If the callback returns null or an unparseable result, the identity converter
-/// is used as a fallback.
-pub(crate) fn wrap_to_response_fn(
-    cb: NvMagicJsonCb,
-    user_data: *mut libc::c_void,
-    free_fn: NvMagicFreeFn,
-) -> ToResponseFn {
-    let ud = make_user_data(user_data, free_fn);
-    Box::new(move |native: &Json| {
-        let c_json = json_to_c_string(native);
-        let result_ptr = unsafe { cb(ud.ptr, c_json) };
-        unsafe { nvmagic_string_free_internal(c_json) };
-        if result_ptr.is_null() {
-            return IdentityConverter.to_response(native);
-        }
-        let result_json = ptr_to_json(result_ptr);
-        unsafe { nvmagic_string_free_internal(result_ptr) };
-        serde_json::from_value::<LLMResponse>(result_json)
-            .unwrap_or_else(|_| IdentityConverter.to_response(native))
-    })
 }

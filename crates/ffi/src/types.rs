@@ -30,8 +30,6 @@ pub struct FfiToolHandle(pub core_types::ToolHandle);
 pub struct FfiLLMHandle(pub core_types::LLMHandle);
 /// Opaque wrapper around an LLM request (headers, content).
 pub struct FfiLLMRequest(pub core_types::LLMRequest);
-/// Opaque wrapper around an LLM response (data).
-pub struct FfiLLMResponse(pub core_types::LLMResponse);
 /// Opaque wrapper around a lifecycle event emitted by the runtime.
 pub struct FfiEvent(pub core_types::Event);
 /// Opaque handle to an isolated scope stack for per-request/per-task isolation.
@@ -478,33 +476,6 @@ pub unsafe extern "C" fn nvmagic_llm_request_content(ptr: *const FfiLLMRequest) 
         return std::ptr::null_mut();
     }
     json_to_c_string(&unsafe { &*ptr }.0.content)
-}
-
-// ---------------------------------------------------------------------------
-// LLMResponse construction + accessors
-// ---------------------------------------------------------------------------
-
-/// Free an LLM response object.
-///
-/// # Safety
-/// `ptr` must be a valid pointer returned by an `nvmagic_*` function, or null.
-#[no_mangle]
-pub unsafe extern "C" fn nvmagic_llm_response_free(ptr: *mut FfiLLMResponse) {
-    if !ptr.is_null() {
-        drop(unsafe { Box::from_raw(ptr) });
-    }
-}
-
-/// Return the data of an LLM response as a JSON C string. Caller must free the result.
-///
-/// # Safety
-/// `ptr` must be a valid `FfiLLMResponse` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nvmagic_llm_response_data(ptr: *const FfiLLMResponse) -> *mut c_char {
-    if ptr.is_null() {
-        return std::ptr::null_mut();
-    }
-    json_to_c_string(&unsafe { &*ptr }.0.data)
 }
 
 // ---------------------------------------------------------------------------

@@ -42,7 +42,7 @@ Types (available at top level):
     ScopeAttributes, ToolAttributes, LLMAttributes,
     ScopeType, EventType,
     ScopeHandle, ToolHandle, LLMHandle,
-    LLMRequest, LLMResponse, Event, AtifExporter
+    LLMRequest, Event, AtifExporter
 """
 
 import contextvars
@@ -56,7 +56,6 @@ from nvmagic._native import (
     LLMAttributes,
     LLMHandle,
     LLMRequest,
-    LLMResponse,
     # Types (always at top level)
     ScopeAttributes,
     ScopeHandle,
@@ -105,7 +104,6 @@ __all__ = [
     "ToolHandle",
     "LLMHandle",
     "LLMRequest",
-    "LLMResponse",
     "Event",
     "AtifExporter",
 ]

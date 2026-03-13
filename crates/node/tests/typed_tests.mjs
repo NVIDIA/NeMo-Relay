@@ -35,7 +35,7 @@ const pointCodec = {
 };
 
 function makeNative() {
-  return { messages: [], model: 'test-model' };
+  return { headers: {}, content: { messages: [], model: 'test-model' } };
 }
 
 // ===========================================================================

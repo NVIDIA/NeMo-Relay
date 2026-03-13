@@ -6,7 +6,7 @@
 Provides both manual and managed LLM-call workflows, including streaming.
 
 Functions:
-    call(name, native, *, handle=None, attributes=None, data=None, metadata=None, model_name=None)
+    call(name, request, *, handle=None, attributes=None, data=None, metadata=None, model_name=None)
         Begin an LLM call manually.
 
         Returns an ``LLMHandle`` that must later be passed to ``call_end``. Emits a ``Start`` event.
@@ -15,12 +15,12 @@ Functions:
     call_end(handle, response, *, data=None, metadata=None)
         End a manual LLM call. Records the response and emits an ``End`` event.
 
-    execute(name, native, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None)
+    execute(name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None)
         Execute an LLM call through the full middleware pipeline:
 
-        - conditional-execution guardrails (on formal request derived via converter)
-        - request intercepts (on opaque native Json)
-        - sanitize-request guardrails (on formal request)
+        - conditional-execution guardrails (on ``LLMRequest``)
+        - request intercepts (on ``LLMRequest``)
+        - sanitize-request guardrails (on ``LLMRequest``)
         - execution intercepts
         - *func*
         - sanitize-response guardrails
@@ -31,11 +31,10 @@ Functions:
         Returns an awaitable of the final response. The optional ``model_name`` is propagated to events
         for ATIF trajectory export.
 
-    stream_execute(name, native, func, collector, finalizer, *, handle=None,
+    stream_execute(name, request, func, collector, finalizer, *, handle=None,
             attributes=None, data=None, metadata=None, model_name=None)
         Like ``execute``, conditional-execution guardrails run first on the
-        formal request derived via the converter. The execution function returns
-        an async iterator of Json chunks.
+        ``LLMRequest``. The execution function returns an async iterator of Json chunks.
 
         The ``collector`` callable is invoked with each Json chunk.
 
@@ -44,22 +43,23 @@ Functions:
 
         Returns an awaitable ``LlmStream`` that can be iterated with ``async for``.
 
-    request_intercepts(native)
-        Run the registered LLM request intercept chain on the given native payload.
-        Returns the transformed native Json.
+    request_intercepts(request)
+        Run the registered LLM request intercept chain on the given ``LLMRequest``.
+        Returns the transformed ``LLMRequest``.
 
-    conditional_execution(native)
+    conditional_execution(request)
         Run the registered LLM conditional execution guardrail chain.
         Raises ``RuntimeError`` if any guardrail rejects.
 
 Example::
 
     import nvmagic
+    from nvmagic import LLMRequest
 
-    native = {"messages": [{"role": "user", "content": "hello"}]}
+    request = LLMRequest({}, {"messages": [{"role": "user", "content": "hello"}]})
 
     # Non-streaming
-    resp = await nvmagic.llm.execute("gpt-4", native, my_llm_fn)
+    resp = await nvmagic.llm.execute("gpt-4", request, my_llm_fn)
 
     # Streaming with collector/finalizer
     chunks = []
@@ -69,7 +69,7 @@ Example::
         return {"chunks": chunks}
 
     stream = await nvmagic.llm.stream_execute(
-        "gpt-4", native, my_stream_fn, collect, finalize,
+        "gpt-4", request, my_stream_fn, collect, finalize,
     )
     async for chunk in stream:
         process(chunk)

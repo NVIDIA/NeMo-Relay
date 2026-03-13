@@ -18,8 +18,8 @@ fn parse_json(s: &str) -> JsValue {
     js_sys::JSON::parse(s).unwrap()
 }
 
-fn make_native() -> JsValue {
-    parse_json(r#"{"messages":[],"model":"test-model"}"#)
+fn make_request() -> JsValue {
+    parse_json(r#"{"headers":{},"content":{"messages":[],"model":"test-model"}}"#)
 }
 
 // ===========================================================================
@@ -28,15 +28,14 @@ fn make_native() -> JsValue {
 
 #[wasm_bindgen_test]
 fn test_llm_call_and_end() {
-    let native = make_native();
+    let request = make_request();
     let handle = nvmagic_llm_call(
         "test_llm",
-        native,
+        request,
         None,
         None,
         JsValue::NULL,
         JsValue::NULL,
-        None,
         None,
     )
     .unwrap();
@@ -44,49 +43,47 @@ fn test_llm_call_and_end() {
     assert!(!handle.uuid().is_empty());
 
     let response = parse_json(r#"{"choices":[{"text":"hello"}]}"#);
-    nvmagic_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
+    nvmagic_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_call_with_attributes() {
-    let native = make_native();
+    let request = make_request();
     let handle = nvmagic_llm_call(
         "attr_llm",
-        native,
+        request,
         None,
         Some(LLM_STATELESS | LLM_STREAMING),
         JsValue::NULL,
         JsValue::NULL,
-        None,
         None,
     )
     .unwrap();
     assert_eq!(handle.attributes(), LLM_STATELESS | LLM_STREAMING);
 
     let response = parse_json(r#"{}"#);
-    nvmagic_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
+    nvmagic_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_call_with_parent() {
     let scope = nvmagic_push_scope("llm_parent", SCOPE_TYPE_AGENT, None, None).unwrap();
     let scope_uuid = scope.uuid();
-    let native = make_native();
+    let request = make_request();
     let handle = nvmagic_llm_call(
         "parented_llm",
-        native,
+        request,
         Some(scope),
         None,
         JsValue::NULL,
         JsValue::NULL,
-        None,
         None,
     )
     .unwrap();
     assert_eq!(handle.parent_uuid().unwrap(), scope_uuid);
 
     let response = parse_json(r#"{}"#);
-    nvmagic_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
+    nvmagic_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
 
     let current = nvmagic_get_handle().unwrap();
     nvmagic_pop_scope(&current).unwrap();
@@ -94,14 +91,14 @@ fn test_llm_call_with_parent() {
 
 #[wasm_bindgen_test]
 fn test_llm_call_with_data_metadata() {
-    let native = make_native();
+    let request = make_request();
     let data = parse_json(r#"{"info":"llm_test"}"#);
     let meta = parse_json(r#"{"version":"2.0"}"#);
-    let handle = nvmagic_llm_call("data_llm", native, None, None, data, meta, None, None).unwrap();
+    let handle = nvmagic_llm_call("data_llm", request, None, None, data, meta, None).unwrap();
 
     let response = parse_json(r#"{}"#);
     let end_data = parse_json(r#"{"tokens":100}"#);
-    nvmagic_llm_call_end(&handle, response, end_data, JsValue::NULL, None).unwrap();
+    nvmagic_llm_call_end(&handle, response, end_data, JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -110,20 +107,19 @@ fn test_llm_call_generates_events() {
     let cb = js_fn1("event", "globalThis.__llm_events.push(event)");
     register_subscriber("wasm_llm_evt_sub", cb).unwrap();
 
-    let native = make_native();
+    let request = make_request();
     let handle = nvmagic_llm_call(
         "evt_llm",
-        native,
+        request,
         None,
         None,
         JsValue::NULL,
         JsValue::NULL,
-        None,
         None,
     )
     .unwrap();
     let response = parse_json(r#"{}"#);
-    nvmagic_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL, None).unwrap();
+    nvmagic_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
 
     let events = js_sys::eval("globalThis.__llm_events").unwrap();
     let arr = js_sys::Array::from(&events);
@@ -143,17 +139,15 @@ fn test_llm_call_generates_events() {
 #[wasm_bindgen_test]
 async fn test_llm_execute_basic() {
     let func = js_fn1("native", "return {response: 'hello from llm'}");
-    let native = make_native();
+    let request = make_request();
     let result = nvmagic_llm_call_execute(
         "exec_llm",
-        native,
+        request,
         func,
         None,
         None,
         JsValue::NULL,
         JsValue::NULL,
-        None,
-        None,
         None,
     )
     .await
@@ -166,17 +160,15 @@ async fn test_llm_execute_basic() {
 #[wasm_bindgen_test]
 async fn test_llm_execute_promise() {
     let func = js_fn1("native", "return Promise.resolve({async: true})");
-    let native = make_native();
+    let request = make_request();
     let result = nvmagic_llm_call_execute(
         "async_llm",
-        native,
+        request,
         func,
         None,
         None,
         JsValue::NULL,
         JsValue::NULL,
-        None,
-        None,
         None,
     )
     .await
@@ -234,24 +226,22 @@ fn test_duplicate_llm_guardrail_fails() {
 
 #[wasm_bindgen_test]
 fn test_llm_request_intercept() {
-    let func = js_fn1("native", "native.intercepted = true; return native");
+    let func = js_fn1("native", "native.content.intercepted = true; return native");
     register_llm_request_intercept("wasm_llm_req_int", 10, false, func).unwrap();
     deregister_llm_request_intercept("wasm_llm_req_int").unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_execution_intercept() {
-    let cond = js_fn1("native", "return true");
     let exec = js_fn1("native", "return {replaced: true}");
-    register_llm_execution_intercept("wasm_llm_exec_int", 10, cond, exec).unwrap();
+    register_llm_execution_intercept("wasm_llm_exec_int", 10, exec).unwrap();
     deregister_llm_execution_intercept("wasm_llm_exec_int").unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_stream_execution_intercept() {
-    let cond = js_fn1("native", "return true");
     let exec = js_fn1("native", "return {stream_result: true}");
-    register_llm_stream_execution_intercept("wasm_llm_stream_exec", 10, cond, exec).unwrap();
+    register_llm_stream_execution_intercept("wasm_llm_stream_exec", 10, exec).unwrap();
     deregister_llm_stream_execution_intercept("wasm_llm_stream_exec").unwrap();
 }
 
@@ -274,24 +264,22 @@ fn test_duplicate_llm_intercept_fails() {
 
 #[wasm_bindgen_test]
 async fn test_llm_request_intercept_modifies_request() {
-    let intercept = js_fn1("native", "native.intercepted = true; return native");
+    let intercept = js_fn1("native", "native.content.intercepted = true; return native");
     register_llm_request_intercept("wasm_llm_req_mod", 10, false, intercept).unwrap();
 
     let func = js_fn1(
         "native",
-        "return {saw_intercepted: native.intercepted || false}",
+        "return {saw_intercepted: (native.content && native.content.intercepted) || false}",
     );
-    let native = make_native();
+    let request = make_request();
     let result = nvmagic_llm_call_execute(
         "mod_llm",
-        native,
+        request,
         func,
         None,
         None,
         JsValue::NULL,
         JsValue::NULL,
-        None,
-        None,
         None,
     )
     .await
@@ -305,22 +293,19 @@ async fn test_llm_request_intercept_modifies_request() {
 
 #[wasm_bindgen_test]
 async fn test_llm_execution_intercept_replaces_func() {
-    let cond = js_fn1("native", "return true");
     let intercept_exec = js_fn1("native", "return {replaced: true}");
-    register_llm_execution_intercept("wasm_llm_exec_repl", 10, cond, intercept_exec).unwrap();
+    register_llm_execution_intercept("wasm_llm_exec_repl", 10, intercept_exec).unwrap();
 
     let original = js_fn1("native", "return {original: true}");
-    let native = make_native();
+    let request = make_request();
     let result = nvmagic_llm_call_execute(
         "repl_llm",
-        native,
+        request,
         original,
         None,
         None,
         JsValue::NULL,
         JsValue::NULL,
-        None,
-        None,
         None,
     )
     .await

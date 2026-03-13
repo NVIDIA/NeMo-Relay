@@ -258,9 +258,8 @@ fn test_tool_response_intercept() {
 
 #[wasm_bindgen_test]
 fn test_tool_execution_intercept() {
-    let cond = js_fn2("name, args", "return true");
     let exec = js_fn1("args", "return {intercepted: true}");
-    register_tool_execution_intercept("wasm_tool_exec_int", 10, cond, exec).unwrap();
+    register_tool_execution_intercept("wasm_tool_exec_int", 10, exec).unwrap();
     deregister_tool_execution_intercept("wasm_tool_exec_int").unwrap();
 }
 
@@ -336,9 +335,8 @@ async fn test_tool_response_intercept_modifies_result() {
 
 #[wasm_bindgen_test]
 async fn test_tool_execution_intercept_replaces_func() {
-    let cond = js_fn2("name, args", "return true");
     let intercept_exec = js_fn1("args", "return {replaced: true}");
-    register_tool_execution_intercept("wasm_tool_exec_repl", 10, cond, intercept_exec).unwrap();
+    register_tool_execution_intercept("wasm_tool_exec_repl", 10, intercept_exec).unwrap();
 
     let original = js_fn1("args", "return {original: true}");
     let args = parse_json(r#"{}"#);

@@ -23,7 +23,7 @@ const {
 } = lib;
 
 function makeNative() {
-  return { messages: [], model: 'test-model' };
+  return { headers: {}, content: { messages: [], model: 'test-model' } };
 }
 
 // ===========================================================================
@@ -33,7 +33,7 @@ function makeNative() {
 describe('LLM lifecycle', () => {
   it('llm call and end', () => {
     const native = makeNative();
-    const handle = llmCall('test_llm', native, null, null, null, null);
+    const handle = llmCall('test_llm', native, null, null, null, null, null);
     assert.equal(handle.name, 'test_llm');
     assert.ok(handle.uuid.length > 0);
     llmCallEnd(handle, { choices: [{ text: 'hello' }] }, null, null);
@@ -41,7 +41,7 @@ describe('LLM lifecycle', () => {
 
   it('llm call with attributes', () => {
     const native = makeNative();
-    const handle = llmCall('attr_llm', native, null, LLM_ATTR_STATELESS | LLM_ATTR_STREAMING, null, null);
+    const handle = llmCall('attr_llm', native, null, LLM_ATTR_STATELESS | LLM_ATTR_STREAMING, null, null, null);
     assert.equal(handle.attributes, LLM_ATTR_STATELESS | LLM_ATTR_STREAMING);
     llmCallEnd(handle, {}, null, null);
   });
@@ -49,7 +49,7 @@ describe('LLM lifecycle', () => {
   it('llm call with parent', () => {
     const scope = pushScope('llm_parent', ScopeType.Agent, null, null);
     const native = makeNative();
-    const handle = llmCall('parented_llm', native, scope, null, null, null);
+    const handle = llmCall('parented_llm', native, scope, null, null, null, null);
     assert.equal(handle.parentUuid, scope.uuid);
     llmCallEnd(handle, {}, null, null);
     popScope(scope);
@@ -57,7 +57,7 @@ describe('LLM lifecycle', () => {
 
   it('llm call with data/metadata', () => {
     const native = makeNative();
-    const handle = llmCall('data_llm', native, null, null, { info: 'llm_test' }, { version: '2.0' });
+    const handle = llmCall('data_llm', native, null, null, { info: 'llm_test' }, { version: '2.0' }, null);
     llmCallEnd(handle, {}, { tokens: 100 }, null);
   });
 
@@ -65,7 +65,7 @@ describe('LLM lifecycle', () => {
     const events = [];
     registerSubscriber('node_llm_evt_sub', (e) => events.push(e));
     const native = makeNative();
-    const handle = llmCall('evt_llm', native, null, null, null, null);
+    const handle = llmCall('evt_llm', native, null, null, null, null, null);
     llmCallEnd(handle, {}, null, null);
     await new Promise(r => setTimeout(r, 50));
     assert.ok(events.length >= 2, 'Expected at least 2 events');
@@ -80,7 +80,7 @@ describe('LLM lifecycle', () => {
 describe('LLM execute', () => {
   it('basic execute', async () => {
     const native = makeNative();
-    const result = await llmCallExecute('exec_llm', native, (n) => ({ response: 'hello from llm' }), null, null, null, null);
+    const result = await llmCallExecute('exec_llm', native, (n) => ({ response: 'hello from llm' }), null, null, null, null, null);
     assert.deepEqual(result, { response: 'hello from llm' });
   });
 });
@@ -128,12 +128,12 @@ describe('LLM intercepts', () => {
   });
 
   it('execution intercept', () => {
-    registerLlmExecutionIntercept('node_llm_exec_int', 10, (native) => true, (native) => ({ replaced: true }));
+    registerLlmExecutionIntercept('node_llm_exec_int', 10, (native) => ({ replaced: true }));
     deregisterLlmExecutionIntercept('node_llm_exec_int');
   });
 
   it('stream execution intercept', () => {
-    registerLlmStreamExecutionIntercept('node_llm_stream_exec', 10, (native) => true, (native) => ({ stream_result: true }));
+    registerLlmStreamExecutionIntercept('node_llm_stream_exec', 10, (native) => ({ stream_result: true }));
     deregisterLlmStreamExecutionIntercept('node_llm_stream_exec');
   });
 
@@ -149,17 +149,17 @@ describe('LLM intercepts', () => {
   });
 
   it('request intercept modifies request', async () => {
-    registerLlmRequestIntercept('node_llm_req_mod', 10, false, (native) => { native.intercepted = true; return native; });
+    registerLlmRequestIntercept('node_llm_req_mod', 10, false, (native) => { native.content.intercepted = true; return native; });
     const native = makeNative();
-    const result = await llmCallExecute('mod_llm', native, (n) => ({ saw_intercepted: n.intercepted || false }), null, null, null, null);
+    const result = await llmCallExecute('mod_llm', native, (n) => ({ saw_intercepted: n.content.intercepted || false }), null, null, null, null, null);
     assert.equal(result.saw_intercepted, true);
     deregisterLlmRequestIntercept('node_llm_req_mod');
   });
 
   it('execution intercept replaces func', async () => {
-    registerLlmExecutionIntercept('node_llm_exec_repl', 10, (native) => true, (native) => ({ replaced: true }));
+    registerLlmExecutionIntercept('node_llm_exec_repl', 10, (native) => ({ replaced: true }));
     const native = makeNative();
-    const result = await llmCallExecute('repl_llm', native, (n) => ({ original: true }), null, null, null, null);
+    const result = await llmCallExecute('repl_llm', native, (n) => ({ original: true }), null, null, null, null, null);
     assert.equal(result.replaced, true);
     deregisterLlmExecutionIntercept('node_llm_exec_repl');
   });

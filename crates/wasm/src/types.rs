@@ -385,51 +385,6 @@ impl WasmLLMRequest {
 }
 
 // ---------------------------------------------------------------------------
-// LLMResponse
-// ---------------------------------------------------------------------------
-
-/// Represents an LLM API response.
-///
-/// Construct via `new WasmLLMResponse(data)` from JavaScript.
-#[wasm_bindgen]
-pub struct WasmLLMResponse {
-    /// The underlying core `LLMResponse` containing the response data.
-    pub(crate) inner: core_types::LLMResponse,
-}
-
-#[wasm_bindgen]
-impl WasmLLMResponse {
-    /// Creates a new LLM response.
-    ///
-    /// - `data` - JSON response payload.
-    #[wasm_bindgen(constructor)]
-    pub fn new(data: JsValue) -> Result<WasmLLMResponse, JsValue> {
-        let data_json: serde_json::Value =
-            serde_wasm_bindgen::from_value(data).map_err(|e| JsValue::from_str(&e.to_string()))?;
-        Ok(Self {
-            inner: core_types::LLMResponse { data: data_json },
-        })
-    }
-
-    /// Returns the response data as a JSON value.
-    #[wasm_bindgen(getter)]
-    pub fn data(&self) -> JsValue {
-        self.inner
-            .data
-            .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
-            .unwrap_or(JsValue::NULL)
-    }
-
-    /// Sets the response data from a JSON value.
-    #[wasm_bindgen(setter)]
-    pub fn set_data(&mut self, data: JsValue) {
-        if let Ok(val) = serde_wasm_bindgen::from_value::<serde_json::Value>(data) {
-            self.inner.data = val;
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Event (serialized to JS object for subscribers)
 // ---------------------------------------------------------------------------
 

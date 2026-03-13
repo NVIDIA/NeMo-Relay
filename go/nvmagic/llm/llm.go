@@ -69,9 +69,9 @@ func RequestIntercepts(request json.RawMessage) (json.RawMessage, error) {
 
 // ConditionalExecution runs the registered LLM conditional execution guardrail
 // chain. Returns nil if all guardrails pass, or an error with the rejection
-// reason if blocked. Optional [nvmagic.LLMCallOption] values can supply a
-// [nvmagic.WithLLMToRequest] converter. This is a shorthand for
+// reason if blocked. The request should be in LLMRequest JSON format
+// ({"headers": {...}, "content": {...}}). This is a shorthand for
 // [nvmagic.LlmConditionalExecution].
-func ConditionalExecution(request json.RawMessage, opts ...nvmagic.LLMCallOption) error {
-	return nvmagic.LlmConditionalExecution(request, opts...)
+func ConditionalExecution(request json.RawMessage) error {
+	return nvmagic.LlmConditionalExecution(request)
 }

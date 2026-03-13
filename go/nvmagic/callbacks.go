@@ -30,12 +30,9 @@ typedef struct FfiEvent FfiEvent;
 typedef void (*NvMagicFreeFn)(void* user_data);
 typedef char* (*NvMagicToolSanitizeFn)(void* user_data, const char* name, const char* args_json);
 typedef char* (*NvMagicToolConditionalFn)(void* user_data, const char* name, const char* args_json);
-typedef _Bool (*NvMagicToolExecConditionalFn)(void* user_data, const char* name, const char* args_json);
 typedef char* (*NvMagicToolExecFn)(void* user_data, const char* args_json);
-typedef char* (*NvMagicJsonFn)(void* user_data, const char* json);
-typedef char* (*NvMagicLlmRequestFn)(void* user_data, const char* native_json);
-typedef char* (*NvMagicLlmConditionalFn)(void* user_data, const char* native_json);
-typedef _Bool (*NvMagicLlmExecConditionalFn)(void* user_data, const char* native_json);
+typedef FfiLLMRequest* (*NvMagicLlmRequestCb)(void* user_data, const FfiLLMRequest* request);
+typedef char* (*NvMagicLlmConditionalCb)(void* user_data, const FfiLLMRequest* request);
 typedef char* (*NvMagicLlmExecFn)(void* user_data, const char* native_json);
 typedef char* (*NvMagicLlmResponseFn)(void* user_data, const char* response_json);
 typedef void (*NvMagicEventSubscriberFn)(void* user_data, const FfiEvent* event);
@@ -140,11 +137,6 @@ type ToolSanitizeFunc func(name string, args json.RawMessage) json.RawMessage
 // message string to reject the call.
 type ToolConditionalFunc func(name string, args json.RawMessage) *string
 
-// ToolExecConditionalFunc is a callback that returns true if an execution
-// intercept should handle the tool call, or false to pass through to the
-// next intercept or the original implementation.
-type ToolExecConditionalFunc func(name string, args json.RawMessage) bool
-
 // ToolExecutionFunc is a callback that executes a tool call, receiving the
 // arguments as JSON and returning the result JSON or an error.
 type ToolExecutionFunc func(args json.RawMessage) (json.RawMessage, error)
@@ -156,13 +148,9 @@ type ToolExecutionFunc func(args json.RawMessage) (json.RawMessage, error)
 // Skip calling `next` to short-circuit the chain entirely.
 type ToolExecutionInterceptFunc func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error)
 
-// JSONFunc is a generic callback that transforms a JSON value and returns
-// the modified JSON. It is used for LLM request intercepts.
-type JSONFunc func(value json.RawMessage) json.RawMessage
-
 // LLMResponseFunc is a callback that transforms an LLM response. It receives
-// the response as a serialized LLMResponse JSON (containing a "data" field)
-// and must return the (possibly modified) response JSON.
+// the response as plain JSON and must return the (possibly modified) response
+// JSON.
 type LLMResponseFunc func(responseJSON json.RawMessage) json.RawMessage
 
 // LLMRequestFunc is a callback that transforms an LLM request. It receives
@@ -176,33 +164,16 @@ type LLMRequestFunc func(headers, content json.RawMessage) (headers2, content2 j
 // message string to reject the call.
 type LLMConditionalFunc func(headers, content json.RawMessage) *string
 
-// LLMExecConditionalFunc is a callback that returns true if an execution
-// intercept should handle the LLM call, or false to pass through to the
-// next intercept or the original implementation.
-type LLMExecConditionalFunc func(nativeJSON json.RawMessage) bool
-
 // LLMExecutionFunc is a callback that executes an LLM call, receiving the
-// native request as JSON and returning the response JSON or an error.
-type LLMExecutionFunc func(nativeJSON json.RawMessage) (json.RawMessage, error)
+// serialized LLMRequest as JSON and returning the response JSON or an error.
+type LLMExecutionFunc func(requestJSON json.RawMessage) (json.RawMessage, error)
 
 // LLMExecutionInterceptFunc is a callback for LLM execution intercepts
-// following the middleware chain pattern. It receives the native request JSON
-// and a `next` function. Call `next` to invoke the next intercept in the chain
-// (or the original LLM implementation if this is the innermost intercept).
-// Skip calling `next` to short-circuit the chain entirely.
-type LLMExecutionInterceptFunc func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error)
-
-// LLMToRequestFunc is a per-call converter that transforms native LLM JSON
-// into an LLMRequest JSON representation. It is passed via [WithLLMToRequest]
-// and is applied during LLM call start to convert provider-specific request
-// formats into the canonical LLMRequest used by guardrails and intercepts.
-type LLMToRequestFunc func(nativeJSON json.RawMessage) json.RawMessage
-
-// LLMToResponseFunc is a per-call converter that transforms native LLM JSON
-// into an LLMResponse JSON representation. It is passed via [WithLLMToResponse]
-// and is applied during LLM call end to convert provider-specific response
-// formats into the canonical LLMResponse used by guardrails and intercepts.
-type LLMToResponseFunc func(nativeJSON json.RawMessage) json.RawMessage
+// following the middleware chain pattern. It receives the serialized LLMRequest
+// as JSON and a `next` function. Call `next` to invoke the next intercept in
+// the chain (or the original LLM implementation if this is the innermost
+// intercept). Skip calling `next` to short-circuit the chain entirely.
+type LLMExecutionInterceptFunc func(requestJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error)
 
 // CollectorFunc is a callback invoked with each intercepted chunk during a
 // streaming LLM response. It is used to accumulate chunks on the Go side for
@@ -245,14 +216,6 @@ func goToolConditionalTrampoline(userData unsafe.Pointer, name *C.char, argsJSON
 	return C.CString(*result)
 }
 
-//export goToolExecConditionalTrampoline
-func goToolExecConditionalTrampoline(userData unsafe.Pointer, name *C.char, argsJSON *C.char) C._Bool {
-	fn := lookupClosure(userData).(ToolExecConditionalFunc)
-	goName := C.GoString(name)
-	goArgs := json.RawMessage(C.GoString(argsJSON))
-	return C._Bool(fn(goName, goArgs))
-}
-
 //export goToolExecTrampoline
 func goToolExecTrampoline(userData unsafe.Pointer, argsJSON *C.char) *C.char {
 	fn := lookupClosure(userData).(ToolExecutionFunc)
@@ -261,14 +224,6 @@ func goToolExecTrampoline(userData unsafe.Pointer, argsJSON *C.char) *C.char {
 	if err != nil {
 		return C.CString(`{"error":"` + err.Error() + `"}`)
 	}
-	return C.CString(string(result))
-}
-
-//export goJSONTrampoline
-func goJSONTrampoline(userData unsafe.Pointer, jsonStr *C.char) *C.char {
-	fn := lookupClosure(userData).(JSONFunc)
-	goJSON := json.RawMessage(C.GoString(jsonStr))
-	result := fn(goJSON)
 	return C.CString(string(result))
 }
 
@@ -285,11 +240,26 @@ func goFreeTrampoline(userData unsafe.Pointer) {
 }
 
 //export goLlmRequestTrampoline
-func goLlmRequestTrampoline(userData unsafe.Pointer, nativeJSON *C.char) *C.char {
-	fn := lookupClosure(userData).(JSONFunc)
-	goJSON := json.RawMessage(C.GoString(nativeJSON))
-	result := fn(goJSON)
-	return C.CString(string(result))
+func goLlmRequestTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) *C.FfiLLMRequest {
+	fn := lookupClosure(userData).(LLMRequestFunc)
+
+	// Extract headers and content from the incoming FfiLLMRequest
+	cHeaders := C.nvmagic_llm_request_headers(request)
+	cContent := C.nvmagic_llm_request_content(request)
+	goHeaders := json.RawMessage(C.GoString(cHeaders))
+	goContent := json.RawMessage(C.GoString(cContent))
+	C.nvmagic_string_free(cHeaders)
+	C.nvmagic_string_free(cContent)
+
+	// Call the Go callback
+	newHeaders, newContent := fn(goHeaders, goContent)
+
+	// Create a new FfiLLMRequest from the result
+	cNewHeaders := C.CString(string(newHeaders))
+	cNewContent := C.CString(string(newContent))
+	defer C.free(unsafe.Pointer(cNewHeaders))
+	defer C.free(unsafe.Pointer(cNewContent))
+	return C.nvmagic_llm_request_new(cNewHeaders, cNewContent)
 }
 
 //export goLlmResponseTrampoline
@@ -301,32 +271,22 @@ func goLlmResponseTrampoline(userData unsafe.Pointer, responseJSON *C.char) *C.c
 }
 
 //export goLlmConditionalTrampoline
-func goLlmConditionalTrampoline(userData unsafe.Pointer, nativeJSON *C.char) *C.char {
+func goLlmConditionalTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) *C.char {
 	fn := lookupClosure(userData).(LLMConditionalFunc)
 
-	// Parse the native JSON to extract headers and content for the Go callback
-	var req struct {
-		Headers map[string]interface{} `json:"headers"`
-		Content interface{}            `json:"content"`
-	}
-	goJSON := C.GoString(nativeJSON)
-	json.Unmarshal([]byte(goJSON), &req)
+	// Extract headers and content from the incoming FfiLLMRequest
+	cHeaders := C.nvmagic_llm_request_headers(request)
+	cContent := C.nvmagic_llm_request_content(request)
+	goHeaders := json.RawMessage(C.GoString(cHeaders))
+	goContent := json.RawMessage(C.GoString(cContent))
+	C.nvmagic_string_free(cHeaders)
+	C.nvmagic_string_free(cContent)
 
-	headersBytes, _ := json.Marshal(req.Headers)
-	contentBytes, _ := json.Marshal(req.Content)
-
-	result := fn(json.RawMessage(headersBytes), json.RawMessage(contentBytes))
+	result := fn(goHeaders, goContent)
 	if result == nil {
 		return nil
 	}
 	return C.CString(*result)
-}
-
-//export goLlmExecConditionalTrampoline
-func goLlmExecConditionalTrampoline(userData unsafe.Pointer, nativeJSON *C.char) C._Bool {
-	fn := lookupClosure(userData).(LLMExecConditionalFunc)
-	goJSON := json.RawMessage(C.GoString(nativeJSON))
-	return C._Bool(fn(goJSON))
 }
 
 //export goLlmExecTrampoline
@@ -367,22 +327,6 @@ func goFinalizerTrampoline() *C.char {
 		return C.CString(result)
 	}
 	return C.CString("null")
-}
-
-//export goToRequestTrampoline
-func goToRequestTrampoline(userData unsafe.Pointer, jsonStr *C.char) *C.char {
-	fn := lookupClosure(userData).(LLMToRequestFunc)
-	goJSON := json.RawMessage(C.GoString(jsonStr))
-	result := fn(goJSON)
-	return C.CString(string(result))
-}
-
-//export goToResponseTrampoline
-func goToResponseTrampoline(userData unsafe.Pointer, jsonStr *C.char) *C.char {
-	fn := lookupClosure(userData).(LLMToResponseFunc)
-	goJSON := json.RawMessage(C.GoString(jsonStr))
-	result := fn(goJSON)
-	return C.CString(string(result))
 }
 
 //export goToolExecInterceptTrampoline

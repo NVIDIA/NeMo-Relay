@@ -242,10 +242,10 @@ class LLMHandle:
 # ---------------------------------------------------------------------------
 
 class LLMRequest:
-    """An opaque LLM request derived from the native payload via the converter.
+    """An LLM request carrying headers and a content payload.
 
-    Used by guardrails for structured access. Intercepts and execution
-    operate on the native ``Json`` representation directly.
+    Flows through the entire middleware pipeline: guardrails, intercepts,
+    and execution functions all receive and return ``LLMRequest``.
     """
 
     def __init__(
@@ -267,24 +267,6 @@ class LLMRequest:
     @property
     def content(self) -> Json:
         """The request payload."""
-        ...
-
-class LLMResponse:
-    """An opaque LLM response derived from the native payload via the converter.
-
-    Used by response guardrails and response intercepts for structured access.
-    """
-
-    def __init__(self, data: Json) -> None:
-        """Create an LLM response.
-
-        Args:
-            data: The response payload.
-        """
-        ...
-    @property
-    def data(self) -> Json:
-        """The response payload."""
         ...
 
 class Event:
@@ -385,7 +367,7 @@ class LlmStream:
 
     Returned by ``llm.stream_execute()``. Use with ``async for``::
 
-        stream = await nvmagic.llm.stream_execute("model", native, fn, collector, finalizer)
+        stream = await nvmagic.llm.stream_execute("model", request, fn, collector, finalizer)
         async for chunk in stream:
             process(chunk)
     """
@@ -532,20 +514,19 @@ def nvmagic_tool_call_execute(
 
 def nvmagic_llm_call(
     name: str,
-    native: Json,
+    request: LLMRequest,
     *,
     handle: Optional[ScopeHandle] = None,
     attributes: Optional[LLMAttributes] = None,
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
     model_name: Optional[str] = None,
-    to_request: Optional[Callable[[Json], Json]] = None,
 ) -> LLMHandle:
     """Begin an LLM call manually.
 
     Args:
         name: Model/provider name.
-        native: The native LLM request payload (any JSON-serializable value).
+        request: An ``LLMRequest`` object with headers and content.
 
     Returns an ``LLMHandle`` that must be passed to ``nvmagic_llm_call_end``.
     Emits a Start event.
@@ -558,37 +539,33 @@ def nvmagic_llm_call_end(
     *,
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
-    to_response: Optional[Callable[[Json], Json]] = None,
 ) -> None:
     """End a manual LLM call. Records the response and emits an End event."""
     ...
 
 def nvmagic_llm_call_execute(
     name: str,
-    native: Json,
-    func: Callable[[Json], Awaitable[Json]],
+    request: LLMRequest,
+    func: Callable[[LLMRequest], Awaitable[Json]],
     *,
     handle: Optional[ScopeHandle] = None,
     attributes: Optional[LLMAttributes] = None,
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
     model_name: Optional[str] = None,
-    to_request: Optional[Callable[[Json], Json]] = None,
-    to_response: Optional[Callable[[Json], Json]] = None,
 ) -> Awaitable[Json]:
     """Execute an LLM call through the full middleware pipeline.
 
-    Runs conditional-execution guardrails (on formal request derived via
-    converter) → request intercepts (on opaque native Json) →
-    sanitize-request guardrails → execution intercepts → func → response
-    intercepts → sanitize-response guardrails. On rejection, only a standalone
+    Runs conditional-execution guardrails → request intercepts →
+    sanitize-request guardrails → execution intercepts → func →
+    sanitize-response guardrails. On rejection, only a standalone
     ``Mark`` event is emitted (no ``Start``/``End`` pair) and
     ``GuardrailRejected`` is raised.
 
     Args:
         name: Model/provider name.
-        native: The native LLM request payload (any JSON-serializable value).
-        func: Async callable ``(native) -> response``.
+        request: An ``LLMRequest`` object with headers and content.
+        func: Async callable ``(LLMRequest) -> response``.
         handle: Optional parent scope handle.
         attributes: Optional ``LLMAttributes`` bitflags.
         data: Optional application data.
@@ -601,8 +578,8 @@ def nvmagic_llm_call_execute(
 
 async def nvmagic_llm_stream_call_execute(
     name: str,
-    native: Json,
-    func: Callable[[Json], AsyncIterator[Json]],
+    request: LLMRequest,
+    func: Callable[[LLMRequest], AsyncIterator[Json]],
     collector: Callable[[Json], None],
     finalizer: Callable[[], Any],
     *,
@@ -611,20 +588,17 @@ async def nvmagic_llm_stream_call_execute(
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
     model_name: Optional[str] = None,
-    to_request: Optional[Callable[[Json], Json]] = None,
-    to_response: Optional[Callable[[Json], Json]] = None,
 ) -> LlmStream:
     """Execute a streaming LLM call through the full middleware pipeline.
 
     Like ``nvmagic_llm_call_execute``, conditional-execution guardrails run
-    first on the formal request derived via the converter. On rejection, only
-    a standalone ``Mark`` event is emitted (no ``Start``/``End`` pair) and
-    ``GuardrailRejected`` is raised.
+    first. On rejection, only a standalone ``Mark`` event is emitted
+    (no ``Start``/``End`` pair) and ``GuardrailRejected`` is raised.
 
     Args:
         name: Model/provider name.
-        native: The native LLM request payload (any JSON-serializable value).
-        func: Async callable ``(native) -> AsyncIterator[Json]`` returning
+        request: An ``LLMRequest`` object with headers and content.
+        func: Async callable ``(LLMRequest) -> AsyncIterator[Json]`` returning
             Json chunks.
         collector: A callable ``(chunk: Json) -> None`` invoked with each
             intercepted chunk after stream response intercepts have been applied.
@@ -665,22 +639,17 @@ def nvmagic_tool_response_intercepts(name: str, result: Json) -> Json:
     """
     ...
 
-def nvmagic_llm_request_intercepts(native: Json) -> Json:
-    """Run the registered LLM request intercept chain on the native payload.
+def nvmagic_llm_request_intercepts(request: LLMRequest) -> LLMRequest:
+    """Run the registered LLM request intercept chain.
 
-    Returns the transformed native Json.
+    Returns the transformed ``LLMRequest``.
     """
     ...
 
-def nvmagic_llm_conditional_execution(
-    native: Json,
-    *,
-    to_request: Optional[Callable[[Json], Json]] = None,
-) -> None:
+def nvmagic_llm_conditional_execution(request: LLMRequest) -> None:
     """Run the registered LLM conditional execution guardrail chain.
 
-    Derives a formal ``LLMRequest`` via the converter and runs conditional
-    guardrails on it. Raises ``RuntimeError`` if any guardrail rejects.
+    Raises ``RuntimeError`` if any guardrail rejects.
     """
     ...
 
@@ -766,12 +735,10 @@ def nvmagic_deregister_tool_response_intercept(name: str) -> bool:
 def nvmagic_register_tool_execution_intercept(
     name: str,
     priority: int,
-    conditional: Callable[[str, Json], bool],
     callable: Callable[[Json, Callable[[Json], Awaitable[Json]]], Awaitable[Json]],
 ) -> None:
     """Register a tool execution intercept (middleware chain pattern).
 
-    ``conditional``: ``(tool_name, args) -> bool`` — activates this intercept.
     ``callable``: ``async (args, next) -> result`` — intercept function.
     Call ``await next(args)`` to invoke the next intercept or original
     implementation. Skip calling ``next`` to short-circuit the chain.
@@ -800,11 +767,11 @@ def nvmagic_deregister_llm_sanitize_request_guardrail(name: str) -> bool:
     ...
 
 def nvmagic_register_llm_sanitize_response_guardrail(
-    name: str, priority: int, guardrail: Callable[[LLMResponse], LLMResponse]
+    name: str, priority: int, guardrail: Callable[[dict], dict]
 ) -> None:
     """Register an LLM sanitize-response guardrail.
 
-    Callback: ``(response: LLMResponse) -> LLMResponse``.
+    Callback: ``(response: dict) -> dict``.
     """
     ...
 
@@ -833,11 +800,11 @@ def nvmagic_register_llm_request_intercept(
     name: str,
     priority: int,
     break_chain: bool,
-    callable: Callable[[Json], Json],
+    callable: Callable[[LLMRequest], LLMRequest],
 ) -> None:
     """Register an LLM request intercept.
 
-    Callback: ``(native) -> transformed_native`` — operates on opaque Json.
+    Callback: ``(request: LLMRequest) -> LLMRequest`` — transforms the LLM request.
     """
     ...
 
@@ -848,14 +815,12 @@ def nvmagic_deregister_llm_request_intercept(name: str) -> bool:
 def nvmagic_register_llm_execution_intercept(
     name: str,
     priority: int,
-    conditional: Callable[[Json], bool],
-    callable: Callable[[Json, Callable[[Json], Awaitable[Json]]], Awaitable[Json]],
+    callable: Callable[[LLMRequest, Callable[[LLMRequest], Awaitable[Json]]], Awaitable[Json]],
 ) -> None:
     """Register an LLM execution intercept (middleware chain pattern).
 
-    ``conditional``: ``(native) -> bool`` — activates this intercept.
-    ``callable``: ``async (native, next) -> response`` — intercept function.
-    Call ``await next(native)`` to invoke the next intercept or original
+    ``callable``: ``async (request, next) -> response`` — intercept function.
+    Call ``await next(request)`` to invoke the next intercept or original
     implementation. Skip calling ``next`` to short-circuit the chain.
     """
     ...
@@ -867,14 +832,14 @@ def nvmagic_deregister_llm_execution_intercept(name: str) -> bool:
 def nvmagic_register_llm_stream_execution_intercept(
     name: str,
     priority: int,
-    conditional: Callable[[Json], bool],
-    callable: Callable[[Json, Callable[[Json], Awaitable[AsyncIterator[Json]]]], Awaitable[AsyncIterator[Json]]],
+    callable: Callable[
+        [LLMRequest, Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]]], Awaitable[AsyncIterator[Json]]
+    ],
 ) -> None:
     """Register an LLM stream-execution intercept (middleware chain pattern).
 
-    ``conditional``: ``(native) -> bool`` — activates this intercept.
-    ``callable``: ``async (native, next) -> AsyncIterator[Json]`` — intercept
-    function. Call ``await next(native)`` to invoke the next intercept or
+    ``callable``: ``async (request, next) -> AsyncIterator[Json]`` — intercept
+    function. Call ``await next(request)`` to invoke the next intercept or
     original streaming implementation. Skip calling ``next`` to short-circuit.
     """
     ...

@@ -32,7 +32,6 @@ typedef struct FfiScopeStack FfiScopeStack;
 typedef struct FfiToolHandle FfiToolHandle;
 typedef struct FfiLLMHandle FfiLLMHandle;
 typedef struct FfiLLMRequest FfiLLMRequest;
-typedef struct FfiLLMResponse FfiLLMResponse;
 typedef struct FfiEvent FfiEvent;
 typedef struct FfiStream FfiStream;
 
@@ -57,20 +56,12 @@ extern int32_t nvmagic_tool_call_execute(
 	const char* data_json, const char* metadata_json,
 	char** out);
 
-// LLM lifecycle (converter callbacks are nullable NvMagicJsonCb function pointers)
-// Option<fn_ptr> in Rust is ABI-compatible with a nullable function pointer.
-// We define the Option struct explicitly so CGo can pass it by value correctly.
-typedef char* (*NvMagicJsonCb)(void* user_data, const char* json);
-typedef struct Option_NvMagicJsonCb { NvMagicJsonCb cb; } Option_NvMagicJsonCb;
+// LLM lifecycle
 typedef void (*NvMagicCollectorCb)(const char* chunk_json);
 typedef struct Option_NvMagicCollectorCb { NvMagicCollectorCb cb; } Option_NvMagicCollectorCb;
 typedef char* (*NvMagicFinalizerCb)();
 typedef struct Option_NvMagicFinalizerCb { NvMagicFinalizerCb cb; } Option_NvMagicFinalizerCb;
 
-static inline Option_NvMagicJsonCb makeOptJsonCb(NvMagicJsonCb cb) {
-	Option_NvMagicJsonCb opt = { cb };
-	return opt;
-}
 static inline Option_NvMagicCollectorCb makeOptCollectorCb(NvMagicCollectorCb cb) {
 	Option_NvMagicCollectorCb opt = { cb };
 	return opt;
@@ -80,8 +71,8 @@ static inline Option_NvMagicFinalizerCb makeOptFinalizerCb(NvMagicFinalizerCb cb
 	return opt;
 }
 
-extern int32_t nvmagic_llm_call(const char* name, const char* native_json, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* model_name, Option_NvMagicJsonCb to_request_cb, void* to_request_ud, NvMagicFreeFn to_request_free, FfiLLMHandle** out);
-extern int32_t nvmagic_llm_call_end(const FfiLLMHandle* handle, const char* response_json, const char* data_json, const char* metadata_json, Option_NvMagicJsonCb to_response_cb, void* to_response_ud, NvMagicFreeFn to_response_free);
+extern int32_t nvmagic_llm_call(const char* name, const char* native_json, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* model_name, FfiLLMHandle** out);
+extern int32_t nvmagic_llm_call_end(const FfiLLMHandle* handle, const char* response_json, const char* data_json, const char* metadata_json);
 
 // LLM call execute
 typedef char* (*NvMagicLlmExecFn)(void* user_data, const char* native_json);
@@ -91,8 +82,6 @@ extern int32_t nvmagic_llm_call_execute(
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
 	const char* model_name,
-	Option_NvMagicJsonCb to_request_cb, void* to_request_ud, NvMagicFreeFn to_request_free,
-	Option_NvMagicJsonCb to_response_cb, void* to_response_ud, NvMagicFreeFn to_response_free,
 	char** out);
 
 // LLM stream execute
@@ -103,8 +92,6 @@ extern int32_t nvmagic_llm_stream_call_execute(
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
 	const char* model_name,
-	Option_NvMagicJsonCb to_request_cb, void* to_request_ud, NvMagicFreeFn to_request_free,
-	Option_NvMagicJsonCb to_response_cb, void* to_response_ud, NvMagicFreeFn to_response_free,
 	FfiStream** out);
 
 // Tool guardrails
@@ -124,38 +111,34 @@ extern int32_t nvmagic_deregister_tool_request_intercept(const char* name);
 extern int32_t nvmagic_register_tool_response_intercept(const char* name, int32_t priority, _Bool break_chain, NvMagicToolSanitizeFn cb, void* user_data, NvMagicFreeFn free_fn);
 extern int32_t nvmagic_deregister_tool_response_intercept(const char* name);
 
-typedef _Bool (*NvMagicToolExecConditionalFn)(void* user_data, const char* name, const char* args_json);
 // Middleware chain intercept callback types (must be declared before use in externs)
 typedef char* (*NvMagicToolExecNextFn)(const char* args_json, void* next_ctx);
 typedef char* (*NvMagicToolExecInterceptCb)(void* user_data, const char* args_json, NvMagicToolExecNextFn next_fn, void* next_ctx);
-extern int32_t nvmagic_register_tool_execution_intercept(const char* name, int32_t priority, NvMagicToolExecConditionalFn cond_cb, void* cond_user_data, NvMagicFreeFn cond_free, NvMagicToolExecInterceptCb exec_cb, void* exec_user_data, NvMagicFreeFn exec_free);
+extern int32_t nvmagic_register_tool_execution_intercept(const char* name, int32_t priority, NvMagicToolExecInterceptCb exec_cb, void* exec_user_data, NvMagicFreeFn exec_free);
 extern int32_t nvmagic_deregister_tool_execution_intercept(const char* name);
 
 // LLM guardrails
-typedef char* (*NvMagicLlmRequestFn)(void* user_data, const char* native_json);
-extern int32_t nvmagic_register_llm_sanitize_request_guardrail(const char* name, int32_t priority, NvMagicLlmRequestFn cb, void* user_data, NvMagicFreeFn free_fn);
+typedef FfiLLMRequest* (*NvMagicLlmRequestCb)(void* user_data, const FfiLLMRequest* request);
+extern int32_t nvmagic_register_llm_sanitize_request_guardrail(const char* name, int32_t priority, NvMagicLlmRequestCb cb, void* user_data, NvMagicFreeFn free_fn);
 extern int32_t nvmagic_deregister_llm_sanitize_request_guardrail(const char* name);
 
 typedef char* (*NvMagicLlmResponseFn)(void* user_data, const char* response_json);
 extern int32_t nvmagic_register_llm_sanitize_response_guardrail(const char* name, int32_t priority, NvMagicLlmResponseFn cb, void* user_data, NvMagicFreeFn free_fn);
 extern int32_t nvmagic_deregister_llm_sanitize_response_guardrail(const char* name);
 
-typedef char* (*NvMagicJsonFn)(void* user_data, const char* json);
-
-typedef char* (*NvMagicLlmConditionalFn)(void* user_data, const char* native_json);
-extern int32_t nvmagic_register_llm_conditional_execution_guardrail(const char* name, int32_t priority, NvMagicLlmConditionalFn cb, void* user_data, NvMagicFreeFn free_fn);
+typedef char* (*NvMagicLlmConditionalCb)(void* user_data, const FfiLLMRequest* request);
+extern int32_t nvmagic_register_llm_conditional_execution_guardrail(const char* name, int32_t priority, NvMagicLlmConditionalCb cb, void* user_data, NvMagicFreeFn free_fn);
 extern int32_t nvmagic_deregister_llm_conditional_execution_guardrail(const char* name);
 
 // LLM intercepts
-extern int32_t nvmagic_register_llm_request_intercept(const char* name, int32_t priority, _Bool break_chain, NvMagicJsonFn cb, void* user_data, NvMagicFreeFn free_fn);
+extern int32_t nvmagic_register_llm_request_intercept(const char* name, int32_t priority, _Bool break_chain, NvMagicLlmRequestCb cb, void* user_data, NvMagicFreeFn free_fn);
 extern int32_t nvmagic_deregister_llm_request_intercept(const char* name);
-typedef _Bool (*NvMagicLlmExecConditionalFn)(void* user_data, const char* native_json);
 typedef char* (*NvMagicLlmExecNextFn)(const char* native_json, void* next_ctx);
 typedef char* (*NvMagicLlmExecInterceptCb)(void* user_data, const char* native_json, NvMagicLlmExecNextFn next_fn, void* next_ctx);
 
-extern int32_t nvmagic_register_llm_execution_intercept(const char* name, int32_t priority, NvMagicLlmExecConditionalFn cond_cb, void* cond_user_data, NvMagicFreeFn cond_free, NvMagicLlmExecInterceptCb exec_cb, void* exec_user_data, NvMagicFreeFn exec_free);
+extern int32_t nvmagic_register_llm_execution_intercept(const char* name, int32_t priority, NvMagicLlmExecInterceptCb exec_cb, void* exec_user_data, NvMagicFreeFn exec_free);
 extern int32_t nvmagic_deregister_llm_execution_intercept(const char* name);
-extern int32_t nvmagic_register_llm_stream_execution_intercept(const char* name, int32_t priority, NvMagicLlmExecConditionalFn cond_cb, void* cond_user_data, NvMagicFreeFn cond_free, NvMagicLlmExecInterceptCb exec_cb, void* exec_user_data, NvMagicFreeFn exec_free);
+extern int32_t nvmagic_register_llm_stream_execution_intercept(const char* name, int32_t priority, NvMagicLlmExecInterceptCb exec_cb, void* exec_user_data, NvMagicFreeFn exec_free);
 extern int32_t nvmagic_deregister_llm_stream_execution_intercept(const char* name);
 
 // Subscribers
@@ -168,7 +151,7 @@ extern int32_t nvmagic_tool_request_intercepts(const char* name, const char* arg
 extern int32_t nvmagic_tool_conditional_execution(const char* name, const char* args_json);
 extern int32_t nvmagic_tool_response_intercepts(const char* name, const char* result_json, char** out);
 extern int32_t nvmagic_llm_request_intercepts(const char* request_json, char** out);
-extern int32_t nvmagic_llm_conditional_execution(const char* request_json, Option_NvMagicJsonCb to_request_cb, void* to_request_ud, NvMagicFreeFn to_request_free);
+extern int32_t nvmagic_llm_conditional_execution(const char* request_json);
 // Error
 extern const char* nvmagic_last_error();
 
@@ -191,20 +174,15 @@ extern void nvmagic_atif_exporter_free(void*);
 // Go trampoline forward declarations (defined via //export in callbacks.go)
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
 extern char* goToolConditionalTrampoline(void*, const char*, const char*);
-extern _Bool goToolExecConditionalTrampoline(void*, const char*, const char*);
 extern char* goToolExecTrampoline(void*, const char*);
-extern char* goJSONTrampoline(void*, const char*);
 extern void goEventSubscriberTrampoline(void*, const FfiEvent*);
 extern void goFreeTrampoline(void*);
-extern char* goLlmRequestTrampoline(void*, const char*);
+extern FfiLLMRequest* goLlmRequestTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmResponseTrampoline(void*, const char*);
-extern char* goLlmConditionalTrampoline(void*, const char*);
-extern _Bool goLlmExecConditionalTrampoline(void*, const char*);
+extern char* goLlmConditionalTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmExecTrampoline(void*, const char*);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NvMagicToolExecNextFn, void*);
 extern char* goLlmExecInterceptTrampoline(void*, const char*, NvMagicLlmExecNextFn, void*);
-extern char* goToRequestTrampoline(void*, const char*);
-extern char* goToResponseTrampoline(void*, const char*);
 extern void goCollectorTrampoline(const char*);
 extern char* goFinalizerTrampoline();
 */
@@ -550,18 +528,13 @@ type llmCallOptions struct {
 	data       *C.char
 	metadata   *C.char
 	modelName  *C.char
-
-	// Per-call converter callbacks (nullable).
-	toRequest    LLMToRequestFunc
-	toRequestID  unsafe.Pointer // closure registry ID for toRequest
-	toResponse   LLMToResponseFunc
-	toResponseID unsafe.Pointer // closure registry ID for toResponse
 }
 
 // LLMCallOption is a functional option that configures optional parameters for
 // LLM call functions ([LlmCall], [LlmCallEnd], [LlmCallExecute],
-// [LlmStreamCallExecute]). Available options include [WithLLMParent],
-// [WithLLMAttributes], [WithLLMData], and [WithLLMMetadata].
+// [LlmStreamCallExecute], [LlmConditionalExecution]). Available options include
+// [WithLLMParent], [WithLLMAttributes], [WithLLMData], [WithLLMMetadata], and
+// [WithLLMModelName].
 type LLMCallOption func(*llmCallOptions)
 
 // WithLLMParent sets the parent scope handle for an LLM call. If not provided,
@@ -609,37 +582,6 @@ func WithLLMModelName(name string) LLMCallOption {
 	}
 }
 
-// WithLLMToRequest sets a per-call converter function that transforms native
-// LLM JSON into an LLMRequest JSON representation. This converter is applied
-// during call start ([LlmCall], [LlmCallExecute], [LlmStreamCallExecute]) and
-// during conditional execution ([LlmConditionalExecution]) to convert the
-// provider-specific request format into the canonical LLMRequest used by
-// guardrails and intercepts. Pass nil or omit to use the default identity
-// conversion.
-func WithLLMToRequest(fn LLMToRequestFunc) LLMCallOption {
-	return func(o *llmCallOptions) {
-		o.toRequest = fn
-		if fn != nil {
-			o.toRequestID = registerClosure(fn)
-		}
-	}
-}
-
-// WithLLMToResponse sets a per-call converter function that transforms native
-// LLM JSON into an LLMResponse JSON representation. This converter is applied
-// during call end ([LlmCallEnd], [LlmCallExecute], [LlmStreamCallExecute])
-// to convert the provider-specific response format into the canonical
-// LLMResponse used by guardrails and intercepts. Pass nil or omit to use the
-// default identity conversion.
-func WithLLMToResponse(fn LLMToResponseFunc) LLMCallOption {
-	return func(o *llmCallOptions) {
-		o.toResponse = fn
-		if fn != nil {
-			o.toResponseID = registerClosure(fn)
-		}
-	}
-}
-
 func freeLLMOpts(o *llmCallOptions) {
 	if o.data != nil {
 		C.free(unsafe.Pointer(o.data))
@@ -650,27 +592,6 @@ func freeLLMOpts(o *llmCallOptions) {
 	if o.modelName != nil {
 		C.free(unsafe.Pointer(o.modelName))
 	}
-	// Note: converter callback closure IDs (toRequestID, toResponseID) are
-	// NOT freed here. They are passed to C along with goFreeTrampoline, and
-	// C calls the free function when it is done with the callback.
-}
-
-// toRequestCParams returns the C callback triple for the to_request converter.
-// Returns a zero Option_NvMagicJsonCb (None) when no converter is set.
-func (o *llmCallOptions) toRequestCParams() (C.Option_NvMagicJsonCb, unsafe.Pointer, C.NvMagicFreeFn) {
-	if o.toRequest == nil {
-		return C.makeOptJsonCb(nil), nil, nil
-	}
-	return C.makeOptJsonCb(C.NvMagicJsonCb(C.goToRequestTrampoline)), o.toRequestID, C.NvMagicFreeFn(C.goFreeTrampoline)
-}
-
-// toResponseCParams returns the C callback triple for the to_response converter.
-// Returns a zero Option_NvMagicJsonCb (None) when no converter is set.
-func (o *llmCallOptions) toResponseCParams() (C.Option_NvMagicJsonCb, unsafe.Pointer, C.NvMagicFreeFn) {
-	if o.toResponse == nil {
-		return C.makeOptJsonCb(nil), nil, nil
-	}
-	return C.makeOptJsonCb(C.NvMagicJsonCb(C.goToResponseTrampoline)), o.toResponseID, C.NvMagicFreeFn(C.goFreeTrampoline)
 }
 
 // LlmCall starts an LLM call lifecycle and returns an [LLMHandle]. This emits a
@@ -679,30 +600,28 @@ func (o *llmCallOptions) toResponseCParams() (C.Option_NvMagicJsonCb, unsafe.Poi
 // the full lifecycle automatically, use [LlmCallExecute] or
 // [LlmStreamCallExecute] instead.
 //
-// The name identifies the LLM provider/model, and native is any JSON-serializable
-// value representing the native LLM request payload. Optional parameters can be
-// set via [LLMCallOption] values.
-func LlmCall(name string, native interface{}, opts ...LLMCallOption) (*LLMHandle, error) {
+// The name identifies the LLM provider/model, and request is an LLMRequest-shaped
+// value ({headers, content}) that will be serialized to JSON. Optional parameters
+// can be set via [LLMCallOption] values.
+func LlmCall(name string, request interface{}, opts ...LLMCallOption) (*LLMHandle, error) {
 	o := &llmCallOptions{}
 	for _, opt := range opts {
 		opt(o)
 	}
 	defer freeLLMOpts(o)
 
-	nativeJSON, err := json.Marshal(native)
+	requestJSON, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
 	}
 
 	cName := C.CString(name)
-	cNative := C.CString(string(nativeJSON))
+	cRequest := C.CString(string(requestJSON))
 	defer C.free(unsafe.Pointer(cName))
-	defer C.free(unsafe.Pointer(cNative))
-
-	toReqCb, toReqUD, toReqFree := o.toRequestCParams()
+	defer C.free(unsafe.Pointer(cRequest))
 
 	var out *C.FfiLLMHandle
-	status := C.nvmagic_llm_call(cName, cNative, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.modelName, toReqCb, toReqUD, toReqFree, &out)
+	status := C.nvmagic_llm_call(cName, cRequest, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.modelName, &out)
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}
@@ -722,9 +641,7 @@ func LlmCallEnd(handle *LLMHandle, response json.RawMessage, opts ...LLMCallOpti
 	cResponse := C.CString(string(response))
 	defer C.free(unsafe.Pointer(cResponse))
 
-	toRespCb, toRespUD, toRespFree := o.toResponseCParams()
-
-	return checkStatus(C.nvmagic_llm_call_end(handle.ptr, cResponse, o.data, o.metadata, toRespCb, toRespUD, toRespFree))
+	return checkStatus(C.nvmagic_llm_call_end(handle.ptr, cResponse, o.data, o.metadata))
 }
 
 // LlmCallExecute runs a complete LLM call lifecycle through the full
@@ -734,14 +651,14 @@ func LlmCallEnd(handle *LLMHandle, response json.RawMessage, opts ...LLMCallOpti
 // On rejection, only a standalone Mark event is emitted (no Start/End pair)
 // and GuardrailRejected is returned. This is the recommended high-level API
 // for non-streaming LLM invocations.
-func LlmCallExecute(name string, native interface{}, fn LLMExecutionFunc, opts ...LLMCallOption) (json.RawMessage, error) {
+func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts ...LLMCallOption) (json.RawMessage, error) {
 	o := &llmCallOptions{}
 	for _, opt := range opts {
 		opt(o)
 	}
 	defer freeLLMOpts(o)
 
-	nativeJSON, err := json.Marshal(native)
+	requestJSON, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
 	}
@@ -749,24 +666,19 @@ func LlmCallExecute(name string, native interface{}, fn LLMExecutionFunc, opts .
 	id := registerClosure(fn)
 
 	cName := C.CString(name)
-	cNative := C.CString(string(nativeJSON))
+	cRequest := C.CString(string(requestJSON))
 	defer C.free(unsafe.Pointer(cName))
-	defer C.free(unsafe.Pointer(cNative))
-
-	toReqCb, toReqUD, toReqFree := o.toRequestCParams()
-	toRespCb, toRespUD, toRespFree := o.toResponseCParams()
+	defer C.free(unsafe.Pointer(cRequest))
 
 	var out *C.char
 	status := C.nvmagic_llm_call_execute(
-		cName, cNative,
+		cName, cRequest,
 		C.NvMagicLlmExecFn(C.goLlmExecTrampoline),
 		id,
 		C.NvMagicFreeFn(C.goFreeTrampoline),
 		o.parent, C.uint32_t(o.attributes),
 		o.data, o.metadata,
 		o.modelName,
-		toReqCb, toReqUD, toReqFree,
-		toRespCb, toRespUD, toRespFree,
 		&out,
 	)
 	if err := checkStatus(status); err != nil {
@@ -790,14 +702,14 @@ func LlmCallExecute(name string, native interface{}, fn LLMExecutionFunc, opts .
 // finalizer callback is invoked once when the stream is exhausted and must
 // return a JSON string representing the aggregated response. Pass nil for
 // either to use the default no-op behavior.
-func LlmStreamCallExecute(name string, native interface{}, fn LLMExecutionFunc, collector CollectorFunc, finalizer FinalizerFunc, opts ...LLMCallOption) (*LlmStream, error) {
+func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc, collector CollectorFunc, finalizer FinalizerFunc, opts ...LLMCallOption) (*LlmStream, error) {
 	o := &llmCallOptions{}
 	for _, opt := range opts {
 		opt(o)
 	}
 	defer freeLLMOpts(o)
 
-	nativeJSON, err := json.Marshal(native)
+	requestJSON, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
 	}
@@ -805,9 +717,9 @@ func LlmStreamCallExecute(name string, native interface{}, fn LLMExecutionFunc, 
 	id := registerClosure(fn)
 
 	cName := C.CString(name)
-	cNative := C.CString(string(nativeJSON))
+	cRequest := C.CString(string(requestJSON))
 	defer C.free(unsafe.Pointer(cName))
-	defer C.free(unsafe.Pointer(cNative))
+	defer C.free(unsafe.Pointer(cRequest))
 
 	// Set the active collector/finalizer for the duration of the blocking FFI call.
 	// The C collector/finalizer callbacks are plain function pointers (no user_data),
@@ -838,12 +750,9 @@ func LlmStreamCallExecute(name string, native interface{}, fn LLMExecutionFunc, 
 		cFinalizer = C.makeOptFinalizerCb(nil)
 	}
 
-	toReqCb, toReqUD, toReqFree := o.toRequestCParams()
-	toRespCb, toRespUD, toRespFree := o.toResponseCParams()
-
 	var out *C.FfiStream
 	status := C.nvmagic_llm_stream_call_execute(
-		cName, cNative,
+		cName, cRequest,
 		C.NvMagicLlmExecFn(C.goLlmExecTrampoline),
 		id,
 		C.NvMagicFreeFn(C.goFreeTrampoline),
@@ -852,8 +761,6 @@ func LlmStreamCallExecute(name string, native interface{}, fn LLMExecutionFunc, 
 		o.parent, C.uint32_t(o.attributes),
 		o.data, o.metadata,
 		o.modelName,
-		toReqCb, toReqUD, toReqFree,
-		toRespCb, toRespUD, toRespFree,
 		&out,
 	)
 	if err := checkStatus(status); err != nil {
@@ -996,20 +903,15 @@ func DeregisterToolResponseIntercept(name string) error {
 }
 
 // RegisterToolExecutionIntercept registers an execution intercept following
-// the middleware chain pattern. The condFn callback is evaluated first; if it
-// returns true, execFn is called with the args and a `next` function. Call
-// `next` to invoke the next intercept or original implementation; skip calling
-// `next` to short-circuit the chain.
-func RegisterToolExecutionIntercept(name string, priority int32, condFn ToolExecConditionalFunc, execFn ToolExecutionInterceptFunc) error {
-	condID := registerClosure(condFn)
+// the middleware chain pattern. execFn is called with the args and a `next`
+// function. Call `next` to invoke the next intercept or original
+// implementation; skip calling `next` to short-circuit the chain.
+func RegisterToolExecutionIntercept(name string, priority int32, execFn ToolExecutionInterceptFunc) error {
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nvmagic_register_tool_execution_intercept(
 		cName, C.int32_t(priority),
-		C.NvMagicToolExecConditionalFn(C.goToolExecConditionalTrampoline),
-		condID,
-		C.NvMagicFreeFn(C.goFreeTrampoline),
 		C.NvMagicToolExecInterceptCb(C.goToolExecInterceptTrampoline),
 		execID,
 		C.NvMagicFreeFn(C.goFreeTrampoline),
@@ -1029,16 +931,16 @@ func DeregisterToolExecutionIntercept(name string) error {
 // ---------------------------------------------------------------------------
 
 // RegisterLlmSanitizeRequestGuardrail registers a guardrail that sanitizes LLM
-// request JSON before the call is made. The callback receives the native request
-// JSON and must return the (possibly modified) JSON. Guardrails are invoked in
-// priority order (lower values run first).
-func RegisterLlmSanitizeRequestGuardrail(name string, priority int32, fn JSONFunc) error {
+// request data before the call is made. The callback receives the request
+// headers and content JSON and must return the (possibly modified) versions.
+// Guardrails are invoked in priority order (lower values run first).
+func RegisterLlmSanitizeRequestGuardrail(name string, priority int32, fn LLMRequestFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nvmagic_register_llm_sanitize_request_guardrail(
 		cName, C.int32_t(priority),
-		C.NvMagicLlmRequestFn(C.goLlmRequestTrampoline),
+		C.NvMagicLlmRequestCb(C.goLlmRequestTrampoline),
 		id,
 		C.NvMagicFreeFn(C.goFreeTrampoline),
 	))
@@ -1054,9 +956,8 @@ func DeregisterLlmSanitizeRequestGuardrail(name string) error {
 
 // RegisterLlmSanitizeResponseGuardrail registers a guardrail that sanitizes
 // LLM response data before it is returned to the caller. The callback receives
-// the serialized LLMResponse JSON (containing a "data" field) and must return
-// the (possibly modified) response JSON. Guardrails are invoked in priority
-// order (lower values run first).
+// the response as plain JSON and must return the (possibly modified) response
+// JSON. Guardrails are invoked in priority order (lower values run first).
 func RegisterLlmSanitizeResponseGuardrail(name string, priority int32, fn LLMResponseFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
@@ -1089,7 +990,7 @@ func RegisterLlmConditionalExecutionGuardrail(name string, priority int32, fn LL
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nvmagic_register_llm_conditional_execution_guardrail(
 		cName, C.int32_t(priority),
-		C.NvMagicLlmConditionalFn(C.goLlmConditionalTrampoline),
+		C.NvMagicLlmConditionalCb(C.goLlmConditionalTrampoline),
 		id,
 		C.NvMagicFreeFn(C.goFreeTrampoline),
 	))
@@ -1104,16 +1005,16 @@ func DeregisterLlmConditionalExecutionGuardrail(name string) error {
 }
 
 // RegisterLlmRequestIntercept registers an intercept that transforms the LLM
-// request JSON before the call is made. Intercepts run in priority order (lower
-// values first). When breakChain is true, no lower-priority intercepts in the
-// chain are invoked after this one.
-func RegisterLlmRequestIntercept(name string, priority int32, breakChain bool, fn JSONFunc) error {
+// request (headers and content) before the call is made. Intercepts run in
+// priority order (lower values first). When breakChain is true, no
+// lower-priority intercepts in the chain are invoked after this one.
+func RegisterLlmRequestIntercept(name string, priority int32, breakChain bool, fn LLMRequestFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nvmagic_register_llm_request_intercept(
 		cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NvMagicJsonFn(C.goJSONTrampoline),
+		C.NvMagicLlmRequestCb(C.goLlmRequestTrampoline),
 		id,
 		C.NvMagicFreeFn(C.goFreeTrampoline),
 	))
@@ -1128,20 +1029,15 @@ func DeregisterLlmRequestIntercept(name string) error {
 }
 
 // RegisterLlmExecutionIntercept registers an execution intercept following
-// the middleware chain pattern. The condFn callback is evaluated first; if it
-// returns true, execFn is called with the request parameters and a `next`
-// function. Call `next` to invoke the next intercept or original
+// the middleware chain pattern. execFn is called with the request parameters
+// and a `next` function. Call `next` to invoke the next intercept or original
 // implementation; skip calling `next` to short-circuit the chain.
-func RegisterLlmExecutionIntercept(name string, priority int32, condFn LLMExecConditionalFunc, execFn LLMExecutionInterceptFunc) error {
-	condID := registerClosure(condFn)
+func RegisterLlmExecutionIntercept(name string, priority int32, execFn LLMExecutionInterceptFunc) error {
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nvmagic_register_llm_execution_intercept(
 		cName, C.int32_t(priority),
-		C.NvMagicLlmExecConditionalFn(C.goLlmExecConditionalTrampoline),
-		condID,
-		C.NvMagicFreeFn(C.goFreeTrampoline),
 		C.NvMagicLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
 		execID,
 		C.NvMagicFreeFn(C.goFreeTrampoline),
@@ -1157,20 +1053,16 @@ func DeregisterLlmExecutionIntercept(name string) error {
 }
 
 // RegisterLlmStreamExecutionIntercept registers an execution intercept for
-// streaming LLM calls following the middleware chain pattern. The condFn
-// callback is evaluated first; if it returns true, execFn is called with the
-// request parameters and a `next` function. Call `next` to invoke the next
-// intercept or original implementation; skip calling `next` to short-circuit.
-func RegisterLlmStreamExecutionIntercept(name string, priority int32, condFn LLMExecConditionalFunc, execFn LLMExecutionInterceptFunc) error {
-	condID := registerClosure(condFn)
+// streaming LLM calls following the middleware chain pattern. execFn is called
+// with the request parameters and a `next` function. Call `next` to invoke the
+// next intercept or original implementation; skip calling `next` to
+// short-circuit.
+func RegisterLlmStreamExecutionIntercept(name string, priority int32, execFn LLMExecutionInterceptFunc) error {
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nvmagic_register_llm_stream_execution_intercept(
 		cName, C.int32_t(priority),
-		C.NvMagicLlmExecConditionalFn(C.goLlmExecConditionalTrampoline),
-		condID,
-		C.NvMagicFreeFn(C.goFreeTrampoline),
 		C.NvMagicLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
 		execID,
 		C.NvMagicFreeFn(C.goFreeTrampoline),
@@ -1401,20 +1293,12 @@ func LlmRequestIntercepts(request json.RawMessage) (json.RawMessage, error) {
 
 // LlmConditionalExecution runs the registered LLM conditional execution
 // guardrail chain. Returns nil if all guardrails pass, or an error with the
-// rejection reason if blocked. Optional [LLMCallOption] values can supply a
-// [WithLLMToRequest] converter for the guardrail to operate on.
-func LlmConditionalExecution(request json.RawMessage, opts ...LLMCallOption) error {
-	o := &llmCallOptions{}
-	for _, opt := range opts {
-		opt(o)
-	}
-	defer freeLLMOpts(o)
-
+// rejection reason if blocked. The request should be in LLMRequest JSON format
+// ({"headers": {...}, "content": {...}}).
+func LlmConditionalExecution(request json.RawMessage) error {
 	cRequest := C.CString(string(request))
 	defer C.free(unsafe.Pointer(cRequest))
 
-	toReqCb, toReqUD, toReqFree := o.toRequestCParams()
-
-	status := C.nvmagic_llm_conditional_execution(cRequest, toReqCb, toReqUD, toReqFree)
+	status := C.nvmagic_llm_conditional_execution(cRequest)
 	return checkStatus(status)
 }
