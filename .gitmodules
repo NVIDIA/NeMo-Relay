@@ -1,0 +1,6 @@
+[submodule "third_party/langchain-nvidia"]
+	path = third_party/langchain-nvidia
+	url = https://github.com/langchain-ai/langchain-nvidia.git
+[submodule "third_party/langchain"]
+	path = third_party/langchain
+	url = https://github.com/langchain-ai/langchain.git
