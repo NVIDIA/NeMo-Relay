@@ -481,12 +481,14 @@ fn nvmagic_llm_stream_call_execute<'py>(
 /// Macro that generates a register/deregister pair for tool guardrails
 /// whose callback signature is `(tool_name: str, json: Any) -> Any`.
 macro_rules! py_guardrail_tool_api {
-    ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path, $wrapper:path) => {
+    ($(#[$reg_meta:meta])* $register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path, $wrapper:path) => {
+        $(#[$reg_meta])*
         #[pyfunction]
         fn $register_name(name: &str, priority: i32, guardrail: Py<PyAny>) -> PyResult<()> {
             $core_register(name, priority, $wrapper(guardrail)).map_err(to_py_err)
         }
 
+        /// Remove the previously registered guardrail by name.
         #[pyfunction]
         fn $deregister_name(name: &str) -> PyResult<bool> {
             $core_deregister(name).map_err(to_py_err)
@@ -494,12 +496,10 @@ macro_rules! py_guardrail_tool_api {
     };
 }
 
-// Register a tool sanitize-request guardrail.
-//
-// Callback: ``(tool_name: str, args: Any) -> Any`` — returns sanitized args.
-//
-// Deregister with ``deregister_tool_sanitize_request_guardrail``.
 py_guardrail_tool_api!(
+    /// Register a tool sanitize-request guardrail.
+    ///
+    /// Callback: ``(tool_name: str, args: Any) -> Any`` — returns sanitized args.
     nvmagic_register_tool_sanitize_request_guardrail,
     nvmagic_deregister_tool_sanitize_request_guardrail,
     core::nvmagic_register_tool_sanitize_request_guardrail,
@@ -507,12 +507,10 @@ py_guardrail_tool_api!(
     py_callable::wrap_py_tool_fn
 );
 
-// Register a tool sanitize-response guardrail.
-//
-// Callback: ``(tool_name: str, result: Any) -> Any`` — returns sanitized result.
-//
-// Deregister with ``deregister_tool_sanitize_response_guardrail``.
 py_guardrail_tool_api!(
+    /// Register a tool sanitize-response guardrail.
+    ///
+    /// Callback: ``(tool_name: str, result: Any) -> Any`` — returns sanitized result.
     nvmagic_register_tool_sanitize_response_guardrail,
     nvmagic_deregister_tool_sanitize_response_guardrail,
     core::nvmagic_register_tool_sanitize_response_guardrail,
@@ -551,7 +549,8 @@ fn nvmagic_deregister_tool_conditional_execution_guardrail(name: &str) -> PyResu
 /// Macro that generates a register/deregister pair for tool intercepts
 /// whose callback signature is `(tool_name: str, json: Any) -> Any`.
 macro_rules! py_intercept_tool_api {
-    ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path, $wrapper:path) => {
+    ($(#[$reg_meta:meta])* $register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path, $wrapper:path) => {
+        $(#[$reg_meta])*
         #[pyfunction]
         fn $register_name(
             name: &str,
@@ -562,6 +561,7 @@ macro_rules! py_intercept_tool_api {
             $core_register(name, priority, break_chain, $wrapper(callable)).map_err(to_py_err)
         }
 
+        /// Remove the previously registered intercept by name.
         #[pyfunction]
         fn $deregister_name(name: &str) -> PyResult<bool> {
             $core_deregister(name).map_err(to_py_err)
@@ -569,11 +569,11 @@ macro_rules! py_intercept_tool_api {
     };
 }
 
-// Register a tool request intercept.
-//
-// Callback: ``(tool_name: str, args: Any) -> Any`` — transforms tool arguments.
-// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
 py_intercept_tool_api!(
+    /// Register a tool request intercept.
+    ///
+    /// Callback: ``(tool_name: str, args: Any) -> Any`` — transforms tool arguments.
+    /// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
     nvmagic_register_tool_request_intercept,
     nvmagic_deregister_tool_request_intercept,
     core::nvmagic_register_tool_request_intercept,
@@ -581,11 +581,11 @@ py_intercept_tool_api!(
     py_callable::wrap_py_tool_fn
 );
 
-// Register a tool response intercept.
-//
-// Callback: ``(tool_name: str, result: Any) -> Any`` — transforms tool result.
-// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
 py_intercept_tool_api!(
+    /// Register a tool response intercept.
+    ///
+    /// Callback: ``(tool_name: str, result: Any) -> Any`` — transforms tool result.
+    /// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
     nvmagic_register_tool_response_intercept,
     nvmagic_deregister_tool_response_intercept,
     core::nvmagic_register_tool_response_intercept,

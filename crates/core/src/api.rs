@@ -59,7 +59,8 @@ fn current_root_uuid() -> Option<Uuid> {
 // ---------------------------------------------------------------------------
 
 macro_rules! guardrail_registry_api {
-    ($register_name:ident, $deregister_name:ident, $field:ident, $fn_type:ty) => {
+    ($(#[$reg_meta:meta])* $register_name:ident, $deregister_name:ident, $field:ident, $fn_type:ty) => {
+        $(#[$reg_meta])*
         pub fn $register_name(name: &str, priority: i32, guardrail: $fn_type) -> Result<()> {
             let ctx = global_context();
             let mut state = ctx
@@ -77,6 +78,7 @@ macro_rules! guardrail_registry_api {
                 .map_err(|e| MagicError::AlreadyExists(e))
         }
 
+        /// Deregister the guardrail by name. Returns `true` if it existed.
         pub fn $deregister_name(name: &str) -> Result<bool> {
             let ctx = global_context();
             let mut state = ctx
@@ -88,7 +90,8 @@ macro_rules! guardrail_registry_api {
 }
 
 macro_rules! intercept_registry_api {
-    ($register_name:ident, $deregister_name:ident, $field:ident, $fn_type:ty) => {
+    ($(#[$reg_meta:meta])* $register_name:ident, $deregister_name:ident, $field:ident, $fn_type:ty) => {
+        $(#[$reg_meta])*
         pub fn $register_name(
             name: &str,
             priority: i32,
@@ -112,6 +115,7 @@ macro_rules! intercept_registry_api {
                 .map_err(|e| MagicError::AlreadyExists(e))
         }
 
+        /// Deregister the intercept by name. Returns `true` if it existed.
         pub fn $deregister_name(name: &str) -> Result<bool> {
             let ctx = global_context();
             let mut state = ctx
@@ -123,7 +127,8 @@ macro_rules! intercept_registry_api {
 }
 
 macro_rules! execution_intercept_registry_api {
-    ($register_name:ident, $deregister_name:ident, $field:ident, $fn_type:ty) => {
+    ($(#[$reg_meta:meta])* $register_name:ident, $deregister_name:ident, $field:ident, $fn_type:ty) => {
+        $(#[$reg_meta])*
         pub fn $register_name(name: &str, priority: i32, callable: $fn_type) -> Result<()> {
             let ctx = global_context();
             let mut state = ctx
@@ -135,6 +140,7 @@ macro_rules! execution_intercept_registry_api {
                 .map_err(|e| MagicError::AlreadyExists(e))
         }
 
+        /// Deregister the execution intercept by name. Returns `true` if it existed.
         pub fn $deregister_name(name: &str) -> Result<bool> {
             let ctx = global_context();
             let mut state = ctx
@@ -155,33 +161,35 @@ macro_rules! execution_intercept_registry_api {
 //     Returns Ok(true) if it existed, Ok(false) otherwise.
 // ---------------------------------------------------------------------------
 
-// Registers a tool request sanitize guardrail that transforms tool arguments before execution.
-// Callback signature: `(tool_name: &str, args: Json) -> Json`.
-//
-// Errors: Returns `MagicError::AlreadyExists` if a guardrail with the given name is already registered.
-// deregister: Deregisters a tool request sanitize guardrail by name.
 guardrail_registry_api!(
+    /// Register a tool request sanitize guardrail that transforms tool arguments before execution.
+    ///
+    /// Callback signature: `(tool_name: &str, args: Json) -> Json`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MagicError::AlreadyExists`] if a guardrail with the given name is already registered.
     nvmagic_register_tool_sanitize_request_guardrail,
     nvmagic_deregister_tool_sanitize_request_guardrail,
     tool_sanitize_request_guardrails,
     ToolSanitizeFn
 );
 
-// Registers a tool response sanitize guardrail that transforms tool results after execution.
-// Callback signature: `(tool_name: &str, result: Json) -> Json`.
-// deregister: Deregisters a tool response sanitize guardrail by name.
 guardrail_registry_api!(
+    /// Register a tool response sanitize guardrail that transforms tool results after execution.
+    ///
+    /// Callback signature: `(tool_name: &str, result: Json) -> Json`.
     nvmagic_register_tool_sanitize_response_guardrail,
     nvmagic_deregister_tool_sanitize_response_guardrail,
     tool_sanitize_response_guardrails,
     ToolSanitizeFn
 );
 
-// Registers a tool conditional execution guardrail that can reject tool calls.
-// Callback signature: `(tool_name: &str, args: &Json) -> Option<rejection_reason>`.
-// Return `None` to allow, `Some(reason)` to reject.
-// deregister: Deregisters a tool conditional execution guardrail by name.
 guardrail_registry_api!(
+    /// Register a tool conditional execution guardrail that can reject tool calls.
+    ///
+    /// Callback signature: `(tool_name: &str, args: &Json) -> Option<String>`.
+    /// Return `None` to allow execution, `Some(reason)` to reject it.
     nvmagic_register_tool_conditional_execution_guardrail,
     nvmagic_deregister_tool_conditional_execution_guardrail,
     tool_conditional_execution_guardrails,
@@ -195,33 +203,33 @@ guardrail_registry_api!(
 // data flowing through the tool call pipeline.
 // ---------------------------------------------------------------------------
 
-// Registers a tool request intercept that transforms arguments before sanitize guardrails.
-// Callback signature: `(tool_name: &str, args: Json) -> Json`.
-// Set `break_chain = true` to prevent subsequent intercepts from running.
-// deregister: Deregisters a tool request intercept by name.
 intercept_registry_api!(
+    /// Register a tool request intercept that transforms arguments before sanitize guardrails.
+    ///
+    /// Callback signature: `(tool_name: &str, args: Json) -> Json`.
+    /// Set `break_chain = true` to prevent lower-priority intercepts from running.
     nvmagic_register_tool_request_intercept,
     nvmagic_deregister_tool_request_intercept,
     tool_request_intercepts,
     ToolInterceptFn
 );
 
-// Registers a tool response intercept that transforms the result after execution.
-// Callback signature: `(tool_name: &str, result: Json) -> Json`.
-// Set `break_chain = true` to prevent subsequent intercepts from running.
-// deregister: Deregisters a tool response intercept by name.
 intercept_registry_api!(
+    /// Register a tool response intercept that transforms the result after execution.
+    ///
+    /// Callback signature: `(tool_name: &str, result: Json) -> Json`.
+    /// Set `break_chain = true` to prevent lower-priority intercepts from running.
     nvmagic_register_tool_response_intercept,
     nvmagic_deregister_tool_response_intercept,
     tool_response_intercepts,
     ToolInterceptFn
 );
 
-// Registers a tool execution intercept following the middleware chain pattern.
-// The `callable` is invoked: `(args: Json, next: ToolExecutionNextFn) -> Future<Result<Json>>`.
-// Call `next(args)` to continue the chain or skip it to short-circuit.
-// deregister: Deregisters a tool execution intercept by name.
 execution_intercept_registry_api!(
+    /// Register a tool execution intercept following the middleware chain pattern.
+    ///
+    /// Callback signature: `(args: Json, next: ToolExecutionNextFn) -> Future<Result<Json>>`.
+    /// Call `next(args)` to continue the chain, or skip it to short-circuit.
     nvmagic_register_tool_execution_intercept,
     nvmagic_deregister_tool_execution_intercept,
     tool_execution_intercepts,
@@ -232,31 +240,31 @@ execution_intercept_registry_api!(
 // LLM guardrail registrations
 // ---------------------------------------------------------------------------
 
-// Registers an LLM request sanitize guardrail that transforms the request before execution.
-// Callback signature: `(request: LLMRequest) -> LLMRequest`.
-// deregister: Deregisters an LLM request sanitize guardrail by name.
 guardrail_registry_api!(
+    /// Register an LLM request sanitize guardrail that transforms the request before execution.
+    ///
+    /// Callback signature: `(request: LLMRequest) -> LLMRequest`.
     nvmagic_register_llm_sanitize_request_guardrail,
     nvmagic_deregister_llm_sanitize_request_guardrail,
     llm_sanitize_request_guardrails,
     LlmSanitizeRequestFn
 );
 
-// Registers an LLM response sanitize guardrail that transforms the response after execution.
-// Callback signature: `(response: Json) -> Json`.
-// deregister: Deregisters an LLM response sanitize guardrail by name.
 guardrail_registry_api!(
+    /// Register an LLM response sanitize guardrail that transforms the response after execution.
+    ///
+    /// Callback signature: `(response: Json) -> Json`.
     nvmagic_register_llm_sanitize_response_guardrail,
     nvmagic_deregister_llm_sanitize_response_guardrail,
     llm_sanitize_response_guardrails,
     LlmSanitizeResponseFn
 );
 
-// Registers an LLM conditional execution guardrail that can reject LLM calls.
-// Callback signature: `(request: &LLMRequest) -> Option<rejection_reason>`.
-// Return `None` to allow, `Some(reason)` to reject.
-// deregister: Deregisters an LLM conditional execution guardrail by name.
 guardrail_registry_api!(
+    /// Register an LLM conditional execution guardrail that can reject LLM calls.
+    ///
+    /// Callback signature: `(request: &LLMRequest) -> Option<String>`.
+    /// Return `None` to allow execution, `Some(reason)` to reject it.
     nvmagic_register_llm_conditional_execution_guardrail,
     nvmagic_deregister_llm_conditional_execution_guardrail,
     llm_conditional_execution_guardrails,
@@ -267,32 +275,33 @@ guardrail_registry_api!(
 // LLM intercept registrations
 // ---------------------------------------------------------------------------
 
-// Registers an LLM request intercept that transforms the request before sanitize guardrails.
-// Callback signature: `(request: LLMRequest) -> LLMRequest`.
-// deregister: Deregisters an LLM request intercept by name.
 intercept_registry_api!(
+    /// Register an LLM request intercept that transforms the request before sanitize guardrails.
+    ///
+    /// Callback signature: `(request: LLMRequest) -> LLMRequest`.
+    /// Set `break_chain = true` to prevent lower-priority intercepts from running.
     nvmagic_register_llm_request_intercept,
     nvmagic_deregister_llm_request_intercept,
     llm_request_intercepts,
     LlmRequestInterceptFn
 );
 
-// Registers an LLM execution intercept following the middleware chain pattern.
-// The `callable` is invoked: `(native: Json, next: LlmExecutionNextFn) -> Future<Result<Json>>`.
-// Call `next(native)` to continue the chain or skip it to short-circuit.
-// deregister: Deregisters an LLM execution intercept by name.
 execution_intercept_registry_api!(
+    /// Register an LLM execution intercept following the middleware chain pattern.
+    ///
+    /// Callback signature: `(request: LLMRequest, next: LlmExecutionNextFn) -> Future<Result<Json>>`.
+    /// Call `next(request)` to continue the chain, or skip it to short-circuit.
     nvmagic_register_llm_execution_intercept,
     nvmagic_deregister_llm_execution_intercept,
     llm_execution_intercepts,
     LlmExecutionFn
 );
 
-// Registers an LLM streaming execution intercept following the middleware chain pattern.
-// The `callable` is invoked: `(native: Json, next: LlmStreamExecutionNextFn) -> Future<Result<Stream>>`.
-// Call `next(native)` to continue the chain or skip it to short-circuit.
-// deregister: Deregisters an LLM streaming execution intercept by name.
 execution_intercept_registry_api!(
+    /// Register an LLM streaming execution intercept following the middleware chain pattern.
+    ///
+    /// Callback signature: `(request: LLMRequest, next: LlmStreamExecutionNextFn) -> Future<Result<Stream>>`.
+    /// Call `next(request)` to continue the chain, or skip it to short-circuit.
     nvmagic_register_llm_stream_execution_intercept,
     nvmagic_deregister_llm_stream_execution_intercept,
     llm_stream_execution_intercepts,

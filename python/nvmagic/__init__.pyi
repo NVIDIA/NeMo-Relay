@@ -246,6 +246,15 @@ class LLMRequest:
 
     Flows through the entire middleware pipeline: guardrails, intercepts,
     and execution functions all receive and return ``LLMRequest``.
+
+    Example::
+
+        request = LLMRequest(
+            {"Authorization": "Bearer tok"},
+            {"model": "gpt-4", "messages": [{"role": "user", "content": "Hi"}]},
+        )
+        print(request.headers)   # {"Authorization": "Bearer tok"}
+        print(request.content)   # {"model": "gpt-4", ...}
     """
 
     def __init__(
@@ -330,7 +339,16 @@ class Event:
         ...
 
 class AtifExporter:
-    """ATIF trajectory exporter that collects events and exports ATIF trajectories."""
+    """ATIF trajectory exporter that collects events and exports ATIF trajectories.
+
+    Example::
+
+        exporter = AtifExporter("session-1", "my-agent", "1.0.0", model_name="gpt-4")
+        exporter.register("my-exporter")
+        # ... run agent workflow ...
+        trajectory = exporter.export()
+        exporter.deregister("my-exporter")
+    """
 
     def __init__(
         self,
@@ -359,7 +377,14 @@ class AtifExporter:
         ...
 
 class ScopeStack:
-    """An isolated scope stack for per-request/per-task isolation."""
+    """An isolated scope stack for per-request/per-task isolation.
+
+    Example::
+
+        stack = create_scope_stack()
+        # Use with contextvars for per-task isolation:
+        nvmagic._scope_stack_var.set(stack)
+    """
     def __repr__(self) -> str: ...
 
 class LlmStream:
@@ -417,6 +442,15 @@ def nvmagic_push_scope(
 
     Returns:
         The newly created ``ScopeHandle``.
+
+    Example::
+
+        handle = nvmagic_push_scope("my-agent", ScopeType.Agent)
+        try:
+            # ... do work ...
+            pass
+        finally:
+            nvmagic_pop_scope(handle)
     """
     ...
 
@@ -505,6 +539,13 @@ def nvmagic_tool_call_execute(
 
     Returns:
         An awaitable that resolves to the (possibly transformed) tool result.
+
+    Example::
+
+        async def my_tool(args):
+            return {"answer": args["x"] + args["y"]}
+
+        result = await nvmagic_tool_call_execute("add", {"x": 1, "y": 2}, my_tool)
     """
     ...
 
@@ -573,6 +614,15 @@ def nvmagic_llm_call_execute(
 
     Returns:
         An awaitable that resolves to the (possibly transformed) LLM response.
+
+    Example::
+
+        async def call_openai(req: LLMRequest) -> dict:
+            # req.headers and req.content may have been modified by intercepts
+            return await httpx_client.post("/chat/completions", json=req.content)
+
+        request = LLMRequest({}, {"model": "gpt-4", "messages": [...]})
+        response = await nvmagic_llm_call_execute("gpt-4", request, call_openai)
     """
     ...
 
@@ -663,6 +713,13 @@ def nvmagic_register_tool_sanitize_request_guardrail(
     """Register a tool sanitize-request guardrail.
 
     Callback: ``(tool_name, args) -> sanitized_args``.
+
+    Example::
+
+        def redact_keys(tool_name: str, args: dict) -> dict:
+            return {k: "***" if "secret" in k else v for k, v in args.items()}
+
+        nvmagic_register_tool_sanitize_request_guardrail("redact", 0, redact_keys)
     """
     ...
 
@@ -689,6 +746,15 @@ def nvmagic_register_tool_conditional_execution_guardrail(
     """Register a tool conditional-execution guardrail.
 
     Callback: ``(tool_name, args) -> None | rejection_reason``.
+
+    Example::
+
+        def block_dangerous(tool_name: str, args: dict) -> str | None:
+            if tool_name == "rm_rf":
+                return "dangerous tool blocked"
+            return None  # allow
+
+        nvmagic_register_tool_conditional_execution_guardrail("safety", 0, block_dangerous)
     """
     ...
 
@@ -742,6 +808,18 @@ def nvmagic_register_tool_execution_intercept(
     ``callable``: ``async (args, next) -> result`` — intercept function.
     Call ``await next(args)`` to invoke the next intercept or original
     implementation. Skip calling ``next`` to short-circuit the chain.
+
+    Example::
+
+        async def cache_intercept(args, next):
+            key = json.dumps(args, sort_keys=True)
+            if key in cache:
+                return cache[key]
+            result = await next(args)
+            cache[key] = result
+            return result
+
+        nvmagic_register_tool_execution_intercept("cache", 0, cache_intercept)
     """
     ...
 
@@ -822,6 +900,16 @@ def nvmagic_register_llm_execution_intercept(
     ``callable``: ``async (request, next) -> response`` — intercept function.
     Call ``await next(request)`` to invoke the next intercept or original
     implementation. Skip calling ``next`` to short-circuit the chain.
+
+    Example::
+
+        async def logging_intercept(request: LLMRequest, next):
+            print(f"LLM request: {request.content['model']}")
+            response = await next(request)
+            print(f"LLM response tokens: {len(str(response))}")
+            return response
+
+        nvmagic_register_llm_execution_intercept("logger", 0, logging_intercept)
     """
     ...
 
@@ -856,6 +944,13 @@ def nvmagic_register_subscriber(name: str, callback: Callable[[Event], None]) ->
     """Register an event subscriber.
 
     Callback: ``(event) -> None`` — called for every lifecycle event.
+
+    Example::
+
+        def on_event(event: Event) -> None:
+            print(f"[{event.event_type}] {event.name} @ {event.timestamp}")
+
+        nvmagic_register_subscriber("my-logger", on_event)
     """
     ...
 

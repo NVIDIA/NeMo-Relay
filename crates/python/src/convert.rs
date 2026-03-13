@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Bidirectional conversion between Python objects and `serde_json::Value`.
+//!
+//! Uses the [`pythonize`] crate under the hood.  The four public helpers cover
+//! the required/optional × to-json/from-json matrix used throughout the PyO3
+//! binding layer.
+
 use pyo3::prelude::*;
 use serde_json::Value as Json;
 

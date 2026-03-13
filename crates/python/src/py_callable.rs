@@ -1,6 +1,23 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Python-to-Rust callback wrappers.
+//!
+//! Each `wrap_py_*` function takes a Python callable (`Py<PyAny>`) and returns
+//! a Rust closure that the core library can store and invoke.  The wrappers
+//! handle:
+//!
+//! - **GIL acquisition** — every call back into Python goes through
+//!   `Python::attach`.
+//! - **Type conversion** — Python objects are converted to/from
+//!   `serde_json::Value` via the helpers in [`crate::convert`].
+//! - **Async bridging** — for functions that may return a Python coroutine,
+//!   the wrapper detects `__await__` and uses `pyo3_async_runtimes` to drive
+//!   the coroutine on the tokio runtime.
+//! - **Middleware `next` functions** — execution intercepts receive a
+//!   `PyToolNextFn`, `PyLlmNextFn`, or `PyLlmStreamNextFn` wrapper that
+//!   Python code can `await` to invoke the next layer in the chain.
+
 #![allow(clippy::type_complexity)]
 
 use std::future::Future;

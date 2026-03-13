@@ -105,9 +105,11 @@ class PydanticCodec(Codec[T]):
         self._cls = model_cls
 
     def to_json(self, value: T) -> Json:
+        """Serialize a Pydantic model to a JSON-serializable dict via ``model_dump()``."""
         return value.model_dump()  # type: ignore[union-attr]
 
     def from_json(self, data: Json) -> T:
+        """Deserialize a dict into a Pydantic model via ``model_validate()``."""
         return self._cls.model_validate(data)  # type: ignore[attr-defined]
 
 
@@ -125,9 +127,11 @@ class DataclassCodec(Codec[T]):
         self._cls = dc_cls
 
     def to_json(self, value: T) -> Json:
+        """Serialize a dataclass instance to a dict via ``dataclasses.asdict()``."""
         return dataclasses.asdict(value)  # type: ignore[arg-type]
 
     def from_json(self, data: Json) -> T:
+        """Deserialize a dict into a dataclass instance via ``cls(**data)``."""
         return self._cls(**data)
 
 
@@ -143,6 +147,13 @@ class BestEffortAnyCodec(Codec[Any]):
     """
 
     def to_json(self, value: Any) -> Any:
+        """Serialize an arbitrary Python value to a JSON-serializable form.
+
+        Tries, in order: Pydantic ``model_dump_json``, ``dataclasses.asdict``,
+        native JSON encoding, pickle fallback, and finally ``str()`` as a last
+        resort.  Each encoding is tagged with a ``__nv_*__`` key so that
+        ``from_json`` can reconstruct the original type.
+        """
         try:
             if hasattr(value, "model_dump_json"):
                 return {
@@ -179,6 +190,13 @@ class BestEffortAnyCodec(Codec[Any]):
                 }
 
     def from_json(self, data: Any) -> Any:
+        """Reconstruct a Python value from its tagged JSON representation.
+
+        Recognises the ``__nv_pydantic__``, ``__nv_dataclass__``,
+        ``__nv_pickle__``, and ``__nv_fallback_str__`` tags produced by
+        ``to_json`` and dispatches to the appropriate reconstruction strategy.
+        Falls through to returning the raw data if no tag is recognised.
+        """
         if data and "data" in data:
             if "__nv_pydantic__" in data:
                 try:
