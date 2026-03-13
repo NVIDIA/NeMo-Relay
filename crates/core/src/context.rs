@@ -62,10 +62,6 @@ pub type LlmSanitizeResponseFn = Box<dyn Fn(LLMResponse) -> LLMResponse + Send +
 pub type LlmConditionalFn = Box<dyn Fn(&LLMRequest) -> Option<String> + Send + Sync>;
 /// LLM request intercept: `(native) -> transformed_native` (opaque Json).
 pub type LlmRequestInterceptFn = Box<dyn Fn(Json) -> Json + Send + Sync>;
-/// LLM response intercept: `(response) -> transformed_response`.
-pub type LlmResponseInterceptFn = Box<dyn Fn(LLMResponse) -> LLMResponse + Send + Sync>;
-/// LLM streaming response intercept: `(chunk) -> transformed_chunk` (Json).
-pub type LlmStreamResponseInterceptFn = Box<dyn Fn(Json) -> Json + Send + Sync>;
 /// LLM execution "next" function (FnOnce — each chain link is single-use):
 /// `(native) -> Future<Result<Json>>`.
 pub type LlmExecutionNextFn =
@@ -305,10 +301,6 @@ pub struct NVMagicContextState {
 
     /// Registry of LLM request intercepts.
     pub llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
-    /// Registry of LLM response intercepts.
-    pub llm_response_intercepts: SortedRegistry<Intercept<LlmResponseInterceptFn>>,
-    /// Registry of LLM streaming response intercepts (per-chunk).
-    pub llm_stream_response_intercepts: SortedRegistry<Intercept<LlmStreamResponseInterceptFn>>,
     /// Registry of LLM execution intercepts (conditionally replace execution).
     pub llm_execution_intercepts:
         SortedRegistry<ExecutionIntercept<LlmExecutionConditionalFn, LlmExecutionFn>>,
@@ -334,8 +326,6 @@ impl NVMagicContextState {
             llm_sanitize_response_guardrails: SortedRegistry::new(|e| e.priority),
             llm_conditional_execution_guardrails: SortedRegistry::new(|e| e.priority),
             llm_request_intercepts: SortedRegistry::new(|e| e.priority),
-            llm_response_intercepts: SortedRegistry::new(|e| e.priority),
-            llm_stream_response_intercepts: SortedRegistry::new(|e| e.priority),
             llm_execution_intercepts: SortedRegistry::new(|e| e.priority),
             llm_stream_execution_intercepts: SortedRegistry::new(|e| e.priority),
             event_subscribers: HashMap::new(),
@@ -698,30 +688,6 @@ impl NVMagicContextState {
     pub fn llm_request_intercepts_chain(&mut self, native: Json) -> Json {
         let mut v = native;
         for entry in self.llm_request_intercepts.sorted_values() {
-            v = (entry.callable)(v);
-            if entry.break_chain {
-                break;
-            }
-        }
-        v
-    }
-
-    /// Runs the LLM response intercept chain, piping the response through each intercept (with optional break).
-    pub fn llm_response_intercepts_chain(&mut self, response: LLMResponse) -> LLMResponse {
-        let mut v = response;
-        for entry in self.llm_response_intercepts.sorted_values() {
-            v = (entry.callable)(v);
-            if entry.break_chain {
-                break;
-            }
-        }
-        v
-    }
-
-    /// Runs the LLM stream response intercept chain on a single chunk (Json).
-    pub fn llm_stream_response_intercepts_chain(&mut self, chunk: Json) -> Json {
-        let mut v = chunk;
-        for entry in self.llm_stream_response_intercepts.sorted_values() {
             v = (entry.callable)(v);
             if entry.break_chain {
                 break;
@@ -1844,51 +1810,6 @@ mod tests {
         let result = ctx.llm_request_intercepts_chain(native);
         assert_eq!(result["from_i1"], true);
         assert!(result.get("from_i2").is_none());
-    }
-
-    #[test]
-    fn test_llm_response_intercepts_chain() {
-        let mut ctx = NVMagicContextState::new();
-        ctx.llm_response_intercepts
-            .register(
-                "i1".into(),
-                Intercept {
-                    priority: 1,
-                    break_chain: false,
-                    callable: Box::new(|mut resp: LLMResponse| {
-                        resp.data
-                            .as_object_mut()
-                            .unwrap()
-                            .insert("modified".into(), serde_json::json!(true));
-                        resp
-                    }),
-                },
-            )
-            .unwrap();
-
-        let result = ctx.llm_response_intercepts_chain(LLMResponse {
-            data: serde_json::json!({"original": true}),
-        });
-        assert_eq!(result.data["modified"], true);
-        assert_eq!(result.data["original"], true);
-    }
-
-    #[test]
-    fn test_llm_stream_response_intercepts_chain() {
-        let mut ctx = NVMagicContextState::new();
-        ctx.llm_stream_response_intercepts
-            .register(
-                "i1".into(),
-                Intercept {
-                    priority: 1,
-                    break_chain: false,
-                    callable: Box::new(|chunk: Json| serde_json::json!({"modified": chunk})),
-                },
-            )
-            .unwrap();
-
-        let result = ctx.llm_stream_response_intercepts_chain(serde_json::json!("original"));
-        assert_eq!(result["modified"], "original");
     }
 
     #[tokio::test]

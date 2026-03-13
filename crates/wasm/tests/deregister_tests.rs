@@ -33,8 +33,6 @@ fn test_deregister_nonexistent_llm_guardrails() {
 #[wasm_bindgen_test]
 fn test_deregister_nonexistent_llm_intercepts() {
     assert!(!deregister_llm_request_intercept("nx").unwrap());
-    assert!(!deregister_llm_response_intercept("nx").unwrap());
     assert!(!deregister_llm_execution_intercept("nx").unwrap());
-    assert!(!deregister_llm_stream_response_intercept("nx").unwrap());
     assert!(!deregister_llm_stream_execution_intercept("nx").unwrap());
 }

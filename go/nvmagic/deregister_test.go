@@ -24,8 +24,6 @@ func TestDeregisterNonexistentIntercepts(t *testing.T) {
 	DeregisterToolResponseIntercept("nonexistent")
 	DeregisterToolExecutionIntercept("nonexistent")
 	DeregisterLlmRequestIntercept("nonexistent")
-	DeregisterLlmResponseIntercept("nonexistent")
-	DeregisterLlmStreamResponseIntercept("nonexistent")
 	DeregisterLlmExecutionIntercept("nonexistent")
 	DeregisterLlmStreamExecutionIntercept("nonexistent")
 }

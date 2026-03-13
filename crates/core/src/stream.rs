@@ -5,17 +5,17 @@
 //!
 //! This module provides [`LlmStreamWrapper`], a [`Stream`] adapter
 //! that sits between the raw stream from an LLM API and the consumer. It
-//! applies per-chunk interception, feeds intercepted chunks to a user-supplied
-//! collector, and automatically emits lifecycle events when the stream ends.
+//! feeds chunks to a user-supplied collector, and automatically emits
+//! lifecycle events when the stream ends.
 //!
 //! ## Pipeline
 //!
 //! ```text
-//! raw chunk (Json) → StreamResponseIntercepts → collector(chunk) + yield chunk
+//! raw chunk (Json) → collector(chunk) + yield chunk
 //! stream ends → finalizer() → converter.to_response() → SanitizeResponseGuardrails → END event
 //! ```
 //!
-//! The **collector** receives each intercepted chunk (Json) and can accumulate state
+//! The **collector** receives each chunk (Json) and can accumulate state
 //! (e.g., concatenating tokens). The **finalizer** is called once when the
 //! stream is exhausted and returns the aggregated response as [`Json`]. That
 //! aggregated response is then converted via the LLM converter and flows through
@@ -33,8 +33,7 @@ use crate::types::*;
 
 /// Wraps an inner `Stream<Item = Result<Json>>` of raw chunks and:
 ///
-/// 1. Runs the stream response intercept chain on each chunk as [`Json`].
-/// 2. Passes each intercepted chunk to the user-supplied **collector** closure.
+/// 1. Passes each chunk to the user-supplied **collector** closure.
 /// 3. On stream exhaustion, calls the **finalizer** to produce an aggregated
 ///    [`Json`] response, converts it to [`LLMResponse`] via the LLM converter,
 ///    runs sanitize response guardrails on it, then emits the LLM END event.
@@ -146,16 +145,9 @@ impl Stream for LlmStreamWrapper {
         // Poll the inner stream
         match this.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(raw_chunk))) => {
-                // Run stream response intercept chain on the raw chunk
-                let intercepted = if let Ok(mut ctx) = global_context().write() {
-                    ctx.llm_stream_response_intercepts_chain(raw_chunk)
-                } else {
-                    raw_chunk
-                };
-
-                // Feed intercepted chunk to the collector
-                (this.collector)(intercepted.clone());
-                Poll::Ready(Some(Ok(intercepted)))
+                // Feed chunk to the collector
+                (this.collector)(raw_chunk.clone());
+                Poll::Ready(Some(Ok(raw_chunk)))
             }
             Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
             Poll::Ready(None) => {

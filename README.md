@@ -123,12 +123,9 @@ flowchart TB
 
         subgraph Streaming
             direction TB
-            StreamingResponseIntercepts[/Streaming Response Intercepts/]
             Finalizer[Finalizer]
             Collector[Collector]
         end
-
-        ResponseIntercepts[/Response Intercepts/]
 
         subgraph Observability
             direction TB
@@ -139,7 +136,6 @@ flowchart TB
     end
 
     Response([Response])
-
 
     Request --> ConditionalExecutionGuardrails
     RequestIntercepts -->|Transformed Request| SanitizeRequestGuardrails & Invocation
@@ -152,14 +148,12 @@ flowchart TB
     ExecutionIntercepts -.->|chain=yes| HasExecutionIntercept
     ExecutionIntercepts -.->|chain=no| DefaultCallable
 
-    Invocation -->|Response| ResponseIntercepts
-    ResponseIntercepts -->|Transformed Response| SanitizeResponseGuardrails
-    ResponseIntercepts -->|Transformed Response| Response
+    Invocation -->|Response| SanitizeResponseGuardrails
+    Invocation -->|Response| Response
 
-    Invocation -.->|stream chunks| StreamingResponseIntercepts
-    StreamingResponseIntercepts -.->|"(stream ends)"| Finalizer
-    StreamingResponseIntercepts -.->|stream chunks| Collector
+    Invocation -.->|stream chunks| Collector
     Collector -..->|stream chunks| Response
+    Invocation -.->|"(stream ends)"| Finalizer
     Finalizer -.->|Aggregated Response| SanitizeResponseGuardrails
     Finalizer o--o|shared state| Collector
 
@@ -174,8 +168,6 @@ flowchart TB
     style EventSubscribers fill:#bff,stroke:#044,color:#044
     style RequestIntercepts fill:#ffb,stroke:#440,color:#440
     style HasExecutionIntercept fill:#ffb,stroke:#440,color:#440
-    style ResponseIntercepts fill:#ffb,stroke:#440,color:#440
-    style StreamingResponseIntercepts fill:#ffb,stroke:#440,color:#440
     style ExecutionIntercepts fill:#ffb,stroke:#440,color:#440
     style ConditionalExecutionGuardrails fill:#bfb,stroke:#040,color:#040
     style SanitizeRequestGuardrails fill:#bfb,stroke:#040,color:#040
@@ -188,9 +180,9 @@ flowchart TB
 
 Key mechanisms:
 
-- **Intercept chains** — priority-ordered middleware that can transform requests/responses; supports `break_chain` for short-circuit.
+- **Intercept chains** — priority-ordered middleware that can transform requests; supports `break_chain` for short-circuit. Execution intercepts wrap the callable in a middleware chain pattern.
 - **Guardrails** — sanitize (modify) or gate (allow/reject) at request and response boundaries.
-- **Stream wrapping** — `LlmStreamWrapper` buffers and parses SSE events, applying intercepts mid-stream.
+- **Stream wrapping** — `LlmStreamWrapper` buffers and parses SSE events, feeding chunks to the collector and calling the finalizer on stream end.
 - **Event subscribers** — observer pattern with named subscribers for lifecycle events. Events carry typed lifecycle fields (`input`, `output`, `model_name`, `tool_call_id`, `root_uuid`) in addition to custom `data`/`metadata`.
 - **Context propagation** — `tokio::task_local` for async, thread-local for sync paths.
 - **ATIF trajectory export** — `AtifExporter` registers as an event subscriber and exports [ATIF v1.6](https://github.com/nvidia/ATIF) trajectories from collected lifecycle events. LLM calls map to user/agent steps; tool calls map to tool_calls/observations. Filter by `root_uuid` to isolate concurrent agents. Available in all bindings.

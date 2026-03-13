@@ -240,25 +240,11 @@ fn test_llm_request_intercept() {
 }
 
 #[wasm_bindgen_test]
-fn test_llm_response_intercept() {
-    let func = js_fn1("response", "response.intercepted = true; return response");
-    register_llm_response_intercept("wasm_llm_resp_int", 10, false, func).unwrap();
-    deregister_llm_response_intercept("wasm_llm_resp_int").unwrap();
-}
-
-#[wasm_bindgen_test]
 fn test_llm_execution_intercept() {
     let cond = js_fn1("native", "return true");
     let exec = js_fn1("native", "return {replaced: true}");
     register_llm_execution_intercept("wasm_llm_exec_int", 10, cond, exec).unwrap();
     deregister_llm_execution_intercept("wasm_llm_exec_int").unwrap();
-}
-
-#[wasm_bindgen_test]
-fn test_llm_stream_response_intercept() {
-    let func = js_fn1("chunk", "return chunk");
-    register_llm_stream_response_intercept("wasm_llm_sse_int", 10, false, func).unwrap();
-    deregister_llm_stream_response_intercept("wasm_llm_sse_int").unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -315,37 +301,6 @@ async fn test_llm_request_intercept_modifies_request() {
     assert!(saw.as_bool().unwrap());
 
     deregister_llm_request_intercept("wasm_llm_req_mod").unwrap();
-}
-
-#[wasm_bindgen_test]
-async fn test_llm_response_intercept_modifies_response() {
-    let intercept = js_fn1(
-        "response",
-        "response.post_processed = true; return response",
-    );
-    register_llm_response_intercept("wasm_llm_resp_mod", 10, false, intercept).unwrap();
-
-    let func = js_fn1("native", "return {value: 'test'}");
-    let native = make_native();
-    let result = nvmagic_llm_call_execute(
-        "resp_mod_llm",
-        native,
-        func,
-        None,
-        None,
-        JsValue::NULL,
-        JsValue::NULL,
-        None,
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-
-    let pp = js_sys::Reflect::get(&result, &"post_processed".into()).unwrap();
-    assert!(pp.as_bool().unwrap());
-
-    deregister_llm_response_intercept("wasm_llm_resp_mod").unwrap();
 }
 
 #[wasm_bindgen_test]

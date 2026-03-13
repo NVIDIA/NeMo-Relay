@@ -3,9 +3,9 @@
 
 """Intercept registration for tools and LLMs.
 
-Intercepts transform requests/responses or replace execution functions entirely.
-They are priority-ordered (ascending) and registered by name. Request and
-response intercepts accept a ``break_chain`` flag — when ``True``, no
+Intercepts transform requests or replace execution functions entirely.
+They are priority-ordered (ascending) and registered by name. Request
+intercepts accept a ``break_chain`` flag — when ``True``, no
 lower-priority intercepts run after this one.
 
 **Tool intercepts** — callback signatures:
@@ -26,12 +26,6 @@ lower-priority intercepts run after this one.
 
     register_llm_request(name, priority, break_chain, fn)
         ``fn(native: Any) -> Any`` — transform the opaque native payload.
-
-    register_llm_response(name, priority, break_chain, fn)
-        ``fn(response: LLMResponse) -> LLMResponse`` — transform LLM response.
-
-    register_llm_stream_response(name, priority, break_chain, fn)
-        ``fn(chunk: Any) -> Any`` — transform each Json chunk.
 
     register_llm_execution(name, priority, conditional, fn)
         ``conditional(native: Any) -> bool``.
@@ -64,13 +58,7 @@ from nvmagic._native import (
     nvmagic_deregister_llm_request_intercept as deregister_llm_request,
 )
 from nvmagic._native import (
-    nvmagic_deregister_llm_response_intercept as deregister_llm_response,
-)
-from nvmagic._native import (
     nvmagic_deregister_llm_stream_execution_intercept as deregister_llm_stream_execution,
-)
-from nvmagic._native import (
-    nvmagic_deregister_llm_stream_response_intercept as deregister_llm_stream_response,
 )
 from nvmagic._native import (
     nvmagic_deregister_tool_execution_intercept as deregister_tool_execution,
@@ -89,13 +77,7 @@ from nvmagic._native import (
     nvmagic_register_llm_request_intercept as register_llm_request,
 )
 from nvmagic._native import (
-    nvmagic_register_llm_response_intercept as register_llm_response,
-)
-from nvmagic._native import (
     nvmagic_register_llm_stream_execution_intercept as register_llm_stream_execution,
-)
-from nvmagic._native import (
-    nvmagic_register_llm_stream_response_intercept as register_llm_stream_response,
 )
 from nvmagic._native import (
     nvmagic_register_tool_execution_intercept as register_tool_execution,
@@ -117,10 +99,6 @@ __all__ = [
     "deregister_tool_execution",
     "register_llm_request",
     "deregister_llm_request",
-    "register_llm_response",
-    "deregister_llm_response",
-    "register_llm_stream_response",
-    "deregister_llm_stream_response",
     "register_llm_execution",
     "deregister_llm_execution",
     "register_llm_stream_execution",

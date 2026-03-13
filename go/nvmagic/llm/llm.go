@@ -75,10 +75,3 @@ func RequestIntercepts(request json.RawMessage) (json.RawMessage, error) {
 func ConditionalExecution(request json.RawMessage, opts ...nvmagic.LLMCallOption) error {
 	return nvmagic.LlmConditionalExecution(request, opts...)
 }
-
-// ResponseIntercepts runs the registered LLM response intercept chain on the
-// given response and returns the transformed response. This is a shorthand for
-// [nvmagic.LlmResponseIntercepts].
-func ResponseIntercepts(response json.RawMessage) (json.RawMessage, error) {
-	return nvmagic.LlmResponseIntercepts(response)
-}

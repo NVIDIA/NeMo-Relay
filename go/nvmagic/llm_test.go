@@ -228,26 +228,6 @@ func TestLlmRequestInterceptRegisterDeregister(t *testing.T) {
 	DeregisterLlmRequestIntercept("go_llm_req")
 }
 
-func TestLlmResponseInterceptRegisterDeregister(t *testing.T) {
-	err := RegisterLlmResponseIntercept("go_llm_resp", 1, false,
-		func(responseJSON json.RawMessage) json.RawMessage { return responseJSON },
-	)
-	if err != nil {
-		t.Fatalf("register failed: %v", err)
-	}
-	DeregisterLlmResponseIntercept("go_llm_resp")
-}
-
-func TestLlmStreamResponseInterceptRegisterDeregister(t *testing.T) {
-	err := RegisterLlmStreamResponseIntercept("go_llm_sr", 1, false,
-		func(chunkJSON json.RawMessage) json.RawMessage { return chunkJSON },
-	)
-	if err != nil {
-		t.Fatalf("register failed: %v", err)
-	}
-	DeregisterLlmStreamResponseIntercept("go_llm_sr")
-}
-
 func TestLlmExecutionInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterLlmExecutionIntercept("go_llm_exec", 1,
 		func(nativeJSON json.RawMessage) bool { return false },
@@ -306,40 +286,6 @@ func TestLlmRequestInterceptModifies(t *testing.T) {
 	}
 
 	DeregisterLlmRequestIntercept("go_llm_req_mod")
-}
-
-func TestLlmResponseInterceptModifies(t *testing.T) {
-	RegisterLlmResponseIntercept("go_llm_resp_mod", 1, false,
-		func(responseJSON json.RawMessage) json.RawMessage {
-			var m map[string]interface{}
-			json.Unmarshal(responseJSON, &m)
-			// responseJSON is {"data": ...}, modify the data
-			if data, ok := m["data"].(map[string]interface{}); ok {
-				data["modified"] = true
-				m["data"] = data
-			}
-			out, _ := json.Marshal(m)
-			return out
-		},
-	)
-
-	native := makeNative()
-	result, err := LlmCallExecute("resp_llm", native,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"original": true}`), nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("execute failed: %v", err)
-	}
-
-	var output map[string]interface{}
-	json.Unmarshal(result, &output)
-	if output["original"] != true || output["modified"] != true {
-		t.Fatalf("expected both original and modified, got %v", output)
-	}
-
-	DeregisterLlmResponseIntercept("go_llm_resp_mod")
 }
 
 func TestLlmExecutionInterceptReplaces(t *testing.T) {

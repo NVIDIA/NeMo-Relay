@@ -743,8 +743,8 @@ pub fn wrap_py_finalizer_fn(py_fn: Py<PyAny>) -> Box<dyn FnOnce() -> Json + Send
     })
 }
 
-/// Wrap a Python callable `(LLMResponse) -> LLMResponse` for LLM response intercepts.
-pub fn wrap_py_llm_response_intercept_fn(
+/// Wrap a Python callable `(LLMResponse) -> LLMResponse` for LLM sanitize response guardrails.
+pub fn wrap_py_llm_sanitize_response_fn(
     py_fn: Py<PyAny>,
 ) -> Box<dyn Fn(LLMResponse) -> LLMResponse + Send + Sync> {
     Box::new(move |response: LLMResponse| {
@@ -757,13 +757,6 @@ pub fn wrap_py_llm_response_intercept_fn(
                 .inner
         })
     })
-}
-
-/// Wrap a Python callable `(LLMResponse) -> LLMResponse` for LLM sanitize response guardrails.
-pub fn wrap_py_llm_sanitize_response_fn(
-    py_fn: Py<PyAny>,
-) -> Box<dyn Fn(LLMResponse) -> LLMResponse + Send + Sync> {
-    wrap_py_llm_response_intercept_fn(py_fn)
 }
 
 /// Wrap a Python callable `(Event) -> None` for event subscribers.

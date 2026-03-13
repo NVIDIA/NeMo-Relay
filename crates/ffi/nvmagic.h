@@ -248,12 +248,6 @@ typedef char *(*NvMagicJsonCb)(void *user_data, const char *json);
 typedef char *(*NvMagicLlmConditionalCb)(void *user_data, const struct FfiLLMRequest *request);
 
 /**
- * Callback for SSE stream response intercepts. Receives the SSE event serialized
- * as a JSON C string and returns a (possibly modified) JSON C string.
- */
-typedef char *(*NvMagicSseInterceptCb)(void *user_data, const char *sse_json);
-
-/**
  * Callback for LLM execution intercept conditions.
  * Receives native JSON string. Returns `true` if this intercept should handle the execution.
  */
@@ -776,66 +770,6 @@ NvMagicStatus nvmagic_register_llm_request_intercept(const char *name,
 NvMagicStatus nvmagic_deregister_llm_request_intercept(const char *name);
 
 /**
- * Register an LLM response intercept. The callback can transform the
- * LLM response after it is received from the LLM provider.
- *
- * # Parameters
- * - `name`: Unique intercept name.
- * - `priority`: Execution priority (lower runs first).
- * - `break_chain`: If true, stop processing further intercepts after this one.
- * - `cb`: JSON transform callback (receives/returns LLMResponse as JSON C string).
- * - `user_data`: Opaque pointer passed to `cb`.
- * - `free_fn`: Optional destructor for `user_data`.
- *
- * # Safety
- * `name` must be a valid C string. `cb` must be a valid function pointer.
- */
-NvMagicStatus nvmagic_register_llm_response_intercept(const char *name,
-                                                      int32_t priority,
-                                                      bool break_chain,
-                                                      NvMagicJsonCb cb,
-                                                      void *user_data,
-                                                      NvMagicFreeFn free_fn);
-
-/**
- * Deregister an LLM response intercept by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NvMagicStatus nvmagic_deregister_llm_response_intercept(const char *name);
-
-/**
- * Register an LLM streaming response intercept. The callback transforms
- * individual chunk strings as they arrive during a streaming LLM call.
- *
- * # Parameters
- * - `name`: Unique intercept name.
- * - `priority`: Execution priority (lower runs first).
- * - `break_chain`: If true, stop processing further intercepts after this one.
- * - `cb`: Chunk string transform callback (receives/returns C string).
- * - `user_data`: Opaque pointer passed to `cb`.
- * - `free_fn`: Optional destructor for `user_data`.
- *
- * # Safety
- * `name` must be a valid C string. `cb` must be a valid function pointer.
- */
-NvMagicStatus nvmagic_register_llm_stream_response_intercept(const char *name,
-                                                             int32_t priority,
-                                                             bool break_chain,
-                                                             NvMagicSseInterceptCb cb,
-                                                             void *user_data,
-                                                             NvMagicFreeFn free_fn);
-
-/**
- * Deregister an LLM streaming response intercept by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NvMagicStatus nvmagic_deregister_llm_stream_response_intercept(const char *name);
-
-/**
  * Register an LLM execution intercept following the middleware chain pattern.
  * When the condition callback returns true, the execution callback is included
  * in the chain. The callback receives `(request, next_fn, next_ctx)` — call
@@ -1115,19 +1049,6 @@ NvMagicStatus nvmagic_llm_conditional_execution(const char *native_json,
                                                 struct Option_NvMagicJsonCb to_request_cb,
                                                 void *to_request_ud,
                                                 NvMagicFreeFn to_request_free);
-
-/**
- * Run the registered LLM response intercept chain on the given response.
- *
- * # Parameters
- * - `response_json`: LLM response as a JSON C string (serialized LLMResponse).
- * - `out`: On success, receives the transformed JSON string (caller must free
- *   with `nvmagic_string_free`).
- *
- * # Safety
- * All pointers must be valid. `out` must be non-null.
- */
-NvMagicStatus nvmagic_llm_response_intercepts(const char *response_json, char **out);
 
 /**
  * Free a C string previously returned by any `nvmagic_*` accessor function.

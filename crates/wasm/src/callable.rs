@@ -220,20 +220,6 @@ pub fn wrap_js_finalizer_fn(func: Function) -> Box<dyn FnOnce() -> Json + Send> 
     })
 }
 
-/// Wrap a JS function for stream response intercept: `(chunk) => chunk` (Json).
-pub fn wrap_js_stream_response_intercept_fn(
-    func: Function,
-) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
-    let func = SendWrapper::new(func);
-    Box::new(move |chunk: Json| {
-        let js_chunk = json_to_js(&chunk);
-        match func.call1(&JsValue::NULL, &js_chunk) {
-            Ok(result) => js_to_json(&result).unwrap_or(chunk),
-            Err(_) => chunk,
-        }
-    })
-}
-
 /// Wrap a JS function for event subscriber: `(event) => void`.
 pub fn wrap_js_event_subscriber(func: Function) -> Box<dyn Fn(&nvmagic_core::Event) + Send + Sync> {
     let func = SendWrapper::new(func);

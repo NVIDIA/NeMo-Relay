@@ -15,7 +15,8 @@
 //!   sanitize-response, and conditional-execution guardrails for both tools
 //!   and LLMs.
 //! - **Intercept registration** -- register and deregister request, response,
-//!   execution, and stream-response intercepts for both tools and LLMs.
+//!   and execution intercepts for tools; request and execution intercepts for
+//!   LLMs.
 //! - **Event subscribers** -- register and deregister lifecycle event
 //!   subscribers.
 //!
@@ -741,66 +742,6 @@ pub fn deregister_llm_request_intercept(name: &str) -> Result<bool, JsValue> {
     nvmagic_core::nvmagic_deregister_llm_request_intercept(name).map_err(to_js_err)
 }
 
-/// Registers an intercept that transforms LLM response data.
-///
-/// - `name` - Unique intercept name.
-/// - `priority` - Execution priority (lower runs first).
-/// - `break_chain` - If `true`, stops further intercepts from running after this one.
-/// - `func` - JS function `(response) => transformedResponse`.
-#[wasm_bindgen(js_name = "registerLlmResponseIntercept")]
-pub fn register_llm_response_intercept(
-    name: &str,
-    priority: i32,
-    break_chain: bool,
-    func: Function,
-) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_llm_response_intercept(
-        name,
-        priority,
-        break_chain,
-        callable::wrap_js_llm_response_fn(func),
-    )
-    .map_err(to_js_err)
-}
-
-/// Removes a previously registered LLM response intercept by name.
-///
-/// Returns `true` if the intercept was found and removed.
-#[wasm_bindgen(js_name = "deregisterLlmResponseIntercept")]
-pub fn deregister_llm_response_intercept(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_llm_response_intercept(name).map_err(to_js_err)
-}
-
-/// Registers an intercept that transforms individual chunks in a streaming LLM response.
-///
-/// - `name` - Unique intercept name.
-/// - `priority` - Execution priority (lower runs first).
-/// - `break_chain` - If `true`, stops further intercepts from running after this one.
-/// - `func` - JS function `(chunk) => transformedChunk` (Json).
-#[wasm_bindgen(js_name = "registerLlmStreamResponseIntercept")]
-pub fn register_llm_stream_response_intercept(
-    name: &str,
-    priority: i32,
-    break_chain: bool,
-    func: Function,
-) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_llm_stream_response_intercept(
-        name,
-        priority,
-        break_chain,
-        callable::wrap_js_stream_response_intercept_fn(func),
-    )
-    .map_err(to_js_err)
-}
-
-/// Removes a previously registered LLM stream response intercept by name.
-///
-/// Returns `true` if the intercept was found and removed.
-#[wasm_bindgen(js_name = "deregisterLlmStreamResponseIntercept")]
-pub fn deregister_llm_stream_response_intercept(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_llm_stream_response_intercept(name).map_err(to_js_err)
-}
-
 /// Registers an LLM execution intercept following the middleware chain pattern.
 ///
 /// - `name` - Unique intercept name.
@@ -966,16 +907,6 @@ pub fn nvmagic_llm_conditional_execution_wasm(
     let to_req = to_request.map(wrap_wasm_to_request);
     nvmagic_core::nvmagic_llm_conditional_execution(&native_json, to_req.as_ref())
         .map_err(to_js_err)
-}
-
-/// Runs the registered LLM response intercept chain on the given response.
-#[wasm_bindgen(js_name = "llmResponseIntercepts")]
-pub fn nvmagic_llm_response_intercepts_wasm(
-    response: &WasmLLMResponse,
-) -> Result<WasmLLMResponse, JsValue> {
-    let result =
-        nvmagic_core::nvmagic_llm_response_intercepts(response.inner.clone()).map_err(to_js_err)?;
-    Ok(WasmLLMResponse { inner: result })
 }
 
 // ---------------------------------------------------------------------------

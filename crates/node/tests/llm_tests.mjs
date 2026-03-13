@@ -15,8 +15,6 @@ const {
   registerLlmSanitizeResponseGuardrail, deregisterLlmSanitizeResponseGuardrail,
   registerLlmConditionalExecutionGuardrail, deregisterLlmConditionalExecutionGuardrail,
   registerLlmRequestIntercept, deregisterLlmRequestIntercept,
-  registerLlmResponseIntercept, deregisterLlmResponseIntercept,
-  registerLlmStreamResponseIntercept, deregisterLlmStreamResponseIntercept,
   registerLlmExecutionIntercept, deregisterLlmExecutionIntercept,
   registerLlmStreamExecutionIntercept, deregisterLlmStreamExecutionIntercept,
   registerSubscriber, deregisterSubscriber,
@@ -129,19 +127,9 @@ describe('LLM intercepts', () => {
     deregisterLlmRequestIntercept('node_llm_req_int');
   });
 
-  it('response intercept', () => {
-    registerLlmResponseIntercept('node_llm_resp_int', 10, false, (response) => { response.intercepted = true; return response; });
-    deregisterLlmResponseIntercept('node_llm_resp_int');
-  });
-
   it('execution intercept', () => {
     registerLlmExecutionIntercept('node_llm_exec_int', 10, (native) => true, (native) => ({ replaced: true }));
     deregisterLlmExecutionIntercept('node_llm_exec_int');
-  });
-
-  it('stream response intercept', () => {
-    registerLlmStreamResponseIntercept('node_llm_sse_int', 10, false, (chunk) => chunk);
-    deregisterLlmStreamResponseIntercept('node_llm_sse_int');
   });
 
   it('stream execution intercept', () => {
@@ -166,18 +154,6 @@ describe('LLM intercepts', () => {
     const result = await llmCallExecute('mod_llm', native, (n) => ({ saw_intercepted: n.intercepted || false }), null, null, null, null);
     assert.equal(result.saw_intercepted, true);
     deregisterLlmRequestIntercept('node_llm_req_mod');
-  });
-
-  it('response intercept modifies response', async () => {
-    registerLlmResponseIntercept('node_llm_resp_mod', 10, false, (response) => {
-      // response is LLMResponse { data: ... }
-      response.data.post_processed = true;
-      return response;
-    });
-    const native = makeNative();
-    const result = await llmCallExecute('resp_mod_llm', native, (n) => ({ value: 'test' }), null, null, null, null);
-    assert.equal(result.post_processed, true);
-    deregisterLlmResponseIntercept('node_llm_resp_mod');
   });
 
   it('execution intercept replaces func', async () => {

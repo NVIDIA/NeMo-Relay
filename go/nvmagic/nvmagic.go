@@ -149,13 +149,6 @@ extern int32_t nvmagic_deregister_llm_conditional_execution_guardrail(const char
 // LLM intercepts
 extern int32_t nvmagic_register_llm_request_intercept(const char* name, int32_t priority, _Bool break_chain, NvMagicJsonFn cb, void* user_data, NvMagicFreeFn free_fn);
 extern int32_t nvmagic_deregister_llm_request_intercept(const char* name);
-extern int32_t nvmagic_register_llm_response_intercept(const char* name, int32_t priority, _Bool break_chain, NvMagicLlmResponseFn cb, void* user_data, NvMagicFreeFn free_fn);
-extern int32_t nvmagic_deregister_llm_response_intercept(const char* name);
-
-typedef char* (*NvMagicSseInterceptFn)(void* user_data, const char* chunk_json);
-extern int32_t nvmagic_register_llm_stream_response_intercept(const char* name, int32_t priority, _Bool break_chain, NvMagicSseInterceptFn cb, void* user_data, NvMagicFreeFn free_fn);
-extern int32_t nvmagic_deregister_llm_stream_response_intercept(const char* name);
-
 typedef _Bool (*NvMagicLlmExecConditionalFn)(void* user_data, const char* native_json);
 typedef char* (*NvMagicLlmExecNextFn)(const char* native_json, void* next_ctx);
 typedef char* (*NvMagicLlmExecInterceptCb)(void* user_data, const char* native_json, NvMagicLlmExecNextFn next_fn, void* next_ctx);
@@ -176,8 +169,6 @@ extern int32_t nvmagic_tool_conditional_execution(const char* name, const char* 
 extern int32_t nvmagic_tool_response_intercepts(const char* name, const char* result_json, char** out);
 extern int32_t nvmagic_llm_request_intercepts(const char* request_json, char** out);
 extern int32_t nvmagic_llm_conditional_execution(const char* request_json, Option_NvMagicJsonCb to_request_cb, void* to_request_ud, NvMagicFreeFn to_request_free);
-extern int32_t nvmagic_llm_response_intercepts(const char* response_json, char** out);
-
 // Error
 extern const char* nvmagic_last_error();
 
@@ -212,7 +203,6 @@ extern _Bool goLlmExecConditionalTrampoline(void*, const char*);
 extern char* goLlmExecTrampoline(void*, const char*);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NvMagicToolExecNextFn, void*);
 extern char* goLlmExecInterceptTrampoline(void*, const char*, NvMagicLlmExecNextFn, void*);
-extern char* goChunkInterceptTrampoline(void*, const char*);
 extern char* goToRequestTrampoline(void*, const char*);
 extern char* goToResponseTrampoline(void*, const char*);
 extern void goCollectorTrampoline(const char*);
@@ -1137,57 +1127,6 @@ func DeregisterLlmRequestIntercept(name string) error {
 	return checkStatus(C.nvmagic_deregister_llm_request_intercept(cName))
 }
 
-// RegisterLlmResponseIntercept registers an intercept that transforms the LLM
-// response after the LLM returns. The callback receives the serialized
-// LLMResponse JSON (containing a "data" field) and must return the (possibly
-// modified) response JSON. Intercepts run in priority order (lower values
-// first). When breakChain is true, no lower-priority intercepts in the chain
-// are invoked after this one.
-func RegisterLlmResponseIntercept(name string, priority int32, breakChain bool, fn LLMResponseFunc) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nvmagic_register_llm_response_intercept(
-		cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NvMagicLlmResponseFn(C.goLlmResponseTrampoline),
-		id,
-		C.NvMagicFreeFn(C.goFreeTrampoline),
-	))
-}
-
-// DeregisterLlmResponseIntercept removes a previously registered LLM response
-// intercept by name.
-func DeregisterLlmResponseIntercept(name string) error {
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nvmagic_deregister_llm_response_intercept(cName))
-}
-
-// RegisterLlmStreamResponseIntercept registers an intercept that transforms
-// individual chunks during a streaming LLM response. The callback receives
-// each chunk as JSON and must return the (possibly modified) chunk JSON.
-// Intercepts run in priority order (lower values first). When breakChain is
-// true, no lower-priority intercepts are invoked after this one.
-func RegisterLlmStreamResponseIntercept(name string, priority int32, breakChain bool, fn ChunkInterceptFunc) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nvmagic_register_llm_stream_response_intercept(
-		cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NvMagicSseInterceptFn(C.goChunkInterceptTrampoline),
-		id,
-		C.NvMagicFreeFn(C.goFreeTrampoline),
-	))
-}
-
-// DeregisterLlmStreamResponseIntercept removes a previously registered LLM
-// stream response intercept by name.
-func DeregisterLlmStreamResponseIntercept(name string) error {
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nvmagic_deregister_llm_stream_response_intercept(cName))
-}
-
 // RegisterLlmExecutionIntercept registers an execution intercept following
 // the middleware chain pattern. The condFn callback is evaluated first; if it
 // returns true, execFn is called with the request parameters and a `next`
@@ -1478,20 +1417,4 @@ func LlmConditionalExecution(request json.RawMessage, opts ...LLMCallOption) err
 
 	status := C.nvmagic_llm_conditional_execution(cRequest, toReqCb, toReqUD, toReqFree)
 	return checkStatus(status)
-}
-
-// LlmResponseIntercepts runs the registered LLM response intercept chain on
-// the given response and returns the transformed response. The response JSON
-// should be a serialized LLMResponse (containing a "data" field).
-func LlmResponseIntercepts(response json.RawMessage) (json.RawMessage, error) {
-	cResponse := C.CString(string(response))
-	defer C.free(unsafe.Pointer(cResponse))
-
-	var out *C.char
-	status := C.nvmagic_llm_response_intercepts(cResponse, &out)
-	if err := checkStatus(status); err != nil {
-		return nil, err
-	}
-	defer C.nvmagic_string_free(out)
-	return json.RawMessage(C.GoString(out)), nil
 }

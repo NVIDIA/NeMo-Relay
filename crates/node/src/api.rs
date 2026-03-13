@@ -701,64 +701,6 @@ pub fn deregister_llm_request_intercept(name: String) -> Result<bool> {
     core::nvmagic_deregister_llm_request_intercept(&name).map_err(to_napi_err)
 }
 
-/// Register an intercept that transforms LLM response data.
-///
-/// The `callable` receives the LLM response as a `JsLLMResponse` and returns a transformed response.
-/// If `breakChain` is `true`, no lower-priority intercepts run after this one.
-/// Higher `priority` values run first.
-#[napi]
-pub fn register_llm_response_intercept(
-    name: String,
-    priority: i32,
-    break_chain: bool,
-    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Result<()> {
-    core::nvmagic_register_llm_response_intercept(
-        &name,
-        priority,
-        break_chain,
-        callable::wrap_js_llm_response_fn(callable),
-    )
-    .map_err(to_napi_err)
-}
-
-/// Deregister an LLM response intercept by name.
-///
-/// Returns `true` if an intercept with that name was found and removed.
-#[napi]
-pub fn deregister_llm_response_intercept(name: String) -> Result<bool> {
-    core::nvmagic_deregister_llm_response_intercept(&name).map_err(to_napi_err)
-}
-
-/// Register an intercept that transforms individual chunks in a streaming LLM response.
-///
-/// The `callable` receives each chunk as a JSON value and returns the transformed chunk.
-/// If `breakChain` is `true`, no lower-priority intercepts run after this one.
-/// Higher `priority` values run first.
-#[napi]
-pub fn register_llm_stream_response_intercept(
-    name: String,
-    priority: i32,
-    break_chain: bool,
-    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Result<()> {
-    core::nvmagic_register_llm_stream_response_intercept(
-        &name,
-        priority,
-        break_chain,
-        callable::wrap_js_json_fn(callable),
-    )
-    .map_err(to_napi_err)
-}
-
-/// Deregister an LLM stream response intercept by name.
-///
-/// Returns `true` if an intercept with that name was found and removed.
-#[napi]
-pub fn deregister_llm_stream_response_intercept(name: String) -> Result<bool> {
-    core::nvmagic_deregister_llm_stream_response_intercept(&name).map_err(to_napi_err)
-}
-
 /// Register an LLM execution intercept following the middleware chain pattern.
 ///
 /// The `conditional` callback receives the LLM request as JSON and returns `true` if this
@@ -887,15 +829,6 @@ pub fn llm_conditional_execution(
 ) -> Result<()> {
     let to_request_fn = to_request.map(wrap_js_to_request);
     core::nvmagic_llm_conditional_execution(&native, to_request_fn.as_ref()).map_err(to_napi_err)
-}
-
-/// Run the registered LLM response intercept chain on the given response.
-/// Returns the transformed response.
-#[napi]
-pub fn llm_response_intercepts(response: &JsLLMResponse) -> Result<JsLLMResponse> {
-    let core_response = response.inner.clone();
-    let result = core::nvmagic_llm_response_intercepts(core_response).map_err(to_napi_err)?;
-    Ok(JsLLMResponse { inner: result })
 }
 
 // ---------------------------------------------------------------------------

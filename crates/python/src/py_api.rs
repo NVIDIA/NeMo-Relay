@@ -753,58 +753,6 @@ fn nvmagic_deregister_llm_request_intercept(name: &str) -> PyResult<bool> {
     core::nvmagic_deregister_llm_request_intercept(name).map_err(to_py_err)
 }
 
-/// Register an LLM response intercept.
-///
-/// Callback: ``(response: LLMResponse) -> LLMResponse`` — transforms the LLM response.
-/// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
-#[pyfunction]
-fn nvmagic_register_llm_response_intercept(
-    name: &str,
-    priority: i32,
-    break_chain: bool,
-    callable: Py<PyAny>,
-) -> PyResult<()> {
-    core::nvmagic_register_llm_response_intercept(
-        name,
-        priority,
-        break_chain,
-        py_callable::wrap_py_llm_response_intercept_fn(callable),
-    )
-    .map_err(to_py_err)
-}
-
-/// Remove a previously registered LLM response intercept.
-#[pyfunction]
-fn nvmagic_deregister_llm_response_intercept(name: &str) -> PyResult<bool> {
-    core::nvmagic_deregister_llm_response_intercept(name).map_err(to_py_err)
-}
-
-/// Register an LLM stream-response intercept.
-///
-/// Callback: ``(chunk: Any) -> Any`` — transforms each JSON chunk in a stream.
-/// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
-#[pyfunction]
-fn nvmagic_register_llm_stream_response_intercept(
-    name: &str,
-    priority: i32,
-    break_chain: bool,
-    callable: Py<PyAny>,
-) -> PyResult<()> {
-    core::nvmagic_register_llm_stream_response_intercept(
-        name,
-        priority,
-        break_chain,
-        py_callable::wrap_py_json_fn(callable),
-    )
-    .map_err(to_py_err)
-}
-
-/// Remove a previously registered LLM stream-response intercept.
-#[pyfunction]
-fn nvmagic_deregister_llm_stream_response_intercept(name: &str) -> PyResult<bool> {
-    core::nvmagic_deregister_llm_stream_response_intercept(name).map_err(to_py_err)
-}
-
 /// Register an LLM execution intercept that can replace the LLM call.
 ///
 /// ``conditional``: ``(native: Any) -> bool`` — return ``True``
@@ -994,21 +942,6 @@ fn nvmagic_llm_conditional_execution(
     core::nvmagic_llm_conditional_execution(&native_json, to_req.as_ref()).map_err(to_py_err)
 }
 
-/// Run the registered LLM response intercept chain on the given response.
-///
-/// Returns the transformed response after all intercepts have been applied.
-///
-/// Args:
-///     response: An ``LLMResponse`` to transform.
-///
-/// Returns:
-///     A new ``LLMResponse`` with intercepts applied.
-#[pyfunction]
-fn nvmagic_llm_response_intercepts(response: PyLLMResponse) -> PyResult<PyLLMResponse> {
-    let result = core::nvmagic_llm_response_intercepts(response.inner).map_err(to_py_err)?;
-    Ok(PyLLMResponse { inner: result })
-}
-
 // ---------------------------------------------------------------------------
 // Subscriber registrations
 // ---------------------------------------------------------------------------
@@ -1149,22 +1082,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nvmagic_register_llm_response_intercept,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        nvmagic_deregister_llm_response_intercept,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        nvmagic_register_llm_stream_response_intercept,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        nvmagic_deregister_llm_stream_response_intercept,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
         nvmagic_register_llm_execution_intercept,
         m
     )?)?;
@@ -1191,7 +1108,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(nvmagic_tool_response_intercepts, m)?)?;
     m.add_function(wrap_pyfunction!(nvmagic_llm_request_intercepts, m)?)?;
     m.add_function(wrap_pyfunction!(nvmagic_llm_conditional_execution, m)?)?;
-    m.add_function(wrap_pyfunction!(nvmagic_llm_response_intercepts, m)?)?;
 
     Ok(())
 }

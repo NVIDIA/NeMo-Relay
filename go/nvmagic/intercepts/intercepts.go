@@ -9,9 +9,8 @@
 //
 // Intercept categories for both tools and LLMs:
 //   - Request: transforms request arguments/parameters; supports breakChain.
-//   - Response: transforms response data; supports breakChain.
+//   - Response (tool only): transforms response data; supports breakChain.
 //   - Execution: middleware chain — each intercept receives a next function.
-//   - StreamResponse (LLM only): transforms individual SSE events mid-stream.
 //   - StreamExecution (LLM only): middleware chain for streaming calls.
 //
 // When breakChain is true on a request or response intercept, no lower-priority
@@ -101,38 +100,6 @@ func DeregisterLlmRequest(name string) error {
 	return nvmagic.DeregisterLlmRequestIntercept(name)
 }
 
-// --- LLM Response ---
-
-// RegisterLlmResponse registers an intercept that transforms LLM response data.
-// The callback receives serialized LLMResponse JSON (containing a "data" field).
-// When breakChain is true, no lower-priority intercepts run after this one.
-// This is a shorthand for [nvmagic.RegisterLlmResponseIntercept].
-func RegisterLlmResponse(name string, priority int32, breakChain bool, fn nvmagic.LLMResponseFunc) error {
-	return nvmagic.RegisterLlmResponseIntercept(name, priority, breakChain, fn)
-}
-
-// DeregisterLlmResponse removes an LLM response intercept by name. This is a
-// shorthand for [nvmagic.DeregisterLlmResponseIntercept].
-func DeregisterLlmResponse(name string) error {
-	return nvmagic.DeregisterLlmResponseIntercept(name)
-}
-
-// --- LLM Stream Response ---
-
-// RegisterLlmStreamResponse registers an intercept that transforms individual
-// JSON chunks during a streaming LLM response. When breakChain is true, no
-// lower-priority intercepts run after this one. This is a shorthand for
-// [nvmagic.RegisterLlmStreamResponseIntercept].
-func RegisterLlmStreamResponse(name string, priority int32, breakChain bool, fn nvmagic.ChunkInterceptFunc) error {
-	return nvmagic.RegisterLlmStreamResponseIntercept(name, priority, breakChain, fn)
-}
-
-// DeregisterLlmStreamResponse removes an LLM stream response intercept by
-// name. This is a shorthand for [nvmagic.DeregisterLlmStreamResponseIntercept].
-func DeregisterLlmStreamResponse(name string) error {
-	return nvmagic.DeregisterLlmStreamResponseIntercept(name)
-}
-
 // --- LLM Execution ---
 
 // RegisterLlmExecution registers an LLM execution intercept following the
@@ -192,13 +159,4 @@ func ToolResponseIntercepts(name string, result json.RawMessage) (json.RawMessag
 // [nvmagic.LlmRequestIntercepts].
 func LlmRequestIntercepts(request json.RawMessage) (json.RawMessage, error) {
 	return nvmagic.LlmRequestIntercepts(request)
-}
-
-// --- LLM Response Intercepts (standalone) ---
-
-// LlmResponseIntercepts runs the registered LLM response intercept chain and
-// returns the transformed response. This is a shorthand for
-// [nvmagic.LlmResponseIntercepts].
-func LlmResponseIntercepts(response json.RawMessage) (json.RawMessage, error) {
-	return nvmagic.LlmResponseIntercepts(response)
 }

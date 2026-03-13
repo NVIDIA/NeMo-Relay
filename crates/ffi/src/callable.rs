@@ -132,11 +132,6 @@ pub type NvMagicLlmExecInterceptCb = unsafe extern "C" fn(
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char;
 
-/// Callback for SSE stream response intercepts. Receives the SSE event serialized
-/// as a JSON C string and returns a (possibly modified) JSON C string.
-pub type NvMagicSseInterceptCb =
-    unsafe extern "C" fn(user_data: *mut libc::c_void, sse_json: *const c_char) -> *mut c_char;
-
 /// Callback for event subscribers. Invoked on each lifecycle event emitted by
 /// the runtime. The `FfiEvent` pointer is only valid for the duration of the call.
 pub type NvMagicEventSubscriberCb =
@@ -554,28 +549,6 @@ pub fn wrap_llm_stream_exec_fn(
             let stream = tokio_stream::once(Ok(result));
             Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
         })
-    })
-}
-
-/// Wrap a C SSE/stream intercept callback into a Rust closure that transforms
-/// Json chunks. The Json value is serialized to a JSON string for the C callback,
-/// and the returned JSON string is deserialized back to Json.
-pub fn wrap_string_intercept_fn(
-    cb: NvMagicSseInterceptCb,
-    user_data: *mut libc::c_void,
-    free_fn: NvMagicFreeFn,
-) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
-    let ud = make_user_data(user_data, free_fn);
-    Box::new(move |chunk: Json| {
-        let c_chunk = json_to_c_string(&chunk);
-        let result_ptr = unsafe { cb(ud.ptr, c_chunk) };
-        unsafe { nvmagic_string_free_internal(c_chunk) };
-        if result_ptr.is_null() {
-            return chunk;
-        }
-        let result = ptr_to_json(result_ptr);
-        unsafe { nvmagic_string_free_internal(result_ptr) };
-        result
     })
 }
 

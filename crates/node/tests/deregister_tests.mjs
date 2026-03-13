@@ -19,9 +19,7 @@ const {
   deregisterLlmSanitizeResponseGuardrail,
   deregisterLlmConditionalExecutionGuardrail,
   deregisterLlmRequestIntercept,
-  deregisterLlmResponseIntercept,
   deregisterLlmExecutionIntercept,
-  deregisterLlmStreamResponseIntercept,
   deregisterLlmStreamExecutionIntercept,
   deregisterSubscriber,
 } = lib;
@@ -51,9 +49,7 @@ describe('Deregister nonexistent', () => {
 
   it('llm intercepts', () => {
     assert.equal(deregisterLlmRequestIntercept('nx'), false);
-    assert.equal(deregisterLlmResponseIntercept('nx'), false);
     assert.equal(deregisterLlmExecutionIntercept('nx'), false);
-    assert.equal(deregisterLlmStreamResponseIntercept('nx'), false);
     assert.equal(deregisterLlmStreamExecutionIntercept('nx'), false);
   });
 

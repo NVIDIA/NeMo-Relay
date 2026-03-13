@@ -23,7 +23,6 @@ Functions:
         - sanitize-request guardrails (on formal request)
         - execution intercepts
         - *func*
-        - response intercepts
         - sanitize-response guardrails
 
         On rejection, only a standalone Mark event is emitted (no Start/End
@@ -38,13 +37,12 @@ Functions:
         formal request derived via the converter. The execution function returns
         an async iterator of Json chunks.
 
-        The ``collector`` callable is invoked with each intercepted Json chunk (after stream response intercepts).
+        The ``collector`` callable is invoked with each Json chunk.
 
         The ``finalizer`` callable is invoked once when the stream is exhausted and returns the
         aggregated response as a JSON-serializable value.
 
         Returns an awaitable ``LlmStream`` that can be iterated with ``async for``.
-        Stream-response intercepts are applied to each chunk in flight.
 
     request_intercepts(native)
         Run the registered LLM request intercept chain on the given native payload.
@@ -53,10 +51,6 @@ Functions:
     conditional_execution(native)
         Run the registered LLM conditional execution guardrail chain.
         Raises ``RuntimeError`` if any guardrail rejects.
-
-    response_intercepts(response)
-        Run the registered LLM response intercept chain on the given response.
-        Returns the transformed ``LLMResponse``.
 
 Example::
 
@@ -97,9 +91,6 @@ from nvmagic._native import (
     nvmagic_llm_request_intercepts as request_intercepts,
 )
 from nvmagic._native import (
-    nvmagic_llm_response_intercepts as response_intercepts,
-)
-from nvmagic._native import (
     nvmagic_llm_stream_call_execute as stream_execute,
 )
 
@@ -110,5 +101,4 @@ __all__ = [
     "stream_execute",
     "request_intercepts",
     "conditional_execution",
-    "response_intercepts",
 ]

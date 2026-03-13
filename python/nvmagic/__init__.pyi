@@ -684,13 +684,6 @@ def nvmagic_llm_conditional_execution(
     """
     ...
 
-def nvmagic_llm_response_intercepts(response: LLMResponse) -> LLMResponse:
-    """Run the registered LLM response intercept chain.
-
-    Returns the transformed ``LLMResponse``.
-    """
-    ...
-
 # ---------------------------------------------------------------------------
 # Tool guardrails
 # ---------------------------------------------------------------------------
@@ -850,38 +843,6 @@ def nvmagic_register_llm_request_intercept(
 
 def nvmagic_deregister_llm_request_intercept(name: str) -> bool:
     """Remove an LLM request intercept. Returns ``True`` if found."""
-    ...
-
-def nvmagic_register_llm_response_intercept(
-    name: str,
-    priority: int,
-    break_chain: bool,
-    callable: Callable[[LLMResponse], LLMResponse],
-) -> None:
-    """Register an LLM response intercept.
-
-    Callback: ``(response: LLMResponse) -> LLMResponse``.
-    """
-    ...
-
-def nvmagic_deregister_llm_response_intercept(name: str) -> bool:
-    """Remove an LLM response intercept. Returns ``True`` if found."""
-    ...
-
-def nvmagic_register_llm_stream_response_intercept(
-    name: str,
-    priority: int,
-    break_chain: bool,
-    callable: Callable[[Json], Json],
-) -> None:
-    """Register an LLM stream-response intercept.
-
-    Callback: ``(chunk: Json) -> Json`` — applied to each Json chunk.
-    """
-    ...
-
-def nvmagic_deregister_llm_stream_response_intercept(name: str) -> bool:
-    """Remove an LLM stream-response intercept. Returns ``True`` if found."""
     ...
 
 def nvmagic_register_llm_execution_intercept(

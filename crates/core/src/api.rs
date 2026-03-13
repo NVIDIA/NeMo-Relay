@@ -20,8 +20,7 @@
 //!   [`nvmagic_deregister_subscriber`]
 //! - **Standalone middleware chains** — [`nvmagic_tool_request_intercepts`],
 //!   [`nvmagic_tool_conditional_execution`], [`nvmagic_tool_response_intercepts`],
-//!   [`nvmagic_llm_request_intercepts`], [`nvmagic_llm_conditional_execution`],
-//!   [`nvmagic_llm_response_intercepts`]
+//!   [`nvmagic_llm_request_intercepts`], [`nvmagic_llm_conditional_execution`]
 //!
 //! All functions operate on the global context singleton returned by
 //! [`global_context`].
@@ -290,26 +289,6 @@ intercept_registry_api!(
     nvmagic_deregister_llm_request_intercept,
     llm_request_intercepts,
     LlmRequestInterceptFn
-);
-
-// Registers an LLM response intercept that transforms the response after execution.
-// Callback signature: `(response: Json) -> Json`.
-// deregister: Deregisters an LLM response intercept by name.
-intercept_registry_api!(
-    nvmagic_register_llm_response_intercept,
-    nvmagic_deregister_llm_response_intercept,
-    llm_response_intercepts,
-    LlmResponseInterceptFn
-);
-
-// Registers an LLM stream response intercept applied to each chunk during streaming.
-// Callback signature: `(chunk: String) -> String`.
-// deregister: Deregisters an LLM stream response intercept by name.
-intercept_registry_api!(
-    nvmagic_register_llm_stream_response_intercept,
-    nvmagic_deregister_llm_stream_response_intercept,
-    llm_stream_response_intercepts,
-    LlmStreamResponseInterceptFn
 );
 
 // Registers an LLM execution intercept following the middleware chain pattern.
@@ -737,20 +716,6 @@ pub async fn nvmagic_llm_call_execute(
     };
     let response = exec_future(intercepted_native).await?;
 
-    // Response intercepts
-    let response = {
-        let ctx = global_context();
-        let mut state = ctx
-            .write()
-            .map_err(|e| MagicError::Internal(e.to_string()))?;
-        let formal_response = match &to_response {
-            Some(f) => f(&response),
-            None => IdentityConverter.to_response(&response),
-        };
-        let intercepted = state.llm_response_intercepts_chain(formal_response);
-        intercepted.data
-    };
-
     // LLM call end (converter + sanitize response guardrails happen inside)
     nvmagic_llm_call_end(
         &handle,
@@ -948,19 +913,6 @@ pub fn nvmagic_llm_conditional_execution(
         return Err(MagicError::GuardrailRejected(err));
     }
     Ok(())
-}
-
-/// Runs the registered LLM response intercept chain on the given response.
-///
-/// Returns the transformed response after all intercepts have been applied.
-/// This allows invoking response intercepts independently of the full
-/// [`nvmagic_llm_call_execute`] pipeline.
-pub fn nvmagic_llm_response_intercepts(response: LLMResponse) -> Result<LLMResponse> {
-    let ctx = global_context();
-    let mut state = ctx
-        .write()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
-    Ok(state.llm_response_intercepts_chain(response))
 }
 
 #[cfg(test)]
@@ -1696,51 +1648,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_llm_call_execute_with_response_intercept() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        reset_global();
-
-        nvmagic_register_llm_response_intercept(
-            "llm_resp_intercept",
-            1,
-            false,
-            Box::new(|mut resp: LLMResponse| {
-                resp.data
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("response_modified".into(), json!(true));
-                resp
-            }),
-        )
-        .unwrap();
-
-        let func: LlmExecutionNextFn =
-            Box::new(|_native| Box::pin(async move { Ok(json!({"original": true})) }));
-
-        let native = json!({"messages": []});
-
-        let result = nvmagic_llm_call_execute(
-            "llm",
-            native,
-            func,
-            None,
-            LLMAttributes::empty(),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(result["original"], true);
-        assert_eq!(result["response_modified"], true);
-
-        nvmagic_deregister_llm_response_intercept("llm_resp_intercept").unwrap();
-    }
-
-    #[tokio::test]
     async fn test_llm_call_execute_with_execution_intercept() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
@@ -1905,27 +1812,6 @@ mod tests {
     }
 
     #[test]
-    fn test_llm_response_intercept_registration() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        reset_global();
-        nvmagic_register_llm_response_intercept("i1", 1, false, Box::new(|r| r)).unwrap();
-        assert!(nvmagic_register_llm_response_intercept("i1", 1, false, Box::new(|r| r)).is_err());
-        assert!(nvmagic_deregister_llm_response_intercept("i1").unwrap());
-    }
-
-    #[test]
-    fn test_llm_stream_response_intercept_registration() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        reset_global();
-        nvmagic_register_llm_stream_response_intercept("i1", 1, false, Box::new(|s| s)).unwrap();
-        assert!(
-            nvmagic_register_llm_stream_response_intercept("i1", 1, false, Box::new(|s| s))
-                .is_err()
-        );
-        assert!(nvmagic_deregister_llm_stream_response_intercept("i1").unwrap());
-    }
-
-    #[test]
     fn test_llm_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
@@ -2005,8 +1891,6 @@ mod tests {
         assert!(!nvmagic_deregister_tool_response_intercept("nope").unwrap());
         assert!(!nvmagic_deregister_tool_execution_intercept("nope").unwrap());
         assert!(!nvmagic_deregister_llm_request_intercept("nope").unwrap());
-        assert!(!nvmagic_deregister_llm_response_intercept("nope").unwrap());
-        assert!(!nvmagic_deregister_llm_stream_response_intercept("nope").unwrap());
         assert!(!nvmagic_deregister_llm_execution_intercept("nope").unwrap());
         assert!(!nvmagic_deregister_llm_stream_execution_intercept("nope").unwrap());
     }
@@ -2338,34 +2222,5 @@ mod tests {
         }
 
         nvmagic_deregister_llm_conditional_execution_guardrail("blocker").unwrap();
-    }
-
-    #[test]
-    fn test_llm_response_intercepts_standalone() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        reset_global();
-
-        nvmagic_register_llm_response_intercept(
-            "tag",
-            10,
-            false,
-            Box::new(|mut resp| {
-                resp.data
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("tagged".into(), json!(true));
-                resp
-            }),
-        )
-        .unwrap();
-
-        let result = nvmagic_llm_response_intercepts(LLMResponse {
-            data: json!({"content": "hello"}),
-        })
-        .unwrap();
-        assert_eq!(result.data["content"], "hello");
-        assert_eq!(result.data["tagged"], true);
-
-        nvmagic_deregister_llm_response_intercept("tag").unwrap();
     }
 }

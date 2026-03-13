@@ -152,16 +152,6 @@ class TestLLMIntercepts:
         intercepts.register_llm_request("py_llm_req", 1, False, lambda native: native)
         assert intercepts.deregister_llm_request("py_llm_req")
 
-    def test_response_intercept(self):
-        # Response intercepts now operate on LLMResponse objects
-        intercepts.register_llm_response("py_llm_resp", 1, False, lambda r: r)
-        assert intercepts.deregister_llm_response("py_llm_resp")
-
-    def test_stream_response_intercept(self):
-        # Stream response intercepts now operate on Json chunks
-        intercepts.register_llm_stream_response("py_llm_sr", 1, False, lambda e: e)
-        assert intercepts.deregister_llm_stream_response("py_llm_sr")
-
     def test_execution_intercept(self):
         # Execution intercepts now take native Json, not LLMRequest
         intercepts.register_llm_execution(
@@ -189,8 +179,6 @@ class TestLLMIntercepts:
 
     def test_deregister_nonexistent(self):
         assert not intercepts.deregister_llm_request("nope")
-        assert not intercepts.deregister_llm_response("nope")
-        assert not intercepts.deregister_llm_stream_response("nope")
         assert not intercepts.deregister_llm_execution("nope")
         assert not intercepts.deregister_llm_stream_execution("nope")
         assert not intercepts.deregister_tool_request("nope")
@@ -215,25 +203,6 @@ class TestLLMInterceptsAsync:
         assert result["saw_intercepted"] is True
 
         intercepts.deregister_llm_request("py_llm_req_mod")
-
-    async def test_response_intercept_modifies(self):
-        def intercept_fn(response):
-            # Response intercepts now take LLMResponse objects
-            data = response.data
-            data["modified"] = True
-            return LLMResponse(data)
-
-        intercepts.register_llm_response("py_llm_resp_mod", 1, False, intercept_fn)
-
-        def func(native):
-            return {"original": True}
-
-        native = make_native()
-        result = await llm.execute("resp_llm", native, func)
-        assert result["original"] is True
-        assert result["modified"] is True
-
-        intercepts.deregister_llm_response("py_llm_resp_mod")
 
     async def test_execution_intercept_replaces(self):
         intercepts.register_llm_execution(

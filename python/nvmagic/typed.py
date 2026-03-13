@@ -36,7 +36,11 @@ Built-in codecs:
 
 from __future__ import annotations
 
+import base64
 import dataclasses
+import importlib
+import json
+import pickle
 import typing
 from typing import Any, AsyncIterator, Awaitable, Callable, Generic, TypeVar, overload
 
@@ -125,6 +129,94 @@ class DataclassCodec(Codec[T]):
 
     def from_json(self, data: Json) -> T:
         return self._cls(**data)
+
+
+class BestEffortAnyCodec(Codec[Any]):
+    """
+    Bidirectional (as far as possible) lossless JSON codec for arbitrary Python values.
+
+    Tries:
+    1. If it's a dataclass, serialize/deserialize as dict.
+    2. If it's a Pydantic BaseModel, use .model_dump() / .model_validate().
+    3. Try JSON natively.
+    4. If all else fails, fallback to pickling (not portable but lossless).
+    """
+
+    def to_json(self, value: Any) -> Any:
+        try:
+            if hasattr(value, "model_dump_json"):
+                return {
+                    "__nv_pydantic__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
+                    "data": value.model_dump_json(),
+                }
+        except Exception:
+            pass  # Don't fail if pydantic not available
+
+        # Dataclass
+        if dataclasses.is_dataclass(value):
+            return {
+                "__nv_dataclass__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
+                "data": dataclasses.asdict(value),
+            }
+
+        # Try JSON encoding directly
+        try:
+            return json.loads(json.dumps(value))
+        except Exception:
+            # Fallback: pickle
+            try:
+                pickled = pickle.dumps(value)
+                encoded = base64.b64encode(pickled).decode("ascii")
+                return {
+                    "__nv_pickle__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
+                    "data": encoded,
+                }
+            except Exception:
+                # As last resort, do string (may be lossy, but not error)
+                return {
+                    "__nv_fallback_str__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
+                    "data": str(value),
+                }
+
+    def from_json(self, data: Any) -> Any:
+        if data and "data" in data:
+            if "__nv_pydantic__" in data:
+                try:
+                    path = data["__nv_pydantic__"]
+                    mod_name, _, cls_name = path.rpartition(".")
+                    mod = importlib.import_module(mod_name)
+                    cls = getattr(mod, cls_name)
+                    if hasattr(cls, "model_validate"):
+                        return cls.model_validate(data["data"])
+                except Exception:
+                    pass  # Fallback on raw dict
+
+            # Try to reconstruct a dataclass
+            if "__nv_dataclass__" in data:
+                try:
+                    path = data["__nv_dataclass__"]
+                    mod_name, _, cls_name = path.rpartition(".")
+                    mod = importlib.import_module(mod_name)
+                    cls = getattr(mod, cls_name)
+                    if dataclasses.is_dataclass(cls):
+                        return cls(**data["data"])
+                except Exception:
+                    pass  # Fallback on raw dict
+
+            # Try to reconstruct from pickle
+            if "__nv_pickle__" in data:
+                try:
+                    decoded = base64.b64decode(data["data"])
+                    return pickle.loads(decoded)
+                except Exception:
+                    pass  # Fall through
+
+            # If fallback string exists and data exists, return the string
+            if "__nv_fallback_str__" in data and "data" in data:
+                # Only the string is recoverable; return as string
+                return data["data"]
+
+        return data
 
 
 # ---------------------------------------------------------------------------

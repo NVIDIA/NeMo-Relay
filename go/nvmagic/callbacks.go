@@ -38,7 +38,6 @@ typedef char* (*NvMagicLlmConditionalFn)(void* user_data, const char* native_jso
 typedef _Bool (*NvMagicLlmExecConditionalFn)(void* user_data, const char* native_json);
 typedef char* (*NvMagicLlmExecFn)(void* user_data, const char* native_json);
 typedef char* (*NvMagicLlmResponseFn)(void* user_data, const char* response_json);
-typedef char* (*NvMagicSseInterceptFn)(void* user_data, const char* chunk_json);
 typedef void (*NvMagicEventSubscriberFn)(void* user_data, const FfiEvent* event);
 
 // Middleware chain next function types
@@ -204,10 +203,6 @@ type LLMToRequestFunc func(nativeJSON json.RawMessage) json.RawMessage
 // and is applied during LLM call end to convert provider-specific response
 // formats into the canonical LLMResponse used by guardrails and intercepts.
 type LLMToResponseFunc func(nativeJSON json.RawMessage) json.RawMessage
-
-// ChunkInterceptFunc is a callback that transforms a single chunk (as JSON)
-// during a streaming LLM response.
-type ChunkInterceptFunc func(chunkJSON json.RawMessage) json.RawMessage
 
 // CollectorFunc is a callback invoked with each intercepted chunk during a
 // streaming LLM response. It is used to accumulate chunks on the Go side for
@@ -387,14 +382,6 @@ func goToResponseTrampoline(userData unsafe.Pointer, jsonStr *C.char) *C.char {
 	fn := lookupClosure(userData).(LLMToResponseFunc)
 	goJSON := json.RawMessage(C.GoString(jsonStr))
 	result := fn(goJSON)
-	return C.CString(string(result))
-}
-
-//export goChunkInterceptTrampoline
-func goChunkInterceptTrampoline(userData unsafe.Pointer, chunkJSON *C.char) *C.char {
-	fn := lookupClosure(userData).(ChunkInterceptFunc)
-	goChunk := json.RawMessage(C.GoString(chunkJSON))
-	result := fn(goChunk)
 	return C.CString(string(result))
 }
 

@@ -12,7 +12,6 @@ const { typedToolExecute, typedLlmExecute, typedLlmStreamExecute, JsonPassthroug
 const {
   registerToolRequestIntercept, deregisterToolRequestIntercept,
   registerToolResponseIntercept, deregisterToolResponseIntercept,
-  registerLlmResponseIntercept, deregisterLlmResponseIntercept,
 } = lib;
 
 // ===========================================================================
@@ -188,27 +187,6 @@ describe('typedLlmExecute', () => {
       responseCodec,
     );
     assert.equal(result, 'hello world');
-  });
-
-  it('response intercept modifies before deserialization', async () => {
-    registerLlmResponseIntercept('typed_node_llm_resp', 10, false, (response) => {
-      // response is LLMResponse { data: ... }
-      response.data.modified = true;
-      return response;
-    });
-
-    const passthrough = new JsonPassthrough();
-    const native = makeNative();
-    const result = await typedLlmExecute(
-      'int_llm',
-      native,
-      (n) => ({ original: true }),
-      passthrough,
-    );
-    assert.equal(result.original, true);
-    assert.equal(result.modified, true);
-
-    deregisterLlmResponseIntercept('typed_node_llm_resp');
   });
 
   it('with modelName option', async () => {
