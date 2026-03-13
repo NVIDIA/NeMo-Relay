@@ -1,3 +1,124 @@
+diff --git a/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nvmagic.py b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nvmagic.py
+new file mode 100644
+index 0000000..c220118
+--- /dev/null
++++ b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nvmagic.py
+@@ -0,0 +1,115 @@
++"""Thin bridge module for optional NVMagic integration.
++
++When nvmagic is installed and a scope stack has been initialized by the
++caller, the helpers in this module route LLM calls through the full
++NVMagic middleware pipeline (guardrails, intercepts, execution intercepts).
++If nvmagic is not installed or no scope stack is active, ``available()``
++returns ``False`` and ChatNVIDIA falls back to its vanilla code path.
++
++All LLM calls flow through the **typed** NVMagic API
++(``nvmagic.typed.llm_execute`` / ``nvmagic.typed.llm_stream_execute``)
++with ``JsonPassthrough`` since the ``_call`` helpers already return plain
++dicts (via ``postprocess()``) before reaching the codec boundary.
++"""
++
++from __future__ import annotations
++
++import asyncio
++from concurrent.futures import ThreadPoolExecutor
++from typing import Any, Callable
++
++try:
++    import nvmagic
++    from nvmagic import LLMRequest
++
++    _HAS_NVMAGIC = True
++except ImportError:
++    _HAS_NVMAGIC = False
++
++
++def available() -> bool:
++    """Return True when nvmagic is importable *and* a scope stack is active."""
++    if not _HAS_NVMAGIC:
++        return False
++    try:
++        # Only consider nvmagic available if the caller has explicitly
++        # initialised a scope stack (we don't want to auto-create one).
++        return nvmagic._scope_stack_var.get(None) is not None
++    except Exception:
++        return False
++
++
++def make_request(payload: dict, extra_headers: dict | None = None) -> "LLMRequest":
++    """Wrap a payload dict and optional extra headers into an LLMRequest."""
++    return LLMRequest(extra_headers or {}, payload)
++
++
++# ---------------------------------------------------------------------------
++# Sync-to-async bridge
++# ---------------------------------------------------------------------------
++
++
++def run_sync(coro: Any) -> Any:
++    """Run *coro* synchronously, handling the case where an event loop is
++    already running (e.g. Jupyter notebooks)."""
++    try:
++        asyncio.get_running_loop()
++    except RuntimeError:
++        # No loop running – we can just use asyncio.run.
++        return asyncio.run(coro)
++    # Loop already running – offload to a worker thread so we don't block.
++    with ThreadPoolExecutor(max_workers=1) as pool:
++        return pool.submit(asyncio.run, coro).result()
++
++
++# ---------------------------------------------------------------------------
++# LLM pipeline wrappers (typed API)
++# ---------------------------------------------------------------------------
++
++
++async def llm_execute(
++    model_name: str,
++    request: "LLMRequest",
++    func: Callable[..., Any],
++) -> Any:
++    """Execute a non-streaming LLM call through the NVMagic typed pipeline.
++
++    The *func* callable receives an ``LLMRequest`` and returns a dict
++    (already converted via ``postprocess()``). ``JsonPassthrough`` passes
++    dicts through with zero overhead.
++    """
++    codec = nvmagic.typed.JsonPassthrough()
++    return await nvmagic.typed.llm_execute(  # type: ignore[union-attr]
++        model_name,
++        request,
++        func,
++        codec,
++        model_name=model_name,
++    )
++
++
++async def llm_stream_execute(
++    model_name: str,
++    request: "LLMRequest",
++    func: Callable[..., Any],
++    collector: Callable[[Any], None],
++    finalizer: Callable[[], Any],
++) -> Any:
++    """Execute a streaming LLM call through the NVMagic typed pipeline.
++
++    The *func* callable receives an ``LLMRequest`` and should return an
++    async iterator of dict chunks. ``JsonPassthrough`` passes each chunk
++    through with zero overhead. Returns an ``LlmStream`` async-iterable
++    whose chunks have already passed through stream-response intercepts.
++    """
++    codec = nvmagic.typed.JsonPassthrough()
++    return await nvmagic.typed.llm_stream_execute(  # type: ignore[union-attr]
++        model_name,
++        request,
++        func,
++        collector,
++        finalizer,
++        codec,
++        codec,
++        model_name=model_name,
++    )
 diff --git a/libs/ai-endpoints/langchain_nvidia_ai_endpoints/chat_models.py b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/chat_models.py
 index 07df9ab..2c70db2 100644
 --- a/libs/ai-endpoints/langchain_nvidia_ai_endpoints/chat_models.py
@@ -157,111 +278,3 @@ index 07df9ab..2c70db2 100644
          async for response in self._client.aget_req_stream(
              payload=payload, extra_headers=extra_headers
          ):
-diff --git a/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nvmagic.py b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nvmagic.py
-new file mode 100644
-index 0000000..4d4bf6c
---- /dev/null
-+++ b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nvmagic.py
-@@ -0,0 +1,102 @@
-+"""Thin bridge module for optional NVMagic integration.
-+
-+When nvmagic is installed and a scope stack has been initialized by the
-+caller, the helpers in this module route LLM calls through the full
-+NVMagic middleware pipeline (guardrails, intercepts, execution intercepts).
-+If nvmagic is not installed or no scope stack is active, ``available()``
-+returns ``False`` and ChatNVIDIA falls back to its vanilla code path.
-+"""
-+
-+from __future__ import annotations
-+
-+import asyncio
-+from concurrent.futures import ThreadPoolExecutor
-+from typing import Any, Callable
-+
-+try:
-+    import nvmagic
-+    from nvmagic import LLMRequest
-+
-+    _HAS_NVMAGIC = True
-+except ImportError:
-+    _HAS_NVMAGIC = False
-+
-+
-+def available() -> bool:
-+    """Return True when nvmagic is importable *and* a scope stack is active."""
-+    if not _HAS_NVMAGIC:
-+        return False
-+    try:
-+        # Only consider nvmagic available if the caller has explicitly
-+        # initialised a scope stack (we don't want to auto-create one).
-+        return nvmagic._scope_stack_var.get(None) is not None
-+    except Exception:
-+        return False
-+
-+
-+def make_request(payload: dict, extra_headers: dict | None = None) -> "LLMRequest":
-+    """Wrap a payload dict and optional extra headers into an LLMRequest."""
-+    return LLMRequest(extra_headers or {}, payload)
-+
-+
-+# ---------------------------------------------------------------------------
-+# Sync-to-async bridge
-+# ---------------------------------------------------------------------------
-+
-+
-+def run_sync(coro: Any) -> Any:
-+    """Run *coro* synchronously, handling the case where an event loop is
-+    already running (e.g. Jupyter notebooks)."""
-+    try:
-+        asyncio.get_running_loop()
-+    except RuntimeError:
-+        # No loop running – we can just use asyncio.run.
-+        return asyncio.run(coro)
-+    # Loop already running – offload to a worker thread so we don't block.
-+    with ThreadPoolExecutor(max_workers=1) as pool:
-+        return pool.submit(asyncio.run, coro).result()
-+
-+
-+# ---------------------------------------------------------------------------
-+# LLM pipeline wrappers
-+# ---------------------------------------------------------------------------
-+
-+
-+async def llm_execute(
-+    model_name: str,
-+    request: "LLMRequest",
-+    func: Callable[..., Any],
-+) -> dict:
-+    """Execute a non-streaming LLM call through the NVMagic pipeline.
-+
-+    The *func* callable receives an ``LLMRequest`` and should return a dict.
-+    """
-+    return await nvmagic.llm.execute(  # type: ignore[union-attr]
-+        model_name,
-+        request,
-+        func,
-+        model_name=model_name,
-+    )
-+
-+
-+async def llm_stream_execute(
-+    model_name: str,
-+    request: "LLMRequest",
-+    func: Callable[..., Any],
-+    collector: Callable[[Any], None],
-+    finalizer: Callable[[], Any],
-+) -> Any:
-+    """Execute a streaming LLM call through the NVMagic pipeline.
-+
-+    The *func* callable receives an ``LLMRequest`` and should return an
-+    async iterator of chunks. Returns an ``LlmStream`` async-iterable
-+    whose chunks have already passed through stream-response intercepts.
-+    """
-+    return await nvmagic.llm.stream_execute(  # type: ignore[union-attr]
-+        model_name,
-+        request,
-+        func,
-+        collector,
-+        finalizer,
-+        model_name=model_name,
-+    )

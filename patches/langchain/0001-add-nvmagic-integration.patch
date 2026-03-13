@@ -1,299 +1,6 @@
-diff --git a/libs/core/langchain_core/tools/base.py b/libs/core/langchain_core/tools/base.py
-index 7026a2e..70adb4a 100644
---- a/libs/core/langchain_core/tools/base.py
-+++ b/libs/core/langchain_core/tools/base.py
-@@ -58,6 +58,7 @@ from langchain_core.utils.function_calling import (
-     _parse_google_docstring,
-     _py_38_safe_origin,
- )
-+from langchain_core.utils._nvmagic import get_nvmagic
- from langchain_core.utils.pydantic import (
-     TypeBaseModel,
-     _create_subset_model,
-@@ -964,7 +965,18 @@ class ChildTool(BaseTool):
-                     tool_kwargs |= {"run_manager": run_manager}
-                 if config_param := _get_runnable_config_param(self._run):
-                     tool_kwargs |= {config_param: config}
--                response = context.run(self._run, *tool_args, **tool_kwargs)
-+                def _func(_args: Any) -> Any:
-+                    return context.run(self._run, *tool_args, **tool_kwargs)
-+
-+                if (nvmag := get_nvmagic()) is not None:
-+                    response = nvmag.typed.tool_execute(
-+                        self.name,
-+                        tool_input,
-+                        _func,
-+                        result_codec=nvmag.typed.BestEffortAnyCodec(),
-+                    )
-+                else:
-+                    response = _func(tool_input)
-             if self.response_format == "content_and_artifact":
-                 msg = (
-                     "Since response_format='content_and_artifact' "
-@@ -1093,8 +1105,19 @@ class ChildTool(BaseTool):
-                 if config_param := _get_runnable_config_param(func_to_check):
-                     tool_kwargs[config_param] = config
-
--                coro = self._arun(*tool_args, **tool_kwargs)
--                response = await coro_with_context(coro, context)
-+                async def _func(_args: Any) -> Any:
-+                    coro = self._arun(*tool_args, **tool_kwargs)
-+                    return await coro_with_context(coro, context)
-+
-+                if (nvmag := get_nvmagic()) is not None:
-+                    response = await nvmag.typed.tool_execute(
-+                        self.name,
-+                        tool_input,
-+                        _func,
-+                        result_codec=nvmag.typed.BestEffortAnyCodec(),
-+                    )
-+                else:
-+                    response = await _func(tool_input)
-             if self.response_format == "content_and_artifact":
-                 msg = (
-                     "Since response_format='content_and_artifact' "
-diff --git a/libs/partners/openai/langchain_openai/chat_models/base.py b/libs/partners/openai/langchain_openai/chat_models/base.py
-index c74c40f..155397e 100644
---- a/libs/partners/openai/langchain_openai/chat_models/base.py
-+++ b/libs/partners/openai/langchain_openai/chat_models/base.py
-@@ -128,6 +128,7 @@ from pydantic import (
- from pydantic.v1 import BaseModel as BaseModelV1
- from typing_extensions import Self
-
-+from langchain_openai.chat_models import _nvmagic
- from langchain_openai.chat_models._client_utils import (
-     _get_default_async_httpx_client,
-     _get_default_httpx_client,
-@@ -1368,7 +1369,57 @@ class BaseChatOpenAI(BaseChatModel):
-             kwargs["stream_options"] = {"include_usage": stream_usage}
-         payload = self._get_request_payload(messages, stop=stop, **kwargs)
-         default_chunk_class: type[BaseMessageChunk] = AIMessageChunk
--        base_generation_info = {}
-+        base_generation_info: dict = {}
-+
-+        # NVMagic path: standard chat completions only.
-+        if (
-+            _nvmagic.available()
-+            and "response_format" not in payload
-+        ):
-+            collected: list[dict] = []
-+
-+            async def _call(native: dict) -> Any:
-+                resp = await self.async_client.create(**native)
-+                async with resp as r:
-+                    async for chunk in r:
-+                        yield chunk.model_dump()
-+
-+            def _collector(chunk: Any) -> None:
-+                collected.append(chunk)
-+
-+            def _finalizer() -> dict:
-+                return collected[-1] if collected else {}
-+
-+            async def _run() -> list[dict]:
-+                stream = await _nvmagic.llm_stream_execute(
-+                    self.model_name, payload, _call, _collector, _finalizer
-+                )
-+                chunks: list[dict] = []
-+                async for chunk_dict in stream:
-+                    chunks.append(chunk_dict)
-+                return chunks
-+
-+            chunk_dicts = _nvmagic.run_sync(_run())
-+            is_first_chunk = True
-+            for chunk_dict in chunk_dicts:
-+                generation_chunk = self._convert_chunk_to_generation_chunk(
-+                    chunk_dict,
-+                    default_chunk_class,
-+                    base_generation_info if is_first_chunk else {},
-+                )
-+                if generation_chunk is None:
-+                    continue
-+                default_chunk_class = generation_chunk.message.__class__
-+                logprobs = (generation_chunk.generation_info or {}).get("logprobs")
-+                if run_manager:
-+                    run_manager.on_llm_new_token(
-+                        generation_chunk.text,
-+                        chunk=generation_chunk,
-+                        logprobs=logprobs,
-+                    )
-+                is_first_chunk = False
-+                yield generation_chunk
-+            return
-
-         try:
-             if "response_format" in payload:
-@@ -1436,6 +1487,59 @@ class BaseChatOpenAI(BaseChatModel):
-     ) -> ChatResult:
-         self._ensure_sync_client_available()
-         payload = self._get_request_payload(messages, stop=stop, **kwargs)
-+
-+        if _nvmagic.available():
-+            use_responses = self._use_responses_api(payload)
-+            has_response_format = "response_format" in payload
-+            original_schema_obj = kwargs.get("response_format")
-+            # Capture the SDK response for post-processing paths that
-+            # require it (responses API, structured output .parsed).
-+            _sdk_response: list = []
-+
-+            async def _call(native: dict) -> dict:
-+                if has_response_format:
-+                    native_copy = {k: v for k, v in native.items() if k != "stream"}
-+                    raw = await self.root_async_client.chat.completions.with_raw_response.parse(  # noqa: E501
-+                        **native_copy
-+                    )
-+                elif use_responses:
-+                    if original_schema_obj and _is_pydantic_class(
-+                        original_schema_obj
-+                    ):
-+                        raw = await self.root_async_client.responses.with_raw_response.parse(  # noqa: E501
-+                            **native
-+                        )
-+                    else:
-+                        raw = await self.root_async_client.responses.with_raw_response.create(  # noqa: E501
-+                            **native
-+                        )
-+                else:
-+                    raw = await self.async_client.with_raw_response.create(
-+                        **native
-+                    )
-+                sdk_resp = raw.parse()
-+                _sdk_response.append((sdk_resp, raw))
-+                return sdk_resp.model_dump()
-+
-+            resp_dict = _nvmagic.run_sync(
-+                _nvmagic.llm_execute(self.model_name, payload, _call)
-+            )
-+            sdk_resp, raw_resp = _sdk_response[0]
-+            generation_info = None
-+            if (
-+                self.include_response_headers
-+                and hasattr(raw_resp, "headers")
-+            ):
-+                generation_info = {"headers": dict(raw_resp.headers)}
-+            if use_responses:
-+                return _construct_lc_result_from_responses_api(
-+                    sdk_resp,
-+                    schema=original_schema_obj,
-+                    metadata=generation_info,
-+                    output_version=self.output_version,
-+                )
-+            return self._create_chat_result(resp_dict, generation_info)
-+
-         generation_info = None
-         raw_response = None
-         try:
-@@ -1621,7 +1725,50 @@ class BaseChatOpenAI(BaseChatModel):
-             kwargs["stream_options"] = {"include_usage": stream_usage}
-         payload = self._get_request_payload(messages, stop=stop, **kwargs)
-         default_chunk_class: type[BaseMessageChunk] = AIMessageChunk
--        base_generation_info = {}
-+        base_generation_info: dict = {}
-+
-+        # NVMagic path: standard chat completions only.
-+        if (
-+            _nvmagic.available()
-+            and "response_format" not in payload
-+        ):
-+            collected: list[dict] = []
-+
-+            async def _call(native: dict) -> Any:
-+                resp = await self.async_client.create(**native)
-+                async with resp as r:
-+                    async for chunk in r:
-+                        yield chunk.model_dump()
-+
-+            def _collector(chunk: Any) -> None:
-+                collected.append(chunk)
-+
-+            def _finalizer() -> dict:
-+                return collected[-1] if collected else {}
-+
-+            stream = await _nvmagic.llm_stream_execute(
-+                self.model_name, payload, _call, _collector, _finalizer
-+            )
-+            is_first_chunk = True
-+            async for chunk_dict in stream:
-+                generation_chunk = self._convert_chunk_to_generation_chunk(
-+                    chunk_dict,
-+                    default_chunk_class,
-+                    base_generation_info if is_first_chunk else {},
-+                )
-+                if generation_chunk is None:
-+                    continue
-+                default_chunk_class = generation_chunk.message.__class__
-+                logprobs = (generation_chunk.generation_info or {}).get("logprobs")
-+                if run_manager:
-+                    await run_manager.on_llm_new_token(
-+                        generation_chunk.text,
-+                        chunk=generation_chunk,
-+                        logprobs=logprobs,
-+                    )
-+                is_first_chunk = False
-+                yield generation_chunk
-+            return
-
-         try:
-             if "response_format" in payload:
-@@ -1690,6 +1837,55 @@ class BaseChatOpenAI(BaseChatModel):
-         **kwargs: Any,
-     ) -> ChatResult:
-         payload = self._get_request_payload(messages, stop=stop, **kwargs)
-+
-+        if _nvmagic.available():
-+            use_responses = self._use_responses_api(payload)
-+            has_response_format = "response_format" in payload
-+            original_schema_obj = kwargs.get("response_format")
-+            _sdk_response: list = []
-+
-+            async def _call(native: dict) -> dict:
-+                if has_response_format:
-+                    native_copy = {k: v for k, v in native.items() if k != "stream"}
-+                    raw = await self.root_async_client.chat.completions.with_raw_response.parse(  # noqa: E501
-+                        **native_copy
-+                    )
-+                elif use_responses:
-+                    if original_schema_obj and _is_pydantic_class(
-+                        original_schema_obj
-+                    ):
-+                        raw = await self.root_async_client.responses.with_raw_response.parse(  # noqa: E501
-+                            **native
-+                        )
-+                    else:
-+                        raw = await self.root_async_client.responses.with_raw_response.create(  # noqa: E501
-+                            **native
-+                        )
-+                else:
-+                    raw = await self.async_client.with_raw_response.create(
-+                        **native
-+                    )
-+                sdk_resp = raw.parse()
-+                _sdk_response.append((sdk_resp, raw))
-+                return sdk_resp.model_dump()
-+
-+            resp_dict = await _nvmagic.llm_execute(self.model_name, payload, _call)
-+            sdk_resp, raw_resp = _sdk_response[0]
-+            generation_info = None
-+            if (
-+                self.include_response_headers
-+                and hasattr(raw_resp, "headers")
-+            ):
-+                generation_info = {"headers": dict(raw_resp.headers)}
-+            if use_responses:
-+                return _construct_lc_result_from_responses_api(
-+                    sdk_resp,
-+                    schema=original_schema_obj,
-+                    metadata=generation_info,
-+                    output_version=self.output_version,
-+                )
-+            return self._create_chat_result(resp_dict, generation_info)
-+
-         generation_info = None
-         raw_response = None
-         try:
 diff --git a/libs/core/langchain_core/callbacks/nvmagic_handler.py b/libs/core/langchain_core/callbacks/nvmagic_handler.py
 new file mode 100644
-index 0000000..fdf7795
+index 0000000000..fdf7795bfe
 --- /dev/null
 +++ b/libs/core/langchain_core/callbacks/nvmagic_handler.py
 @@ -0,0 +1,145 @@
@@ -442,9 +149,93 @@ index 0000000..fdf7795
 +        return get_nvmagic()
 +    except Exception:
 +        return None
+diff --git a/libs/core/langchain_core/tools/base.py b/libs/core/langchain_core/tools/base.py
+index 7026a2e8fb..2267503c48 100644
+--- a/libs/core/langchain_core/tools/base.py
++++ b/libs/core/langchain_core/tools/base.py
+@@ -58,6 +58,7 @@ from langchain_core.utils.function_calling import (
+     _parse_google_docstring,
+     _py_38_safe_origin,
+ )
++from langchain_core.utils._nvmagic import get_nvmagic
+ from langchain_core.utils.pydantic import (
+     TypeBaseModel,
+     _create_subset_model,
+@@ -964,7 +965,46 @@ class ChildTool(BaseTool):
+                     tool_kwargs |= {"run_manager": run_manager}
+                 if config_param := _get_runnable_config_param(self._run):
+                     tool_kwargs |= {config_param: config}
+-                response = context.run(self._run, *tool_args, **tool_kwargs)
++                def _func(_args: Any) -> Any:
++                    return context.run(self._run, *tool_args, **tool_kwargs)
++
++                if (nvmag := get_nvmagic()) is not None:
++                    import asyncio
++                    import contextvars
++                    from concurrent.futures import ThreadPoolExecutor
++
++                    codec = nvmag.typed.BestEffortAnyCodec()
++                    ctx = contextvars.copy_context()
++                    # Capture the current scope stack so we can propagate it
++                    # to the worker thread's Rust thread-local storage.
++                    scope_stack = nvmag.get_scope_stack()
++
++                    async def _nvmagic_run() -> Any:
++                        return await nvmag.typed.tool_execute(
++                            self.name,
++                            tool_input,
++                            _func,
++                            codec,
++                            codec,
++                        )
++
++                    def _run_with_scope_stack() -> Any:
++                        # Bind the parent's scope stack to this thread's
++                        # Rust-side thread-local before running the async
++                        # nvmagic pipeline.
++                        nvmag.set_thread_scope_stack(scope_stack)
++                        return asyncio.run(_nvmagic_run())
++
++                    try:
++                        asyncio.get_running_loop()
++                        with ThreadPoolExecutor(max_workers=1) as pool:
++                            response = pool.submit(
++                                ctx.run, _run_with_scope_stack
++                            ).result()
++                    except RuntimeError:
++                        response = asyncio.run(_nvmagic_run())
++                else:
++                    response = _func(tool_input)
+             if self.response_format == "content_and_artifact":
+                 msg = (
+                     "Since response_format='content_and_artifact' "
+@@ -1093,8 +1133,21 @@ class ChildTool(BaseTool):
+                 if config_param := _get_runnable_config_param(func_to_check):
+                     tool_kwargs[config_param] = config
+
+-                coro = self._arun(*tool_args, **tool_kwargs)
+-                response = await coro_with_context(coro, context)
++                async def _func(_args: Any) -> Any:
++                    coro = self._arun(*tool_args, **tool_kwargs)
++                    return await coro_with_context(coro, context)
++
++                if (nvmag := get_nvmagic()) is not None:
++                    codec = nvmag.typed.BestEffortAnyCodec()
++                    response = await nvmag.typed.tool_execute(
++                        self.name,
++                        tool_input,
++                        _func,
++                        codec,
++                        codec,
++                    )
++                else:
++                    response = await _func(tool_input)
+             if self.response_format == "content_and_artifact":
+                 msg = (
+                     "Since response_format='content_and_artifact' "
 diff --git a/libs/core/langchain_core/utils/_nvmagic.py b/libs/core/langchain_core/utils/_nvmagic.py
 new file mode 100644
-index 0000000..9040214
+index 0000000000..9040214d2a
 --- /dev/null
 +++ b/libs/core/langchain_core/utils/_nvmagic.py
 @@ -0,0 +1,35 @@
@@ -485,7 +276,7 @@ index 0000000..9040214
 +    return get_nvmagic() is not None
 diff --git a/libs/core/tests/unit_tests/callbacks/test_nvmagic_handler.py b/libs/core/tests/unit_tests/callbacks/test_nvmagic_handler.py
 new file mode 100644
-index 0000000..165e577
+index 0000000000..165e5777e1
 --- /dev/null
 +++ b/libs/core/tests/unit_tests/callbacks/test_nvmagic_handler.py
 @@ -0,0 +1,197 @@
@@ -688,10 +479,10 @@ index 0000000..165e577
 +        h.on_chain_end({}, run_id=run_id)
 diff --git a/libs/partners/openai/langchain_openai/chat_models/_nvmagic.py b/libs/partners/openai/langchain_openai/chat_models/_nvmagic.py
 new file mode 100644
-index 0000000..6cd6d92
+index 0000000000..e085443917
 --- /dev/null
 +++ b/libs/partners/openai/langchain_openai/chat_models/_nvmagic.py
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,116 @@
 +"""Thin bridge module for optional NVMagic integration.
 +
 +When nvmagic is installed and a scope stack has been initialized by the
@@ -699,6 +490,11 @@ index 0000000..6cd6d92
 +NVMagic middleware pipeline (guardrails, intercepts, execution intercepts).
 +If nvmagic is not installed or no scope stack is active, ``available()``
 +returns ``False`` and ChatOpenAI falls back to its vanilla code path.
++
++All LLM calls flow through the **typed** NVMagic API
++(``nvmagic.typed.llm_execute`` / ``nvmagic.typed.llm_stream_execute``)
++with ``JsonPassthrough`` since the ``_call`` helpers already convert SDK
++responses to plain dicts (via ``model_dump()``) before returning.
 +"""
 +
 +from __future__ import annotations
@@ -709,6 +505,7 @@ index 0000000..6cd6d92
 +
 +try:
 +    import nvmagic
++    from nvmagic import LLMRequest
 +
 +    _HAS_NVMAGIC = True
 +except ImportError:
@@ -725,6 +522,11 @@ index 0000000..6cd6d92
 +        return nvmagic._scope_stack_var.get(None) is not None
 +    except Exception:
 +        return False
++
++
++def make_request(payload: dict, extra_headers: dict | None = None) -> "LLMRequest":
++    """Wrap a payload dict and optional extra headers into an LLMRequest."""
++    return LLMRequest(extra_headers or {}, payload)
 +
 +
 +# ---------------------------------------------------------------------------
@@ -746,41 +548,299 @@ index 0000000..6cd6d92
 +
 +
 +# ---------------------------------------------------------------------------
-+# LLM pipeline wrappers
++# LLM pipeline wrappers (typed API)
 +# ---------------------------------------------------------------------------
 +
 +
 +async def llm_execute(
 +    model_name: str,
-+    payload: dict,
++    request: "LLMRequest",
 +    func: Callable[..., Any],
-+) -> dict:
-+    """Execute a non-streaming LLM call through the NVMagic pipeline."""
-+    return await nvmagic.llm.execute(  # type: ignore[union-attr]
++) -> Any:
++    """Execute a non-streaming LLM call through the NVMagic typed pipeline.
++
++    The *func* callable receives an ``LLMRequest`` and returns a dict
++    (already converted from the SDK response via ``model_dump()``).
++    ``JsonPassthrough`` passes dicts through with zero overhead.
++    """
++    codec = nvmagic.typed.JsonPassthrough()
++    return await nvmagic.typed.llm_execute(  # type: ignore[union-attr]
 +        model_name,
-+        payload,
++        request,
 +        func,
++        codec,
 +        model_name=model_name,
 +    )
 +
 +
 +async def llm_stream_execute(
 +    model_name: str,
-+    payload: dict,
++    request: "LLMRequest",
 +    func: Callable[..., Any],
 +    collector: Callable[[Any], None],
 +    finalizer: Callable[[], Any],
 +) -> Any:
-+    """Execute a streaming LLM call through the NVMagic pipeline.
++    """Execute a streaming LLM call through the NVMagic typed pipeline.
 +
++    The *func* callable receives an ``LLMRequest`` and should return an
++    async iterator of dict chunks (already converted via ``model_dump()``).
++    ``JsonPassthrough`` passes each chunk through with zero overhead.
 +    Returns an ``LlmStream`` async-iterable whose chunks have already
 +    passed through stream-response intercepts.
 +    """
-+    return await nvmagic.llm.stream_execute(  # type: ignore[union-attr]
++    codec = nvmagic.typed.JsonPassthrough()
++    return await nvmagic.typed.llm_stream_execute(  # type: ignore[union-attr]
 +        model_name,
-+        payload,
++        request,
 +        func,
 +        collector,
 +        finalizer,
++        codec,
++        codec,
 +        model_name=model_name,
 +    )
+diff --git a/libs/partners/openai/langchain_openai/chat_models/base.py b/libs/partners/openai/langchain_openai/chat_models/base.py
+index c74c40f3c5..74df4295c3 100644
+--- a/libs/partners/openai/langchain_openai/chat_models/base.py
++++ b/libs/partners/openai/langchain_openai/chat_models/base.py
+@@ -128,6 +128,7 @@ from pydantic import (
+ from pydantic.v1 import BaseModel as BaseModelV1
+ from typing_extensions import Self
+
++from langchain_openai.chat_models import _nvmagic
+ from langchain_openai.chat_models._client_utils import (
+     _get_default_async_httpx_client,
+     _get_default_httpx_client,
+@@ -1368,7 +1369,58 @@ class BaseChatOpenAI(BaseChatModel):
+             kwargs["stream_options"] = {"include_usage": stream_usage}
+         payload = self._get_request_payload(messages, stop=stop, **kwargs)
+         default_chunk_class: type[BaseMessageChunk] = AIMessageChunk
+-        base_generation_info = {}
++        base_generation_info: dict = {}
++
++        # NVMagic path: standard chat completions only.
++        if (
++            _nvmagic.available()
++            and "response_format" not in payload
++        ):
++            request = _nvmagic.make_request(payload)
++            collected: list[dict] = []
++
++            async def _call(req: Any) -> Any:
++                resp = await self.async_client.create(**req.content)
++                async with resp as r:
++                    async for chunk in r:
++                        yield chunk.model_dump()
++
++            def _collector(chunk: Any) -> None:
++                collected.append(chunk)
++
++            def _finalizer() -> dict:
++                return collected[-1] if collected else {}
++
++            async def _run() -> list[dict]:
++                stream = await _nvmagic.llm_stream_execute(
++                    self.model_name, request, _call, _collector, _finalizer
++                )
++                chunks: list[dict] = []
++                async for chunk_dict in stream:
++                    chunks.append(chunk_dict)
++                return chunks
++
++            chunk_dicts = _nvmagic.run_sync(_run())
++            is_first_chunk = True
++            for chunk_dict in chunk_dicts:
++                generation_chunk = self._convert_chunk_to_generation_chunk(
++                    chunk_dict,
++                    default_chunk_class,
++                    base_generation_info if is_first_chunk else {},
++                )
++                if generation_chunk is None:
++                    continue
++                default_chunk_class = generation_chunk.message.__class__
++                logprobs = (generation_chunk.generation_info or {}).get("logprobs")
++                if run_manager:
++                    run_manager.on_llm_new_token(
++                        generation_chunk.text,
++                        chunk=generation_chunk,
++                        logprobs=logprobs,
++                    )
++                is_first_chunk = False
++                yield generation_chunk
++            return
+
+         try:
+             if "response_format" in payload:
+@@ -1436,6 +1488,61 @@ class BaseChatOpenAI(BaseChatModel):
+     ) -> ChatResult:
+         self._ensure_sync_client_available()
+         payload = self._get_request_payload(messages, stop=stop, **kwargs)
++
++        if _nvmagic.available():
++            use_responses = self._use_responses_api(payload)
++            has_response_format = "response_format" in payload
++            original_schema_obj = kwargs.get("response_format")
++            request = _nvmagic.make_request(payload)
++            # Capture the SDK response for post-processing paths that
++            # require it (responses API, structured output .parsed).
++            _sdk_response: list = []
++
++            async def _call(req: Any) -> dict:
++                native = req.content
++                if has_response_format:
++                    native_copy = {k: v for k, v in native.items() if k != "stream"}
++                    raw = await self.root_async_client.chat.completions.with_raw_response.parse(  # noqa: E501
++                        **native_copy
++                    )
++                elif use_responses:
++                    if original_schema_obj and _is_pydantic_class(
++                        original_schema_obj
++                    ):
++                        raw = await self.root_async_client.responses.with_raw_response.parse(  # noqa: E501
++                            **native
++                        )
++                    else:
++                        raw = await self.root_async_client.responses.with_raw_response.create(  # noqa: E501
++                            **native
++                        )
++                else:
++                    raw = await self.async_client.with_raw_response.create(
++                        **native
++                    )
++                sdk_resp = raw.parse()
++                _sdk_response.append((sdk_resp, raw))
++                return sdk_resp.model_dump()
++
++            resp_dict = _nvmagic.run_sync(
++                _nvmagic.llm_execute(self.model_name, request, _call)
++            )
++            sdk_resp, raw_resp = _sdk_response[0]
++            generation_info = None
++            if (
++                self.include_response_headers
++                and hasattr(raw_resp, "headers")
++            ):
++                generation_info = {"headers": dict(raw_resp.headers)}
++            if use_responses:
++                return _construct_lc_result_from_responses_api(
++                    sdk_resp,
++                    schema=original_schema_obj,
++                    metadata=generation_info,
++                    output_version=self.output_version,
++                )
++            return self._create_chat_result(resp_dict, generation_info)
++
+         generation_info = None
+         raw_response = None
+         try:
+@@ -1621,7 +1728,51 @@ class BaseChatOpenAI(BaseChatModel):
+             kwargs["stream_options"] = {"include_usage": stream_usage}
+         payload = self._get_request_payload(messages, stop=stop, **kwargs)
+         default_chunk_class: type[BaseMessageChunk] = AIMessageChunk
+-        base_generation_info = {}
++        base_generation_info: dict = {}
++
++        # NVMagic path: standard chat completions only.
++        if (
++            _nvmagic.available()
++            and "response_format" not in payload
++        ):
++            request = _nvmagic.make_request(payload)
++            collected: list[dict] = []
++
++            async def _call(req: Any) -> Any:
++                resp = await self.async_client.create(**req.content)
++                async with resp as r:
++                    async for chunk in r:
++                        yield chunk.model_dump()
++
++            def _collector(chunk: Any) -> None:
++                collected.append(chunk)
++
++            def _finalizer() -> dict:
++                return collected[-1] if collected else {}
++
++            stream = await _nvmagic.llm_stream_execute(
++                self.model_name, request, _call, _collector, _finalizer
++            )
++            is_first_chunk = True
++            async for chunk_dict in stream:
++                generation_chunk = self._convert_chunk_to_generation_chunk(
++                    chunk_dict,
++                    default_chunk_class,
++                    base_generation_info if is_first_chunk else {},
++                )
++                if generation_chunk is None:
++                    continue
++                default_chunk_class = generation_chunk.message.__class__
++                logprobs = (generation_chunk.generation_info or {}).get("logprobs")
++                if run_manager:
++                    await run_manager.on_llm_new_token(
++                        generation_chunk.text,
++                        chunk=generation_chunk,
++                        logprobs=logprobs,
++                    )
++                is_first_chunk = False
++                yield generation_chunk
++            return
+
+         try:
+             if "response_format" in payload:
+@@ -1690,6 +1841,57 @@ class BaseChatOpenAI(BaseChatModel):
+         **kwargs: Any,
+     ) -> ChatResult:
+         payload = self._get_request_payload(messages, stop=stop, **kwargs)
++
++        if _nvmagic.available():
++            use_responses = self._use_responses_api(payload)
++            has_response_format = "response_format" in payload
++            original_schema_obj = kwargs.get("response_format")
++            request = _nvmagic.make_request(payload)
++            _sdk_response: list = []
++
++            async def _call(req: Any) -> dict:
++                native = req.content
++                if has_response_format:
++                    native_copy = {k: v for k, v in native.items() if k != "stream"}
++                    raw = await self.root_async_client.chat.completions.with_raw_response.parse(  # noqa: E501
++                        **native_copy
++                    )
++                elif use_responses:
++                    if original_schema_obj and _is_pydantic_class(
++                        original_schema_obj
++                    ):
++                        raw = await self.root_async_client.responses.with_raw_response.parse(  # noqa: E501
++                            **native
++                        )
++                    else:
++                        raw = await self.root_async_client.responses.with_raw_response.create(  # noqa: E501
++                            **native
++                        )
++                else:
++                    raw = await self.async_client.with_raw_response.create(
++                        **native
++                    )
++                sdk_resp = raw.parse()
++                _sdk_response.append((sdk_resp, raw))
++                return sdk_resp.model_dump()
++
++            resp_dict = await _nvmagic.llm_execute(self.model_name, request, _call)
++            sdk_resp, raw_resp = _sdk_response[0]
++            generation_info = None
++            if (
++                self.include_response_headers
++                and hasattr(raw_resp, "headers")
++            ):
++                generation_info = {"headers": dict(raw_resp.headers)}
++            if use_responses:
++                return _construct_lc_result_from_responses_api(
++                    sdk_resp,
++                    schema=original_schema_obj,
++                    metadata=generation_info,
++                    output_version=self.output_version,
++                )
++            return self._create_chat_result(resp_dict, generation_info)
++
+         generation_info = None
+         raw_response = None
+         try:

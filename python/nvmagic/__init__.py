@@ -65,21 +65,30 @@ from nvmagic._native import (
 )
 from nvmagic._native import ScopeStack as _ScopeStack
 from nvmagic._native import create_scope_stack as _create_scope_stack
+from nvmagic._native import set_thread_scope_stack as _set_thread_scope_stack
 
 _scope_stack_var: contextvars.ContextVar[_ScopeStack] = contextvars.ContextVar("nvmagic_scope_stack")
 
 
 def get_scope_stack() -> _ScopeStack:
-    """Get the current task's scope stack, creating one if needed."""
+    """Get the current task's scope stack, creating one if needed.
+
+    Also binds the scope stack to the Rust-side thread-local storage so that
+    native API calls on this thread use the same scope stack.
+    """
     stack = _scope_stack_var.get(None)
     if stack is None:
         stack = _create_scope_stack()
         _scope_stack_var.set(stack)
+    # Keep the Rust thread-local in sync so that native calls (which read
+    # from THREAD_SCOPE_STACK / TASK_SCOPE_STACK) see the same scope stack.
+    _set_thread_scope_stack(stack)
     return stack
 
 
 ScopeStack = _ScopeStack
 create_scope_stack = _create_scope_stack
+set_thread_scope_stack = _set_thread_scope_stack
 
 __all__ = [
     # Submodules
@@ -94,6 +103,7 @@ __all__ = [
     "ScopeStack",
     "create_scope_stack",
     "get_scope_stack",
+    "set_thread_scope_stack",
     # Types
     "ScopeAttributes",
     "ToolAttributes",

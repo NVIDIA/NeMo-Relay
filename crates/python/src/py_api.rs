@@ -35,6 +35,19 @@ pub fn create_scope_stack() -> PyScopeStack {
     PyScopeStack(nvmagic_core::create_scope_stack())
 }
 
+/// Bind a ``ScopeStack`` to the current thread's thread-local storage.
+///
+/// This ensures that subsequent NVMagic API calls on this thread use the given
+/// scope stack rather than a default one. Primarily useful when propagating
+/// scope context into worker threads (e.g. ``ThreadPoolExecutor``).
+///
+/// Args:
+///     stack: The ``ScopeStack`` to bind to the current thread.
+#[pyfunction]
+pub fn set_thread_scope_stack(stack: &PyScopeStack) {
+    nvmagic_core::set_thread_scope_stack(stack.0.clone());
+}
+
 // ---------------------------------------------------------------------------
 // Scope / handle operations
 // ---------------------------------------------------------------------------
@@ -894,8 +907,9 @@ fn nvmagic_deregister_subscriber(name: &str) -> PyResult<bool> {
 
 /// Register all API functions into the given `PyModule`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Scope stack creation
+    // Scope stack creation / binding
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(set_thread_scope_stack, m)?)?;
 
     // Scope/handle ops
     m.add_function(wrap_pyfunction!(nvmagic_get_handle, m)?)?;
