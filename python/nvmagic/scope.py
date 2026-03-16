@@ -32,6 +32,7 @@ Example::
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
 
 from nvmagic._native import (
@@ -89,4 +90,19 @@ def event(name: str, *, handle: Any = None, data: Any = None, metadata: Any = No
     _native_event(name, handle=handle, data=data, metadata=metadata)
 
 
-__all__ = ["get_handle", "push", "pop", "event"]
+@contextmanager
+def scope(name: str, scope_type: Any, *, handle: Any = None, attributes: Any = None) -> Any:
+    """
+    Push a new child scope onto the scope stack, ensuring the stack is pop'd at the end
+
+    If *handle* is omitted, the scope is parented to the current top of stack.
+    Returns the new ``ScopeHandle``.
+    """
+    _ensure_scope_stack()
+    try:
+        pushed_handle = _native_push_scope(name, scope_type, handle=handle, attributes=attributes)
+        yield pushed_handle
+    finally:
+        _native_pop_scope(pushed_handle)
+
+__all__ = ["get_handle", "push", "pop", "event", "scope"]
