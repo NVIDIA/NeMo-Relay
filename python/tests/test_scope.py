@@ -75,6 +75,13 @@ class TestScope:
         with pytest.raises(RuntimeError):
             scope.pop(handle)
 
+    def test_scope_ctx_mgr(self):
+        with scope.scope("test_scope", ScopeType.Agent) as handle:
+            assert handle.name == "test_scope"
+            assert scope.get_handle().name == "test_scope"
+        
+        assert scope.get_handle().name == "root"
+
 
 class TestAllScopeTypes:
     @pytest.mark.parametrize(
