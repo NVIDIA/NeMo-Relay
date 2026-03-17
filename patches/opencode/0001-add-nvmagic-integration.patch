@@ -539,7 +539,7 @@ index 5bde2608f..5d4c54dfe 100644
          await Plugin.trigger(
            "tool.execute.after",
 diff --git a/packages/opencode/src/tool/batch.ts b/packages/opencode/src/tool/batch.ts
-index 00c22bfe6..d165db920 100644
+index 00c22bfe6..521cbfcbc 100644
 --- a/packages/opencode/src/tool/batch.ts
 +++ b/packages/opencode/src/tool/batch.ts
 @@ -2,6 +2,7 @@ import z from "zod"
@@ -561,21 +561,12 @@ index 00c22bfe6..d165db920 100644
            const attachments = result.attachments?.map((attachment) => ({
              ...attachment,
              id: PartID.ascending(),
-@@ -130,7 +133,17 @@ export const BatchTool = Tool.define("batch", async () => {
+@@ -130,7 +133,9 @@ export const BatchTool = Tool.define("batch", async () => {
          }
        }
 
--      const results = await Promise.all(toolCalls.map((call) => executeCall(call)))
 +      const batchScope = NVMagic.pushFunctionScope("batch-parallel", NVMagic.SCOPE_ATTR_PARALLEL)
-+      let results
-+      if (NVMagic.isEnabled()) {
-+        results = []
-+        for (const call of toolCalls) {
-+          results.push(await executeCall(call))
-+        }
-+      } else {
-+        results = await Promise.all(toolCalls.map((call) => executeCall(call)))
-+      }
+       const results = await Promise.all(toolCalls.map((call) => executeCall(call)))
 +      NVMagic.popScope(batchScope)
 
        // Add discarded calls as errors
