@@ -82,6 +82,53 @@ wasm-pack build crates/wasm              # Produces pkg/ with .wasm, .js, .d.ts
 - **Tests**: Split by topic (types, scope, tools, llm, deregister, context isolation) across all languages
 - **Pre-commit hooks**: trailing whitespace, EOF fixup, YAML/TOML/JSON validity; Ruff + ty (Python), cargo fmt + clippy + deny (Rust), gofmt + go vet (Go)
 
+## Third-Party Integrations & Patches
+
+NVMagic integrations with upstream projects are maintained as git submodules under `third_party/` with corresponding patch files in `patches/`.
+
+```
+third_party/
+  langchain/          # git submodule: github.com/langchain-ai/langchain
+  langchain-nvidia/   # git submodule: github.com/langchain-ai/langchain-nvidia
+  opencode/           # git submodule: github.com/anomalyco/opencode
+
+patches/
+  langchain/          # Patches applied on top of the langchain submodule
+    0001-add-nvmagic-integration.patch
+  langchain-nvidia/   # Patches applied on top of the langchain-nvidia submodule
+    0001-add-nvmagic-integration.patch
+  opencode/           # Patches applied on top of the opencode submodule
+    0001-add-nvmagic-integration.patch
+```
+
+### Applying patches to a submodule
+
+```bash
+cd third_party/<name>
+git checkout .                          # Reset to upstream HEAD
+git apply ../../patches/<name>/*.patch  # Apply NVMagic integration patches
+```
+
+### Updating a patch after making changes
+
+After modifying files inside a `third_party/<name>` submodule, regenerate the patch:
+
+```bash
+cd third_party/<name>
+git diff HEAD -- . > ../../patches/<name>/0001-add-nvmagic-integration.patch
+```
+
+### Updating the upstream submodule
+
+```bash
+cd third_party/<name>
+git fetch origin
+git checkout <new-tag-or-commit>
+cd ../..
+git add third_party/<name>
+# Re-apply and resolve any conflicts in the patch, then regenerate it
+```
+
 ## Architecture Patterns
 
 - **Scope stack**: Hierarchical scopes with UUID handles; root scope always present. Each binding exposes scope stack isolation for concurrent/multi-tenant use.
