@@ -4,3 +4,6 @@
 [submodule "third_party/langchain"]
 	path = third_party/langchain
 	url = https://github.com/langchain-ai/langchain.git
+[submodule "third_party/opencode"]
+	path = third_party/opencode
+	url = https://github.com/anomalyco/opencode.git

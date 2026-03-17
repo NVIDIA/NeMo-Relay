@@ -71,7 +71,7 @@ pub fn wrap_js_tool_conditional_fn(
     })
 }
 
-/// Wrap a JS function `(args: object) => object` for tool execution.
+/// Wrap a JS function `(args: object) => object` for tool execution (synchronous callbacks).
 pub fn wrap_js_tool_exec_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {

@@ -15,6 +15,7 @@ use std::sync::Mutex as StdMutex;
 
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::JsObject;
 use napi_derive::napi;
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
@@ -207,6 +208,7 @@ pub fn tool_call_end(
 /// intercepts → sanitize-response guardrails. On rejection, only a standalone
 /// Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned.
 /// Returns the final (possibly intercepted) tool result.
+#[allow(clippy::too_many_arguments)]
 #[napi]
 pub async fn tool_call_execute(
     name: String,
@@ -240,6 +242,66 @@ pub async fn tool_call_execute(
             .map_err(to_napi_err)
         })
         .await
+}
+
+/// Execute a tool call end-to-end, supporting both sync and async (Promise-returning) callbacks.
+///
+/// Same lifecycle as `toolCallExecute` (guardrails → intercepts → func → response processing),
+/// but transparently handles JS callbacks that return Promises. Uses `napi_is_promise` to detect
+/// Promise return values and resolves them before continuing the pipeline.
+///
+/// Accepts a raw `JsFunction` instead of `ThreadsafeFunction` so it can create a
+/// promise-aware wrapper with access to `Env`.
+#[allow(clippy::too_many_arguments)]
+#[napi(ts_return_type = "Promise<unknown>")]
+pub fn tool_call_execute_async(
+    env: Env,
+    name: String,
+    args: Json,
+    func: JsFunction,
+    handle: Option<&JsScopeHandle>,
+    attributes: Option<u32>,
+    data: Option<Json>,
+    metadata: Option<Json>,
+) -> Result<JsObject> {
+    let attrs = core_types::ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
+    let parent = handle
+        .map(|h| h.inner.clone())
+        .unwrap_or_else(core::task_scope_top);
+    let scope_stack = nvmagic_core::current_scope_stack();
+
+    // Create promise-aware wrapper — this must happen on the JS thread (we have Env).
+    let pa_fn = std::sync::Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &func).map_err(|e| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
+        })?,
+    );
+
+    let exec_fn: nvmagic_core::ToolExecutionNextFn = Box::new(move |args| {
+        let pa_fn = pa_fn.clone();
+        Box::pin(async move { pa_fn.call(args).await })
+    });
+
+    env.execute_tokio_future(
+        async move {
+            nvmagic_core::TASK_SCOPE_STACK
+                .scope(scope_stack, async move {
+                    core::nvmagic_tool_call_execute(
+                        &name,
+                        args,
+                        exec_fn,
+                        Some(parent),
+                        attrs,
+                        opt_json(data),
+                        opt_json(metadata),
+                    )
+                    .await
+                    .map_err(to_napi_err)
+                })
+                .await
+        },
+        |_env, result| Ok(result),
+    )
 }
 
 // ---------------------------------------------------------------------------
