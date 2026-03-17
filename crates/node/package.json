@@ -4,6 +4,16 @@
   "description": "NVMagic Node.js bindings via napi-rs",
   "main": "index.js",
   "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./typed": {
+      "types": "./typed.d.ts",
+      "default": "./typed.js"
+    }
+  },
   "napi": {
     "name": "nvmagic",
     "triples": {}
