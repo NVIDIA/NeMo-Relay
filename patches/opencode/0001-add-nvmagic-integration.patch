@@ -93,10 +93,10 @@ index a1cfd862b..4759ab4e6 100644
      Config.withDefault(false),
 diff --git a/packages/opencode/src/nvmagic/index.ts b/packages/opencode/src/nvmagic/index.ts
 new file mode 100644
-index 000000000..4b65a152f
+index 000000000..367966404
 --- /dev/null
 +++ b/packages/opencode/src/nvmagic/index.ts
-@@ -0,0 +1,255 @@
+@@ -0,0 +1,259 @@
 +import { Log } from "../util/log"
 +import { Flag } from "../flag/flag"
 +
@@ -270,6 +270,10 @@ index 000000000..4b65a152f
 +          // Apply intercepted request changes back to streamInput before
 +          // streamFn() reads it — streamFn captures streamInput by reference.
 +          applyIntercepted(streamInput, interceptedReq?.content)
++          // Bridge NVMagic-intercepted headers to the AI SDK HTTP request.
++          if (interceptedReq?.headers && Object.keys(interceptedReq.headers).length > 0) {
++            streamInput.extraHeaders = interceptedReq.headers
++          }
 +          return streamFn()
 +        },
 +        (chunk: any) => {
@@ -429,6 +433,26 @@ index 000000000..1344001b1
 +    },
 +  } satisfies Hooks
 +}
+diff --git a/packages/opencode/src/session/llm.ts b/packages/opencode/src/session/llm.ts
+index 88841a30a..0d31b9ce6 100644
+--- a/packages/opencode/src/session/llm.ts
++++ b/packages/opencode/src/session/llm.ts
+@@ -40,6 +40,7 @@ export namespace LLM {
+     tools: Record<string, Tool>
+     retries?: number
+     toolChoice?: "auto" | "required" | "none"
++    extraHeaders?: Record<string, string>
+   }
+
+   export type StreamOutput = StreamTextResult<ToolSet, unknown>
+@@ -221,6 +222,7 @@ export namespace LLM {
+             : undefined),
+         ...input.model.headers,
+         ...headers,
++        ...input.extraHeaders,
+       },
+       maxRetries: input.retries ?? 0,
+       messages: [
 diff --git a/packages/opencode/src/session/processor.ts b/packages/opencode/src/session/processor.ts
 index 38dac41b0..ae988f1cc 100644
 --- a/packages/opencode/src/session/processor.ts
