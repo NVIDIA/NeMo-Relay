@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Basic LangChain agent with NVMagic event logging and ATIF trajectory export.
+"""Basic LangChain agent with NeMo Agent Toolkit Nexus event logging and ATIF trajectory export.
 
 This example creates a ReAct agent using ChatNVIDIA and registers:
   1. An event subscriber that logs all lifecycle events to the console
@@ -22,7 +22,7 @@ import json
 import os
 import sys
 
-import nvmagic
+import nat_nexus
 from langchain.agents import create_agent
 from langchain_core.tools import tool
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
@@ -57,12 +57,12 @@ def get_population(city: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# NVMagic event subscriber
+# NeMo Agent Toolkit Nexus event subscriber
 # ---------------------------------------------------------------------------
 
 
-def log_event(event: nvmagic.Event) -> None:
-    """Log every NVMagic lifecycle event to stdout."""
+def log_event(event: nat_nexus.Event) -> None:
+    """Log every NeMo Agent Toolkit Nexus lifecycle event to stdout."""
     parts = [
         f"[{event.event_type}]",
         f"name={event.name}",
@@ -98,10 +98,10 @@ async def amain() -> None:
         sys.exit(1)
 
     # Register the console logging subscriber.
-    nvmagic.subscribers.register("console-logger", log_event)
+    nat_nexus.subscribers.register("console-logger", log_event)
 
     # Set up ATIF trajectory exporter.
-    exporter = nvmagic.AtifExporter(
+    exporter = nat_nexus.AtifExporter(
         "example-session",
         "example-agent",
         "0.1.0",
@@ -110,7 +110,7 @@ async def amain() -> None:
     exporter.register("atif-exporter")
 
     # Push a top-level agent scope.
-    agent_scope = nvmagic.scope.push("example-agent", nvmagic.ScopeType.Agent)
+    agent_scope = nat_nexus.scope.push("example-agent", nat_nexus.ScopeType.Agent)
     agent_root_uuid = agent_scope.uuid
 
     # Create the LLM and agent.
@@ -127,7 +127,7 @@ async def amain() -> None:
     print("\n--- Final response ---\n")
     print(result["messages"][-1].content)
 
-    nvmagic.scope.pop(agent_scope)
+    nat_nexus.scope.pop(agent_scope)
 
     # Export ATIF trajectory filtered to this agent's root scope.
     trajectory = exporter.export(agent_root_uuid)
@@ -140,7 +140,7 @@ async def amain() -> None:
 
     # Clean up.
     exporter.deregister("atif-exporter")
-    nvmagic.subscribers.deregister("console-logger")
+    nat_nexus.subscribers.deregister("console-logger")
 
 
 if __name__ == "__main__":

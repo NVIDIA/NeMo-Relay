@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Error types for the NVMagic runtime.
+//! Error types for the Nexus runtime.
 //!
 //! All fallible operations in the runtime return [`Result<T>`], which uses
 //! [`MagicError`] as the error type. Errors are categorized by cause
@@ -9,7 +9,7 @@
 
 use thiserror::Error;
 
-/// The error type for all NVMagic runtime operations.
+/// The error type for all Nexus runtime operations.
 ///
 /// Each variant represents a distinct failure mode that callers can match on
 /// to determine the appropriate recovery strategy.
@@ -50,7 +50,7 @@ pub enum MagicError {
     Internal(String),
 }
 
-/// A specialized [`Result`](std::result::Result) type for NVMagic operations.
+/// A specialized [`Result`](std::result::Result) type for Nexus operations.
 pub type Result<T> = std::result::Result<T, MagicError>;
 
 #[cfg(test)]

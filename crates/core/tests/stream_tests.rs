@@ -6,12 +6,12 @@
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use nvmagic_core::context::*;
-use nvmagic_core::error::Result;
-use nvmagic_core::json::Json;
-use nvmagic_core::stream::LlmStreamWrapper;
-use nvmagic_core::types::*;
-use nvmagic_core::*;
+use nvidia_nat_nexus_core::context::*;
+use nvidia_nat_nexus_core::error::Result;
+use nvidia_nat_nexus_core::json::Json;
+use nvidia_nat_nexus_core::stream::LlmStreamWrapper;
+use nvidia_nat_nexus_core::types::*;
+use nvidia_nat_nexus_core::*;
 use serde_json::json;
 use tokio_stream::{Stream, StreamExt};
 
@@ -21,7 +21,7 @@ static TEST_MUTEX: Mutex<()> = Mutex::new(());
 fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NVMagicContextState::new();
+    *state = NatNexusContextState::new();
 }
 
 fn make_llm_handle(name: &str) -> LLMHandle {
@@ -142,7 +142,7 @@ async fn test_stream_wrapper_emits_end_event() {
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nvmagic_register_subscriber(
+    nat_nexus_register_subscriber(
         "stream_end_test",
         Box::new(move |e: &Event| {
             ec.lock().unwrap().push((e.event_type, e.scope_type));
@@ -158,7 +158,7 @@ async fn test_stream_wrapper_emits_end_event() {
         headers: serde_json::Map::new(),
         content: json!({"messages": []}),
     };
-    let handle = nvmagic_llm_call(
+    let handle = nat_nexus_llm_call(
         "test_llm",
         &request,
         None,
@@ -183,7 +183,7 @@ async fn test_stream_wrapper_emits_end_event() {
     assert_eq!(captured.last().unwrap().0, EventType::End);
 
     drop(captured);
-    nvmagic_deregister_subscriber("stream_end_test").unwrap();
+    nat_nexus_deregister_subscriber("stream_end_test").unwrap();
 }
 
 #[tokio::test]
@@ -193,7 +193,9 @@ async fn test_stream_wrapper_error_propagation() {
 
     let items: Vec<Result<Json>> = vec![
         Ok(json!("good chunk")),
-        Err(nvmagic_core::MagicError::Internal("stream error".into())),
+        Err(nvidia_nat_nexus_core::MagicError::Internal(
+            "stream error".into(),
+        )),
     ];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
@@ -292,7 +294,9 @@ async fn test_stream_wrapper_error_skips_collector_finalizer() {
     let finalizer_called = Arc::new(Mutex::new(false));
     let fc = finalizer_called.clone();
 
-    let items: Vec<Result<Json>> = vec![Err(nvmagic_core::MagicError::Internal("error".into()))];
+    let items: Vec<Result<Json>> = vec![Err(nvidia_nat_nexus_core::MagicError::Internal(
+        "error".into(),
+    ))];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let collector: Box<dyn FnMut(Json) + Send> = Box::new(move |_| {
@@ -324,7 +328,7 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nvmagic_register_subscriber(
+    nat_nexus_register_subscriber(
         "end_event_test",
         Box::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
@@ -339,7 +343,7 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
         headers: serde_json::Map::new(),
         content: json!({"messages": []}),
     };
-    let handle = nvmagic_llm_call(
+    let handle = nat_nexus_llm_call(
         "test_llm",
         &request,
         None,
@@ -371,5 +375,5 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
     assert_eq!(arr[1]["token"], "b");
 
     drop(captured);
-    nvmagic_deregister_subscriber("end_event_test").unwrap();
+    nat_nexus_deregister_subscriber("end_event_test").unwrap();
 }

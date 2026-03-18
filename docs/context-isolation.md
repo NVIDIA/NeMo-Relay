@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Context Isolation
 
-NVMagic supports per-request and per-task context isolation through hierarchical scope stacks. Each scope stack has its own root UUID, enabling safe concurrent and multi-tenant agent execution in a single process.
+Nexus supports per-request and per-task context isolation through hierarchical scope stacks. Each scope stack has its own root UUID, enabling safe concurrent and multi-tenant agent execution in a single process.
 
 ## Scope Stack
 
@@ -28,7 +28,7 @@ A `ScopeStack` is a vector of `ScopeHandle`s with an immovable root scope at ind
 
 ## Storage: Two-Tier Lookup
 
-NVMagic uses a two-tier storage pattern for context isolation:
+Nexus uses a two-tier storage pattern for context isolation:
 
 ```
 current_scope_stack()
@@ -81,17 +81,17 @@ set_thread_scope_stack(custom);
 **Python** — uses `contextvars.ContextVar` for async-safe isolation:
 
 ```python
-import nvmagic
+import nat_nexus
 
 async def handle_request():
     # Each asyncio task inherits parent's ContextVar at fork time
     # Override to isolate:
-    stack = nvmagic.create_scope_stack()
-    nvmagic._scope_stack_var.set(stack)
+    stack = nat_nexus.create_scope_stack()
+    nat_nexus._scope_stack_var.set(stack)
 
-    handle = nvmagic.scope.push("agent", nvmagic.ScopeType.Agent)
+    handle = nat_nexus.scope.push("agent", nat_nexus.ScopeType.Agent)
     # ... process request ...
-    nvmagic.scope.pop(handle)
+    nat_nexus.scope.pop(handle)
 ```
 
 Lazy initialization: `get_scope_stack()` creates a new stack on first access in a task.
@@ -99,7 +99,7 @@ Lazy initialization: `get_scope_stack()` creates a new stack on first access in 
 **Go** — uses `ScopeStack.Run()` which locks the goroutine to an OS thread:
 
 ```go
-stack, _ := nvmagic.NewScopeStack()
+stack, _ := nat_nexus.NewScopeStack()
 defer stack.Close()
 
 go func() {
@@ -157,12 +157,12 @@ Each agent gets its own scope stack with a unique root UUID. All middleware regi
 ```python
 async def handle_agent(agent_id: str):
     # Isolated stack for this agent
-    stack = nvmagic.create_scope_stack()
-    nvmagic._scope_stack_var.set(stack)
+    stack = nat_nexus.create_scope_stack()
+    nat_nexus._scope_stack_var.set(stack)
 
-    handle = nvmagic.scope.push(f"agent-{agent_id}", nvmagic.ScopeType.Agent)
-    response = await nvmagic.llm.execute("gpt-4", request, llm_func)
-    nvmagic.scope.pop(handle)
+    handle = nat_nexus.scope.push(f"agent-{agent_id}", nat_nexus.ScopeType.Agent)
+    response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
+    nat_nexus.scope.pop(handle)
 
 # Concurrent agents — fully isolated
 async def main():
@@ -181,7 +181,7 @@ for _, agentID := range agents {
     wg.Add(1)
     go func(id string) {
         defer wg.Done()
-        stack, _ := nvmagic.NewScopeStack()
+        stack, _ := nat_nexus.NewScopeStack()
         defer stack.Close()
 
         stack.Run(func() {

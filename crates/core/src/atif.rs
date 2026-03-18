@@ -4,7 +4,7 @@
 //! ATIF (Agent Trajectory Interchange Format) exporter.
 //!
 //! This module provides types and an exporter that collects lifecycle events
-//! from the NVMagic runtime and converts them into ATIF trajectories.
+//! from the Nexus runtime and converts them into ATIF trajectories.
 //!
 //! The [`AtifExporter`] registers as an event subscriber, collects all events,
 //! and can export them as an [`AtifTrajectory`] via [`AtifExporter::export`].
@@ -171,7 +171,7 @@ impl AtifExporter {
     }
 
     /// Returns an event subscriber function that can be registered with
-    /// [`nvmagic_register_subscriber`](crate::api::nvmagic_register_subscriber).
+    /// [`nat_nexus_register_subscriber`](crate::api::nat_nexus_register_subscriber).
     pub fn subscriber(&self) -> EventSubscriberFn {
         let state = self.state.clone();
         Box::new(move |event: &Event| {
@@ -257,7 +257,7 @@ impl AtifExporter {
 /// If `input` looks like an `LLMRequest` envelope (`{"content": ..., "headers": ...}`),
 /// return the inner `content` value. Otherwise return the input unchanged.
 ///
-/// This avoids leaking the NVMagic transport wrapper into the trajectory.
+/// This avoids leaking the Nexus transport wrapper into the trajectory.
 fn unwrap_llm_request(input: &Json) -> Json {
     if let Some(obj) = input.as_object() {
         if obj.contains_key("content") && obj.contains_key("headers") {
@@ -347,7 +347,7 @@ fn extract_user_messages(input: &Json) -> Json {
 /// "tool_calls": [{ "id": "...", "type": "function", "function": { "name": "...", "arguments": "..." } }]
 /// ```
 ///
-/// String `arguments` are parsed into JSON for consistency with NVMagic tool events
+/// String `arguments` are parsed into JSON for consistency with Nexus tool events
 /// which always provide parsed arguments.
 ///
 /// Returns `None` if there are no tool calls or the structure is unrecognized.

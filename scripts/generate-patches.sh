@@ -32,7 +32,7 @@ generate_patches() {
     fi
 
     mkdir -p "$patch_dir"
-    local patch_file="$patch_dir/0001-add-nvmagic-integration.patch"
+    local patch_file="$patch_dir/0001-add-nat-nexus-integration.patch"
 
     # Combine tracked diffs and new file diffs
     {

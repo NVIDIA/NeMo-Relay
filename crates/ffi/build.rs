@@ -11,6 +11,6 @@ fn main() {
         .with_config(config)
         .generate()
     {
-        bindings.write_to_file(format!("{crate_dir}/nvmagic.h"));
+        bindings.write_to_file(format!("{crate_dir}/nat_nexus.h"));
     }
 }

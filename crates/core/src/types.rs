@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Core data types for the NVMagic runtime.
+//! Core data types for the Nexus runtime.
 //!
 //! This module defines the fundamental types used throughout the framework:
 //!
@@ -168,8 +168,8 @@ impl ScopeHandle {
 
 /// A handle representing an active tool invocation.
 ///
-/// Created by [`nvmagic_tool_call`](crate::api::nvmagic_tool_call) and
-/// ended by [`nvmagic_tool_call_end`](crate::api::nvmagic_tool_call_end).
+/// Created by [`nat_nexus_tool_call`](crate::api::nat_nexus_tool_call) and
+/// ended by [`nat_nexus_tool_call_end`](crate::api::nat_nexus_tool_call_end).
 /// Each handle gets a unique v4 UUID and emits `Start`/`End` lifecycle events
 /// to all registered subscribers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,8 +213,8 @@ impl ToolHandle {
 
 /// A handle representing an active LLM call.
 ///
-/// Created by [`nvmagic_llm_call`](crate::api::nvmagic_llm_call) and
-/// ended by [`nvmagic_llm_call_end`](crate::api::nvmagic_llm_call_end).
+/// Created by [`nat_nexus_llm_call`](crate::api::nat_nexus_llm_call) and
+/// ended by [`nat_nexus_llm_call_end`](crate::api::nat_nexus_llm_call_end).
 /// For streaming calls, the [`LlmStreamWrapper`](crate::stream::LlmStreamWrapper)
 /// automatically emits the `End` event when the stream is exhausted.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -815,7 +815,7 @@ pub struct GuardrailEntry<F> {
 ///
 /// Events are produced when scopes, tool handles, or LLM handles are created
 /// or destroyed, and when explicit marker events are fired via
-/// [`nvmagic_event`](crate::api::nvmagic_event). Subscribers receive
+/// [`nat_nexus_event`](crate::api::nat_nexus_event). Subscribers receive
 /// a reference to each event and can use them for logging, tracing, metrics,
 /// or other observability tasks.
 #[derive(Debug, Clone, Serialize, Deserialize)]

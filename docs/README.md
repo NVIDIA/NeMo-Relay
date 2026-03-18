@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# NVMagic Documentation
+# NeMo Agent Toolkit Nexus Documentation
 
-NVMagic is a multi-language agent runtime framework providing execution scope management, lifecycle event tracking, and configurable middleware pipelines for tool and LLM calls.
+Nexus is a multi-language agent runtime framework providing execution scope management, lifecycle event tracking, and configurable middleware pipelines for tool and LLM calls.
 
 ## Contents
 
@@ -23,21 +23,21 @@ NVMagic is a multi-language agent runtime framework providing execution scope ma
 ## Quick Start
 
 ```python
-import nvmagic
-from nvmagic import LLMRequest, ScopeType
+import nat_nexus
+from nat_nexus import LLMRequest, ScopeType
 
 # Push an agent scope
-handle = nvmagic.scope.push("my_agent", ScopeType.Agent)
+handle = nat_nexus.scope.push("my_agent", ScopeType.Agent)
 
 # Execute an LLM call through the full middleware pipeline
 request = LLMRequest(
     headers={"Authorization": "Bearer ..."},
     content={"messages": [{"role": "user", "content": "Hello"}], "model": "gpt-4"},
 )
-response = await nvmagic.llm.execute("gpt-4", request, my_llm_func)
+response = await nat_nexus.llm.execute("gpt-4", request, my_llm_func)
 
 # Execute a tool call
-result = await nvmagic.tools.execute("search", {"query": "example"}, my_tool_func)
+result = await nat_nexus.tools.execute("search", {"query": "example"}, my_tool_func)
 
-nvmagic.scope.pop(handle)
+nat_nexus.scope.pop(handle)
 ```

@@ -11,10 +11,10 @@ This document covers the complete API surface. Function signatures are shown in 
 
 ```python
 # Get the current top-of-stack scope handle
-handle = nvmagic.scope.get_handle() -> ScopeHandle
+handle = nat_nexus.scope.get_handle() -> ScopeHandle
 
 # Push a new scope onto the stack
-handle = nvmagic.scope.push(
+handle = nat_nexus.scope.push(
     name: str,
     scope_type: ScopeType,
     *,
@@ -23,10 +23,10 @@ handle = nvmagic.scope.push(
 ) -> ScopeHandle
 
 # Pop a scope from the stack
-nvmagic.scope.pop(handle: ScopeHandle) -> None
+nat_nexus.scope.pop(handle: ScopeHandle) -> None
 
 # Emit a standalone Mark event
-nvmagic.scope.event(
+nat_nexus.scope.event(
     name: str,
     *,
     handle: ScopeHandle | None = None,
@@ -41,7 +41,7 @@ nvmagic.scope.event(
 
 ```python
 # Begin a tool call — emits Start event
-handle = nvmagic.tools.call(
+handle = nat_nexus.tools.call(
     name: str,
     args: dict,
     *,
@@ -53,7 +53,7 @@ handle = nvmagic.tools.call(
 ) -> ToolHandle
 
 # End a tool call — emits End event
-nvmagic.tools.call_end(
+nat_nexus.tools.call_end(
     handle: ToolHandle,
     result: dict,
     *,
@@ -66,7 +66,7 @@ nvmagic.tools.call_end(
 
 ```python
 # Execute a tool call through the full middleware pipeline
-result = await nvmagic.tools.execute(
+result = await nat_nexus.tools.execute(
     name: str,
     args: dict,
     func: Callable[[dict], Awaitable[dict]] | Callable[[dict], dict],
@@ -82,13 +82,13 @@ result = await nvmagic.tools.execute(
 
 ```python
 # Run request intercept chain only
-transformed_args = nvmagic.intercepts.tool_request_intercepts(name: str, args: dict) -> dict
+transformed_args = nat_nexus.intercepts.tool_request_intercepts(name: str, args: dict) -> dict
 
 # Run response intercept chain only
-transformed_result = nvmagic.intercepts.tool_response_intercepts(name: str, result: dict) -> dict
+transformed_result = nat_nexus.intercepts.tool_response_intercepts(name: str, result: dict) -> dict
 
 # Run conditional execution guardrails only (raises on rejection)
-nvmagic.tools.conditional_execution(name: str, args: dict) -> None
+nat_nexus.tools.conditional_execution(name: str, args: dict) -> None
 ```
 
 ## LLM Lifecycle
@@ -97,7 +97,7 @@ nvmagic.tools.conditional_execution(name: str, args: dict) -> None
 
 ```python
 # Begin an LLM call — emits Start event
-handle = nvmagic.llm.call(
+handle = nat_nexus.llm.call(
     name: str,
     request: LLMRequest,
     *,
@@ -109,7 +109,7 @@ handle = nvmagic.llm.call(
 ) -> LLMHandle
 
 # End an LLM call — emits End event
-nvmagic.llm.call_end(
+nat_nexus.llm.call_end(
     handle: LLMHandle,
     response: dict,
     *,
@@ -122,7 +122,7 @@ nvmagic.llm.call_end(
 
 ```python
 # Execute an LLM call through the full middleware pipeline
-result = await nvmagic.llm.execute(
+result = await nat_nexus.llm.execute(
     name: str,
     request: LLMRequest,
     func: Callable[[LLMRequest], Awaitable[dict]] | Callable[[LLMRequest], dict],
@@ -135,7 +135,7 @@ result = await nvmagic.llm.execute(
 ) -> dict
 
 # Execute a streaming LLM call
-stream = await nvmagic.llm.stream_execute(
+stream = await nat_nexus.llm.stream_execute(
     name: str,
     request: LLMRequest,
     func: Callable[[LLMRequest], AsyncIterator[dict]],
@@ -154,10 +154,10 @@ stream = await nvmagic.llm.stream_execute(
 
 ```python
 # Run LLM request intercept chain only
-transformed = nvmagic.llm.request_intercepts(request: LLMRequest) -> LLMRequest
+transformed = nat_nexus.llm.request_intercepts(request: LLMRequest) -> LLMRequest
 
 # Run conditional execution guardrails only (raises on rejection)
-nvmagic.llm.conditional_execution(request: LLMRequest) -> None
+nat_nexus.llm.conditional_execution(request: LLMRequest) -> None
 ```
 
 ## Guardrail Registration
@@ -168,54 +168,54 @@ All guardrails are priority-ordered (ascending — lower numbers run first). Nam
 
 ```python
 # Sanitize tool request arguments
-nvmagic.guardrails.register_tool_sanitize_request(
+nat_nexus.guardrails.register_tool_sanitize_request(
     name: str, priority: int,
     fn: Callable[[str, dict], dict],               # (tool_name, args) -> args
 ) -> None
 
 # Sanitize tool response
-nvmagic.guardrails.register_tool_sanitize_response(
+nat_nexus.guardrails.register_tool_sanitize_response(
     name: str, priority: int,
     fn: Callable[[str, dict], dict],               # (tool_name, result) -> result
 ) -> None
 
 # Conditionally block tool execution
-nvmagic.guardrails.register_tool_conditional_execution(
+nat_nexus.guardrails.register_tool_conditional_execution(
     name: str, priority: int,
     fn: Callable[[str, dict], str | None],         # (tool_name, args) -> None or reason
 ) -> None
 
 # Deregister (returns True if found)
-nvmagic.guardrails.deregister_tool_sanitize_request(name: str) -> bool
-nvmagic.guardrails.deregister_tool_sanitize_response(name: str) -> bool
-nvmagic.guardrails.deregister_tool_conditional_execution(name: str) -> bool
+nat_nexus.guardrails.deregister_tool_sanitize_request(name: str) -> bool
+nat_nexus.guardrails.deregister_tool_sanitize_response(name: str) -> bool
+nat_nexus.guardrails.deregister_tool_conditional_execution(name: str) -> bool
 ```
 
 ### LLM Guardrails
 
 ```python
 # Sanitize LLM request
-nvmagic.guardrails.register_llm_sanitize_request(
+nat_nexus.guardrails.register_llm_sanitize_request(
     name: str, priority: int,
     fn: Callable[[LLMRequest], LLMRequest],
 ) -> None
 
 # Sanitize LLM response
-nvmagic.guardrails.register_llm_sanitize_response(
+nat_nexus.guardrails.register_llm_sanitize_response(
     name: str, priority: int,
     fn: Callable[[dict], dict],
 ) -> None
 
 # Conditionally block LLM execution
-nvmagic.guardrails.register_llm_conditional_execution(
+nat_nexus.guardrails.register_llm_conditional_execution(
     name: str, priority: int,
     fn: Callable[[LLMRequest], str | None],
 ) -> None
 
 # Deregister (returns True if found)
-nvmagic.guardrails.deregister_llm_sanitize_request(name: str) -> bool
-nvmagic.guardrails.deregister_llm_sanitize_response(name: str) -> bool
-nvmagic.guardrails.deregister_llm_conditional_execution(name: str) -> bool
+nat_nexus.guardrails.deregister_llm_sanitize_request(name: str) -> bool
+nat_nexus.guardrails.deregister_llm_sanitize_response(name: str) -> bool
+nat_nexus.guardrails.deregister_llm_conditional_execution(name: str) -> bool
 ```
 
 ## Intercept Registration
@@ -226,77 +226,77 @@ Intercepts are priority-ordered (ascending). Names must be unique.
 
 ```python
 # Transform tool request arguments
-nvmagic.intercepts.register_tool_request(
+nat_nexus.intercepts.register_tool_request(
     name: str, priority: int, break_chain: bool,
     fn: Callable[[str, dict], dict],               # (tool_name, args) -> args
 ) -> None
 
 # Transform tool response
-nvmagic.intercepts.register_tool_response(
+nat_nexus.intercepts.register_tool_response(
     name: str, priority: int, break_chain: bool,
     fn: Callable[[str, dict], dict],               # (tool_name, result) -> result
 ) -> None
 
 # Execution middleware chain
-nvmagic.intercepts.register_tool_execution(
+nat_nexus.intercepts.register_tool_execution(
     name: str, priority: int,
     fn: Callable[[dict, Callable], Awaitable[dict]],  # (args, next) -> result
 ) -> None
 
 # Deregister
-nvmagic.intercepts.deregister_tool_request(name: str) -> bool
-nvmagic.intercepts.deregister_tool_response(name: str) -> bool
-nvmagic.intercepts.deregister_tool_execution(name: str) -> bool
+nat_nexus.intercepts.deregister_tool_request(name: str) -> bool
+nat_nexus.intercepts.deregister_tool_response(name: str) -> bool
+nat_nexus.intercepts.deregister_tool_execution(name: str) -> bool
 ```
 
 ### LLM Intercepts
 
 ```python
 # Transform LLM request
-nvmagic.intercepts.register_llm_request(
+nat_nexus.intercepts.register_llm_request(
     name: str, priority: int, break_chain: bool,
     fn: Callable[[LLMRequest], LLMRequest],
 ) -> None
 
 # Execution middleware chain
-nvmagic.intercepts.register_llm_execution(
+nat_nexus.intercepts.register_llm_execution(
     name: str, priority: int,
     fn: Callable[[LLMRequest, Callable], Awaitable[dict]],  # (request, next) -> result
 ) -> None
 
 # Stream execution middleware chain
-nvmagic.intercepts.register_llm_stream_execution(
+nat_nexus.intercepts.register_llm_stream_execution(
     name: str, priority: int,
     fn: Callable[[LLMRequest, Callable], Awaitable[AsyncIterator[dict]]],
 ) -> None
 
 # Deregister
-nvmagic.intercepts.deregister_llm_request(name: str) -> bool
-nvmagic.intercepts.deregister_llm_execution(name: str) -> bool
-nvmagic.intercepts.deregister_llm_stream_execution(name: str) -> bool
+nat_nexus.intercepts.deregister_llm_request(name: str) -> bool
+nat_nexus.intercepts.deregister_llm_execution(name: str) -> bool
+nat_nexus.intercepts.deregister_llm_stream_execution(name: str) -> bool
 ```
 
 ## Event Subscribers
 
 ```python
 # Register an event subscriber
-nvmagic.subscribers.register(
+nat_nexus.subscribers.register(
     name: str,
     fn: Callable[[Event], None],
 ) -> None
 
 # Deregister (returns True if found)
-nvmagic.subscribers.deregister(name: str) -> bool
+nat_nexus.subscribers.deregister(name: str) -> bool
 ```
 
 ## Context Isolation
 
 ```python
 # Get or create the current task/thread scope stack
-stack = nvmagic.get_scope_stack() -> ScopeStack
+stack = nat_nexus.get_scope_stack() -> ScopeStack
 
 # Create a new isolated scope stack
-stack = nvmagic.create_scope_stack() -> ScopeStack
+stack = nat_nexus.create_scope_stack() -> ScopeStack
 ```
 
 ## Types
@@ -350,7 +350,7 @@ Additionally:
 ## ATIF Export
 
 ```python
-from nvmagic import AtifExporter
+from nat_nexus import AtifExporter
 
 exporter = AtifExporter()
 # ... run operations ...

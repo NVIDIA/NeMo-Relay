@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! # NVMagic Core
+//! # NeMo Agent Toolkit Nexus Core
 //!
-//! The core runtime library for the NVMagic multi-language agent framework. This crate
+//! The core runtime library for the NeMo Agent Toolkit Nexus multi-language agent framework. This crate
 //! provides execution scope management, lifecycle event tracking, and middleware pipelines
 //! (guardrails and intercepts) for tool and LLM calls.
 //!
 //! ## Architecture
 //!
-//! The runtime is organized around a **global context** ([`NVMagicContextState`]) that holds
+//! The runtime is organized around a **global context** ([`NatNexusContextState`]) that holds
 //! all registered middleware (guardrails, intercepts, subscribers) and a **scope stack**
 //! ([`ScopeStack`]) that tracks the hierarchical execution context via task-local or
 //! thread-local storage.
@@ -65,7 +65,7 @@ pub use context::{
     create_scope_stack, current_scope_stack, global_context, set_thread_scope_stack,
     task_scope_push, task_scope_remove, task_scope_top, EventSubscriberFn, LlmConditionalFn,
     LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
-    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn, NVMagicContextState,
+    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn, NatNexusContextState,
     ScopeStack, ScopeStackHandle, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
     ToolInterceptFn, ToolSanitizeFn, TASK_SCOPE_STACK,
 };

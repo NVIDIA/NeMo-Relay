@@ -186,9 +186,9 @@ Event subscribers observe all lifecycle events. They are registered by name and 
 def my_subscriber(event):
     print(f"{event.event_type}: {event.name} [{event.uuid}]")
 
-nvmagic.subscribers.register("logger", my_subscriber)
+nat_nexus.subscribers.register("logger", my_subscriber)
 # ... run operations ...
-nvmagic.subscribers.deregister("logger")
+nat_nexus.subscribers.deregister("logger")
 ```
 
 ## Error Types

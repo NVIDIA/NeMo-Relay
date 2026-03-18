@@ -28,8 +28,10 @@ use pyo3::prelude::*;
 use serde_json::Value as Json;
 use tokio_stream::Stream;
 
-use nvmagic_core::types::LLMRequest;
-use nvmagic_core::{LlmExecutionNextFn, LlmStreamExecutionNextFn, MagicError, ToolExecutionNextFn};
+use nvidia_nat_nexus_core::types::LLMRequest;
+use nvidia_nat_nexus_core::{
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, MagicError, ToolExecutionNextFn,
+};
 
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_types::PyLLMRequest;
@@ -73,14 +75,16 @@ pub fn wrap_py_tool_conditional_fn(
 pub fn wrap_py_tool_exec_fn(
     py_fn: Py<PyAny>,
 ) -> Box<
-    dyn Fn(Json) -> Pin<Box<dyn Future<Output = nvmagic_core::Result<Json>> + Send>> + Send + Sync,
+    dyn Fn(Json) -> Pin<Box<dyn Future<Output = nvidia_nat_nexus_core::Result<Json>> + Send>>
+        + Send
+        + Sync,
 > {
     let py_fn = std::sync::Arc::new(py_fn);
     Box::new(move |args: Json| {
         let py_fn = py_fn.clone();
         Box::pin(async move {
             // Call the Python function and check if it returns a coroutine
-            let outcome: nvmagic_core::Result<
+            let outcome: nvidia_nat_nexus_core::Result<
                 Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
             > = Python::attach(|py| {
                 let py_args = json_to_py(py, &args)
@@ -192,7 +196,7 @@ impl PyLlmStreamNextFn {
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
             // Drain into mpsc channel and return PyLlmStream
-            let (tx, rx) = tokio::sync::mpsc::channel::<nvmagic_core::Result<Json>>(32);
+            let (tx, rx) = tokio::sync::mpsc::channel::<nvidia_nat_nexus_core::Result<Json>>(32);
             tokio::spawn(async move {
                 use tokio_stream::StreamExt;
                 let mut stream = rust_stream;
@@ -218,7 +222,7 @@ pub fn wrap_py_tool_exec_intercept_fn(
     dyn Fn(
             Json,
             ToolExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = nvmagic_core::Result<Json>> + Send>>
+        ) -> Pin<Box<dyn Future<Output = nvidia_nat_nexus_core::Result<Json>> + Send>>
         + Send
         + Sync,
 > {
@@ -226,7 +230,7 @@ pub fn wrap_py_tool_exec_intercept_fn(
     Arc::new(move |args: Json, next: ToolExecutionNextFn| {
         let py_fn = py_fn.clone();
         Box::pin(async move {
-            let outcome: nvmagic_core::Result<
+            let outcome: nvidia_nat_nexus_core::Result<
                 Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
             > = Python::attach(|py| {
                 let py_args = json_to_py(py, &args)
@@ -285,7 +289,7 @@ pub fn wrap_py_llm_exec_intercept_fn(
     dyn Fn(
             LLMRequest,
             LlmExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = nvmagic_core::Result<Json>> + Send>>
+        ) -> Pin<Box<dyn Future<Output = nvidia_nat_nexus_core::Result<Json>> + Send>>
         + Send
         + Sync,
 > {
@@ -293,7 +297,7 @@ pub fn wrap_py_llm_exec_intercept_fn(
     Arc::new(move |request: LLMRequest, next: LlmExecutionNextFn| {
         let py_fn = py_fn.clone();
         Box::pin(async move {
-            let outcome: nvmagic_core::Result<
+            let outcome: nvidia_nat_nexus_core::Result<
                 Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
             > = Python::attach(|py| {
                 let py_req = PyLLMRequest { inner: request };
@@ -357,8 +361,8 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
         ) -> Pin<
             Box<
                 dyn Future<
-                        Output = nvmagic_core::Result<
-                            Pin<Box<dyn Stream<Item = nvmagic_core::Result<Json>> + Send>>,
+                        Output = nvidia_nat_nexus_core::Result<
+                            Pin<Box<dyn Stream<Item = nvidia_nat_nexus_core::Result<Json>> + Send>>,
                         >,
                     > + Send,
             >,
@@ -392,7 +396,7 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                     .map_err(|e: PyErr| MagicError::Internal(e.to_string()))
             })?;
 
-            let (tx, rx) = tokio::sync::mpsc::channel::<nvmagic_core::Result<Json>>(32);
+            let (tx, rx) = tokio::sync::mpsc::channel::<nvidia_nat_nexus_core::Result<Json>>(32);
 
             let task_locals = Python::attach(|py| {
                 pyo3_async_runtimes::tokio::get_current_locals(py)
@@ -464,7 +468,7 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
             let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
             Ok(Box::pin(stream)
                 as Pin<
-                    Box<dyn Stream<Item = nvmagic_core::Result<Json>> + Send>,
+                    Box<dyn Stream<Item = nvidia_nat_nexus_core::Result<Json>> + Send>,
                 >)
         })
     })
@@ -529,7 +533,7 @@ pub fn wrap_py_llm_request_intercept_fn(
 pub fn wrap_py_llm_exec_fn(
     py_fn: Py<PyAny>,
 ) -> Box<
-    dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = nvmagic_core::Result<Json>> + Send>>
+    dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = nvidia_nat_nexus_core::Result<Json>> + Send>>
         + Send
         + Sync,
 > {
@@ -537,7 +541,7 @@ pub fn wrap_py_llm_exec_fn(
     Box::new(move |request: LLMRequest| {
         let py_fn = py_fn.clone();
         Box::pin(async move {
-            let outcome: nvmagic_core::Result<
+            let outcome: nvidia_nat_nexus_core::Result<
                 Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
             > = Python::attach(|py| {
                 let py_req = PyLLMRequest { inner: request };
@@ -586,8 +590,8 @@ pub fn wrap_py_llm_stream_exec_fn(
         ) -> Pin<
             Box<
                 dyn Future<
-                        Output = nvmagic_core::Result<
-                            Pin<Box<dyn Stream<Item = nvmagic_core::Result<Json>> + Send>>,
+                        Output = nvidia_nat_nexus_core::Result<
+                            Pin<Box<dyn Stream<Item = nvidia_nat_nexus_core::Result<Json>> + Send>>,
                         >,
                     > + Send,
             >,
@@ -606,7 +610,7 @@ pub fn wrap_py_llm_stream_exec_fn(
                     .map_err(|e: PyErr| MagicError::Internal(e.to_string()))
             })?;
 
-            let (tx, rx) = tokio::sync::mpsc::channel::<nvmagic_core::Result<Json>>(32);
+            let (tx, rx) = tokio::sync::mpsc::channel::<nvidia_nat_nexus_core::Result<Json>>(32);
 
             // Capture the Python event loop context so the spawned task can use
             // pyo3_async_runtimes::tokio::into_future (which needs TaskLocals).
@@ -687,7 +691,7 @@ pub fn wrap_py_llm_stream_exec_fn(
             let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
             Ok(Box::pin(stream)
                 as Pin<
-                    Box<dyn Stream<Item = nvmagic_core::Result<Json>> + Send>,
+                    Box<dyn Stream<Item = nvidia_nat_nexus_core::Result<Json>> + Send>,
                 >)
         })
     })
@@ -739,8 +743,8 @@ pub fn wrap_py_llm_sanitize_response_fn(
 /// Wrap a Python callable `(Event) -> None` for event subscribers.
 pub fn wrap_py_event_subscriber(
     py_fn: Py<PyAny>,
-) -> Box<dyn Fn(&nvmagic_core::Event) + Send + Sync> {
-    Box::new(move |event: &nvmagic_core::Event| {
+) -> Box<dyn Fn(&nvidia_nat_nexus_core::Event) + Send + Sync> {
+    Box::new(move |event: &nvidia_nat_nexus_core::Event| {
         Python::attach(|py| {
             let py_event = crate::py_types::PyEvent {
                 inner: event.clone(),

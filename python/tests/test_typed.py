@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for NVMagic typed wrappers with explicit Codec protocol."""
+"""Tests for NeMo Agent Toolkit Nexus typed wrappers with explicit Codec protocol."""
 
 import dataclasses
 
-from nvmagic import LLMRequest, intercepts, typed
-from nvmagic.typed import Codec, DataclassCodec, JsonPassthrough
+from nat_nexus import LLMRequest, intercepts, typed
+from nat_nexus.typed import Codec, DataclassCodec, JsonPassthrough
 
 # ---------------------------------------------------------------------------
 # Test models

@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for NVMagic subscriber and event handling."""
+"""Tests for NeMo Agent Toolkit Nexus subscriber and event handling."""
 
 import pytest
-from nvmagic import (
+from nat_nexus import (
     Event,
     EventType,
     LLMRequest,

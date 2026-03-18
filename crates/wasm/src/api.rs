@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Top-level NVMagic API functions exposed to JavaScript via `wasm_bindgen`.
+//! Top-level Nexus API functions exposed to JavaScript via `wasm_bindgen`.
 //!
 //! This module contains all public entry points for:
 //!
@@ -26,7 +26,7 @@
 use js_sys::Function;
 use wasm_bindgen::prelude::*;
 
-use nvmagic_core::types as core_types;
+use nvidia_nat_nexus_core::types as core_types;
 
 use crate::callable;
 use crate::convert::*;
@@ -41,8 +41,8 @@ use crate::types::*;
 ///
 /// Throws if the scope stack is empty.
 #[wasm_bindgen(js_name = "getHandle")]
-pub fn nvmagic_get_handle() -> Result<WasmScopeHandle, JsValue> {
-    nvmagic_core::nvmagic_get_handle()
+pub fn nat_nexus_get_handle() -> Result<WasmScopeHandle, JsValue> {
+    nvidia_nat_nexus_core::nat_nexus_get_handle()
         .map(WasmScopeHandle::from)
         .map_err(to_js_err)
 }
@@ -54,14 +54,14 @@ pub fn nvmagic_get_handle() -> Result<WasmScopeHandle, JsValue> {
 /// - `parent` - Optional parent scope handle; uses the current top if omitted.
 /// - `attributes` - Optional bitfield of scope attribute flags.
 #[wasm_bindgen(js_name = "pushScope")]
-pub fn nvmagic_push_scope(
+pub fn nat_nexus_push_scope(
     name: &str,
     scope_type: i32,
     parent: Option<WasmScopeHandle>,
     attributes: Option<u32>,
 ) -> Result<WasmScopeHandle, JsValue> {
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    nvmagic_core::nvmagic_push_scope(
+    nvidia_nat_nexus_core::nat_nexus_push_scope(
         name,
         i32_to_scope_type(scope_type),
         parent.as_ref().map(|h| &h.inner),
@@ -75,8 +75,8 @@ pub fn nvmagic_push_scope(
 ///
 /// Throws if the handle does not match the current top of the stack.
 #[wasm_bindgen(js_name = "popScope")]
-pub fn nvmagic_pop_scope(handle: &WasmScopeHandle) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_pop_scope(&handle.inner.uuid).map_err(to_js_err)
+pub fn nat_nexus_pop_scope(handle: &WasmScopeHandle) -> Result<(), JsValue> {
+    nvidia_nat_nexus_core::nat_nexus_pop_scope(&handle.inner.uuid).map_err(to_js_err)
 }
 
 /// Emits a custom event to all registered subscribers.
@@ -86,13 +86,13 @@ pub fn nvmagic_pop_scope(handle: &WasmScopeHandle) -> Result<(), JsValue> {
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "event")]
-pub fn nvmagic_event(
+pub fn nat_nexus_event(
     name: &str,
     parent: Option<WasmScopeHandle>,
     data: JsValue,
     metadata: JsValue,
 ) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_event(
+    nvidia_nat_nexus_core::nat_nexus_event(
         name,
         parent.as_ref().map(|h| &h.inner),
         opt_js_to_json(&data)?,
@@ -116,7 +116,7 @@ pub fn nvmagic_event(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "toolCall")]
-pub fn nvmagic_tool_call(
+pub fn nat_nexus_tool_call(
     name: &str,
     args: JsValue,
     parent: Option<WasmScopeHandle>,
@@ -127,7 +127,7 @@ pub fn nvmagic_tool_call(
 ) -> Result<WasmToolHandle, JsValue> {
     let args_json = js_to_json(&args)?;
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    nvmagic_core::nvmagic_tool_call(
+    nvidia_nat_nexus_core::nat_nexus_tool_call(
         name,
         args_json,
         parent.as_ref().map(|h| &h.inner),
@@ -147,14 +147,14 @@ pub fn nvmagic_tool_call(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "toolCallEnd")]
-pub fn nvmagic_tool_call_end(
+pub fn nat_nexus_tool_call_end(
     handle: &WasmToolHandle,
     result: JsValue,
     data: JsValue,
     metadata: JsValue,
 ) -> Result<(), JsValue> {
     let result_json = js_to_json(&result)?;
-    nvmagic_core::nvmagic_tool_call_end(
+    nvidia_nat_nexus_core::nat_nexus_tool_call_end(
         &handle.inner,
         result_json,
         opt_js_to_json(&data)?,
@@ -178,7 +178,7 @@ pub fn nvmagic_tool_call_end(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "toolCallExecute")]
-pub async fn nvmagic_tool_call_execute(
+pub async fn nat_nexus_tool_call_execute(
     name: &str,
     args: JsValue,
     func: Function,
@@ -191,11 +191,12 @@ pub async fn nvmagic_tool_call_execute(
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
-        .unwrap_or_else(nvmagic_core::task_scope_top);
+        .unwrap_or_else(nvidia_nat_nexus_core::task_scope_top);
     let exec_fn = callable::wrap_js_tool_exec_fn(func);
-    let default_fn: nvmagic_core::ToolExecutionNextFn = Box::new(move |args| exec_fn(args));
+    let default_fn: nvidia_nat_nexus_core::ToolExecutionNextFn =
+        Box::new(move |args| exec_fn(args));
 
-    let result = nvmagic_core::nvmagic_tool_call_execute(
+    let result = nvidia_nat_nexus_core::nat_nexus_tool_call_execute(
         name,
         args_json,
         default_fn,
@@ -227,7 +228,7 @@ pub async fn nvmagic_tool_call_execute(
 /// - `model_name` - Optional model name string.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmCall")]
-pub fn nvmagic_llm_call(
+pub fn nat_nexus_llm_call(
     name: &str,
     request: JsValue,
     parent: Option<WasmScopeHandle>,
@@ -238,9 +239,9 @@ pub fn nvmagic_llm_call(
 ) -> Result<WasmLLMHandle, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvmagic_core::MagicError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nvidia_nat_nexus_core::MagicError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    nvmagic_core::nvmagic_llm_call(
+    nvidia_nat_nexus_core::nat_nexus_llm_call(
         name,
         &llm_request,
         parent.as_ref().map(|h| &h.inner),
@@ -260,14 +261,14 @@ pub fn nvmagic_llm_call(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "llmCallEnd")]
-pub fn nvmagic_llm_call_end(
+pub fn nat_nexus_llm_call_end(
     handle: &WasmLLMHandle,
     response: JsValue,
     data: JsValue,
     metadata: JsValue,
 ) -> Result<(), JsValue> {
     let response_json = js_to_json(&response)?;
-    nvmagic_core::nvmagic_llm_call_end(
+    nvidia_nat_nexus_core::nat_nexus_llm_call_end(
         &handle.inner,
         response_json,
         opt_js_to_json(&data)?,
@@ -293,7 +294,7 @@ pub fn nvmagic_llm_call_end(
 /// - `model_name` - Optional model name string.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmCallExecute")]
-pub async fn nvmagic_llm_call_execute(
+pub async fn nat_nexus_llm_call_execute(
     name: &str,
     request: JsValue,
     func: Function,
@@ -305,15 +306,16 @@ pub async fn nvmagic_llm_call_execute(
 ) -> Result<JsValue, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvmagic_core::MagicError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nvidia_nat_nexus_core::MagicError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
-        .unwrap_or_else(nvmagic_core::task_scope_top);
+        .unwrap_or_else(nvidia_nat_nexus_core::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
-    let default_fn: nvmagic_core::LlmExecutionNextFn = Box::new(move |request| exec_fn(request));
+    let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn =
+        Box::new(move |request| exec_fn(request));
 
-    let result = nvmagic_core::nvmagic_llm_call_execute(
+    let result = nvidia_nat_nexus_core::nat_nexus_llm_call_execute(
         name,
         llm_request,
         default_fn,
@@ -349,7 +351,7 @@ pub async fn nvmagic_llm_call_execute(
 /// - `model_name` - Optional model name string.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmStreamCallExecute")]
-pub async fn nvmagic_llm_stream_call_execute(
+pub async fn nat_nexus_llm_stream_call_execute(
     name: &str,
     request: JsValue,
     func: Function,
@@ -363,11 +365,11 @@ pub async fn nvmagic_llm_stream_call_execute(
 ) -> Result<WasmLlmStream, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvmagic_core::MagicError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nvidia_nat_nexus_core::MagicError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
-        .unwrap_or_else(nvmagic_core::task_scope_top);
+        .unwrap_or_else(nvidia_nat_nexus_core::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
 
     let wrapped_collector: Box<dyn FnMut(serde_json::Value) + Send> = match collector {
@@ -381,7 +383,7 @@ pub async fn nvmagic_llm_stream_call_execute(
     };
 
     // Bridge LlmExecutionFn -> LlmStreamExecutionNextFn (FnOnce)
-    let default_fn: nvmagic_core::LlmStreamExecutionNextFn = Box::new(move |request| {
+    let default_fn: nvidia_nat_nexus_core::LlmStreamExecutionNextFn = Box::new(move |request| {
         let fut = exec_fn(request);
         Box::pin(async move {
             let result = fut.await?;
@@ -389,14 +391,15 @@ pub async fn nvmagic_llm_stream_call_execute(
             Ok(Box::pin(stream)
                 as std::pin::Pin<
                     Box<
-                        dyn tokio_stream::Stream<Item = nvmagic_core::Result<serde_json::Value>>
-                            + Send,
+                        dyn tokio_stream::Stream<
+                                Item = nvidia_nat_nexus_core::Result<serde_json::Value>,
+                            > + Send,
                     >,
                 >)
         })
     });
 
-    let rust_stream = nvmagic_core::nvmagic_llm_stream_call_execute(
+    let rust_stream = nvidia_nat_nexus_core::nat_nexus_llm_stream_call_execute(
         name,
         llm_request,
         default_fn,
@@ -442,7 +445,7 @@ pub fn register_tool_sanitize_request_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_tool_sanitize_request_guardrail(
+    nvidia_nat_nexus_core::nat_nexus_register_tool_sanitize_request_guardrail(
         name,
         priority,
         callable::wrap_js_tool_fn(guardrail),
@@ -455,7 +458,8 @@ pub fn register_tool_sanitize_request_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolSanitizeRequestGuardrail")]
 pub fn deregister_tool_sanitize_request_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_tool_sanitize_request_guardrail(name).map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_deregister_tool_sanitize_request_guardrail(name)
+        .map_err(to_js_err)
 }
 
 /// Registers a guardrail that sanitizes tool response data after execution.
@@ -469,7 +473,7 @@ pub fn register_tool_sanitize_response_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_tool_sanitize_response_guardrail(
+    nvidia_nat_nexus_core::nat_nexus_register_tool_sanitize_response_guardrail(
         name,
         priority,
         callable::wrap_js_tool_fn(guardrail),
@@ -482,7 +486,8 @@ pub fn register_tool_sanitize_response_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolSanitizeResponseGuardrail")]
 pub fn deregister_tool_sanitize_response_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_tool_sanitize_response_guardrail(name).map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_deregister_tool_sanitize_response_guardrail(name)
+        .map_err(to_js_err)
 }
 
 /// Registers a guardrail that conditionally gates tool execution.
@@ -499,7 +504,7 @@ pub fn register_tool_conditional_execution_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_tool_conditional_execution_guardrail(
+    nvidia_nat_nexus_core::nat_nexus_register_tool_conditional_execution_guardrail(
         name,
         priority,
         callable::wrap_js_tool_conditional_fn(guardrail),
@@ -512,7 +517,8 @@ pub fn register_tool_conditional_execution_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolConditionalExecutionGuardrail")]
 pub fn deregister_tool_conditional_execution_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_tool_conditional_execution_guardrail(name).map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_deregister_tool_conditional_execution_guardrail(name)
+        .map_err(to_js_err)
 }
 
 // Tool intercepts
@@ -530,7 +536,7 @@ pub fn register_tool_request_intercept(
     break_chain: bool,
     func: Function,
 ) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_tool_request_intercept(
+    nvidia_nat_nexus_core::nat_nexus_register_tool_request_intercept(
         name,
         priority,
         break_chain,
@@ -544,7 +550,7 @@ pub fn register_tool_request_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolRequestIntercept")]
 pub fn deregister_tool_request_intercept(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_tool_request_intercept(name).map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_deregister_tool_request_intercept(name).map_err(to_js_err)
 }
 
 /// Registers an intercept that transforms tool response data.
@@ -560,7 +566,7 @@ pub fn register_tool_response_intercept(
     break_chain: bool,
     func: Function,
 ) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_tool_response_intercept(
+    nvidia_nat_nexus_core::nat_nexus_register_tool_response_intercept(
         name,
         priority,
         break_chain,
@@ -574,7 +580,7 @@ pub fn register_tool_response_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolResponseIntercept")]
 pub fn deregister_tool_response_intercept(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_tool_response_intercept(name).map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_deregister_tool_response_intercept(name).map_err(to_js_err)
 }
 
 /// Registers a tool execution intercept following the middleware chain pattern.
@@ -589,7 +595,7 @@ pub fn register_tool_execution_intercept(
     priority: i32,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_tool_execution_intercept(
+    nvidia_nat_nexus_core::nat_nexus_register_tool_execution_intercept(
         name,
         priority,
         callable::wrap_js_tool_exec_intercept_fn(exec_fn),
@@ -602,7 +608,7 @@ pub fn register_tool_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolExecutionIntercept")]
 pub fn deregister_tool_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_tool_execution_intercept(name).map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_deregister_tool_execution_intercept(name).map_err(to_js_err)
 }
 
 // LLM guardrails
@@ -618,7 +624,7 @@ pub fn register_llm_sanitize_request_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_llm_sanitize_request_guardrail(
+    nvidia_nat_nexus_core::nat_nexus_register_llm_sanitize_request_guardrail(
         name,
         priority,
         callable::wrap_js_llm_sanitize_request_fn(guardrail),
@@ -631,7 +637,8 @@ pub fn register_llm_sanitize_request_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmSanitizeRequestGuardrail")]
 pub fn deregister_llm_sanitize_request_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_llm_sanitize_request_guardrail(name).map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_deregister_llm_sanitize_request_guardrail(name)
+        .map_err(to_js_err)
 }
 
 /// Registers a guardrail that sanitizes LLM response data after the call.
@@ -645,7 +652,7 @@ pub fn register_llm_sanitize_response_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_llm_sanitize_response_guardrail(
+    nvidia_nat_nexus_core::nat_nexus_register_llm_sanitize_response_guardrail(
         name,
         priority,
         callable::wrap_js_llm_response_fn(guardrail),
@@ -658,7 +665,8 @@ pub fn register_llm_sanitize_response_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmSanitizeResponseGuardrail")]
 pub fn deregister_llm_sanitize_response_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_llm_sanitize_response_guardrail(name).map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_deregister_llm_sanitize_response_guardrail(name)
+        .map_err(to_js_err)
 }
 
 /// Registers a guardrail that conditionally gates LLM execution.
@@ -675,7 +683,7 @@ pub fn register_llm_conditional_execution_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_llm_conditional_execution_guardrail(
+    nvidia_nat_nexus_core::nat_nexus_register_llm_conditional_execution_guardrail(
         name,
         priority,
         callable::wrap_js_llm_conditional_fn(guardrail),
@@ -688,7 +696,8 @@ pub fn register_llm_conditional_execution_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmConditionalExecutionGuardrail")]
 pub fn deregister_llm_conditional_execution_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_llm_conditional_execution_guardrail(name).map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_deregister_llm_conditional_execution_guardrail(name)
+        .map_err(to_js_err)
 }
 
 // LLM intercepts
@@ -706,7 +715,7 @@ pub fn register_llm_request_intercept(
     break_chain: bool,
     func: Function,
 ) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_llm_request_intercept(
+    nvidia_nat_nexus_core::nat_nexus_register_llm_request_intercept(
         name,
         priority,
         break_chain,
@@ -720,7 +729,7 @@ pub fn register_llm_request_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmRequestIntercept")]
 pub fn deregister_llm_request_intercept(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_llm_request_intercept(name).map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_deregister_llm_request_intercept(name).map_err(to_js_err)
 }
 
 /// Registers an LLM execution intercept following the middleware chain pattern.
@@ -735,7 +744,7 @@ pub fn register_llm_execution_intercept(
     priority: i32,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_llm_execution_intercept(
+    nvidia_nat_nexus_core::nat_nexus_register_llm_execution_intercept(
         name,
         priority,
         callable::wrap_js_llm_exec_intercept_fn(exec_fn),
@@ -748,7 +757,7 @@ pub fn register_llm_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmExecutionIntercept")]
 pub fn deregister_llm_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_llm_execution_intercept(name).map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_deregister_llm_execution_intercept(name).map_err(to_js_err)
 }
 
 /// Registers a streaming LLM execution intercept following the middleware chain pattern.
@@ -765,7 +774,7 @@ pub fn register_llm_stream_execution_intercept(
     priority: i32,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_llm_stream_execution_intercept(
+    nvidia_nat_nexus_core::nat_nexus_register_llm_stream_execution_intercept(
         name,
         priority,
         callable::wrap_js_llm_stream_exec_intercept_fn(exec_fn),
@@ -778,7 +787,8 @@ pub fn register_llm_stream_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmStreamExecutionIntercept")]
 pub fn deregister_llm_stream_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_llm_stream_execution_intercept(name).map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_deregister_llm_stream_execution_intercept(name)
+        .map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -791,8 +801,11 @@ pub fn deregister_llm_stream_execution_intercept(name: &str) -> Result<bool, JsV
 /// - `callback` - JS function `(event) => void` called for each event.
 #[wasm_bindgen(js_name = "registerSubscriber")]
 pub fn register_subscriber(name: &str, callback: Function) -> Result<(), JsValue> {
-    nvmagic_core::nvmagic_register_subscriber(name, callable::wrap_js_event_subscriber(callback))
-        .map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_register_subscriber(
+        name,
+        callable::wrap_js_event_subscriber(callback),
+    )
+    .map_err(to_js_err)
 }
 
 /// Removes a previously registered event subscriber by name.
@@ -800,7 +813,7 @@ pub fn register_subscriber(name: &str, callback: Function) -> Result<(), JsValue
 /// Returns `true` if the subscriber was found and removed.
 #[wasm_bindgen(js_name = "deregisterSubscriber")]
 pub fn deregister_subscriber(name: &str) -> Result<bool, JsValue> {
-    nvmagic_core::nvmagic_deregister_subscriber(name).map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_deregister_subscriber(name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -811,7 +824,7 @@ pub fn deregister_subscriber(name: &str) -> Result<bool, JsValue> {
 #[wasm_bindgen(js_name = "createScopeStack")]
 pub fn create_scope_stack() -> WasmScopeStack {
     WasmScopeStack {
-        inner: nvmagic_core::create_scope_stack(),
+        inner: nvidia_nat_nexus_core::create_scope_stack(),
     }
 }
 
@@ -819,14 +832,14 @@ pub fn create_scope_stack() -> WasmScopeStack {
 #[wasm_bindgen(js_name = "currentScopeStack")]
 pub fn current_scope_stack() -> WasmScopeStack {
     WasmScopeStack {
-        inner: nvmagic_core::current_scope_stack(),
+        inner: nvidia_nat_nexus_core::current_scope_stack(),
     }
 }
 
 /// Binds a scope stack to the current thread.
 #[wasm_bindgen(js_name = "setThreadScopeStack")]
 pub fn set_thread_scope_stack(stack: &WasmScopeStack) {
-    nvmagic_core::set_thread_scope_stack(stack.inner.clone());
+    nvidia_nat_nexus_core::set_thread_scope_stack(stack.inner.clone());
 }
 
 // ---------------------------------------------------------------------------
@@ -835,41 +848,45 @@ pub fn set_thread_scope_stack(stack: &WasmScopeStack) {
 
 /// Runs the registered tool request intercept chain on the given arguments.
 #[wasm_bindgen(js_name = "toolRequestIntercepts")]
-pub fn nvmagic_tool_request_intercepts_wasm(name: &str, args: JsValue) -> Result<JsValue, JsValue> {
+pub fn nat_nexus_tool_request_intercepts_wasm(
+    name: &str,
+    args: JsValue,
+) -> Result<JsValue, JsValue> {
     let args_json = js_to_json(&args)?;
-    let result =
-        nvmagic_core::nvmagic_tool_request_intercepts(name, args_json).map_err(to_js_err)?;
+    let result = nvidia_nat_nexus_core::nat_nexus_tool_request_intercepts(name, args_json)
+        .map_err(to_js_err)?;
     Ok(json_to_js(&result))
 }
 
 /// Runs the registered tool conditional execution guardrail chain.
 #[wasm_bindgen(js_name = "toolConditionalExecution")]
-pub fn nvmagic_tool_conditional_execution_wasm(name: &str, args: JsValue) -> Result<(), JsValue> {
+pub fn nat_nexus_tool_conditional_execution_wasm(name: &str, args: JsValue) -> Result<(), JsValue> {
     let args_json = js_to_json(&args)?;
-    nvmagic_core::nvmagic_tool_conditional_execution(name, &args_json).map_err(to_js_err)
+    nvidia_nat_nexus_core::nat_nexus_tool_conditional_execution(name, &args_json).map_err(to_js_err)
 }
 
 /// Runs the registered tool response intercept chain on the given result.
 #[wasm_bindgen(js_name = "toolResponseIntercepts")]
-pub fn nvmagic_tool_response_intercepts_wasm(
+pub fn nat_nexus_tool_response_intercepts_wasm(
     name: &str,
     result: JsValue,
 ) -> Result<JsValue, JsValue> {
     let result_json = js_to_json(&result)?;
-    let transformed =
-        nvmagic_core::nvmagic_tool_response_intercepts(name, result_json).map_err(to_js_err)?;
+    let transformed = nvidia_nat_nexus_core::nat_nexus_tool_response_intercepts(name, result_json)
+        .map_err(to_js_err)?;
     Ok(json_to_js(&transformed))
 }
 
 /// Runs the registered LLM request intercept chain on the given `LLMRequest`.
 #[wasm_bindgen(js_name = "llmRequestIntercepts")]
-pub fn nvmagic_llm_request_intercepts_wasm(request: JsValue) -> Result<JsValue, JsValue> {
+pub fn nat_nexus_llm_request_intercepts_wasm(request: JsValue) -> Result<JsValue, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvmagic_core::MagicError::Internal(e.to_string())))?;
-    let result = nvmagic_core::nvmagic_llm_request_intercepts(llm_request).map_err(to_js_err)?;
+        .map_err(|e| to_js_err(nvidia_nat_nexus_core::MagicError::Internal(e.to_string())))?;
+    let result =
+        nvidia_nat_nexus_core::nat_nexus_llm_request_intercepts(llm_request).map_err(to_js_err)?;
     let result_json = serde_json::to_value(&result)
-        .map_err(|e| to_js_err(nvmagic_core::MagicError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nvidia_nat_nexus_core::MagicError::Internal(e.to_string())))?;
     Ok(json_to_js(&result_json))
 }
 
@@ -877,11 +894,11 @@ pub fn nvmagic_llm_request_intercepts_wasm(request: JsValue) -> Result<JsValue, 
 ///
 /// - `request` - The LLM request as a JSON value with `{ headers, content }` shape.
 #[wasm_bindgen(js_name = "llmConditionalExecution")]
-pub fn nvmagic_llm_conditional_execution_wasm(request: JsValue) -> Result<(), JsValue> {
+pub fn nat_nexus_llm_conditional_execution_wasm(request: JsValue) -> Result<(), JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvmagic_core::MagicError::Internal(e.to_string())))?;
-    nvmagic_core::nvmagic_llm_conditional_execution(&llm_request).map_err(to_js_err)
+        .map_err(|e| to_js_err(nvidia_nat_nexus_core::MagicError::Internal(e.to_string())))?;
+    nvidia_nat_nexus_core::nat_nexus_llm_conditional_execution(&llm_request).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -891,7 +908,7 @@ pub fn nvmagic_llm_conditional_execution_wasm(request: JsValue) -> Result<(), Js
 /// ATIF trajectory exporter for collecting events and producing ATIF JSON.
 #[wasm_bindgen]
 pub struct WasmAtifExporter {
-    inner: nvmagic_core::atif::AtifExporter,
+    inner: nvidia_nat_nexus_core::atif::AtifExporter,
 }
 
 #[wasm_bindgen]
@@ -904,7 +921,7 @@ impl WasmAtifExporter {
         agent_version: String,
         model_name: Option<String>,
     ) -> Self {
-        let agent_info = nvmagic_core::atif::AtifAgentInfo {
+        let agent_info = nvidia_nat_nexus_core::atif::AtifAgentInfo {
             name: agent_name,
             version: agent_version,
             model_name,
@@ -912,20 +929,20 @@ impl WasmAtifExporter {
             extra: None,
         };
         Self {
-            inner: nvmagic_core::atif::AtifExporter::new(session_id, agent_info),
+            inner: nvidia_nat_nexus_core::atif::AtifExporter::new(session_id, agent_info),
         }
     }
 
     /// Registers the exporter as an event subscriber.
     pub fn register(&self, name: &str) -> Result<(), JsValue> {
         let subscriber = self.inner.subscriber();
-        nvmagic_core::nvmagic_register_subscriber(name, subscriber)
+        nvidia_nat_nexus_core::nat_nexus_register_subscriber(name, subscriber)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Deregisters the exporter subscriber.
     pub fn deregister(&self, name: &str) -> Result<bool, JsValue> {
-        nvmagic_core::nvmagic_deregister_subscriber(name)
+        nvidia_nat_nexus_core::nat_nexus_deregister_subscriber(name)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
