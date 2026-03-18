@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #![allow(clippy::type_complexity)]
-//! JavaScript callable wrappers for NVMagic callbacks.
+//! JavaScript callable wrappers for Nexus callbacks.
 //!
 //! This module bridges JavaScript functions (received as NAPI `ThreadsafeFunction` values)
-//! into the Rust closure signatures expected by the NVMagic core runtime. Each wrapper
+//! into the Rust closure signatures expected by the Nexus core runtime. Each wrapper
 //! handles serialization of arguments to/from JSON and manages cross-thread communication
 //! between the Rust async runtime and the Node.js event loop.
 
@@ -16,8 +16,8 @@ use std::sync::Arc;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use serde_json::Value as Json;
 
-use nvmagic_core::types::LLMRequest;
-use nvmagic_core::{
+use nvidia_nat_nexus_core::types::LLMRequest;
+use nvidia_nat_nexus_core::{
     LlmExecutionNextFn, LlmStreamExecutionNextFn, MagicError, Result, ToolExecutionNextFn,
 };
 
@@ -251,9 +251,9 @@ pub fn wrap_js_finalizer_fn(
 /// Wrap a JS function for event subscriber: `(event: JsEvent) => void`.
 pub fn wrap_js_event_subscriber(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(&nvmagic_core::Event) + Send + Sync> {
+) -> Box<dyn Fn(&nvidia_nat_nexus_core::Event) + Send + Sync> {
     let func = Arc::new(func);
-    Box::new(move |event: &nvmagic_core::Event| {
+    Box::new(move |event: &nvidia_nat_nexus_core::Event| {
         let event_json = serde_json::to_value(JsEvent::from(event)).unwrap_or(Json::Null);
         func.call(event_json, ThreadsafeFunctionCallMode::NonBlocking);
     })

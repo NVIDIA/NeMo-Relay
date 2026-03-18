@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Language Bindings
 
-NVMagic provides native bindings for Python, Node.js, Go, and WebAssembly. All bindings mirror the full API surface: scopes, tools, LLM, guardrails, intercepts, subscribers, and ATIF export.
+Nexus provides native bindings for Python, Node.js, Go, and WebAssembly. All bindings mirror the full API surface: scopes, tools, LLM, guardrails, intercepts, subscribers, and ATIF export.
 
 ## Architecture
 
@@ -21,12 +21,12 @@ graph TD
     subgraph "Binding Layers"
         PYO3["PyO3 (abi3, Python 3.11+)"]
         NAPI["NAPI-RS (Node.js addon)"]
-        FFI["C FFI (cbindgen → nvmagic.h)"]
+        FFI["C FFI (cbindgen → nat_nexus.h)"]
         WASM["wasm-bindgen"]
     end
 
     subgraph "Core"
-        CORE["nvmagic-core (Rust)"]
+        CORE["nvidia-nat-nexus-core (Rust)"]
     end
 
     PY --> PYO3 --> CORE
@@ -39,10 +39,10 @@ graph TD
 
 | Aspect | Python | Go | Node.js | WASM | FFI/C |
 |--------|--------|----|---------|------|-------|
-| Functions | `snake_case` | `PascalCase` | `camelCase` | `camelCase` | `nvmagic_snake_case` |
+| Functions | `snake_case` | `PascalCase` | `camelCase` | `camelCase` | `nat_nexus_snake_case` |
 | Types | `PascalCase` | `PascalCase` | `PascalCase` | `PascalCase` | `FfiPascalCase` |
-| Enums | `ScopeType.Agent` | `ScopeTypeAgent` | `ScopeType.Agent` | `ScopeType.Agent` | `NvMagicScopeTypeAgent` |
-| Errors | `RuntimeError` | `error` | JS exception | JS exception | `NvMagicStatus` + `nvmagic_last_error()` |
+| Enums | `ScopeType.Agent` | `ScopeTypeAgent` | `ScopeType.Agent` | `ScopeType.Agent` | `NatNexusScopeTypeAgent` |
+| Errors | `RuntimeError` | `error` | JS exception | JS exception | `NatNexusStatus` + `nat_nexus_last_error()` |
 
 ## Python
 
@@ -56,7 +56,7 @@ uv run pytest  # Run tests
 ### Module Structure
 
 ```
-python/nvmagic/
+python/nat_nexus/
   __init__.py       # Re-exports, ContextVar-based scope isolation
   scope.py          # Scope operations
   tools.py          # Tool lifecycle
@@ -72,31 +72,31 @@ The Python package wraps a PyO3 native extension (`_native`) built with the stab
 ### Usage
 
 ```python
-import nvmagic
-from nvmagic import LLMRequest, ScopeType
+import nat_nexus
+from nat_nexus import LLMRequest, ScopeType
 
 # Scopes
-handle = nvmagic.scope.push("my_agent", ScopeType.Agent)
-nvmagic.scope.pop(handle)
+handle = nat_nexus.scope.push("my_agent", ScopeType.Agent)
+nat_nexus.scope.pop(handle)
 
 # Tool execution
-result = await nvmagic.tools.execute("search", {"q": "test"}, search_func)
+result = await nat_nexus.tools.execute("search", {"q": "test"}, search_func)
 
 # LLM execution
 request = LLMRequest(
     headers={"Authorization": "Bearer ..."},
     content={"messages": [{"role": "user", "content": "Hello"}], "model": "gpt-4"},
 )
-response = await nvmagic.llm.execute("gpt-4", request, llm_func)
+response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
 
 # Guardrails
-nvmagic.guardrails.register_tool_conditional_execution(
+nat_nexus.guardrails.register_tool_conditional_execution(
     "block_dangerous", 1,
     lambda name, args: "blocked" if name == "rm" else None,
 )
 
 # Intercepts
-nvmagic.intercepts.register_tool_request(
+nat_nexus.intercepts.register_tool_request(
     "add_context", 1, False,
     lambda name, args: {**args, "context": "injected"},
 )
@@ -108,8 +108,8 @@ Python uses `contextvars.ContextVar` for async-safe per-task isolation. Each `as
 
 ```python
 async def handle_request():
-    stack = nvmagic.create_scope_stack()
-    nvmagic._scope_stack_var.set(stack)
+    stack = nat_nexus.create_scope_stack()
+    nat_nexus._scope_stack_var.set(stack)
     # All scope operations now use this isolated stack
 ```
 
@@ -179,18 +179,18 @@ Node.js uses a push-based stream bridge for LLM streaming. JavaScript drives asy
 
 ```bash
 # Build the FFI shared library first
-cargo build --release -p nvmagic-ffi
+cargo build --release -p nvidia-nat-nexus-ffi
 
 # Run Go tests
-cd go/nvmagic
+cd go/nat_nexus
 CGO_LDFLAGS="-L../../target/release" go test -v ./...
 ```
 
 ### Package Structure
 
 ```
-go/nvmagic/
-  nvmagic.go        # CGo declarations, core bindings
+go/nat_nexus/
+  nat_nexus.go        # CGo declarations, core bindings
   types.go          # Type definitions (ScopeHandle, ToolHandle, etc.)
   stream.go         # LLM stream handling
   callbacks.go      # Go trampolines for Rust callbacks
@@ -206,10 +206,10 @@ go/nvmagic/
 
 ```go
 import (
-    "github.com/nvidia/nvmagic/go/nvmagic"
-    "github.com/nvidia/nvmagic/go/nvmagic/scope"
-    "github.com/nvidia/nvmagic/go/nvmagic/tools"
-    "github.com/nvidia/nvmagic/go/nvmagic/llm"
+    "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus"
+    "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/scope"
+    "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/tools"
+    "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/llm"
 )
 
 // Scopes
@@ -247,7 +247,7 @@ Memory management requires explicit `Free()` calls on handles and scope stacks.
 Go goroutines use `ScopeStack.Run()` which pins the goroutine to an OS thread:
 
 ```go
-stack, _ := nvmagic.NewScopeStack()
+stack, _ := nat_nexus.NewScopeStack()
 defer stack.Close()
 
 go func() {
@@ -266,7 +266,7 @@ go func() {
 wasm-pack build crates/wasm    # Produces pkg/ with .wasm, .js, .d.ts
 
 # Unit tests
-cargo test -p nvmagic-wasm
+cargo test -p nvidia-nat-nexus-wasm
 
 # Integration tests
 wasm-pack test --node crates/wasm
@@ -277,8 +277,8 @@ wasm-pack test --node crates/wasm
 ```javascript
 import init, {
     pushScope, popScope, ScopeType,
-    nvmagicToolCallExecute, nvmagicLlmCallExecute,
-} from './pkg/nvmagic.js';
+    natNexusToolCallExecute, natNexusLlmCallExecute,
+} from './pkg/nat_nexus.js';
 
 await init();  // Initialize WASM module
 
@@ -289,7 +289,7 @@ popScope(handle);
 
 ### Differences from Node.js
 
-- Functions are prefixed with `nvmagic` in some cases (via `#[wasm_bindgen(js_name = "...")]`)
+- Functions are prefixed with `natNexus` in some cases (via `#[wasm_bindgen(js_name = "...")]`)
 - Single-threaded (no worker thread isolation)
 - Uses `wasm_bindgen_futures::spawn_local()` for async execution
 - Stream objects expose an async `next()` method
@@ -304,7 +304,7 @@ popScope(handle);
 | Context isolation | `contextvars` | `ScopeStack.Run()` | `setThreadScopeStack()` | manual |
 | Callback pattern | `PyAny` → closure | C trampolines | `ThreadsafeFunction` | `js_sys::Function` |
 | Stream support | AsyncIterator | Channel-based | Push-based bridge | Async iterator |
-| Typed wrappers | `nvmagic.typed` | — | `typed.js` | — |
+| Typed wrappers | `nat_nexus.typed` | — | `typed.js` | — |
 | Memory management | GC | Manual (`Free`/`Close`) | GC | GC |
 
 ## Error Handling
@@ -319,4 +319,4 @@ All bindings map core `MagicError` variants to language-appropriate errors:
 | `ScopeStackEmpty` | `RuntimeError` | `error` | thrown exception |
 | `Internal` | `RuntimeError` | `error` | thrown exception |
 
-Go additionally provides the FFI pattern of `NvMagicStatus` return codes with `nvmagic_last_error()` for the error message string.
+Go additionally provides the FFI pattern of `NatNexusStatus` return codes with `nat_nexus_last_error()` for the error message string.

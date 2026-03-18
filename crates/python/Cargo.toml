@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "nvmagic-python"
+name = "nvidia-nat-nexus-python"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,7 +12,7 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-nvmagic-core = { path = "../core" }
+nvidia-nat-nexus-core = { path = "../core" }
 pyo3 = { version = "0.28.2", features = ["abi3", "abi3-py311", "macros"] }
 pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }
 pythonize = "0.28.0"

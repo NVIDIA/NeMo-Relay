@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Promise-aware JS function calling for NVMagic NAPI bindings.
+//! Promise-aware JS function calling for Nexus NAPI bindings.
 //!
 //! Provides [`PromiseAwareFn`], a cross-thread callable wrapper around a JS function
 //! that transparently handles both synchronous return values and Promise-returning
@@ -24,7 +24,7 @@ use napi::bindgen_prelude::{FromNapiValue, ToNapiValue};
 use napi::{Env, JsFunction, NapiRaw};
 use serde_json::Value as Json;
 
-use nvmagic_core::{MagicError, Result as MagicResult};
+use nvidia_nat_nexus_core::{MagicError, Result as MagicResult};
 
 // ---------------------------------------------------------------------------
 // Channel registry for pending call results
@@ -164,7 +164,7 @@ unsafe extern "C" fn promise_call_js_cb(
     let env = unsafe { Env::from_raw(raw_env) };
 
     let resolve_id = call_id;
-    let resolve_fn = match env.create_function_from_closure("__nvmagic_resolve", move |ctx| {
+    let resolve_fn = match env.create_function_from_closure("__nat_nexus_resolve", move |ctx| {
         let val: Json = ctx.get(0).unwrap_or(Json::Null);
         send_result(resolve_id, val);
         ctx.env.get_undefined()
@@ -177,7 +177,7 @@ unsafe extern "C" fn promise_call_js_cb(
     };
 
     let reject_id = call_id;
-    let reject_fn = match env.create_function_from_closure("__nvmagic_reject", move |ctx| {
+    let reject_fn = match env.create_function_from_closure("__nat_nexus_reject", move |ctx| {
         // Try to extract error message from the rejection reason.
         // Could be an Error object, string, or any value.
         // Error.message is non-enumerable so JSON serialization loses it —
@@ -300,7 +300,7 @@ impl PromiseAwareFn {
         let mut tsfn: sys::napi_threadsafe_function = std::ptr::null_mut();
 
         // Create resource name
-        let name = "nvmagic_promise_aware_fn\0";
+        let name = "nat_nexus_promise_aware_fn\0";
         let mut resource_name: sys::napi_value = std::ptr::null_mut();
         let status = unsafe {
             sys::napi_create_string_utf8(

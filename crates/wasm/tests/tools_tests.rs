@@ -4,8 +4,8 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
 
-use nvmagic_wasm::api::*;
-use nvmagic_wasm::types::*;
+use nvidia_nat_nexus_wasm::api::*;
+use nvidia_nat_nexus_wasm::types::*;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -29,7 +29,7 @@ fn parse_json(s: &str) -> JsValue {
 #[wasm_bindgen_test]
 fn test_tool_call_and_end() {
     let args = parse_json(r#"{"x": 1}"#);
-    let handle = nvmagic_tool_call(
+    let handle = nat_nexus_tool_call(
         "test_tool",
         args,
         None,
@@ -43,13 +43,13 @@ fn test_tool_call_and_end() {
     assert!(!handle.uuid().is_empty());
 
     let result = parse_json(r#"{"result": 42}"#);
-    nvmagic_tool_call_end(&handle, result, JsValue::NULL, JsValue::NULL).unwrap();
+    nat_nexus_tool_call_end(&handle, result, JsValue::NULL, JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_tool_call_with_attributes() {
     let args = parse_json(r#"{}"#);
-    let handle = nvmagic_tool_call(
+    let handle = nat_nexus_tool_call(
         "attr_tool",
         args,
         None,
@@ -62,7 +62,7 @@ fn test_tool_call_with_attributes() {
     assert_eq!(handle.attributes(), TOOL_LOCAL);
 
     let result = parse_json(r#"{}"#);
-    nvmagic_tool_call_end(&handle, result, JsValue::NULL, JsValue::NULL).unwrap();
+    nat_nexus_tool_call_end(&handle, result, JsValue::NULL, JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -70,19 +70,19 @@ fn test_tool_call_with_data_metadata() {
     let args = parse_json(r#"{}"#);
     let data = parse_json(r#"{"info":"test"}"#);
     let meta = parse_json(r#"{"version":"1.0"}"#);
-    let handle = nvmagic_tool_call("data_tool", args, None, None, data, meta, None).unwrap();
+    let handle = nat_nexus_tool_call("data_tool", args, None, None, data, meta, None).unwrap();
 
     let result = parse_json(r#"{}"#);
     let end_data = parse_json(r#"{"done":true}"#);
-    nvmagic_tool_call_end(&handle, result, end_data, JsValue::NULL).unwrap();
+    nat_nexus_tool_call_end(&handle, result, end_data, JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_tool_call_with_parent() {
-    let scope = nvmagic_push_scope("tool_parent", SCOPE_TYPE_AGENT, None, None).unwrap();
+    let scope = nat_nexus_push_scope("tool_parent", SCOPE_TYPE_AGENT, None, None).unwrap();
     let scope_uuid = scope.uuid();
     let args = parse_json(r#"{}"#);
-    let handle = nvmagic_tool_call(
+    let handle = nat_nexus_tool_call(
         "parented_tool",
         args,
         Some(scope),
@@ -95,10 +95,10 @@ fn test_tool_call_with_parent() {
     assert_eq!(handle.parent_uuid().unwrap(), scope_uuid);
 
     let result = parse_json(r#"{}"#);
-    nvmagic_tool_call_end(&handle, result, JsValue::NULL, JsValue::NULL).unwrap();
+    nat_nexus_tool_call_end(&handle, result, JsValue::NULL, JsValue::NULL).unwrap();
 
-    let current = nvmagic_get_handle().unwrap();
-    nvmagic_pop_scope(&current).unwrap();
+    let current = nat_nexus_get_handle().unwrap();
+    nat_nexus_pop_scope(&current).unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -108,7 +108,7 @@ fn test_tool_call_generates_events() {
     register_subscriber("wasm_tool_evt_sub", cb).unwrap();
 
     let args = parse_json(r#"{}"#);
-    let handle = nvmagic_tool_call(
+    let handle = nat_nexus_tool_call(
         "evt_tool",
         args,
         None,
@@ -119,7 +119,7 @@ fn test_tool_call_generates_events() {
     )
     .unwrap();
     let result = parse_json(r#"{}"#);
-    nvmagic_tool_call_end(&handle, result, JsValue::NULL, JsValue::NULL).unwrap();
+    nat_nexus_tool_call_end(&handle, result, JsValue::NULL, JsValue::NULL).unwrap();
 
     let events = js_sys::eval("globalThis.__tool_events").unwrap();
     let arr = js_sys::Array::from(&events);
@@ -140,7 +140,7 @@ fn test_tool_call_generates_events() {
 async fn test_tool_execute_basic() {
     let func = js_fn1("args", "return {result: args.x + 1}");
     let args = parse_json(r#"{"x": 10}"#);
-    let result = nvmagic_tool_call_execute(
+    let result = nat_nexus_tool_call_execute(
         "exec_tool",
         args,
         func,
@@ -160,7 +160,7 @@ async fn test_tool_execute_basic() {
 async fn test_tool_execute_with_attributes() {
     let func = js_fn1("args", "return {ok: true}");
     let args = parse_json(r#"{}"#);
-    let result = nvmagic_tool_call_execute(
+    let result = nat_nexus_tool_call_execute(
         "exec_attr_tool",
         args,
         func,
@@ -180,7 +180,7 @@ async fn test_tool_execute_with_attributes() {
 async fn test_tool_execute_promise() {
     let func = js_fn1("args", "return Promise.resolve({async_result: args.v * 2})");
     let args = parse_json(r#"{"v": 5}"#);
-    let result = nvmagic_tool_call_execute(
+    let result = nat_nexus_tool_call_execute(
         "promise_tool",
         args,
         func,
@@ -287,7 +287,7 @@ async fn test_tool_request_intercept_modifies_args() {
 
     let exec = js_fn1("args", "return args");
     let args = parse_json(r#"{"original": true}"#);
-    let result = nvmagic_tool_call_execute(
+    let result = nat_nexus_tool_call_execute(
         "mod_tool",
         args,
         exec,
@@ -315,7 +315,7 @@ async fn test_tool_response_intercept_modifies_result() {
 
     let exec = js_fn1("args", "return {value: 42}");
     let args = parse_json(r#"{}"#);
-    let result = nvmagic_tool_call_execute(
+    let result = nat_nexus_tool_call_execute(
         "resp_mod_tool",
         args,
         exec,
@@ -340,7 +340,7 @@ async fn test_tool_execution_intercept_replaces_func() {
 
     let original = js_fn1("args", "return {original: true}");
     let args = parse_json(r#"{}"#);
-    let result = nvmagic_tool_call_execute(
+    let result = nat_nexus_tool_call_execute(
         "replaced_tool",
         args,
         original,

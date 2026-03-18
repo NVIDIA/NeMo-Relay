@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Testing Guide
 
-NVMagic maintains comprehensive test coverage across all five language bindings.
+Nexus maintains comprehensive test coverage across all five language bindings.
 Every binding mirrors the same test domains so that behavioral parity is verified
 at each layer.
 
@@ -16,10 +16,10 @@ at each layer.
 cargo test --workspace
 
 # Core only
-cargo test -p nvmagic-core
+cargo test -p nvidia-nat-nexus-core
 
 # WASM unit tests
-cargo test -p nvmagic-wasm
+cargo test -p nvidia-nat-nexus-wasm
 
 # WASM integration tests (wasm-bindgen-test)
 wasm-pack test --node crates/wasm
@@ -30,8 +30,8 @@ uv run pytest                  # run all Python tests
 uv run pytest -k test_typed    # run a single module
 
 # ── Go (requires FFI shared lib) ───────────────────────────
-cargo build --release -p nvmagic-ffi
-cd go/nvmagic && CGO_LDFLAGS="-L../../target/release" go test -v ./...
+cargo build --release -p nvidia-nat-nexus-ffi
+cd go/nat_nexus && CGO_LDFLAGS="-L../../target/release" go test -v ./...
 
 # ── Node.js (requires native addon) ────────────────────────
 cd crates/node && npm install && npm run build
@@ -48,7 +48,7 @@ cargo test --workspace && uv run pytest
 - **`TEST_MUTEX`** (`context_isolation_tests.rs`, `stream_tests.rs`): Static
   mutex that serializes tests touching global state, preventing interference
   between concurrent test threads.
-- **`reset_global()`**: Resets `NVMagicContextState` to a clean default.
+- **`reset_global()`**: Resets `NatNexusContextState` to a clean default.
 - **`make_llm_handle()`**: Creates an `LLMHandle` with defaults for stream tests.
 - **`make_stream()`**: Builds a `tokio_stream` from `Vec<Result<Json>>`.
 - **`make_collector_finalizer()`**: Returns a collector/finalizer pair backed by
@@ -131,13 +131,13 @@ mod tests {
 ```python
 # python/tests/test_<domain>.py
 import pytest
-import nvmagic
+import nat_nexus
 
 class TestNewFeature:
     async def test_basic_behavior(self):
-        handle = nvmagic.scope.push("test", nvmagic.ScopeType.Agent)
+        handle = nat_nexus.scope.push("test", nat_nexus.ScopeType.Agent)
         assert handle.name == "test"
-        nvmagic.scope.pop(handle)
+        nat_nexus.scope.pop(handle)
 ```
 
 ### Adding a Node.js Test
@@ -160,12 +160,12 @@ describe('New feature', () => {
 ### Adding a Go Test
 
 ```go
-// go/nvmagic/<domain>_test.go
+// go/nat_nexus/<domain>_test.go
 func TestNewFeature(t *testing.T) {
-    stack := nvmagic.NewScopeStack()
+    stack := nat_nexus.NewScopeStack()
     defer stack.Close()
     stack.Run(func() {
-        handle, err := scope.Push("test", nvmagic.ScopeTypeAgent, 0, nil)
+        handle, err := scope.Push("test", nat_nexus.ScopeTypeAgent, 0, nil)
         require.NoError(t, err)
         scope.Pop(handle)
     })

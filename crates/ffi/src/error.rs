@@ -3,10 +3,10 @@
 
 //! Error handling for the FFI layer.
 //!
-//! This module defines the [`NvMagicStatus`] enum returned by every exported
+//! This module defines the [`NatNexusStatus`] enum returned by every exported
 //! FFI function, along with thread-local storage for human-readable error
 //! messages. After any non-`Ok` return, the caller should invoke
-//! [`nvmagic_last_error`] on the same thread to obtain a diagnostic string.
+//! [`nat_nexus_last_error`] on the same thread to obtain a diagnostic string.
 //! The error message remains valid until the next FFI call on that thread clears
 //! it via [`clear_last_error`].
 
@@ -15,16 +15,16 @@ use std::ffi::CString;
 
 use libc::c_char;
 
-use nvmagic_core::MagicError;
+use nvidia_nat_nexus_core::MagicError;
 
 /// Status codes returned by all FFI functions.
 ///
-/// Every `extern "C"` function in this library returns an `NvMagicStatus`.
-/// On non-`Ok` returns, call [`nvmagic_last_error`] on the same thread to
+/// Every `extern "C"` function in this library returns an `NatNexusStatus`.
+/// On non-`Ok` returns, call [`nat_nexus_last_error`] on the same thread to
 /// retrieve a human-readable error message.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NvMagicStatus {
+pub enum NatNexusStatus {
     /// Operation completed successfully.
     Ok = 0,
     /// A resource with the given name already exists.
@@ -70,7 +70,7 @@ pub fn clear_last_error() {
 /// until the next FFI call on the same thread. Do **not** free the returned
 /// pointer.
 #[no_mangle]
-pub extern "C" fn nvmagic_last_error() -> *const c_char {
+pub extern "C" fn nat_nexus_last_error() -> *const c_char {
     LAST_ERROR.with(|cell| {
         cell.borrow()
             .as_ref()
@@ -79,21 +79,21 @@ pub extern "C" fn nvmagic_last_error() -> *const c_char {
     })
 }
 
-impl From<&MagicError> for NvMagicStatus {
+impl From<&MagicError> for NatNexusStatus {
     fn from(e: &MagicError) -> Self {
         match e {
-            MagicError::AlreadyExists(_) => NvMagicStatus::AlreadyExists,
-            MagicError::NotFound(_) => NvMagicStatus::NotFound,
-            MagicError::ScopeStackEmpty => NvMagicStatus::ScopeStackEmpty,
-            MagicError::GuardrailRejected(_) => NvMagicStatus::GuardrailRejected,
-            MagicError::Internal(_) => NvMagicStatus::Internal,
+            MagicError::AlreadyExists(_) => NatNexusStatus::AlreadyExists,
+            MagicError::NotFound(_) => NatNexusStatus::NotFound,
+            MagicError::ScopeStackEmpty => NatNexusStatus::ScopeStackEmpty,
+            MagicError::GuardrailRejected(_) => NatNexusStatus::GuardrailRejected,
+            MagicError::Internal(_) => NatNexusStatus::Internal,
         }
     }
 }
 
-/// Convert an `MagicError` to an `NvMagicStatus`, storing the error message
+/// Convert an `MagicError` to an `NatNexusStatus`, storing the error message
 /// in thread-local storage.
-pub fn status_from_error(e: &MagicError) -> NvMagicStatus {
+pub fn status_from_error(e: &MagicError) -> NatNexusStatus {
     set_last_error(&e.to_string());
-    NvMagicStatus::from(e)
+    NatNexusStatus::from(e)
 }

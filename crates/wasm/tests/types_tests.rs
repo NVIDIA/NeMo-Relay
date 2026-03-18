@@ -4,7 +4,7 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
 
-use nvmagic_wasm::types::*;
+use nvidia_nat_nexus_wasm::types::*;
 
 // ---------------------------------------------------------------------------
 // Helper

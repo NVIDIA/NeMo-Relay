@@ -3,7 +3,7 @@
 
 use wasm_bindgen_test::*;
 
-use nvmagic_wasm::api::*;
+use nvidia_nat_nexus_wasm::api::*;
 
 // ===========================================================================
 // Deregister nonexistent

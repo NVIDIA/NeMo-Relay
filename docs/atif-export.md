@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # ATIF Export
 
-NVMagic exports agent execution trajectories in **ATIF v1.6** (Agent Trajectory Interchange Format), a standardized JSON schema for recording lifecycle events as structured steps.
+Nexus exports agent execution trajectories in **ATIF v1.6** (Agent Trajectory Interchange Format), a standardized JSON schema for recording lifecycle events as structured steps.
 
 ## Overview
 
@@ -18,7 +18,7 @@ The `AtifExporter`:
 ## Quick Start
 
 ```python
-from nvmagic import AtifExporter, ScopeType
+from nat_nexus import AtifExporter, ScopeType
 
 # Create and register
 exporter = AtifExporter(
@@ -30,10 +30,10 @@ exporter = AtifExporter(
 exporter.register("atif_logger")
 
 # Run operations
-handle = nvmagic.scope.push("agent", ScopeType.Agent)
-response = await nvmagic.llm.execute("gpt-4", request, llm_func)
-result = await nvmagic.tools.execute("search", {"q": "test"}, search_func)
-nvmagic.scope.pop(handle)
+handle = nat_nexus.scope.push("agent", ScopeType.Agent)
+response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
+result = await nat_nexus.tools.execute("search", {"q": "test"}, search_func)
+nat_nexus.scope.pop(handle)
 
 # Export trajectory
 trajectory = exporter.export()       # Returns dict
@@ -139,7 +139,7 @@ flowchart LR
         {
             "tool_call_id": "call_abc123",
             "function_name": "search",
-            "arguments": {"query": "NVMagic docs"}
+            "arguments": {"query": "Nexus docs"}
         }
     ]
 }
@@ -194,8 +194,8 @@ In multi-agent scenarios, each agent's scope stack has a unique root UUID. Expor
 
 ```python
 # Two agents running concurrently
-stack_a = nvmagic.create_scope_stack()
-stack_b = nvmagic.create_scope_stack()
+stack_a = nat_nexus.create_scope_stack()
+stack_b = nat_nexus.create_scope_stack()
 
 # Get root UUIDs
 root_a = stack_a.root_uuid
@@ -221,7 +221,7 @@ Without filtering, all events from all agents appear in a single trajectory.
 | Node.js | `JsAtifExporter` | Same API surface |
 | WASM | `WasmAtifExporter` | Same API surface |
 | Go | `AtifExporter` | `Register(name)`, `Deregister(name)`, `Export(rootUUID)`, `Clear()` |
-| FFI | `nvmagic_atif_exporter_*` | C functions: `_create`, `_register`, `_export`, `_clear`, `_free` |
+| FFI | `nat_nexus_atif_exporter_*` | C functions: `_create`, `_register`, `_export`, `_clear`, `_free` |
 
 ## Design Notes
 

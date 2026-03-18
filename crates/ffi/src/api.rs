@@ -4,14 +4,14 @@
 //! Top-level FFI API functions exported as `extern "C"`.
 //!
 //! Each function clears the thread-local error before executing and returns an
-//! [`NvMagicStatus`]. On failure, call [`nvmagic_last_error`] to retrieve
+//! [`NatNexusStatus`]. On failure, call [`nat_nexus_last_error`] to retrieve
 //! the error message.
 
 use std::sync::OnceLock;
 
 use libc::c_char;
-use nvmagic_core as core;
-use nvmagic_core::types as core_types;
+use nvidia_nat_nexus_core as core;
+use nvidia_nat_nexus_core::types as core_types;
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
 
@@ -42,21 +42,21 @@ fn tokio_runtime() -> &'static Runtime {
 ///
 /// # Parameters
 /// - `out`: On success, receives a heap-allocated `FfiScopeHandle` that must be
-///   freed with `nvmagic_scope_handle_free`.
+///   freed with `nat_nexus_scope_handle_free`.
 ///
 /// # Safety
 /// `out` must be a valid, non-null pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_get_handle(out: *mut *mut FfiScopeHandle) -> NvMagicStatus {
+pub unsafe extern "C" fn nat_nexus_get_handle(out: *mut *mut FfiScopeHandle) -> NatNexusStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
-    match core::nvmagic_get_handle() {
+    match core::nat_nexus_get_handle() {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiScopeHandle(h))) };
-            NvMagicStatus::Ok
+            NatNexusStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -74,17 +74,17 @@ pub unsafe extern "C" fn nvmagic_get_handle(out: *mut *mut FfiScopeHandle) -> Nv
 /// # Safety
 /// `name` must be a valid C string. `out` must be non-null. `parent` may be null.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_push_scope(
+pub unsafe extern "C" fn nat_nexus_push_scope(
     name: *const c_char,
-    scope_type: NvMagicScopeType,
+    scope_type: NatNexusScopeType,
     parent: *const FfiScopeHandle,
     attributes: u32,
     out: *mut *mut FfiScopeHandle,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -97,10 +97,10 @@ pub unsafe extern "C" fn nvmagic_push_scope(
     };
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes);
 
-    match core::nvmagic_push_scope(&name, scope_type.into(), parent_ref, attrs) {
+    match core::nat_nexus_push_scope(&name, scope_type.into(), parent_ref, attrs) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiScopeHandle(h))) };
-            NvMagicStatus::Ok
+            NatNexusStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -114,14 +114,14 @@ pub unsafe extern "C" fn nvmagic_push_scope(
 /// # Safety
 /// `handle` must be a valid, non-null `FfiScopeHandle` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_pop_scope(handle: *const FfiScopeHandle) -> NvMagicStatus {
+pub unsafe extern "C" fn nat_nexus_pop_scope(handle: *const FfiScopeHandle) -> NatNexusStatus {
     clear_last_error();
     if handle.is_null() {
         set_last_error("handle is null");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
-    match core::nvmagic_pop_scope(&unsafe { &*handle }.0.uuid) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_pop_scope(&unsafe { &*handle }.0.uuid) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -137,12 +137,12 @@ pub unsafe extern "C" fn nvmagic_pop_scope(handle: *const FfiScopeHandle) -> NvM
 /// # Safety
 /// `name` must be a valid C string. Other pointer args may be null.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_event(
+pub unsafe extern "C" fn nat_nexus_event(
     name: *const c_char,
     parent: *const FfiScopeHandle,
     data_json: *const c_char,
     metadata_json: *const c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -155,15 +155,15 @@ pub unsafe extern "C" fn nvmagic_event(
     };
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
 
-    match core::nvmagic_event(&name, parent_ref, data, metadata) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_event(&name, parent_ref, data, metadata) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -187,7 +187,7 @@ pub unsafe extern "C" fn nvmagic_event(
 /// # Safety
 /// `name` and `args_json` must be valid C strings. `out` must be non-null.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_tool_call(
+pub unsafe extern "C" fn nat_nexus_tool_call(
     name: *const c_char,
     args_json: *const c_char,
     parent: *const FfiScopeHandle,
@@ -196,11 +196,11 @@ pub unsafe extern "C" fn nvmagic_tool_call(
     metadata_json: *const c_char,
     tool_call_id: *const c_char,
     out: *mut *mut FfiToolHandle,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -208,7 +208,7 @@ pub unsafe extern "C" fn nvmagic_tool_call(
     };
     let args = match c_str_to_json(args_json) {
         Some(a) => a,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let parent_ref = if parent.is_null() {
         None
@@ -218,11 +218,11 @@ pub unsafe extern "C" fn nvmagic_tool_call(
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes);
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let tool_call_id_opt = if tool_call_id.is_null() {
         None
@@ -233,7 +233,7 @@ pub unsafe extern "C" fn nvmagic_tool_call(
         }
     };
 
-    match core::nvmagic_tool_call(
+    match core::nat_nexus_tool_call(
         &name,
         args,
         parent_ref,
@@ -244,7 +244,7 @@ pub unsafe extern "C" fn nvmagic_tool_call(
     ) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiToolHandle(h))) };
-            NvMagicStatus::Ok
+            NatNexusStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -253,7 +253,7 @@ pub unsafe extern "C" fn nvmagic_tool_call(
 /// End a tool call, running post-call guardrails and intercepts.
 ///
 /// # Parameters
-/// - `handle`: The tool handle from `nvmagic_tool_call`.
+/// - `handle`: The tool handle from `nat_nexus_tool_call`.
 /// - `result_json`: Tool result as a JSON C string.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
@@ -261,32 +261,32 @@ pub unsafe extern "C" fn nvmagic_tool_call(
 /// # Safety
 /// `handle` and `result_json` must be valid, non-null pointers.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_tool_call_end(
+pub unsafe extern "C" fn nat_nexus_tool_call_end(
     handle: *const FfiToolHandle,
     result_json: *const c_char,
     data_json: *const c_char,
     metadata_json: *const c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     if handle.is_null() {
         set_last_error("handle is null");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     let result = match c_str_to_json(result_json) {
         Some(r) => r,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
 
-    match core::nvmagic_tool_call_end(&unsafe { &*handle }.0, result, data, metadata) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_tool_call_end(&unsafe { &*handle }.0, result, data, metadata) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -309,27 +309,27 @@ pub unsafe extern "C" fn nvmagic_tool_call_end(
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `out`: On success, receives the result as a JSON C string. Caller must free
-///   with `nvmagic_string_free`.
+///   with `nat_nexus_string_free`.
 ///
 /// # Safety
 /// `name`, `args_json`, and `out` must be valid, non-null pointers.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_tool_call_execute(
+pub unsafe extern "C" fn nat_nexus_tool_call_execute(
     name: *const c_char,
     args_json: *const c_char,
-    func: NvMagicToolExecCb,
+    func: NatNexusToolExecCb,
     func_user_data: *mut libc::c_void,
-    func_free: NvMagicFreeFn,
+    func_free: NatNexusFreeFn,
     parent: *const FfiScopeHandle,
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
     out: *mut *mut c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -337,7 +337,7 @@ pub unsafe extern "C" fn nvmagic_tool_call_execute(
     };
     let args = match c_str_to_json(args_json) {
         Some(a) => a,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let parent_handle = if parent.is_null() {
         None
@@ -347,18 +347,19 @@ pub unsafe extern "C" fn nvmagic_tool_call_execute(
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes);
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
 
     let exec_fn = wrap_tool_exec_fn(func, func_user_data, func_free);
-    let default_fn: nvmagic_core::ToolExecutionNextFn = Box::new(move |args| exec_fn(args));
+    let default_fn: nvidia_nat_nexus_core::ToolExecutionNextFn =
+        Box::new(move |args| exec_fn(args));
 
     let result = tokio_runtime().block_on(async {
-        core::nvmagic_tool_call_execute(
+        core::nat_nexus_tool_call_execute(
             &name,
             args,
             default_fn,
@@ -373,7 +374,7 @@ pub unsafe extern "C" fn nvmagic_tool_call_execute(
     match result {
         Ok(json) => {
             unsafe { *out = json_to_c_string(&json) };
-            NvMagicStatus::Ok
+            NatNexusStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -399,7 +400,7 @@ pub unsafe extern "C" fn nvmagic_tool_call_execute(
 /// # Safety
 /// `name`, `native_json`, and `out` must be valid, non-null pointers.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_llm_call(
+pub unsafe extern "C" fn nat_nexus_llm_call(
     name: *const c_char,
     native_json: *const c_char,
     parent: *const FfiScopeHandle,
@@ -408,11 +409,11 @@ pub unsafe extern "C" fn nvmagic_llm_call(
     metadata_json: *const c_char,
     model_name: *const c_char,
     out: *mut *mut FfiLLMHandle,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("null pointer argument");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -420,13 +421,13 @@ pub unsafe extern "C" fn nvmagic_llm_call(
     };
     let native = match c_str_to_json(native_json) {
         Some(n) => n,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let request: core_types::LLMRequest = match serde_json::from_value(native) {
         Ok(r) => r,
         Err(_) => {
             set_last_error("failed to parse native_json as LLMRequest");
-            return NvMagicStatus::InvalidJson;
+            return NatNexusStatus::InvalidJson;
         }
     };
     let parent_ref = if parent.is_null() {
@@ -437,11 +438,11 @@ pub unsafe extern "C" fn nvmagic_llm_call(
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes);
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let model_name_opt = if model_name.is_null() {
         None
@@ -452,7 +453,7 @@ pub unsafe extern "C" fn nvmagic_llm_call(
         }
     };
 
-    match core::nvmagic_llm_call(
+    match core::nat_nexus_llm_call(
         &name,
         &request,
         parent_ref,
@@ -463,7 +464,7 @@ pub unsafe extern "C" fn nvmagic_llm_call(
     ) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiLLMHandle(h))) };
-            NvMagicStatus::Ok
+            NatNexusStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -472,7 +473,7 @@ pub unsafe extern "C" fn nvmagic_llm_call(
 /// End an LLM call, running post-call guardrails and intercepts.
 ///
 /// # Parameters
-/// - `handle`: The LLM handle from `nvmagic_llm_call`.
+/// - `handle`: The LLM handle from `nat_nexus_llm_call`.
 /// - `response_json`: LLM response as a JSON C string.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
@@ -480,32 +481,32 @@ pub unsafe extern "C" fn nvmagic_llm_call(
 /// # Safety
 /// `handle` and `response_json` must be valid, non-null pointers.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_llm_call_end(
+pub unsafe extern "C" fn nat_nexus_llm_call_end(
     handle: *const FfiLLMHandle,
     response_json: *const c_char,
     data_json: *const c_char,
     metadata_json: *const c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     if handle.is_null() {
         set_last_error("handle is null");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     let response = match c_str_to_json(response_json) {
         Some(r) => r,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
 
-    match core::nvmagic_llm_call_end(&unsafe { &*handle }.0, response, data, metadata) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_llm_call_end(&unsafe { &*handle }.0, response, data, metadata) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -530,28 +531,28 @@ pub unsafe extern "C" fn nvmagic_llm_call_end(
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `model_name`: Optional LLM model identifier, or null.
 /// - `out`: On success, receives the response as a JSON C string. Caller must
-///   free with `nvmagic_string_free`.
+///   free with `nat_nexus_string_free`.
 ///
 /// # Safety
 /// `name`, `native_json`, and `out` must be valid, non-null pointers.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_llm_call_execute(
+pub unsafe extern "C" fn nat_nexus_llm_call_execute(
     name: *const c_char,
     native_json: *const c_char,
-    func: NvMagicLlmExecCb,
+    func: NatNexusLlmExecCb,
     func_user_data: *mut libc::c_void,
-    func_free: NvMagicFreeFn,
+    func_free: NatNexusFreeFn,
     parent: *const FfiScopeHandle,
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
     model_name: *const c_char,
     out: *mut *mut c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("null pointer argument");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -559,13 +560,13 @@ pub unsafe extern "C" fn nvmagic_llm_call_execute(
     };
     let native = match c_str_to_json(native_json) {
         Some(n) => n,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let request: core_types::LLMRequest = match serde_json::from_value(native) {
         Ok(r) => r,
         Err(_) => {
             set_last_error("failed to parse native_json as LLMRequest");
-            return NvMagicStatus::InvalidJson;
+            return NatNexusStatus::InvalidJson;
         }
     };
     let parent_handle = if parent.is_null() {
@@ -576,11 +577,11 @@ pub unsafe extern "C" fn nvmagic_llm_call_execute(
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes);
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let model_name_opt = if model_name.is_null() {
         None
@@ -592,10 +593,11 @@ pub unsafe extern "C" fn nvmagic_llm_call_execute(
     };
 
     let exec_fn = wrap_llm_exec_fn(func, func_user_data, func_free);
-    let default_fn: nvmagic_core::LlmExecutionNextFn = Box::new(move |request| exec_fn(request));
+    let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn =
+        Box::new(move |request| exec_fn(request));
 
     let result = tokio_runtime().block_on(async {
-        core::nvmagic_llm_call_execute(
+        core::nat_nexus_llm_call_execute(
             &name,
             request,
             default_fn,
@@ -611,7 +613,7 @@ pub unsafe extern "C" fn nvmagic_llm_call_execute(
     match result {
         Ok(json) => {
             unsafe { *out = json_to_c_string(&json) };
-            NvMagicStatus::Ok
+            NatNexusStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -622,15 +624,16 @@ pub unsafe extern "C" fn nvmagic_llm_call_execute(
 // ---------------------------------------------------------------------------
 
 /// Opaque stream handle for consuming LLM streaming responses chunk by chunk.
-/// Use `nvmagic_stream_next` to poll and `nvmagic_stream_free` to release.
+/// Use `nat_nexus_stream_next` to poll and `nat_nexus_stream_free` to release.
 pub struct FfiStream {
-    receiver:
-        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvmagic_core::Result<serde_json::Value>>>,
+    receiver: tokio::sync::Mutex<
+        tokio::sync::mpsc::Receiver<nvidia_nat_nexus_core::Result<serde_json::Value>>,
+    >,
 }
 
 /// Execute a streaming LLM call end-to-end. Conditional-execution guardrails
 /// run first on the raw request. Returns a stream handle that can be polled
-/// with `nvmagic_stream_next`. Blocks until the stream is set up.
+/// with `nat_nexus_stream_next`. Blocks until the stream is set up.
 ///
 /// # Parameters
 /// - `name`: Null-terminated LLM provider name.
@@ -655,25 +658,25 @@ pub struct FfiStream {
 /// `name`, `native_json`, and `out` must be valid, non-null pointers. `collector`
 /// and `finalizer` may be null.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_llm_stream_call_execute(
+pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
     name: *const c_char,
     native_json: *const c_char,
-    func: NvMagicLlmExecCb,
+    func: NatNexusLlmExecCb,
     func_user_data: *mut libc::c_void,
-    func_free: NvMagicFreeFn,
-    collector: Option<NvMagicCollectorCb>,
-    finalizer: Option<NvMagicFinalizerCb>,
+    func_free: NatNexusFreeFn,
+    collector: Option<NatNexusCollectorCb>,
+    finalizer: Option<NatNexusFinalizerCb>,
     parent: *const FfiScopeHandle,
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
     model_name: *const c_char,
     out: *mut *mut FfiStream,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("null pointer argument");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -681,13 +684,13 @@ pub unsafe extern "C" fn nvmagic_llm_stream_call_execute(
     };
     let native = match c_str_to_json(native_json) {
         Some(n) => n,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let request: core_types::LLMRequest = match serde_json::from_value(native) {
         Ok(r) => r,
         Err(_) => {
             set_last_error("failed to parse native_json as LLMRequest");
-            return NvMagicStatus::InvalidJson;
+            return NatNexusStatus::InvalidJson;
         }
     };
     let parent_handle = if parent.is_null() {
@@ -698,11 +701,11 @@ pub unsafe extern "C" fn nvmagic_llm_stream_call_execute(
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes);
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let model_name_opt = if model_name.is_null() {
         None
@@ -714,7 +717,7 @@ pub unsafe extern "C" fn nvmagic_llm_stream_call_execute(
     };
 
     let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
-    let default_fn: nvmagic_core::LlmStreamExecutionNextFn =
+    let default_fn: nvidia_nat_nexus_core::LlmStreamExecutionNextFn =
         Box::new(move |request| exec_fn(request));
 
     let wrapped_collector: Box<dyn FnMut(serde_json::Value) + Send> = match collector {
@@ -728,7 +731,7 @@ pub unsafe extern "C" fn nvmagic_llm_stream_call_execute(
     };
 
     let result = tokio_runtime().block_on(async {
-        core::nvmagic_llm_stream_call_execute(
+        core::nat_nexus_llm_stream_call_execute(
             &name,
             request,
             default_fn,
@@ -758,7 +761,7 @@ pub unsafe extern "C" fn nvmagic_llm_stream_call_execute(
                 receiver: tokio::sync::Mutex::new(rx),
             });
             unsafe { *out = Box::into_raw(ffi_stream) };
-            NvMagicStatus::Ok
+            NatNexusStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -769,14 +772,14 @@ pub unsafe extern "C" fn nvmagic_llm_stream_call_execute(
 ///
 /// # Returns
 /// - `1`: A chunk was written to `*out_chunk`. Caller must free with
-///   `nvmagic_string_free`.
+///   `nat_nexus_string_free`.
 /// - `0`: The stream is complete (no more chunks).
-/// - `-1`: An error occurred. Call `nvmagic_last_error` for details.
+/// - `-1`: An error occurred. Call `nat_nexus_last_error` for details.
 ///
 /// # Safety
 /// `stream` and `out_chunk` must be valid, non-null pointers.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_stream_next(
+pub unsafe extern "C" fn nat_nexus_stream_next(
     stream: *mut FfiStream,
     out_chunk: *mut *mut c_char,
 ) -> i32 {
@@ -805,9 +808,9 @@ pub unsafe extern "C" fn nvmagic_stream_next(
 ///
 /// # Safety
 /// `stream` must be a valid `FfiStream` pointer returned by
-/// `nvmagic_llm_stream_call_execute`, or null.
+/// `nat_nexus_llm_stream_call_execute`, or null.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_stream_free(stream: *mut FfiStream) {
+pub unsafe extern "C" fn nat_nexus_stream_free(stream: *mut FfiStream) {
     if !stream.is_null() {
         drop(unsafe { Box::from_raw(stream) });
     }
@@ -826,10 +829,10 @@ macro_rules! ffi_guardrail_tool_api {
         pub unsafe extern "C" fn $register_name(
             name: *const c_char,
             priority: i32,
-            cb: NvMagicToolSanitizeCb,
+            cb: NatNexusToolSanitizeCb,
             user_data: *mut libc::c_void,
-            free_fn: NvMagicFreeFn,
-        ) -> NvMagicStatus {
+            free_fn: NatNexusFreeFn,
+        ) -> NatNexusStatus {
             clear_last_error();
             let name = match c_str_to_string(name) {
                 Ok(s) => s,
@@ -837,7 +840,7 @@ macro_rules! ffi_guardrail_tool_api {
             };
             let wrapped = $wrapper(cb, user_data, free_fn);
             match $core_register(&name, priority, wrapped) {
-                Ok(()) => NvMagicStatus::Ok,
+                Ok(()) => NatNexusStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -846,14 +849,14 @@ macro_rules! ffi_guardrail_tool_api {
         #[no_mangle]
         pub unsafe extern "C" fn $deregister_name(
             name: *const c_char,
-        ) -> NvMagicStatus {
+        ) -> NatNexusStatus {
             clear_last_error();
             let name = match c_str_to_string(name) {
                 Ok(s) => s,
                 Err(status) => return status,
             };
             match $core_deregister(&name) {
-                Ok(_) => NvMagicStatus::Ok,
+                Ok(_) => NatNexusStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -873,14 +876,14 @@ ffi_guardrail_tool_api!(
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nvmagic_register_tool_sanitize_request_guardrail,
+    nat_nexus_register_tool_sanitize_request_guardrail,
     /// Deregister a tool request sanitization guardrail by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nvmagic_deregister_tool_sanitize_request_guardrail,
-    core::nvmagic_register_tool_sanitize_request_guardrail,
-    core::nvmagic_deregister_tool_sanitize_request_guardrail,
+    nat_nexus_deregister_tool_sanitize_request_guardrail,
+    core::nat_nexus_register_tool_sanitize_request_guardrail,
+    core::nat_nexus_deregister_tool_sanitize_request_guardrail,
     wrap_tool_sanitize_fn
 );
 
@@ -897,14 +900,14 @@ ffi_guardrail_tool_api!(
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nvmagic_register_tool_sanitize_response_guardrail,
+    nat_nexus_register_tool_sanitize_response_guardrail,
     /// Deregister a tool response sanitization guardrail by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nvmagic_deregister_tool_sanitize_response_guardrail,
-    core::nvmagic_register_tool_sanitize_response_guardrail,
-    core::nvmagic_deregister_tool_sanitize_response_guardrail,
+    nat_nexus_deregister_tool_sanitize_response_guardrail,
+    core::nat_nexus_register_tool_sanitize_response_guardrail,
+    core::nat_nexus_deregister_tool_sanitize_response_guardrail,
     wrap_tool_sanitize_fn
 );
 
@@ -921,21 +924,21 @@ ffi_guardrail_tool_api!(
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_register_tool_conditional_execution_guardrail(
+pub unsafe extern "C" fn nat_nexus_register_tool_conditional_execution_guardrail(
     name: *const c_char,
     priority: i32,
-    cb: NvMagicToolConditionalCb,
+    cb: NatNexusToolConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NvMagicFreeFn,
-) -> NvMagicStatus {
+    free_fn: NatNexusFreeFn,
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let wrapped = wrap_tool_conditional_fn(cb, user_data, free_fn);
-    match core::nvmagic_register_tool_conditional_execution_guardrail(&name, priority, wrapped) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_register_tool_conditional_execution_guardrail(&name, priority, wrapped) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -945,16 +948,16 @@ pub unsafe extern "C" fn nvmagic_register_tool_conditional_execution_guardrail(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_deregister_tool_conditional_execution_guardrail(
+pub unsafe extern "C" fn nat_nexus_deregister_tool_conditional_execution_guardrail(
     name: *const c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nvmagic_deregister_tool_conditional_execution_guardrail(&name) {
-        Ok(_) => NvMagicStatus::Ok,
+    match core::nat_nexus_deregister_tool_conditional_execution_guardrail(&name) {
+        Ok(_) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -973,10 +976,10 @@ macro_rules! ffi_intercept_tool_api {
             name: *const c_char,
             priority: i32,
             break_chain: bool,
-            cb: NvMagicToolSanitizeCb,
+            cb: NatNexusToolSanitizeCb,
             user_data: *mut libc::c_void,
-            free_fn: NvMagicFreeFn,
-        ) -> NvMagicStatus {
+            free_fn: NatNexusFreeFn,
+        ) -> NatNexusStatus {
             clear_last_error();
             let name = match c_str_to_string(name) {
                 Ok(s) => s,
@@ -984,7 +987,7 @@ macro_rules! ffi_intercept_tool_api {
             };
             let wrapped = $wrapper(cb, user_data, free_fn);
             match $core_register(&name, priority, break_chain, wrapped) {
-                Ok(()) => NvMagicStatus::Ok,
+                Ok(()) => NatNexusStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -993,14 +996,14 @@ macro_rules! ffi_intercept_tool_api {
         #[no_mangle]
         pub unsafe extern "C" fn $deregister_name(
             name: *const c_char,
-        ) -> NvMagicStatus {
+        ) -> NatNexusStatus {
             clear_last_error();
             let name = match c_str_to_string(name) {
                 Ok(s) => s,
                 Err(status) => return status,
             };
             match $core_deregister(&name) {
-                Ok(_) => NvMagicStatus::Ok,
+                Ok(_) => NatNexusStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -1022,14 +1025,14 @@ ffi_intercept_tool_api!(
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nvmagic_register_tool_request_intercept,
+    nat_nexus_register_tool_request_intercept,
     /// Deregister a tool request intercept by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nvmagic_deregister_tool_request_intercept,
-    core::nvmagic_register_tool_request_intercept,
-    core::nvmagic_deregister_tool_request_intercept,
+    nat_nexus_deregister_tool_request_intercept,
+    core::nat_nexus_register_tool_request_intercept,
+    core::nat_nexus_deregister_tool_request_intercept,
     wrap_tool_sanitize_fn
 );
 
@@ -1048,14 +1051,14 @@ ffi_intercept_tool_api!(
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nvmagic_register_tool_response_intercept,
+    nat_nexus_register_tool_response_intercept,
     /// Deregister a tool response intercept by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nvmagic_deregister_tool_response_intercept,
-    core::nvmagic_register_tool_response_intercept,
-    core::nvmagic_deregister_tool_response_intercept,
+    nat_nexus_deregister_tool_response_intercept,
+    core::nat_nexus_register_tool_response_intercept,
+    core::nat_nexus_deregister_tool_response_intercept,
     wrap_tool_sanitize_fn
 );
 
@@ -1074,21 +1077,21 @@ ffi_intercept_tool_api!(
 /// # Safety
 /// `name` must be a valid C string. Callback pointers must be valid.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_register_tool_execution_intercept(
+pub unsafe extern "C" fn nat_nexus_register_tool_execution_intercept(
     name: *const c_char,
     priority: i32,
-    exec_cb: NvMagicToolExecInterceptCb,
+    exec_cb: NatNexusToolExecInterceptCb,
     exec_user_data: *mut libc::c_void,
-    exec_free: NvMagicFreeFn,
-) -> NvMagicStatus {
+    exec_free: NatNexusFreeFn,
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let exec = wrap_tool_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nvmagic_register_tool_execution_intercept(&name, priority, exec) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_register_tool_execution_intercept(&name, priority, exec) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1098,16 +1101,16 @@ pub unsafe extern "C" fn nvmagic_register_tool_execution_intercept(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_deregister_tool_execution_intercept(
+pub unsafe extern "C" fn nat_nexus_deregister_tool_execution_intercept(
     name: *const c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nvmagic_deregister_tool_execution_intercept(&name) {
-        Ok(_) => NvMagicStatus::Ok,
+    match core::nat_nexus_deregister_tool_execution_intercept(&name) {
+        Ok(_) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1129,21 +1132,21 @@ pub unsafe extern "C" fn nvmagic_deregister_tool_execution_intercept(
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_register_llm_sanitize_request_guardrail(
+pub unsafe extern "C" fn nat_nexus_register_llm_sanitize_request_guardrail(
     name: *const c_char,
     priority: i32,
-    cb: NvMagicLlmRequestCb,
+    cb: NatNexusLlmRequestCb,
     user_data: *mut libc::c_void,
-    free_fn: NvMagicFreeFn,
-) -> NvMagicStatus {
+    free_fn: NatNexusFreeFn,
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let wrapped = wrap_llm_sanitize_request_fn(cb, user_data, free_fn);
-    match core::nvmagic_register_llm_sanitize_request_guardrail(&name, priority, wrapped) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_register_llm_sanitize_request_guardrail(&name, priority, wrapped) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1153,16 +1156,16 @@ pub unsafe extern "C" fn nvmagic_register_llm_sanitize_request_guardrail(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_deregister_llm_sanitize_request_guardrail(
+pub unsafe extern "C" fn nat_nexus_deregister_llm_sanitize_request_guardrail(
     name: *const c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nvmagic_deregister_llm_sanitize_request_guardrail(&name) {
-        Ok(_) => NvMagicStatus::Ok,
+    match core::nat_nexus_deregister_llm_sanitize_request_guardrail(&name) {
+        Ok(_) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1180,21 +1183,21 @@ pub unsafe extern "C" fn nvmagic_deregister_llm_sanitize_request_guardrail(
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_register_llm_sanitize_response_guardrail(
+pub unsafe extern "C" fn nat_nexus_register_llm_sanitize_response_guardrail(
     name: *const c_char,
     priority: i32,
-    cb: NvMagicJsonCb,
+    cb: NatNexusJsonCb,
     user_data: *mut libc::c_void,
-    free_fn: NvMagicFreeFn,
-) -> NvMagicStatus {
+    free_fn: NatNexusFreeFn,
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let wrapped = wrap_llm_response_fn(cb, user_data, free_fn);
-    match core::nvmagic_register_llm_sanitize_response_guardrail(&name, priority, wrapped) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_register_llm_sanitize_response_guardrail(&name, priority, wrapped) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1204,16 +1207,16 @@ pub unsafe extern "C" fn nvmagic_register_llm_sanitize_response_guardrail(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_deregister_llm_sanitize_response_guardrail(
+pub unsafe extern "C" fn nat_nexus_deregister_llm_sanitize_response_guardrail(
     name: *const c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nvmagic_deregister_llm_sanitize_response_guardrail(&name) {
-        Ok(_) => NvMagicStatus::Ok,
+    match core::nat_nexus_deregister_llm_sanitize_response_guardrail(&name) {
+        Ok(_) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1231,21 +1234,21 @@ pub unsafe extern "C" fn nvmagic_deregister_llm_sanitize_response_guardrail(
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_register_llm_conditional_execution_guardrail(
+pub unsafe extern "C" fn nat_nexus_register_llm_conditional_execution_guardrail(
     name: *const c_char,
     priority: i32,
-    cb: NvMagicLlmConditionalCb,
+    cb: NatNexusLlmConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NvMagicFreeFn,
-) -> NvMagicStatus {
+    free_fn: NatNexusFreeFn,
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let wrapped = wrap_llm_conditional_fn(cb, user_data, free_fn);
-    match core::nvmagic_register_llm_conditional_execution_guardrail(&name, priority, wrapped) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_register_llm_conditional_execution_guardrail(&name, priority, wrapped) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1255,16 +1258,16 @@ pub unsafe extern "C" fn nvmagic_register_llm_conditional_execution_guardrail(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_deregister_llm_conditional_execution_guardrail(
+pub unsafe extern "C" fn nat_nexus_deregister_llm_conditional_execution_guardrail(
     name: *const c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nvmagic_deregister_llm_conditional_execution_guardrail(&name) {
-        Ok(_) => NvMagicStatus::Ok,
+    match core::nat_nexus_deregister_llm_conditional_execution_guardrail(&name) {
+        Ok(_) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1287,22 +1290,22 @@ pub unsafe extern "C" fn nvmagic_deregister_llm_conditional_execution_guardrail(
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_register_llm_request_intercept(
+pub unsafe extern "C" fn nat_nexus_register_llm_request_intercept(
     name: *const c_char,
     priority: i32,
     break_chain: bool,
-    cb: NvMagicLlmRequestCb,
+    cb: NatNexusLlmRequestCb,
     user_data: *mut libc::c_void,
-    free_fn: NvMagicFreeFn,
-) -> NvMagicStatus {
+    free_fn: NatNexusFreeFn,
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let wrapped = wrap_llm_request_intercept_fn(cb, user_data, free_fn);
-    match core::nvmagic_register_llm_request_intercept(&name, priority, break_chain, wrapped) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_register_llm_request_intercept(&name, priority, break_chain, wrapped) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1312,16 +1315,16 @@ pub unsafe extern "C" fn nvmagic_register_llm_request_intercept(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_deregister_llm_request_intercept(
+pub unsafe extern "C" fn nat_nexus_deregister_llm_request_intercept(
     name: *const c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nvmagic_deregister_llm_request_intercept(&name) {
-        Ok(_) => NvMagicStatus::Ok,
+    match core::nat_nexus_deregister_llm_request_intercept(&name) {
+        Ok(_) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1341,21 +1344,21 @@ pub unsafe extern "C" fn nvmagic_deregister_llm_request_intercept(
 /// # Safety
 /// `name` must be a valid C string. Callback pointers must be valid.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_register_llm_execution_intercept(
+pub unsafe extern "C" fn nat_nexus_register_llm_execution_intercept(
     name: *const c_char,
     priority: i32,
-    exec_cb: NvMagicLlmExecInterceptCb,
+    exec_cb: NatNexusLlmExecInterceptCb,
     exec_user_data: *mut libc::c_void,
-    exec_free: NvMagicFreeFn,
-) -> NvMagicStatus {
+    exec_free: NatNexusFreeFn,
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let exec = wrap_llm_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nvmagic_register_llm_execution_intercept(&name, priority, exec) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_register_llm_execution_intercept(&name, priority, exec) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1365,16 +1368,16 @@ pub unsafe extern "C" fn nvmagic_register_llm_execution_intercept(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_deregister_llm_execution_intercept(
+pub unsafe extern "C" fn nat_nexus_deregister_llm_execution_intercept(
     name: *const c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nvmagic_deregister_llm_execution_intercept(&name) {
-        Ok(_) => NvMagicStatus::Ok,
+    match core::nat_nexus_deregister_llm_execution_intercept(&name) {
+        Ok(_) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1394,21 +1397,21 @@ pub unsafe extern "C" fn nvmagic_deregister_llm_execution_intercept(
 /// # Safety
 /// `name` must be a valid C string. Callback pointers must be valid.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_register_llm_stream_execution_intercept(
+pub unsafe extern "C" fn nat_nexus_register_llm_stream_execution_intercept(
     name: *const c_char,
     priority: i32,
-    exec_cb: NvMagicLlmExecInterceptCb,
+    exec_cb: NatNexusLlmExecInterceptCb,
     exec_user_data: *mut libc::c_void,
-    exec_free: NvMagicFreeFn,
-) -> NvMagicStatus {
+    exec_free: NatNexusFreeFn,
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let exec = wrap_llm_stream_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nvmagic_register_llm_stream_execution_intercept(&name, priority, exec) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_register_llm_stream_execution_intercept(&name, priority, exec) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1418,16 +1421,16 @@ pub unsafe extern "C" fn nvmagic_register_llm_stream_execution_intercept(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_deregister_llm_stream_execution_intercept(
+pub unsafe extern "C" fn nat_nexus_deregister_llm_stream_execution_intercept(
     name: *const c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nvmagic_deregister_llm_stream_execution_intercept(&name) {
-        Ok(_) => NvMagicStatus::Ok,
+    match core::nat_nexus_deregister_llm_stream_execution_intercept(&name) {
+        Ok(_) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1448,20 +1451,20 @@ pub unsafe extern "C" fn nvmagic_deregister_llm_stream_execution_intercept(
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_register_subscriber(
+pub unsafe extern "C" fn nat_nexus_register_subscriber(
     name: *const c_char,
-    cb: NvMagicEventSubscriberCb,
+    cb: NatNexusEventSubscriberCb,
     user_data: *mut libc::c_void,
-    free_fn: NvMagicFreeFn,
-) -> NvMagicStatus {
+    free_fn: NatNexusFreeFn,
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let wrapped = wrap_event_subscriber(cb, user_data, free_fn);
-    match core::nvmagic_register_subscriber(&name, wrapped) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_register_subscriber(&name, wrapped) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1471,14 +1474,14 @@ pub unsafe extern "C" fn nvmagic_register_subscriber(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_deregister_subscriber(name: *const c_char) -> NvMagicStatus {
+pub unsafe extern "C" fn nat_nexus_deregister_subscriber(name: *const c_char) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nvmagic_deregister_subscriber(&name) {
-        Ok(_) => NvMagicStatus::Ok,
+    match core::nat_nexus_deregister_subscriber(&name) {
+        Ok(_) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1490,31 +1493,33 @@ pub unsafe extern "C" fn nvmagic_deregister_subscriber(name: *const c_char) -> N
 /// Create a new isolated scope stack with its own root scope.
 ///
 /// Each scope stack is independent: scopes pushed on one do not appear on another.
-/// Use `nvmagic_scope_stack_set_thread` to bind a stack to the current thread
-/// before making other NVMagic API calls.
+/// Use `nat_nexus_scope_stack_set_thread` to bind a stack to the current thread
+/// before making other Nexus API calls.
 ///
 /// # Parameters
 /// - `out`: On success, receives a heap-allocated `FfiScopeStack` that must be
-///   freed with `nvmagic_scope_stack_free`.
+///   freed with `nat_nexus_scope_stack_free`.
 ///
 /// # Safety
 /// `out` must be a valid, non-null pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_scope_stack_create(out: *mut *mut FfiScopeStack) -> NvMagicStatus {
+pub unsafe extern "C" fn nat_nexus_scope_stack_create(
+    out: *mut *mut FfiScopeStack,
+) -> NatNexusStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     let handle = core::create_scope_stack();
     unsafe { *out = Box::into_raw(Box::new(FfiScopeStack(handle))) };
-    NvMagicStatus::Ok
+    NatNexusStatus::Ok
 }
 
 /// Bind an isolated scope stack to the current OS thread.
 ///
-/// After this call, all NVMagic scope operations on the current thread
-/// (e.g. `nvmagic_push_scope`, `nvmagic_get_handle`) will use the
+/// After this call, all Nexus scope operations on the current thread
+/// (e.g. `nat_nexus_push_scope`, `nat_nexus_get_handle`) will use the
 /// given scope stack. This is typically used from Go goroutines that have
 /// called `runtime.LockOSThread()`.
 ///
@@ -1524,17 +1529,17 @@ pub unsafe extern "C" fn nvmagic_scope_stack_create(out: *mut *mut FfiScopeStack
 /// # Safety
 /// `stack` must be a valid, non-null `FfiScopeStack` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_scope_stack_set_thread(
+pub unsafe extern "C" fn nat_nexus_scope_stack_set_thread(
     stack: *const FfiScopeStack,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     if stack.is_null() {
         set_last_error("stack pointer is null");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     let handle = unsafe { &*stack }.0.clone();
     core::set_thread_scope_stack(handle);
-    NvMagicStatus::Ok
+    NatNexusStatus::Ok
 }
 
 // ---------------------------------------------------------------------------
@@ -1553,17 +1558,17 @@ pub unsafe extern "C" fn nvmagic_scope_stack_set_thread(
 /// # Safety
 /// All non-null string pointers must be valid C strings. `out` must be valid.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_atif_exporter_create(
+pub unsafe extern "C" fn nat_nexus_atif_exporter_create(
     session_id: *const c_char,
     agent_name: *const c_char,
     agent_version: *const c_char,
     model_name: *const c_char,
     out: *mut *mut FfiAtifExporter,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     let session_id = match c_str_to_string(session_id) {
         Ok(s) => s,
@@ -1586,7 +1591,7 @@ pub unsafe extern "C" fn nvmagic_atif_exporter_create(
         }
     };
 
-    let agent_info = nvmagic_core::atif::AtifAgentInfo {
+    let agent_info = nvidia_nat_nexus_core::atif::AtifAgentInfo {
         name: agent_name,
         version: agent_version,
         model_name: model_name_opt,
@@ -1594,9 +1599,9 @@ pub unsafe extern "C" fn nvmagic_atif_exporter_create(
         extra: None,
     };
 
-    let exporter = nvmagic_core::atif::AtifExporter::new(session_id, agent_info);
+    let exporter = nvidia_nat_nexus_core::atif::AtifExporter::new(session_id, agent_info);
     unsafe { *out = Box::into_raw(Box::new(FfiAtifExporter(exporter))) };
-    NvMagicStatus::Ok
+    NatNexusStatus::Ok
 }
 
 /// Registers the exporter as an event subscriber.
@@ -1608,22 +1613,22 @@ pub unsafe extern "C" fn nvmagic_atif_exporter_create(
 /// # Safety
 /// `exporter` and `name` must be valid, non-null pointers.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_atif_exporter_register(
+pub unsafe extern "C" fn nat_nexus_atif_exporter_register(
     exporter: *const FfiAtifExporter,
     name: *const c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     if exporter.is_null() {
         set_last_error("exporter pointer is null");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let subscriber = unsafe { &*exporter }.0.subscriber();
-    match core::nvmagic_register_subscriber(&name, subscriber) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_register_subscriber(&name, subscriber) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1636,14 +1641,14 @@ pub unsafe extern "C" fn nvmagic_atif_exporter_register(
 /// # Safety
 /// `name` must be a valid C string.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_atif_exporter_deregister(name: *const c_char) -> NvMagicStatus {
+pub unsafe extern "C" fn nat_nexus_atif_exporter_deregister(name: *const c_char) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nvmagic_deregister_subscriber(&name) {
-        Ok(_) => NvMagicStatus::Ok,
+    match core::nat_nexus_deregister_subscriber(&name) {
+        Ok(_) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1654,25 +1659,25 @@ pub unsafe extern "C" fn nvmagic_atif_exporter_deregister(name: *const c_char) -
 /// - `exporter`: The exporter handle.
 /// - `root_uuid`: Optional root UUID filter (nullable C string).
 /// - `out`: On success, receives a JSON string (caller must free with
-///   `nvmagic_string_free`).
+///   `nat_nexus_string_free`).
 ///
 /// # Safety
 /// `exporter` and `out` must be valid, non-null pointers. `root_uuid` may be
 /// null.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_atif_exporter_export(
+pub unsafe extern "C" fn nat_nexus_atif_exporter_export(
     exporter: *const FfiAtifExporter,
     root_uuid: *const c_char,
     out: *mut *mut c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     if exporter.is_null() {
         set_last_error("exporter pointer is null");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     let root_uuid_opt = if root_uuid.is_null() {
         None
@@ -1685,7 +1690,7 @@ pub unsafe extern "C" fn nvmagic_atif_exporter_export(
             Ok(u) => Some(u),
             Err(e) => {
                 set_last_error(&format!("invalid UUID: {e}"));
-                return NvMagicStatus::Internal;
+                return NatNexusStatus::Internal;
             }
         }
     };
@@ -1694,11 +1699,11 @@ pub unsafe extern "C" fn nvmagic_atif_exporter_export(
     match serde_json::to_string(&trajectory) {
         Ok(json_str) => {
             unsafe { *out = str_to_c_string(&json_str) };
-            NvMagicStatus::Ok
+            NatNexusStatus::Ok
         }
         Err(e) => {
             set_last_error(&format!("failed to serialize trajectory: {e}"));
-            NvMagicStatus::Internal
+            NatNexusStatus::Internal
         }
     }
 }
@@ -1711,16 +1716,16 @@ pub unsafe extern "C" fn nvmagic_atif_exporter_export(
 /// # Safety
 /// `exporter` must be a valid, non-null `FfiAtifExporter` pointer.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_atif_exporter_clear(
+pub unsafe extern "C" fn nat_nexus_atif_exporter_clear(
     exporter: *const FfiAtifExporter,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     if exporter.is_null() {
         set_last_error("exporter pointer is null");
-        return NvMagicStatus::NullPointer;
+        return NatNexusStatus::NullPointer;
     }
     unsafe { &*exporter }.0.clear();
-    NvMagicStatus::Ok
+    NatNexusStatus::Ok
 }
 
 // ---------------------------------------------------------------------------
@@ -1733,16 +1738,16 @@ pub unsafe extern "C" fn nvmagic_atif_exporter_clear(
 /// - `name`: Tool name (null-terminated C string).
 /// - `args_json`: Tool arguments as a JSON C string.
 /// - `out`: On success, receives the transformed JSON string (caller must free
-///   with `nvmagic_string_free`).
+///   with `nat_nexus_string_free`).
 ///
 /// # Safety
 /// All pointers must be valid. `out` must be non-null.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_tool_request_intercepts(
+pub unsafe extern "C" fn nat_nexus_tool_request_intercepts(
     name: *const c_char,
     args_json: *const c_char,
     out: *mut *mut c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -1750,12 +1755,12 @@ pub unsafe extern "C" fn nvmagic_tool_request_intercepts(
     };
     let args = match c_str_to_json(args_json) {
         Some(a) => a,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
-    match core::nvmagic_tool_request_intercepts(&name, args) {
+    match core::nat_nexus_tool_request_intercepts(&name, args) {
         Ok(result) => {
             unsafe { *out = json_to_c_string(&result) };
-            NvMagicStatus::Ok
+            NatNexusStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -1763,8 +1768,8 @@ pub unsafe extern "C" fn nvmagic_tool_request_intercepts(
 
 /// Run the registered tool conditional execution guardrail chain.
 ///
-/// Returns `NvMagicStatus::Ok` if all guardrails pass, or
-/// `NvMagicStatus::GuardrailRejected` if blocked.
+/// Returns `NatNexusStatus::Ok` if all guardrails pass, or
+/// `NatNexusStatus::GuardrailRejected` if blocked.
 ///
 /// # Parameters
 /// - `name`: Tool name (null-terminated C string).
@@ -1773,10 +1778,10 @@ pub unsafe extern "C" fn nvmagic_tool_request_intercepts(
 /// # Safety
 /// All pointers must be valid.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_tool_conditional_execution(
+pub unsafe extern "C" fn nat_nexus_tool_conditional_execution(
     name: *const c_char,
     args_json: *const c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -1784,10 +1789,10 @@ pub unsafe extern "C" fn nvmagic_tool_conditional_execution(
     };
     let args = match c_str_to_json(args_json) {
         Some(a) => a,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
-    match core::nvmagic_tool_conditional_execution(&name, &args) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_tool_conditional_execution(&name, &args) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1798,16 +1803,16 @@ pub unsafe extern "C" fn nvmagic_tool_conditional_execution(
 /// - `name`: Tool name (null-terminated C string).
 /// - `result_json`: Tool result as a JSON C string.
 /// - `out`: On success, receives the transformed JSON string (caller must free
-///   with `nvmagic_string_free`).
+///   with `nat_nexus_string_free`).
 ///
 /// # Safety
 /// All pointers must be valid. `out` must be non-null.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_tool_response_intercepts(
+pub unsafe extern "C" fn nat_nexus_tool_response_intercepts(
     name: *const c_char,
     result_json: *const c_char,
     out: *mut *mut c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -1815,12 +1820,12 @@ pub unsafe extern "C" fn nvmagic_tool_response_intercepts(
     };
     let result = match c_str_to_json(result_json) {
         Some(r) => r,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
-    match core::nvmagic_tool_response_intercepts(&name, result) {
+    match core::nat_nexus_tool_response_intercepts(&name, result) {
         Ok(transformed) => {
             unsafe { *out = json_to_c_string(&transformed) };
-            NvMagicStatus::Ok
+            NatNexusStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -1832,32 +1837,32 @@ pub unsafe extern "C" fn nvmagic_tool_response_intercepts(
 /// - `native_json`: The request payload as a JSON C string representing an
 ///   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
 /// - `out`: On success, receives the transformed JSON string (caller must free
-///   with `nvmagic_string_free`). The output is a serialized `LLMRequest`.
+///   with `nat_nexus_string_free`). The output is a serialized `LLMRequest`.
 ///
 /// # Safety
 /// All pointers must be valid. `out` must be non-null.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_llm_request_intercepts(
+pub unsafe extern "C" fn nat_nexus_llm_request_intercepts(
     native_json: *const c_char,
     out: *mut *mut c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     let native = match c_str_to_json(native_json) {
         Some(j) => j,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let request: core_types::LLMRequest = match serde_json::from_value(native) {
         Ok(r) => r,
         Err(_) => {
             set_last_error("failed to parse native_json as LLMRequest");
-            return NvMagicStatus::InvalidJson;
+            return NatNexusStatus::InvalidJson;
         }
     };
-    match core::nvmagic_llm_request_intercepts(request) {
+    match core::nat_nexus_llm_request_intercepts(request) {
         Ok(transformed) => {
             let result_json = serde_json::to_value(&transformed).unwrap_or(serde_json::Value::Null);
             unsafe { *out = json_to_c_string(&result_json) };
-            NvMagicStatus::Ok
+            NatNexusStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -1865,8 +1870,8 @@ pub unsafe extern "C" fn nvmagic_llm_request_intercepts(
 
 /// Run the registered LLM conditional execution guardrail chain.
 ///
-/// Returns `NvMagicStatus::Ok` if all guardrails pass, or
-/// `NvMagicStatus::GuardrailRejected` if blocked.
+/// Returns `NatNexusStatus::Ok` if all guardrails pass, or
+/// `NatNexusStatus::GuardrailRejected` if blocked.
 ///
 /// # Parameters
 /// - `native_json`: The request payload as a JSON C string representing an
@@ -1875,23 +1880,23 @@ pub unsafe extern "C" fn nvmagic_llm_request_intercepts(
 /// # Safety
 /// All pointers must be valid.
 #[no_mangle]
-pub unsafe extern "C" fn nvmagic_llm_conditional_execution(
+pub unsafe extern "C" fn nat_nexus_llm_conditional_execution(
     native_json: *const c_char,
-) -> NvMagicStatus {
+) -> NatNexusStatus {
     clear_last_error();
     let native = match c_str_to_json(native_json) {
         Some(j) => j,
-        None => return NvMagicStatus::InvalidJson,
+        None => return NatNexusStatus::InvalidJson,
     };
     let request: core_types::LLMRequest = match serde_json::from_value(native) {
         Ok(r) => r,
         Err(_) => {
             set_last_error("failed to parse native_json as LLMRequest");
-            return NvMagicStatus::InvalidJson;
+            return NatNexusStatus::InvalidJson;
         }
     };
-    match core::nvmagic_llm_conditional_execution(&request) {
-        Ok(()) => NvMagicStatus::Ok,
+    match core::nat_nexus_llm_conditional_execution(&request) {
+        Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }

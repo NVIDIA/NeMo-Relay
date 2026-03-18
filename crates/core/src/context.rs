@@ -11,7 +11,7 @@
 //!   an immovable root scope.
 //! - **Task-local and thread-local scope storage** — [`TASK_SCOPE_STACK`] for async
 //!   contexts, with a thread-local fallback for synchronous code.
-//! - **[`NVMagicContextState`]** — the central state object holding all registered
+//! - **[`NatNexusContextState`]** — the central state object holding all registered
 //!   middleware and subscribers, plus methods for chain execution and handle lifecycle.
 //! - **[`global_context`]** — returns the process-wide singleton context, lazily
 //!   initialized on first access.
@@ -269,8 +269,8 @@ pub fn task_scope_remove(uuid: &Uuid) -> Result<ScopeHandle> {
 /// lifecycle events.
 ///
 /// In production use, a single instance is held behind the [`global_context`]
-/// singleton (`Arc<RwLock<NVMagicContextState>>`).
-pub struct NVMagicContextState {
+/// singleton (`Arc<RwLock<NatNexusContextState>>`).
+pub struct NatNexusContextState {
     /// Registry of tool request sanitize guardrails.
     pub tool_sanitize_request_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
     /// Registry of tool response sanitize guardrails.
@@ -303,7 +303,7 @@ pub struct NVMagicContextState {
     pub event_subscribers: HashMap<String, EventSubscriberFn>,
 }
 
-impl NVMagicContextState {
+impl NatNexusContextState {
     /// Creates a new context state with empty registries and no subscribers.
     pub fn new() -> Self {
         Self {
@@ -730,7 +730,7 @@ impl NVMagicContextState {
     }
 }
 
-impl Default for NVMagicContextState {
+impl Default for NatNexusContextState {
     fn default() -> Self {
         Self::new()
     }
@@ -740,16 +740,16 @@ impl Default for NVMagicContextState {
 // Global singleton
 // ---------------------------------------------------------------------------
 
-static GLOBAL_CONTEXT: std::sync::OnceLock<Arc<RwLock<NVMagicContextState>>> =
+static GLOBAL_CONTEXT: std::sync::OnceLock<Arc<RwLock<NatNexusContextState>>> =
     std::sync::OnceLock::new();
 
-/// Returns the process-wide singleton [`NVMagicContextState`], lazily initialized.
+/// Returns the process-wide singleton [`NatNexusContextState`], lazily initialized.
 ///
 /// The returned `Arc<RwLock<...>>` can be cloned cheaply and shared across threads.
 /// All public API functions in [`crate::api`] use this internally.
-pub fn global_context() -> Arc<RwLock<NVMagicContextState>> {
+pub fn global_context() -> Arc<RwLock<NatNexusContextState>> {
     GLOBAL_CONTEXT
-        .get_or_init(|| Arc::new(RwLock::new(NVMagicContextState::new())))
+        .get_or_init(|| Arc::new(RwLock::new(NatNexusContextState::new())))
         .clone()
 }
 
@@ -764,7 +764,7 @@ mod tests {
         // Root scope is always present
         assert_eq!(task_scope_top().name, "root");
 
-        let ctx = NVMagicContextState::new();
+        let ctx = NatNexusContextState::new();
         let handle = ctx.create_scope_handle(
             "test",
             None,
@@ -787,7 +787,7 @@ mod tests {
     fn test_event_subscriber() {
         use std::sync::atomic::{AtomicU32, Ordering};
 
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         let count = Arc::new(AtomicU32::new(0));
         let count_clone = count.clone();
 
@@ -935,17 +935,17 @@ mod tests {
         }
     }
 
-    // -- NVMagicContextState tests --
+    // -- NatNexusContextState tests --
 
     #[test]
     fn test_context_state_new_empty() {
-        let ctx = NVMagicContextState::new();
+        let ctx = NatNexusContextState::new();
         assert!(ctx.event_subscribers.is_empty());
     }
 
     #[test]
     fn test_context_state_default() {
-        let ctx = NVMagicContextState::default();
+        let ctx = NatNexusContextState::default();
         assert!(ctx.event_subscribers.is_empty());
     }
 
@@ -955,7 +955,7 @@ mod tests {
     fn test_emit_event_multiple_subscribers() {
         use std::sync::atomic::{AtomicU32, Ordering};
 
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         let c1 = Arc::new(AtomicU32::new(0));
         let c2 = Arc::new(AtomicU32::new(0));
         let c1c = c1.clone();
@@ -992,7 +992,7 @@ mod tests {
 
     #[test]
     fn test_emit_event_no_subscribers() {
-        let ctx = NVMagicContextState::new();
+        let ctx = NatNexusContextState::new();
         // Should not panic with no subscribers
         let event = Event::new(
             None,
@@ -1013,7 +1013,7 @@ mod tests {
     fn test_create_event_emits_mark() {
         use std::sync::Mutex;
 
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let events_clone = events.clone();
 
@@ -1044,7 +1044,7 @@ mod tests {
     fn test_create_scope_handle_emits_start() {
         use std::sync::Mutex;
 
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1077,7 +1077,7 @@ mod tests {
     fn test_end_scope_handle_emits_end() {
         use std::sync::Mutex;
 
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1102,7 +1102,7 @@ mod tests {
     fn test_create_tool_handle_emits_start() {
         use std::sync::Mutex;
 
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1138,7 +1138,7 @@ mod tests {
     fn test_end_tool_handle_merges_data() {
         use std::sync::Mutex;
 
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1173,7 +1173,7 @@ mod tests {
     fn test_create_llm_handle_emits_start() {
         use std::sync::Mutex;
 
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1207,7 +1207,7 @@ mod tests {
     fn test_end_llm_handle_merges_metadata() {
         use std::sync::Mutex;
 
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1246,7 +1246,7 @@ mod tests {
 
     #[test]
     fn test_tool_sanitize_request_chain() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.tool_sanitize_request_guardrails
             .register(
                 "g1".into(),
@@ -1269,7 +1269,7 @@ mod tests {
 
     #[test]
     fn test_tool_sanitize_request_chain_multiple_priority_order() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.tool_sanitize_request_guardrails
             .register(
                 "g2".into(),
@@ -1306,7 +1306,7 @@ mod tests {
 
     #[test]
     fn test_tool_sanitize_response_chain() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.tool_sanitize_response_guardrails
             .register(
                 "g1".into(),
@@ -1330,7 +1330,7 @@ mod tests {
 
     #[test]
     fn test_tool_conditional_execution_chain_passes() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.tool_conditional_execution_guardrails
             .register(
                 "g1".into(),
@@ -1347,7 +1347,7 @@ mod tests {
 
     #[test]
     fn test_tool_conditional_execution_chain_rejects() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.tool_conditional_execution_guardrails
             .register(
                 "blocker".into(),
@@ -1364,7 +1364,7 @@ mod tests {
 
     #[test]
     fn test_tool_conditional_first_rejection_wins() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.tool_conditional_execution_guardrails
             .register(
                 "g1".into(),
@@ -1390,7 +1390,7 @@ mod tests {
 
     #[test]
     fn test_tool_request_intercepts_chain() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.tool_request_intercepts
             .register(
                 "i1".into(),
@@ -1415,7 +1415,7 @@ mod tests {
 
     #[test]
     fn test_tool_request_intercepts_chain_break() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.tool_request_intercepts
             .register(
                 "i1".into(),
@@ -1455,7 +1455,7 @@ mod tests {
 
     #[test]
     fn test_tool_response_intercepts_chain() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.tool_response_intercepts
             .register(
                 "i1".into(),
@@ -1475,7 +1475,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_no_intercepts() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         let default_fn: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
         let chain = ctx.tool_build_execution_chain(default_fn);
@@ -1485,7 +1485,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_passthrough() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         // An intercept that simply passes through to next (equivalent to old conditional=false)
         ctx.tool_execution_intercepts
             .register(
@@ -1511,7 +1511,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_short_circuit() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.tool_execution_intercepts
             .register(
                 "ei1".into(),
@@ -1536,7 +1536,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_calls_next() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.tool_execution_intercepts
             .register(
                 "ei1".into(),
@@ -1569,7 +1569,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_multiple_intercepts() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         // Lower priority = outermost wrapper
         ctx.tool_execution_intercepts
             .register(
@@ -1627,7 +1627,7 @@ mod tests {
 
     #[test]
     fn test_llm_sanitize_request_chain() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.llm_sanitize_request_guardrails
             .register(
                 "g1".into(),
@@ -1653,7 +1653,7 @@ mod tests {
 
     #[test]
     fn test_llm_sanitize_response_chain() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.llm_sanitize_response_guardrails
             .register(
                 "g1".into(),
@@ -1675,7 +1675,7 @@ mod tests {
 
     #[test]
     fn test_llm_conditional_execution_chain_passes() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.llm_conditional_execution_guardrails
             .register(
                 "g1".into(),
@@ -1695,7 +1695,7 @@ mod tests {
 
     #[test]
     fn test_llm_conditional_execution_chain_rejects() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.llm_conditional_execution_guardrails
             .register(
                 "blocker".into(),
@@ -1718,7 +1718,7 @@ mod tests {
 
     #[test]
     fn test_llm_request_intercepts_chain() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.llm_request_intercepts
             .register(
                 "i1".into(),
@@ -1745,7 +1745,7 @@ mod tests {
 
     #[test]
     fn test_llm_request_intercepts_break_chain() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         ctx.llm_request_intercepts
             .register(
                 "i1".into(),
@@ -1786,7 +1786,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_llm_build_execution_chain_no_intercepts() {
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         let request = LLMRequest {
             headers: serde_json::Map::new(),
             content: serde_json::json!({"messages": []}),
@@ -1801,7 +1801,7 @@ mod tests {
     #[tokio::test]
     async fn test_llm_stream_build_execution_chain_no_intercepts() {
         use futures::StreamExt;
-        let mut ctx = NVMagicContextState::new();
+        let mut ctx = NatNexusContextState::new();
         let request = LLMRequest {
             headers: serde_json::Map::new(),
             content: serde_json::json!({"messages": []}),
@@ -1831,7 +1831,7 @@ mod tests {
     fn test_run_sanitize_chain_empty() {
         let mut reg: SortedRegistry<GuardrailEntry<Box<dyn Fn(i32) -> i32>>> =
             SortedRegistry::new(|e| e.priority);
-        let result = NVMagicContextState::run_sanitize_chain(&mut reg, 42);
+        let result = NatNexusContextState::run_sanitize_chain(&mut reg, 42);
         assert_eq!(result, 42);
     }
 
@@ -1855,7 +1855,7 @@ mod tests {
             },
         )
         .unwrap();
-        let result = NVMagicContextState::run_sanitize_chain(&mut reg, 5);
+        let result = NatNexusContextState::run_sanitize_chain(&mut reg, 5);
         // (5 + 1) * 2 = 12
         assert_eq!(result, 12);
     }
@@ -1880,7 +1880,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(NVMagicContextState::run_conditional_chain(&mut reg, &42).is_none());
+        assert!(NatNexusContextState::run_conditional_chain(&mut reg, &42).is_none());
     }
 
     #[test]
@@ -1904,7 +1904,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            NVMagicContextState::run_conditional_chain(&mut reg, &42),
+            NatNexusContextState::run_conditional_chain(&mut reg, &42),
             Some("err".into())
         );
     }
@@ -1931,7 +1931,7 @@ mod tests {
             },
         )
         .unwrap();
-        let result = NVMagicContextState::run_intercept_chain(&mut reg, 0);
+        let result = NatNexusContextState::run_intercept_chain(&mut reg, 0);
         assert_eq!(result, 110);
     }
 
@@ -1957,7 +1957,7 @@ mod tests {
             },
         )
         .unwrap();
-        let result = NVMagicContextState::run_intercept_chain(&mut reg, 0);
+        let result = NatNexusContextState::run_intercept_chain(&mut reg, 0);
         // Only 'a' runs, 'b' is skipped
         assert_eq!(result, 10);
     }
@@ -1966,7 +1966,7 @@ mod tests {
     fn test_run_intercept_chain_empty() {
         let mut reg: SortedRegistry<Intercept<Box<dyn Fn(i32) -> i32>>> =
             SortedRegistry::new(|e| e.priority);
-        let result = NVMagicContextState::run_intercept_chain(&mut reg, 42);
+        let result = NatNexusContextState::run_intercept_chain(&mut reg, 42);
         assert_eq!(result, 42);
     }
 }

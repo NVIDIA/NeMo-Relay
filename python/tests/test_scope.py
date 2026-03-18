@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for NVMagic scope operations."""
+"""Tests for NeMo Agent Toolkit Nexus scope operations."""
 
 import pytest
-from nvmagic import (
+from nat_nexus import (
     ScopeAttributes,
     ScopeHandle,
     ScopeType,
@@ -79,7 +79,7 @@ class TestScope:
         with scope.scope("test_scope", ScopeType.Agent) as handle:
             assert handle.name == "test_scope"
             assert scope.get_handle().name == "test_scope"
-        
+
         assert scope.get_handle().name == "root"
 
 

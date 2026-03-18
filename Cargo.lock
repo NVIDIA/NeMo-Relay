@@ -609,7 +609,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nvmagic-core"
+name = "nvidia-nat-nexus-core"
 version = "0.1.0"
 dependencies = [
  "bitflags",
@@ -624,12 +624,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "nvmagic-ffi"
+name = "nvidia-nat-nexus-ffi"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
  "libc",
- "nvmagic-core",
+ "nvidia-nat-nexus-core",
  "serde_json",
  "tokio",
  "tokio-stream",
@@ -637,13 +637,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "nvmagic-node"
+name = "nvidia-nat-nexus-node"
 version = "0.1.0"
 dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
- "nvmagic-core",
+ "nvidia-nat-nexus-core",
  "serde",
  "serde_json",
  "tokio",
@@ -652,11 +652,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nvmagic-python"
+name = "nvidia-nat-nexus-python"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "nvmagic-core",
+ "nvidia-nat-nexus-core",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",
@@ -668,11 +668,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nvmagic-wasm"
+name = "nvidia-nat-nexus-wasm"
 version = "0.1.0"
 dependencies = [
  "js-sys",
- "nvmagic-core",
+ "nvidia-nat-nexus-core",
  "send_wrapper",
  "serde",
  "serde-wasm-bindgen",

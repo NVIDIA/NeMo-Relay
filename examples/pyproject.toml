@@ -2,18 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [project]
-name = "nvmagic-examples"
+name = "nvidia-nat-nexus-examples"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "langchain>=0.3",
     "langchain-core>=0.3",
     "langchain-nvidia-ai-endpoints>=0.3",
-    "nvmagic>=0.1.0",
+    "nvidia-nat-nexus>=0.1.0",
 ]
 
 [tool.uv.sources]
-nvmagic = { path = "..", editable = true }
+nvidia-nat-nexus = { path = "..", editable = true }
 langchain = { path = "../third_party/langchain/libs/langchain_v1", editable = true }
 langchain-core = { path = "../third_party/langchain/libs/core", editable = true }
 langchain-nvidia-ai-endpoints = { path = "../third_party/langchain-nvidia/libs/ai-endpoints", editable = true }

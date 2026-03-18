@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Apply NVMagic integration patches to third-party submodules.
+# Apply Nexus integration patches to third-party submodules.
 #
 # Usage:
 #   ./scripts/apply-patches.sh          # apply all patches

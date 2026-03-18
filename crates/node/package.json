@@ -1,7 +1,7 @@
 {
-  "name": "@nvmagic/node",
+  "name": "@nvidia/nat-nexus-node",
   "version": "0.1.0",
-  "description": "NVMagic Node.js bindings via napi-rs",
+  "description": "Nexus Node.js bindings via napi-rs",
   "main": "index.js",
   "types": "index.d.ts",
   "exports": {
@@ -15,7 +15,7 @@
     }
   },
   "napi": {
-    "name": "nvmagic",
+    "name": "nat-nexus",
     "triples": {}
   },
   "scripts": {

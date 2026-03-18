@@ -1,26 +1,26 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Public API for the NVMagic runtime.
+//! Public API for the Nexus runtime.
 //!
 //! This module contains all top-level functions that language bindings and
 //! application code call. The API is organized into several groups:
 //!
-//! - **Scope operations** — [`nvmagic_get_handle`], [`nvmagic_push_scope`],
-//!   [`nvmagic_pop_scope`], [`nvmagic_event`]
-//! - **Tool lifecycle** — [`nvmagic_tool_call`], [`nvmagic_tool_call_end`],
-//!   [`nvmagic_tool_call_execute`]
-//! - **LLM lifecycle** — [`nvmagic_llm_call`], [`nvmagic_llm_call_end`],
-//!   [`nvmagic_llm_call_execute`], [`nvmagic_llm_stream_call_execute`]
-//! - **Guardrail registration** — `nvmagic_register_*_guardrail` /
-//!   `nvmagic_deregister_*_guardrail` for tool and LLM sanitize/conditional guardrails
-//! - **Intercept registration** — `nvmagic_register_*_intercept` /
-//!   `nvmagic_deregister_*_intercept` for tool and LLM request/response/execution intercepts
-//! - **Subscriber registration** — [`nvmagic_register_subscriber`],
-//!   [`nvmagic_deregister_subscriber`]
-//! - **Standalone middleware chains** — [`nvmagic_tool_request_intercepts`],
-//!   [`nvmagic_tool_conditional_execution`], [`nvmagic_tool_response_intercepts`],
-//!   [`nvmagic_llm_request_intercepts`], [`nvmagic_llm_conditional_execution`]
+//! - **Scope operations** — [`nat_nexus_get_handle`], [`nat_nexus_push_scope`],
+//!   [`nat_nexus_pop_scope`], [`nat_nexus_event`]
+//! - **Tool lifecycle** — [`nat_nexus_tool_call`], [`nat_nexus_tool_call_end`],
+//!   [`nat_nexus_tool_call_execute`]
+//! - **LLM lifecycle** — [`nat_nexus_llm_call`], [`nat_nexus_llm_call_end`],
+//!   [`nat_nexus_llm_call_execute`], [`nat_nexus_llm_stream_call_execute`]
+//! - **Guardrail registration** — `nat_nexus_register_*_guardrail` /
+//!   `nat_nexus_deregister_*_guardrail` for tool and LLM sanitize/conditional guardrails
+//! - **Intercept registration** — `nat_nexus_register_*_intercept` /
+//!   `nat_nexus_deregister_*_intercept` for tool and LLM request/response/execution intercepts
+//! - **Subscriber registration** — [`nat_nexus_register_subscriber`],
+//!   [`nat_nexus_deregister_subscriber`]
+//! - **Standalone middleware chains** — [`nat_nexus_tool_request_intercepts`],
+//!   [`nat_nexus_tool_conditional_execution`], [`nat_nexus_tool_response_intercepts`],
+//!   [`nat_nexus_llm_request_intercepts`], [`nat_nexus_llm_conditional_execution`]
 //!
 //! All functions operate on the global context singleton returned by
 //! [`global_context`].
@@ -155,9 +155,9 @@ macro_rules! execution_intercept_registry_api {
 // Tool guardrail registrations
 //
 // Each pair generates:
-//   - `nvmagic_register_*`: registers a named guardrail with a priority.
+//   - `nat_nexus_register_*`: registers a named guardrail with a priority.
 //     Returns AlreadyExists if the name is taken.
-//   - `nvmagic_deregister_*`: removes a guardrail by name.
+//   - `nat_nexus_deregister_*`: removes a guardrail by name.
 //     Returns Ok(true) if it existed, Ok(false) otherwise.
 // ---------------------------------------------------------------------------
 
@@ -169,8 +169,8 @@ guardrail_registry_api!(
     /// # Errors
     ///
     /// Returns [`MagicError::AlreadyExists`] if a guardrail with the given name is already registered.
-    nvmagic_register_tool_sanitize_request_guardrail,
-    nvmagic_deregister_tool_sanitize_request_guardrail,
+    nat_nexus_register_tool_sanitize_request_guardrail,
+    nat_nexus_deregister_tool_sanitize_request_guardrail,
     tool_sanitize_request_guardrails,
     ToolSanitizeFn
 );
@@ -179,8 +179,8 @@ guardrail_registry_api!(
     /// Register a tool response sanitize guardrail that transforms tool results after execution.
     ///
     /// Callback signature: `(tool_name: &str, result: Json) -> Json`.
-    nvmagic_register_tool_sanitize_response_guardrail,
-    nvmagic_deregister_tool_sanitize_response_guardrail,
+    nat_nexus_register_tool_sanitize_response_guardrail,
+    nat_nexus_deregister_tool_sanitize_response_guardrail,
     tool_sanitize_response_guardrails,
     ToolSanitizeFn
 );
@@ -190,8 +190,8 @@ guardrail_registry_api!(
     ///
     /// Callback signature: `(tool_name: &str, args: &Json) -> Option<String>`.
     /// Return `None` to allow execution, `Some(reason)` to reject it.
-    nvmagic_register_tool_conditional_execution_guardrail,
-    nvmagic_deregister_tool_conditional_execution_guardrail,
+    nat_nexus_register_tool_conditional_execution_guardrail,
+    nat_nexus_deregister_tool_conditional_execution_guardrail,
     tool_conditional_execution_guardrails,
     ToolConditionalFn
 );
@@ -208,8 +208,8 @@ intercept_registry_api!(
     ///
     /// Callback signature: `(tool_name: &str, args: Json) -> Json`.
     /// Set `break_chain = true` to prevent lower-priority intercepts from running.
-    nvmagic_register_tool_request_intercept,
-    nvmagic_deregister_tool_request_intercept,
+    nat_nexus_register_tool_request_intercept,
+    nat_nexus_deregister_tool_request_intercept,
     tool_request_intercepts,
     ToolInterceptFn
 );
@@ -219,8 +219,8 @@ intercept_registry_api!(
     ///
     /// Callback signature: `(tool_name: &str, result: Json) -> Json`.
     /// Set `break_chain = true` to prevent lower-priority intercepts from running.
-    nvmagic_register_tool_response_intercept,
-    nvmagic_deregister_tool_response_intercept,
+    nat_nexus_register_tool_response_intercept,
+    nat_nexus_deregister_tool_response_intercept,
     tool_response_intercepts,
     ToolInterceptFn
 );
@@ -230,8 +230,8 @@ execution_intercept_registry_api!(
     ///
     /// Callback signature: `(args: Json, next: ToolExecutionNextFn) -> Future<Result<Json>>`.
     /// Call `next(args)` to continue the chain, or skip it to short-circuit.
-    nvmagic_register_tool_execution_intercept,
-    nvmagic_deregister_tool_execution_intercept,
+    nat_nexus_register_tool_execution_intercept,
+    nat_nexus_deregister_tool_execution_intercept,
     tool_execution_intercepts,
     ToolExecutionFn
 );
@@ -244,8 +244,8 @@ guardrail_registry_api!(
     /// Register an LLM request sanitize guardrail that transforms the request before execution.
     ///
     /// Callback signature: `(request: LLMRequest) -> LLMRequest`.
-    nvmagic_register_llm_sanitize_request_guardrail,
-    nvmagic_deregister_llm_sanitize_request_guardrail,
+    nat_nexus_register_llm_sanitize_request_guardrail,
+    nat_nexus_deregister_llm_sanitize_request_guardrail,
     llm_sanitize_request_guardrails,
     LlmSanitizeRequestFn
 );
@@ -254,8 +254,8 @@ guardrail_registry_api!(
     /// Register an LLM response sanitize guardrail that transforms the response after execution.
     ///
     /// Callback signature: `(response: Json) -> Json`.
-    nvmagic_register_llm_sanitize_response_guardrail,
-    nvmagic_deregister_llm_sanitize_response_guardrail,
+    nat_nexus_register_llm_sanitize_response_guardrail,
+    nat_nexus_deregister_llm_sanitize_response_guardrail,
     llm_sanitize_response_guardrails,
     LlmSanitizeResponseFn
 );
@@ -265,8 +265,8 @@ guardrail_registry_api!(
     ///
     /// Callback signature: `(request: &LLMRequest) -> Option<String>`.
     /// Return `None` to allow execution, `Some(reason)` to reject it.
-    nvmagic_register_llm_conditional_execution_guardrail,
-    nvmagic_deregister_llm_conditional_execution_guardrail,
+    nat_nexus_register_llm_conditional_execution_guardrail,
+    nat_nexus_deregister_llm_conditional_execution_guardrail,
     llm_conditional_execution_guardrails,
     LlmConditionalFn
 );
@@ -280,8 +280,8 @@ intercept_registry_api!(
     ///
     /// Callback signature: `(request: LLMRequest) -> LLMRequest`.
     /// Set `break_chain = true` to prevent lower-priority intercepts from running.
-    nvmagic_register_llm_request_intercept,
-    nvmagic_deregister_llm_request_intercept,
+    nat_nexus_register_llm_request_intercept,
+    nat_nexus_deregister_llm_request_intercept,
     llm_request_intercepts,
     LlmRequestInterceptFn
 );
@@ -291,8 +291,8 @@ execution_intercept_registry_api!(
     ///
     /// Callback signature: `(request: LLMRequest, next: LlmExecutionNextFn) -> Future<Result<Json>>`.
     /// Call `next(request)` to continue the chain, or skip it to short-circuit.
-    nvmagic_register_llm_execution_intercept,
-    nvmagic_deregister_llm_execution_intercept,
+    nat_nexus_register_llm_execution_intercept,
+    nat_nexus_deregister_llm_execution_intercept,
     llm_execution_intercepts,
     LlmExecutionFn
 );
@@ -302,8 +302,8 @@ execution_intercept_registry_api!(
     ///
     /// Callback signature: `(request: LLMRequest, next: LlmStreamExecutionNextFn) -> Future<Result<Stream>>`.
     /// Call `next(request)` to continue the chain, or skip it to short-circuit.
-    nvmagic_register_llm_stream_execution_intercept,
-    nvmagic_deregister_llm_stream_execution_intercept,
+    nat_nexus_register_llm_stream_execution_intercept,
+    nat_nexus_deregister_llm_stream_execution_intercept,
     llm_stream_execution_intercepts,
     LlmStreamExecutionFn
 );
@@ -316,7 +316,7 @@ execution_intercept_registry_api!(
 ///
 /// Returns [`MagicError::AlreadyExists`] if a subscriber with the given name
 /// is already registered.
-pub fn nvmagic_register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()> {
+pub fn nat_nexus_register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()> {
     let ctx = global_context();
     let mut state = ctx
         .write()
@@ -331,7 +331,7 @@ pub fn nvmagic_register_subscriber(name: &str, callback: EventSubscriberFn) -> R
 }
 
 /// Deregisters an event subscriber by name. Returns `true` if it existed, `false` otherwise.
-pub fn nvmagic_deregister_subscriber(name: &str) -> Result<bool> {
+pub fn nat_nexus_deregister_subscriber(name: &str) -> Result<bool> {
     let ctx = global_context();
     let mut state = ctx
         .write()
@@ -346,7 +346,7 @@ pub fn nvmagic_deregister_subscriber(name: &str) -> Result<bool> {
 /// Returns a clone of the current top scope handle from the scope stack.
 ///
 /// Always succeeds because the root scope is always present.
-pub fn nvmagic_get_handle() -> Result<ScopeHandle> {
+pub fn nat_nexus_get_handle() -> Result<ScopeHandle> {
     Ok(task_scope_top())
 }
 
@@ -356,7 +356,7 @@ pub fn nvmagic_get_handle() -> Result<ScopeHandle> {
 /// top of the scope stack is used as the parent.
 ///
 /// Returns the new [`ScopeHandle`].
-pub fn nvmagic_push_scope(
+pub fn nat_nexus_push_scope(
     name: &str,
     scope_type: ScopeType,
     parent: Option<&ScopeHandle>,
@@ -376,7 +376,7 @@ pub fn nvmagic_push_scope(
 /// Removes a scope from the scope stack by UUID and emits an `End` event.
 ///
 /// Returns [`MagicError::NotFound`] if the UUID is not in the stack.
-pub fn nvmagic_pop_scope(handle_uuid: &Uuid) -> Result<()> {
+pub fn nat_nexus_pop_scope(handle_uuid: &Uuid) -> Result<()> {
     let root_uuid = current_root_uuid();
     let scope = task_scope_remove(handle_uuid)?;
     let ctx = global_context();
@@ -391,7 +391,7 @@ pub fn nvmagic_pop_scope(handle_uuid: &Uuid) -> Result<()> {
 ///
 /// This is a lightweight way to record application-specific events (e.g.,
 /// checkpoints, metrics) without creating a scope or handle.
-pub fn nvmagic_event(
+pub fn nat_nexus_event(
     name: &str,
     parent: Option<&ScopeHandle>,
     data: Option<Json>,
@@ -415,8 +415,8 @@ pub fn nvmagic_event(
 /// and emits a `Start` event.
 ///
 /// The sanitized arguments are stored in the event's `input` field.
-/// Call [`nvmagic_tool_call_end`] when the tool completes.
-pub fn nvmagic_tool_call(
+/// Call [`nat_nexus_tool_call_end`] when the tool completes.
+pub fn nat_nexus_tool_call(
     name: &str,
     args: Json,
     parent: Option<&ScopeHandle>,
@@ -449,7 +449,7 @@ pub fn nvmagic_tool_call(
 /// Ends a tool call: runs response sanitize guardrails and emits an `End` event.
 ///
 /// The sanitized result is stored in the event's `output` field.
-pub fn nvmagic_tool_call_end(
+pub fn nat_nexus_tool_call_end(
     handle: &ToolHandle,
     result: Json,
     data: Option<Json>,
@@ -478,7 +478,7 @@ pub fn nvmagic_tool_call_end(
 ///
 /// This is the high-level function that orchestrates the full middleware pipeline.
 /// Returns [`MagicError::GuardrailRejected`] if a conditional guardrail rejects the call.
-pub async fn nvmagic_tool_call_execute(
+pub async fn nat_nexus_tool_call_execute(
     name: &str,
     args: Json,
     func: ToolExecutionNextFn,
@@ -500,7 +500,7 @@ pub async fn nvmagic_tool_call_execute(
                 obj.insert("rejected".into(), json!(true));
                 obj.insert("rejection_reason".into(), json!(&err));
             }
-            let _ = nvmagic_event(name, parent.as_ref(), Some(rejection_data), metadata);
+            let _ = nat_nexus_event(name, parent.as_ref(), Some(rejection_data), metadata);
             return Err(MagicError::GuardrailRejected(err));
         }
     }
@@ -515,7 +515,7 @@ pub async fn nvmagic_tool_call_execute(
     };
 
     // Tool call start
-    let handle = nvmagic_tool_call(
+    let handle = nat_nexus_tool_call(
         name,
         intercepted_args.clone(),
         parent.as_ref(),
@@ -545,7 +545,7 @@ pub async fn nvmagic_tool_call_execute(
     };
 
     // Tool call end
-    nvmagic_tool_call_end(&handle, result.clone(), data, metadata)?;
+    nat_nexus_tool_call_end(&handle, result.clone(), data, metadata)?;
 
     Ok(result)
 }
@@ -558,9 +558,9 @@ pub async fn nvmagic_tool_call_execute(
 /// creates an LLM handle, and emits a `Start` event.
 ///
 /// The sanitized request is stored in the event's `input` field.
-/// Call [`nvmagic_llm_call_end`] when the LLM call completes.
+/// Call [`nat_nexus_llm_call_end`] when the LLM call completes.
 #[allow(clippy::too_many_arguments)]
-pub fn nvmagic_llm_call(
+pub fn nat_nexus_llm_call(
     name: &str,
     request: &LLMRequest,
     parent: Option<&ScopeHandle>,
@@ -594,7 +594,7 @@ pub fn nvmagic_llm_call(
 /// Ends an LLM call: runs response sanitize guardrails and emits an `End` event.
 ///
 /// The sanitized response data is stored in the event's `output` field.
-pub fn nvmagic_llm_call_end(
+pub fn nat_nexus_llm_call_end(
     handle: &LLMHandle,
     response: Json,
     data: Option<Json>,
@@ -623,7 +623,7 @@ pub fn nvmagic_llm_call_end(
 ///
 /// Returns [`MagicError::GuardrailRejected`] if a conditional guardrail rejects the call.
 #[allow(clippy::too_many_arguments)]
-pub async fn nvmagic_llm_call_execute(
+pub async fn nat_nexus_llm_call_execute(
     name: &str,
     request: LLMRequest,
     func: LlmExecutionNextFn,
@@ -646,7 +646,7 @@ pub async fn nvmagic_llm_call_execute(
                 obj.insert("rejected".into(), json!(true));
                 obj.insert("rejection_reason".into(), json!(&err));
             }
-            let _ = nvmagic_event(name, parent.as_ref(), Some(rejection_data), metadata);
+            let _ = nat_nexus_event(name, parent.as_ref(), Some(rejection_data), metadata);
             return Err(MagicError::GuardrailRejected(err));
         }
     }
@@ -661,7 +661,7 @@ pub async fn nvmagic_llm_call_execute(
     };
 
     // LLM call start (sanitize guardrails happen inside)
-    let handle = nvmagic_llm_call(
+    let handle = nat_nexus_llm_call(
         name,
         &intercepted_request,
         parent.as_ref(),
@@ -682,14 +682,14 @@ pub async fn nvmagic_llm_call_execute(
     let response = exec_future(intercepted_request).await?;
 
     // LLM call end (sanitize response guardrails happen inside)
-    nvmagic_llm_call_end(&handle, response.clone(), data, metadata)?;
+    nat_nexus_llm_call_end(&handle, response.clone(), data, metadata)?;
 
     Ok(response)
 }
 
 /// Executes a complete streaming LLM call lifecycle.
 ///
-/// Similar to [`nvmagic_llm_call_execute`] but returns a
+/// Similar to [`nat_nexus_llm_call_execute`] but returns a
 /// [`Stream`] of Json chunks. Conditional execution guardrails run
 /// **before** request intercepts so that they gate on the unmodified
 /// input. On rejection, only a standalone `Mark` event is emitted
@@ -708,7 +708,7 @@ pub async fn nvmagic_llm_call_execute(
 ///
 /// Returns [`MagicError::GuardrailRejected`] if a conditional guardrail rejects the call.
 #[allow(clippy::too_many_arguments)]
-pub async fn nvmagic_llm_stream_call_execute(
+pub async fn nat_nexus_llm_stream_call_execute(
     name: &str,
     request: LLMRequest,
     func: LlmStreamExecutionNextFn,
@@ -733,7 +733,7 @@ pub async fn nvmagic_llm_stream_call_execute(
                 obj.insert("rejected".into(), json!(true));
                 obj.insert("rejection_reason".into(), json!(&err));
             }
-            let _ = nvmagic_event(name, parent.as_ref(), Some(rejection_data), metadata);
+            let _ = nat_nexus_event(name, parent.as_ref(), Some(rejection_data), metadata);
             return Err(MagicError::GuardrailRejected(err));
         }
     }
@@ -748,7 +748,7 @@ pub async fn nvmagic_llm_stream_call_execute(
     };
 
     // LLM call start (sanitize guardrails happen inside)
-    let handle = nvmagic_llm_call(
+    let handle = nat_nexus_llm_call(
         name,
         &intercepted_request,
         parent.as_ref(),
@@ -781,8 +781,8 @@ pub async fn nvmagic_llm_stream_call_execute(
 ///
 /// Returns the transformed arguments after all intercepts have been applied.
 /// This allows invoking request intercepts independently of the full
-/// [`nvmagic_tool_call_execute`] pipeline.
-pub fn nvmagic_tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
+/// [`nat_nexus_tool_call_execute`] pipeline.
+pub fn nat_nexus_tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
     let ctx = global_context();
     let mut state = ctx
         .write()
@@ -795,7 +795,7 @@ pub fn nvmagic_tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
 /// Returns `Ok(())` if all guardrails pass, or
 /// [`Err(MagicError::GuardrailRejected(reason))`](MagicError::GuardrailRejected)
 /// if any guardrail rejects the call.
-pub fn nvmagic_tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
+pub fn nat_nexus_tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
     let ctx = global_context();
     let mut state = ctx
         .write()
@@ -810,8 +810,8 @@ pub fn nvmagic_tool_conditional_execution(name: &str, args: &Json) -> Result<()>
 ///
 /// Returns the transformed result after all intercepts have been applied.
 /// This allows invoking response intercepts independently of the full
-/// [`nvmagic_tool_call_execute`] pipeline.
-pub fn nvmagic_tool_response_intercepts(name: &str, result: Json) -> Result<Json> {
+/// [`nat_nexus_tool_call_execute`] pipeline.
+pub fn nat_nexus_tool_response_intercepts(name: &str, result: Json) -> Result<Json> {
     let ctx = global_context();
     let mut state = ctx
         .write()
@@ -823,8 +823,8 @@ pub fn nvmagic_tool_response_intercepts(name: &str, result: Json) -> Result<Json
 ///
 /// Returns the transformed [`LLMRequest`] after all intercepts have been applied.
 /// This allows invoking request intercepts independently of the full
-/// [`nvmagic_llm_call_execute`] pipeline.
-pub fn nvmagic_llm_request_intercepts(request: LLMRequest) -> Result<LLMRequest> {
+/// [`nat_nexus_llm_call_execute`] pipeline.
+pub fn nat_nexus_llm_request_intercepts(request: LLMRequest) -> Result<LLMRequest> {
     let ctx = global_context();
     let mut state = ctx
         .write()
@@ -837,7 +837,7 @@ pub fn nvmagic_llm_request_intercepts(request: LLMRequest) -> Result<LLMRequest>
 /// Returns `Ok(())` if all guardrails pass, or
 /// [`Err(MagicError::GuardrailRejected(reason))`](MagicError::GuardrailRejected)
 /// if any guardrail rejects the call.
-pub fn nvmagic_llm_conditional_execution(request: &LLMRequest) -> Result<()> {
+pub fn nat_nexus_llm_conditional_execution(request: &LLMRequest) -> Result<()> {
     let ctx = global_context();
     let mut state = ctx
         .write()
@@ -863,7 +863,7 @@ mod tests {
     fn reset_global() {
         let ctx = global_context();
         let mut state = ctx.write().unwrap();
-        *state = NVMagicContextState::new();
+        *state = NatNexusContextState::new();
     }
 
     #[test]
@@ -872,21 +872,21 @@ mod tests {
         reset_global();
 
         // Root scope is always present
-        let root = nvmagic_get_handle().unwrap();
+        let root = nat_nexus_get_handle().unwrap();
         assert_eq!(root.name, "root");
 
-        let handle = nvmagic_push_scope(
+        let handle = nat_nexus_push_scope(
             "test_scope",
             ScopeType::Agent,
             None,
             ScopeAttributes::empty(),
         )
         .unwrap();
-        assert_eq!(nvmagic_get_handle().unwrap().name, "test_scope");
-        nvmagic_pop_scope(&handle.uuid).unwrap();
+        assert_eq!(nat_nexus_get_handle().unwrap().name, "test_scope");
+        nat_nexus_pop_scope(&handle.uuid).unwrap();
 
         // After pop, root scope is on top again
-        assert_eq!(nvmagic_get_handle().unwrap().name, "root");
+        assert_eq!(nat_nexus_get_handle().unwrap().name, "root");
     }
 
     #[test]
@@ -895,7 +895,7 @@ mod tests {
         reset_global();
         let count = Arc::new(AtomicU32::new(0));
         let c = count.clone();
-        nvmagic_register_subscriber(
+        nat_nexus_register_subscriber(
             "test_sub",
             Box::new(move |_| {
                 c.fetch_add(1, Ordering::SeqCst);
@@ -904,37 +904,37 @@ mod tests {
         .unwrap();
 
         // Duplicate should fail
-        assert!(nvmagic_register_subscriber("test_sub", Box::new(|_| {}),).is_err());
+        assert!(nat_nexus_register_subscriber("test_sub", Box::new(|_| {}),).is_err());
 
         // Push scope emits event
         let handle =
-            nvmagic_push_scope("s", ScopeType::Function, None, ScopeAttributes::empty()).unwrap();
+            nat_nexus_push_scope("s", ScopeType::Function, None, ScopeAttributes::empty()).unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 1);
 
-        nvmagic_pop_scope(&handle.uuid).unwrap();
+        nat_nexus_pop_scope(&handle.uuid).unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 2);
 
         // Deregister
-        assert!(nvmagic_deregister_subscriber("test_sub").unwrap());
-        assert!(!nvmagic_deregister_subscriber("test_sub").unwrap());
+        assert!(nat_nexus_deregister_subscriber("test_sub").unwrap());
+        assert!(!nat_nexus_deregister_subscriber("test_sub").unwrap());
     }
 
     #[test]
     fn test_tool_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvmagic_register_tool_sanitize_request_guardrail("g1", 10, Box::new(|_name, args| args))
+        nat_nexus_register_tool_sanitize_request_guardrail("g1", 10, Box::new(|_name, args| args))
             .unwrap();
 
         // Duplicate fails
-        assert!(nvmagic_register_tool_sanitize_request_guardrail(
+        assert!(nat_nexus_register_tool_sanitize_request_guardrail(
             "g1",
             10,
             Box::new(|_name, args| args),
         )
         .is_err());
 
-        assert!(nvmagic_deregister_tool_sanitize_request_guardrail("g1").unwrap());
+        assert!(nat_nexus_deregister_tool_sanitize_request_guardrail("g1").unwrap());
     }
 
     // -- Scope hierarchy --
@@ -944,32 +944,32 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let s1 =
-            nvmagic_push_scope("level1", ScopeType::Agent, None, ScopeAttributes::empty()).unwrap();
-        assert_eq!(nvmagic_get_handle().unwrap().name, "level1");
+        let s1 = nat_nexus_push_scope("level1", ScopeType::Agent, None, ScopeAttributes::empty())
+            .unwrap();
+        assert_eq!(nat_nexus_get_handle().unwrap().name, "level1");
 
-        let s2 = nvmagic_push_scope(
+        let s2 = nat_nexus_push_scope(
             "level2",
             ScopeType::Function,
             Some(&s1),
             ScopeAttributes::empty(),
         )
         .unwrap();
-        assert_eq!(nvmagic_get_handle().unwrap().name, "level2");
+        assert_eq!(nat_nexus_get_handle().unwrap().name, "level2");
         assert_eq!(s2.parent_uuid, Some(s1.uuid));
 
-        nvmagic_pop_scope(&s2.uuid).unwrap();
-        assert_eq!(nvmagic_get_handle().unwrap().name, "level1");
+        nat_nexus_pop_scope(&s2.uuid).unwrap();
+        assert_eq!(nat_nexus_get_handle().unwrap().name, "level1");
 
-        nvmagic_pop_scope(&s1.uuid).unwrap();
-        assert_eq!(nvmagic_get_handle().unwrap().name, "root");
+        nat_nexus_pop_scope(&s1.uuid).unwrap();
+        assert_eq!(nat_nexus_get_handle().unwrap().name, "root");
     }
 
     #[test]
     fn test_pop_nonexistent_scope() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        let result = nvmagic_pop_scope(&Uuid::new_v4());
+        let result = nat_nexus_pop_scope(&Uuid::new_v4());
         assert!(result.is_err());
     }
 
@@ -977,7 +977,7 @@ mod tests {
     fn test_scope_attributes_propagated() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        let handle = nvmagic_push_scope(
+        let handle = nat_nexus_push_scope(
             "parallel_scope",
             ScopeType::Agent,
             None,
@@ -986,7 +986,7 @@ mod tests {
         .unwrap();
         assert!(handle.attributes.contains(ScopeAttributes::PARALLEL));
         assert!(handle.attributes.contains(ScopeAttributes::RELOCATABLE));
-        nvmagic_pop_scope(&handle.uuid).unwrap();
+        nat_nexus_pop_scope(&handle.uuid).unwrap();
     }
 
     // -- Event emission --
@@ -998,7 +998,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvmagic_register_subscriber(
+        nat_nexus_register_subscriber(
             "evt_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push((e.name.clone(), e.event_type));
@@ -1006,7 +1006,7 @@ mod tests {
         )
         .unwrap();
 
-        nvmagic_event("my_mark", None, Some(json!({"x": 1})), None).unwrap();
+        nat_nexus_event("my_mark", None, Some(json!({"x": 1})), None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1014,7 +1014,7 @@ mod tests {
         assert_eq!(captured[0].1, crate::types::EventType::Mark);
 
         drop(captured);
-        nvmagic_deregister_subscriber("evt_test").unwrap();
+        nat_nexus_deregister_subscriber("evt_test").unwrap();
     }
 
     // -- Tool lifecycle --
@@ -1026,7 +1026,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvmagic_register_subscriber(
+        nat_nexus_register_subscriber(
             "tool_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.event_type);
@@ -1034,7 +1034,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nvmagic_tool_call(
+        let handle = nat_nexus_tool_call(
             "my_tool",
             json!({"input": "data"}),
             None,
@@ -1046,7 +1046,7 @@ mod tests {
         .unwrap();
         assert_eq!(handle.name, "my_tool");
 
-        nvmagic_tool_call_end(&handle, json!({"output": "result"}), None, None).unwrap();
+        nat_nexus_tool_call_end(&handle, json!({"output": "result"}), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -1054,7 +1054,7 @@ mod tests {
         assert_eq!(captured[1], crate::types::EventType::End);
 
         drop(captured);
-        nvmagic_deregister_subscriber("tool_test").unwrap();
+        nat_nexus_deregister_subscriber("tool_test").unwrap();
     }
 
     #[test]
@@ -1063,7 +1063,7 @@ mod tests {
         reset_global();
 
         // Register a sanitizer that adds a field
-        nvmagic_register_tool_sanitize_request_guardrail(
+        nat_nexus_register_tool_sanitize_request_guardrail(
             "sanitizer",
             1,
             Box::new(|_name, mut args| {
@@ -1077,7 +1077,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvmagic_register_subscriber(
+        nat_nexus_register_subscriber(
             "tool_san_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1085,7 +1085,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nvmagic_tool_call(
+        let handle = nat_nexus_tool_call(
             "my_tool",
             json!({"input": "data"}),
             None,
@@ -1104,9 +1104,9 @@ mod tests {
         assert_eq!(input["input"], "data");
 
         drop(captured);
-        nvmagic_tool_call_end(&handle, json!("ok"), None, None).unwrap();
-        nvmagic_deregister_subscriber("tool_san_test").unwrap();
-        nvmagic_deregister_tool_sanitize_request_guardrail("sanitizer").unwrap();
+        nat_nexus_tool_call_end(&handle, json!("ok"), None, None).unwrap();
+        nat_nexus_deregister_subscriber("tool_san_test").unwrap();
+        nat_nexus_deregister_tool_sanitize_request_guardrail("sanitizer").unwrap();
     }
 
     #[test]
@@ -1114,7 +1114,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvmagic_register_tool_sanitize_response_guardrail(
+        nat_nexus_register_tool_sanitize_response_guardrail(
             "resp_sanitizer",
             1,
             Box::new(|_name, mut result| {
@@ -1129,7 +1129,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvmagic_register_subscriber(
+        nat_nexus_register_subscriber(
             "tool_resp_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1137,7 +1137,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nvmagic_tool_call(
+        let handle = nat_nexus_tool_call(
             "tool",
             json!({}),
             None,
@@ -1147,7 +1147,7 @@ mod tests {
             None,
         )
         .unwrap();
-        nvmagic_tool_call_end(&handle, json!({"output": "raw"}), None, None).unwrap();
+        nat_nexus_tool_call_end(&handle, json!({"output": "raw"}), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];
@@ -1156,8 +1156,8 @@ mod tests {
         assert_eq!(output["output"], "raw");
 
         drop(captured);
-        nvmagic_deregister_subscriber("tool_resp_test").unwrap();
-        nvmagic_deregister_tool_sanitize_response_guardrail("resp_sanitizer").unwrap();
+        nat_nexus_deregister_subscriber("tool_resp_test").unwrap();
+        nat_nexus_deregister_tool_sanitize_response_guardrail("resp_sanitizer").unwrap();
     }
 
     // -- Tool call execute (async) --
@@ -1170,7 +1170,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Box::new(|args| Box::pin(async move { Ok(json!({"result": args["input"]})) }));
 
-        let result = nvmagic_tool_call_execute(
+        let result = nat_nexus_tool_call_execute(
             "exec_tool",
             json!({"input": "hello"}),
             func,
@@ -1190,7 +1190,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvmagic_register_tool_request_intercept(
+        nat_nexus_register_tool_request_intercept(
             "req_intercept",
             1,
             false,
@@ -1205,7 +1205,7 @@ mod tests {
 
         let func: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
 
-        let result = nvmagic_tool_call_execute(
+        let result = nat_nexus_tool_call_execute(
             "tool",
             json!({"original": true}),
             func,
@@ -1220,7 +1220,7 @@ mod tests {
         assert_eq!(result["original"], true);
         assert_eq!(result["added_by_intercept"], true);
 
-        nvmagic_deregister_tool_request_intercept("req_intercept").unwrap();
+        nat_nexus_deregister_tool_request_intercept("req_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -1228,7 +1228,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvmagic_register_tool_response_intercept(
+        nat_nexus_register_tool_response_intercept(
             "resp_intercept",
             1,
             false,
@@ -1245,7 +1245,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async move { Ok(json!({"output": "raw"})) }));
 
-        let result = nvmagic_tool_call_execute(
+        let result = nat_nexus_tool_call_execute(
             "tool",
             json!({}),
             func,
@@ -1260,7 +1260,7 @@ mod tests {
         assert_eq!(result["output"], "raw");
         assert_eq!(result["response_intercepted"], true);
 
-        nvmagic_deregister_tool_response_intercept("resp_intercept").unwrap();
+        nat_nexus_deregister_tool_response_intercept("resp_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -1270,7 +1270,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvmagic_register_subscriber(
+        nat_nexus_register_subscriber(
             "tool_reject_sub",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1278,7 +1278,7 @@ mod tests {
         )
         .unwrap();
 
-        nvmagic_register_tool_conditional_execution_guardrail(
+        nat_nexus_register_tool_conditional_execution_guardrail(
             "blocker",
             1,
             Box::new(|_name, _args| Some("forbidden tool".into())),
@@ -1288,7 +1288,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async move { Ok(json!({"should_not_reach": true})) }));
 
-        let result = nvmagic_tool_call_execute(
+        let result = nat_nexus_tool_call_execute(
             "tool",
             json!({}),
             func,
@@ -1314,8 +1314,8 @@ mod tests {
         assert_eq!(mark_data["rejection_reason"], "forbidden tool");
 
         drop(captured);
-        nvmagic_deregister_subscriber("tool_reject_sub").unwrap();
-        nvmagic_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
+        nat_nexus_deregister_subscriber("tool_reject_sub").unwrap();
+        nat_nexus_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
     }
 
     #[tokio::test]
@@ -1323,7 +1323,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvmagic_register_tool_execution_intercept(
+        nat_nexus_register_tool_execution_intercept(
             "exec_intercept",
             1,
             Arc::new(|_args: Json, _next: ToolExecutionNextFn| {
@@ -1336,7 +1336,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async move { Ok(json!({"from_original": true})) }));
 
-        let result = nvmagic_tool_call_execute(
+        let result = nat_nexus_tool_call_execute(
             "tool",
             json!({}),
             func,
@@ -1352,7 +1352,7 @@ mod tests {
         assert_eq!(result["from_intercept"], true);
         assert!(result.get("from_original").is_none());
 
-        nvmagic_deregister_tool_execution_intercept("exec_intercept").unwrap();
+        nat_nexus_deregister_tool_execution_intercept("exec_intercept").unwrap();
     }
 
     // -- LLM lifecycle --
@@ -1364,7 +1364,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvmagic_register_subscriber(
+        nat_nexus_register_subscriber(
             "llm_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.event_type);
@@ -1376,7 +1376,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        let handle = nvmagic_llm_call(
+        let handle = nat_nexus_llm_call(
             "my_llm",
             &request,
             None,
@@ -1388,7 +1388,7 @@ mod tests {
         .unwrap();
         assert_eq!(handle.name, "my_llm");
 
-        nvmagic_llm_call_end(&handle, json!({"response": "ok"}), None, None).unwrap();
+        nat_nexus_llm_call_end(&handle, json!({"response": "ok"}), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -1396,7 +1396,7 @@ mod tests {
         assert_eq!(captured[1], crate::types::EventType::End);
 
         drop(captured);
-        nvmagic_deregister_subscriber("llm_test").unwrap();
+        nat_nexus_deregister_subscriber("llm_test").unwrap();
     }
 
     #[test]
@@ -1404,7 +1404,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvmagic_register_llm_sanitize_request_guardrail(
+        nat_nexus_register_llm_sanitize_request_guardrail(
             "llm_sanitizer",
             1,
             Box::new(|mut req: LLMRequest| {
@@ -1416,7 +1416,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvmagic_register_subscriber(
+        nat_nexus_register_subscriber(
             "llm_san_test",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1428,7 +1428,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        let handle = nvmagic_llm_call(
+        let handle = nat_nexus_llm_call(
             "llm",
             &request,
             None,
@@ -1446,9 +1446,9 @@ mod tests {
         assert_eq!(input["headers"]["X-Sanitized"], "true");
 
         drop(captured);
-        nvmagic_llm_call_end(&handle, json!("ok"), None, None).unwrap();
-        nvmagic_deregister_subscriber("llm_san_test").unwrap();
-        nvmagic_deregister_llm_sanitize_request_guardrail("llm_sanitizer").unwrap();
+        nat_nexus_llm_call_end(&handle, json!("ok"), None, None).unwrap();
+        nat_nexus_deregister_subscriber("llm_san_test").unwrap();
+        nat_nexus_deregister_llm_sanitize_request_guardrail("llm_sanitizer").unwrap();
     }
 
     #[tokio::test]
@@ -1465,7 +1465,7 @@ mod tests {
         };
         let content = request.content.clone();
 
-        let result = nvmagic_llm_call_execute(
+        let result = nat_nexus_llm_call_execute(
             "llm",
             request,
             func,
@@ -1488,7 +1488,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvmagic_register_subscriber(
+        nat_nexus_register_subscriber(
             "llm_reject_sub",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1496,7 +1496,7 @@ mod tests {
         )
         .unwrap();
 
-        nvmagic_register_llm_conditional_execution_guardrail(
+        nat_nexus_register_llm_conditional_execution_guardrail(
             "llm_blocker",
             1,
             Box::new(|_req: &LLMRequest| Some("blocked by policy".into())),
@@ -1510,7 +1510,7 @@ mod tests {
             content: json!({"messages": []}),
         };
 
-        let result = nvmagic_llm_call_execute(
+        let result = nat_nexus_llm_call_execute(
             "llm",
             request,
             func,
@@ -1537,8 +1537,8 @@ mod tests {
         assert_eq!(mark_data["rejection_reason"], "blocked by policy");
 
         drop(captured);
-        nvmagic_deregister_subscriber("llm_reject_sub").unwrap();
-        nvmagic_deregister_llm_conditional_execution_guardrail("llm_blocker").unwrap();
+        nat_nexus_deregister_subscriber("llm_reject_sub").unwrap();
+        nat_nexus_deregister_llm_conditional_execution_guardrail("llm_blocker").unwrap();
     }
 
     #[tokio::test]
@@ -1546,7 +1546,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvmagic_register_llm_request_intercept(
+        nat_nexus_register_llm_request_intercept(
             "llm_req_intercept",
             1,
             false,
@@ -1571,7 +1571,7 @@ mod tests {
             content: json!({"messages": []}),
         };
 
-        let result = nvmagic_llm_call_execute(
+        let result = nat_nexus_llm_call_execute(
             "llm",
             request,
             func,
@@ -1586,7 +1586,7 @@ mod tests {
 
         assert_eq!(result["saw_intercepted"], true);
 
-        nvmagic_deregister_llm_request_intercept("llm_req_intercept").unwrap();
+        nat_nexus_deregister_llm_request_intercept("llm_req_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -1594,7 +1594,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvmagic_register_llm_execution_intercept(
+        nat_nexus_register_llm_execution_intercept(
             "llm_exec_intercept",
             1,
             Arc::new(|_req: LLMRequest, _next: LlmExecutionNextFn| {
@@ -1612,7 +1612,7 @@ mod tests {
             content: json!({"messages": []}),
         };
 
-        let result = nvmagic_llm_call_execute(
+        let result = nat_nexus_llm_call_execute(
             "llm",
             request,
             func,
@@ -1628,7 +1628,7 @@ mod tests {
         assert_eq!(result["from_intercept"], true);
         assert!(result.get("from_original").is_none());
 
-        nvmagic_deregister_llm_execution_intercept("llm_exec_intercept").unwrap();
+        nat_nexus_deregister_llm_execution_intercept("llm_exec_intercept").unwrap();
     }
 
     // -- All guardrail/intercept registration pairs --
@@ -1637,57 +1637,58 @@ mod tests {
     fn test_tool_sanitize_response_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvmagic_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r)).unwrap();
+        nat_nexus_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r)).unwrap();
         assert!(
-            nvmagic_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r))
+            nat_nexus_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r))
                 .is_err()
         );
-        assert!(nvmagic_deregister_tool_sanitize_response_guardrail("g1").unwrap());
-        assert!(!nvmagic_deregister_tool_sanitize_response_guardrail("g1").unwrap());
+        assert!(nat_nexus_deregister_tool_sanitize_response_guardrail("g1").unwrap());
+        assert!(!nat_nexus_deregister_tool_sanitize_response_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_tool_conditional_execution_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvmagic_register_tool_conditional_execution_guardrail("g1", 1, Box::new(|_n, _a| None))
+        nat_nexus_register_tool_conditional_execution_guardrail("g1", 1, Box::new(|_n, _a| None))
             .unwrap();
-        assert!(nvmagic_register_tool_conditional_execution_guardrail(
+        assert!(nat_nexus_register_tool_conditional_execution_guardrail(
             "g1",
             1,
             Box::new(|_n, _a| None)
         )
         .is_err());
-        assert!(nvmagic_deregister_tool_conditional_execution_guardrail("g1").unwrap());
+        assert!(nat_nexus_deregister_tool_conditional_execution_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_tool_request_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvmagic_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| a)).unwrap();
+        nat_nexus_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| a)).unwrap();
         assert!(
-            nvmagic_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| a)).is_err()
+            nat_nexus_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| a)).is_err()
         );
-        assert!(nvmagic_deregister_tool_request_intercept("i1").unwrap());
+        assert!(nat_nexus_deregister_tool_request_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_tool_response_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvmagic_register_tool_response_intercept("i1", 1, false, Box::new(|_n, r| r)).unwrap();
+        nat_nexus_register_tool_response_intercept("i1", 1, false, Box::new(|_n, r| r)).unwrap();
         assert!(
-            nvmagic_register_tool_response_intercept("i1", 1, false, Box::new(|_n, r| r)).is_err()
+            nat_nexus_register_tool_response_intercept("i1", 1, false, Box::new(|_n, r| r))
+                .is_err()
         );
-        assert!(nvmagic_deregister_tool_response_intercept("i1").unwrap());
+        assert!(nat_nexus_deregister_tool_response_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_tool_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvmagic_register_tool_execution_intercept(
+        nat_nexus_register_tool_execution_intercept(
             "i1",
             1,
             Arc::new(|a: Json, _next: ToolExecutionNextFn| {
@@ -1696,7 +1697,7 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(nvmagic_register_tool_execution_intercept(
+        assert!(nat_nexus_register_tool_execution_intercept(
             "i1",
             1,
             Arc::new(
@@ -1707,55 +1708,60 @@ mod tests {
             ),
         )
         .is_err());
-        assert!(nvmagic_deregister_tool_execution_intercept("i1").unwrap());
+        assert!(nat_nexus_deregister_tool_execution_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_sanitize_request_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvmagic_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).unwrap();
-        assert!(nvmagic_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).is_err());
-        assert!(nvmagic_deregister_llm_sanitize_request_guardrail("g1").unwrap());
+        nat_nexus_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).unwrap();
+        assert!(
+            nat_nexus_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).is_err()
+        );
+        assert!(nat_nexus_deregister_llm_sanitize_request_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_sanitize_response_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvmagic_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).unwrap();
+        nat_nexus_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).unwrap();
         assert!(
-            nvmagic_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).is_err()
+            nat_nexus_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).is_err()
         );
-        assert!(nvmagic_deregister_llm_sanitize_response_guardrail("g1").unwrap());
+        assert!(nat_nexus_deregister_llm_sanitize_response_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_conditional_execution_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvmagic_register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| None)).unwrap();
-        assert!(
-            nvmagic_register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| None))
-                .is_err()
-        );
-        assert!(nvmagic_deregister_llm_conditional_execution_guardrail("g1").unwrap());
+        nat_nexus_register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| None))
+            .unwrap();
+        assert!(nat_nexus_register_llm_conditional_execution_guardrail(
+            "g1",
+            1,
+            Box::new(|_r| None)
+        )
+        .is_err());
+        assert!(nat_nexus_deregister_llm_conditional_execution_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_request_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvmagic_register_llm_request_intercept("i1", 1, false, Box::new(|r| r)).unwrap();
-        assert!(nvmagic_register_llm_request_intercept("i1", 1, false, Box::new(|r| r)).is_err());
-        assert!(nvmagic_deregister_llm_request_intercept("i1").unwrap());
+        nat_nexus_register_llm_request_intercept("i1", 1, false, Box::new(|r| r)).unwrap();
+        assert!(nat_nexus_register_llm_request_intercept("i1", 1, false, Box::new(|r| r)).is_err());
+        assert!(nat_nexus_deregister_llm_request_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvmagic_register_llm_execution_intercept(
+        nat_nexus_register_llm_execution_intercept(
             "i1",
             1,
             Arc::new(|_request: LLMRequest, _next: LlmExecutionNextFn| {
@@ -1764,14 +1770,14 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(nvmagic_deregister_llm_execution_intercept("i1").unwrap());
+        assert!(nat_nexus_deregister_llm_execution_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_stream_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nvmagic_register_llm_stream_execution_intercept(
+        nat_nexus_register_llm_stream_execution_intercept(
             "i1",
             1,
             Arc::new(|_request: LLMRequest, _next: LlmStreamExecutionNextFn| {
@@ -1797,7 +1803,7 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(nvmagic_deregister_llm_stream_execution_intercept("i1").unwrap());
+        assert!(nat_nexus_deregister_llm_stream_execution_intercept("i1").unwrap());
     }
 
     // -- Deregister non-existent returns false --
@@ -1806,31 +1812,31 @@ mod tests {
     fn test_deregister_nonexistent_subscriber() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nvmagic_deregister_subscriber("nonexistent").unwrap());
+        assert!(!nat_nexus_deregister_subscriber("nonexistent").unwrap());
     }
 
     #[test]
     fn test_deregister_nonexistent_guardrails() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nvmagic_deregister_tool_sanitize_request_guardrail("nope").unwrap());
-        assert!(!nvmagic_deregister_tool_sanitize_response_guardrail("nope").unwrap());
-        assert!(!nvmagic_deregister_tool_conditional_execution_guardrail("nope").unwrap());
-        assert!(!nvmagic_deregister_llm_sanitize_request_guardrail("nope").unwrap());
-        assert!(!nvmagic_deregister_llm_sanitize_response_guardrail("nope").unwrap());
-        assert!(!nvmagic_deregister_llm_conditional_execution_guardrail("nope").unwrap());
+        assert!(!nat_nexus_deregister_tool_sanitize_request_guardrail("nope").unwrap());
+        assert!(!nat_nexus_deregister_tool_sanitize_response_guardrail("nope").unwrap());
+        assert!(!nat_nexus_deregister_tool_conditional_execution_guardrail("nope").unwrap());
+        assert!(!nat_nexus_deregister_llm_sanitize_request_guardrail("nope").unwrap());
+        assert!(!nat_nexus_deregister_llm_sanitize_response_guardrail("nope").unwrap());
+        assert!(!nat_nexus_deregister_llm_conditional_execution_guardrail("nope").unwrap());
     }
 
     #[test]
     fn test_deregister_nonexistent_intercepts() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nvmagic_deregister_tool_request_intercept("nope").unwrap());
-        assert!(!nvmagic_deregister_tool_response_intercept("nope").unwrap());
-        assert!(!nvmagic_deregister_tool_execution_intercept("nope").unwrap());
-        assert!(!nvmagic_deregister_llm_request_intercept("nope").unwrap());
-        assert!(!nvmagic_deregister_llm_execution_intercept("nope").unwrap());
-        assert!(!nvmagic_deregister_llm_stream_execution_intercept("nope").unwrap());
+        assert!(!nat_nexus_deregister_tool_request_intercept("nope").unwrap());
+        assert!(!nat_nexus_deregister_tool_response_intercept("nope").unwrap());
+        assert!(!nat_nexus_deregister_tool_execution_intercept("nope").unwrap());
+        assert!(!nat_nexus_deregister_llm_request_intercept("nope").unwrap());
+        assert!(!nat_nexus_deregister_llm_execution_intercept("nope").unwrap());
+        assert!(!nat_nexus_deregister_llm_stream_execution_intercept("nope").unwrap());
     }
 
     // -- LLM stream call execute --
@@ -1876,7 +1882,7 @@ mod tests {
             Json::Array(chunks.clone())
         });
 
-        let mut stream = nvmagic_llm_stream_call_execute(
+        let mut stream = nat_nexus_llm_stream_call_execute(
             "llm",
             request,
             func,
@@ -1909,7 +1915,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nvmagic_register_subscriber(
+        nat_nexus_register_subscriber(
             "stream_reject_sub",
             Box::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1917,7 +1923,7 @@ mod tests {
         )
         .unwrap();
 
-        nvmagic_register_llm_conditional_execution_guardrail(
+        nat_nexus_register_llm_conditional_execution_guardrail(
             "stream_blocker",
             1,
             Box::new(|_req: &LLMRequest| Some("stream blocked".into())),
@@ -1949,7 +1955,7 @@ mod tests {
         let collector: Box<dyn FnMut(Json) + Send> = Box::new(|_| {});
         let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| Json::Null);
 
-        let result = nvmagic_llm_stream_call_execute(
+        let result = nat_nexus_llm_stream_call_execute(
             "llm",
             request,
             func,
@@ -1978,8 +1984,8 @@ mod tests {
         assert_eq!(mark_data["rejection_reason"], "stream blocked");
 
         drop(captured);
-        nvmagic_deregister_subscriber("stream_reject_sub").unwrap();
-        nvmagic_deregister_llm_conditional_execution_guardrail("stream_blocker").unwrap();
+        nat_nexus_deregister_subscriber("stream_reject_sub").unwrap();
+        nat_nexus_deregister_llm_conditional_execution_guardrail("stream_blocker").unwrap();
     }
 
     // -- Tool call with explicit parent --
@@ -1990,8 +1996,9 @@ mod tests {
         reset_global();
 
         let scope =
-            nvmagic_push_scope("parent", ScopeType::Agent, None, ScopeAttributes::empty()).unwrap();
-        let handle = nvmagic_tool_call(
+            nat_nexus_push_scope("parent", ScopeType::Agent, None, ScopeAttributes::empty())
+                .unwrap();
+        let handle = nat_nexus_tool_call(
             "tool",
             json!({}),
             Some(&scope),
@@ -2003,8 +2010,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(handle.parent_uuid, Some(scope.uuid));
-        nvmagic_tool_call_end(&handle, json!({}), None, None).unwrap();
-        nvmagic_pop_scope(&scope.uuid).unwrap();
+        nat_nexus_tool_call_end(&handle, json!({}), None, None).unwrap();
+        nat_nexus_pop_scope(&scope.uuid).unwrap();
     }
 
     // -- LLM call with attributes --
@@ -2018,7 +2025,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        let handle = nvmagic_llm_call(
+        let handle = nat_nexus_llm_call(
             "llm",
             &request,
             None,
@@ -2031,7 +2038,7 @@ mod tests {
 
         assert!(handle.attributes.contains(LLMAttributes::STATELESS));
         assert!(handle.attributes.contains(LLMAttributes::STREAMING));
-        nvmagic_llm_call_end(&handle, json!({}), None, None).unwrap();
+        nat_nexus_llm_call_end(&handle, json!({}), None, None).unwrap();
     }
 
     // -- Standalone middleware chain tests --
@@ -2041,7 +2048,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvmagic_register_tool_request_intercept(
+        nat_nexus_register_tool_request_intercept(
             "add_field",
             10,
             false,
@@ -2054,11 +2061,11 @@ mod tests {
         )
         .unwrap();
 
-        let result = nvmagic_tool_request_intercepts("tool", json!({"key": "value"})).unwrap();
+        let result = nat_nexus_tool_request_intercepts("tool", json!({"key": "value"})).unwrap();
         assert_eq!(result["key"], "value");
         assert_eq!(result["injected"], true);
 
-        nvmagic_deregister_tool_request_intercept("add_field").unwrap();
+        nat_nexus_deregister_tool_request_intercept("add_field").unwrap();
     }
 
     #[test]
@@ -2067,7 +2074,7 @@ mod tests {
         reset_global();
 
         // No guardrails registered — should pass
-        assert!(nvmagic_tool_conditional_execution("tool", &json!({})).is_ok());
+        assert!(nat_nexus_tool_conditional_execution("tool", &json!({})).is_ok());
     }
 
     #[test]
@@ -2075,19 +2082,19 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvmagic_register_tool_conditional_execution_guardrail(
+        nat_nexus_register_tool_conditional_execution_guardrail(
             "blocker",
             1,
             Box::new(|_name, _args| Some("blocked".into())),
         )
         .unwrap();
 
-        match nvmagic_tool_conditional_execution("tool", &json!({})) {
+        match nat_nexus_tool_conditional_execution("tool", &json!({})) {
             Err(MagicError::GuardrailRejected(msg)) => assert_eq!(msg, "blocked"),
             other => panic!("expected GuardrailRejected, got {other:?}"),
         }
 
-        nvmagic_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
+        nat_nexus_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
     }
 
     #[test]
@@ -2095,7 +2102,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvmagic_register_tool_response_intercept(
+        nat_nexus_register_tool_response_intercept(
             "wrap",
             10,
             false,
@@ -2103,10 +2110,10 @@ mod tests {
         )
         .unwrap();
 
-        let result = nvmagic_tool_response_intercepts("tool", json!("hello")).unwrap();
+        let result = nat_nexus_tool_response_intercepts("tool", json!("hello")).unwrap();
         assert_eq!(result["wrapped"], "hello");
 
-        nvmagic_deregister_tool_response_intercept("wrap").unwrap();
+        nat_nexus_deregister_tool_response_intercept("wrap").unwrap();
     }
 
     #[test]
@@ -2114,7 +2121,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvmagic_register_llm_request_intercept(
+        nat_nexus_register_llm_request_intercept(
             "add_field",
             10,
             false,
@@ -2133,11 +2140,11 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        let result = nvmagic_llm_request_intercepts(request).unwrap();
+        let result = nat_nexus_llm_request_intercepts(request).unwrap();
         assert_eq!(result.content["intercepted"], true);
         assert_eq!(result.content["messages"], json!([]));
 
-        nvmagic_deregister_llm_request_intercept("add_field").unwrap();
+        nat_nexus_deregister_llm_request_intercept("add_field").unwrap();
     }
 
     #[test]
@@ -2149,7 +2156,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        assert!(nvmagic_llm_conditional_execution(&request).is_ok());
+        assert!(nat_nexus_llm_conditional_execution(&request).is_ok());
     }
 
     #[test]
@@ -2157,7 +2164,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nvmagic_register_llm_conditional_execution_guardrail(
+        nat_nexus_register_llm_conditional_execution_guardrail(
             "blocker",
             1,
             Box::new(|_req| Some("llm blocked".into())),
@@ -2168,11 +2175,11 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        match nvmagic_llm_conditional_execution(&request) {
+        match nat_nexus_llm_conditional_execution(&request) {
             Err(MagicError::GuardrailRejected(msg)) => assert_eq!(msg, "llm blocked"),
             other => panic!("expected GuardrailRejected, got {other:?}"),
         }
 
-        nvmagic_deregister_llm_conditional_execution_guardrail("blocker").unwrap();
+        nat_nexus_deregister_llm_conditional_execution_guardrail("blocker").unwrap();
     }
 }

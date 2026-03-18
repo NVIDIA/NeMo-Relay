@@ -1,16 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python-facing type wrappers for NVMagic core types.
+//! Python-facing type wrappers for Nexus core types.
 //!
-//! Each type wraps its corresponding `nvmagic_core::types` struct and exposes
+//! Each type wraps its corresponding `nvidia_nat_nexus_core::types` struct and exposes
 //! properties via `#[getter]`. Doc comments on `#[pyclass]` and `#[pymethods]`
 //! become Python `help()` output.
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use nvmagic_core::types as core_types;
+use nvidia_nat_nexus_core::types as core_types;
 
 use crate::convert::{json_to_py, opt_json_to_py, py_to_json};
 
@@ -25,8 +25,9 @@ use crate::convert::{json_to_py, opt_json_to_py, py_to_json};
 /// End lifecycle event when exhausted.
 #[pyclass(name = "LlmStream")]
 pub struct PyLlmStream {
-    pub receiver:
-        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvmagic_core::Result<serde_json::Value>>>,
+    pub receiver: tokio::sync::Mutex<
+        tokio::sync::mpsc::Receiver<nvidia_nat_nexus_core::Result<serde_json::Value>>,
+    >,
 }
 
 #[pymethods]
@@ -40,7 +41,7 @@ impl PyLlmStream {
         // Since PyLlmStream is behind a PyRef (shared), we use tokio::sync::Mutex.
         let receiver_ptr = &self.receiver
             as *const tokio::sync::Mutex<
-                tokio::sync::mpsc::Receiver<nvmagic_core::Result<serde_json::Value>>,
+                tokio::sync::mpsc::Receiver<nvidia_nat_nexus_core::Result<serde_json::Value>>,
             >;
         // SAFETY: The PyLlmStream outlives this future because Python holds a reference to it.
         // The tokio Mutex ensures exclusive access to the receiver.
@@ -70,7 +71,7 @@ impl PyLlmStream {
 /// Each ``ScopeStack`` wraps an independent scope stack with its own root
 /// scope. Use ``create_scope_stack()`` to obtain one.
 #[pyclass(name = "ScopeStack")]
-pub struct PyScopeStack(pub nvmagic_core::ScopeStackHandle);
+pub struct PyScopeStack(pub nvidia_nat_nexus_core::ScopeStackHandle);
 
 #[pymethods]
 impl PyScopeStack {
@@ -756,7 +757,7 @@ impl From<core_types::Event> for PyEvent {
 ///     exporter.deregister("atif")
 #[pyclass(name = "AtifExporter")]
 pub struct PyAtifExporter {
-    inner: nvmagic_core::atif::AtifExporter,
+    inner: nvidia_nat_nexus_core::atif::AtifExporter,
 }
 
 #[pymethods]
@@ -785,7 +786,7 @@ impl PyAtifExporter {
             Some(obj) if !obj.is_none() => Some(py_to_json(obj)?),
             _ => None,
         };
-        let agent_info = nvmagic_core::atif::AtifAgentInfo {
+        let agent_info = nvidia_nat_nexus_core::atif::AtifAgentInfo {
             name: agent_name,
             version: agent_version,
             model_name,
@@ -793,14 +794,14 @@ impl PyAtifExporter {
             extra: extra_json,
         };
         Ok(Self {
-            inner: nvmagic_core::atif::AtifExporter::new(session_id, agent_info),
+            inner: nvidia_nat_nexus_core::atif::AtifExporter::new(session_id, agent_info),
         })
     }
 
     /// Register this exporter as an event subscriber with the given name.
     fn register(&self, name: String) -> PyResult<()> {
         let subscriber = self.inner.subscriber();
-        nvmagic_core::nvmagic_register_subscriber(&name, subscriber)
+        nvidia_nat_nexus_core::nat_nexus_register_subscriber(&name, subscriber)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -808,7 +809,7 @@ impl PyAtifExporter {
     ///
     /// Returns ``True`` if a subscriber with that name was found and removed.
     fn deregister(&self, name: String) -> PyResult<bool> {
-        nvmagic_core::nvmagic_deregister_subscriber(&name)
+        nvidia_nat_nexus_core::nat_nexus_deregister_subscriber(&name)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 

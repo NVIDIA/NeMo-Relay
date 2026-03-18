@@ -4,7 +4,7 @@
 //! Priority-sorted named registry.
 //!
 //! [`SortedRegistry`] is the backbone data structure for all guardrail and intercept
-//! registries in the NVMagic runtime. It stores entries by unique name and provides
+//! registries in the Nexus runtime. It stores entries by unique name and provides
 //! iteration in ascending priority order, with lazy re-sorting when the registry is
 //! mutated.
 

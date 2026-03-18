@@ -756,7 +756,7 @@ wheels = [
 ]
 
 [[package]]
-name = "nvmagic"
+name = "nvidia-nat-nexus"
 version = "0.1.0"
 source = { editable = "../" }
 
@@ -764,6 +764,7 @@ source = { editable = "../" }
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "ipython", specifier = "~=8.20" },
     { name = "pre-commit", specifier = "~=4.0" },
     { name = "ruff", specifier = "~=0.11" },
     { name = "ty", specifier = ">=0.0.1a7" },
@@ -775,14 +776,14 @@ test = [
 ]
 
 [[package]]
-name = "nvmagic-examples"
+name = "nvidia-nat-nexus-examples"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "langchain" },
     { name = "langchain-core" },
     { name = "langchain-nvidia-ai-endpoints" },
-    { name = "nvmagic" },
+    { name = "nvidia-nat-nexus" },
 ]
 
 [package.metadata]
@@ -790,7 +791,7 @@ requires-dist = [
     { name = "langchain", editable = "../third_party/langchain/libs/langchain_v1" },
     { name = "langchain-core", editable = "../third_party/langchain/libs/core" },
     { name = "langchain-nvidia-ai-endpoints", editable = "../third_party/langchain-nvidia/libs/ai-endpoints" },
-    { name = "nvmagic", editable = "../" },
+    { name = "nvidia-nat-nexus", editable = "../" },
 ]
 
 [[package]]

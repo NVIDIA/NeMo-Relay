@@ -11,14 +11,14 @@ __pycache__/
 *.pyo
 *.egg-info/
 *.so
-python/nvmagic/_native*.so
+python/nat_nexus/_native*.so
 
 # Python (Windows)
-python/nvmagic/_native*.pyd
+python/nat_nexus/_native*.pyd
 
 # Go
-go/nvmagic/nvmagic_test
-go/nvmagic/nvmagic_test.exe
+go/nat_nexus/nat_nexus_test
+go/nat_nexus/nat_nexus_test.exe
 
 # Node.js (NAPI-RS)
 node_modules/

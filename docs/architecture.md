@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ## System Design
 
-NVMagic is a Rust-core runtime with bindings for Python, Node.js, Go, and WebAssembly. The core handles all middleware logic, event emission, and scope management. Each binding is a thin translation layer that marshals types between the host language and Rust.
+Nexus is a Rust-core runtime with bindings for Python, Node.js, Go, and WebAssembly. The core handles all middleware logic, event emission, and scope management. Each binding is a thin translation layer that marshals types between the host language and Rust.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -21,7 +21,7 @@ NVMagic is a Rust-core runtime with bindings for Python, Node.js, Go, and WebAss
 └──────┬───┘  └───┬────┘ └───┬───┘ └───┬──────┘
        │          │          │         │
 ┌──────▼──────────▼──────────▼─────────▼──────┐
-│              nvmagic-core (Rust)            │
+│              nvidia-nat-nexus-core (Rust)            │
 │                                             │
 │  ┌──────────┐  ┌──────────┐  ┌───────────┐  │
 │  │  Scopes  │  │  Tools   │  │    LLM    │  │
@@ -55,7 +55,7 @@ graph TD
     end
 
     subgraph "Core"
-        CORE[crates/core<br/>nvmagic-core]
+        CORE[crates/core<br/>nvidia-nat-nexus-core]
     end
 
     PY --> PYO3
@@ -93,8 +93,8 @@ crates/
   node/            # NAPI Node.js bindings
   wasm/            # wasm-bindgen WebAssembly bindings
 
-python/            # Python wrapper package (nvmagic/)
-  nvmagic/
+python/            # Python wrapper package (nat_nexus/)
+  nat_nexus/
     __init__.py        # Re-exports all submodules and types
     scope.py           # Scope operations
     tools.py           # Tool lifecycle
@@ -104,7 +104,7 @@ python/            # Python wrapper package (nvmagic/)
     subscribers.py     # Event subscriber registration
     typed.py           # Codec-based typed wrappers
 
-go/nvmagic/        # Go CGo bindings
+go/nat_nexus/        # Go CGo bindings
 ```
 
 ## Global Context
@@ -113,7 +113,7 @@ All middleware registrations, event subscribers, and scope stacks share a single
 
 ```mermaid
 graph LR
-    subgraph "NVMagicContextState"
+    subgraph "NatNexusContextState"
         TSR[Tool Sanitize<br/>Request Guards]
         TSP[Tool Sanitize<br/>Response Guards]
         TCE[Tool Conditional<br/>Execution Guards]
@@ -139,7 +139,7 @@ Each registry is a `SortedRegistry<T>` that maintains entries by name with lazy 
 ```mermaid
 sequenceDiagram
     participant App
-    participant Core as nvmagic-core
+    participant Core as nvidia-nat-nexus-core
     participant Guards as Guardrails
     participant Ints as Intercepts
     participant Func as User Function
