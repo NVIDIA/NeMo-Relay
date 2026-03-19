@@ -43,7 +43,7 @@ cargo build -p nvidia-nat-nexus-core          # Core only
 ### Python
 
 ```bash
-uv sync                                # Create venv, install deps, build native extension
+uv sync                                       # Create venv, install deps, build native extension
 ```
 
 ### Go
@@ -84,7 +84,9 @@ uv run pytest                          # Runs tests in python/tests/
 ### Go
 
 ```bash
-cd go/nat_nexus && CGO_LDFLAGS="-L../../target/release" go test -v ./...
+cd go/nat_nexus && \
+CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" \
+go test -v ./...
 ```
 
 ## Dev Tooling
