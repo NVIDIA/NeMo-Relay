@@ -146,20 +146,20 @@ pub struct ScopeHandle {
 
 impl ScopeHandle {
     /// Creates a new scope handle with a fresh v4 UUID.
-    ///
-    /// The `data` and `metadata` fields are initialized to `None`.
     pub fn new(
         name: String,
         scope_type: ScopeType,
         attributes: ScopeAttributes,
         parent_uuid: Option<Uuid>,
+        data: Option<Json>,
+        metadata: Option<Json>,
     ) -> Self {
         Self {
             uuid: Uuid::new_v4(),
             scope_type,
             name,
-            data: None,
-            metadata: None,
+            data,
+            metadata,
             attributes,
             parent_uuid,
         }
@@ -450,6 +450,8 @@ mod tests {
             ScopeType::Agent,
             ScopeAttributes::PARALLEL,
             None,
+            None,
+            None,
         );
         assert_eq!(handle.name, "my_scope");
         assert_eq!(handle.scope_type, ScopeType::Agent);
@@ -469,14 +471,16 @@ mod tests {
             ScopeType::Function,
             ScopeAttributes::empty(),
             Some(parent_uuid),
+            None,
+            None,
         );
         assert_eq!(handle.parent_uuid, Some(parent_uuid));
     }
 
     #[test]
     fn test_scope_handle_unique_uuids() {
-        let h1 = ScopeHandle::new("a".into(), ScopeType::Agent, ScopeAttributes::empty(), None);
-        let h2 = ScopeHandle::new("a".into(), ScopeType::Agent, ScopeAttributes::empty(), None);
+        let h1 = ScopeHandle::new("a".into(), ScopeType::Agent, ScopeAttributes::empty(), None, None, None);
+        let h2 = ScopeHandle::new("a".into(), ScopeType::Agent, ScopeAttributes::empty(), None, None, None);
         assert_ne!(h1.uuid, h2.uuid);
     }
 
@@ -487,6 +491,8 @@ mod tests {
             ScopeType::Tool,
             ScopeAttributes::RELOCATABLE,
             Some(Uuid::new_v4()),
+            None,
+            None,
         );
         let json = serde_json::to_string(&handle).unwrap();
         let deserialized: ScopeHandle = serde_json::from_str(&json).unwrap();

@@ -353,7 +353,8 @@ pub fn nat_nexus_get_handle() -> Result<ScopeHandle> {
 /// Creates a new scope and pushes it onto the scope stack.
 ///
 /// Emits a `Start` event to all subscribers. If `parent` is `None`, the current
-/// top of the scope stack is used as the parent.
+/// top of the scope stack is used as the parent. Optional `data` and `metadata`
+/// payloads are attached to the new scope handle.
 ///
 /// Returns the new [`ScopeHandle`].
 pub fn nat_nexus_push_scope(
@@ -361,6 +362,8 @@ pub fn nat_nexus_push_scope(
     scope_type: ScopeType,
     parent: Option<&ScopeHandle>,
     attributes: ScopeAttributes,
+    data: Option<Json>,
+    metadata: Option<Json>,
 ) -> Result<ScopeHandle> {
     let parent_uuid = resolve_parent_uuid(parent);
     let root_uuid = current_root_uuid();
@@ -368,7 +371,7 @@ pub fn nat_nexus_push_scope(
     let state = ctx
         .read()
         .map_err(|e| MagicError::Internal(e.to_string()))?;
-    let handle = state.create_scope_handle(name, parent_uuid, scope_type, attributes, root_uuid);
+    let handle = state.create_scope_handle(name, parent_uuid, scope_type, attributes, root_uuid, data, metadata);
     task_scope_push(handle.clone());
     Ok(handle)
 }
@@ -880,6 +883,8 @@ mod tests {
             ScopeType::Agent,
             None,
             ScopeAttributes::empty(),
+            None,
+            None,
         )
         .unwrap();
         assert_eq!(nat_nexus_get_handle().unwrap().name, "test_scope");
@@ -908,7 +913,7 @@ mod tests {
 
         // Push scope emits event
         let handle =
-            nat_nexus_push_scope("s", ScopeType::Function, None, ScopeAttributes::empty()).unwrap();
+            nat_nexus_push_scope("s", ScopeType::Function, None, ScopeAttributes::empty(), None, None).unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 1);
 
         nat_nexus_pop_scope(&handle.uuid).unwrap();
@@ -944,7 +949,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let s1 = nat_nexus_push_scope("level1", ScopeType::Agent, None, ScopeAttributes::empty())
+        let s1 = nat_nexus_push_scope("level1", ScopeType::Agent, None, ScopeAttributes::empty(), None, None)
             .unwrap();
         assert_eq!(nat_nexus_get_handle().unwrap().name, "level1");
 
@@ -953,6 +958,8 @@ mod tests {
             ScopeType::Function,
             Some(&s1),
             ScopeAttributes::empty(),
+            None,
+            None,
         )
         .unwrap();
         assert_eq!(nat_nexus_get_handle().unwrap().name, "level2");
@@ -982,6 +989,8 @@ mod tests {
             ScopeType::Agent,
             None,
             ScopeAttributes::PARALLEL | ScopeAttributes::RELOCATABLE,
+            None,
+            None,
         )
         .unwrap();
         assert!(handle.attributes.contains(ScopeAttributes::PARALLEL));
@@ -1996,7 +2005,7 @@ mod tests {
         reset_global();
 
         let scope =
-            nat_nexus_push_scope("parent", ScopeType::Agent, None, ScopeAttributes::empty())
+            nat_nexus_push_scope("parent", ScopeType::Agent, None, ScopeAttributes::empty(), None, None)
                 .unwrap();
         let handle = nat_nexus_tool_call(
             "tool",

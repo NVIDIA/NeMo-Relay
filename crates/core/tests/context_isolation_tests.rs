@@ -25,6 +25,8 @@ fn test_two_scope_stacks_are_independent() {
             ScopeType::Agent,
             ScopeAttributes::empty(),
             None,
+            None,
+            None,
         );
         guard.push(handle);
     }
@@ -36,6 +38,8 @@ fn test_two_scope_stacks_are_independent() {
             "scope_b".into(),
             ScopeType::Function,
             ScopeAttributes::empty(),
+            None,
+            None,
             None,
         );
         guard.push(handle);
@@ -71,6 +75,8 @@ async fn test_tokio_tasks_isolated() {
                     ScopeType::Agent,
                     ScopeAttributes::empty(),
                     None,
+                    None,
+                    None,
                 );
                 task_scope_push(h);
                 // Yield to let other task run
@@ -89,6 +95,8 @@ async fn test_tokio_tasks_isolated() {
                     "task_b_scope".into(),
                     ScopeType::Function,
                     ScopeAttributes::empty(),
+                    None,
+                    None,
                     None,
                 );
                 task_scope_push(h);
@@ -119,6 +127,8 @@ fn test_thread_local_independent_stacks() {
             ScopeType::Agent,
             ScopeAttributes::empty(),
             None,
+            None,
+            None,
         );
         task_scope_push(h);
         b1.wait(); // sync with thread 2
@@ -133,6 +143,8 @@ fn test_thread_local_independent_stacks() {
             "thread2_scope".into(),
             ScopeType::Function,
             ScopeAttributes::empty(),
+            None,
+            None,
             None,
         );
         task_scope_push(h);
@@ -158,6 +170,8 @@ fn test_set_thread_scope_stack() {
                 "custom".into(),
                 ScopeType::Agent,
                 ScopeAttributes::empty(),
+                None,
+                None,
                 None,
             );
             guard.push(h);

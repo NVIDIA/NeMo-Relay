@@ -272,15 +272,20 @@ NatNexusStatus nat_nexus_get_handle(struct FfiScopeHandle **out);
  * - `scope_type`: The type of scope to create.
  * - `parent`: Optional parent scope handle, or null for auto-parenting.
  * - `attributes`: Bitfield of scope attributes.
+ * - `data_json`: Optional null-terminated JSON string for scope data, or null.
+ * - `metadata_json`: Optional null-terminated JSON string for scope metadata, or null.
  * - `out`: On success, receives a heap-allocated `FfiScopeHandle`.
  *
  * # Safety
- * `name` must be a valid C string. `out` must be non-null. `parent` may be null.
+ * `name` must be a valid C string. `out` must be non-null. `parent`,
+ * `data_json`, and `metadata_json` may be null.
  */
 NatNexusStatus nat_nexus_push_scope(const char *name,
                                     NatNexusScopeType scope_type,
                                     const struct FfiScopeHandle *parent,
                                     uint32_t attributes,
+                                    const char *data_json,
+                                    const char *metadata_json,
                                     struct FfiScopeHandle **out);
 
 /**

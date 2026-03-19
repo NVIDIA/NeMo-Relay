@@ -109,6 +109,8 @@ pub fn get_handle() -> Result<JsScopeHandle> {
 /// Creates a child scope with the given `name` and `scopeType`. If `handle` is provided,
 /// the new scope is parented to that scope; otherwise it is parented to the current top scope.
 /// Optional `attributes` is a bitfield of scope attribute flags (e.g., `SCOPE_ATTR_PARALLEL`).
+/// Optional `data` is a JSON application data payload attached to the scope.
+/// Optional `metadata` is a JSON metadata payload attached to the scope.
 /// Returns the handle for the newly created scope.
 #[napi]
 pub fn push_scope(
@@ -116,11 +118,20 @@ pub fn push_scope(
     scope_type: ScopeType,
     handle: Option<&JsScopeHandle>,
     attributes: Option<u32>,
+    data: Option<Json>,
+    metadata: Option<Json>,
 ) -> Result<JsScopeHandle> {
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    core::nat_nexus_push_scope(&name, scope_type.into(), handle.map(|h| &h.inner), attrs)
-        .map(JsScopeHandle::from)
-        .map_err(to_napi_err)
+    core::nat_nexus_push_scope(
+        &name,
+        scope_type.into(),
+        handle.map(|h| &h.inner),
+        attrs,
+        opt_json(data),
+        opt_json(metadata),
+    )
+    .map(JsScopeHandle::from)
+    .map_err(to_napi_err)
 }
 
 /// Pop an execution scope from the scope stack.

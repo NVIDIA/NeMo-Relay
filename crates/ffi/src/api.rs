@@ -69,16 +69,21 @@ pub unsafe extern "C" fn nat_nexus_get_handle(out: *mut *mut FfiScopeHandle) -> 
 /// - `scope_type`: The type of scope to create.
 /// - `parent`: Optional parent scope handle, or null for auto-parenting.
 /// - `attributes`: Bitfield of scope attributes.
+/// - `data_json`: Optional null-terminated JSON string for scope data, or null.
+/// - `metadata_json`: Optional null-terminated JSON string for scope metadata, or null.
 /// - `out`: On success, receives a heap-allocated `FfiScopeHandle`.
 ///
 /// # Safety
-/// `name` must be a valid C string. `out` must be non-null. `parent` may be null.
+/// `name` must be a valid C string. `out` must be non-null. `parent`,
+/// `data_json`, and `metadata_json` may be null.
 #[no_mangle]
 pub unsafe extern "C" fn nat_nexus_push_scope(
     name: *const c_char,
     scope_type: NatNexusScopeType,
     parent: *const FfiScopeHandle,
     attributes: u32,
+    data_json: *const c_char,
+    metadata_json: *const c_char,
     out: *mut *mut FfiScopeHandle,
 ) -> NatNexusStatus {
     clear_last_error();
@@ -96,8 +101,16 @@ pub unsafe extern "C" fn nat_nexus_push_scope(
         Some(&unsafe { &*parent }.0)
     };
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes);
+    let data = match c_str_to_opt_json(data_json) {
+        Some(d) => d,
+        None => return NatNexusStatus::InvalidJson,
+    };
+    let metadata = match c_str_to_opt_json(metadata_json) {
+        Some(m) => m,
+        None => return NatNexusStatus::InvalidJson,
+    };
 
-    match core::nat_nexus_push_scope(&name, scope_type.into(), parent_ref, attrs) {
+    match core::nat_nexus_push_scope(&name, scope_type.into(), parent_ref, attrs, data, metadata) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiScopeHandle(h))) };
             NatNexusStatus::Ok

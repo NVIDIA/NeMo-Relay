@@ -126,6 +126,8 @@ impl ScopeStack {
             ScopeType::Agent,
             ScopeAttributes::empty(),
             None,
+            None,
+            None,
         );
         Self { stack: vec![root] }
     }
@@ -358,6 +360,7 @@ impl NatNexusContextState {
     }
 
     /// Creates a new scope handle and emits a Start event.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_scope_handle(
         &self,
         name: &str,
@@ -365,8 +368,10 @@ impl NatNexusContextState {
         scope_type: ScopeType,
         attributes: ScopeAttributes,
         root_uuid: Option<Uuid>,
+        data: Option<Json>,
+        metadata: Option<Json>,
     ) -> ScopeHandle {
-        let handle = ScopeHandle::new(name.to_string(), scope_type, attributes, parent_uuid);
+        let handle = ScopeHandle::new(name.to_string(), scope_type, attributes, parent_uuid, data, metadata);
         let event = Event::builder(handle.uuid, EventType::Start)
             .parent_uuid(handle.parent_uuid)
             .name(handle.name.clone())
@@ -771,6 +776,8 @@ mod tests {
             ScopeType::Agent,
             ScopeAttributes::empty(),
             None,
+            None,
+            None,
         );
         task_scope_push(handle.clone());
         let top = task_scope_top();
@@ -805,6 +812,8 @@ mod tests {
             ScopeType::Function,
             ScopeAttributes::empty(),
             None,
+            None,
+            None,
         );
         assert_eq!(count.load(Ordering::SeqCst), 1);
 
@@ -837,6 +846,8 @@ mod tests {
             ScopeType::Function,
             ScopeAttributes::empty(),
             None,
+            None,
+            None,
         );
         let uuid = handle.uuid;
         stack.push(handle);
@@ -851,6 +862,8 @@ mod tests {
             "child".into(),
             ScopeType::Function,
             ScopeAttributes::empty(),
+            None,
+            None,
             None,
         );
         let uuid = handle.uuid;
@@ -878,14 +891,16 @@ mod tests {
     #[test]
     fn test_scope_stack_multiple_push_pop() {
         let mut stack = ScopeStack::new();
-        let h1 = ScopeHandle::new("a".into(), ScopeType::Agent, ScopeAttributes::empty(), None);
+        let h1 = ScopeHandle::new("a".into(), ScopeType::Agent, ScopeAttributes::empty(), None, None, None);
         let h2 = ScopeHandle::new(
             "b".into(),
             ScopeType::Function,
             ScopeAttributes::empty(),
             None,
+            None,
+            None,
         );
-        let h3 = ScopeHandle::new("c".into(), ScopeType::Tool, ScopeAttributes::empty(), None);
+        let h3 = ScopeHandle::new("c".into(), ScopeType::Tool, ScopeAttributes::empty(), None, None, None);
         let u1 = h1.uuid;
         let u2 = h2.uuid;
         let u3 = h3.uuid;
@@ -908,11 +923,13 @@ mod tests {
     #[test]
     fn test_scope_stack_remove_middle() {
         let mut stack = ScopeStack::new();
-        let h1 = ScopeHandle::new("a".into(), ScopeType::Agent, ScopeAttributes::empty(), None);
+        let h1 = ScopeHandle::new("a".into(), ScopeType::Agent, ScopeAttributes::empty(), None, None, None);
         let h2 = ScopeHandle::new(
             "b".into(),
             ScopeType::Function,
             ScopeAttributes::empty(),
+            None,
+            None,
             None,
         );
         let u1 = h1.uuid;
@@ -1060,6 +1077,8 @@ mod tests {
             ScopeType::Retriever,
             ScopeAttributes::PARALLEL,
             None,
+            None,
+            None,
         );
 
         let captured = events.lock().unwrap();
@@ -1088,7 +1107,7 @@ mod tests {
         );
 
         let handle =
-            ctx.create_scope_handle("sc", None, ScopeType::Agent, ScopeAttributes::empty(), None);
+            ctx.create_scope_handle("sc", None, ScopeType::Agent, ScopeAttributes::empty(), None, None, None);
         ctx.end_scope_handle(&handle, None);
 
         let captured = events.lock().unwrap();

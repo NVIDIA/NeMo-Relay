@@ -11,7 +11,7 @@ Functions:
         Return the current (topmost) ``ScopeHandle`` from the task-local scope
         stack, or raise ``RuntimeError`` if the stack is empty.
 
-    push(name, scope_type, *, handle=None, attributes=None)
+    push(name, scope_type, *, handle=None, attributes=None, metadata=None)
         Push a new child scope. If *handle* is omitted, the scope is parented
         to the current top of stack. Returns the new ``ScopeHandle``.
 
@@ -68,14 +68,14 @@ def get_handle() -> Any:
     return _native_get_handle()
 
 
-def push(name: str, scope_type: Any, *, handle: Any = None, attributes: Any = None) -> Any:
+def push(name: str, scope_type: Any, *, handle: Any = None, attributes: Any = None, data: Any = None, metadata: Any = None) -> Any:
     """Push a new child scope onto the scope stack.
 
     If *handle* is omitted, the scope is parented to the current top of stack.
     Returns the new ``ScopeHandle``.
     """
     _ensure_scope_stack()
-    return _native_push_scope(name, scope_type, handle=handle, attributes=attributes)
+    return _native_push_scope(name, scope_type, handle=handle, attributes=attributes, data=data, metadata=metadata)
 
 
 def pop(handle: Any) -> None:

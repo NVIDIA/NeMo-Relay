@@ -67,7 +67,7 @@ fn test_llm_call_with_attributes() {
 
 #[wasm_bindgen_test]
 fn test_llm_call_with_parent() {
-    let scope = nat_nexus_push_scope("llm_parent", SCOPE_TYPE_AGENT, None, None).unwrap();
+    let scope = nat_nexus_push_scope("llm_parent", SCOPE_TYPE_AGENT, None, None, JsValue::NULL, JsValue::NULL).unwrap();
     let scope_uuid = scope.uuid();
     let request = make_request();
     let handle = nat_nexus_llm_call(
