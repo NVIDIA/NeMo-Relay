@@ -71,6 +71,7 @@ fn nat_nexus_get_handle() -> PyResult<PyScopeHandle> {
 ///     scope_type: The kind of scope (``ScopeType.Agent``, etc.).
 ///     handle: Optional parent scope. Defaults to the current top of stack.
 ///     attributes: Optional bitflags (e.g. ``ScopeAttributes.PARALLEL``).
+///     metadata: Optional JSON-serializable metadata to attach to the scope.
 ///
 /// Returns:
 ///     The newly created ``ScopeHandle``.
@@ -78,21 +79,27 @@ fn nat_nexus_get_handle() -> PyResult<PyScopeHandle> {
 /// Raises:
 ///     RuntimeError: If the scope stack is empty and no parent handle is given.
 #[pyfunction]
-#[pyo3(signature = (name, scope_type, *, handle=None, attributes=None))]
+#[pyo3(signature = (name, scope_type, *, handle=None, attributes=None, data=None, metadata=None))]
 fn nat_nexus_push_scope(
     name: &str,
     scope_type: PyScopeType,
     handle: Option<PyScopeHandle>,
     attributes: Option<PyScopeAttributes>,
+    data: Option<&Bound<'_, PyAny>>,
+    metadata: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PyScopeHandle> {
     let attrs = attributes
         .map(|a| a.inner)
         .unwrap_or(core_types::ScopeAttributes::empty());
+    let d = opt_py_to_json(data)?;
+    let meta = opt_py_to_json(metadata)?;
     core::nat_nexus_push_scope(
         name,
         scope_type.into(),
         handle.as_ref().map(|h| &h.inner),
         attrs,
+        d,
+        meta,
     )
     .map(PyScopeHandle::from)
     .map_err(to_py_err)

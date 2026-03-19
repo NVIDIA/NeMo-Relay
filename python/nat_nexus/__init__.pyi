@@ -431,6 +431,8 @@ def nat_nexus_push_scope(
     *,
     handle: Optional[ScopeHandle] = None,
     attributes: Optional[ScopeAttributes] = None,
+    data: Optional[Json] = None,
+    metadata: Optional[Json] = None,
 ) -> ScopeHandle:
     """Push a new child scope onto the scope stack.
 
@@ -439,6 +441,8 @@ def nat_nexus_push_scope(
         scope_type: The kind of scope.
         handle: Optional parent scope. Defaults to the current top of stack.
         attributes: Optional bitflags.
+        data: Optional JSON-serializable application data to attach to the scope.
+        metadata: Optional JSON-serializable metadata to attach to the scope.
 
     Returns:
         The newly created ``ScopeHandle``.

@@ -39,7 +39,7 @@ typedef void (*NatNexusFreeFn)(void* user_data);
 
 // Core API
 extern int32_t nat_nexus_get_handle(FfiScopeHandle** out);
-extern int32_t nat_nexus_push_scope(const char* name, int32_t scope_type, const FfiScopeHandle* parent, uint32_t attributes, FfiScopeHandle** out);
+extern int32_t nat_nexus_push_scope(const char* name, int32_t scope_type, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, FfiScopeHandle** out);
 extern int32_t nat_nexus_pop_scope(const FfiScopeHandle* handle);
 extern int32_t nat_nexus_event(const char* name, const FfiScopeHandle* parent, const char* data_json, const char* metadata_json);
 
@@ -221,11 +221,13 @@ func checkStatus(status C.int32_t) error {
 type scopeOptions struct {
 	parent     *C.FfiScopeHandle
 	attributes uint32
+	data       *C.char
+	metadata   *C.char
 }
 
 // ScopeOption is a functional option that configures optional parameters for
 // [PushScope]. Options are applied in the order they are passed. Available
-// options include [WithParent] and [WithScopeAttributes].
+// options include [WithParent], [WithScopeAttributes], [WithData], and [WithMetadata].
 type ScopeOption func(*scopeOptions)
 
 // WithParent sets the parent scope handle for the new scope. If parent is nil,
@@ -245,6 +247,24 @@ func WithParent(parent *ScopeHandle) ScopeOption {
 func WithScopeAttributes(attrs uint32) ScopeOption {
 	return func(o *scopeOptions) {
 		o.attributes = attrs
+	}
+}
+
+// WithData attaches an arbitrary JSON application data payload to the new scope.
+// Data is typically used for domain-specific information (e.g., user inputs,
+// configuration) as opposed to the operational metadata payload.
+func WithData(data json.RawMessage) ScopeOption {
+	return func(o *scopeOptions) {
+		o.data = C.CString(string(data))
+	}
+}
+
+// WithMetadata attaches an arbitrary JSON metadata payload to the new scope.
+// Metadata is typically used for operational context (e.g., trace IDs, session
+// info) as opposed to the primary data payload.
+func WithMetadata(metadata json.RawMessage) ScopeOption {
+	return func(o *scopeOptions) {
+		o.metadata = C.CString(string(metadata))
 	}
 }
 
@@ -268,7 +288,7 @@ func GetHandle() (*ScopeHandle, error) {
 // PushScope creates a new scope and pushes it onto the hierarchical scope
 // stack. The scope is assigned a unique UUID and emits a Start event to all
 // registered subscribers. Use [PopScope] to end the scope. Optional parameters
-// can be set via [WithParent] and [WithScopeAttributes].
+// can be set via [WithParent], [WithScopeAttributes], [WithData], and [WithMetadata].
 //
 // The name should be a human-readable identifier for the scope (e.g.,
 // "my-agent", "search-tool"). The scopeType categorizes the scope for
@@ -281,9 +301,15 @@ func PushScope(name string, scopeType ScopeType, opts ...ScopeOption) (*ScopeHan
 
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
+	if o.data != nil {
+		defer C.free(unsafe.Pointer(o.data))
+	}
+	if o.metadata != nil {
+		defer C.free(unsafe.Pointer(o.metadata))
+	}
 
 	var out *C.FfiScopeHandle
-	status := C.nat_nexus_push_scope(cName, C.int32_t(scopeType), o.parent, C.uint32_t(o.attributes), &out)
+	status := C.nat_nexus_push_scope(cName, C.int32_t(scopeType), o.parent, C.uint32_t(o.attributes), o.data, o.metadata, &out)
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}

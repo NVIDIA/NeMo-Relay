@@ -53,12 +53,16 @@ pub fn nat_nexus_get_handle() -> Result<WasmScopeHandle, JsValue> {
 /// - `scope_type` - Integer scope type constant (e.g. `SCOPE_TYPE_AGENT`).
 /// - `parent` - Optional parent scope handle; uses the current top if omitted.
 /// - `attributes` - Optional bitfield of scope attribute flags.
+/// - `data` - Optional JSON application data payload.
+/// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "pushScope")]
 pub fn nat_nexus_push_scope(
     name: &str,
     scope_type: i32,
     parent: Option<WasmScopeHandle>,
     attributes: Option<u32>,
+    data: JsValue,
+    metadata: JsValue,
 ) -> Result<WasmScopeHandle, JsValue> {
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
     nvidia_nat_nexus_core::nat_nexus_push_scope(
@@ -66,6 +70,8 @@ pub fn nat_nexus_push_scope(
         i32_to_scope_type(scope_type),
         parent.as_ref().map(|h| &h.inner),
         attrs,
+        opt_js_to_json(&data)?,
+        opt_js_to_json(&metadata)?,
     )
     .map(WasmScopeHandle::from)
     .map_err(to_js_err)
