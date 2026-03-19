@@ -25,13 +25,15 @@ cargo test -p nvidia-nat-nexus-wasm
 wasm-pack test --node crates/wasm
 
 # ── Python ─────────────────────────────────────────────────
-uv sync                        # build native extension + install deps
-uv run pytest                  # run all Python tests
-uv run pytest -k test_typed    # run a single module
+uv sync                          # build native extension + install deps
+uv run pytest                    # run all Python tests
+uv run pytest -k test_typed      # run a single module
 
 # ── Go (requires FFI shared lib) ───────────────────────────
 cargo build --release -p nvidia-nat-nexus-ffi
-cd go/nat_nexus && CGO_LDFLAGS="-L../../target/release" go test -v ./...
+cd go/nat_nexus && \
+CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" \
+go test -v ./...
 
 # ── Node.js (requires native addon) ────────────────────────
 cd crates/node && npm install && npm run build
