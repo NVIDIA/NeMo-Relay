@@ -33,7 +33,15 @@ fn test_set_thread_scope_stack_isolates_scopes() {
 
     // Switch to new stack and push a scope on it
     set_thread_scope_stack(&new_stack);
-    let scope = nat_nexus_push_scope("isolated_scope", SCOPE_TYPE_AGENT, None, None, JsValue::NULL, JsValue::NULL).unwrap();
+    let scope = nat_nexus_push_scope(
+        "isolated_scope",
+        SCOPE_TYPE_AGENT,
+        None,
+        None,
+        JsValue::NULL,
+        JsValue::NULL,
+    )
+    .unwrap();
     let handle = nat_nexus_get_handle().unwrap();
     assert_eq!(handle.name(), "isolated_scope");
     nat_nexus_pop_scope(&scope).unwrap();
@@ -52,11 +60,27 @@ fn test_two_scope_stacks_are_independent() {
 
     // Push a scope on stack1
     set_thread_scope_stack(&stack1);
-    let s1 = nat_nexus_push_scope("stack1_scope", SCOPE_TYPE_AGENT, None, None, JsValue::NULL, JsValue::NULL).unwrap();
+    let s1 = nat_nexus_push_scope(
+        "stack1_scope",
+        SCOPE_TYPE_AGENT,
+        None,
+        None,
+        JsValue::NULL,
+        JsValue::NULL,
+    )
+    .unwrap();
 
     // Switch to stack2 and push a different scope
     set_thread_scope_stack(&stack2);
-    let s2 = nat_nexus_push_scope("stack2_scope", SCOPE_TYPE_TOOL, None, None, JsValue::NULL, JsValue::NULL).unwrap();
+    let s2 = nat_nexus_push_scope(
+        "stack2_scope",
+        SCOPE_TYPE_TOOL,
+        None,
+        None,
+        JsValue::NULL,
+        JsValue::NULL,
+    )
+    .unwrap();
 
     // Verify stack2 sees its own scope
     let handle2 = nat_nexus_get_handle().unwrap();

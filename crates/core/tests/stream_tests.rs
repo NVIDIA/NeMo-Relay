@@ -193,7 +193,7 @@ async fn test_stream_wrapper_error_propagation() {
 
     let items: Vec<Result<Json>> = vec![
         Ok(json!("good chunk")),
-        Err(nvidia_nat_nexus_core::MagicError::Internal(
+        Err(nvidia_nat_nexus_core::NexusError::Internal(
             "stream error".into(),
         )),
     ];
@@ -294,7 +294,7 @@ async fn test_stream_wrapper_error_skips_collector_finalizer() {
     let finalizer_called = Arc::new(Mutex::new(false));
     let fc = finalizer_called.clone();
 
-    let items: Vec<Result<Json>> = vec![Err(nvidia_nat_nexus_core::MagicError::Internal(
+    let items: Vec<Result<Json>> = vec![Err(nvidia_nat_nexus_core::NexusError::Internal(
         "error".into(),
     ))];
     let inner = make_stream(items);

@@ -4,7 +4,7 @@
 //! Error types for the Nexus runtime.
 //!
 //! All fallible operations in the runtime return [`Result<T>`], which uses
-//! [`MagicError`] as the error type. Errors are categorized by cause
+//! [`NexusError`] as the error type. Errors are categorized by cause
 //! (duplicate registration, missing entity, guardrail rejection, etc.).
 
 use thiserror::Error;
@@ -14,7 +14,7 @@ use thiserror::Error;
 /// Each variant represents a distinct failure mode that callers can match on
 /// to determine the appropriate recovery strategy.
 #[derive(Debug, Error)]
-pub enum MagicError {
+pub enum NexusError {
     /// A resource with the given name is already registered.
     ///
     /// Returned when attempting to register a guardrail, intercept, or subscriber
@@ -51,7 +51,7 @@ pub enum MagicError {
 }
 
 /// A specialized [`Result`](std::result::Result) type for Nexus operations.
-pub type Result<T> = std::result::Result<T, MagicError>;
+pub type Result<T> = std::result::Result<T, NexusError>;
 
 #[cfg(test)]
 mod tests {
@@ -59,43 +59,43 @@ mod tests {
 
     #[test]
     fn test_already_exists_display() {
-        let e = MagicError::AlreadyExists("foo".into());
+        let e = NexusError::AlreadyExists("foo".into());
         assert_eq!(format!("{e}"), "already exists: foo");
     }
 
     #[test]
     fn test_not_found_display() {
-        let e = MagicError::NotFound("bar".into());
+        let e = NexusError::NotFound("bar".into());
         assert_eq!(format!("{e}"), "not found: bar");
     }
 
     #[test]
     fn test_scope_stack_empty_display() {
-        let e = MagicError::ScopeStackEmpty;
+        let e = NexusError::ScopeStackEmpty;
         assert_eq!(format!("{e}"), "scope stack empty");
     }
 
     #[test]
     fn test_guardrail_rejected_display() {
-        let e = MagicError::GuardrailRejected("blocked".into());
+        let e = NexusError::GuardrailRejected("blocked".into());
         assert_eq!(format!("{e}"), "guardrail rejected: blocked");
     }
 
     #[test]
     fn test_internal_display() {
-        let e = MagicError::Internal("oops".into());
+        let e = NexusError::Internal("oops".into());
         assert_eq!(format!("{e}"), "internal error: oops");
     }
 
     #[test]
     fn test_error_is_std_error() {
-        let e: Box<dyn std::error::Error> = Box::new(MagicError::Internal("test".into()));
+        let e: Box<dyn std::error::Error> = Box::new(NexusError::Internal("test".into()));
         assert!(e.to_string().contains("internal error"));
     }
 
     #[test]
     fn test_error_debug() {
-        let e = MagicError::AlreadyExists("x".into());
+        let e = NexusError::AlreadyExists("x".into());
         let debug = format!("{e:?}");
         assert!(debug.contains("AlreadyExists"));
     }

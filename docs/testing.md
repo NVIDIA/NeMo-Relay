@@ -34,10 +34,12 @@ cargo build --release -p nvidia-nat-nexus-ffi
 cd go/nat_nexus && \
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" \
 go test -v ./...
+cd -
 
 # ── Node.js (requires native addon) ────────────────────────
 cd crates/node && npm install && npm run build
-node --test crates/node/tests/*.mjs
+node --test tests/*.mjs
+cd -
 
 # ── Full suite ─────────────────────────────────────────────
 cargo test --workspace && uv run pytest

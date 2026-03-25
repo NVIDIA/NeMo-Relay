@@ -32,7 +32,7 @@ use tokio_stream::Stream;
 use uuid::Uuid;
 
 use crate::context::*;
-use crate::error::{MagicError, Result};
+use crate::error::{NexusError, Result};
 use crate::json::Json;
 use crate::stream::LlmStreamWrapper;
 use crate::types::*;
@@ -65,7 +65,7 @@ macro_rules! guardrail_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| MagicError::Internal(e.to_string()))?;
+                .map_err(|e| NexusError::Internal(e.to_string()))?;
             state
                 .$field
                 .register(
@@ -75,7 +75,7 @@ macro_rules! guardrail_registry_api {
                         guardrail,
                     },
                 )
-                .map_err(|e| MagicError::AlreadyExists(e))
+                .map_err(|e| NexusError::AlreadyExists(e))
         }
 
         /// Deregister the guardrail by name. Returns `true` if it existed.
@@ -83,7 +83,7 @@ macro_rules! guardrail_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| MagicError::Internal(e.to_string()))?;
+                .map_err(|e| NexusError::Internal(e.to_string()))?;
             Ok(state.$field.deregister(name))
         }
     };
@@ -101,7 +101,7 @@ macro_rules! intercept_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| MagicError::Internal(e.to_string()))?;
+                .map_err(|e| NexusError::Internal(e.to_string()))?;
             state
                 .$field
                 .register(
@@ -112,7 +112,7 @@ macro_rules! intercept_registry_api {
                         callable,
                     },
                 )
-                .map_err(|e| MagicError::AlreadyExists(e))
+                .map_err(|e| NexusError::AlreadyExists(e))
         }
 
         /// Deregister the intercept by name. Returns `true` if it existed.
@@ -120,7 +120,7 @@ macro_rules! intercept_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| MagicError::Internal(e.to_string()))?;
+                .map_err(|e| NexusError::Internal(e.to_string()))?;
             Ok(state.$field.deregister(name))
         }
     };
@@ -133,11 +133,11 @@ macro_rules! execution_intercept_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| MagicError::Internal(e.to_string()))?;
+                .map_err(|e| NexusError::Internal(e.to_string()))?;
             state
                 .$field
                 .register(name.to_string(), ExecutionIntercept { priority, callable })
-                .map_err(|e| MagicError::AlreadyExists(e))
+                .map_err(|e| NexusError::AlreadyExists(e))
         }
 
         /// Deregister the execution intercept by name. Returns `true` if it existed.
@@ -145,7 +145,7 @@ macro_rules! execution_intercept_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| MagicError::Internal(e.to_string()))?;
+                .map_err(|e| NexusError::Internal(e.to_string()))?;
             Ok(state.$field.deregister(name))
         }
     };
@@ -168,7 +168,7 @@ guardrail_registry_api!(
     ///
     /// # Errors
     ///
-    /// Returns [`MagicError::AlreadyExists`] if a guardrail with the given name is already registered.
+    /// Returns [`NexusError::AlreadyExists`] if a guardrail with the given name is already registered.
     nat_nexus_register_tool_sanitize_request_guardrail,
     nat_nexus_deregister_tool_sanitize_request_guardrail,
     tool_sanitize_request_guardrails,
@@ -314,15 +314,15 @@ execution_intercept_registry_api!(
 
 /// Registers a named event subscriber that will be called for every lifecycle event.
 ///
-/// Returns [`MagicError::AlreadyExists`] if a subscriber with the given name
+/// Returns [`NexusError::AlreadyExists`] if a subscriber with the given name
 /// is already registered.
 pub fn nat_nexus_register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()> {
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
     if state.event_subscribers.contains_key(name) {
-        return Err(MagicError::AlreadyExists(format!(
+        return Err(NexusError::AlreadyExists(format!(
             "{name} subscriber already exists"
         )));
     }
@@ -335,7 +335,7 @@ pub fn nat_nexus_deregister_subscriber(name: &str) -> Result<bool> {
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
     Ok(state.event_subscribers.remove(name).is_some())
 }
 
@@ -370,22 +370,30 @@ pub fn nat_nexus_push_scope(
     let ctx = global_context();
     let state = ctx
         .read()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
-    let handle = state.create_scope_handle(name, parent_uuid, scope_type, attributes, root_uuid, data, metadata);
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
+    let handle = state.create_scope_handle(
+        name,
+        parent_uuid,
+        scope_type,
+        attributes,
+        root_uuid,
+        data,
+        metadata,
+    );
     task_scope_push(handle.clone());
     Ok(handle)
 }
 
 /// Removes a scope from the scope stack by UUID and emits an `End` event.
 ///
-/// Returns [`MagicError::NotFound`] if the UUID is not in the stack.
+/// Returns [`NexusError::NotFound`] if the UUID is not in the stack.
 pub fn nat_nexus_pop_scope(handle_uuid: &Uuid) -> Result<()> {
     let root_uuid = current_root_uuid();
     let scope = task_scope_remove(handle_uuid)?;
     let ctx = global_context();
     let state = ctx
         .read()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
     state.end_scope_handle(&scope, root_uuid);
     Ok(())
 }
@@ -405,7 +413,7 @@ pub fn nat_nexus_event(
     let ctx = global_context();
     let state = ctx
         .read()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
     state.create_event(name, parent_uuid, data, metadata, root_uuid);
     Ok(())
 }
@@ -433,7 +441,7 @@ pub fn nat_nexus_tool_call(
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
 
     let sanitized_args = state.tool_sanitize_request_chain(name, args);
 
@@ -462,7 +470,7 @@ pub fn nat_nexus_tool_call_end(
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
 
     let sanitized_result = state.tool_sanitize_response_chain(&handle.name, result);
 
@@ -480,7 +488,7 @@ pub fn nat_nexus_tool_call_end(
 /// event is emitted (no `Start`/`End` pair).
 ///
 /// This is the high-level function that orchestrates the full middleware pipeline.
-/// Returns [`MagicError::GuardrailRejected`] if a conditional guardrail rejects the call.
+/// Returns [`NexusError::GuardrailRejected`] if a conditional guardrail rejects the call.
 pub async fn nat_nexus_tool_call_execute(
     name: &str,
     args: Json,
@@ -495,7 +503,7 @@ pub async fn nat_nexus_tool_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| MagicError::Internal(e.to_string()))?;
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
         if let Some(err) = state.tool_conditional_execution_chain(name, &args) {
             drop(state);
             let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
@@ -504,7 +512,7 @@ pub async fn nat_nexus_tool_call_execute(
                 obj.insert("rejection_reason".into(), json!(&err));
             }
             let _ = nat_nexus_event(name, parent.as_ref(), Some(rejection_data), metadata);
-            return Err(MagicError::GuardrailRejected(err));
+            return Err(NexusError::GuardrailRejected(err));
         }
     }
 
@@ -513,7 +521,7 @@ pub async fn nat_nexus_tool_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| MagicError::Internal(e.to_string()))?;
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
         state.tool_request_intercepts_chain(name, args)
     };
 
@@ -533,7 +541,7 @@ pub async fn nat_nexus_tool_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| MagicError::Internal(e.to_string()))?;
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
         state.tool_build_execution_chain(func)
     };
     let result = exec_future(intercepted_args).await?;
@@ -543,7 +551,7 @@ pub async fn nat_nexus_tool_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| MagicError::Internal(e.to_string()))?;
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
         state.tool_response_intercepts_chain(name, result)
     };
 
@@ -577,7 +585,7 @@ pub fn nat_nexus_llm_call(
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
 
     let sanitized_request = state.llm_sanitize_request_chain(request.clone());
     let input = serde_json::to_value(&sanitized_request).unwrap_or(Json::Null);
@@ -607,7 +615,7 @@ pub fn nat_nexus_llm_call_end(
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
 
     let sanitized_response = state.llm_sanitize_response_chain(response);
 
@@ -624,7 +632,7 @@ pub fn nat_nexus_llm_call_end(
 /// unmodified input. On rejection, only a standalone `Mark` event is emitted
 /// (no `Start`/`End` pair).
 ///
-/// Returns [`MagicError::GuardrailRejected`] if a conditional guardrail rejects the call.
+/// Returns [`NexusError::GuardrailRejected`] if a conditional guardrail rejects the call.
 #[allow(clippy::too_many_arguments)]
 pub async fn nat_nexus_llm_call_execute(
     name: &str,
@@ -641,7 +649,7 @@ pub async fn nat_nexus_llm_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| MagicError::Internal(e.to_string()))?;
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
         if let Some(err) = state.llm_conditional_execution_chain(&request) {
             drop(state);
             let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
@@ -650,7 +658,7 @@ pub async fn nat_nexus_llm_call_execute(
                 obj.insert("rejection_reason".into(), json!(&err));
             }
             let _ = nat_nexus_event(name, parent.as_ref(), Some(rejection_data), metadata);
-            return Err(MagicError::GuardrailRejected(err));
+            return Err(NexusError::GuardrailRejected(err));
         }
     }
 
@@ -659,7 +667,7 @@ pub async fn nat_nexus_llm_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| MagicError::Internal(e.to_string()))?;
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
         state.llm_request_intercepts_chain(request)
     };
 
@@ -679,7 +687,7 @@ pub async fn nat_nexus_llm_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| MagicError::Internal(e.to_string()))?;
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
         state.llm_build_execution_chain(func)
     };
     let response = exec_future(intercepted_request).await?;
@@ -709,7 +717,7 @@ pub async fn nat_nexus_llm_call_execute(
 /// - `finalizer` — called once when the stream is exhausted; returns the
 ///   aggregated response as [`Json`].
 ///
-/// Returns [`MagicError::GuardrailRejected`] if a conditional guardrail rejects the call.
+/// Returns [`NexusError::GuardrailRejected`] if a conditional guardrail rejects the call.
 #[allow(clippy::too_many_arguments)]
 pub async fn nat_nexus_llm_stream_call_execute(
     name: &str,
@@ -728,7 +736,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| MagicError::Internal(e.to_string()))?;
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
         if let Some(err) = state.llm_conditional_execution_chain(&request) {
             drop(state);
             let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
@@ -737,7 +745,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
                 obj.insert("rejection_reason".into(), json!(&err));
             }
             let _ = nat_nexus_event(name, parent.as_ref(), Some(rejection_data), metadata);
-            return Err(MagicError::GuardrailRejected(err));
+            return Err(NexusError::GuardrailRejected(err));
         }
     }
 
@@ -746,7 +754,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| MagicError::Internal(e.to_string()))?;
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
         state.llm_request_intercepts_chain(request)
     };
 
@@ -766,7 +774,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
         let ctx = global_context();
         let mut state = ctx
             .write()
-            .map_err(|e| MagicError::Internal(e.to_string()))?;
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
         state.llm_stream_build_execution_chain(func)
     };
     let raw_stream = exec_future(intercepted_request).await?;
@@ -789,22 +797,22 @@ pub fn nat_nexus_tool_request_intercepts(name: &str, args: Json) -> Result<Json>
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
     Ok(state.tool_request_intercepts_chain(name, args))
 }
 
 /// Runs the registered tool conditional execution guardrail chain.
 ///
 /// Returns `Ok(())` if all guardrails pass, or
-/// [`Err(MagicError::GuardrailRejected(reason))`](MagicError::GuardrailRejected)
+/// [`Err(NexusError::GuardrailRejected(reason))`](NexusError::GuardrailRejected)
 /// if any guardrail rejects the call.
 pub fn nat_nexus_tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
     if let Some(err) = state.tool_conditional_execution_chain(name, args) {
-        return Err(MagicError::GuardrailRejected(err));
+        return Err(NexusError::GuardrailRejected(err));
     }
     Ok(())
 }
@@ -818,7 +826,7 @@ pub fn nat_nexus_tool_response_intercepts(name: &str, result: Json) -> Result<Js
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
     Ok(state.tool_response_intercepts_chain(name, result))
 }
 
@@ -831,22 +839,22 @@ pub fn nat_nexus_llm_request_intercepts(request: LLMRequest) -> Result<LLMReques
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
     Ok(state.llm_request_intercepts_chain(request))
 }
 
 /// Runs the registered LLM conditional execution guardrail chain.
 ///
 /// Returns `Ok(())` if all guardrails pass, or
-/// [`Err(MagicError::GuardrailRejected(reason))`](MagicError::GuardrailRejected)
+/// [`Err(NexusError::GuardrailRejected(reason))`](NexusError::GuardrailRejected)
 /// if any guardrail rejects the call.
 pub fn nat_nexus_llm_conditional_execution(request: &LLMRequest) -> Result<()> {
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| MagicError::Internal(e.to_string()))?;
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
     if let Some(err) = state.llm_conditional_execution_chain(request) {
-        return Err(MagicError::GuardrailRejected(err));
+        return Err(NexusError::GuardrailRejected(err));
     }
     Ok(())
 }
@@ -912,8 +920,15 @@ mod tests {
         assert!(nat_nexus_register_subscriber("test_sub", Box::new(|_| {}),).is_err());
 
         // Push scope emits event
-        let handle =
-            nat_nexus_push_scope("s", ScopeType::Function, None, ScopeAttributes::empty(), None, None).unwrap();
+        let handle = nat_nexus_push_scope(
+            "s",
+            ScopeType::Function,
+            None,
+            ScopeAttributes::empty(),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 1);
 
         nat_nexus_pop_scope(&handle.uuid).unwrap();
@@ -949,8 +964,15 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let s1 = nat_nexus_push_scope("level1", ScopeType::Agent, None, ScopeAttributes::empty(), None, None)
-            .unwrap();
+        let s1 = nat_nexus_push_scope(
+            "level1",
+            ScopeType::Agent,
+            None,
+            ScopeAttributes::empty(),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(nat_nexus_get_handle().unwrap().name, "level1");
 
         let s2 = nat_nexus_push_scope(
@@ -1310,7 +1332,7 @@ mod tests {
 
         assert!(result.is_err());
         match result.unwrap_err() {
-            MagicError::GuardrailRejected(msg) => assert_eq!(msg, "forbidden tool"),
+            NexusError::GuardrailRejected(msg) => assert_eq!(msg, "forbidden tool"),
             e => panic!("expected GuardrailRejected, got {e:?}"),
         }
 
@@ -1533,7 +1555,7 @@ mod tests {
 
         assert!(result.is_err());
         match result.unwrap_err() {
-            MagicError::GuardrailRejected(msg) => assert_eq!(msg, "blocked by policy"),
+            NexusError::GuardrailRejected(msg) => assert_eq!(msg, "blocked by policy"),
             e => panic!("expected GuardrailRejected, got {e:?}"),
         }
 
@@ -1979,7 +2001,7 @@ mod tests {
         .await;
 
         match result {
-            Err(MagicError::GuardrailRejected(msg)) => assert_eq!(msg, "stream blocked"),
+            Err(NexusError::GuardrailRejected(msg)) => assert_eq!(msg, "stream blocked"),
             Err(e) => panic!("expected GuardrailRejected, got {e:?}"),
             Ok(_) => panic!("expected error, got Ok"),
         }
@@ -2004,9 +2026,15 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let scope =
-            nat_nexus_push_scope("parent", ScopeType::Agent, None, ScopeAttributes::empty(), None, None)
-                .unwrap();
+        let scope = nat_nexus_push_scope(
+            "parent",
+            ScopeType::Agent,
+            None,
+            ScopeAttributes::empty(),
+            None,
+            None,
+        )
+        .unwrap();
         let handle = nat_nexus_tool_call(
             "tool",
             json!({}),
@@ -2099,7 +2127,7 @@ mod tests {
         .unwrap();
 
         match nat_nexus_tool_conditional_execution("tool", &json!({})) {
-            Err(MagicError::GuardrailRejected(msg)) => assert_eq!(msg, "blocked"),
+            Err(NexusError::GuardrailRejected(msg)) => assert_eq!(msg, "blocked"),
             other => panic!("expected GuardrailRejected, got {other:?}"),
         }
 
@@ -2185,7 +2213,7 @@ mod tests {
             content: json!({"messages": []}),
         };
         match nat_nexus_llm_conditional_execution(&request) {
-            Err(MagicError::GuardrailRejected(msg)) => assert_eq!(msg, "llm blocked"),
+            Err(NexusError::GuardrailRejected(msg)) => assert_eq!(msg, "llm blocked"),
             other => panic!("expected GuardrailRejected, got {other:?}"),
         }
 

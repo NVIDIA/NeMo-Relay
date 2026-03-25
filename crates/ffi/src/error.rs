@@ -15,7 +15,7 @@ use std::ffi::CString;
 
 use libc::c_char;
 
-use nvidia_nat_nexus_core::MagicError;
+use nvidia_nat_nexus_core::NexusError;
 
 /// Status codes returned by all FFI functions.
 ///
@@ -79,21 +79,21 @@ pub extern "C" fn nat_nexus_last_error() -> *const c_char {
     })
 }
 
-impl From<&MagicError> for NatNexusStatus {
-    fn from(e: &MagicError) -> Self {
+impl From<&NexusError> for NatNexusStatus {
+    fn from(e: &NexusError) -> Self {
         match e {
-            MagicError::AlreadyExists(_) => NatNexusStatus::AlreadyExists,
-            MagicError::NotFound(_) => NatNexusStatus::NotFound,
-            MagicError::ScopeStackEmpty => NatNexusStatus::ScopeStackEmpty,
-            MagicError::GuardrailRejected(_) => NatNexusStatus::GuardrailRejected,
-            MagicError::Internal(_) => NatNexusStatus::Internal,
+            NexusError::AlreadyExists(_) => NatNexusStatus::AlreadyExists,
+            NexusError::NotFound(_) => NatNexusStatus::NotFound,
+            NexusError::ScopeStackEmpty => NatNexusStatus::ScopeStackEmpty,
+            NexusError::GuardrailRejected(_) => NatNexusStatus::GuardrailRejected,
+            NexusError::Internal(_) => NatNexusStatus::Internal,
         }
     }
 }
 
-/// Convert an `MagicError` to an `NatNexusStatus`, storing the error message
+/// Convert an `NexusError` to an `NatNexusStatus`, storing the error message
 /// in thread-local storage.
-pub fn status_from_error(e: &MagicError) -> NatNexusStatus {
+pub fn status_from_error(e: &NexusError) -> NatNexusStatus {
     set_last_error(&e.to_string());
     NatNexusStatus::from(e)
 }

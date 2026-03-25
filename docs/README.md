@@ -23,21 +23,31 @@ Nexus is a multi-language agent runtime framework providing execution scope mana
 ## Quick Start
 
 ```python
+import asyncio
+
 import nat_nexus
-from nat_nexus import LLMRequest, ScopeType
 
-# Push an agent scope
-handle = nat_nexus.scope.push("my_agent", ScopeType.Agent)
+async def amain():
+    # Define your tool and LLM functions
+    my_tool_func = lambda args: {**args, "result": "ok"}
+    my_llm_func = lambda request: {**request.content, "response": "ok"}
 
-# Execute an LLM call through the full middleware pipeline
-request = LLMRequest(
-    headers={"Authorization": "Bearer ..."},
-    content={"messages": [{"role": "user", "content": "Hello"}], "model": "gpt-4"},
-)
-response = await nat_nexus.llm.execute("gpt-4", request, my_llm_func)
+    # Subscribe to lifecycle events
+    nat_nexus.subscribers.register("logger", lambda event: print(event.name))
 
-# Execute a tool call
-result = await nat_nexus.tools.execute("search", {"query": "example"}, my_tool_func)
+    # Run the agent inside a Nexus scope
+    with nat_nexus.scope.scope("my_agent", nat_nexus.ScopeType.Agent) as handle:
+        # Execute an LLM call through the full middleware pipeline
+        request = nat_nexus.LLMRequest(
+            headers={"Authorization": "Bearer ..."},
+            content={"messages": [{"role": "user", "content": "Hello"}], "model": "gpt-4"},
+        )
+        response = await nat_nexus.llm.execute("gpt-4", request, my_llm_func)
 
-nat_nexus.scope.pop(handle)
+        # Execute a tool call
+        result = await nat_nexus.tools.execute("search", {"query": "example"}, my_tool_func)
+        print(result)
+
+
+asyncio.run(amain())
 ```

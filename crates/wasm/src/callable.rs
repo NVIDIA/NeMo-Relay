@@ -22,7 +22,7 @@ use wasm_bindgen_futures::JsFuture;
 
 use nvidia_nat_nexus_core::types::LLMRequest;
 use nvidia_nat_nexus_core::{
-    LlmExecutionNextFn, LlmStreamExecutionNextFn, MagicError, Result, ToolExecutionNextFn,
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, NexusError, Result, ToolExecutionNextFn,
 };
 
 use crate::convert::{js_to_json, json_to_js};
@@ -77,14 +77,14 @@ pub fn wrap_js_tool_exec_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| MagicError::Internal(format!("{e:?}"))),
-                            Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
+                                .map_err(|e| NexusError::Internal(format!("{e:?}"))),
+                            Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| MagicError::Internal(format!("{e:?}")))
+                        js_to_json(&val).map_err(|e| NexusError::Internal(format!("{e:?}")))
                     }
                 }
-                Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
+                Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
             }
         }))
     })
@@ -167,14 +167,14 @@ pub fn wrap_js_llm_exec_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| MagicError::Internal(format!("{e:?}"))),
-                            Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
+                                .map_err(|e| NexusError::Internal(format!("{e:?}"))),
+                            Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| MagicError::Internal(format!("{e:?}")))
+                        js_to_json(&val).map_err(|e| NexusError::Internal(format!("{e:?}")))
                     }
                 }
-                Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
+                Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
             }
         }))
     })
@@ -252,14 +252,14 @@ pub fn wrap_js_tool_exec_intercept_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| MagicError::Internal(format!("{e:?}"))),
-                            Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
+                                .map_err(|e| NexusError::Internal(format!("{e:?}"))),
+                            Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| MagicError::Internal(format!("{e:?}")))
+                        js_to_json(&val).map_err(|e| NexusError::Internal(format!("{e:?}")))
                     }
                 }
-                Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
+                Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
             }
         }))
     })
@@ -301,14 +301,14 @@ pub fn wrap_js_llm_exec_intercept_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| MagicError::Internal(format!("{e:?}"))),
-                            Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
+                                .map_err(|e| NexusError::Internal(format!("{e:?}"))),
+                            Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| MagicError::Internal(format!("{e:?}")))
+                        js_to_json(&val).map_err(|e| NexusError::Internal(format!("{e:?}")))
                     }
                 }
-                Err(e) => Err(MagicError::Internal(format!("{e:?}"))),
+                Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
             }
         }))
     })
@@ -350,14 +350,14 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
                         if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                             match JsFuture::from(promise.clone()).await {
                                 Ok(resolved) => js_to_json(&resolved)
-                                    .map_err(|e| MagicError::Internal(format!("{e:?}")))?,
-                                Err(e) => return Err(MagicError::Internal(format!("{e:?}"))),
+                                    .map_err(|e| NexusError::Internal(format!("{e:?}")))?,
+                                Err(e) => return Err(NexusError::Internal(format!("{e:?}"))),
                             }
                         } else {
-                            js_to_json(&val).map_err(|e| MagicError::Internal(format!("{e:?}")))?
+                            js_to_json(&val).map_err(|e| NexusError::Internal(format!("{e:?}")))?
                         }
                     }
-                    Err(e) => return Err(MagicError::Internal(format!("{e:?}"))),
+                    Err(e) => return Err(NexusError::Internal(format!("{e:?}"))),
                 };
                 let stream = tokio_stream::once(Ok(val));
                 Ok(Box::pin(stream)

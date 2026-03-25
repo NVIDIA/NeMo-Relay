@@ -49,3 +49,6 @@ $RECYCLE.BIN/
 # OS — Linux
 *~
 .directory
+
+# Temporary files
+.tmp/

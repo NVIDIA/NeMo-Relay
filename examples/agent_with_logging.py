@@ -110,24 +110,22 @@ async def amain() -> None:
     exporter.register("atif-exporter")
 
     # Push a top-level agent scope.
-    agent_scope = nat_nexus.scope.push("example-agent", nat_nexus.ScopeType.Agent)
-    agent_root_uuid = agent_scope.uuid
+    with nat_nexus.scope.scope("example-agent", nat_nexus.ScopeType.Agent) as agent_scope:
+        agent_root_uuid = agent_scope.uuid
 
-    # Create the LLM and agent.
-    llm = ChatNVIDIA(model="nvidia/nemotron-3-nano-30b-a3b")
-    agent = create_agent(llm, tools=[get_weather, get_population])
+        # Create the LLM and agent.
+        llm = ChatNVIDIA(model="nvidia/nemotron-3-nano-30b-a3b")
+        agent = create_agent(llm, tools=[get_weather, get_population])
 
-    # Run the agent.
-    print("\n--- Agent execution ---\n")
-    result = await agent.ainvoke(
-        {"messages": [{"role": "user", "content": "What is the weather and population of San Francisco?"}]}
-    )
+        # Run the agent.
+        print("\n--- Agent execution ---\n")
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": "What is the weather and population of San Francisco?"}]}
+        )
 
-    # Print the final response.
-    print("\n--- Final response ---\n")
-    print(result["messages"][-1].content)
-
-    nat_nexus.scope.pop(agent_scope)
+        # Print the final response.
+        print("\n--- Final response ---\n")
+        print(result["messages"][-1].content)
 
     # Export ATIF trajectory filtered to this agent's root scope.
     trajectory = exporter.export(agent_root_uuid)

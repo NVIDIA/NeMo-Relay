@@ -26,7 +26,7 @@
 //!   [`AtifObservation`](atif::AtifObservation), and [`AtifMetrics`](atif::AtifMetrics).
 //! - [`context`] — Global context singleton, scope stack, task-local/thread-local storage,
 //!   callable type aliases, and middleware chain execution logic.
-//! - [`error`] — Error types ([`MagicError`]) and the [`Result`] type alias.
+//! - [`error`] — Error types ([`NexusError`]) and the [`Result`] type alias.
 //! - [`json`] — JSON type alias ([`Json`]) and the [`merge_json`] utility.
 //! - [`registry`] — [`SortedRegistry`](registry::SortedRegistry) — a priority-sorted, named collection used for
 //!   all guardrail and intercept registries.
@@ -69,7 +69,7 @@ pub use context::{
     ScopeStack, ScopeStackHandle, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
     ToolInterceptFn, ToolSanitizeFn, TASK_SCOPE_STACK,
 };
-pub use error::{MagicError, Result};
+pub use error::{NexusError, Result};
 pub use json::{merge_json, Json};
 pub use stream::LlmStreamWrapper;
 pub use types::*;

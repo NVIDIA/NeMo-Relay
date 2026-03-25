@@ -24,14 +24,14 @@ use napi::bindgen_prelude::{FromNapiValue, ToNapiValue};
 use napi::{Env, JsFunction, NapiRaw};
 use serde_json::Value as Json;
 
-use nvidia_nat_nexus_core::{MagicError, Result as MagicResult};
+use nvidia_nat_nexus_core::{NexusError, Result as NexusResult};
 
 // ---------------------------------------------------------------------------
 // Channel registry for pending call results
 // ---------------------------------------------------------------------------
 
 static NEXT_CALL_ID: AtomicU64 = AtomicU64::new(0);
-type ResultSender = tokio::sync::oneshot::Sender<MagicResult<Json>>;
+type ResultSender = tokio::sync::oneshot::Sender<NexusResult<Json>>;
 
 static PENDING_CALLS: std::sync::LazyLock<Mutex<HashMap<u64, ResultSender>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -48,7 +48,7 @@ fn send_result(call_id: u64, value: Json) {
 
 fn send_error(call_id: u64, msg: String) {
     if let Some(tx) = PENDING_CALLS.lock().unwrap().remove(&call_id) {
-        let _ = tx.send(Err(MagicError::Internal(msg)));
+        let _ = tx.send(Err(NexusError::Internal(msg)));
     }
 }
 
@@ -345,7 +345,7 @@ impl PromiseAwareFn {
     ///
     /// Transparently handles both synchronous returns and Promise returns.
     /// Can be called from any thread (e.g., tokio runtime).
-    pub async fn call(&self, args: Json) -> MagicResult<Json> {
+    pub async fn call(&self, args: Json) -> NexusResult<Json> {
         use napi::sys;
 
         let call_id = NEXT_CALL_ID.fetch_add(1, Ordering::Relaxed);
@@ -355,7 +355,7 @@ impl PromiseAwareFn {
         let args_json = serde_json::to_vec(&args).map_err(|e| {
             // Clean up on serialization failure
             PENDING_CALLS.lock().unwrap().remove(&call_id);
-            MagicError::Internal(format!("failed to serialize args: {e}"))
+            NexusError::Internal(format!("failed to serialize args: {e}"))
         })?;
 
         let call_data = Box::new(CallData { call_id, args_json });
@@ -370,12 +370,12 @@ impl PromiseAwareFn {
 
         if status != sys::Status::napi_ok {
             PENDING_CALLS.lock().unwrap().remove(&call_id);
-            return Err(MagicError::Internal(
+            return Err(NexusError::Internal(
                 "failed to queue threadsafe function call".to_string(),
             ));
         }
 
-        rx.await.map_err(|e| MagicError::Internal(e.to_string()))?
+        rx.await.map_err(|e| NexusError::Internal(e.to_string()))?
     }
 }
 
