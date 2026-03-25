@@ -73,21 +73,6 @@ The Python package wraps a PyO3 native extension (`_native`) built with the stab
 
 ```python
 import nat_nexus
-from nat_nexus import LLMRequest, ScopeType
-
-# Scopes
-handle = nat_nexus.scope.push("my_agent", ScopeType.Agent)
-nat_nexus.scope.pop(handle)
-
-# Tool execution
-result = await nat_nexus.tools.execute("search", {"q": "test"}, search_func)
-
-# LLM execution
-request = LLMRequest(
-    headers={"Authorization": "Bearer ..."},
-    content={"messages": [{"role": "user", "content": "Hello"}], "model": "gpt-4"},
-)
-response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
 
 # Guardrails
 nat_nexus.guardrails.register_tool_conditional_execution(
@@ -100,6 +85,28 @@ nat_nexus.intercepts.register_tool_request(
     "add_context", 1, False,
     lambda name, args: {**args, "context": "injected"},
 )
+
+# Scope Context Management
+with nat_nexus.scope.scope("my_agent", nat_nexus.ScopeType.Agent) as handle:
+    # Inside this block, the scope "my_agent" is active
+    ...
+
+# Alternatively, manual scope push/pop:
+handle = nat_nexus.scope.push("my_agent", nat_nexus.ScopeType.Agent)
+nat_nexus.scope.pop(handle)
+
+# The following examples assume you are inside an active scope context.
+# Some require running inside of a coroutine (the ones that use an `await` expression).
+
+# Tool execution
+result = await nat_nexus.tools.execute("search", {"q": "test"}, search_func)
+
+# LLM execution
+request = nat_nexus.LLMRequest(
+    headers={"Authorization": "Bearer ..."},
+    content={"messages": [{"role": "user", "content": "Hello"}], "model": "gpt-4"},
+)
+response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
 ```
 
 ### Context Isolation
@@ -131,11 +138,25 @@ import {
     pushScope, popScope, ScopeType,
     toolCallExecute, llmCallExecute,
     registerToolRequestIntercept,
-} from './index.node';
+} from './index.js';
+
+// Replace with your actual tool and LLM functions
+function searchFunc() {
+    return { ok: true };
+}
+
+function llmFunc(n) {
+    return { response: 'hello from llm' };
+}
+
+// Intercepts
+registerToolRequestIntercept("add_ctx", 1, false, (name, args) => {
+    console.log("Intercepted tool call: ", name, args);
+    return { ...args, context: "injected" };
+});
 
 // Scopes
 const handle = pushScope("my_agent", ScopeType.Agent, null, null);
-popScope(handle);
 
 // Tool execution
 const result = await toolCallExecute(
@@ -144,16 +165,16 @@ const result = await toolCallExecute(
 );
 
 // LLM execution
-const request = { headers: {}, content: { messages: [...], model: "gpt-4" } };
+const request = { headers: {}, content: { messages: [{"role": "user", "content": "Hello"}], model: "gpt-4" } };
 const response = await llmCallExecute(
     "gpt-4", request, llmFunc,
     null, null, null, null, "gpt-4",
 );
 
-// Intercepts
-registerToolRequestIntercept("add_ctx", 1, false, (name, args) => {
-    return { ...args, context: "injected" };
-});
+console.log("LLM response: ", response);
+
+popScope(handle);
+process.exit(0);
 ```
 
 ### Typed Wrappers
@@ -183,7 +204,7 @@ cargo build --release -p nvidia-nat-nexus-ffi
 
 # Run Go tests
 cd go/nat_nexus
-CGO_LDFLAGS="-L../../target/release" go test -v ./...
+CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" go test -v ./...
 ```
 
 ### Package Structure
@@ -206,28 +227,47 @@ go/nat_nexus/
 
 ```go
 import (
+    "encoding/json"
+    "fmt"
+
     "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus"
-    "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/scope"
-    "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/tools"
-    "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/llm"
 )
 
-// Scopes
-handle, _ := scope.Push("my_agent", scope.TypeAgent)
-scope.Pop(handle)
-
-// Tool execution
-result, _ := tools.Execute("search", map[string]interface{}{"q": "test"}, searchFunc)
-
-// LLM execution
-request := map[string]interface{}{
-    "headers": map[string]interface{}{},
-    "content": map[string]interface{}{
-        "messages": []interface{}{...},
-        "model":    "gpt-4",
-    },
+func searchFunc(args json.RawMessage) (json.RawMessage, error) {
+	var input map[string]interface{}
+	json.Unmarshal(args, &input)
+	result, _ := json.Marshal(map[string]interface{}{"results": []string{"result for: " + input["q"].(string)}})
+	return result, nil
 }
-response, _ := llm.Execute("gpt-4", request, llmFunc, "gpt-4")
+
+func llmFunc(request json.RawMessage) (json.RawMessage, error) {
+	result, _ := json.Marshal(map[string]interface{}{"response": "hello from llm"})
+	return result, nil
+}
+
+func main() {
+    // Scopes
+    handle, _ := nat_nexus.PushScope("my_agent", nat_nexus.ScopeTypeAgent)
+
+    // Tool execution
+    result, _ := nat_nexus.ToolCallExecute("search", json.RawMessage(`{"q": "test"}`), searchFunc)
+
+    fmt.Println("tool result:", string(result))
+
+
+    // LLM execution
+    request := map[string]interface{}{
+        "headers": map[string]interface{}{},
+        "content": map[string]interface{}{
+            "messages": []interface{}{map[string]interface{}{"role": "user", "content": "Hello"}},
+            "model":    "gpt-4",
+        },
+    }
+    response, _ := nat_nexus.LlmCallExecute("gpt-4", request, llmFunc, nat_nexus.WithLLMModelName("gpt-4"))
+    fmt.Println("llm response:", string(response))
+
+    nat_nexus.PopScope(handle)
+}
 ```
 
 ### CGo Callback Pattern
@@ -275,14 +315,11 @@ wasm-pack test --node crates/wasm
 ### Usage
 
 ```javascript
-import init, {
-    pushScope, popScope, ScopeType,
-    natNexusToolCallExecute, natNexusLlmCallExecute,
-} from './pkg/nat_nexus.js';
+import {
+    pushScope, popScope,
+} from './pkg/nvidia_nat_nexus_wasm.js';
 
-await init();  // Initialize WASM module
-
-const handle = pushScope("agent", ScopeType.Agent, null, null);
+const handle = pushScope("agent", 0 /* SCOPE_TYPE_AGENT */, null, null);
 // ... operations ...
 popScope(handle);
 ```
@@ -309,7 +346,7 @@ popScope(handle);
 
 ## Error Handling
 
-All bindings map core `MagicError` variants to language-appropriate errors:
+All bindings map core `NexusError` variants to language-appropriate errors:
 
 | Error | Python | Go | Node.js / WASM |
 |-------|--------|----|-----------------|

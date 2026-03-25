@@ -30,7 +30,7 @@ use tokio_stream::Stream;
 
 use nvidia_nat_nexus_core::types::LLMRequest;
 use nvidia_nat_nexus_core::{
-    LlmExecutionNextFn, LlmStreamExecutionNextFn, MagicError, ToolExecutionNextFn,
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, NexusError, ToolExecutionNextFn,
 };
 
 use crate::convert::{json_to_py, py_to_json};
@@ -88,23 +88,23 @@ pub fn wrap_py_tool_exec_fn(
                 Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
             > = Python::attach(|py| {
                 let py_args = json_to_py(py, &args)
-                    .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
+                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
                 let result = py_fn
                     .call1(py, (py_args,))
-                    .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
+                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
 
                 // Detect coroutine by checking for __await__
                 let bound = result.bind(py);
                 if bound.getattr("__await__").is_ok() {
                     let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-                        .map_err(|e| MagicError::Internal(e.to_string()))?;
+                        .map_err(|e| NexusError::Internal(e.to_string()))?;
                     Ok(Err(Box::pin(future)
                         as Pin<
                             Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>,
                         >))
                 } else {
                     let json = py_to_json(bound)
-                        .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
+                        .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
                     Ok(Ok(json))
                 }
             });
@@ -114,10 +114,10 @@ pub fn wrap_py_tool_exec_fn(
                 Err(future) => {
                     let py_result = future
                         .await
-                        .map_err(|e| MagicError::Internal(e.to_string()))?;
+                        .map_err(|e| NexusError::Internal(e.to_string()))?;
                     Python::attach(|py| {
                         py_to_json(py_result.bind(py))
-                            .map_err(|e: PyErr| MagicError::Internal(e.to_string()))
+                            .map_err(|e: PyErr| NexusError::Internal(e.to_string()))
                     })
                 }
             }
@@ -234,7 +234,7 @@ pub fn wrap_py_tool_exec_intercept_fn(
                 Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
             > = Python::attach(|py| {
                 let py_args = json_to_py(py, &args)
-                    .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
+                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
                 let py_next = PyToolNextFn {
                     inner: std::sync::Mutex::new(Some(next)),
                 };
@@ -245,23 +245,23 @@ pub fn wrap_py_tool_exec_intercept_fn(
                             py_args,
                             py_next
                                 .into_pyobject(py)
-                                .map_err(|e| MagicError::Internal(e.to_string()))?
+                                .map_err(|e| NexusError::Internal(e.to_string()))?
                                 .into_any(),
                         ),
                     )
-                    .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
+                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
 
                 let bound = result.bind(py);
                 if bound.getattr("__await__").is_ok() {
                     let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-                        .map_err(|e| MagicError::Internal(e.to_string()))?;
+                        .map_err(|e| NexusError::Internal(e.to_string()))?;
                     Ok(Err(Box::pin(future)
                         as Pin<
                             Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>,
                         >))
                 } else {
                     let json = py_to_json(bound)
-                        .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
+                        .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
                     Ok(Ok(json))
                 }
             });
@@ -271,10 +271,10 @@ pub fn wrap_py_tool_exec_intercept_fn(
                 Err(future) => {
                     let py_result = future
                         .await
-                        .map_err(|e| MagicError::Internal(e.to_string()))?;
+                        .map_err(|e| NexusError::Internal(e.to_string()))?;
                     Python::attach(|py| {
                         py_to_json(py_result.bind(py))
-                            .map_err(|e: PyErr| MagicError::Internal(e.to_string()))
+                            .map_err(|e: PyErr| NexusError::Internal(e.to_string()))
                     })
                 }
             }
@@ -310,27 +310,27 @@ pub fn wrap_py_llm_exec_intercept_fn(
                         (
                             py_req
                                 .into_pyobject(py)
-                                .map_err(|e| MagicError::Internal(e.to_string()))?
+                                .map_err(|e| NexusError::Internal(e.to_string()))?
                                 .into_any(),
                             py_next
                                 .into_pyobject(py)
-                                .map_err(|e| MagicError::Internal(e.to_string()))?
+                                .map_err(|e| NexusError::Internal(e.to_string()))?
                                 .into_any(),
                         ),
                     )
-                    .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
+                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
 
                 let bound = result.bind(py);
                 if bound.getattr("__await__").is_ok() {
                     let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-                        .map_err(|e| MagicError::Internal(e.to_string()))?;
+                        .map_err(|e| NexusError::Internal(e.to_string()))?;
                     Ok(Err(Box::pin(future)
                         as Pin<
                             Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>,
                         >))
                 } else {
                     let json = py_to_json(bound)
-                        .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
+                        .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
                     Ok(Ok(json))
                 }
             });
@@ -340,10 +340,10 @@ pub fn wrap_py_llm_exec_intercept_fn(
                 Err(future) => {
                     let py_result = future
                         .await
-                        .map_err(|e| MagicError::Internal(e.to_string()))?;
+                        .map_err(|e| NexusError::Internal(e.to_string()))?;
                     Python::attach(|py| {
                         py_to_json(py_result.bind(py))
-                            .map_err(|e: PyErr| MagicError::Internal(e.to_string()))
+                            .map_err(|e: PyErr| NexusError::Internal(e.to_string()))
                     })
                 }
             }
@@ -385,22 +385,22 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                         (
                             py_req
                                 .into_pyobject(py)
-                                .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?
+                                .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?
                                 .into_any(),
                             py_next
                                 .into_pyobject(py)
-                                .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?
+                                .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?
                                 .into_any(),
                         ),
                     )
-                    .map_err(|e: PyErr| MagicError::Internal(e.to_string()))
+                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))
             })?;
 
             let (tx, rx) = tokio::sync::mpsc::channel::<nvidia_nat_nexus_core::Result<Json>>(32);
 
             let task_locals = Python::attach(|py| {
                 pyo3_async_runtimes::tokio::get_current_locals(py)
-                    .map_err(|e: pyo3::PyErr| MagicError::Internal(e.to_string()))
+                    .map_err(|e: pyo3::PyErr| NexusError::Internal(e.to_string()))
             })?;
 
             let async_iter = Arc::new(async_iter);
@@ -415,7 +415,7 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                                 if e.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
                                     Ok(None)
                                 } else {
-                                    Err(MagicError::Internal(e.to_string()))
+                                    Err(NexusError::Internal(e.to_string()))
                                 }
                             }
                         }
@@ -430,19 +430,19 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                         Ok(Some(coro)) => {
                             let future_result = Python::attach(|py| {
                                 pyo3_async_runtimes::tokio::into_future(coro.into_bound(py))
-                                    .map_err(|e| MagicError::Internal(e.to_string()))
+                                    .map_err(|e| NexusError::Internal(e.to_string()))
                             });
                             let awaited: Result<Json, _> = match future_result {
                                 Ok(future) => match future.await {
                                     Ok(result) => Python::attach(|py| {
                                         py_to_json(result.bind(py))
-                                            .map_err(|e| MagicError::Internal(e.to_string()))
+                                            .map_err(|e| NexusError::Internal(e.to_string()))
                                     }),
                                     Err(e) => Python::attach(|py| {
                                         if e.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
-                                            return Err(MagicError::Internal("__stop__".into()));
+                                            return Err(NexusError::Internal("__stop__".into()));
                                         }
-                                        Err(MagicError::Internal(e.to_string()))
+                                        Err(NexusError::Internal(e.to_string()))
                                     }),
                                 },
                                 Err(e) => Err(e),
@@ -454,7 +454,7 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                                         break;
                                     }
                                 }
-                                Err(MagicError::Internal(ref msg)) if msg == "__stop__" => break,
+                                Err(NexusError::Internal(ref msg)) if msg == "__stop__" => break,
                                 Err(e) => {
                                     let _ = tx.send(Err(e)).await;
                                     break;
@@ -547,19 +547,19 @@ pub fn wrap_py_llm_exec_fn(
                 let py_req = PyLLMRequest { inner: request };
                 let result = py_fn
                     .call1(py, (py_req,))
-                    .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
+                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
 
                 let bound = result.bind(py);
                 if bound.getattr("__await__").is_ok() {
                     let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-                        .map_err(|e| MagicError::Internal(e.to_string()))?;
+                        .map_err(|e| NexusError::Internal(e.to_string()))?;
                     Ok(Err(Box::pin(future)
                         as Pin<
                             Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>,
                         >))
                 } else {
                     let json = py_to_json(bound)
-                        .map_err(|e: PyErr| MagicError::Internal(e.to_string()))?;
+                        .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
                     Ok(Ok(json))
                 }
             });
@@ -569,10 +569,10 @@ pub fn wrap_py_llm_exec_fn(
                 Err(future) => {
                     let py_result = future
                         .await
-                        .map_err(|e| MagicError::Internal(e.to_string()))?;
+                        .map_err(|e| NexusError::Internal(e.to_string()))?;
                     Python::attach(|py| {
                         py_to_json(py_result.bind(py))
-                            .map_err(|e: PyErr| MagicError::Internal(e.to_string()))
+                            .map_err(|e: PyErr| NexusError::Internal(e.to_string()))
                     })
                 }
             }
@@ -607,7 +607,7 @@ pub fn wrap_py_llm_stream_exec_fn(
                 let py_req = PyLLMRequest { inner: request };
                 py_fn
                     .call1(py, (py_req,))
-                    .map_err(|e: PyErr| MagicError::Internal(e.to_string()))
+                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))
             })?;
 
             let (tx, rx) = tokio::sync::mpsc::channel::<nvidia_nat_nexus_core::Result<Json>>(32);
@@ -616,7 +616,7 @@ pub fn wrap_py_llm_stream_exec_fn(
             // pyo3_async_runtimes::tokio::into_future (which needs TaskLocals).
             let task_locals = Python::attach(|py| {
                 pyo3_async_runtimes::tokio::get_current_locals(py)
-                    .map_err(|e: pyo3::PyErr| MagicError::Internal(e.to_string()))
+                    .map_err(|e: pyo3::PyErr| NexusError::Internal(e.to_string()))
             })?;
 
             // Spawn a task that drains the Python async iterator into the channel.
@@ -634,7 +634,7 @@ pub fn wrap_py_llm_stream_exec_fn(
                                 if e.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
                                     Ok(None)
                                 } else {
-                                    Err(MagicError::Internal(e.to_string()))
+                                    Err(NexusError::Internal(e.to_string()))
                                 }
                             }
                         }
@@ -650,22 +650,22 @@ pub fn wrap_py_llm_stream_exec_fn(
                             // Await the coroutine using pyo3_async_runtimes
                             let future_result = Python::attach(|py| {
                                 pyo3_async_runtimes::tokio::into_future(coro.into_bound(py))
-                                    .map_err(|e| MagicError::Internal(e.to_string()))
+                                    .map_err(|e| NexusError::Internal(e.to_string()))
                             });
                             let awaited: Result<Json, _> = match future_result {
                                 Ok(future) => match future.await {
                                     Ok(result) => Python::attach(|py| {
                                         py_to_json(result.bind(py))
-                                            .map_err(|e| MagicError::Internal(e.to_string()))
+                                            .map_err(|e| NexusError::Internal(e.to_string()))
                                     }),
                                     Err(e) => Python::attach(|py| {
                                         if e.is_instance_of::<
                                             pyo3::exceptions::PyStopAsyncIteration,
                                         >(py)
                                         {
-                                            return Err(MagicError::Internal("__stop__".into()));
+                                            return Err(NexusError::Internal("__stop__".into()));
                                         }
-                                        Err(MagicError::Internal(e.to_string()))
+                                        Err(NexusError::Internal(e.to_string()))
                                     }),
                                 },
                                 Err(e) => Err(e),
@@ -677,7 +677,7 @@ pub fn wrap_py_llm_stream_exec_fn(
                                         break; // receiver dropped
                                     }
                                 }
-                                Err(MagicError::Internal(ref msg)) if msg == "__stop__" => break,
+                                Err(NexusError::Internal(ref msg)) if msg == "__stop__" => break,
                                 Err(e) => {
                                     let _ = tx.send(Err(e)).await;
                                     break;

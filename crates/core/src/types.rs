@@ -479,8 +479,22 @@ mod tests {
 
     #[test]
     fn test_scope_handle_unique_uuids() {
-        let h1 = ScopeHandle::new("a".into(), ScopeType::Agent, ScopeAttributes::empty(), None, None, None);
-        let h2 = ScopeHandle::new("a".into(), ScopeType::Agent, ScopeAttributes::empty(), None, None, None);
+        let h1 = ScopeHandle::new(
+            "a".into(),
+            ScopeType::Agent,
+            ScopeAttributes::empty(),
+            None,
+            None,
+            None,
+        );
+        let h2 = ScopeHandle::new(
+            "a".into(),
+            ScopeType::Agent,
+            ScopeAttributes::empty(),
+            None,
+            None,
+            None,
+        );
         assert_ne!(h1.uuid, h2.uuid);
     }
 

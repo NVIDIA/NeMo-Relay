@@ -17,8 +17,8 @@ use crate::convert::{json_to_py, opt_py_to_json, py_to_json};
 use crate::py_callable;
 use crate::py_types::*;
 
-/// Convert an [`MagicError`] into a Python `RuntimeError`.
-fn to_py_err(e: core::MagicError) -> PyErr {
+/// Convert an [`NexusError`] into a Python `RuntimeError`.
+fn to_py_err(e: core::NexusError) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
 }
 

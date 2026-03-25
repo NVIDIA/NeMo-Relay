@@ -18,10 +18,14 @@ The `AtifExporter`:
 ## Quick Start
 
 ```python
-from nat_nexus import AtifExporter, ScopeType
+import nat_nexus
+
+# Replace with your actual tool and LLM functions
+llm_func = lambda request: {**request.content, "response": "ok"}
+search_func = lambda args: {"results": ["result1", "result2"]}
 
 # Create and register
-exporter = AtifExporter(
+exporter = nat_nexus.AtifExporter(
     session_id="session-001",
     agent_name="my_agent",
     agent_version="1.0",
@@ -30,10 +34,10 @@ exporter = AtifExporter(
 exporter.register("atif_logger")
 
 # Run operations
-handle = nat_nexus.scope.push("agent", ScopeType.Agent)
-response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
-result = await nat_nexus.tools.execute("search", {"q": "test"}, search_func)
-nat_nexus.scope.pop(handle)
+with nat_nexus.scope.scope("agent", nat_nexus.ScopeType.Agent) as handle:
+    request = nat_nexus.LLMRequest({}, {"messages": [{"role": "user", "content": "Hello"}]})
+    response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
+    result = await nat_nexus.tools.execute("search", {"q": "test"}, search_func)
 
 # Export trajectory
 trajectory = exporter.export()       # Returns dict

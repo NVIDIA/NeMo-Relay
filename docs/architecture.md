@@ -81,7 +81,7 @@ crates/
       context.rs      # Global state, scope stacks, callable type aliases
       registry.rs     # SortedRegistry<T> for priority-ordered middleware
       stream.rs       # LlmStreamWrapper for streaming LLM responses
-      error.rs        # MagicError enum
+      error.rs        # NexusError enum
       json.rs         # Json type alias, merge_json helper
       atif.rs         # ATIF trajectory exporter
     tests/

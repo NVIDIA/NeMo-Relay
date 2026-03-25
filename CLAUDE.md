@@ -72,7 +72,7 @@ wasm-pack build crates/wasm              # Produces pkg/ with .wasm, .js, .d.ts
 ## Key Conventions
 
 - **Naming**: Rust snake_case, C FFI exports prefixed `nat_nexus_`, Go PascalCase, Node.js camelCase
-- **Error handling**: `Result<T>` with `MagicError` enum (AlreadyExists, NotFound, ScopeStackEmpty, GuardrailRejected, Internal)
+- **Error handling**: `Result<T>` with `NexusError` enum (AlreadyExists, NotFound, ScopeStackEmpty, GuardrailRejected, Internal)
 - **Async**: tokio runtime, `Pin<Box<dyn Future>>` for async ops
 - **JSON**: `Json = serde_json::Value` type alias throughout
 - **Middleware**: Priority-based `SortedRegistry<T>` with lazy re-sort; guardrails sanitize/gate, request intercepts transform, execution intercepts follow middleware chain pattern with `next` parameter

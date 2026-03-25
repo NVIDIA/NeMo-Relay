@@ -10,10 +10,10 @@ use serde::Serialize;
 use serde_json::Value as Json;
 use wasm_bindgen::prelude::*;
 
-use nvidia_nat_nexus_core::MagicError;
+use nvidia_nat_nexus_core::NexusError;
 
-/// Converts an `MagicError` into a `JsValue` string for use as a JS exception.
-pub fn to_js_err(e: MagicError) -> JsValue {
+/// Converts an `NexusError` into a `JsValue` string for use as a JS exception.
+pub fn to_js_err(e: NexusError) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 

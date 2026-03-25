@@ -11,7 +11,7 @@ Functions:
         Return the current (topmost) ``ScopeHandle`` from the task-local scope
         stack, or raise ``RuntimeError`` if the stack is empty.
 
-    push(name, scope_type, *, handle=None, attributes=None, metadata=None)
+    push(name, scope_type, *, handle=None, attributes=None, data=None, metadata=None)
         Push a new child scope. If *handle* is omitted, the scope is parented
         to the current top of stack. Returns the new ``ScopeHandle``.
 
@@ -21,10 +21,17 @@ Functions:
     event(name, *, handle=None, data=None, metadata=None)
         Emit a ``Mark`` event under the current or specified scope.
 
+    scope(name, scope_type, *, handle=None, attributes=None, data=None, metadata=None)
+        Context manager that pushes a new child scope and ensures it is popped at the end.
 Example::
 
     import nat_nexus
 
+    # Using the scope context manager (recommended)
+    with nat_nexus.scope.scope("my-agent", nat_nexus.ScopeType.Agent) as handle:
+        nat_nexus.scope.event("checkpoint", data={"step": 1})
+
+    # Manual push/pop
     handle = nat_nexus.scope.push("my-agent", nat_nexus.ScopeType.Agent)
     nat_nexus.scope.event("checkpoint", data={"step": 1})
     nat_nexus.scope.pop(handle)
@@ -68,7 +75,9 @@ def get_handle() -> Any:
     return _native_get_handle()
 
 
-def push(name: str, scope_type: Any, *, handle: Any = None, attributes: Any = None, data: Any = None, metadata: Any = None) -> Any:
+def push(
+    name: str, scope_type: Any, *, handle: Any = None, attributes: Any = None, data: Any = None, metadata: Any = None
+) -> Any:
     """Push a new child scope onto the scope stack.
 
     If *handle* is omitted, the scope is parented to the current top of stack.
@@ -91,7 +100,9 @@ def event(name: str, *, handle: Any = None, data: Any = None, metadata: Any = No
 
 
 @contextmanager
-def scope(name: str, scope_type: Any, *, handle: Any = None, attributes: Any = None) -> Any:
+def scope(
+    name: str, scope_type: Any, *, handle: Any = None, attributes: Any = None, data: Any = None, metadata: Any = None
+) -> Any:
     """
     Push a new child scope onto the scope stack, ensuring the stack is pop'd at the end
 
@@ -100,10 +111,12 @@ def scope(name: str, scope_type: Any, *, handle: Any = None, attributes: Any = N
     """
     _ensure_scope_stack()
     try:
-        pushed_handle = _native_push_scope(name, scope_type, handle=handle, attributes=attributes)
+        pushed_handle = _native_push_scope(
+            name, scope_type, handle=handle, attributes=attributes, data=data, metadata=metadata
+        )
         yield pushed_handle
     finally:
         _native_pop_scope(pushed_handle)
 
 
-__all__ = ["get_handle", "push", "pop", "event", "scope"]
+__all__ = ["event", "get_handle", "pop", "push", "scope"]

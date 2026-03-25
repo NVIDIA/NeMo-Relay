@@ -25,7 +25,7 @@ use std::sync::{Arc, RwLock};
 use tokio_stream::Stream;
 use uuid::Uuid;
 
-use crate::error::{MagicError, Result};
+use crate::error::{NexusError, Result};
 use crate::json::{merge_json, Json};
 use crate::registry::SortedRegistry;
 use crate::types::*;
@@ -249,14 +249,14 @@ pub fn task_scope_push(handle: ScopeHandle) {
 
 /// Removes a scope handle by UUID from the current execution context's scope stack.
 ///
-/// Returns the removed handle on success, or [`MagicError::NotFound`] if the
+/// Returns the removed handle on success, or [`NexusError::NotFound`] if the
 /// UUID is not in the stack (or refers to the immovable root scope).
 pub fn task_scope_remove(uuid: &Uuid) -> Result<ScopeHandle> {
     let stack = current_scope_stack();
     let mut guard = stack.write().expect("scope stack lock poisoned");
     guard
         .remove(uuid)
-        .ok_or_else(|| MagicError::NotFound("scope handle not found".into()))
+        .ok_or_else(|| NexusError::NotFound("scope handle not found".into()))
 }
 
 // ---------------------------------------------------------------------------
@@ -371,7 +371,14 @@ impl NatNexusContextState {
         data: Option<Json>,
         metadata: Option<Json>,
     ) -> ScopeHandle {
-        let handle = ScopeHandle::new(name.to_string(), scope_type, attributes, parent_uuid, data, metadata);
+        let handle = ScopeHandle::new(
+            name.to_string(),
+            scope_type,
+            attributes,
+            parent_uuid,
+            data,
+            metadata,
+        );
         let event = Event::builder(handle.uuid, EventType::Start)
             .parent_uuid(handle.parent_uuid)
             .name(handle.name.clone())
@@ -891,7 +898,14 @@ mod tests {
     #[test]
     fn test_scope_stack_multiple_push_pop() {
         let mut stack = ScopeStack::new();
-        let h1 = ScopeHandle::new("a".into(), ScopeType::Agent, ScopeAttributes::empty(), None, None, None);
+        let h1 = ScopeHandle::new(
+            "a".into(),
+            ScopeType::Agent,
+            ScopeAttributes::empty(),
+            None,
+            None,
+            None,
+        );
         let h2 = ScopeHandle::new(
             "b".into(),
             ScopeType::Function,
@@ -900,7 +914,14 @@ mod tests {
             None,
             None,
         );
-        let h3 = ScopeHandle::new("c".into(), ScopeType::Tool, ScopeAttributes::empty(), None, None, None);
+        let h3 = ScopeHandle::new(
+            "c".into(),
+            ScopeType::Tool,
+            ScopeAttributes::empty(),
+            None,
+            None,
+            None,
+        );
         let u1 = h1.uuid;
         let u2 = h2.uuid;
         let u3 = h3.uuid;
@@ -923,7 +944,14 @@ mod tests {
     #[test]
     fn test_scope_stack_remove_middle() {
         let mut stack = ScopeStack::new();
-        let h1 = ScopeHandle::new("a".into(), ScopeType::Agent, ScopeAttributes::empty(), None, None, None);
+        let h1 = ScopeHandle::new(
+            "a".into(),
+            ScopeType::Agent,
+            ScopeAttributes::empty(),
+            None,
+            None,
+            None,
+        );
         let h2 = ScopeHandle::new(
             "b".into(),
             ScopeType::Function,
@@ -947,7 +975,7 @@ mod tests {
         let result = task_scope_remove(&Uuid::new_v4());
         assert!(result.is_err());
         match result.unwrap_err() {
-            MagicError::NotFound(msg) => assert!(msg.contains("not found")),
+            NexusError::NotFound(msg) => assert!(msg.contains("not found")),
             e => panic!("expected NotFound, got {e:?}"),
         }
     }
@@ -1106,8 +1134,15 @@ mod tests {
             }),
         );
 
-        let handle =
-            ctx.create_scope_handle("sc", None, ScopeType::Agent, ScopeAttributes::empty(), None, None, None);
+        let handle = ctx.create_scope_handle(
+            "sc",
+            None,
+            ScopeType::Agent,
+            ScopeAttributes::empty(),
+            None,
+            None,
+            None,
+        );
         ctx.end_scope_handle(&handle, None);
 
         let captured = events.lock().unwrap();

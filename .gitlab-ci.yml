@@ -7,14 +7,14 @@ workflow:
     - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_BRANCH == 'main'
-   
+
 stages:
   - check
   - build
   - test
 
 variables:
-  NEXUS_CI_GO_VERSION: "1.26.1"  
+  NEXUS_CI_GO_VERSION: "1.26.1"
   NEXUS_CI_DEBIAN_VERSION: "trixie"
   NEXUS_CI_DEFAULT_PYTHON_VER: "3.13"
   NEXUS_CI_RUST_VERSION: "1.94.0"
@@ -38,10 +38,12 @@ default:
 check:precommit:
   stage: check
   image:
-    name: ghcr.io/astral-sh/uv:${NEXUS_CI_UV_VERSION}-python${NEXUS_CI_DEFAULT_PYTHON_VER}-${NEXUS_CI_DEBIAN_VERSION}
+    name: rust:${NEXUS_CI_RUST_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   variables:
     PRE_COMMIT_HOME: ${CI_PROJECT_DIR}/.cache/pre-commit
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
   cache:
     - key:
         files:
@@ -49,23 +51,29 @@ check:precommit:
       paths:
         - ${CI_PROJECT_DIR}/.cache/pre-commit
   script:
-    - echo "Running pre-commit"
+    - echo "Installing Rust tools"
+    - rustup component add rustfmt clippy
+    - cargo fetch --locked
+    - cargo install cargo-deny --locked
+    - echo "Installing Go"
+    - curl -LsSf https://go.dev/dl/go${NEXUS_CI_GO_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+    - export PATH=$PATH:/usr/local/go/bin
+    - echo "Installing uv"
+    - curl -LsSf https://astral.sh/uv/${NEXUS_CI_UV_VERSION}/install.sh | sh
+    - echo "Installing Python and Python tools"
+    - UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${NEXUS_CI_DEFAULT_PYTHON_VER}
     - uv venv --python=${NEXUS_CI_DEFAULT_PYTHON_VER} --seed ${NEXUS_CI_WORKSPACE_TMP}/.venv
     - source ${NEXUS_CI_WORKSPACE_TMP}/.venv/bin/activate
-    - uv sync --active --only-dev
-    - git reset --hard
-    - pre-commit run --show-diff-on-failure
-  after_script:
-    - uv cache prune --ci
-
-  rules:
-    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
-  cache:
-    key:
-      files:
-        - .pre-commit-config.yaml
-    paths:
-      - .cache/pre-commit
+    - uv sync --active
+    - echo "Running pre-commit"
+    - |
+      if [ -n "${CI_MERGE_REQUEST_DIFF_BASE_SHA}" ]; then
+        echo "Running pre-commit on changed files between ${CI_MERGE_REQUEST_DIFF_BASE_SHA} and ${CI_COMMIT_SHA}"
+        pre-commit run --show-diff-on-failure --from-ref "${CI_MERGE_REQUEST_DIFF_BASE_SHA}" --to-ref "${CI_COMMIT_SHA}"
+      else
+        echo "Warning: Base SHA not available, checking all files"
+        pre-commit run --show-diff-on-failure --all-files
+      fi
   after_script:
     - uv cache prune --ci
 
@@ -184,8 +192,8 @@ test:python_tests:
     - uv cache prune --ci
   script:
     - echo "Creating UV environment"
-    - uv venv --python=${NEXUS_CI_DEFAULT_PYTHON_VER} --seed ${WORKSPACE_TMP}/.venv
-    - source ${WORKSPACE_TMP}/.venv/bin/activate
+    - uv venv --python=${NEXUS_CI_DEFAULT_PYTHON_VER} --seed ${NEXUS_CI_WORKSPACE_TMP}/.venv
+    - source ${NEXUS_CI_WORKSPACE_TMP}/.venv/bin/activate
     - uv sync --active
     - echo "Running Python tests"
     - pytest

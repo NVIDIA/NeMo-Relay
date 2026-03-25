@@ -8,10 +8,10 @@
 
 use serde_json::Value as Json;
 
-use nvidia_nat_nexus_core::MagicError;
+use nvidia_nat_nexus_core::NexusError;
 
-/// Convert an `MagicError` into a `napi::Error` by formatting the error as a reason string.
-pub fn to_napi_err(e: MagicError) -> napi::Error {
+/// Convert an `NexusError` into a `napi::Error` by formatting the error as a reason string.
+pub fn to_napi_err(e: NexusError) -> napi::Error {
     napi::Error::from_reason(e.to_string())
 }
 

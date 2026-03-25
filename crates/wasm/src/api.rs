@@ -245,7 +245,7 @@ pub fn nat_nexus_llm_call(
 ) -> Result<WasmLLMHandle, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvidia_nat_nexus_core::MagicError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     nvidia_nat_nexus_core::nat_nexus_llm_call(
         name,
@@ -312,7 +312,7 @@ pub async fn nat_nexus_llm_call_execute(
 ) -> Result<JsValue, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvidia_nat_nexus_core::MagicError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
@@ -371,7 +371,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
 ) -> Result<WasmLlmStream, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvidia_nat_nexus_core::MagicError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
@@ -888,11 +888,11 @@ pub fn nat_nexus_tool_response_intercepts_wasm(
 pub fn nat_nexus_llm_request_intercepts_wasm(request: JsValue) -> Result<JsValue, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvidia_nat_nexus_core::MagicError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string())))?;
     let result =
         nvidia_nat_nexus_core::nat_nexus_llm_request_intercepts(llm_request).map_err(to_js_err)?;
     let result_json = serde_json::to_value(&result)
-        .map_err(|e| to_js_err(nvidia_nat_nexus_core::MagicError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string())))?;
     Ok(json_to_js(&result_json))
 }
 
@@ -903,7 +903,7 @@ pub fn nat_nexus_llm_request_intercepts_wasm(request: JsValue) -> Result<JsValue
 pub fn nat_nexus_llm_conditional_execution_wasm(request: JsValue) -> Result<(), JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvidia_nat_nexus_core::MagicError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string())))?;
     nvidia_nat_nexus_core::nat_nexus_llm_conditional_execution(&llm_request).map_err(to_js_err)
 }
 

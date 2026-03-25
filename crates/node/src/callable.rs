@@ -18,7 +18,7 @@ use serde_json::Value as Json;
 
 use nvidia_nat_nexus_core::types::LLMRequest;
 use nvidia_nat_nexus_core::{
-    LlmExecutionNextFn, LlmStreamExecutionNextFn, MagicError, Result, ToolExecutionNextFn,
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, NexusError, Result, ToolExecutionNextFn,
 };
 
 use crate::types::JsEvent;
@@ -88,7 +88,7 @@ pub fn wrap_js_tool_exec_fn(
                     Ok(())
                 },
             );
-            rx.await.map_err(|e| MagicError::Internal(e.to_string()))
+            rx.await.map_err(|e| NexusError::Internal(e.to_string()))
         })
     })
 }
@@ -209,7 +209,7 @@ pub fn wrap_js_llm_exec_fn(
                     Ok(())
                 },
             );
-            rx.await.map_err(|e| MagicError::Internal(e.to_string()))
+            rx.await.map_err(|e| NexusError::Internal(e.to_string()))
         })
     })
 }
@@ -293,7 +293,7 @@ pub fn wrap_js_tool_exec_intercept_fn(
                     Ok(())
                 },
             );
-            rx.await.map_err(|e| MagicError::Internal(e.to_string()))
+            rx.await.map_err(|e| NexusError::Internal(e.to_string()))
         })
     })
 }
@@ -323,7 +323,7 @@ pub fn wrap_js_llm_exec_intercept_fn(
                     Ok(())
                 },
             );
-            rx.await.map_err(|e| MagicError::Internal(e.to_string()))
+            rx.await.map_err(|e| NexusError::Internal(e.to_string()))
         })
     })
 }
@@ -365,7 +365,7 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
                         Ok(())
                     },
                 );
-                let result = rx.await.map_err(|e| MagicError::Internal(e.to_string()))?;
+                let result = rx.await.map_err(|e| NexusError::Internal(e.to_string()))?;
                 let stream = tokio_stream::once(Ok(result));
                 Ok(Box::pin(stream)
                     as Pin<
