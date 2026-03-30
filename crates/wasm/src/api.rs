@@ -848,6 +848,16 @@ pub fn set_thread_scope_stack(stack: &WasmScopeStack) {
     nvidia_nat_nexus_core::set_thread_scope_stack(stack.inner.clone());
 }
 
+/// Returns whether the current execution context has an explicitly-initialized
+/// scope stack.
+///
+/// Returns `true` if `setThreadScopeStack` has been called. Returns `false`
+/// when only the auto-created default is present.
+#[wasm_bindgen(js_name = "scopeStackActive")]
+pub fn scope_stack_active() -> bool {
+    nvidia_nat_nexus_core::scope_stack_active()
+}
+
 // ---------------------------------------------------------------------------
 // Standalone middleware chains
 // ---------------------------------------------------------------------------

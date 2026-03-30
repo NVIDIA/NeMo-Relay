@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 const lib = require('../index.js');
 
 const {
-  createScopeStack, currentScopeStack, setThreadScopeStack,
+  createScopeStack, currentScopeStack, setThreadScopeStack, scopeStackActive,
   getHandle, pushScope, popScope,
   ScopeType, JsScopeStack,
 } = lib;
@@ -50,6 +50,12 @@ describe('Context isolation', () => {
     setThreadScopeStack(original);
     const restored = getHandle();
     assert.notEqual(restored.name, 'isolated_scope');
+  });
+
+  it('scopeStackActive returns true after setThreadScopeStack', () => {
+    const stack = createScopeStack();
+    setThreadScopeStack(stack);
+    assert.equal(scopeStackActive(), true);
   });
 
   it('two scope stacks are independent', () => {

@@ -57,15 +57,19 @@ from nat_nexus._native import (
 
 
 def _ensure_scope_stack() -> None:
-    """Ensure the Python-side scope stack contextvar is initialized and synced
-    with the Rust thread-local.
+    """Ensure the current context has a scope stack available.
 
-    This must be called before any scope operation so that:
-    1. The LangChain bridges see ``_scope_stack_var`` as set (``available()``).
-    2. The Rust thread-local ``THREAD_SCOPE_STACK`` matches what Python sees.
+    If the Rust-side thread-local was explicitly set via
+    ``set_thread_scope_stack()`` (e.g. by a worker thread), this is a
+    no-op — the Rust thread-local is already correct.
+
+    Otherwise, calls ``get_scope_stack()`` which creates a scope stack if
+    needed (via the ContextVar) and syncs it to the Rust thread-local.
     """
     import nat_nexus
 
+    if nat_nexus._native_scope_stack_active():
+        return
     nat_nexus.get_scope_stack()
 
 

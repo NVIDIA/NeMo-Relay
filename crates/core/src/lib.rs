@@ -62,12 +62,13 @@ pub mod types;
 
 pub use api::*;
 pub use context::{
-    create_scope_stack, current_scope_stack, global_context, set_thread_scope_stack,
-    task_scope_push, task_scope_remove, task_scope_top, EventSubscriberFn, LlmConditionalFn,
-    LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
-    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn, NatNexusContextState,
-    ScopeStack, ScopeStackHandle, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn, TASK_SCOPE_STACK,
+    create_scope_stack, current_scope_stack, global_context, propagate_scope_to_thread,
+    scope_stack_active, set_thread_scope_stack, sync_thread_scope_stack, task_scope_push,
+    task_scope_remove, task_scope_top, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn,
+    LlmExecutionNextFn, LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
+    LlmStreamExecutionFn, LlmStreamExecutionNextFn, NatNexusContextState, ScopeStack,
+    ScopeStackHandle, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn,
+    ToolSanitizeFn, TASK_SCOPE_STACK,
 };
 pub use error::{NexusError, Result};
 pub use json::{merge_json, Json};

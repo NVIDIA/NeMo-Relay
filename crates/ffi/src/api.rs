@@ -1555,6 +1555,17 @@ pub unsafe extern "C" fn nat_nexus_scope_stack_set_thread(
     NatNexusStatus::Ok
 }
 
+/// Returns whether the current execution context has an explicitly-initialized
+/// scope stack.
+///
+/// Returns `true` if `nat_nexus_scope_stack_set_thread` has been called on the
+/// current OS thread (or the caller is inside a tokio task-local scope).
+/// Returns `false` when only the auto-created default is present.
+#[no_mangle]
+pub extern "C" fn nat_nexus_scope_stack_active() -> bool {
+    core::scope_stack_active()
+}
+
 // ---------------------------------------------------------------------------
 // ATIF exporter
 // ---------------------------------------------------------------------------

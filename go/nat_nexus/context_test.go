@@ -34,6 +34,23 @@ func TestScopeStackClose(t *testing.T) {
 	}
 }
 
+func TestScopeStackActiveInsideRun(t *testing.T) {
+	stack, err := NewScopeStack()
+	if err != nil {
+		t.Fatalf("NewScopeStack failed: %v", err)
+	}
+	defer stack.Close()
+
+	var active bool
+	stack.Run(func() {
+		active = ScopeStackActive()
+	})
+
+	if !active {
+		t.Error("expected ScopeStackActive() to be true inside Run")
+	}
+}
+
 func TestScopeStackRunIsolation(t *testing.T) {
 	stack1, err := NewScopeStack()
 	if err != nil {

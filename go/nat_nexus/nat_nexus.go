@@ -161,6 +161,7 @@ extern void nat_nexus_string_free(char* ptr);
 // Scope stack isolation
 extern int32_t nat_nexus_scope_stack_create(FfiScopeStack** out);
 extern int32_t nat_nexus_scope_stack_set_thread(const FfiScopeStack* stack);
+extern _Bool nat_nexus_scope_stack_active(void);
 extern void nat_nexus_scope_stack_free(FfiScopeStack* ptr);
 
 // ATIF exporter
@@ -1164,11 +1165,23 @@ func (s *ScopeStack) Close() {
 // Run binds this scope stack to the current OS thread and executes fn.
 // The calling goroutine is locked to the OS thread for the duration of fn.
 // All Nexus scope operations within fn will use this scope stack.
+//
+// This is the canonical way to propagate a scope stack to a worker goroutine.
 func (s *ScopeStack) Run(fn func()) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	C.nat_nexus_scope_stack_set_thread(s.ptr)
 	fn()
+}
+
+// ScopeStackActive returns true if the current OS thread has an explicitly-bound
+// scope stack (set via ScopeStack.Run or directly via set_thread), or false if
+// only the auto-created default is present.
+//
+// This function must be called from a goroutine locked to an OS thread
+// (e.g. inside ScopeStack.Run) for the result to be meaningful.
+func ScopeStackActive() bool {
+	return bool(C.nat_nexus_scope_stack_active())
 }
 
 // ---------------------------------------------------------------------------
