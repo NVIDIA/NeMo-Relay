@@ -89,6 +89,17 @@ pub fn set_thread_scope_stack(stack: &JsScopeStack) {
     nvidia_nat_nexus_core::set_thread_scope_stack(stack.inner.clone());
 }
 
+/// Returns whether the current execution context has an explicitly-initialized
+/// scope stack.
+///
+/// Returns `true` if `setThreadScopeStack` has been called on the current
+/// thread, or the caller is inside a task-local scope. Returns `false` when
+/// only the auto-created default is present.
+#[napi]
+pub fn scope_stack_active() -> bool {
+    nvidia_nat_nexus_core::scope_stack_active()
+}
+
 // ---------------------------------------------------------------------------
 // Scope / handle operations
 // ---------------------------------------------------------------------------

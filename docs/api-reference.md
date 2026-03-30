@@ -297,6 +297,16 @@ stack = nat_nexus.get_scope_stack() -> ScopeStack
 
 # Create a new isolated scope stack
 stack = nat_nexus.create_scope_stack() -> ScopeStack
+
+# Bind a scope stack to the current thread (for worker threads)
+nat_nexus.set_thread_scope_stack(stack: ScopeStack) -> None
+
+# Check if a scope stack has been explicitly initialized
+nat_nexus.scope_stack_active() -> bool
+
+# Capture current scope stack for propagation to a worker thread
+# Raises RuntimeError if no scope stack is active
+stack = nat_nexus.propagate_scope_to_thread() -> ScopeStack
 ```
 
 ## Types

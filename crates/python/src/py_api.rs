@@ -48,6 +48,36 @@ pub fn set_thread_scope_stack(stack: &PyScopeStack) {
     nvidia_nat_nexus_core::set_thread_scope_stack(stack.0.clone());
 }
 
+/// Sync a ``ScopeStack`` to the current thread's Rust thread-local storage
+/// **without** marking it as explicitly set.
+///
+/// This is used internally by ``nat_nexus.get_scope_stack()`` to keep the Rust
+/// thread-local in sync with the Python ``contextvars.ContextVar`` without
+/// affecting ``scope_stack_active()``.
+#[pyfunction]
+pub fn sync_thread_scope_stack(stack: &PyScopeStack) {
+    nvidia_nat_nexus_core::sync_thread_scope_stack(stack.0.clone());
+}
+
+/// Return whether the current execution context has an explicitly-initialized
+/// scope stack.
+///
+/// Returns ``True`` if ``set_thread_scope_stack`` has been called on the
+/// current thread, or the caller is inside a tokio task with a task-local
+/// scope stack. Returns ``False`` when only the auto-created default is
+/// present.
+///
+/// .. note::
+///     The Python-level ``nat_nexus.scope_stack_active()`` wrapper also
+///     checks the ``contextvars.ContextVar`` and should be preferred in
+///     Python code. This native function is useful for non-async contexts
+///     where ``contextvars`` are not involved.
+#[pyfunction]
+#[pyo3(name = "scope_stack_active")]
+pub fn py_scope_stack_active() -> bool {
+    nvidia_nat_nexus_core::scope_stack_active()
+}
+
 // ---------------------------------------------------------------------------
 // Scope / handle operations
 // ---------------------------------------------------------------------------
@@ -918,9 +948,11 @@ fn nat_nexus_deregister_subscriber(name: &str) -> PyResult<bool> {
 
 /// Register all API functions into the given `PyModule`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Scope stack creation / binding
+    // Scope stack creation / binding / query
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(set_thread_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(sync_thread_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(py_scope_stack_active, m)?)?;
 
     // Scope/handle ops
     m.add_function(wrap_pyfunction!(nat_nexus_get_handle, m)?)?;

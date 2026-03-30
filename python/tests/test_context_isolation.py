@@ -49,3 +49,102 @@ def test_scope_stack_repr():
     """ScopeStack has a meaningful repr."""
     stack = nat_nexus.create_scope_stack()
     assert "<ScopeStack>" in repr(stack)
+
+
+def test_scope_stack_active_false_by_default():
+    """scope_stack_active returns False before any scope stack is initialized."""
+    import threading
+
+    result = {}
+
+    def worker():
+        # Fresh thread, no ContextVar set
+        result["active"] = nat_nexus.scope_stack_active()
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+    assert result["active"] is False
+
+
+def test_scope_stack_active_true_after_get_scope_stack():
+    """scope_stack_active returns True after get_scope_stack is called (ContextVar path)."""
+    import threading
+
+    result = {}
+
+    def worker():
+        nat_nexus.get_scope_stack()
+        result["active"] = nat_nexus.scope_stack_active()
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+    assert result["active"] is True
+
+
+def test_scope_stack_active_true_after_set_thread():
+    """scope_stack_active returns True after set_thread_scope_stack on a fresh thread."""
+    import threading
+
+    result = {}
+    stack = nat_nexus.create_scope_stack()
+
+    def worker():
+        nat_nexus.set_thread_scope_stack(stack)
+        result["active"] = nat_nexus.scope_stack_active()
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+    assert result["active"] is True
+
+
+def test_propagate_scope_to_thread_fails_when_inactive():
+    """propagate_scope_to_thread raises RuntimeError when no scope is active."""
+    import threading
+
+    result = {}
+
+    def worker():
+        try:
+            nat_nexus.propagate_scope_to_thread()
+            result["raised"] = False
+        except RuntimeError:
+            result["raised"] = True
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+    assert result["raised"] is True
+
+
+def test_propagate_scope_to_thread_returns_scope_stack():
+    """propagate_scope_to_thread returns the current ScopeStack."""
+    nat_nexus.get_scope_stack()
+    stack = nat_nexus.propagate_scope_to_thread()
+    assert isinstance(stack, nat_nexus.ScopeStack)
+
+
+def test_propagate_scope_to_thread_cross_thread():
+    """Propagated scope stack works on a worker thread."""
+    import threading
+
+    # Initialize scope stack and push a scope
+    nat_nexus.get_scope_stack()
+    handle = nat_nexus.scope.push("parent_scope", nat_nexus.ScopeType.Agent)
+
+    propagated = nat_nexus.propagate_scope_to_thread()
+    result = {}
+
+    def worker():
+        nat_nexus.set_thread_scope_stack(propagated)
+        h = nat_nexus.scope.get_handle()
+        result["name"] = h.name
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+
+    assert result["name"] == "parent_scope"
+    nat_nexus.scope.pop(handle)

@@ -777,7 +777,7 @@ index 0000000000..65de480427
 +    try:
 +        # Only consider nat_nexus available if the caller has explicitly
 +        # initialised a scope stack (we don't want to auto-create one).
-+        return nat_nexus._scope_stack_var.get(None) is not None
++        return nat_nexus.scope_stack_active()
 +    except Exception:
 +        return False
 +

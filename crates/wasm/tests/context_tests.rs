@@ -53,6 +53,13 @@ fn test_set_thread_scope_stack_isolates_scopes() {
 }
 
 #[wasm_bindgen_test]
+fn test_scope_stack_active_true_after_set() {
+    let stack = create_scope_stack();
+    set_thread_scope_stack(&stack);
+    assert!(scope_stack_active());
+}
+
+#[wasm_bindgen_test]
 fn test_two_scope_stacks_are_independent() {
     let original = current_scope_stack();
     let stack1 = create_scope_stack();

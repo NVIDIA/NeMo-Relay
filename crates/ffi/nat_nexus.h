@@ -831,6 +831,16 @@ NatNexusStatus nat_nexus_scope_stack_create(struct FfiScopeStack **out);
 NatNexusStatus nat_nexus_scope_stack_set_thread(const struct FfiScopeStack *stack);
 
 /**
+ * Returns whether the current execution context has an explicitly-initialized
+ * scope stack.
+ *
+ * Returns `true` if `nat_nexus_scope_stack_set_thread` has been called on the
+ * current OS thread (or the caller is inside a tokio task-local scope).
+ * Returns `false` when only the auto-created default is present.
+ */
+bool nat_nexus_scope_stack_active(void);
+
+/**
  * Creates a new ATIF exporter.
  *
  * # Parameters

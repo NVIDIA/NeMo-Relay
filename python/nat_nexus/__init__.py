@@ -80,7 +80,9 @@ from nat_nexus._native import (
 )
 from nat_nexus._native import ScopeStack as _ScopeStack
 from nat_nexus._native import create_scope_stack as _create_scope_stack
+from nat_nexus._native import scope_stack_active as _native_scope_stack_active
 from nat_nexus._native import set_thread_scope_stack as _set_thread_scope_stack
+from nat_nexus._native import sync_thread_scope_stack as _sync_thread_scope_stack
 
 _scope_stack_var: contextvars.ContextVar[_ScopeStack] = contextvars.ContextVar("nat_nexus_scope_stack")
 
@@ -88,8 +90,14 @@ _scope_stack_var: contextvars.ContextVar[_ScopeStack] = contextvars.ContextVar("
 def get_scope_stack() -> _ScopeStack:
     """Get the current task's scope stack, creating one if needed.
 
-    Also binds the scope stack to the Rust-side thread-local storage so that
+    Also syncs the scope stack to the Rust-side thread-local storage so that
     native API calls on this thread use the same scope stack.
+
+    .. note::
+        This uses ``sync_thread_scope_stack`` (not ``set_thread_scope_stack``)
+        so the internal sync does not set the ``scope_stack_active()`` flag.
+        Only explicit user calls to ``set_thread_scope_stack()`` mark the
+        thread as having an active scope stack.
     """
     stack = _scope_stack_var.get(None)
     if stack is None:
@@ -97,8 +105,66 @@ def get_scope_stack() -> _ScopeStack:
         _scope_stack_var.set(stack)
     # Keep the Rust thread-local in sync so that native calls (which read
     # from THREAD_SCOPE_STACK / TASK_SCOPE_STACK) see the same scope stack.
-    _set_thread_scope_stack(stack)
+    # Uses sync (not set) to avoid marking this thread as explicitly active.
+    _sync_thread_scope_stack(stack)
     return stack
+
+
+def scope_stack_active() -> bool:
+    """Return whether the current context has an explicitly-initialized scope stack.
+
+    Returns ``True`` when:
+    - The Python-side ``contextvars.ContextVar`` has been set (e.g. via
+      ``get_scope_stack()``), **or**
+    - The Rust-side thread-local has been explicitly set via
+      ``set_thread_scope_stack()``.
+
+    Returns ``False`` when only the auto-created default is present.
+
+    This replaces the ``nat_nexus._scope_stack_var.get(None) is not None``
+    pattern used in integrations.
+    """
+    if _scope_stack_var.get(None) is not None:
+        return True
+    return _native_scope_stack_active()
+
+
+def propagate_scope_to_thread() -> _ScopeStack:
+    """Capture the current scope stack for propagation to a worker thread.
+
+    Returns the current ``ScopeStack`` handle. Call
+    ``set_thread_scope_stack()`` with the returned value inside the worker
+    thread before making any Nexus API calls.
+
+    Example::
+
+        stack = nat_nexus.propagate_scope_to_thread()
+
+        def worker():
+            nat_nexus.set_thread_scope_stack(stack)
+            # All Nexus calls on this thread now use the captured stack
+            ...
+
+        with ThreadPoolExecutor() as pool:
+            pool.submit(worker).result()
+
+    Raises:
+        RuntimeError: If no scope stack has been explicitly initialized in
+            the current context (i.e., ``scope_stack_active()`` returns
+            ``False``).
+    """
+    if not scope_stack_active():
+        raise RuntimeError(
+            "no active scope stack in current context; call nat_nexus.get_scope_stack() or nat_nexus.scope.push() first"
+        )
+    # Return the ContextVar value directly if available, to avoid
+    # calling get_scope_stack() which would sync to the Rust thread-local.
+    stack = _scope_stack_var.get(None)
+    if stack is not None:
+        return stack
+    # Rust-side explicit flag is set. Return via get_scope_stack() which
+    # will create a ContextVar entry and sync.
+    return get_scope_stack()
 
 
 ScopeStack = _ScopeStack
@@ -118,6 +184,8 @@ __all__ = [
     "ScopeStack",
     "create_scope_stack",
     "get_scope_stack",
+    "scope_stack_active",
+    "propagate_scope_to_thread",
     "set_thread_scope_stack",
     # Types
     "ScopeAttributes",

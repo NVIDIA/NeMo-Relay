@@ -6,7 +6,8 @@
 use std::sync::Arc;
 
 use nvidia_nat_nexus_core::context::{
-    create_scope_stack, current_scope_stack, set_thread_scope_stack, TASK_SCOPE_STACK,
+    create_scope_stack, current_scope_stack, propagate_scope_to_thread, scope_stack_active,
+    set_thread_scope_stack, TASK_SCOPE_STACK,
 };
 use nvidia_nat_nexus_core::types::*;
 use nvidia_nat_nexus_core::{task_scope_push, task_scope_top};
@@ -189,6 +190,117 @@ fn test_set_thread_scope_stack() {
     .join();
 
     result.unwrap();
+}
+
+/// scope_stack_active returns false on a fresh thread (auto-created default).
+#[test]
+fn test_scope_stack_active_false_by_default() {
+    let result = std::thread::spawn(scope_stack_active).join();
+    assert!(
+        !result.unwrap(),
+        "scope_stack_active should be false on a fresh thread"
+    );
+}
+
+/// scope_stack_active returns true after set_thread_scope_stack is called.
+#[test]
+fn test_scope_stack_active_true_after_explicit_set() {
+    let result = std::thread::spawn(|| {
+        assert!(!scope_stack_active());
+        let custom = create_scope_stack();
+        set_thread_scope_stack(custom);
+        scope_stack_active()
+    })
+    .join();
+    assert!(
+        result.unwrap(),
+        "scope_stack_active should be true after set_thread_scope_stack"
+    );
+}
+
+/// scope_stack_active returns true inside a TASK_SCOPE_STACK.scope() block.
+#[tokio::test]
+async fn test_scope_stack_active_in_task_local() {
+    let stack = create_scope_stack();
+    let active = TASK_SCOPE_STACK
+        .scope(stack, async { scope_stack_active() })
+        .await;
+    assert!(
+        active,
+        "scope_stack_active should be true inside task-local scope"
+    );
+}
+
+/// propagate_scope_to_thread fails when no scope is active.
+#[test]
+fn test_propagate_scope_to_thread_fails_when_inactive() {
+    let result = std::thread::spawn(propagate_scope_to_thread).join();
+    assert!(
+        result.unwrap().is_err(),
+        "propagate_scope_to_thread should fail on a fresh thread"
+    );
+}
+
+/// propagate_scope_to_thread returns the current scope stack handle.
+#[test]
+fn test_propagate_scope_to_thread_returns_correct_stack() {
+    let result = std::thread::spawn(|| {
+        let custom = create_scope_stack();
+        // Push a scope so we can identify the stack
+        {
+            let mut guard = custom.write().unwrap();
+            let h = ScopeHandle::new(
+                "propagated".into(),
+                ScopeType::Agent,
+                ScopeAttributes::empty(),
+                None,
+                None,
+                None,
+            );
+            guard.push(h);
+        }
+        set_thread_scope_stack(custom);
+        let propagated = propagate_scope_to_thread().expect("should succeed");
+        let top = propagated.read().unwrap().top().clone();
+        top.name.clone()
+    })
+    .join();
+    assert_eq!(result.unwrap(), "propagated");
+}
+
+/// propagate_scope_to_thread handle can be used on another thread via set_thread_scope_stack.
+#[test]
+fn test_propagate_scope_to_thread_cross_thread() {
+    // Parent thread: create and set a scope stack, return the propagated handle
+    let parent_handle = std::thread::spawn(|| {
+        let custom = create_scope_stack();
+        {
+            let mut guard = custom.write().unwrap();
+            let h = ScopeHandle::new(
+                "parent_scope".into(),
+                ScopeType::Agent,
+                ScopeAttributes::empty(),
+                None,
+                None,
+                None,
+            );
+            guard.push(h);
+        }
+        set_thread_scope_stack(custom);
+        propagate_scope_to_thread().expect("should succeed")
+    })
+    .join()
+    .unwrap();
+
+    // Child thread: receive and bind the propagated handle
+    let child_result = std::thread::spawn(move || {
+        assert!(!scope_stack_active());
+        set_thread_scope_stack(parent_handle);
+        assert!(scope_stack_active());
+        task_scope_top().name.clone()
+    })
+    .join();
+    assert_eq!(child_result.unwrap(), "parent_scope");
 }
 
 /// current_scope_stack returns different handles for different tokio tasks.

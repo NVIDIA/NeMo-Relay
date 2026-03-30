@@ -207,6 +207,11 @@ thread_local! {
     /// Thread-local scope stack handle, used as a fallback when no task-local
     /// scope is set. Each thread gets its own independent scope stack by default.
     static THREAD_SCOPE_STACK: RefCell<ScopeStackHandle> = RefCell::new(create_scope_stack());
+
+    /// Tracks whether [`set_thread_scope_stack`] has been explicitly called on
+    /// this thread. Used by [`scope_stack_active`] to distinguish an
+    /// explicitly-bound scope stack from the auto-created default.
+    static THREAD_SCOPE_STACK_EXPLICIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Returns the [`ScopeStackHandle`] for the current execution context.
@@ -224,8 +229,51 @@ pub fn current_scope_stack() -> ScopeStackHandle {
 ///
 /// This is primarily used by FFI consumers (e.g. Go goroutines) that need to
 /// pin a particular scope stack to an OS thread before making API calls.
+///
+/// After this call, [`scope_stack_active`] will return `true` for this thread.
 pub fn set_thread_scope_stack(handle: ScopeStackHandle) {
     THREAD_SCOPE_STACK.with(|s| *s.borrow_mut() = handle);
+    THREAD_SCOPE_STACK_EXPLICIT.with(|f| f.set(true));
+}
+
+/// Syncs a [`ScopeStackHandle`] to the current thread's thread-local storage
+/// **without** marking it as explicitly set.
+///
+/// This is used internally by binding layers (e.g. Python's `get_scope_stack()`)
+/// that need to keep the Rust thread-local in sync with a higher-level context
+/// mechanism (e.g. `contextvars.ContextVar`) without affecting the
+/// [`scope_stack_active`] flag.
+pub fn sync_thread_scope_stack(handle: ScopeStackHandle) {
+    THREAD_SCOPE_STACK.with(|s| *s.borrow_mut() = handle);
+}
+
+/// Returns whether the current execution context has an explicitly-initialized
+/// scope stack.
+///
+/// Returns `true` if the caller is inside a tokio task with [`TASK_SCOPE_STACK`]
+/// set, or if [`set_thread_scope_stack`] has been called on the current OS
+/// thread. Returns `false` when only the auto-created default is present.
+pub fn scope_stack_active() -> bool {
+    TASK_SCOPE_STACK
+        .try_with(|_| true)
+        .unwrap_or_else(|_| THREAD_SCOPE_STACK_EXPLICIT.with(|f| f.get()))
+}
+
+/// Captures the current scope stack for propagation to a worker thread.
+///
+/// Returns a clone of the current [`ScopeStackHandle`] that can be passed to
+/// [`set_thread_scope_stack`] on a worker thread. Fails if no scope stack has
+/// been explicitly initialized in the current context (i.e.,
+/// [`scope_stack_active`] returns `false`).
+pub fn propagate_scope_to_thread() -> Result<ScopeStackHandle> {
+    if !scope_stack_active() {
+        return Err(NexusError::Internal(
+            "no active scope stack in current context; \
+             call create_scope_stack() and set_thread_scope_stack() first"
+                .into(),
+        ));
+    }
+    Ok(current_scope_stack())
 }
 
 /// Returns a clone of the top scope handle from the current execution context.

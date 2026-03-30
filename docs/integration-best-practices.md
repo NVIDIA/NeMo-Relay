@@ -123,7 +123,7 @@ def available() -> bool:
     if not _HAS_NAT_NEXUS:
         return False
     try:
-        return nat_nexus._scope_stack_var.get(None) is not None
+        return nat_nexus.scope_stack_active()
     except Exception:
         return False
 ```
@@ -475,15 +475,15 @@ thread-locals (for native FFI calls). The integration must keep these in sync.
 ### Scope stack propagation
 
 When spawning a new thread or offloading work to a thread pool, propagate the scope
-stack:
+stack using `propagate_scope_to_thread()`:
 
 ```python
 import contextvars
 from concurrent.futures import ThreadPoolExecutor
 
-# Capture current context
+# Capture current scope stack (raises RuntimeError if none is active)
+scope_stack = nnex.propagate_scope_to_thread()
 ctx = contextvars.copy_context()
-scope_stack = nnex.get_scope_stack()
 
 def worker():
     # Bind the Rust thread-local in the worker thread
@@ -492,6 +492,14 @@ def worker():
 
 with ThreadPoolExecutor(max_workers=1) as pool:
     result = pool.submit(ctx.run, worker).result()
+```
+
+You can also check whether a scope stack is active before attempting propagation:
+
+```python
+if nnex.scope_stack_active():
+    scope_stack = nnex.propagate_scope_to_thread()
+    # ... propagate to worker ...
 ```
 
 ### Sync-to-async bridge

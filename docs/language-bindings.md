@@ -115,9 +115,17 @@ Python uses `contextvars.ContextVar` for async-safe per-task isolation. Each `as
 
 ```python
 async def handle_request():
-    stack = nat_nexus.create_scope_stack()
-    nat_nexus._scope_stack_var.set(stack)
+    # get_scope_stack() lazily creates an isolated stack per task
+    nat_nexus.get_scope_stack()
     # All scope operations now use this isolated stack
+```
+
+Check whether a scope stack is active, and propagate to worker threads:
+
+```python
+if nat_nexus.scope_stack_active():
+    stack = nat_nexus.propagate_scope_to_thread()
+    # Pass `stack` to worker, call nat_nexus.set_thread_scope_stack(stack) there
 ```
 
 ## Node.js
@@ -294,6 +302,11 @@ go func() {
     stack.Run(func() {
         // All scope operations use this stack
         scope.Push("agent", scope.TypeAgent)
+
+        // Check if a scope stack is explicitly bound
+        if nat_nexus.ScopeStackActive() {
+            // ...
+        }
     })
 }()
 ```
@@ -338,7 +351,7 @@ popScope(handle);
 | Build tool | uv / PyO3 | CGo | napi-build | wasm-pack |
 | Output | `.so` (abi3) | CGo packages | `.node` addon | `.wasm` + `.js` |
 | Async | asyncio | goroutines | event loop | spawn_local |
-| Context isolation | `contextvars` | `ScopeStack.Run()` | `setThreadScopeStack()` | manual |
+| Context isolation | `contextvars` + `scope_stack_active()` | `ScopeStack.Run()` + `ScopeStackActive()` | `setThreadScopeStack()` + `scopeStackActive()` | `setThreadScopeStack()` + `scopeStackActive()` |
 | Callback pattern | `PyAny` → closure | C trampolines | `ThreadsafeFunction` | `js_sys::Function` |
 | Stream support | AsyncIterator | Channel-based | Push-based bridge | Async iterator |
 | Typed wrappers | `nat_nexus.typed` | — | `typed.js` | — |

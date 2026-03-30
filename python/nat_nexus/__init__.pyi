@@ -10,6 +10,7 @@ all types exported from the native Rust extension and all API functions.
 import contextvars
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
+from nat_nexus import scope as scope
 from nat_nexus import typed as typed
 
 Json = Any
@@ -412,6 +413,39 @@ def create_scope_stack() -> ScopeStack:
 
 def get_scope_stack() -> ScopeStack:
     """Get the current task's scope stack, creating one if needed."""
+    ...
+
+def set_thread_scope_stack(stack: ScopeStack) -> None:
+    """Bind a ``ScopeStack`` to the current thread's thread-local storage.
+
+    After this call, all Nexus API calls on the current thread will use
+    the given scope stack. Primarily used to propagate scope context into
+    worker threads (e.g. ``ThreadPoolExecutor`` workers).
+    """
+    ...
+
+def _native_scope_stack_active() -> bool: ...
+def scope_stack_active() -> bool:
+    """Return whether the current context has an explicitly-initialized scope stack.
+
+    Returns ``True`` when the Python-side ``contextvars.ContextVar`` has been
+    set (e.g. via ``get_scope_stack()``) or the Rust-side thread-local has been
+    explicitly set via ``set_thread_scope_stack()``.
+
+    Returns ``False`` when only the auto-created default is present.
+    """
+    ...
+
+def propagate_scope_to_thread() -> ScopeStack:
+    """Capture the current scope stack for propagation to a worker thread.
+
+    Returns the current ``ScopeStack`` handle. Call
+    ``set_thread_scope_stack()`` with the returned value inside the worker
+    thread before making any Nexus API calls.
+
+    Raises:
+        RuntimeError: If no scope stack has been explicitly initialized.
+    """
     ...
 
 # ---------------------------------------------------------------------------

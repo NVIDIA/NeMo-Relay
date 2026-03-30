@@ -75,6 +75,8 @@ set_thread_scope_stack(custom);
 | `create_scope_stack()` | Create new isolated stack with fresh root |
 | `current_scope_stack()` | Get current task/thread's stack |
 | `set_thread_scope_stack(stack)` | Bind stack to current OS thread |
+| `scope_stack_active()` | Check if an explicit scope stack is set |
+| `propagate_scope_to_thread()` | Capture current stack for worker-thread propagation (Python) |
 
 ### Per-Language Patterns
 
@@ -84,10 +86,9 @@ set_thread_scope_stack(custom);
 import nat_nexus
 
 async def handle_request():
-    # Each asyncio task inherits parent's ContextVar at fork time
-    # Override to isolate:
-    stack = nat_nexus.create_scope_stack()
-    nat_nexus._scope_stack_var.set(stack)
+    # Each asyncio task gets its own scope stack via get_scope_stack()
+    # (lazily created, stored in a contextvars.ContextVar)
+    nat_nexus.get_scope_stack()
 
     handle = nat_nexus.scope.push("agent", nat_nexus.ScopeType.Agent)
     # ... process request ...
@@ -95,6 +96,15 @@ async def handle_request():
 ```
 
 Lazy initialization: `get_scope_stack()` creates a new stack on first access in a task.
+
+Check whether a scope stack has been explicitly initialized (useful for integrations
+that should only activate when the caller has set up Nexus):
+
+```python
+if nat_nexus.scope_stack_active():
+    # Nexus is active — use the middleware pipeline
+    ...
+```
 
 **Go** — uses `ScopeStack.Run()` which locks the goroutine to an OS thread:
 
@@ -156,9 +166,8 @@ Each agent gets its own scope stack with a unique root UUID. All middleware regi
 
 ```python
 async def handle_agent(agent_id: str):
-    # Isolated stack for this agent
-    stack = nat_nexus.create_scope_stack()
-    nat_nexus._scope_stack_var.set(stack)
+    # Isolated stack for this agent — get_scope_stack() creates one per task
+    nat_nexus.get_scope_stack()
 
     handle = nat_nexus.scope.push(f"agent-{agent_id}", nat_nexus.ScopeType.Agent)
     response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
