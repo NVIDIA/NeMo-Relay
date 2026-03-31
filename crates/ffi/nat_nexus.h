@@ -121,6 +121,10 @@ enum NatNexusStatus {
    * A C string argument contained invalid UTF-8.
    */
   NAT_NEXUS_STATUS_INVALID_UTF8 = 8,
+  /**
+   * A function argument had an invalid value (e.g. malformed UUID).
+   */
+  NAT_NEXUS_STATUS_INVALID_ARG = 9,
 };
 typedef int32_t NatNexusStatus;
 
@@ -910,6 +914,278 @@ NatNexusStatus nat_nexus_atif_exporter_export(const struct FfiAtifExporter *expo
  * `exporter` must be a valid, non-null `FfiAtifExporter` pointer.
  */
 NatNexusStatus nat_nexus_atif_exporter_clear(const struct FfiAtifExporter *exporter);
+
+/**
+ * Register a scope-local tool conditional execution guardrail.
+ *
+ * # Parameters
+ * - `scope_uuid`: UUID of the target scope (null-terminated C string).
+ * - `name`: Unique guardrail name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `cb`: Conditional callback.
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
+ */
+NatNexusStatus nat_nexus_scope_register_tool_conditional_execution_guardrail(const char *scope_uuid,
+                                                                             const char *name,
+                                                                             int32_t priority,
+                                                                             NatNexusToolConditionalCb cb,
+                                                                             void *user_data,
+                                                                             NatNexusFreeFn free_fn);
+
+/**
+ * Deregister a scope-local tool conditional execution guardrail by name.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings.
+ */
+NatNexusStatus nat_nexus_scope_deregister_tool_conditional_execution_guardrail(const char *scope_uuid,
+                                                                               const char *name);
+
+/**
+ * Register a scope-local tool execution intercept following the middleware
+ * chain pattern.
+ *
+ * # Parameters
+ * - `scope_uuid`: UUID of the target scope (null-terminated C string).
+ * - `name`: Unique intercept name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `exec_cb`: Middleware callback receiving args and a next function.
+ * - `exec_user_data`: Opaque pointer for the execution callback.
+ * - `exec_free`: Optional destructor for `exec_user_data`.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings. Callback pointers must be valid.
+ */
+NatNexusStatus nat_nexus_scope_register_tool_execution_intercept(const char *scope_uuid,
+                                                                 const char *name,
+                                                                 int32_t priority,
+                                                                 NatNexusToolExecInterceptCb exec_cb,
+                                                                 void *exec_user_data,
+                                                                 NatNexusFreeFn exec_free);
+
+/**
+ * Deregister a scope-local tool execution intercept by name.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings.
+ */
+NatNexusStatus nat_nexus_scope_deregister_tool_execution_intercept(const char *scope_uuid,
+                                                                   const char *name);
+
+/**
+ * Register a scope-local LLM request sanitization guardrail.
+ *
+ * # Parameters
+ * - `scope_uuid`: UUID of the target scope (null-terminated C string).
+ * - `name`: Unique guardrail name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `cb`: Request sanitize callback.
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
+ */
+NatNexusStatus nat_nexus_scope_register_llm_sanitize_request_guardrail(const char *scope_uuid,
+                                                                       const char *name,
+                                                                       int32_t priority,
+                                                                       NatNexusLlmRequestCb cb,
+                                                                       void *user_data,
+                                                                       NatNexusFreeFn free_fn);
+
+/**
+ * Deregister a scope-local LLM request sanitization guardrail by name.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings.
+ */
+NatNexusStatus nat_nexus_scope_deregister_llm_sanitize_request_guardrail(const char *scope_uuid,
+                                                                         const char *name);
+
+/**
+ * Register a scope-local LLM response sanitization guardrail.
+ *
+ * # Parameters
+ * - `scope_uuid`: UUID of the target scope (null-terminated C string).
+ * - `name`: Unique guardrail name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `cb`: JSON-to-JSON callback.
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
+ */
+NatNexusStatus nat_nexus_scope_register_llm_sanitize_response_guardrail(const char *scope_uuid,
+                                                                        const char *name,
+                                                                        int32_t priority,
+                                                                        NatNexusJsonCb cb,
+                                                                        void *user_data,
+                                                                        NatNexusFreeFn free_fn);
+
+/**
+ * Deregister a scope-local LLM response sanitization guardrail by name.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings.
+ */
+NatNexusStatus nat_nexus_scope_deregister_llm_sanitize_response_guardrail(const char *scope_uuid,
+                                                                          const char *name);
+
+/**
+ * Register a scope-local LLM conditional execution guardrail.
+ *
+ * # Parameters
+ * - `scope_uuid`: UUID of the target scope (null-terminated C string).
+ * - `name`: Unique guardrail name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `cb`: Conditional callback.
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
+ */
+NatNexusStatus nat_nexus_scope_register_llm_conditional_execution_guardrail(const char *scope_uuid,
+                                                                            const char *name,
+                                                                            int32_t priority,
+                                                                            NatNexusLlmConditionalCb cb,
+                                                                            void *user_data,
+                                                                            NatNexusFreeFn free_fn);
+
+/**
+ * Deregister a scope-local LLM conditional execution guardrail by name.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings.
+ */
+NatNexusStatus nat_nexus_scope_deregister_llm_conditional_execution_guardrail(const char *scope_uuid,
+                                                                              const char *name);
+
+/**
+ * Register a scope-local LLM request intercept.
+ *
+ * # Parameters
+ * - `scope_uuid`: UUID of the target scope (null-terminated C string).
+ * - `name`: Unique intercept name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `break_chain`: If true, stop processing further intercepts after this one.
+ * - `cb`: LLM request transform callback.
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
+ */
+NatNexusStatus nat_nexus_scope_register_llm_request_intercept(const char *scope_uuid,
+                                                              const char *name,
+                                                              int32_t priority,
+                                                              bool break_chain,
+                                                              NatNexusLlmRequestCb cb,
+                                                              void *user_data,
+                                                              NatNexusFreeFn free_fn);
+
+/**
+ * Deregister a scope-local LLM request intercept by name.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings.
+ */
+NatNexusStatus nat_nexus_scope_deregister_llm_request_intercept(const char *scope_uuid,
+                                                                const char *name);
+
+/**
+ * Register a scope-local LLM execution intercept following the middleware
+ * chain pattern.
+ *
+ * # Parameters
+ * - `scope_uuid`: UUID of the target scope (null-terminated C string).
+ * - `name`: Unique intercept name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_user_data`: Opaque pointer for the execution callback.
+ * - `exec_free`: Optional destructor for `exec_user_data`.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings. Callback pointers must be valid.
+ */
+NatNexusStatus nat_nexus_scope_register_llm_execution_intercept(const char *scope_uuid,
+                                                                const char *name,
+                                                                int32_t priority,
+                                                                NatNexusLlmExecInterceptCb exec_cb,
+                                                                void *exec_user_data,
+                                                                NatNexusFreeFn exec_free);
+
+/**
+ * Deregister a scope-local LLM execution intercept by name.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings.
+ */
+NatNexusStatus nat_nexus_scope_deregister_llm_execution_intercept(const char *scope_uuid,
+                                                                  const char *name);
+
+/**
+ * Register a scope-local LLM streaming execution intercept following the
+ * middleware chain pattern.
+ *
+ * # Parameters
+ * - `scope_uuid`: UUID of the target scope (null-terminated C string).
+ * - `name`: Unique intercept name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_user_data`: Opaque pointer for the execution callback.
+ * - `exec_free`: Optional destructor for `exec_user_data`.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings. Callback pointers must be valid.
+ */
+NatNexusStatus nat_nexus_scope_register_llm_stream_execution_intercept(const char *scope_uuid,
+                                                                       const char *name,
+                                                                       int32_t priority,
+                                                                       NatNexusLlmExecInterceptCb exec_cb,
+                                                                       void *exec_user_data,
+                                                                       NatNexusFreeFn exec_free);
+
+/**
+ * Deregister a scope-local LLM streaming execution intercept by name.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings.
+ */
+NatNexusStatus nat_nexus_scope_deregister_llm_stream_execution_intercept(const char *scope_uuid,
+                                                                         const char *name);
+
+/**
+ * Register a scope-local event subscriber.
+ *
+ * # Parameters
+ * - `scope_uuid`: UUID of the target scope (null-terminated C string).
+ * - `name`: Unique subscriber name.
+ * - `cb`: Event callback.
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
+ */
+NatNexusStatus nat_nexus_scope_register_subscriber(const char *scope_uuid,
+                                                   const char *name,
+                                                   NatNexusEventSubscriberCb cb,
+                                                   void *user_data,
+                                                   NatNexusFreeFn free_fn);
+
+/**
+ * Deregister a scope-local event subscriber by name.
+ *
+ * # Safety
+ * `scope_uuid` and `name` must be valid C strings.
+ */
+NatNexusStatus nat_nexus_scope_deregister_subscriber(const char *scope_uuid, const char *name);
 
 /**
  * Run the registered tool request intercept chain on the given arguments.

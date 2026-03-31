@@ -111,9 +111,11 @@ pub type EventSubscriberFn = Box<dyn Fn(&Event) + Send + Sync>;
 /// type [`ScopeType::Agent`]). Scopes are pushed when entering a new
 /// execution context and removed by UUID when exiting. The root scope
 /// at index 0 can never be removed.
-#[derive(Debug, Clone)]
 pub struct ScopeStack {
     stack: Vec<ScopeHandle>,
+    /// Per-scope middleware registries, keyed by scope UUID. Lazily populated
+    /// on first scope-local registration and automatically cleaned up on scope pop.
+    scope_registries: HashMap<Uuid, ScopeLocalRegistries>,
 }
 
 impl ScopeStack {
@@ -129,7 +131,10 @@ impl ScopeStack {
             None,
             None,
         );
-        Self { stack: vec![root] }
+        Self {
+            stack: vec![root],
+            scope_registries: HashMap::new(),
+        }
     }
 
     /// Pushes a new scope handle onto the top of the stack.
@@ -155,18 +160,71 @@ impl ScopeStack {
             .uuid
     }
 
+    /// Finds a scope by UUID and returns a reference to it, or `None` if not found.
+    pub fn find(&self, uuid: &Uuid) -> Option<&ScopeHandle> {
+        self.stack.iter().find(|h| h.uuid == *uuid)
+    }
+
     /// Removes a scope by UUID and returns it, or `None` if not found or if
     /// the UUID belongs to the root scope (which cannot be removed).
+    ///
+    /// Also removes any scope-local registries associated with the scope.
     pub fn remove(&mut self, uuid: &Uuid) -> Option<ScopeHandle> {
         // Never remove the root (index 0)
         if let Some(pos) = self.stack.iter().position(|h| h.uuid == *uuid) {
             if pos == 0 {
                 return None; // cannot remove root
             }
+            self.scope_registries.remove(uuid);
             Some(self.stack.remove(pos))
         } else {
             None
         }
+    }
+
+    /// Returns a mutable reference to the scope-local registries for the given
+    /// scope UUID, creating a new empty set if none exists yet.
+    ///
+    /// Returns `None` if the UUID is not in the current scope stack.
+    pub fn local_registries_mut(&mut self, uuid: &Uuid) -> Option<&mut ScopeLocalRegistries> {
+        // Verify the scope UUID exists in the stack
+        if !self.stack.iter().any(|h| h.uuid == *uuid) {
+            return None;
+        }
+        Some(self.scope_registries.entry(*uuid).or_default())
+    }
+
+    /// Collects references to scope-local registries for a specific field,
+    /// in stack order (root to top). Used by chain methods to merge with global.
+    ///
+    /// The closure `field` extracts the desired registry from each `ScopeLocalRegistries`.
+    pub fn collect_scope_local_registries<'a, T>(
+        &'a self,
+        field: impl Fn(&'a ScopeLocalRegistries) -> &'a SortedRegistry<T>,
+    ) -> Vec<&'a SortedRegistry<T>> {
+        self.stack
+            .iter()
+            .filter_map(|h| self.scope_registries.get(&h.uuid))
+            .map(field)
+            .collect()
+    }
+
+    /// Collects scope-local event subscribers in stack order (root to top).
+    pub fn collect_scope_local_subscribers(&self) -> Vec<&HashMap<String, EventSubscriberFn>> {
+        self.stack
+            .iter()
+            .filter_map(|h| self.scope_registries.get(&h.uuid))
+            .map(|r| &r.event_subscribers)
+            .collect()
+    }
+}
+
+impl std::fmt::Debug for ScopeStack {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScopeStack")
+            .field("stack", &self.stack)
+            .field("scope_registries_count", &self.scope_registries.len())
+            .finish()
     }
 }
 
@@ -308,6 +366,121 @@ pub fn task_scope_remove(uuid: &Uuid) -> Result<ScopeHandle> {
 }
 
 // ---------------------------------------------------------------------------
+// Scope-local registries
+// ---------------------------------------------------------------------------
+
+/// Per-scope middleware registries. Mirrors the 12 sorted registries plus
+/// event subscribers from [`NatNexusContextState`], but scoped to a single
+/// scope in the stack. Created lazily on first scope-local registration and
+/// dropped automatically when the scope is popped.
+pub struct ScopeLocalRegistries {
+    pub tool_sanitize_request_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
+    pub tool_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
+    pub tool_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<ToolConditionalFn>>,
+    pub tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
+    pub tool_response_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
+    pub tool_execution_intercepts: SortedRegistry<ExecutionIntercept<ToolExecutionFn>>,
+    pub llm_sanitize_request_guardrails: SortedRegistry<GuardrailEntry<LlmSanitizeRequestFn>>,
+    pub llm_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<LlmSanitizeResponseFn>>,
+    pub llm_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<LlmConditionalFn>>,
+    pub llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
+    pub llm_execution_intercepts: SortedRegistry<ExecutionIntercept<LlmExecutionFn>>,
+    pub llm_stream_execution_intercepts: SortedRegistry<ExecutionIntercept<LlmStreamExecutionFn>>,
+    pub event_subscribers: HashMap<String, EventSubscriberFn>,
+}
+
+impl ScopeLocalRegistries {
+    /// Creates a new set of empty scope-local registries.
+    pub fn new() -> Self {
+        Self {
+            tool_sanitize_request_guardrails: SortedRegistry::new(|e| e.priority),
+            tool_sanitize_response_guardrails: SortedRegistry::new(|e| e.priority),
+            tool_conditional_execution_guardrails: SortedRegistry::new(|e| e.priority),
+            tool_request_intercepts: SortedRegistry::new(|e| e.priority),
+            tool_response_intercepts: SortedRegistry::new(|e| e.priority),
+            tool_execution_intercepts: SortedRegistry::new(|e| e.priority),
+            llm_sanitize_request_guardrails: SortedRegistry::new(|e| e.priority),
+            llm_sanitize_response_guardrails: SortedRegistry::new(|e| e.priority),
+            llm_conditional_execution_guardrails: SortedRegistry::new(|e| e.priority),
+            llm_request_intercepts: SortedRegistry::new(|e| e.priority),
+            llm_execution_intercepts: SortedRegistry::new(|e| e.priority),
+            llm_stream_execution_intercepts: SortedRegistry::new(|e| e.priority),
+            event_subscribers: HashMap::new(),
+        }
+    }
+}
+
+impl Default for ScopeLocalRegistries {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Merge helpers — combine global + scope-local registries by priority
+// ---------------------------------------------------------------------------
+
+/// Collects sorted entries from multiple registries and merges them by priority.
+///
+/// Entries from the global registry and each scope-local registry are flattened
+/// into a single list, then stable-sorted by priority (ascending). At equal
+/// priority, global entries appear before scope-local entries (since global
+/// is collected first), and ancestor-scope entries appear before descendant ones.
+pub fn merge_guardrail_entries<'a, F>(
+    global: &'a SortedRegistry<GuardrailEntry<F>>,
+    scope_locals: &'a [&SortedRegistry<GuardrailEntry<F>>],
+) -> Vec<&'a GuardrailEntry<F>> {
+    let mut all: Vec<(&GuardrailEntry<F>, i32)> = Vec::new();
+    for entry in global.sorted_values() {
+        all.push((entry, entry.priority));
+    }
+    for reg in scope_locals {
+        for entry in reg.sorted_values() {
+            all.push((entry, entry.priority));
+        }
+    }
+    all.sort_by_key(|&(_, p)| p);
+    all.into_iter().map(|(e, _)| e).collect()
+}
+
+/// Collects sorted entries from multiple intercept registries and merges by priority.
+pub fn merge_intercept_entries<'a, F>(
+    global: &'a SortedRegistry<Intercept<F>>,
+    scope_locals: &'a [&SortedRegistry<Intercept<F>>],
+) -> Vec<&'a Intercept<F>> {
+    let mut all: Vec<(&Intercept<F>, i32)> = Vec::new();
+    for entry in global.sorted_values() {
+        all.push((entry, entry.priority));
+    }
+    for reg in scope_locals {
+        for entry in reg.sorted_values() {
+            all.push((entry, entry.priority));
+        }
+    }
+    all.sort_by_key(|&(_, p)| p);
+    all.into_iter().map(|(e, _)| e).collect()
+}
+
+/// Collects sorted entries from multiple execution intercept registries, merged by priority.
+/// Returns cloned `Arc<callable>`s ready for chain building.
+pub fn merge_execution_intercept_callables<F: Clone>(
+    global: &SortedRegistry<ExecutionIntercept<F>>,
+    scope_locals: &[&SortedRegistry<ExecutionIntercept<F>>],
+) -> Vec<(F, i32)> {
+    let mut all: Vec<(F, i32)> = Vec::new();
+    for entry in global.sorted_values() {
+        all.push((entry.callable.clone(), entry.priority));
+    }
+    for reg in scope_locals {
+        for entry in reg.sorted_values() {
+            all.push((entry.callable.clone(), entry.priority));
+        }
+    }
+    all.sort_by_key(|&(_, p)| p);
+    all
+}
+
+// ---------------------------------------------------------------------------
 // Context state
 // ---------------------------------------------------------------------------
 
@@ -377,10 +550,19 @@ impl NatNexusContextState {
     // Event emission
     // -----------------------------------------------------------------------
 
-    /// Dispatches an event to all registered subscribers.
-    pub fn emit_event(&self, event: &Event) {
+    /// Dispatches an event to all registered subscribers (global + scope-local).
+    pub fn emit_event(
+        &self,
+        event: &Event,
+        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
+    ) {
         for sub in self.event_subscribers.values() {
             sub(event);
+        }
+        for subs in scope_local_subscribers {
+            for sub in subs.values() {
+                sub(event);
+            }
         }
     }
 
@@ -396,6 +578,7 @@ impl NatNexusContextState {
         data: Option<Json>,
         metadata: Option<Json>,
         root_uuid: Option<Uuid>,
+        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
     ) {
         let event = Event::builder(Uuid::new_v4(), EventType::Mark)
             .parent_uuid(parent_uuid)
@@ -404,7 +587,7 @@ impl NatNexusContextState {
             .metadata(metadata)
             .root_uuid(root_uuid)
             .build();
-        self.emit_event(&event);
+        self.emit_event(&event, scope_local_subscribers);
     }
 
     /// Creates a new scope handle and emits a Start event.
@@ -418,6 +601,7 @@ impl NatNexusContextState {
         root_uuid: Option<Uuid>,
         data: Option<Json>,
         metadata: Option<Json>,
+        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
     ) -> ScopeHandle {
         let handle = ScopeHandle::new(
             name.to_string(),
@@ -436,12 +620,17 @@ impl NatNexusContextState {
             .scope_type(handle.scope_type)
             .root_uuid(root_uuid)
             .build();
-        self.emit_event(&event);
+        self.emit_event(&event, scope_local_subscribers);
         handle
     }
 
     /// Emits an End event for the given scope handle.
-    pub fn end_scope_handle(&self, scope: &ScopeHandle, root_uuid: Option<Uuid>) {
+    pub fn end_scope_handle(
+        &self,
+        scope: &ScopeHandle,
+        root_uuid: Option<Uuid>,
+        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
+    ) {
         let event = Event::builder(scope.uuid, EventType::End)
             .parent_uuid(scope.parent_uuid)
             .name(scope.name.clone())
@@ -451,7 +640,7 @@ impl NatNexusContextState {
             .scope_type(scope.scope_type)
             .root_uuid(root_uuid)
             .build();
-        self.emit_event(&event);
+        self.emit_event(&event, scope_local_subscribers);
     }
 
     /// Creates a new tool handle and emits a Start event.
@@ -470,6 +659,7 @@ impl NatNexusContextState {
         tool_call_id: Option<String>,
         input: Option<Json>,
         root_uuid: Option<Uuid>,
+        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
     ) -> ToolHandle {
         let mut handle = ToolHandle::new(name.to_string(), attributes, parent_uuid, data, metadata);
         handle.tool_call_id = tool_call_id;
@@ -484,7 +674,7 @@ impl NatNexusContextState {
             .tool_call_id(handle.tool_call_id.clone())
             .root_uuid(root_uuid)
             .build();
-        self.emit_event(&event);
+        self.emit_event(&event, scope_local_subscribers);
         handle
     }
 
@@ -498,6 +688,7 @@ impl NatNexusContextState {
         metadata: Option<Json>,
         output: Option<Json>,
         root_uuid: Option<Uuid>,
+        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
     ) {
         let event = Event::builder(handle.uuid, EventType::End)
             .parent_uuid(handle.parent_uuid)
@@ -510,7 +701,7 @@ impl NatNexusContextState {
             .tool_call_id(handle.tool_call_id.clone())
             .root_uuid(root_uuid)
             .build();
-        self.emit_event(&event);
+        self.emit_event(&event, scope_local_subscribers);
     }
 
     /// Creates a new LLM handle and emits a Start event.
@@ -529,6 +720,7 @@ impl NatNexusContextState {
         model_name: Option<String>,
         input: Option<Json>,
         root_uuid: Option<Uuid>,
+        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
     ) -> LLMHandle {
         let mut handle = LLMHandle::new(name.to_string(), attributes, parent_uuid, data, metadata);
         handle.model_name = model_name;
@@ -543,7 +735,7 @@ impl NatNexusContextState {
             .model_name(handle.model_name.clone())
             .root_uuid(root_uuid)
             .build();
-        self.emit_event(&event);
+        self.emit_event(&event, scope_local_subscribers);
         handle
     }
 
@@ -557,6 +749,7 @@ impl NatNexusContextState {
         metadata: Option<Json>,
         output: Option<Json>,
         root_uuid: Option<Uuid>,
+        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
     ) {
         let event = Event::builder(handle.uuid, EventType::End)
             .parent_uuid(handle.parent_uuid)
@@ -569,7 +762,7 @@ impl NatNexusContextState {
             .model_name(handle.model_name.clone())
             .root_uuid(root_uuid)
             .build();
-        self.emit_event(&event);
+        self.emit_event(&event, scope_local_subscribers);
     }
 
     // -----------------------------------------------------------------------
@@ -577,7 +770,7 @@ impl NatNexusContextState {
     // -----------------------------------------------------------------------
 
     /// Sanitize chain: run each guardrail in order, piping the value through.
-    pub fn run_sanitize_chain<F, V>(registry: &mut SortedRegistry<GuardrailEntry<F>>, value: V) -> V
+    pub fn run_sanitize_chain<F, V>(registry: &SortedRegistry<GuardrailEntry<F>>, value: V) -> V
     where
         F: Fn(V) -> V,
     {
@@ -590,7 +783,7 @@ impl NatNexusContextState {
 
     /// Conditional chain: return the first error, or None.
     pub fn run_conditional_chain<F, V>(
-        registry: &mut SortedRegistry<GuardrailEntry<F>>,
+        registry: &SortedRegistry<GuardrailEntry<F>>,
         value: &V,
     ) -> Option<String>
     where
@@ -605,7 +798,7 @@ impl NatNexusContextState {
     }
 
     /// Intercept chain: run each intercept, break if break_chain is set.
-    pub fn run_intercept_chain<F, V>(registry: &mut SortedRegistry<Intercept<F>>, value: V) -> V
+    pub fn run_intercept_chain<F, V>(registry: &SortedRegistry<Intercept<F>>, value: V) -> V
     where
         F: Fn(V) -> V,
     {
@@ -624,26 +817,49 @@ impl NatNexusContextState {
     // -----------------------------------------------------------------------
 
     /// Runs the tool request sanitize guardrail chain, piping args through each guardrail.
-    pub fn tool_sanitize_request_chain(&mut self, name: &str, args: Json) -> Json {
+    /// Merges global + scope-local entries by priority.
+    pub fn tool_sanitize_request_chain(
+        &self,
+        name: &str,
+        args: Json,
+        scope_locals: &[&SortedRegistry<GuardrailEntry<ToolSanitizeFn>>],
+    ) -> Json {
+        let entries = merge_guardrail_entries(&self.tool_sanitize_request_guardrails, scope_locals);
         let mut v = args;
-        for entry in self.tool_sanitize_request_guardrails.sorted_values() {
+        for entry in entries {
             v = (entry.guardrail)(name, v);
         }
         v
     }
 
     /// Runs the tool response sanitize guardrail chain, piping the result through each guardrail.
-    pub fn tool_sanitize_response_chain(&mut self, name: &str, result: Json) -> Json {
+    /// Merges global + scope-local entries by priority.
+    pub fn tool_sanitize_response_chain(
+        &self,
+        name: &str,
+        result: Json,
+        scope_locals: &[&SortedRegistry<GuardrailEntry<ToolSanitizeFn>>],
+    ) -> Json {
+        let entries =
+            merge_guardrail_entries(&self.tool_sanitize_response_guardrails, scope_locals);
         let mut v = result;
-        for entry in self.tool_sanitize_response_guardrails.sorted_values() {
+        for entry in entries {
             v = (entry.guardrail)(name, v);
         }
         v
     }
 
     /// Runs the tool conditional execution guardrail chain. Returns the first rejection reason, or `None` if all pass.
-    pub fn tool_conditional_execution_chain(&mut self, name: &str, args: &Json) -> Option<String> {
-        for entry in self.tool_conditional_execution_guardrails.sorted_values() {
+    /// Merges global + scope-local entries by priority.
+    pub fn tool_conditional_execution_chain(
+        &self,
+        name: &str,
+        args: &Json,
+        scope_locals: &[&SortedRegistry<GuardrailEntry<ToolConditionalFn>>],
+    ) -> Option<String> {
+        let entries =
+            merge_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals);
+        for entry in entries {
             if let Some(err) = (entry.guardrail)(name, args) {
                 return Some(err);
             }
@@ -652,9 +868,16 @@ impl NatNexusContextState {
     }
 
     /// Runs the tool request intercept chain, piping args through each intercept (with optional break).
-    pub fn tool_request_intercepts_chain(&mut self, name: &str, args: Json) -> Json {
+    /// Merges global + scope-local entries by priority.
+    pub fn tool_request_intercepts_chain(
+        &self,
+        name: &str,
+        args: Json,
+        scope_locals: &[&SortedRegistry<Intercept<ToolInterceptFn>>],
+    ) -> Json {
+        let entries = merge_intercept_entries(&self.tool_request_intercepts, scope_locals);
         let mut v = args;
-        for entry in self.tool_request_intercepts.sorted_values() {
+        for entry in entries {
             v = (entry.callable)(name, v);
             if entry.break_chain {
                 break;
@@ -664,9 +887,16 @@ impl NatNexusContextState {
     }
 
     /// Runs the tool response intercept chain, piping the result through each intercept (with optional break).
-    pub fn tool_response_intercepts_chain(&mut self, name: &str, result: Json) -> Json {
+    /// Merges global + scope-local entries by priority.
+    pub fn tool_response_intercepts_chain(
+        &self,
+        name: &str,
+        result: Json,
+        scope_locals: &[&SortedRegistry<Intercept<ToolInterceptFn>>],
+    ) -> Json {
+        let entries = merge_intercept_entries(&self.tool_response_intercepts, scope_locals);
         let mut v = result;
-        for entry in self.tool_response_intercepts.sorted_values() {
+        for entry in entries {
             v = (entry.callable)(name, v);
             if entry.break_chain {
                 break;
@@ -681,19 +911,17 @@ impl NatNexusContextState {
     ///
     /// Intercepts are sorted by priority ascending. The lowest-priority
     /// (first) matching intercept becomes the outermost wrapper.
+    /// Merges global + scope-local entries by priority.
     pub fn tool_build_execution_chain(
-        &mut self,
+        &self,
         default_fn: ToolExecutionNextFn,
+        scope_locals: &[&SortedRegistry<ExecutionIntercept<ToolExecutionFn>>],
     ) -> ToolExecutionNextFn {
-        let matching: Vec<Arc<_>> = self
-            .tool_execution_intercepts
-            .sorted_values()
-            .into_iter()
-            .map(|e| Arc::clone(&e.callable))
-            .collect();
+        let matching =
+            merge_execution_intercept_callables(&self.tool_execution_intercepts, scope_locals);
 
         let mut next = default_fn;
-        for callable in matching.into_iter().rev() {
+        for (callable, _) in matching.into_iter().rev() {
             let current_next = next;
             next = Box::new(move |args| callable(args, current_next));
         }
@@ -705,26 +933,45 @@ impl NatNexusContextState {
     // -----------------------------------------------------------------------
 
     /// Runs the LLM request sanitize guardrail chain, piping the request through each guardrail.
-    pub fn llm_sanitize_request_chain(&mut self, request: LLMRequest) -> LLMRequest {
+    /// Merges global + scope-local entries by priority.
+    pub fn llm_sanitize_request_chain(
+        &self,
+        request: LLMRequest,
+        scope_locals: &[&SortedRegistry<GuardrailEntry<LlmSanitizeRequestFn>>],
+    ) -> LLMRequest {
+        let entries = merge_guardrail_entries(&self.llm_sanitize_request_guardrails, scope_locals);
         let mut v = request;
-        for entry in self.llm_sanitize_request_guardrails.sorted_values() {
+        for entry in entries {
             v = (entry.guardrail)(v);
         }
         v
     }
 
     /// Runs the LLM response sanitize guardrail chain, piping the response through each guardrail.
-    pub fn llm_sanitize_response_chain(&mut self, response: Json) -> Json {
+    /// Merges global + scope-local entries by priority.
+    pub fn llm_sanitize_response_chain(
+        &self,
+        response: Json,
+        scope_locals: &[&SortedRegistry<GuardrailEntry<LlmSanitizeResponseFn>>],
+    ) -> Json {
+        let entries = merge_guardrail_entries(&self.llm_sanitize_response_guardrails, scope_locals);
         let mut v = response;
-        for entry in self.llm_sanitize_response_guardrails.sorted_values() {
+        for entry in entries {
             v = (entry.guardrail)(v);
         }
         v
     }
 
     /// Runs the LLM conditional execution guardrail chain. Returns the first rejection reason, or `None` if all pass.
-    pub fn llm_conditional_execution_chain(&mut self, request: &LLMRequest) -> Option<String> {
-        for entry in self.llm_conditional_execution_guardrails.sorted_values() {
+    /// Merges global + scope-local entries by priority.
+    pub fn llm_conditional_execution_chain(
+        &self,
+        request: &LLMRequest,
+        scope_locals: &[&SortedRegistry<GuardrailEntry<LlmConditionalFn>>],
+    ) -> Option<String> {
+        let entries =
+            merge_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals);
+        for entry in entries {
             if let Some(err) = (entry.guardrail)(request) {
                 return Some(err);
             }
@@ -733,9 +980,15 @@ impl NatNexusContextState {
     }
 
     /// Runs the LLM request intercept chain on `LLMRequest`, piping through each intercept (with optional break).
-    pub fn llm_request_intercepts_chain(&mut self, request: LLMRequest) -> LLMRequest {
+    /// Merges global + scope-local entries by priority.
+    pub fn llm_request_intercepts_chain(
+        &self,
+        request: LLMRequest,
+        scope_locals: &[&SortedRegistry<Intercept<LlmRequestInterceptFn>>],
+    ) -> LLMRequest {
+        let entries = merge_intercept_entries(&self.llm_request_intercepts, scope_locals);
         let mut v = request;
-        for entry in self.llm_request_intercepts.sorted_values() {
+        for entry in entries {
             v = (entry.callable)(v);
             if entry.break_chain {
                 break;
@@ -747,19 +1000,17 @@ impl NatNexusContextState {
     /// Build a middleware chain of all matching LLM execution intercepts.
     /// Returns a single `FnOnce` that, when called, runs through the chain
     /// and ultimately calls `default_fn` if no intercept short-circuits.
+    /// Merges global + scope-local entries by priority.
     pub fn llm_build_execution_chain(
-        &mut self,
+        &self,
         default_fn: LlmExecutionNextFn,
+        scope_locals: &[&SortedRegistry<ExecutionIntercept<LlmExecutionFn>>],
     ) -> LlmExecutionNextFn {
-        let matching: Vec<Arc<_>> = self
-            .llm_execution_intercepts
-            .sorted_values()
-            .into_iter()
-            .map(|e| Arc::clone(&e.callable))
-            .collect();
+        let matching =
+            merge_execution_intercept_callables(&self.llm_execution_intercepts, scope_locals);
 
         let mut next = default_fn;
-        for callable in matching.into_iter().rev() {
+        for (callable, _) in matching.into_iter().rev() {
             let current_next = next;
             next = Box::new(move |request| callable(request, current_next));
         }
@@ -769,20 +1020,20 @@ impl NatNexusContextState {
     /// Build a middleware chain of all matching LLM streaming execution intercepts.
     /// Returns a single `FnOnce` that, when called, runs through the chain
     /// and ultimately calls `default_fn` if no intercept short-circuits.
+    /// Merges global + scope-local entries by priority.
     #[allow(clippy::type_complexity)]
     pub fn llm_stream_build_execution_chain(
-        &mut self,
+        &self,
         default_fn: LlmStreamExecutionNextFn,
+        scope_locals: &[&SortedRegistry<ExecutionIntercept<LlmStreamExecutionFn>>],
     ) -> LlmStreamExecutionNextFn {
-        let matching: Vec<Arc<_>> = self
-            .llm_stream_execution_intercepts
-            .sorted_values()
-            .into_iter()
-            .map(|e| Arc::clone(&e.callable))
-            .collect();
+        let matching = merge_execution_intercept_callables(
+            &self.llm_stream_execution_intercepts,
+            scope_locals,
+        );
 
         let mut next = default_fn;
-        for callable in matching.into_iter().rev() {
+        for (callable, _) in matching.into_iter().rev() {
             let current_next = next;
             next = Box::new(move |request| callable(request, current_next));
         }
@@ -833,13 +1084,14 @@ mod tests {
             None,
             None,
             None,
+            &[],
         );
         task_scope_push(handle.clone());
         let top = task_scope_top();
         assert_eq!(top.name, "test");
 
         let removed = task_scope_remove(&handle.uuid).unwrap();
-        ctx.end_scope_handle(&removed, None);
+        ctx.end_scope_handle(&removed, None, &[]);
 
         // After pop, root scope is on top again
         assert_eq!(task_scope_top().name, "root");
@@ -869,11 +1121,12 @@ mod tests {
             None,
             None,
             None,
+            &[],
         );
         assert_eq!(count.load(Ordering::SeqCst), 1);
 
         // end_scope_handle emits an END event
-        ctx.end_scope_handle(&handle, None);
+        ctx.end_scope_handle(&handle, None, &[]);
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 
@@ -1077,7 +1330,7 @@ mod tests {
             EventType::Mark,
             None,
         );
-        ctx.emit_event(&event);
+        ctx.emit_event(&event, &[]);
 
         assert_eq!(c1.load(Ordering::SeqCst), 1);
         assert_eq!(c2.load(Ordering::SeqCst), 1);
@@ -1097,7 +1350,7 @@ mod tests {
             EventType::Mark,
             None,
         );
-        ctx.emit_event(&event);
+        ctx.emit_event(&event, &[]);
     }
 
     // -- create_event tests --
@@ -1123,6 +1376,7 @@ mod tests {
             Some(serde_json::json!({"x": 1})),
             None,
             None,
+            &[],
         );
 
         let captured = events.lock().unwrap();
@@ -1155,6 +1409,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
         );
 
         let captured = events.lock().unwrap();
@@ -1190,8 +1445,9 @@ mod tests {
             None,
             None,
             None,
+            &[],
         );
-        ctx.end_scope_handle(&handle, None);
+        ctx.end_scope_handle(&handle, None, &[]);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -1223,6 +1479,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
         );
 
         let captured = events.lock().unwrap();
@@ -1259,8 +1516,16 @@ mod tests {
             None,
             None,
             None,
+            &[],
         );
-        ctx.end_tool_handle(&handle, Some(serde_json::json!({"b": 2})), None, None, None);
+        ctx.end_tool_handle(
+            &handle,
+            Some(serde_json::json!({"b": 2})),
+            None,
+            None,
+            None,
+            &[],
+        );
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];
@@ -1294,6 +1559,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
         );
 
         let captured = events.lock().unwrap();
@@ -1328,6 +1594,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
         );
         ctx.end_llm_handle(
             &handle,
@@ -1335,6 +1602,7 @@ mod tests {
             Some(serde_json::json!({"m2": false})),
             None,
             None,
+            &[],
         );
 
         let captured = events.lock().unwrap();
@@ -1364,7 +1632,8 @@ mod tests {
             )
             .unwrap();
 
-        let result = ctx.tool_sanitize_request_chain("tool", serde_json::json!({"input": "data"}));
+        let result =
+            ctx.tool_sanitize_request_chain("tool", serde_json::json!({"input": "data"}), &[]);
         assert_eq!(result["input"], "data");
         assert_eq!(result["sanitized"], true);
     }
@@ -1401,7 +1670,7 @@ mod tests {
             )
             .unwrap();
 
-        let result = ctx.tool_sanitize_request_chain("tool", serde_json::json!({}));
+        let result = ctx.tool_sanitize_request_chain("tool", serde_json::json!({}), &[]);
         // g1 runs first (priority 10), then g2 (priority 20) overwrites
         assert_eq!(result["step"], "second");
     }
@@ -1425,7 +1694,8 @@ mod tests {
             )
             .unwrap();
 
-        let result = ctx.tool_sanitize_response_chain("tool", serde_json::json!({"output": "ok"}));
+        let result =
+            ctx.tool_sanitize_response_chain("tool", serde_json::json!({"output": "ok"}), &[]);
         assert_eq!(result["clean"], true);
         assert_eq!(result["output"], "ok");
     }
@@ -1443,7 +1713,7 @@ mod tests {
             )
             .unwrap();
 
-        let result = ctx.tool_conditional_execution_chain("tool", &serde_json::json!({}));
+        let result = ctx.tool_conditional_execution_chain("tool", &serde_json::json!({}), &[]);
         assert!(result.is_none());
     }
 
@@ -1460,7 +1730,7 @@ mod tests {
             )
             .unwrap();
 
-        let result = ctx.tool_conditional_execution_chain("tool", &serde_json::json!({}));
+        let result = ctx.tool_conditional_execution_chain("tool", &serde_json::json!({}), &[]);
         assert_eq!(result, Some("not allowed".into()));
     }
 
@@ -1486,7 +1756,7 @@ mod tests {
             )
             .unwrap();
 
-        let result = ctx.tool_conditional_execution_chain("tool", &serde_json::json!({}));
+        let result = ctx.tool_conditional_execution_chain("tool", &serde_json::json!({}), &[]);
         assert_eq!(result, Some("first".into()));
     }
 
@@ -1510,7 +1780,7 @@ mod tests {
             .unwrap();
 
         let result =
-            ctx.tool_request_intercepts_chain("tool", serde_json::json!({"original": true}));
+            ctx.tool_request_intercepts_chain("tool", serde_json::json!({"original": true}), &[]);
         assert_eq!(result["original"], true);
         assert_eq!(result["intercepted"], true);
     }
@@ -1549,7 +1819,7 @@ mod tests {
             )
             .unwrap();
 
-        let result = ctx.tool_request_intercepts_chain("tool", serde_json::json!({}));
+        let result = ctx.tool_request_intercepts_chain("tool", serde_json::json!({}), &[]);
         assert_eq!(result["from_i1"], true);
         // i2 should NOT have run due to break_chain
         assert!(result.get("from_i2").is_none());
@@ -1571,16 +1841,16 @@ mod tests {
             )
             .unwrap();
 
-        let result = ctx.tool_response_intercepts_chain("tool", serde_json::json!("original"));
+        let result = ctx.tool_response_intercepts_chain("tool", serde_json::json!("original"), &[]);
         assert_eq!(result["wrapped"], "original");
     }
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_no_intercepts() {
-        let mut ctx = NatNexusContextState::new();
+        let ctx = NatNexusContextState::new();
         let default_fn: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
-        let chain = ctx.tool_build_execution_chain(default_fn);
+        let chain = ctx.tool_build_execution_chain(default_fn, &[]);
         let result = chain(serde_json::json!({})).await.unwrap();
         assert_eq!(result["default"], true);
     }
@@ -1605,7 +1875,7 @@ mod tests {
             .unwrap();
         let default_fn: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
-        let chain = ctx.tool_build_execution_chain(default_fn);
+        let chain = ctx.tool_build_execution_chain(default_fn, &[]);
         let result = chain(serde_json::json!({})).await.unwrap();
         // Intercept passes through, so default should run
         assert_eq!(result["default"], true);
@@ -1630,7 +1900,7 @@ mod tests {
             .unwrap();
         let default_fn: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
-        let chain = ctx.tool_build_execution_chain(default_fn);
+        let chain = ctx.tool_build_execution_chain(default_fn, &[]);
         let result = chain(serde_json::json!({})).await.unwrap();
         // Intercept short-circuits (skips next), so intercept result should be returned
         assert_eq!(result["intercepted"], true);
@@ -1662,7 +1932,7 @@ mod tests {
             .unwrap();
         let default_fn: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
-        let chain = ctx.tool_build_execution_chain(default_fn);
+        let chain = ctx.tool_build_execution_chain(default_fn, &[]);
         let result = chain(serde_json::json!({})).await.unwrap();
         // Intercept calls next, then wraps result
         assert_eq!(result["default"], true);
@@ -1717,7 +1987,7 @@ mod tests {
             .unwrap();
         let default_fn: ToolExecutionNextFn =
             Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
-        let chain = ctx.tool_build_execution_chain(default_fn);
+        let chain = ctx.tool_build_execution_chain(default_fn, &[]);
         let result = chain(serde_json::json!({})).await.unwrap();
         // Both intercepts call next, so all three flags should be set
         assert_eq!(result["default"], true);
@@ -1748,7 +2018,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: serde_json::json!({"messages": []}),
         };
-        let result = ctx.llm_sanitize_request_chain(req);
+        let result = ctx.llm_sanitize_request_chain(req, &[]);
         assert_eq!(result.headers["sanitized"], true);
         assert_eq!(result.content, serde_json::json!({"messages": []}));
     }
@@ -1771,7 +2041,7 @@ mod tests {
             )
             .unwrap();
 
-        let result = ctx.llm_sanitize_response_chain(serde_json::json!({"data": "test"}));
+        let result = ctx.llm_sanitize_response_chain(serde_json::json!({"data": "test"}), &[]);
         assert_eq!(result["sanitized"], true);
     }
 
@@ -1792,7 +2062,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: serde_json::json!({}),
         };
-        assert!(ctx.llm_conditional_execution_chain(&req).is_none());
+        assert!(ctx.llm_conditional_execution_chain(&req, &[]).is_none());
     }
 
     #[test]
@@ -1813,7 +2083,7 @@ mod tests {
             content: serde_json::json!({}),
         };
         assert_eq!(
-            ctx.llm_conditional_execution_chain(&req),
+            ctx.llm_conditional_execution_chain(&req, &[]),
             Some("blocked".into())
         );
     }
@@ -1840,7 +2110,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: serde_json::json!({"messages": []}),
         };
-        let result = ctx.llm_request_intercepts_chain(request);
+        let result = ctx.llm_request_intercepts_chain(request, &[]);
         assert_eq!(result.headers["intercepted"], true);
         assert_eq!(result.content["messages"], serde_json::json!([]));
     }
@@ -1881,21 +2151,21 @@ mod tests {
             headers: serde_json::Map::new(),
             content: serde_json::json!({}),
         };
-        let result = ctx.llm_request_intercepts_chain(request);
+        let result = ctx.llm_request_intercepts_chain(request, &[]);
         assert_eq!(result.headers["from_i1"], true);
         assert!(result.headers.get("from_i2").is_none());
     }
 
     #[tokio::test]
     async fn test_llm_build_execution_chain_no_intercepts() {
-        let mut ctx = NatNexusContextState::new();
+        let ctx = NatNexusContextState::new();
         let request = LLMRequest {
             headers: serde_json::Map::new(),
             content: serde_json::json!({"messages": []}),
         };
         let default_fn: LlmExecutionNextFn =
             Box::new(|_req| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
-        let chain = ctx.llm_build_execution_chain(default_fn);
+        let chain = ctx.llm_build_execution_chain(default_fn, &[]);
         let result = chain(request).await.unwrap();
         assert_eq!(result["default"], true);
     }
@@ -1903,7 +2173,7 @@ mod tests {
     #[tokio::test]
     async fn test_llm_stream_build_execution_chain_no_intercepts() {
         use futures::StreamExt;
-        let mut ctx = NatNexusContextState::new();
+        let ctx = NatNexusContextState::new();
         let request = LLMRequest {
             headers: serde_json::Map::new(),
             content: serde_json::json!({"messages": []}),
@@ -1917,7 +2187,7 @@ mod tests {
                 Ok(stream)
             })
         });
-        let chain = ctx.llm_stream_build_execution_chain(default_fn);
+        let chain = ctx.llm_stream_build_execution_chain(default_fn, &[]);
         let stream = chain(request).await.unwrap();
         let chunks: Vec<_> = stream.collect().await;
         assert_eq!(chunks.len(), 1);
@@ -1931,9 +2201,9 @@ mod tests {
 
     #[test]
     fn test_run_sanitize_chain_empty() {
-        let mut reg: SortedRegistry<GuardrailEntry<Box<dyn Fn(i32) -> i32>>> =
+        let reg: SortedRegistry<GuardrailEntry<Box<dyn Fn(i32) -> i32>>> =
             SortedRegistry::new(|e| e.priority);
-        let result = NatNexusContextState::run_sanitize_chain(&mut reg, 42);
+        let result = NatNexusContextState::run_sanitize_chain(&reg, 42);
         assert_eq!(result, 42);
     }
 
@@ -1957,7 +2227,7 @@ mod tests {
             },
         )
         .unwrap();
-        let result = NatNexusContextState::run_sanitize_chain(&mut reg, 5);
+        let result = NatNexusContextState::run_sanitize_chain(&reg, 5);
         // (5 + 1) * 2 = 12
         assert_eq!(result, 12);
     }
@@ -1982,7 +2252,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(NatNexusContextState::run_conditional_chain(&mut reg, &42).is_none());
+        assert!(NatNexusContextState::run_conditional_chain(&reg, &42).is_none());
     }
 
     #[test]
@@ -2006,7 +2276,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            NatNexusContextState::run_conditional_chain(&mut reg, &42),
+            NatNexusContextState::run_conditional_chain(&reg, &42),
             Some("err".into())
         );
     }
@@ -2033,7 +2303,7 @@ mod tests {
             },
         )
         .unwrap();
-        let result = NatNexusContextState::run_intercept_chain(&mut reg, 0);
+        let result = NatNexusContextState::run_intercept_chain(&reg, 0);
         assert_eq!(result, 110);
     }
 
@@ -2059,16 +2329,16 @@ mod tests {
             },
         )
         .unwrap();
-        let result = NatNexusContextState::run_intercept_chain(&mut reg, 0);
+        let result = NatNexusContextState::run_intercept_chain(&reg, 0);
         // Only 'a' runs, 'b' is skipped
         assert_eq!(result, 10);
     }
 
     #[test]
     fn test_run_intercept_chain_empty() {
-        let mut reg: SortedRegistry<Intercept<Box<dyn Fn(i32) -> i32>>> =
+        let reg: SortedRegistry<Intercept<Box<dyn Fn(i32) -> i32>>> =
             SortedRegistry::new(|e| e.priority);
-        let result = NatNexusContextState::run_intercept_chain(&mut reg, 42);
+        let result = NatNexusContextState::run_intercept_chain(&reg, 42);
         assert_eq!(result, 42);
     }
 }

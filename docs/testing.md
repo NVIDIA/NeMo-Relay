@@ -49,9 +49,9 @@ cargo test --workspace && uv run pytest
 
 ### Rust
 
-- **`TEST_MUTEX`** (`context_isolation_tests.rs`, `stream_tests.rs`): Static
-  mutex that serializes tests touching global state, preventing interference
-  between concurrent test threads.
+- **`TEST_MUTEX`** (`context_isolation_tests.rs`, `stream_tests.rs`,
+  `scope_local_tests.rs`): Static mutex that serializes tests touching global
+  state, preventing interference between concurrent test threads.
 - **`reset_global()`**: Resets `NatNexusContextState` to a clean default.
 - **`make_llm_handle()`**: Creates an `LLMHandle` with defaults for stream tests.
 - **`make_stream()`**: Builds a `tokio_stream` from `Vec<Result<Json>>`.
@@ -100,7 +100,7 @@ The `.pre-commit-config.yaml` enforces quality gates before every commit:
 ### Conventions
 
 1. **Split by domain**: Each test file covers one domain (types, scope, tools,
-   llm, etc.). Add tests to the appropriate file.
+   llm, scope_local, etc.). Add tests to the appropriate file.
 2. **Mirror across bindings**: When adding a new feature, add tests in every
    binding that exposes it.
 3. **Use descriptive names**: `test_<domain>_<behavior>_<condition>`, e.g.

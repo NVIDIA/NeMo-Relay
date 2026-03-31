@@ -357,6 +357,100 @@ Additionally:
 | `tool_call_id` | `str \| None` | Tool correlation ID |
 | `root_uuid` | `str \| None` | Root scope UUID |
 
+## Scope-Local Registration
+
+Scope-local middleware is bound to a specific scope and automatically cleaned up when that scope is popped. The API mirrors the global registration functions but takes an additional `handle` parameter.
+
+### Scope-Local Guardrails
+
+```python
+# Tool guardrails (scope-local)
+nat_nexus.scope_local.register_tool_sanitize_request(
+    handle: ScopeHandle, name: str, priority: int,
+    fn: Callable[[str, dict], dict],
+) -> None
+
+nat_nexus.scope_local.register_tool_sanitize_response(
+    handle: ScopeHandle, name: str, priority: int,
+    fn: Callable[[str, dict], dict],
+) -> None
+
+nat_nexus.scope_local.register_tool_conditional_execution(
+    handle: ScopeHandle, name: str, priority: int,
+    fn: Callable[[str, dict], str | None],
+) -> None
+
+# LLM guardrails (scope-local)
+nat_nexus.scope_local.register_llm_sanitize_request(
+    handle: ScopeHandle, name: str, priority: int,
+    fn: Callable[[LLMRequest], LLMRequest],
+) -> None
+
+nat_nexus.scope_local.register_llm_sanitize_response(
+    handle: ScopeHandle, name: str, priority: int,
+    fn: Callable[[dict], dict],
+) -> None
+
+nat_nexus.scope_local.register_llm_conditional_execution(
+    handle: ScopeHandle, name: str, priority: int,
+    fn: Callable[[LLMRequest], str | None],
+) -> None
+```
+
+### Scope-Local Intercepts
+
+```python
+# Tool intercepts (scope-local)
+nat_nexus.scope_local.register_tool_request_intercept(
+    handle: ScopeHandle, name: str, priority: int, break_chain: bool,
+    fn: Callable[[str, dict], dict],
+) -> None
+
+nat_nexus.scope_local.register_tool_response_intercept(
+    handle: ScopeHandle, name: str, priority: int, break_chain: bool,
+    fn: Callable[[str, dict], dict],
+) -> None
+
+nat_nexus.scope_local.register_tool_execution_intercept(
+    handle: ScopeHandle, name: str, priority: int,
+    fn: Callable[[dict, Callable], Awaitable[dict]],
+) -> None
+
+# LLM intercepts (scope-local)
+nat_nexus.scope_local.register_llm_request_intercept(
+    handle: ScopeHandle, name: str, priority: int, break_chain: bool,
+    fn: Callable[[LLMRequest], LLMRequest],
+) -> None
+
+nat_nexus.scope_local.register_llm_execution_intercept(
+    handle: ScopeHandle, name: str, priority: int,
+    fn: Callable[[LLMRequest, Callable], Awaitable[dict]],
+) -> None
+
+nat_nexus.scope_local.register_llm_stream_execution_intercept(
+    handle: ScopeHandle, name: str, priority: int,
+    fn: Callable[[LLMRequest, Callable], Awaitable[AsyncIterator[dict]]],
+) -> None
+```
+
+### Scope-Local Subscribers
+
+```python
+nat_nexus.scope_local.register_subscriber(
+    handle: ScopeHandle, name: str,
+    fn: Callable[[Event], None],
+) -> None
+```
+
+### Cross-Language Names
+
+| Python | Go | Node.js | WASM | FFI/C |
+|--------|----|---------|------|-------|
+| `scope_local.register_tool_conditional_execution` | `ScopeRegisterToolConditionalExecution` | `scopeRegisterToolConditionalExecution` | `scope_register_tool_conditional_execution` | `nat_nexus_scope_register_tool_conditional_execution` |
+| `scope_local.register_subscriber` | `ScopeRegisterSubscriber` | `scopeRegisterSubscriber` | `scope_register_subscriber` | `nat_nexus_scope_register_subscriber` |
+
+All scope-local registration functions follow the same naming pattern: prefix the global registration name with `scope_register_` (FFI/WASM), `scopeRegister` (Node.js), `ScopeRegister` (Go), or place it in the `scope_local` module (Python).
+
 ## ATIF Export
 
 ```python

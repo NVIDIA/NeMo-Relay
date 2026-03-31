@@ -995,3 +995,267 @@ def nat_nexus_register_subscriber(name: str, callback: Callable[[Event], None]) 
 def nat_nexus_deregister_subscriber(name: str) -> bool:
     """Remove an event subscriber. Returns ``True`` if found."""
     ...
+
+# ---------------------------------------------------------------------------
+# Scope-local tool guardrails
+# ---------------------------------------------------------------------------
+
+def nat_nexus_scope_register_tool_sanitize_request_guardrail(
+    scope_uuid: str, name: str, priority: int, guardrail: Callable[[str, Json], Json]
+) -> None:
+    """Register a scope-local tool sanitize-request guardrail.
+
+    Args:
+        scope_uuid: UUID string of the scope to register under.
+        name: Unique guardrail name.
+        priority: Priority (ascending order).
+        guardrail: ``(tool_name, args) -> sanitized_args``.
+    """
+    ...
+
+def nat_nexus_scope_deregister_tool_sanitize_request_guardrail(scope_uuid: str, name: str) -> bool:
+    """Remove a scope-local tool sanitize-request guardrail. Returns ``True`` if found."""
+    ...
+
+def nat_nexus_scope_register_tool_sanitize_response_guardrail(
+    scope_uuid: str, name: str, priority: int, guardrail: Callable[[str, Json], Json]
+) -> None:
+    """Register a scope-local tool sanitize-response guardrail.
+
+    Args:
+        scope_uuid: UUID string of the scope to register under.
+        name: Unique guardrail name.
+        priority: Priority (ascending order).
+        guardrail: ``(tool_name, result) -> sanitized_result``.
+    """
+    ...
+
+def nat_nexus_scope_deregister_tool_sanitize_response_guardrail(scope_uuid: str, name: str) -> bool:
+    """Remove a scope-local tool sanitize-response guardrail. Returns ``True`` if found."""
+    ...
+
+def nat_nexus_scope_register_tool_conditional_execution_guardrail(
+    scope_uuid: str, name: str, priority: int, guardrail: Callable[[str, Json], Optional[str]]
+) -> None:
+    """Register a scope-local tool conditional-execution guardrail.
+
+    Args:
+        scope_uuid: UUID string of the scope to register under.
+        name: Unique guardrail name.
+        priority: Priority (ascending order).
+        guardrail: ``(tool_name, args) -> None | rejection_reason``.
+    """
+    ...
+
+def nat_nexus_scope_deregister_tool_conditional_execution_guardrail(scope_uuid: str, name: str) -> bool:
+    """Remove a scope-local tool conditional-execution guardrail. Returns ``True`` if found."""
+    ...
+
+# ---------------------------------------------------------------------------
+# Scope-local tool intercepts
+# ---------------------------------------------------------------------------
+
+def nat_nexus_scope_register_tool_request_intercept(
+    scope_uuid: str,
+    name: str,
+    priority: int,
+    break_chain: bool,
+    callable: Callable[[str, Json], Json],
+) -> None:
+    """Register a scope-local tool request intercept.
+
+    Args:
+        scope_uuid: UUID string of the scope to register under.
+        name: Unique intercept name.
+        priority: Priority (ascending order).
+        break_chain: If ``True``, no lower-priority intercepts run after this one.
+        callable: ``(tool_name, args) -> transformed_args``.
+    """
+    ...
+
+def nat_nexus_scope_deregister_tool_request_intercept(scope_uuid: str, name: str) -> bool:
+    """Remove a scope-local tool request intercept. Returns ``True`` if found."""
+    ...
+
+def nat_nexus_scope_register_tool_response_intercept(
+    scope_uuid: str,
+    name: str,
+    priority: int,
+    break_chain: bool,
+    callable: Callable[[str, Json], Json],
+) -> None:
+    """Register a scope-local tool response intercept.
+
+    Args:
+        scope_uuid: UUID string of the scope to register under.
+        name: Unique intercept name.
+        priority: Priority (ascending order).
+        break_chain: If ``True``, no lower-priority intercepts run after this one.
+        callable: ``(tool_name, result) -> transformed_result``.
+    """
+    ...
+
+def nat_nexus_scope_deregister_tool_response_intercept(scope_uuid: str, name: str) -> bool:
+    """Remove a scope-local tool response intercept. Returns ``True`` if found."""
+    ...
+
+def nat_nexus_scope_register_tool_execution_intercept(
+    scope_uuid: str,
+    name: str,
+    priority: int,
+    callable: Callable[[Json, Callable[[Json], Awaitable[Json]]], Awaitable[Json]],
+) -> None:
+    """Register a scope-local tool execution intercept (middleware chain pattern).
+
+    Args:
+        scope_uuid: UUID string of the scope to register under.
+        name: Unique intercept name.
+        priority: Priority (ascending order).
+        callable: ``async (args, next) -> result``.
+    """
+    ...
+
+def nat_nexus_scope_deregister_tool_execution_intercept(scope_uuid: str, name: str) -> bool:
+    """Remove a scope-local tool execution intercept. Returns ``True`` if found."""
+    ...
+
+# ---------------------------------------------------------------------------
+# Scope-local LLM guardrails
+# ---------------------------------------------------------------------------
+
+def nat_nexus_scope_register_llm_sanitize_request_guardrail(
+    scope_uuid: str, name: str, priority: int, guardrail: Callable[[LLMRequest], LLMRequest]
+) -> None:
+    """Register a scope-local LLM sanitize-request guardrail.
+
+    Args:
+        scope_uuid: UUID string of the scope to register under.
+        name: Unique guardrail name.
+        priority: Priority (ascending order).
+        guardrail: ``(request) -> sanitized_request``.
+    """
+    ...
+
+def nat_nexus_scope_deregister_llm_sanitize_request_guardrail(scope_uuid: str, name: str) -> bool:
+    """Remove a scope-local LLM sanitize-request guardrail. Returns ``True`` if found."""
+    ...
+
+def nat_nexus_scope_register_llm_sanitize_response_guardrail(
+    scope_uuid: str, name: str, priority: int, guardrail: Callable[[dict], dict]
+) -> None:
+    """Register a scope-local LLM sanitize-response guardrail.
+
+    Args:
+        scope_uuid: UUID string of the scope to register under.
+        name: Unique guardrail name.
+        priority: Priority (ascending order).
+        guardrail: ``(response: dict) -> dict``.
+    """
+    ...
+
+def nat_nexus_scope_deregister_llm_sanitize_response_guardrail(scope_uuid: str, name: str) -> bool:
+    """Remove a scope-local LLM sanitize-response guardrail. Returns ``True`` if found."""
+    ...
+
+def nat_nexus_scope_register_llm_conditional_execution_guardrail(
+    scope_uuid: str, name: str, priority: int, guardrail: Callable[[LLMRequest], Optional[str]]
+) -> None:
+    """Register a scope-local LLM conditional-execution guardrail.
+
+    Args:
+        scope_uuid: UUID string of the scope to register under.
+        name: Unique guardrail name.
+        priority: Priority (ascending order).
+        guardrail: ``(request) -> None | rejection_reason``.
+    """
+    ...
+
+def nat_nexus_scope_deregister_llm_conditional_execution_guardrail(scope_uuid: str, name: str) -> bool:
+    """Remove a scope-local LLM conditional-execution guardrail. Returns ``True`` if found."""
+    ...
+
+# ---------------------------------------------------------------------------
+# Scope-local LLM intercepts
+# ---------------------------------------------------------------------------
+
+def nat_nexus_scope_register_llm_request_intercept(
+    scope_uuid: str,
+    name: str,
+    priority: int,
+    break_chain: bool,
+    callable: Callable[[LLMRequest], LLMRequest],
+) -> None:
+    """Register a scope-local LLM request intercept.
+
+    Args:
+        scope_uuid: UUID string of the scope to register under.
+        name: Unique intercept name.
+        priority: Priority (ascending order).
+        break_chain: If ``True``, no lower-priority intercepts run after this one.
+        callable: ``(request: LLMRequest) -> LLMRequest``.
+    """
+    ...
+
+def nat_nexus_scope_deregister_llm_request_intercept(scope_uuid: str, name: str) -> bool:
+    """Remove a scope-local LLM request intercept. Returns ``True`` if found."""
+    ...
+
+def nat_nexus_scope_register_llm_execution_intercept(
+    scope_uuid: str,
+    name: str,
+    priority: int,
+    callable: Callable[[LLMRequest, Callable[[LLMRequest], Awaitable[Json]]], Awaitable[Json]],
+) -> None:
+    """Register a scope-local LLM execution intercept (middleware chain pattern).
+
+    Args:
+        scope_uuid: UUID string of the scope to register under.
+        name: Unique intercept name.
+        priority: Priority (ascending order).
+        callable: ``async (request, next) -> response``.
+    """
+    ...
+
+def nat_nexus_scope_deregister_llm_execution_intercept(scope_uuid: str, name: str) -> bool:
+    """Remove a scope-local LLM execution intercept. Returns ``True`` if found."""
+    ...
+
+def nat_nexus_scope_register_llm_stream_execution_intercept(
+    scope_uuid: str,
+    name: str,
+    priority: int,
+    callable: Callable[
+        [LLMRequest, Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]]], Awaitable[AsyncIterator[Json]]
+    ],
+) -> None:
+    """Register a scope-local LLM stream-execution intercept (middleware chain pattern).
+
+    Args:
+        scope_uuid: UUID string of the scope to register under.
+        name: Unique intercept name.
+        priority: Priority (ascending order).
+        callable: ``async (request, next) -> AsyncIterator[Json]``.
+    """
+    ...
+
+def nat_nexus_scope_deregister_llm_stream_execution_intercept(scope_uuid: str, name: str) -> bool:
+    """Remove a scope-local LLM stream-execution intercept. Returns ``True`` if found."""
+    ...
+
+# ---------------------------------------------------------------------------
+# Scope-local subscribers
+# ---------------------------------------------------------------------------
+
+def nat_nexus_scope_register_subscriber(scope_uuid: str, name: str, callback: Callable[[Event], None]) -> None:
+    """Register a scope-local event subscriber.
+
+    Args:
+        scope_uuid: UUID string of the scope to register under.
+        name: Unique subscriber name.
+        callback: ``(event) -> None``.
+    """
+    ...
+
+def nat_nexus_scope_deregister_subscriber(scope_uuid: str, name: str) -> bool:
+    """Remove a scope-local event subscriber. Returns ``True`` if found."""
+    ...

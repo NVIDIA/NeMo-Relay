@@ -102,6 +102,7 @@ python/            # Python wrapper package (nat_nexus/)
     guardrails.py      # Guardrail registration
     intercepts.py      # Intercept registration
     subscribers.py     # Event subscriber registration
+    scope_local.py     # Scope-local middleware registration
     typed.py           # Codec-based typed wrappers
 
 go/nat_nexus/        # Go CGo bindings
@@ -109,11 +110,13 @@ go/nat_nexus/        # Go CGo bindings
 
 ## Global Context
 
-All middleware registrations, event subscribers, and scope stacks share a single global context:
+Middleware registrations exist at two levels: **global** (shared by all scope stacks) and **scope-local** (bound to a specific scope within a stack).
+
+### Global Registries
 
 ```mermaid
 graph LR
-    subgraph "NatNexusContextState"
+    subgraph "NatNexusContextState (Global)"
         TSR[Tool Sanitize<br/>Request Guards]
         TSP[Tool Sanitize<br/>Response Guards]
         TCE[Tool Conditional<br/>Execution Guards]
@@ -133,6 +136,29 @@ graph LR
 ```
 
 Each registry is a `SortedRegistry<T>` that maintains entries by name with lazy priority-based sorting.
+
+### Scope-Local Registries
+
+Each `ScopeStack` can also hold per-scope middleware, stored in a `HashMap<Uuid, ScopeLocalRegistries>`:
+
+```mermaid
+graph TD
+    subgraph "ScopeStack"
+        ROOT["Root Scope (uuid-A)"]
+        AGENT["Agent Scope (uuid-B)"]
+        ROOT --> AGENT
+
+        subgraph "scope_registries"
+            SL_B["uuid-B → ScopeLocalRegistries<br/>(same 13 registry types as global)"]
+        end
+    end
+```
+
+- Lazily created on first `scope_register_*` call for a given scope
+- Automatically removed when the scope is popped
+- During pipeline execution, entries from global + all ancestor scope-local registries are merged by priority
+
+See [Core Concepts: Scope-Local Middleware](concepts.md#scope-local-middleware) for usage details.
 
 ## Data Flow: LLM Execute
 

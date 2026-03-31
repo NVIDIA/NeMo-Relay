@@ -259,9 +259,11 @@ pub fn wrap_tool_exec_intercept_fn(
                     let s = unsafe { CStr::from_ptr(args_json) }.to_string_lossy();
                     serde_json::from_str(&s).unwrap_or(Json::Null)
                 };
-                // Block on the async next fn (we're already in a tokio context)
+                // Use block_in_place to allow nested block_on within the
+                // multi-threaded tokio runtime (the outer block_on in
+                // nat_nexus_tool_call_execute already occupies this worker).
                 let handle = tokio::runtime::Handle::current();
-                let result = handle.block_on(next(args));
+                let result = tokio::task::block_in_place(|| handle.block_on(next(args)));
                 match result {
                     Ok(json) => json_to_c_string(&json),
                     Err(_) => std::ptr::null_mut(),
@@ -316,7 +318,7 @@ pub fn wrap_llm_exec_intercept_fn(
                     })
                 };
                 let handle = tokio::runtime::Handle::current();
-                let result = handle.block_on(next(request));
+                let result = tokio::task::block_in_place(|| handle.block_on(next(request)));
                 match result {
                     Ok(json) => json_to_c_string(&json),
                     Err(_) => std::ptr::null_mut(),

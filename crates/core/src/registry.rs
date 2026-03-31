@@ -5,17 +5,17 @@
 //!
 //! [`SortedRegistry`] is the backbone data structure for all guardrail and intercept
 //! registries in the Nexus runtime. It stores entries by unique name and provides
-//! iteration in ascending priority order, with lazy re-sorting when the registry is
-//! mutated.
+//! iteration in ascending priority order, with eager re-sorting on every mutation.
 
 use std::collections::HashMap;
 
-/// A named registry that maintains a cached sort order by priority.
+/// A named registry that maintains a sorted order by priority.
 ///
 /// Items are stored by unique string name and sorted by an integer priority
-/// extracted via a caller-provided function. The sort is performed lazily:
-/// modifications mark the registry as dirty, and the next call to
-/// [`sorted_values`](SortedRegistry::sorted_values) re-sorts only if needed.
+/// extracted via a caller-provided function. The sort is performed eagerly:
+/// every [`register`](SortedRegistry::register) or
+/// [`deregister`](SortedRegistry::deregister) call re-sorts immediately, so
+/// [`sorted_values`](SortedRegistry::sorted_values) is a read-only lookup.
 ///
 /// # Priority ordering
 ///
@@ -30,7 +30,6 @@ use std::collections::HashMap;
 pub struct SortedRegistry<T> {
     entries: HashMap<String, T>,
     sorted_keys: Vec<String>,
-    dirty: bool,
     priority_fn: fn(&T) -> i32,
 }
 
@@ -43,9 +42,17 @@ impl<T> SortedRegistry<T> {
         Self {
             entries: HashMap::new(),
             sorted_keys: Vec::new(),
-            dirty: false,
             priority_fn,
         }
+    }
+
+    /// Re-sorts the cached key order by priority. Called eagerly on every mutation.
+    fn resort(&mut self) {
+        let pf = self.priority_fn;
+        let entries = &self.entries;
+        let mut keys: Vec<String> = entries.keys().cloned().collect();
+        keys.sort_by_key(|k| pf(entries.get(k).unwrap()));
+        self.sorted_keys = keys;
     }
 
     /// Register a new entry. Returns Err if the name already exists.
@@ -54,14 +61,14 @@ impl<T> SortedRegistry<T> {
             return Err(format!("{name} already exists"));
         }
         self.entries.insert(name, entry);
-        self.dirty = true;
+        self.resort();
         Ok(())
     }
 
     /// Deregister an entry by name. Returns true if it existed.
     pub fn deregister(&mut self, name: &str) -> bool {
         if self.entries.remove(name).is_some() {
-            self.dirty = true;
+            self.resort();
             true
         } else {
             false
@@ -69,15 +76,10 @@ impl<T> SortedRegistry<T> {
     }
 
     /// Return entries sorted by priority (ascending).
-    pub fn sorted_values(&mut self) -> Vec<&T> {
-        if self.dirty {
-            let pf = self.priority_fn;
-            let entries = &self.entries;
-            let mut keys: Vec<String> = entries.keys().cloned().collect();
-            keys.sort_by_key(|k| pf(entries.get(k).unwrap()));
-            self.sorted_keys = keys;
-            self.dirty = false;
-        }
+    ///
+    /// This is a read-only operation — the sort order is maintained eagerly
+    /// on every [`register`](SortedRegistry::register) / [`deregister`](SortedRegistry::deregister) call.
+    pub fn sorted_values(&self) -> Vec<&T> {
         self.sorted_keys
             .iter()
             .filter_map(|k| self.entries.get(k))
@@ -162,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_empty_registry() {
-        let mut reg = SortedRegistry::new(|item: &PriorityItem| item.priority);
+        let reg = SortedRegistry::new(|item: &PriorityItem| item.priority);
         let sorted = reg.sorted_values();
         assert!(sorted.is_empty());
     }
@@ -290,14 +292,14 @@ mod tests {
             },
         )
         .unwrap();
-        // First call sorts
+        // Sort order is already maintained eagerly by register()
         let s1: Vec<&str> = reg
             .sorted_values()
             .iter()
             .map(|i| i.value.as_str())
             .collect();
         assert_eq!(s1, vec!["A"]);
-        // Second call uses cache (same result)
+        // Second call returns the same result (no re-sort needed)
         let s2: Vec<&str> = reg
             .sorted_values()
             .iter()

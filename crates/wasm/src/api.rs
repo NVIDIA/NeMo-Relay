@@ -202,17 +202,24 @@ pub async fn nat_nexus_tool_call_execute(
     let default_fn: nvidia_nat_nexus_core::ToolExecutionNextFn =
         Box::new(move |args| exec_fn(args));
 
-    let result = nvidia_nat_nexus_core::nat_nexus_tool_call_execute(
-        name,
-        args_json,
-        default_fn,
-        Some(parent_handle),
-        attrs,
-        opt_js_to_json(&data)?,
-        opt_js_to_json(&metadata)?,
-    )
-    .await
-    .map_err(to_js_err)?;
+    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let data_json = opt_js_to_json(&data)?;
+    let metadata_json = opt_js_to_json(&metadata)?;
+    let result = nvidia_nat_nexus_core::TASK_SCOPE_STACK
+        .scope(scope_stack, async move {
+            nvidia_nat_nexus_core::nat_nexus_tool_call_execute(
+                name,
+                args_json,
+                default_fn,
+                Some(parent_handle),
+                attrs,
+                data_json,
+                metadata_json,
+            )
+            .await
+        })
+        .await
+        .map_err(to_js_err)?;
 
     Ok(json_to_js(&result))
 }
@@ -321,18 +328,25 @@ pub async fn nat_nexus_llm_call_execute(
     let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn =
         Box::new(move |request| exec_fn(request));
 
-    let result = nvidia_nat_nexus_core::nat_nexus_llm_call_execute(
-        name,
-        llm_request,
-        default_fn,
-        Some(parent_handle),
-        attrs,
-        opt_js_to_json(&data)?,
-        opt_js_to_json(&metadata)?,
-        model_name,
-    )
-    .await
-    .map_err(to_js_err)?;
+    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let data_json = opt_js_to_json(&data)?;
+    let metadata_json = opt_js_to_json(&metadata)?;
+    let result = nvidia_nat_nexus_core::TASK_SCOPE_STACK
+        .scope(scope_stack, async move {
+            nvidia_nat_nexus_core::nat_nexus_llm_call_execute(
+                name,
+                llm_request,
+                default_fn,
+                Some(parent_handle),
+                attrs,
+                data_json,
+                metadata_json,
+                model_name,
+            )
+            .await
+        })
+        .await
+        .map_err(to_js_err)?;
 
     Ok(json_to_js(&result))
 }
@@ -405,20 +419,27 @@ pub async fn nat_nexus_llm_stream_call_execute(
         })
     });
 
-    let rust_stream = nvidia_nat_nexus_core::nat_nexus_llm_stream_call_execute(
-        name,
-        llm_request,
-        default_fn,
-        wrapped_collector,
-        wrapped_finalizer,
-        Some(parent_handle),
-        attrs,
-        opt_js_to_json(&data)?,
-        opt_js_to_json(&metadata)?,
-        model_name,
-    )
-    .await
-    .map_err(to_js_err)?;
+    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let data_json = opt_js_to_json(&data)?;
+    let metadata_json = opt_js_to_json(&metadata)?;
+    let rust_stream = nvidia_nat_nexus_core::TASK_SCOPE_STACK
+        .scope(scope_stack, async move {
+            nvidia_nat_nexus_core::nat_nexus_llm_stream_call_execute(
+                name,
+                llm_request,
+                default_fn,
+                wrapped_collector,
+                wrapped_finalizer,
+                Some(parent_handle),
+                attrs,
+                data_json,
+                metadata_json,
+                model_name,
+            )
+            .await
+        })
+        .await
+        .map_err(to_js_err)?;
 
     use tokio_stream::StreamExt;
     let (tx, rx) = tokio::sync::mpsc::channel(32);
@@ -820,6 +841,538 @@ pub fn register_subscriber(name: &str, callback: Function) -> Result<(), JsValue
 #[wasm_bindgen(js_name = "deregisterSubscriber")]
 pub fn deregister_subscriber(name: &str) -> Result<bool, JsValue> {
     nvidia_nat_nexus_core::nat_nexus_deregister_subscriber(name).map_err(to_js_err)
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local guardrail registrations — Tool
+// ---------------------------------------------------------------------------
+
+/// Registers a scope-local guardrail that sanitizes tool request arguments before execution.
+///
+/// - `scope_uuid` - UUID of the scope to register on.
+/// - `name` - Unique guardrail name.
+/// - `priority` - Execution priority (lower runs first).
+/// - `guardrail` - JS function `(name, args) => sanitizedArgs`.
+#[wasm_bindgen(js_name = "scopeRegisterToolSanitizeRequestGuardrail")]
+pub fn scope_register_tool_sanitize_request_guardrail(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    guardrail: Function,
+) -> Result<(), JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_register_tool_sanitize_request_guardrail(
+        &uuid,
+        name,
+        priority,
+        callable::wrap_js_tool_fn(guardrail),
+    )
+    .map_err(to_js_err)
+}
+
+/// Removes a scope-local tool sanitize-request guardrail by name.
+///
+/// Returns `true` if the guardrail was found and removed from the specified scope.
+#[wasm_bindgen(js_name = "scopeDeregisterToolSanitizeRequestGuardrail")]
+pub fn scope_deregister_tool_sanitize_request_guardrail(
+    scope_uuid: &str,
+    name: &str,
+) -> Result<bool, JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_deregister_tool_sanitize_request_guardrail(&uuid, name)
+        .map_err(to_js_err)
+}
+
+/// Registers a scope-local guardrail that sanitizes tool response data after execution.
+///
+/// - `scope_uuid` - UUID of the scope to register on.
+/// - `name` - Unique guardrail name.
+/// - `priority` - Execution priority (lower runs first).
+/// - `guardrail` - JS function `(name, result) => sanitizedResult`.
+#[wasm_bindgen(js_name = "scopeRegisterToolSanitizeResponseGuardrail")]
+pub fn scope_register_tool_sanitize_response_guardrail(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    guardrail: Function,
+) -> Result<(), JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_register_tool_sanitize_response_guardrail(
+        &uuid,
+        name,
+        priority,
+        callable::wrap_js_tool_fn(guardrail),
+    )
+    .map_err(to_js_err)
+}
+
+/// Removes a scope-local tool sanitize-response guardrail by name.
+///
+/// Returns `true` if the guardrail was found and removed from the specified scope.
+#[wasm_bindgen(js_name = "scopeDeregisterToolSanitizeResponseGuardrail")]
+pub fn scope_deregister_tool_sanitize_response_guardrail(
+    scope_uuid: &str,
+    name: &str,
+) -> Result<bool, JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_deregister_tool_sanitize_response_guardrail(&uuid, name)
+        .map_err(to_js_err)
+}
+
+/// Registers a scope-local guardrail that conditionally gates tool execution.
+///
+/// The guardrail function returns `null` to allow execution or a rejection
+/// reason string to block it.
+///
+/// - `scope_uuid` - UUID of the scope to register on.
+/// - `name` - Unique guardrail name.
+/// - `priority` - Execution priority (lower runs first).
+/// - `guardrail` - JS function `(name, args) => string | null`.
+#[wasm_bindgen(js_name = "scopeRegisterToolConditionalExecutionGuardrail")]
+pub fn scope_register_tool_conditional_execution_guardrail(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    guardrail: Function,
+) -> Result<(), JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_register_tool_conditional_execution_guardrail(
+        &uuid,
+        name,
+        priority,
+        callable::wrap_js_tool_conditional_fn(guardrail),
+    )
+    .map_err(to_js_err)
+}
+
+/// Removes a scope-local tool conditional-execution guardrail by name.
+///
+/// Returns `true` if the guardrail was found and removed from the specified scope.
+#[wasm_bindgen(js_name = "scopeDeregisterToolConditionalExecutionGuardrail")]
+pub fn scope_deregister_tool_conditional_execution_guardrail(
+    scope_uuid: &str,
+    name: &str,
+) -> Result<bool, JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_deregister_tool_conditional_execution_guardrail(
+        &uuid, name,
+    )
+    .map_err(to_js_err)
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local intercept registrations — Tool
+// ---------------------------------------------------------------------------
+
+/// Registers a scope-local intercept that transforms tool request arguments.
+///
+/// - `scope_uuid` - UUID of the scope to register on.
+/// - `name` - Unique intercept name.
+/// - `priority` - Execution priority (lower runs first).
+/// - `break_chain` - If `true`, stops further intercepts from running after this one.
+/// - `func` - JS function `(name, args) => transformedArgs`.
+#[wasm_bindgen(js_name = "scopeRegisterToolRequestIntercept")]
+pub fn scope_register_tool_request_intercept(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    break_chain: bool,
+    func: Function,
+) -> Result<(), JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_register_tool_request_intercept(
+        &uuid,
+        name,
+        priority,
+        break_chain,
+        callable::wrap_js_tool_fn(func),
+    )
+    .map_err(to_js_err)
+}
+
+/// Removes a scope-local tool request intercept by name.
+///
+/// Returns `true` if the intercept was found and removed from the specified scope.
+#[wasm_bindgen(js_name = "scopeDeregisterToolRequestIntercept")]
+pub fn scope_deregister_tool_request_intercept(
+    scope_uuid: &str,
+    name: &str,
+) -> Result<bool, JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_deregister_tool_request_intercept(&uuid, name)
+        .map_err(to_js_err)
+}
+
+/// Registers a scope-local intercept that transforms tool response data.
+///
+/// - `scope_uuid` - UUID of the scope to register on.
+/// - `name` - Unique intercept name.
+/// - `priority` - Execution priority (lower runs first).
+/// - `break_chain` - If `true`, stops further intercepts from running after this one.
+/// - `func` - JS function `(name, result) => transformedResult`.
+#[wasm_bindgen(js_name = "scopeRegisterToolResponseIntercept")]
+pub fn scope_register_tool_response_intercept(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    break_chain: bool,
+    func: Function,
+) -> Result<(), JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_register_tool_response_intercept(
+        &uuid,
+        name,
+        priority,
+        break_chain,
+        callable::wrap_js_tool_fn(func),
+    )
+    .map_err(to_js_err)
+}
+
+/// Removes a scope-local tool response intercept by name.
+///
+/// Returns `true` if the intercept was found and removed from the specified scope.
+#[wasm_bindgen(js_name = "scopeDeregisterToolResponseIntercept")]
+pub fn scope_deregister_tool_response_intercept(
+    scope_uuid: &str,
+    name: &str,
+) -> Result<bool, JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_deregister_tool_response_intercept(&uuid, name)
+        .map_err(to_js_err)
+}
+
+/// Registers a scope-local tool execution intercept following the middleware chain pattern.
+///
+/// - `scope_uuid` - UUID of the scope to register on.
+/// - `name` - Unique intercept name.
+/// - `priority` - Execution priority (lower runs first).
+/// - `exec_fn` - JS function `(args, next) => result | Promise<result>` -- intercept function.
+///   Call `await next(args)` to invoke the next intercept or original implementation.
+#[wasm_bindgen(js_name = "scopeRegisterToolExecutionIntercept")]
+pub fn scope_register_tool_execution_intercept(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    exec_fn: Function,
+) -> Result<(), JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_register_tool_execution_intercept(
+        &uuid,
+        name,
+        priority,
+        callable::wrap_js_tool_exec_intercept_fn(exec_fn),
+    )
+    .map_err(to_js_err)
+}
+
+/// Removes a scope-local tool execution intercept by name.
+///
+/// Returns `true` if the intercept was found and removed from the specified scope.
+#[wasm_bindgen(js_name = "scopeDeregisterToolExecutionIntercept")]
+pub fn scope_deregister_tool_execution_intercept(
+    scope_uuid: &str,
+    name: &str,
+) -> Result<bool, JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_deregister_tool_execution_intercept(&uuid, name)
+        .map_err(to_js_err)
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local guardrail registrations — LLM
+// ---------------------------------------------------------------------------
+
+/// Registers a scope-local guardrail that sanitizes LLM request data before the call.
+///
+/// - `scope_uuid` - UUID of the scope to register on.
+/// - `name` - Unique guardrail name.
+/// - `priority` - Execution priority (lower runs first).
+/// - `guardrail` - JS function `(request) => sanitizedRequest`.
+#[wasm_bindgen(js_name = "scopeRegisterLlmSanitizeRequestGuardrail")]
+pub fn scope_register_llm_sanitize_request_guardrail(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    guardrail: Function,
+) -> Result<(), JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_register_llm_sanitize_request_guardrail(
+        &uuid,
+        name,
+        priority,
+        callable::wrap_js_llm_sanitize_request_fn(guardrail),
+    )
+    .map_err(to_js_err)
+}
+
+/// Removes a scope-local LLM sanitize-request guardrail by name.
+///
+/// Returns `true` if the guardrail was found and removed from the specified scope.
+#[wasm_bindgen(js_name = "scopeDeregisterLlmSanitizeRequestGuardrail")]
+pub fn scope_deregister_llm_sanitize_request_guardrail(
+    scope_uuid: &str,
+    name: &str,
+) -> Result<bool, JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_deregister_llm_sanitize_request_guardrail(&uuid, name)
+        .map_err(to_js_err)
+}
+
+/// Registers a scope-local guardrail that sanitizes LLM response data after the call.
+///
+/// - `scope_uuid` - UUID of the scope to register on.
+/// - `name` - Unique guardrail name.
+/// - `priority` - Execution priority (lower runs first).
+/// - `guardrail` - JS function `(response) => sanitizedResponse`.
+#[wasm_bindgen(js_name = "scopeRegisterLlmSanitizeResponseGuardrail")]
+pub fn scope_register_llm_sanitize_response_guardrail(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    guardrail: Function,
+) -> Result<(), JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_register_llm_sanitize_response_guardrail(
+        &uuid,
+        name,
+        priority,
+        callable::wrap_js_llm_response_fn(guardrail),
+    )
+    .map_err(to_js_err)
+}
+
+/// Removes a scope-local LLM sanitize-response guardrail by name.
+///
+/// Returns `true` if the guardrail was found and removed from the specified scope.
+#[wasm_bindgen(js_name = "scopeDeregisterLlmSanitizeResponseGuardrail")]
+pub fn scope_deregister_llm_sanitize_response_guardrail(
+    scope_uuid: &str,
+    name: &str,
+) -> Result<bool, JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_deregister_llm_sanitize_response_guardrail(&uuid, name)
+        .map_err(to_js_err)
+}
+
+/// Registers a scope-local guardrail that conditionally gates LLM execution.
+///
+/// The guardrail function returns `null` to allow execution or a rejection
+/// reason string to block it.
+///
+/// - `scope_uuid` - UUID of the scope to register on.
+/// - `name` - Unique guardrail name.
+/// - `priority` - Execution priority (lower runs first).
+/// - `guardrail` - JS function `(request) => string | null`.
+#[wasm_bindgen(js_name = "scopeRegisterLlmConditionalExecutionGuardrail")]
+pub fn scope_register_llm_conditional_execution_guardrail(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    guardrail: Function,
+) -> Result<(), JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_register_llm_conditional_execution_guardrail(
+        &uuid,
+        name,
+        priority,
+        callable::wrap_js_llm_conditional_fn(guardrail),
+    )
+    .map_err(to_js_err)
+}
+
+/// Removes a scope-local LLM conditional-execution guardrail by name.
+///
+/// Returns `true` if the guardrail was found and removed from the specified scope.
+#[wasm_bindgen(js_name = "scopeDeregisterLlmConditionalExecutionGuardrail")]
+pub fn scope_deregister_llm_conditional_execution_guardrail(
+    scope_uuid: &str,
+    name: &str,
+) -> Result<bool, JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_deregister_llm_conditional_execution_guardrail(
+        &uuid, name,
+    )
+    .map_err(to_js_err)
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local intercept registrations — LLM
+// ---------------------------------------------------------------------------
+
+/// Registers a scope-local intercept that transforms LLM request data (`LLMRequest`).
+///
+/// - `scope_uuid` - UUID of the scope to register on.
+/// - `name` - Unique intercept name.
+/// - `priority` - Execution priority (lower runs first).
+/// - `break_chain` - If `true`, stops further intercepts from running after this one.
+/// - `func` - JS function `(request) => transformedRequest`.
+#[wasm_bindgen(js_name = "scopeRegisterLlmRequestIntercept")]
+pub fn scope_register_llm_request_intercept(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    break_chain: bool,
+    func: Function,
+) -> Result<(), JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_register_llm_request_intercept(
+        &uuid,
+        name,
+        priority,
+        break_chain,
+        callable::wrap_js_llm_request_intercept_fn(func),
+    )
+    .map_err(to_js_err)
+}
+
+/// Removes a scope-local LLM request intercept by name.
+///
+/// Returns `true` if the intercept was found and removed from the specified scope.
+#[wasm_bindgen(js_name = "scopeDeregisterLlmRequestIntercept")]
+pub fn scope_deregister_llm_request_intercept(
+    scope_uuid: &str,
+    name: &str,
+) -> Result<bool, JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_deregister_llm_request_intercept(&uuid, name)
+        .map_err(to_js_err)
+}
+
+/// Registers a scope-local LLM execution intercept following the middleware chain pattern.
+///
+/// - `scope_uuid` - UUID of the scope to register on.
+/// - `name` - Unique intercept name.
+/// - `priority` - Execution priority (lower runs first).
+/// - `exec_fn` - JS function `(native, next) => result | Promise<result>` -- intercept function.
+///   Call `await next(native)` to invoke the next intercept or original implementation.
+#[wasm_bindgen(js_name = "scopeRegisterLlmExecutionIntercept")]
+pub fn scope_register_llm_execution_intercept(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    exec_fn: Function,
+) -> Result<(), JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_register_llm_execution_intercept(
+        &uuid,
+        name,
+        priority,
+        callable::wrap_js_llm_exec_intercept_fn(exec_fn),
+    )
+    .map_err(to_js_err)
+}
+
+/// Removes a scope-local LLM execution intercept by name.
+///
+/// Returns `true` if the intercept was found and removed from the specified scope.
+#[wasm_bindgen(js_name = "scopeDeregisterLlmExecutionIntercept")]
+pub fn scope_deregister_llm_execution_intercept(
+    scope_uuid: &str,
+    name: &str,
+) -> Result<bool, JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_deregister_llm_execution_intercept(&uuid, name)
+        .map_err(to_js_err)
+}
+
+/// Registers a scope-local streaming LLM execution intercept following the middleware chain pattern.
+///
+/// The execution function result is wrapped into a single-item stream internally.
+///
+/// - `scope_uuid` - UUID of the scope to register on.
+/// - `name` - Unique intercept name.
+/// - `priority` - Execution priority (lower runs first).
+/// - `exec_fn` - JS function `(native, next) => result | Promise<result>` -- intercept function.
+///   Call `await next(native)` to invoke the next intercept or original streaming implementation.
+#[wasm_bindgen(js_name = "scopeRegisterLlmStreamExecutionIntercept")]
+pub fn scope_register_llm_stream_execution_intercept(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    exec_fn: Function,
+) -> Result<(), JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_register_llm_stream_execution_intercept(
+        &uuid,
+        name,
+        priority,
+        callable::wrap_js_llm_stream_exec_intercept_fn(exec_fn),
+    )
+    .map_err(to_js_err)
+}
+
+/// Removes a scope-local LLM stream execution intercept by name.
+///
+/// Returns `true` if the intercept was found and removed from the specified scope.
+#[wasm_bindgen(js_name = "scopeDeregisterLlmStreamExecutionIntercept")]
+pub fn scope_deregister_llm_stream_execution_intercept(
+    scope_uuid: &str,
+    name: &str,
+) -> Result<bool, JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_deregister_llm_stream_execution_intercept(&uuid, name)
+        .map_err(to_js_err)
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local subscriber registrations
+// ---------------------------------------------------------------------------
+
+/// Registers a scope-local event subscriber that receives lifecycle events
+/// for the specified scope.
+///
+/// - `scope_uuid` - UUID of the scope to register on.
+/// - `name` - Unique subscriber name.
+/// - `callback` - JS function `(event) => void` called for each event.
+#[wasm_bindgen(js_name = "scopeRegisterSubscriber")]
+pub fn scope_register_subscriber(
+    scope_uuid: &str,
+    name: &str,
+    callback: Function,
+) -> Result<(), JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_register_subscriber(
+        &uuid,
+        name,
+        callable::wrap_js_event_subscriber(callback),
+    )
+    .map_err(to_js_err)
+}
+
+/// Removes a scope-local event subscriber by name.
+///
+/// Returns `true` if the subscriber was found and removed from the specified scope.
+#[wasm_bindgen(js_name = "scopeDeregisterSubscriber")]
+pub fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> Result<bool, JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    nvidia_nat_nexus_core::nat_nexus_scope_deregister_subscriber(&uuid, name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------

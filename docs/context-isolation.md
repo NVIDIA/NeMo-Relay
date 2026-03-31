@@ -156,11 +156,68 @@ graph TD
             B1 --> B2["LLM: gpt-4"]
         end
 
-        REG["Shared Registries<br/>(guardrails, intercepts, subscribers)"]
+        REG["Global Registries<br/>(guardrails, intercepts, subscribers)"]
     end
 ```
 
-Each agent gets its own scope stack with a unique root UUID. All middleware registrations (guardrails, intercepts, subscribers) are shared globally — they fire for all agents. Use `root_uuid` on events to filter per-agent in subscribers or ATIF export.
+Each agent gets its own scope stack with a unique root UUID. **Global** middleware registrations are shared across all agents. Use `root_uuid` on events to filter per-agent in subscribers or ATIF export.
+
+### Scope-Local Middleware for Per-Agent Isolation
+
+For middleware that should only apply to a specific agent or session, use **scope-local registration** instead of global registration. Scope-local middleware is stored in the `ScopeStack` and only participates in pipeline execution for that stack:
+
+```mermaid
+graph TD
+    subgraph "Process"
+        subgraph "Agent A (Stack A)"
+            A_ROOT["Root (uuid-A)"]
+            A_ROOT --> A1["Agent: planner"]
+            A_SL["Scope-local:<br/>pii_filter (priority=5)"]
+        end
+
+        subgraph "Agent B (Stack B)"
+            B_ROOT["Root (uuid-B)"]
+            B_ROOT --> B1["Agent: coder"]
+            B_SL["Scope-local:<br/>code_validator (priority=5)"]
+        end
+
+        REG["Global Registries<br/>compliance_check (priority=1)"]
+    end
+```
+
+In this setup:
+- **Agent A** runs `compliance_check` (global) + `pii_filter` (scope-local) during tool/LLM calls
+- **Agent B** runs `compliance_check` (global) + `code_validator` (scope-local) during tool/LLM calls
+- Neither agent sees the other's scope-local middleware
+
+```python
+async def handle_agent(agent_id: str, guardrail_fn):
+    stack = nat_nexus.create_scope_stack()
+    nat_nexus._scope_stack_var.set(stack)
+
+    handle = nat_nexus.scope.push(f"agent-{agent_id}", nat_nexus.ScopeType.Agent)
+
+    # Register middleware only for this agent's scope
+    nat_nexus.scope_local.register_tool_conditional_execution(
+        handle, f"{agent_id}_guard", 10, guardrail_fn,
+    )
+
+    response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
+    nat_nexus.scope.pop(handle)  # guardrail automatically removed
+
+async def main():
+    # Global: applies to all agents
+    nat_nexus.guardrails.register_llm_conditional_execution(
+        "compliance", 1, compliance_check,
+    )
+
+    await asyncio.gather(
+        handle_agent("alice", alice_guardrail),
+        handle_agent("bob", bob_guardrail),
+    )
+```
+
+See [Core Concepts: Scope-Local Middleware](concepts.md#scope-local-middleware) for full details.
 
 ### Async Example (Python)
 
