@@ -40,3 +40,16 @@ func Register(name string, fn nat_nexus.EventSubscriberFunc) error {
 func Deregister(name string) error {
 	return nat_nexus.DeregisterSubscriber(name)
 }
+
+// ScopeRegister registers a scope-local event subscriber that will be called
+// for lifecycle events within the given scope. This is a shorthand for
+// [nat_nexus.ScopeRegisterSubscriber].
+func ScopeRegister(scopeUUID string, name string, fn nat_nexus.EventSubscriberFunc) error {
+	return nat_nexus.ScopeRegisterSubscriber(scopeUUID, name, fn)
+}
+
+// ScopeDeregister removes a scope-local event subscriber by name. This is a
+// shorthand for [nat_nexus.ScopeDeregisterSubscriber].
+func ScopeDeregister(scopeUUID string, name string) error {
+	return nat_nexus.ScopeDeregisterSubscriber(scopeUUID, name)
+}

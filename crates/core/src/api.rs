@@ -47,13 +47,6 @@ fn resolve_parent_uuid(parent: Option<&ScopeHandle>) -> Option<Uuid> {
     )
 }
 
-/// Returns the root UUID from the current scope stack for concurrent agent isolation.
-fn current_root_uuid() -> Option<Uuid> {
-    let stack = current_scope_stack();
-    let guard = stack.read().expect("scope stack lock poisoned");
-    Some(guard.root_uuid())
-}
-
 // ---------------------------------------------------------------------------
 // Macros for register/deregister API generation
 // ---------------------------------------------------------------------------
@@ -340,6 +333,224 @@ pub fn nat_nexus_deregister_subscriber(name: &str) -> Result<bool> {
 }
 
 // ---------------------------------------------------------------------------
+// Scope-local guardrail registrations
+// ---------------------------------------------------------------------------
+
+macro_rules! scope_local_guardrail_registry_api {
+    ($(#[$reg_meta:meta])* $register_name:ident, $deregister_name:ident, $field:ident, $fn_type:ty) => {
+        $(#[$reg_meta])*
+        pub fn $register_name(scope_uuid: &Uuid, name: &str, priority: i32, guardrail: $fn_type) -> Result<()> {
+            let ss = current_scope_stack();
+            let mut guard = ss.write().expect("scope stack lock poisoned");
+            let regs = guard
+                .local_registries_mut(scope_uuid)
+                .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+            regs.$field
+                .register(
+                    name.to_string(),
+                    GuardrailEntry { priority, guardrail },
+                )
+                .map_err(|e| NexusError::AlreadyExists(e))
+        }
+
+        /// Deregister a scope-local guardrail by name. Returns `true` if it existed.
+        pub fn $deregister_name(scope_uuid: &Uuid, name: &str) -> Result<bool> {
+            let ss = current_scope_stack();
+            let mut guard = ss.write().expect("scope stack lock poisoned");
+            let regs = guard
+                .local_registries_mut(scope_uuid)
+                .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+            Ok(regs.$field.deregister(name))
+        }
+    };
+}
+
+macro_rules! scope_local_intercept_registry_api {
+    ($(#[$reg_meta:meta])* $register_name:ident, $deregister_name:ident, $field:ident, $fn_type:ty) => {
+        $(#[$reg_meta])*
+        pub fn $register_name(
+            scope_uuid: &Uuid,
+            name: &str,
+            priority: i32,
+            break_chain: bool,
+            callable: $fn_type,
+        ) -> Result<()> {
+            let ss = current_scope_stack();
+            let mut guard = ss.write().expect("scope stack lock poisoned");
+            let regs = guard
+                .local_registries_mut(scope_uuid)
+                .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+            regs.$field
+                .register(
+                    name.to_string(),
+                    Intercept { priority, break_chain, callable },
+                )
+                .map_err(|e| NexusError::AlreadyExists(e))
+        }
+
+        /// Deregister a scope-local intercept by name. Returns `true` if it existed.
+        pub fn $deregister_name(scope_uuid: &Uuid, name: &str) -> Result<bool> {
+            let ss = current_scope_stack();
+            let mut guard = ss.write().expect("scope stack lock poisoned");
+            let regs = guard
+                .local_registries_mut(scope_uuid)
+                .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+            Ok(regs.$field.deregister(name))
+        }
+    };
+}
+
+macro_rules! scope_local_execution_intercept_registry_api {
+    ($(#[$reg_meta:meta])* $register_name:ident, $deregister_name:ident, $field:ident, $fn_type:ty) => {
+        $(#[$reg_meta])*
+        pub fn $register_name(scope_uuid: &Uuid, name: &str, priority: i32, callable: $fn_type) -> Result<()> {
+            let ss = current_scope_stack();
+            let mut guard = ss.write().expect("scope stack lock poisoned");
+            let regs = guard
+                .local_registries_mut(scope_uuid)
+                .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+            regs.$field
+                .register(name.to_string(), ExecutionIntercept { priority, callable })
+                .map_err(|e| NexusError::AlreadyExists(e))
+        }
+
+        /// Deregister a scope-local execution intercept by name. Returns `true` if it existed.
+        pub fn $deregister_name(scope_uuid: &Uuid, name: &str) -> Result<bool> {
+            let ss = current_scope_stack();
+            let mut guard = ss.write().expect("scope stack lock poisoned");
+            let regs = guard
+                .local_registries_mut(scope_uuid)
+                .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+            Ok(regs.$field.deregister(name))
+        }
+    };
+}
+
+// Tool guardrails — scope-local
+scope_local_guardrail_registry_api!(
+    /// Register a scope-local tool request sanitize guardrail.
+    nat_nexus_scope_register_tool_sanitize_request_guardrail,
+    nat_nexus_scope_deregister_tool_sanitize_request_guardrail,
+    tool_sanitize_request_guardrails,
+    ToolSanitizeFn
+);
+scope_local_guardrail_registry_api!(
+    /// Register a scope-local tool response sanitize guardrail.
+    nat_nexus_scope_register_tool_sanitize_response_guardrail,
+    nat_nexus_scope_deregister_tool_sanitize_response_guardrail,
+    tool_sanitize_response_guardrails,
+    ToolSanitizeFn
+);
+scope_local_guardrail_registry_api!(
+    /// Register a scope-local tool conditional execution guardrail.
+    nat_nexus_scope_register_tool_conditional_execution_guardrail,
+    nat_nexus_scope_deregister_tool_conditional_execution_guardrail,
+    tool_conditional_execution_guardrails,
+    ToolConditionalFn
+);
+
+// Tool intercepts — scope-local
+scope_local_intercept_registry_api!(
+    /// Register a scope-local tool request intercept.
+    nat_nexus_scope_register_tool_request_intercept,
+    nat_nexus_scope_deregister_tool_request_intercept,
+    tool_request_intercepts,
+    ToolInterceptFn
+);
+scope_local_intercept_registry_api!(
+    /// Register a scope-local tool response intercept.
+    nat_nexus_scope_register_tool_response_intercept,
+    nat_nexus_scope_deregister_tool_response_intercept,
+    tool_response_intercepts,
+    ToolInterceptFn
+);
+scope_local_execution_intercept_registry_api!(
+    /// Register a scope-local tool execution intercept.
+    nat_nexus_scope_register_tool_execution_intercept,
+    nat_nexus_scope_deregister_tool_execution_intercept,
+    tool_execution_intercepts,
+    ToolExecutionFn
+);
+
+// LLM guardrails — scope-local
+scope_local_guardrail_registry_api!(
+    /// Register a scope-local LLM request sanitize guardrail.
+    nat_nexus_scope_register_llm_sanitize_request_guardrail,
+    nat_nexus_scope_deregister_llm_sanitize_request_guardrail,
+    llm_sanitize_request_guardrails,
+    LlmSanitizeRequestFn
+);
+scope_local_guardrail_registry_api!(
+    /// Register a scope-local LLM response sanitize guardrail.
+    nat_nexus_scope_register_llm_sanitize_response_guardrail,
+    nat_nexus_scope_deregister_llm_sanitize_response_guardrail,
+    llm_sanitize_response_guardrails,
+    LlmSanitizeResponseFn
+);
+scope_local_guardrail_registry_api!(
+    /// Register a scope-local LLM conditional execution guardrail.
+    nat_nexus_scope_register_llm_conditional_execution_guardrail,
+    nat_nexus_scope_deregister_llm_conditional_execution_guardrail,
+    llm_conditional_execution_guardrails,
+    LlmConditionalFn
+);
+
+// LLM intercepts — scope-local
+scope_local_intercept_registry_api!(
+    /// Register a scope-local LLM request intercept.
+    nat_nexus_scope_register_llm_request_intercept,
+    nat_nexus_scope_deregister_llm_request_intercept,
+    llm_request_intercepts,
+    LlmRequestInterceptFn
+);
+scope_local_execution_intercept_registry_api!(
+    /// Register a scope-local LLM execution intercept.
+    nat_nexus_scope_register_llm_execution_intercept,
+    nat_nexus_scope_deregister_llm_execution_intercept,
+    llm_execution_intercepts,
+    LlmExecutionFn
+);
+scope_local_execution_intercept_registry_api!(
+    /// Register a scope-local LLM streaming execution intercept.
+    nat_nexus_scope_register_llm_stream_execution_intercept,
+    nat_nexus_scope_deregister_llm_stream_execution_intercept,
+    llm_stream_execution_intercepts,
+    LlmStreamExecutionFn
+);
+
+// Scope-local subscriber registration
+
+/// Registers a scope-local event subscriber.
+pub fn nat_nexus_scope_register_subscriber(
+    scope_uuid: &Uuid,
+    name: &str,
+    callback: EventSubscriberFn,
+) -> Result<()> {
+    let ss = current_scope_stack();
+    let mut guard = ss.write().expect("scope stack lock poisoned");
+    let regs = guard
+        .local_registries_mut(scope_uuid)
+        .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+    if regs.event_subscribers.contains_key(name) {
+        return Err(NexusError::AlreadyExists(format!(
+            "{name} subscriber already exists"
+        )));
+    }
+    regs.event_subscribers.insert(name.to_string(), callback);
+    Ok(())
+}
+
+/// Deregisters a scope-local event subscriber. Returns `true` if it existed.
+pub fn nat_nexus_scope_deregister_subscriber(scope_uuid: &Uuid, name: &str) -> Result<bool> {
+    let ss = current_scope_stack();
+    let mut guard = ss.write().expect("scope stack lock poisoned");
+    let regs = guard
+        .local_registries_mut(scope_uuid)
+        .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+    Ok(regs.event_subscribers.remove(name).is_some())
+}
+
+// ---------------------------------------------------------------------------
 // Scope / handle operations
 // ---------------------------------------------------------------------------
 
@@ -366,20 +577,26 @@ pub fn nat_nexus_push_scope(
     metadata: Option<Json>,
 ) -> Result<ScopeHandle> {
     let parent_uuid = resolve_parent_uuid(parent);
-    let root_uuid = current_root_uuid();
-    let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
-    let handle = state.create_scope_handle(
-        name,
-        parent_uuid,
-        scope_type,
-        attributes,
-        root_uuid,
-        data,
-        metadata,
-    );
+    let handle = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let root_uuid = Some(ss_guard.root_uuid());
+        let sl_subs = ss_guard.collect_scope_local_subscribers();
+        let ctx = global_context();
+        let state = ctx
+            .read()
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        state.create_scope_handle(
+            name,
+            parent_uuid,
+            scope_type,
+            attributes,
+            root_uuid,
+            data,
+            metadata,
+            &sl_subs,
+        )
+    };
     task_scope_push(handle.clone());
     Ok(handle)
 }
@@ -388,13 +605,25 @@ pub fn nat_nexus_push_scope(
 ///
 /// Returns [`NexusError::NotFound`] if the UUID is not in the stack.
 pub fn nat_nexus_pop_scope(handle_uuid: &Uuid) -> Result<()> {
-    let root_uuid = current_root_uuid();
-    let scope = task_scope_remove(handle_uuid)?;
-    let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
-    state.end_scope_handle(&scope, root_uuid);
+    // Emit the End event while still holding the read lock so scope-local
+    // subscribers (including those on the scope being popped) are dispatched.
+    let ss = current_scope_stack();
+    {
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let root_uuid = Some(ss_guard.root_uuid());
+        let sl_subs = ss_guard.collect_scope_local_subscribers();
+        let scope = ss_guard
+            .find(handle_uuid)
+            .ok_or_else(|| NexusError::NotFound("scope handle not found".into()))?
+            .clone();
+        let ctx = global_context();
+        let state = ctx
+            .read()
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        state.end_scope_handle(&scope, root_uuid, &sl_subs);
+    }
+    // Now remove the scope (takes a write lock internally).
+    task_scope_remove(handle_uuid)?;
     Ok(())
 }
 
@@ -409,12 +638,15 @@ pub fn nat_nexus_event(
     metadata: Option<Json>,
 ) -> Result<()> {
     let parent_uuid = resolve_parent_uuid(parent);
-    let root_uuid = current_root_uuid();
+    let ss = current_scope_stack();
+    let ss_guard = ss.read().expect("scope stack lock poisoned");
+    let root_uuid = Some(ss_guard.root_uuid());
+    let sl_subs = ss_guard.collect_scope_local_subscribers();
     let ctx = global_context();
     let state = ctx
         .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
-    state.create_event(name, parent_uuid, data, metadata, root_uuid);
+    state.create_event(name, parent_uuid, data, metadata, root_uuid, &sl_subs);
     Ok(())
 }
 
@@ -437,13 +669,17 @@ pub fn nat_nexus_tool_call(
     tool_call_id: Option<String>,
 ) -> Result<ToolHandle> {
     let parent_uuid = resolve_parent_uuid(parent);
-    let root_uuid = current_root_uuid();
+    let ss = current_scope_stack();
+    let ss_guard = ss.read().expect("scope stack lock poisoned");
+    let root_uuid = Some(ss_guard.root_uuid());
+    let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_sanitize_request_guardrails);
+    let sl_subs = ss_guard.collect_scope_local_subscribers();
     let ctx = global_context();
-    let mut state = ctx
-        .write()
+    let state = ctx
+        .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
 
-    let sanitized_args = state.tool_sanitize_request_chain(name, args);
+    let sanitized_args = state.tool_sanitize_request_chain(name, args, &sl);
 
     Ok(state.create_tool_handle(
         name,
@@ -454,6 +690,7 @@ pub fn nat_nexus_tool_call(
         tool_call_id,
         Some(sanitized_args),
         root_uuid,
+        &sl_subs,
     ))
 }
 
@@ -466,15 +703,26 @@ pub fn nat_nexus_tool_call_end(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
-    let root_uuid = current_root_uuid();
+    let ss = current_scope_stack();
+    let ss_guard = ss.read().expect("scope stack lock poisoned");
+    let root_uuid = Some(ss_guard.root_uuid());
+    let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_sanitize_response_guardrails);
+    let sl_subs = ss_guard.collect_scope_local_subscribers();
     let ctx = global_context();
-    let mut state = ctx
-        .write()
+    let state = ctx
+        .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
 
-    let sanitized_result = state.tool_sanitize_response_chain(&handle.name, result);
+    let sanitized_result = state.tool_sanitize_response_chain(&handle.name, result, &sl);
 
-    state.end_tool_handle(handle, data, metadata, Some(sanitized_result), root_uuid);
+    state.end_tool_handle(
+        handle,
+        data,
+        metadata,
+        Some(sanitized_result),
+        root_uuid,
+        &sl_subs,
+    );
     Ok(())
 }
 
@@ -500,12 +748,17 @@ pub async fn nat_nexus_tool_call_execute(
 ) -> Result<Json> {
     // Conditional guardrails — run on the raw args before any transformation
     {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let sl =
+            ss_guard.collect_scope_local_registries(|r| &r.tool_conditional_execution_guardrails);
         let ctx = global_context();
-        let mut state = ctx
-            .write()
+        let state = ctx
+            .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        if let Some(err) = state.tool_conditional_execution_chain(name, &args) {
+        if let Some(err) = state.tool_conditional_execution_chain(name, &args, &sl) {
             drop(state);
+            drop(ss_guard);
             let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
             if let Some(obj) = rejection_data.as_object_mut() {
                 obj.insert("rejected".into(), json!(true));
@@ -518,14 +771,17 @@ pub async fn nat_nexus_tool_call_execute(
 
     // Request intercepts
     let intercepted_args = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_request_intercepts);
         let ctx = global_context();
-        let mut state = ctx
-            .write()
+        let state = ctx
+            .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.tool_request_intercepts_chain(name, args)
+        state.tool_request_intercepts_chain(name, args, &sl)
     };
 
-    // Tool call start
+    // Tool call start (scope-local sanitize request guardrails are picked up inside nat_nexus_tool_call)
     let handle = nat_nexus_tool_call(
         name,
         intercepted_args.clone(),
@@ -538,24 +794,30 @@ pub async fn nat_nexus_tool_call_execute(
 
     // Execution chain — build middleware chain under lock, release, then await
     let exec_future = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_execution_intercepts);
         let ctx = global_context();
-        let mut state = ctx
-            .write()
+        let state = ctx
+            .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.tool_build_execution_chain(func)
+        state.tool_build_execution_chain(func, &sl)
     };
     let result = exec_future(intercepted_args).await?;
 
     // Response intercepts
     let result = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_response_intercepts);
         let ctx = global_context();
-        let mut state = ctx
-            .write()
+        let state = ctx
+            .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.tool_response_intercepts_chain(name, result)
+        state.tool_response_intercepts_chain(name, result, &sl)
     };
 
-    // Tool call end
+    // Tool call end (scope-local sanitize response guardrails are picked up inside nat_nexus_tool_call_end)
     nat_nexus_tool_call_end(&handle, result.clone(), data, metadata)?;
 
     Ok(result)
@@ -581,13 +843,17 @@ pub fn nat_nexus_llm_call(
     model_name: Option<String>,
 ) -> Result<LLMHandle> {
     let parent_uuid = resolve_parent_uuid(parent);
-    let root_uuid = current_root_uuid();
+    let ss = current_scope_stack();
+    let ss_guard = ss.read().expect("scope stack lock poisoned");
+    let root_uuid = Some(ss_guard.root_uuid());
+    let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_request_guardrails);
+    let sl_subs = ss_guard.collect_scope_local_subscribers();
     let ctx = global_context();
-    let mut state = ctx
-        .write()
+    let state = ctx
+        .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
 
-    let sanitized_request = state.llm_sanitize_request_chain(request.clone());
+    let sanitized_request = state.llm_sanitize_request_chain(request.clone(), &sl);
     let input = serde_json::to_value(&sanitized_request).unwrap_or(Json::Null);
 
     Ok(state.create_llm_handle(
@@ -599,6 +865,7 @@ pub fn nat_nexus_llm_call(
         model_name,
         Some(input),
         root_uuid,
+        &sl_subs,
     ))
 }
 
@@ -611,15 +878,26 @@ pub fn nat_nexus_llm_call_end(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
-    let root_uuid = current_root_uuid();
+    let ss = current_scope_stack();
+    let ss_guard = ss.read().expect("scope stack lock poisoned");
+    let root_uuid = Some(ss_guard.root_uuid());
+    let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
+    let sl_subs = ss_guard.collect_scope_local_subscribers();
     let ctx = global_context();
-    let mut state = ctx
-        .write()
+    let state = ctx
+        .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
 
-    let sanitized_response = state.llm_sanitize_response_chain(response);
+    let sanitized_response = state.llm_sanitize_response_chain(response, &sl);
 
-    state.end_llm_handle(handle, data, metadata, Some(sanitized_response), root_uuid);
+    state.end_llm_handle(
+        handle,
+        data,
+        metadata,
+        Some(sanitized_response),
+        root_uuid,
+        &sl_subs,
+    );
     Ok(())
 }
 
@@ -646,12 +924,17 @@ pub async fn nat_nexus_llm_call_execute(
 ) -> Result<Json> {
     // Conditional guardrails — check on unmodified request
     {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let sl =
+            ss_guard.collect_scope_local_registries(|r| &r.llm_conditional_execution_guardrails);
         let ctx = global_context();
-        let mut state = ctx
-            .write()
+        let state = ctx
+            .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        if let Some(err) = state.llm_conditional_execution_chain(&request) {
+        if let Some(err) = state.llm_conditional_execution_chain(&request, &sl) {
             drop(state);
+            drop(ss_guard);
             let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
             if let Some(obj) = rejection_data.as_object_mut() {
                 obj.insert("rejected".into(), json!(true));
@@ -664,14 +947,17 @@ pub async fn nat_nexus_llm_call_execute(
 
     // Request intercepts
     let intercepted_request = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_request_intercepts);
         let ctx = global_context();
-        let mut state = ctx
-            .write()
+        let state = ctx
+            .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.llm_request_intercepts_chain(request)
+        state.llm_request_intercepts_chain(request, &sl)
     };
 
-    // LLM call start (sanitize guardrails happen inside)
+    // LLM call start (sanitize guardrails happen inside nat_nexus_llm_call)
     let handle = nat_nexus_llm_call(
         name,
         &intercepted_request,
@@ -684,15 +970,18 @@ pub async fn nat_nexus_llm_call_execute(
 
     // Execution chain — build middleware chain under lock, release, then await
     let exec_future = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_execution_intercepts);
         let ctx = global_context();
-        let mut state = ctx
-            .write()
+        let state = ctx
+            .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.llm_build_execution_chain(func)
+        state.llm_build_execution_chain(func, &sl)
     };
     let response = exec_future(intercepted_request).await?;
 
-    // LLM call end (sanitize response guardrails happen inside)
+    // LLM call end (sanitize response guardrails happen inside nat_nexus_llm_call_end)
     nat_nexus_llm_call_end(&handle, response.clone(), data, metadata)?;
 
     Ok(response)
@@ -733,12 +1022,17 @@ pub async fn nat_nexus_llm_stream_call_execute(
 ) -> Result<Pin<Box<dyn Stream<Item = Result<Json>> + Send>>> {
     // Conditional guardrails — check on unmodified request
     {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let sl =
+            ss_guard.collect_scope_local_registries(|r| &r.llm_conditional_execution_guardrails);
         let ctx = global_context();
-        let mut state = ctx
-            .write()
+        let state = ctx
+            .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        if let Some(err) = state.llm_conditional_execution_chain(&request) {
+        if let Some(err) = state.llm_conditional_execution_chain(&request, &sl) {
             drop(state);
+            drop(ss_guard);
             let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
             if let Some(obj) = rejection_data.as_object_mut() {
                 obj.insert("rejected".into(), json!(true));
@@ -751,14 +1045,17 @@ pub async fn nat_nexus_llm_stream_call_execute(
 
     // Request intercepts
     let intercepted_request = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_request_intercepts);
         let ctx = global_context();
-        let mut state = ctx
-            .write()
+        let state = ctx
+            .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.llm_request_intercepts_chain(request)
+        state.llm_request_intercepts_chain(request, &sl)
     };
 
-    // LLM call start (sanitize guardrails happen inside)
+    // LLM call start (sanitize guardrails happen inside nat_nexus_llm_call)
     let handle = nat_nexus_llm_call(
         name,
         &intercepted_request,
@@ -771,11 +1068,14 @@ pub async fn nat_nexus_llm_stream_call_execute(
 
     // Stream execution chain — build middleware chain under lock, release, then await
     let exec_future = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_stream_execution_intercepts);
         let ctx = global_context();
-        let mut state = ctx
-            .write()
+        let state = ctx
+            .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.llm_stream_build_execution_chain(func)
+        state.llm_stream_build_execution_chain(func, &sl)
     };
     let raw_stream = exec_future(intercepted_request).await?;
 
@@ -794,11 +1094,14 @@ pub async fn nat_nexus_llm_stream_call_execute(
 /// This allows invoking request intercepts independently of the full
 /// [`nat_nexus_tool_call_execute`] pipeline.
 pub fn nat_nexus_tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
+    let ss = current_scope_stack();
+    let ss_guard = ss.read().expect("scope stack lock poisoned");
+    let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_request_intercepts);
     let ctx = global_context();
-    let mut state = ctx
-        .write()
+    let state = ctx
+        .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
-    Ok(state.tool_request_intercepts_chain(name, args))
+    Ok(state.tool_request_intercepts_chain(name, args, &sl))
 }
 
 /// Runs the registered tool conditional execution guardrail chain.
@@ -807,11 +1110,14 @@ pub fn nat_nexus_tool_request_intercepts(name: &str, args: Json) -> Result<Json>
 /// [`Err(NexusError::GuardrailRejected(reason))`](NexusError::GuardrailRejected)
 /// if any guardrail rejects the call.
 pub fn nat_nexus_tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
+    let ss = current_scope_stack();
+    let ss_guard = ss.read().expect("scope stack lock poisoned");
+    let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_conditional_execution_guardrails);
     let ctx = global_context();
-    let mut state = ctx
-        .write()
+    let state = ctx
+        .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
-    if let Some(err) = state.tool_conditional_execution_chain(name, args) {
+    if let Some(err) = state.tool_conditional_execution_chain(name, args, &sl) {
         return Err(NexusError::GuardrailRejected(err));
     }
     Ok(())
@@ -823,11 +1129,14 @@ pub fn nat_nexus_tool_conditional_execution(name: &str, args: &Json) -> Result<(
 /// This allows invoking response intercepts independently of the full
 /// [`nat_nexus_tool_call_execute`] pipeline.
 pub fn nat_nexus_tool_response_intercepts(name: &str, result: Json) -> Result<Json> {
+    let ss = current_scope_stack();
+    let ss_guard = ss.read().expect("scope stack lock poisoned");
+    let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_response_intercepts);
     let ctx = global_context();
-    let mut state = ctx
-        .write()
+    let state = ctx
+        .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
-    Ok(state.tool_response_intercepts_chain(name, result))
+    Ok(state.tool_response_intercepts_chain(name, result, &sl))
 }
 
 /// Runs the registered LLM request intercept chain on the given [`LLMRequest`].
@@ -836,11 +1145,14 @@ pub fn nat_nexus_tool_response_intercepts(name: &str, result: Json) -> Result<Js
 /// This allows invoking request intercepts independently of the full
 /// [`nat_nexus_llm_call_execute`] pipeline.
 pub fn nat_nexus_llm_request_intercepts(request: LLMRequest) -> Result<LLMRequest> {
+    let ss = current_scope_stack();
+    let ss_guard = ss.read().expect("scope stack lock poisoned");
+    let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_request_intercepts);
     let ctx = global_context();
-    let mut state = ctx
-        .write()
+    let state = ctx
+        .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
-    Ok(state.llm_request_intercepts_chain(request))
+    Ok(state.llm_request_intercepts_chain(request, &sl))
 }
 
 /// Runs the registered LLM conditional execution guardrail chain.
@@ -849,11 +1161,14 @@ pub fn nat_nexus_llm_request_intercepts(request: LLMRequest) -> Result<LLMReques
 /// [`Err(NexusError::GuardrailRejected(reason))`](NexusError::GuardrailRejected)
 /// if any guardrail rejects the call.
 pub fn nat_nexus_llm_conditional_execution(request: &LLMRequest) -> Result<()> {
+    let ss = current_scope_stack();
+    let ss_guard = ss.read().expect("scope stack lock poisoned");
+    let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_conditional_execution_guardrails);
     let ctx = global_context();
-    let mut state = ctx
-        .write()
+    let state = ctx
+        .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
-    if let Some(err) = state.llm_conditional_execution_chain(request) {
+    if let Some(err) = state.llm_conditional_execution_chain(request, &sl) {
         return Err(NexusError::GuardrailRejected(err));
     }
     Ok(())

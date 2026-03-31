@@ -52,6 +52,7 @@ Submodules:
     guardrails  - Guardrail registration for tools and LLMs.
     intercepts  - Intercept registration for tools and LLMs.
     subscribers - Event subscriber registration.
+    scope_local - Scope-local guardrail, intercept, and subscriber registration.
 
 Types (available at top level):
     ScopeAttributes, ToolAttributes, LLMAttributes,
@@ -62,7 +63,7 @@ Types (available at top level):
 
 import contextvars
 
-from nat_nexus import guardrails, intercepts, llm, scope, subscribers, tools, typed
+from nat_nexus import guardrails, intercepts, llm, scope, scope_local, subscribers, tools, typed
 from nat_nexus._native import (
     # ATIF exporter
     AtifExporter,
@@ -179,6 +180,7 @@ __all__ = [
     "guardrails",
     "intercepts",
     "subscribers",
+    "scope_local",
     "typed",
     # Scope stack isolation
     "ScopeStack",

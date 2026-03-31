@@ -43,6 +43,8 @@ pub enum NatNexusStatus {
     InvalidJson = 7,
     /// A C string argument contained invalid UTF-8.
     InvalidUtf8 = 8,
+    /// A function argument had an invalid value (e.g. malformed UUID).
+    InvalidArg = 9,
 }
 
 thread_local! {

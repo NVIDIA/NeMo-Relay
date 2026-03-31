@@ -191,6 +191,68 @@ nat_nexus.subscribers.register("logger", my_subscriber)
 nat_nexus.subscribers.deregister("logger")
 ```
 
+## Scope-Local Middleware
+
+Guardrails, intercepts, and event subscribers can be registered on a **specific scope** instead of globally. Scope-local middleware is tied to the scope's lifetime — it is automatically cleaned up when the scope is popped.
+
+### How It Works
+
+- **Registration** — Instead of calling `nat_nexus.guardrails.register_*()` (global), call `nat_nexus.scope_local.register_*()` with a `ScopeHandle` to bind the middleware to that scope.
+- **Storage** — Scope-local entries are stored in the `ScopeStack`, keyed by scope UUID. The per-scope registry is lazily created on first registration.
+- **Execution** — When the pipeline runs, global entries and scope-local entries from all ancestor scopes (root through current top) are merged into a single priority-sorted list.
+- **Cleanup** — When a scope is popped, all its scope-local middleware is automatically removed. No manual `deregister_*` calls needed.
+- **Name uniqueness** — Names are unique **per registry**. A global guardrail named `"pii_filter"` and a scope-local guardrail named `"pii_filter"` coexist without conflict.
+
+### When to Use
+
+| Use Case | Registration |
+|----------|-------------|
+| Process-wide policy (compliance, audit logging) | **Global** — always active, survives scope changes |
+| Per-session guardrail (user-specific PII filter) | **Scope-local** on the session's agent scope |
+| Per-request intercept (A/B test variant) | **Scope-local** on the request scope |
+| Test-only middleware (assertions, mocks) | **Scope-local** on the test scope — auto-cleanup prevents leakage |
+
+### Example
+
+```python
+import nat_nexus
+
+# Global: always active
+nat_nexus.guardrails.register_llm_conditional_execution(
+    "compliance_gate", 1, compliance_check,
+)
+
+with nat_nexus.scope.scope("session_42", nat_nexus.ScopeType.Agent) as handle:
+    # Scope-local: active only inside this scope
+    nat_nexus.scope_local.register_tool_conditional_execution(
+        handle, "block_dangerous", 10, lambda name, args: "blocked" if name == "rm" else None,
+    )
+
+    # Both compliance_gate (global, priority=1) and
+    # block_dangerous (scope-local, priority=10) run during tool calls
+    result = await nat_nexus.tools.execute("search", {"q": "test"}, search_func)
+
+# handle is popped — block_dangerous is automatically removed
+```
+
+### Merge Behavior
+
+During pipeline execution, the effective middleware list is built by merging:
+
+1. All entries from the **global** registry
+2. All entries from **scope-local** registries for every scope from root to the current top of the stack
+
+The merged list is sorted by priority (ascending). If a global entry and a scope-local entry have the same priority, both run — ordering between them is stable but unspecified.
+
+```
+Global:        [compliance_gate(1), audit_log(100)]
+Scope "root":  []
+Scope "agent": [block_dangerous(10)]
+Scope "tool":  [redact_args(5)]
+
+Effective:     [compliance_gate(1), redact_args(5), block_dangerous(10), audit_log(100)]
+```
+
 ## Error Types
 
 | Error | When |

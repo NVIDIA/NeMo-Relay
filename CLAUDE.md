@@ -15,7 +15,7 @@ NeMo Agent Toolkit Nexus (Nexus) is a multi-language agent runtime framework pro
 crates/
   core/           # Core runtime library (nvidia-nat-nexus-core)
     src/          #   lib.rs, api.rs, atif.rs, context.rs, types.rs, registry.rs, stream.rs, error.rs, json.rs
-    tests/        #   context_isolation_tests.rs, stream_tests.rs
+    tests/        #   context_isolation_tests.rs, stream_tests.rs, scope_local_tests.rs
   python/         # PyO3 Python bindings (_native C extension, abi3 stable ABI)
     src/          #   lib.rs, py_api.rs, py_types.rs, py_callable.rs, convert.rs, py_context.rs
   ffi/            # C FFI layer (used by Go, generates nat_nexus.h via cbindgen)
@@ -23,21 +23,21 @@ crates/
   node/           # NAPI Node.js bindings
     src/          #   lib.rs, api.rs, callable.rs, types.rs, convert.rs, stream.rs
     tests/        #   types_tests.mjs, scope_tests.mjs, tools_tests.mjs, llm_tests.mjs,
-                  #   deregister_tests.mjs, context_tests.mjs
+                  #   deregister_tests.mjs, context_tests.mjs, scope_local_tests.mjs
   wasm/           # wasm-bindgen WebAssembly bindings
     src/          #   lib.rs, api.rs, callable.rs, types.rs, convert.rs, stream.rs
     tests/        #   types_tests.rs, scope_tests.rs, tools_tests.rs, llm_tests.rs,
-                  #   deregister_tests.rs, context_tests.rs
+                  #   deregister_tests.rs, context_tests.rs, scope_local_tests.rs
 python/           # Python wrapper module (nat_nexus/)
   nat_nexus/      #   __init__.py, __init__.pyi, scope.py, tools.py, llm.py,
-                  #   guardrails.py, intercepts.py, subscribers.py
+                  #   guardrails.py, intercepts.py, subscribers.py, scope_local.py
   tests/          #   test_types.py, test_scope.py, test_tools.py, test_llm.py,
-                  #   test_subscribers.py, test_context_isolation.py
+                  #   test_subscribers.py, test_context_isolation.py, test_scope_local.py
 go/nat_nexus/     # Go CGo bindings
                   #   nat_nexus.go, types.go, stream.go, callbacks.go
                   #   + subpackages: scope/, tools/, llm/, guardrails/, intercepts/, subscribers/
                   #   Tests: context_test.go, scope_test.go, tools_test.go, llm_test.go,
-                  #          deregister_test.go, types_test.go
+                  #          deregister_test.go, types_test.go, scope_local_test.go
 ```
 
 ## Build & Test Commands
@@ -132,6 +132,7 @@ git add third_party/<name>
 ## Architecture Patterns
 
 - **Scope stack**: Hierarchical scopes with UUID handles; root scope always present. Each binding exposes scope stack isolation for concurrent/multi-tenant use.
+- **Scope-local middleware**: Guardrails, intercepts, and event subscribers can be registered on a specific scope via `nat_nexus_scope_register_*` functions. Scope-local middleware is stored in `ScopeStack` (keyed by scope UUID, lazily created on first registration) and automatically cleaned up when the scope is popped. Chain execution merges global + all ancestor scope-local entries into a single priority-sorted list. Names are unique per registry (global `"foo"` and scope-local `"foo"` coexist). Exposed in all bindings: Python `nat_nexus.scope_local`, Go `ScopeRegister*`, Node.js `scopeRegister*`, WASM `scope_register_*`.
 - **Intercept chains**: Priority-ordered; request intercepts support optional `break_chain` short-circuit; execution intercepts use middleware chain pattern — each receives a `next` function to call the next intercept or the original callable
 - **Stream wrapping**: `LlmStreamWrapper` buffers/parses SSE events, feeds chunks to the collector and calls the finalizer on stream end
 - **Event subscription**: Observer pattern with named subscribers

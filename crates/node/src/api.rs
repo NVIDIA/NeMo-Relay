@@ -231,8 +231,9 @@ pub fn tool_call_end(
 /// Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned.
 /// Returns the final (possibly intercepted) tool result.
 #[allow(clippy::too_many_arguments)]
-#[napi]
-pub async fn tool_call_execute(
+#[napi(ts_return_type = "Promise<unknown>")]
+pub fn tool_call_execute(
+    env: Env,
     name: String,
     args: Json,
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
@@ -240,7 +241,7 @@ pub async fn tool_call_execute(
     attributes: Option<u32>,
     data: Option<Json>,
     metadata: Option<Json>,
-) -> Result<Json> {
+) -> Result<JsObject> {
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent = handle
         .map(|h| h.inner.clone())
@@ -250,21 +251,26 @@ pub async fn tool_call_execute(
         Box::new(move |args| exec_fn(args));
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
 
-    nvidia_nat_nexus_core::TASK_SCOPE_STACK
-        .scope(scope_stack, async move {
-            core::nat_nexus_tool_call_execute(
-                &name,
-                args,
-                default_fn,
-                Some(parent),
-                attrs,
-                opt_json(data),
-                opt_json(metadata),
-            )
-            .await
-            .map_err(to_napi_err)
-        })
-        .await
+    env.execute_tokio_future(
+        async move {
+            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+                .scope(scope_stack, async move {
+                    core::nat_nexus_tool_call_execute(
+                        &name,
+                        args,
+                        default_fn,
+                        Some(parent),
+                        attrs,
+                        opt_json(data),
+                        opt_json(metadata),
+                    )
+                    .await
+                    .map_err(to_napi_err)
+                })
+                .await
+        },
+        |_env, result| Ok(result),
+    )
 }
 
 /// Execute a tool call end-to-end, supporting both sync and async (Promise-returning) callbacks.
@@ -389,8 +395,9 @@ pub fn llm_call_end(
 /// The `request` should be a JSON object with `headers` and `content` fields matching
 /// the `LLMRequest` schema. Returns the final (possibly intercepted) LLM response.
 #[allow(clippy::too_many_arguments)]
-#[napi]
-pub async fn llm_call_execute(
+#[napi(ts_return_type = "Promise<unknown>")]
+pub fn llm_call_execute(
+    env: Env,
     name: String,
     request: Json,
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
@@ -399,7 +406,7 @@ pub async fn llm_call_execute(
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
-) -> Result<Json> {
+) -> Result<JsObject> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent = handle
         .map(|h| h.inner.clone())
@@ -410,22 +417,27 @@ pub async fn llm_call_execute(
     let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn = Box::new(move |req| exec_fn(req));
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
 
-    nvidia_nat_nexus_core::TASK_SCOPE_STACK
-        .scope(scope_stack, async move {
-            core::nat_nexus_llm_call_execute(
-                &name,
-                llm_request,
-                default_fn,
-                Some(parent),
-                attrs,
-                opt_json(data),
-                opt_json(metadata),
-                model_name,
-            )
-            .await
-            .map_err(to_napi_err)
-        })
-        .await
+    env.execute_tokio_future(
+        async move {
+            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+                .scope(scope_stack, async move {
+                    core::nat_nexus_llm_call_execute(
+                        &name,
+                        llm_request,
+                        default_fn,
+                        Some(parent),
+                        attrs,
+                        opt_json(data),
+                        opt_json(metadata),
+                        model_name,
+                    )
+                    .await
+                    .map_err(to_napi_err)
+                })
+                .await
+        },
+        |_env, result| Ok(result),
+    )
 }
 
 /// Execute a streaming LLM call end-to-end with full lifecycle management.
@@ -902,6 +914,460 @@ pub fn register_subscriber(
 #[napi]
 pub fn deregister_subscriber(name: String) -> Result<bool> {
     core::nat_nexus_deregister_subscriber(&name).map_err(to_napi_err)
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local guardrail registrations — Tool
+// ---------------------------------------------------------------------------
+
+macro_rules! napi_scope_guardrail_tool_api {
+    ($(#[doc = $reg_doc:expr])* $register_name:ident,
+     $(#[doc = $dereg_doc:expr])* $deregister_name:ident,
+     $core_register:path, $core_deregister:path, $wrapper:path) => {
+        $(#[doc = $reg_doc])*
+        #[napi]
+        pub fn $register_name(
+            scope_uuid: String,
+            name: String,
+            priority: i32,
+            guardrail: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
+        ) -> Result<()> {
+            let uuid = uuid::Uuid::parse_str(&scope_uuid)
+                .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+            $core_register(&uuid, &name, priority, $wrapper(guardrail)).map_err(to_napi_err)
+        }
+
+        $(#[doc = $dereg_doc])*
+        #[napi]
+        pub fn $deregister_name(scope_uuid: String, name: String) -> Result<bool> {
+            let uuid = uuid::Uuid::parse_str(&scope_uuid)
+                .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+            $core_deregister(&uuid, &name).map_err(to_napi_err)
+        }
+    };
+}
+
+napi_scope_guardrail_tool_api!(
+    /// Register a scope-local guardrail that sanitizes tool request arguments before execution.
+    ///
+    /// The `guardrail` callback receives `(toolName, args)` and must return sanitized args.
+    /// Higher `priority` values run first. Throws if a guardrail with the same `name` already exists
+    /// on the specified scope.
+    scope_register_tool_sanitize_request_guardrail,
+    /// Deregister a scope-local tool request sanitization guardrail by name.
+    ///
+    /// Returns `true` if a guardrail with that name was found and removed from the specified scope.
+    scope_deregister_tool_sanitize_request_guardrail,
+    core::nat_nexus_scope_register_tool_sanitize_request_guardrail,
+    core::nat_nexus_scope_deregister_tool_sanitize_request_guardrail,
+    callable::wrap_js_tool_fn
+);
+
+napi_scope_guardrail_tool_api!(
+    /// Register a scope-local guardrail that sanitizes tool response data after execution.
+    ///
+    /// The `guardrail` callback receives `(toolName, result)` and must return sanitized result.
+    /// Higher `priority` values run first. Throws if a guardrail with the same `name` already exists
+    /// on the specified scope.
+    scope_register_tool_sanitize_response_guardrail,
+    /// Deregister a scope-local tool response sanitization guardrail by name.
+    ///
+    /// Returns `true` if a guardrail with that name was found and removed from the specified scope.
+    scope_deregister_tool_sanitize_response_guardrail,
+    core::nat_nexus_scope_register_tool_sanitize_response_guardrail,
+    core::nat_nexus_scope_deregister_tool_sanitize_response_guardrail,
+    callable::wrap_js_tool_fn
+);
+
+/// Register a scope-local guardrail that conditionally gates tool execution.
+///
+/// The `guardrail` callback receives `(toolName, args)` and must return `null` to allow
+/// execution or a rejection reason string to block it. Higher `priority` values run first.
+#[napi]
+pub fn scope_register_tool_conditional_execution_guardrail(
+    scope_uuid: String,
+    name: String,
+    priority: i32,
+    guardrail: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
+) -> Result<()> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_register_tool_conditional_execution_guardrail(
+        &uuid,
+        &name,
+        priority,
+        callable::wrap_js_tool_conditional_fn(guardrail),
+    )
+    .map_err(to_napi_err)
+}
+
+/// Deregister a scope-local tool conditional execution guardrail by name.
+///
+/// Returns `true` if a guardrail with that name was found and removed from the specified scope.
+#[napi]
+pub fn scope_deregister_tool_conditional_execution_guardrail(
+    scope_uuid: String,
+    name: String,
+) -> Result<bool> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_deregister_tool_conditional_execution_guardrail(&uuid, &name)
+        .map_err(to_napi_err)
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local intercept registrations — Tool
+// ---------------------------------------------------------------------------
+
+macro_rules! napi_scope_intercept_tool_api {
+    ($(#[doc = $reg_doc:expr])* $register_name:ident,
+     $(#[doc = $dereg_doc:expr])* $deregister_name:ident,
+     $core_register:path, $core_deregister:path, $wrapper:path) => {
+        $(#[doc = $reg_doc])*
+        #[napi]
+        pub fn $register_name(
+            scope_uuid: String,
+            name: String,
+            priority: i32,
+            break_chain: bool,
+            callable: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
+        ) -> Result<()> {
+            let uuid = uuid::Uuid::parse_str(&scope_uuid)
+                .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+            $core_register(&uuid, &name, priority, break_chain, $wrapper(callable))
+                .map_err(to_napi_err)
+        }
+
+        $(#[doc = $dereg_doc])*
+        #[napi]
+        pub fn $deregister_name(scope_uuid: String, name: String) -> Result<bool> {
+            let uuid = uuid::Uuid::parse_str(&scope_uuid)
+                .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+            $core_deregister(&uuid, &name).map_err(to_napi_err)
+        }
+    };
+}
+
+napi_scope_intercept_tool_api!(
+    /// Register a scope-local intercept that transforms tool request arguments.
+    ///
+    /// The `callable` receives `(toolName, args)` and returns transformed args. If `breakChain`
+    /// is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first.
+    scope_register_tool_request_intercept,
+    /// Deregister a scope-local tool request intercept by name.
+    ///
+    /// Returns `true` if an intercept with that name was found and removed from the specified scope.
+    scope_deregister_tool_request_intercept,
+    core::nat_nexus_scope_register_tool_request_intercept,
+    core::nat_nexus_scope_deregister_tool_request_intercept,
+    callable::wrap_js_tool_fn
+);
+
+napi_scope_intercept_tool_api!(
+    /// Register a scope-local intercept that transforms tool response data.
+    ///
+    /// The `callable` receives `(toolName, result)` and returns transformed result. If `breakChain`
+    /// is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first.
+    scope_register_tool_response_intercept,
+    /// Deregister a scope-local tool response intercept by name.
+    ///
+    /// Returns `true` if an intercept with that name was found and removed from the specified scope.
+    scope_deregister_tool_response_intercept,
+    core::nat_nexus_scope_register_tool_response_intercept,
+    core::nat_nexus_scope_deregister_tool_response_intercept,
+    callable::wrap_js_tool_fn
+);
+
+/// Register a scope-local tool execution intercept following the middleware chain pattern.
+///
+/// The `callable` receives the args and a `next` function. Call `next(args)` to invoke
+/// the next intercept or original implementation; skip calling `next` to short-circuit
+/// the chain.
+#[napi]
+pub fn scope_register_tool_execution_intercept(
+    scope_uuid: String,
+    name: String,
+    priority: i32,
+    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+) -> Result<()> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_register_tool_execution_intercept(
+        &uuid,
+        &name,
+        priority,
+        callable::wrap_js_tool_exec_intercept_fn(callable),
+    )
+    .map_err(to_napi_err)
+}
+
+/// Deregister a scope-local tool execution intercept by name.
+///
+/// Returns `true` if an intercept with that name was found and removed from the specified scope.
+#[napi]
+pub fn scope_deregister_tool_execution_intercept(scope_uuid: String, name: String) -> Result<bool> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_deregister_tool_execution_intercept(&uuid, &name).map_err(to_napi_err)
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local guardrail registrations — LLM
+// ---------------------------------------------------------------------------
+
+/// Register a scope-local guardrail that sanitizes LLM request data before execution.
+///
+/// The `guardrail` callback receives the LLM request as JSON and must return the sanitized request.
+/// Higher `priority` values run first. Throws if a guardrail with the same `name` already exists
+/// on the specified scope.
+#[napi]
+pub fn scope_register_llm_sanitize_request_guardrail(
+    scope_uuid: String,
+    name: String,
+    priority: i32,
+    guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+) -> Result<()> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_register_llm_sanitize_request_guardrail(
+        &uuid,
+        &name,
+        priority,
+        callable::wrap_js_llm_sanitize_request_fn(guardrail),
+    )
+    .map_err(to_napi_err)
+}
+
+/// Deregister a scope-local LLM request sanitization guardrail by name.
+///
+/// Returns `true` if a guardrail with that name was found and removed from the specified scope.
+#[napi]
+pub fn scope_deregister_llm_sanitize_request_guardrail(
+    scope_uuid: String,
+    name: String,
+) -> Result<bool> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_deregister_llm_sanitize_request_guardrail(&uuid, &name)
+        .map_err(to_napi_err)
+}
+
+/// Register a scope-local guardrail that sanitizes LLM response data after execution.
+///
+/// The `guardrail` callback receives the LLM response as a JSON value and must return
+/// the sanitized response as JSON. Higher `priority` values run first. Throws if a guardrail
+/// with the same `name` already exists on the specified scope.
+#[napi]
+pub fn scope_register_llm_sanitize_response_guardrail(
+    scope_uuid: String,
+    name: String,
+    priority: i32,
+    guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+) -> Result<()> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_register_llm_sanitize_response_guardrail(
+        &uuid,
+        &name,
+        priority,
+        callable::wrap_js_llm_response_fn(guardrail),
+    )
+    .map_err(to_napi_err)
+}
+
+/// Deregister a scope-local LLM response sanitization guardrail by name.
+///
+/// Returns `true` if a guardrail with that name was found and removed from the specified scope.
+#[napi]
+pub fn scope_deregister_llm_sanitize_response_guardrail(
+    scope_uuid: String,
+    name: String,
+) -> Result<bool> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_deregister_llm_sanitize_response_guardrail(&uuid, &name)
+        .map_err(to_napi_err)
+}
+
+/// Register a scope-local guardrail that conditionally gates LLM execution.
+///
+/// The `guardrail` callback receives the LLM request as JSON and must return `null` to allow
+/// execution or a rejection reason string to block it. Higher `priority` values run first.
+#[napi]
+pub fn scope_register_llm_conditional_execution_guardrail(
+    scope_uuid: String,
+    name: String,
+    priority: i32,
+    guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+) -> Result<()> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_register_llm_conditional_execution_guardrail(
+        &uuid,
+        &name,
+        priority,
+        callable::wrap_js_llm_conditional_fn(guardrail),
+    )
+    .map_err(to_napi_err)
+}
+
+/// Deregister a scope-local LLM conditional execution guardrail by name.
+///
+/// Returns `true` if a guardrail with that name was found and removed from the specified scope.
+#[napi]
+pub fn scope_deregister_llm_conditional_execution_guardrail(
+    scope_uuid: String,
+    name: String,
+) -> Result<bool> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_deregister_llm_conditional_execution_guardrail(&uuid, &name)
+        .map_err(to_napi_err)
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local intercept registrations — LLM
+// ---------------------------------------------------------------------------
+
+/// Register a scope-local intercept that transforms LLM request data.
+///
+/// The `callable` receives the `LLMRequest` (as JSON) and returns a transformed request.
+/// If `breakChain` is `true`, no lower-priority intercepts run after this one.
+/// Higher `priority` values run first.
+#[napi]
+pub fn scope_register_llm_request_intercept(
+    scope_uuid: String,
+    name: String,
+    priority: i32,
+    break_chain: bool,
+    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+) -> Result<()> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_register_llm_request_intercept(
+        &uuid,
+        &name,
+        priority,
+        break_chain,
+        callable::wrap_js_llm_request_intercept_fn(callable),
+    )
+    .map_err(to_napi_err)
+}
+
+/// Deregister a scope-local LLM request intercept by name.
+///
+/// Returns `true` if an intercept with that name was found and removed from the specified scope.
+#[napi]
+pub fn scope_deregister_llm_request_intercept(scope_uuid: String, name: String) -> Result<bool> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_deregister_llm_request_intercept(&uuid, &name).map_err(to_napi_err)
+}
+
+/// Register a scope-local LLM execution intercept following the middleware chain pattern.
+///
+/// The `callable` receives the request and a `next` function. Call `next(request)` to
+/// invoke the next intercept or original implementation; skip calling `next` to
+/// short-circuit the chain.
+#[napi]
+pub fn scope_register_llm_execution_intercept(
+    scope_uuid: String,
+    name: String,
+    priority: i32,
+    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+) -> Result<()> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_register_llm_execution_intercept(
+        &uuid,
+        &name,
+        priority,
+        callable::wrap_js_llm_exec_intercept_fn(callable),
+    )
+    .map_err(to_napi_err)
+}
+
+/// Deregister a scope-local LLM execution intercept by name.
+///
+/// Returns `true` if an intercept with that name was found and removed from the specified scope.
+#[napi]
+pub fn scope_deregister_llm_execution_intercept(scope_uuid: String, name: String) -> Result<bool> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_deregister_llm_execution_intercept(&uuid, &name).map_err(to_napi_err)
+}
+
+/// Register a scope-local streaming LLM execution intercept following the middleware chain pattern.
+///
+/// The `callable` receives the request and a `next` function. Call `next(request)` to
+/// invoke the next intercept or original streaming implementation; skip calling `next`
+/// to short-circuit the chain.
+#[napi]
+pub fn scope_register_llm_stream_execution_intercept(
+    scope_uuid: String,
+    name: String,
+    priority: i32,
+    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+) -> Result<()> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_register_llm_stream_execution_intercept(
+        &uuid,
+        &name,
+        priority,
+        callable::wrap_js_llm_stream_exec_intercept_fn(callable),
+    )
+    .map_err(to_napi_err)
+}
+
+/// Deregister a scope-local LLM stream execution intercept by name.
+///
+/// Returns `true` if an intercept with that name was found and removed from the specified scope.
+#[napi]
+pub fn scope_deregister_llm_stream_execution_intercept(
+    scope_uuid: String,
+    name: String,
+) -> Result<bool> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_deregister_llm_stream_execution_intercept(&uuid, &name)
+        .map_err(to_napi_err)
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local subscriber registrations
+// ---------------------------------------------------------------------------
+
+/// Register a scope-local named event subscriber that receives lifecycle events
+/// for the specified scope.
+///
+/// The `callback` receives each event as a JSON-serialized `JsEvent` object. Events are
+/// delivered asynchronously and non-blocking. Throws if a subscriber with the same `name`
+/// already exists on the specified scope.
+#[napi]
+pub fn scope_register_subscriber(
+    scope_uuid: String,
+    name: String,
+    callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+) -> Result<()> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_register_subscriber(
+        &uuid,
+        &name,
+        callable::wrap_js_event_subscriber(callback),
+    )
+    .map_err(to_napi_err)
+}
+
+/// Deregister a scope-local event subscriber by name.
+///
+/// Returns `true` if a subscriber with that name was found and removed from the specified scope.
+#[napi]
+pub fn scope_deregister_subscriber(scope_uuid: String, name: String) -> Result<bool> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core::nat_nexus_scope_deregister_subscriber(&uuid, &name).map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------

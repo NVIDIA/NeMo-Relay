@@ -138,6 +138,25 @@ priority=5  →  runs second
 priority=10 →  runs third
 ```
 
+### Global + Scope-Local Merge
+
+When scope-local middleware is registered (see [Core Concepts: Scope-Local Middleware](concepts.md#scope-local-middleware)), the pipeline merges entries from **all sources** before executing each stage:
+
+1. All entries from the **global** registry
+2. All entries from **scope-local** registries for every scope from root to the current top of the stack
+
+The merged list is sorted by priority (ascending). Both global and scope-local entries participate equally in the same priority ordering:
+
+```
+Global registry:          [compliance_check(1), audit_logger(100)]
+Scope-local "agent" scope: [pii_redactor(5)]
+Scope-local "tool" scope:  [request_logger(50)]
+
+Effective pipeline order:  compliance_check(1) → pii_redactor(5) → request_logger(50) → audit_logger(100)
+```
+
+This merge applies to every middleware stage: conditional execution guardrails, sanitize request/response guardrails, request/response intercepts, execution intercepts, and event subscribers.
+
 ### Break Chain
 
 Request and response intercepts support `break_chain=True`. When set, no lower-priority intercepts in that stage run after:
@@ -171,4 +190,6 @@ Any intercept can short-circuit by returning a result without calling `next`.
 
 ## Registration Uniqueness
 
-All registrations are keyed by name. Attempting to register a duplicate name raises `AlreadyExists`. To replace a registration, deregister first, then register again.
+All registrations are keyed by name. Attempting to register a duplicate name **within the same registry** raises `AlreadyExists`. To replace a registration, deregister first, then register again.
+
+Global and scope-local registries have **independent namespaces**. A global guardrail named `"pii_filter"` and a scope-local guardrail named `"pii_filter"` coexist without conflict — both will run during pipeline execution, ordered by their respective priorities.

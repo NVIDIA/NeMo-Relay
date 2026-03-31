@@ -102,19 +102,20 @@ impl LlmStreamWrapper {
             Json::Null
         };
 
-        let root_uuid = {
-            let guard = self.scope_stack.read().expect("scope stack lock poisoned");
-            Some(guard.root_uuid())
-        };
+        let ss_guard = self.scope_stack.read().expect("scope stack lock poisoned");
+        let root_uuid = Some(ss_guard.root_uuid());
+        let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
+        let sl_subs = ss_guard.collect_scope_local_subscribers();
 
-        if let Ok(mut state) = global_context().write() {
-            let sanitized = state.llm_sanitize_response_chain(aggregated);
+        if let Ok(state) = global_context().read() {
+            let sanitized = state.llm_sanitize_response_chain(aggregated, &sl);
             state.end_llm_handle(
                 &self.handle,
                 self.data.clone(),
                 self.metadata.clone(),
                 Some(sanitized),
                 root_uuid,
+                &sl_subs,
             );
         }
     }

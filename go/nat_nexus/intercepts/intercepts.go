@@ -131,6 +131,97 @@ func DeregisterLlmStreamExecution(name string) error {
 	return nat_nexus.DeregisterLlmStreamExecutionIntercept(name)
 }
 
+// --- Scope-local Tool Request ---
+
+// ScopeRegisterToolRequest registers a scope-local intercept that transforms
+// tool request arguments. This is a shorthand for
+// [nat_nexus.ScopeRegisterToolRequestIntercept].
+func ScopeRegisterToolRequest(scopeUUID string, name string, priority int32, breakChain bool, fn nat_nexus.ToolSanitizeFunc) error {
+	return nat_nexus.ScopeRegisterToolRequestIntercept(scopeUUID, name, priority, breakChain, fn)
+}
+
+// ScopeDeregisterToolRequest removes a scope-local tool request intercept by
+// name. This is a shorthand for [nat_nexus.ScopeDeregisterToolRequestIntercept].
+func ScopeDeregisterToolRequest(scopeUUID string, name string) error {
+	return nat_nexus.ScopeDeregisterToolRequestIntercept(scopeUUID, name)
+}
+
+// --- Scope-local Tool Response ---
+
+// ScopeRegisterToolResponse registers a scope-local intercept that transforms
+// tool response data. This is a shorthand for
+// [nat_nexus.ScopeRegisterToolResponseIntercept].
+func ScopeRegisterToolResponse(scopeUUID string, name string, priority int32, breakChain bool, fn nat_nexus.ToolSanitizeFunc) error {
+	return nat_nexus.ScopeRegisterToolResponseIntercept(scopeUUID, name, priority, breakChain, fn)
+}
+
+// ScopeDeregisterToolResponse removes a scope-local tool response intercept by
+// name. This is a shorthand for [nat_nexus.ScopeDeregisterToolResponseIntercept].
+func ScopeDeregisterToolResponse(scopeUUID string, name string) error {
+	return nat_nexus.ScopeDeregisterToolResponseIntercept(scopeUUID, name)
+}
+
+// --- Scope-local Tool Execution ---
+
+// ScopeRegisterToolExecution registers a scope-local tool execution intercept
+// following the middleware chain pattern. This is a shorthand for
+// [nat_nexus.ScopeRegisterToolExecutionIntercept].
+func ScopeRegisterToolExecution(scopeUUID string, name string, priority int32, execFn nat_nexus.ToolExecutionInterceptFunc) error {
+	return nat_nexus.ScopeRegisterToolExecutionIntercept(scopeUUID, name, priority, execFn)
+}
+
+// ScopeDeregisterToolExecution removes a scope-local tool execution intercept by
+// name. This is a shorthand for [nat_nexus.ScopeDeregisterToolExecutionIntercept].
+func ScopeDeregisterToolExecution(scopeUUID string, name string) error {
+	return nat_nexus.ScopeDeregisterToolExecutionIntercept(scopeUUID, name)
+}
+
+// --- Scope-local LLM Request ---
+
+// ScopeRegisterLlmRequest registers a scope-local intercept that transforms the
+// LLM request. This is a shorthand for
+// [nat_nexus.ScopeRegisterLlmRequestIntercept].
+func ScopeRegisterLlmRequest(scopeUUID string, name string, priority int32, breakChain bool, fn nat_nexus.LLMRequestFunc) error {
+	return nat_nexus.ScopeRegisterLlmRequestIntercept(scopeUUID, name, priority, breakChain, fn)
+}
+
+// ScopeDeregisterLlmRequest removes a scope-local LLM request intercept by
+// name. This is a shorthand for [nat_nexus.ScopeDeregisterLlmRequestIntercept].
+func ScopeDeregisterLlmRequest(scopeUUID string, name string) error {
+	return nat_nexus.ScopeDeregisterLlmRequestIntercept(scopeUUID, name)
+}
+
+// --- Scope-local LLM Execution ---
+
+// ScopeRegisterLlmExecution registers a scope-local LLM execution intercept
+// following the middleware chain pattern. This is a shorthand for
+// [nat_nexus.ScopeRegisterLlmExecutionIntercept].
+func ScopeRegisterLlmExecution(scopeUUID string, name string, priority int32, execFn nat_nexus.LLMExecutionInterceptFunc) error {
+	return nat_nexus.ScopeRegisterLlmExecutionIntercept(scopeUUID, name, priority, execFn)
+}
+
+// ScopeDeregisterLlmExecution removes a scope-local LLM execution intercept by
+// name. This is a shorthand for [nat_nexus.ScopeDeregisterLlmExecutionIntercept].
+func ScopeDeregisterLlmExecution(scopeUUID string, name string) error {
+	return nat_nexus.ScopeDeregisterLlmExecutionIntercept(scopeUUID, name)
+}
+
+// --- Scope-local LLM Stream Execution ---
+
+// ScopeRegisterLlmStreamExecution registers a scope-local streaming LLM
+// execution intercept following the middleware chain pattern. This is a shorthand
+// for [nat_nexus.ScopeRegisterLlmStreamExecutionIntercept].
+func ScopeRegisterLlmStreamExecution(scopeUUID string, name string, priority int32, execFn nat_nexus.LLMExecutionInterceptFunc) error {
+	return nat_nexus.ScopeRegisterLlmStreamExecutionIntercept(scopeUUID, name, priority, execFn)
+}
+
+// ScopeDeregisterLlmStreamExecution removes a scope-local LLM stream execution
+// intercept by name. This is a shorthand for
+// [nat_nexus.ScopeDeregisterLlmStreamExecutionIntercept].
+func ScopeDeregisterLlmStreamExecution(scopeUUID string, name string) error {
+	return nat_nexus.ScopeDeregisterLlmStreamExecutionIntercept(scopeUUID, name)
+}
+
 // --- Tool Request Intercepts (standalone) ---
 
 // ToolRequestIntercepts runs the registered tool request intercept chain and

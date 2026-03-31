@@ -12,6 +12,7 @@ use nvidia_nat_nexus_core as core;
 use nvidia_nat_nexus_core::types as core_types;
 use pyo3::prelude::*;
 use tokio_stream::StreamExt;
+use uuid::Uuid;
 
 use crate::convert::{json_to_py, opt_py_to_json, py_to_json};
 use crate::py_callable;
@@ -943,6 +944,365 @@ fn nat_nexus_deregister_subscriber(name: &str) -> PyResult<bool> {
 }
 
 // ---------------------------------------------------------------------------
+// Scope-local guardrail registrations (macro-generated)
+// ---------------------------------------------------------------------------
+
+/// Parse a UUID string, returning a PyErr on failure.
+fn parse_uuid(scope_uuid: &str) -> PyResult<Uuid> {
+    Uuid::parse_str(scope_uuid)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("invalid UUID: {e}")))
+}
+
+/// Macro that generates a scope-local register/deregister pair for guardrails
+/// whose callback signature is `(tool_name: str, json: Any) -> Any`.
+macro_rules! py_scope_local_guardrail_tool_api {
+    ($(#[$reg_meta:meta])* $register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path, $wrapper:path) => {
+        $(#[$reg_meta])*
+        #[pyfunction]
+        fn $register_name(scope_uuid: &str, name: &str, priority: i32, guardrail: Py<PyAny>) -> PyResult<()> {
+            let uuid = parse_uuid(scope_uuid)?;
+            $core_register(&uuid, name, priority, $wrapper(guardrail)).map_err(to_py_err)
+        }
+
+        /// Remove the previously registered scope-local guardrail by name.
+        #[pyfunction]
+        fn $deregister_name(scope_uuid: &str, name: &str) -> PyResult<bool> {
+            let uuid = parse_uuid(scope_uuid)?;
+            $core_deregister(&uuid, name).map_err(to_py_err)
+        }
+    };
+}
+
+py_scope_local_guardrail_tool_api!(
+    /// Register a scope-local tool sanitize-request guardrail.
+    nat_nexus_scope_register_tool_sanitize_request_guardrail,
+    nat_nexus_scope_deregister_tool_sanitize_request_guardrail,
+    core::nat_nexus_scope_register_tool_sanitize_request_guardrail,
+    core::nat_nexus_scope_deregister_tool_sanitize_request_guardrail,
+    py_callable::wrap_py_tool_fn
+);
+
+py_scope_local_guardrail_tool_api!(
+    /// Register a scope-local tool sanitize-response guardrail.
+    nat_nexus_scope_register_tool_sanitize_response_guardrail,
+    nat_nexus_scope_deregister_tool_sanitize_response_guardrail,
+    core::nat_nexus_scope_register_tool_sanitize_response_guardrail,
+    core::nat_nexus_scope_deregister_tool_sanitize_response_guardrail,
+    py_callable::wrap_py_tool_fn
+);
+
+/// Register a scope-local tool conditional-execution guardrail.
+#[pyfunction]
+fn nat_nexus_scope_register_tool_conditional_execution_guardrail(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    guardrail: Py<PyAny>,
+) -> PyResult<()> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_register_tool_conditional_execution_guardrail(
+        &uuid,
+        name,
+        priority,
+        py_callable::wrap_py_tool_conditional_fn(guardrail),
+    )
+    .map_err(to_py_err)
+}
+
+/// Remove a previously registered scope-local tool conditional-execution guardrail.
+#[pyfunction]
+fn nat_nexus_scope_deregister_tool_conditional_execution_guardrail(
+    scope_uuid: &str,
+    name: &str,
+) -> PyResult<bool> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_deregister_tool_conditional_execution_guardrail(&uuid, name)
+        .map_err(to_py_err)
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local tool intercept registrations
+// ---------------------------------------------------------------------------
+
+/// Macro that generates a scope-local register/deregister pair for tool intercepts
+/// whose callback signature is `(tool_name: str, json: Any) -> Any`.
+macro_rules! py_scope_local_intercept_tool_api {
+    ($(#[$reg_meta:meta])* $register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path, $wrapper:path) => {
+        $(#[$reg_meta])*
+        #[pyfunction]
+        fn $register_name(
+            scope_uuid: &str,
+            name: &str,
+            priority: i32,
+            break_chain: bool,
+            callable: Py<PyAny>,
+        ) -> PyResult<()> {
+            let uuid = parse_uuid(scope_uuid)?;
+            $core_register(&uuid, name, priority, break_chain, $wrapper(callable)).map_err(to_py_err)
+        }
+
+        /// Remove the previously registered scope-local intercept by name.
+        #[pyfunction]
+        fn $deregister_name(scope_uuid: &str, name: &str) -> PyResult<bool> {
+            let uuid = parse_uuid(scope_uuid)?;
+            $core_deregister(&uuid, name).map_err(to_py_err)
+        }
+    };
+}
+
+py_scope_local_intercept_tool_api!(
+    /// Register a scope-local tool request intercept.
+    nat_nexus_scope_register_tool_request_intercept,
+    nat_nexus_scope_deregister_tool_request_intercept,
+    core::nat_nexus_scope_register_tool_request_intercept,
+    core::nat_nexus_scope_deregister_tool_request_intercept,
+    py_callable::wrap_py_tool_fn
+);
+
+py_scope_local_intercept_tool_api!(
+    /// Register a scope-local tool response intercept.
+    nat_nexus_scope_register_tool_response_intercept,
+    nat_nexus_scope_deregister_tool_response_intercept,
+    core::nat_nexus_scope_register_tool_response_intercept,
+    core::nat_nexus_scope_deregister_tool_response_intercept,
+    py_callable::wrap_py_tool_fn
+);
+
+/// Register a scope-local tool execution intercept.
+#[pyfunction]
+fn nat_nexus_scope_register_tool_execution_intercept(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    callable: Py<PyAny>,
+) -> PyResult<()> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_register_tool_execution_intercept(
+        &uuid,
+        name,
+        priority,
+        py_callable::wrap_py_tool_exec_intercept_fn(callable),
+    )
+    .map_err(to_py_err)
+}
+
+/// Remove a previously registered scope-local tool execution intercept.
+#[pyfunction]
+fn nat_nexus_scope_deregister_tool_execution_intercept(
+    scope_uuid: &str,
+    name: &str,
+) -> PyResult<bool> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_deregister_tool_execution_intercept(&uuid, name).map_err(to_py_err)
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local LLM guardrail registrations
+// ---------------------------------------------------------------------------
+
+/// Register a scope-local LLM sanitize-request guardrail.
+#[pyfunction]
+fn nat_nexus_scope_register_llm_sanitize_request_guardrail(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    guardrail: Py<PyAny>,
+) -> PyResult<()> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_register_llm_sanitize_request_guardrail(
+        &uuid,
+        name,
+        priority,
+        py_callable::wrap_py_llm_sanitize_request_fn(guardrail),
+    )
+    .map_err(to_py_err)
+}
+
+/// Remove a previously registered scope-local LLM sanitize-request guardrail.
+#[pyfunction]
+fn nat_nexus_scope_deregister_llm_sanitize_request_guardrail(
+    scope_uuid: &str,
+    name: &str,
+) -> PyResult<bool> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_deregister_llm_sanitize_request_guardrail(&uuid, name).map_err(to_py_err)
+}
+
+/// Register a scope-local LLM sanitize-response guardrail.
+#[pyfunction]
+fn nat_nexus_scope_register_llm_sanitize_response_guardrail(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    guardrail: Py<PyAny>,
+) -> PyResult<()> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_register_llm_sanitize_response_guardrail(
+        &uuid,
+        name,
+        priority,
+        py_callable::wrap_py_llm_sanitize_response_fn(guardrail),
+    )
+    .map_err(to_py_err)
+}
+
+/// Remove a previously registered scope-local LLM sanitize-response guardrail.
+#[pyfunction]
+fn nat_nexus_scope_deregister_llm_sanitize_response_guardrail(
+    scope_uuid: &str,
+    name: &str,
+) -> PyResult<bool> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_deregister_llm_sanitize_response_guardrail(&uuid, name).map_err(to_py_err)
+}
+
+/// Register a scope-local LLM conditional-execution guardrail.
+#[pyfunction]
+fn nat_nexus_scope_register_llm_conditional_execution_guardrail(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    guardrail: Py<PyAny>,
+) -> PyResult<()> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_register_llm_conditional_execution_guardrail(
+        &uuid,
+        name,
+        priority,
+        py_callable::wrap_py_llm_conditional_fn(guardrail),
+    )
+    .map_err(to_py_err)
+}
+
+/// Remove a previously registered scope-local LLM conditional-execution guardrail.
+#[pyfunction]
+fn nat_nexus_scope_deregister_llm_conditional_execution_guardrail(
+    scope_uuid: &str,
+    name: &str,
+) -> PyResult<bool> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_deregister_llm_conditional_execution_guardrail(&uuid, name)
+        .map_err(to_py_err)
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local LLM intercept registrations
+// ---------------------------------------------------------------------------
+
+/// Register a scope-local LLM request intercept.
+#[pyfunction]
+fn nat_nexus_scope_register_llm_request_intercept(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    break_chain: bool,
+    callable: Py<PyAny>,
+) -> PyResult<()> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_register_llm_request_intercept(
+        &uuid,
+        name,
+        priority,
+        break_chain,
+        py_callable::wrap_py_llm_request_intercept_fn(callable),
+    )
+    .map_err(to_py_err)
+}
+
+/// Remove a previously registered scope-local LLM request intercept.
+#[pyfunction]
+fn nat_nexus_scope_deregister_llm_request_intercept(
+    scope_uuid: &str,
+    name: &str,
+) -> PyResult<bool> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_deregister_llm_request_intercept(&uuid, name).map_err(to_py_err)
+}
+
+/// Register a scope-local LLM execution intercept.
+#[pyfunction]
+fn nat_nexus_scope_register_llm_execution_intercept(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    callable: Py<PyAny>,
+) -> PyResult<()> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_register_llm_execution_intercept(
+        &uuid,
+        name,
+        priority,
+        py_callable::wrap_py_llm_exec_intercept_fn(callable),
+    )
+    .map_err(to_py_err)
+}
+
+/// Remove a previously registered scope-local LLM execution intercept.
+#[pyfunction]
+fn nat_nexus_scope_deregister_llm_execution_intercept(
+    scope_uuid: &str,
+    name: &str,
+) -> PyResult<bool> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_deregister_llm_execution_intercept(&uuid, name).map_err(to_py_err)
+}
+
+/// Register a scope-local LLM stream-execution intercept.
+#[pyfunction]
+fn nat_nexus_scope_register_llm_stream_execution_intercept(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    callable: Py<PyAny>,
+) -> PyResult<()> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_register_llm_stream_execution_intercept(
+        &uuid,
+        name,
+        priority,
+        py_callable::wrap_py_llm_stream_exec_intercept_fn(callable),
+    )
+    .map_err(to_py_err)
+}
+
+/// Remove a previously registered scope-local LLM stream-execution intercept.
+#[pyfunction]
+fn nat_nexus_scope_deregister_llm_stream_execution_intercept(
+    scope_uuid: &str,
+    name: &str,
+) -> PyResult<bool> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_deregister_llm_stream_execution_intercept(&uuid, name).map_err(to_py_err)
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local subscriber registrations
+// ---------------------------------------------------------------------------
+
+/// Register a scope-local event subscriber.
+#[pyfunction]
+fn nat_nexus_scope_register_subscriber(
+    scope_uuid: &str,
+    name: &str,
+    callback: Py<PyAny>,
+) -> PyResult<()> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_register_subscriber(
+        &uuid,
+        name,
+        py_callable::wrap_py_event_subscriber(callback),
+    )
+    .map_err(to_py_err)
+}
+
+/// Remove a previously registered scope-local event subscriber.
+#[pyfunction]
+fn nat_nexus_scope_deregister_subscriber(scope_uuid: &str, name: &str) -> PyResult<bool> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core::nat_nexus_scope_deregister_subscriber(&uuid, name).map_err(to_py_err)
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -1078,6 +1438,114 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Subscribers
     m.add_function(wrap_pyfunction!(nat_nexus_register_subscriber, m)?)?;
     m.add_function(wrap_pyfunction!(nat_nexus_deregister_subscriber, m)?)?;
+
+    // Scope-local tool guardrails
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_register_tool_sanitize_request_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_deregister_tool_sanitize_request_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_register_tool_sanitize_response_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_deregister_tool_sanitize_response_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_register_tool_conditional_execution_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_deregister_tool_conditional_execution_guardrail,
+        m
+    )?)?;
+
+    // Scope-local tool intercepts
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_register_tool_request_intercept,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_deregister_tool_request_intercept,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_register_tool_response_intercept,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_deregister_tool_response_intercept,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_register_tool_execution_intercept,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_deregister_tool_execution_intercept,
+        m
+    )?)?;
+
+    // Scope-local LLM guardrails
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_register_llm_sanitize_request_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_deregister_llm_sanitize_request_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_register_llm_sanitize_response_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_deregister_llm_sanitize_response_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_register_llm_conditional_execution_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_deregister_llm_conditional_execution_guardrail,
+        m
+    )?)?;
+
+    // Scope-local LLM intercepts
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_register_llm_request_intercept,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_deregister_llm_request_intercept,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_register_llm_execution_intercept,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_deregister_llm_execution_intercept,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_register_llm_stream_execution_intercept,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        nat_nexus_scope_deregister_llm_stream_execution_intercept,
+        m
+    )?)?;
+
+    // Scope-local subscribers
+    m.add_function(wrap_pyfunction!(nat_nexus_scope_register_subscriber, m)?)?;
+    m.add_function(wrap_pyfunction!(nat_nexus_scope_deregister_subscriber, m)?)?;
 
     // Standalone middleware chains
     m.add_function(wrap_pyfunction!(nat_nexus_tool_request_intercepts, m)?)?;

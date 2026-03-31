@@ -146,6 +146,42 @@ typedef void (*NatNexusEventSubscriberFn)(void* user_data, const FfiEvent* event
 extern int32_t nat_nexus_register_subscriber(const char* name, NatNexusEventSubscriberFn cb, void* user_data, NatNexusFreeFn free_fn);
 extern int32_t nat_nexus_deregister_subscriber(const char* name);
 
+// Scope-local tool guardrails
+extern int32_t nat_nexus_scope_register_tool_sanitize_request_guardrail(const char* scope_uuid, const char* name, int32_t priority, NatNexusToolSanitizeFn cb, void* user_data, NatNexusFreeFn free_fn);
+extern int32_t nat_nexus_scope_deregister_tool_sanitize_request_guardrail(const char* scope_uuid, const char* name);
+extern int32_t nat_nexus_scope_register_tool_sanitize_response_guardrail(const char* scope_uuid, const char* name, int32_t priority, NatNexusToolSanitizeFn cb, void* user_data, NatNexusFreeFn free_fn);
+extern int32_t nat_nexus_scope_deregister_tool_sanitize_response_guardrail(const char* scope_uuid, const char* name);
+extern int32_t nat_nexus_scope_register_tool_conditional_execution_guardrail(const char* scope_uuid, const char* name, int32_t priority, NatNexusToolConditionalFn cb, void* user_data, NatNexusFreeFn free_fn);
+extern int32_t nat_nexus_scope_deregister_tool_conditional_execution_guardrail(const char* scope_uuid, const char* name);
+
+// Scope-local tool intercepts
+extern int32_t nat_nexus_scope_register_tool_request_intercept(const char* scope_uuid, const char* name, int32_t priority, _Bool break_chain, NatNexusToolSanitizeFn cb, void* user_data, NatNexusFreeFn free_fn);
+extern int32_t nat_nexus_scope_deregister_tool_request_intercept(const char* scope_uuid, const char* name);
+extern int32_t nat_nexus_scope_register_tool_response_intercept(const char* scope_uuid, const char* name, int32_t priority, _Bool break_chain, NatNexusToolSanitizeFn cb, void* user_data, NatNexusFreeFn free_fn);
+extern int32_t nat_nexus_scope_deregister_tool_response_intercept(const char* scope_uuid, const char* name);
+extern int32_t nat_nexus_scope_register_tool_execution_intercept(const char* scope_uuid, const char* name, int32_t priority, NatNexusToolExecInterceptCb exec_cb, void* exec_user_data, NatNexusFreeFn exec_free);
+extern int32_t nat_nexus_scope_deregister_tool_execution_intercept(const char* scope_uuid, const char* name);
+
+// Scope-local LLM guardrails
+extern int32_t nat_nexus_scope_register_llm_sanitize_request_guardrail(const char* scope_uuid, const char* name, int32_t priority, NatNexusLlmRequestCb cb, void* user_data, NatNexusFreeFn free_fn);
+extern int32_t nat_nexus_scope_deregister_llm_sanitize_request_guardrail(const char* scope_uuid, const char* name);
+extern int32_t nat_nexus_scope_register_llm_sanitize_response_guardrail(const char* scope_uuid, const char* name, int32_t priority, NatNexusLlmResponseFn cb, void* user_data, NatNexusFreeFn free_fn);
+extern int32_t nat_nexus_scope_deregister_llm_sanitize_response_guardrail(const char* scope_uuid, const char* name);
+extern int32_t nat_nexus_scope_register_llm_conditional_execution_guardrail(const char* scope_uuid, const char* name, int32_t priority, NatNexusLlmConditionalCb cb, void* user_data, NatNexusFreeFn free_fn);
+extern int32_t nat_nexus_scope_deregister_llm_conditional_execution_guardrail(const char* scope_uuid, const char* name);
+
+// Scope-local LLM intercepts
+extern int32_t nat_nexus_scope_register_llm_request_intercept(const char* scope_uuid, const char* name, int32_t priority, _Bool break_chain, NatNexusLlmRequestCb cb, void* user_data, NatNexusFreeFn free_fn);
+extern int32_t nat_nexus_scope_deregister_llm_request_intercept(const char* scope_uuid, const char* name);
+extern int32_t nat_nexus_scope_register_llm_execution_intercept(const char* scope_uuid, const char* name, int32_t priority, NatNexusLlmExecInterceptCb exec_cb, void* exec_user_data, NatNexusFreeFn exec_free);
+extern int32_t nat_nexus_scope_deregister_llm_execution_intercept(const char* scope_uuid, const char* name);
+extern int32_t nat_nexus_scope_register_llm_stream_execution_intercept(const char* scope_uuid, const char* name, int32_t priority, NatNexusLlmExecInterceptCb exec_cb, void* exec_user_data, NatNexusFreeFn exec_free);
+extern int32_t nat_nexus_scope_deregister_llm_stream_execution_intercept(const char* scope_uuid, const char* name);
+
+// Scope-local subscribers
+extern int32_t nat_nexus_scope_register_subscriber(const char* scope_uuid, const char* name, NatNexusEventSubscriberFn cb, void* user_data, NatNexusFreeFn free_fn);
+extern int32_t nat_nexus_scope_deregister_subscriber(const char* scope_uuid, const char* name);
+
 // Standalone middleware chains
 extern int32_t nat_nexus_tool_request_intercepts(const char* name, const char* args_json, char** out);
 extern int32_t nat_nexus_tool_conditional_execution(const char* name, const char* args_json);
@@ -1262,6 +1298,356 @@ func (e *AtifExporter) Close() {
 		C.nat_nexus_atif_exporter_free(e.ptr)
 		e.ptr = nil
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local guardrail/intercept registration (Tool)
+// ---------------------------------------------------------------------------
+
+// ScopeRegisterToolSanitizeRequestGuardrail registers a scope-local guardrail
+// that sanitizes tool request arguments. The guardrail is scoped to the given
+// scope UUID and does not affect other scopes.
+func ScopeRegisterToolSanitizeRequestGuardrail(scopeUUID string, name string, priority int32, fn ToolSanitizeFunc) error {
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_register_tool_sanitize_request_guardrail(
+		cScopeUUID, cName, C.int32_t(priority),
+		C.NatNexusToolSanitizeFn(C.goToolSanitizeTrampoline),
+		id,
+		C.NatNexusFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterToolSanitizeRequestGuardrail removes a scope-local tool
+// sanitize-request guardrail by name.
+func ScopeDeregisterToolSanitizeRequestGuardrail(scopeUUID string, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_deregister_tool_sanitize_request_guardrail(cScopeUUID, cName))
+}
+
+// ScopeRegisterToolSanitizeResponseGuardrail registers a scope-local guardrail
+// that sanitizes tool response data.
+func ScopeRegisterToolSanitizeResponseGuardrail(scopeUUID string, name string, priority int32, fn ToolSanitizeFunc) error {
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_register_tool_sanitize_response_guardrail(
+		cScopeUUID, cName, C.int32_t(priority),
+		C.NatNexusToolSanitizeFn(C.goToolSanitizeTrampoline),
+		id,
+		C.NatNexusFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterToolSanitizeResponseGuardrail removes a scope-local tool
+// sanitize-response guardrail by name.
+func ScopeDeregisterToolSanitizeResponseGuardrail(scopeUUID string, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_deregister_tool_sanitize_response_guardrail(cScopeUUID, cName))
+}
+
+// ScopeRegisterToolConditionalExecutionGuardrail registers a scope-local
+// guardrail that conditionally gates tool execution. Returns nil to allow
+// execution, or a non-nil pointer to an error message string to reject.
+func ScopeRegisterToolConditionalExecutionGuardrail(scopeUUID string, name string, priority int32, fn ToolConditionalFunc) error {
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_register_tool_conditional_execution_guardrail(
+		cScopeUUID, cName, C.int32_t(priority),
+		C.NatNexusToolConditionalFn(C.goToolConditionalTrampoline),
+		id,
+		C.NatNexusFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterToolConditionalExecutionGuardrail removes a scope-local tool
+// conditional-execution guardrail by name.
+func ScopeDeregisterToolConditionalExecutionGuardrail(scopeUUID string, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_deregister_tool_conditional_execution_guardrail(cScopeUUID, cName))
+}
+
+// ScopeRegisterToolRequestIntercept registers a scope-local intercept that
+// transforms tool request arguments.
+func ScopeRegisterToolRequestIntercept(scopeUUID string, name string, priority int32, breakChain bool, fn ToolSanitizeFunc) error {
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_register_tool_request_intercept(
+		cScopeUUID, cName, C.int32_t(priority), C._Bool(breakChain),
+		C.NatNexusToolSanitizeFn(C.goToolSanitizeTrampoline),
+		id,
+		C.NatNexusFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterToolRequestIntercept removes a scope-local tool request
+// intercept by name.
+func ScopeDeregisterToolRequestIntercept(scopeUUID string, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_deregister_tool_request_intercept(cScopeUUID, cName))
+}
+
+// ScopeRegisterToolResponseIntercept registers a scope-local intercept that
+// transforms tool response data.
+func ScopeRegisterToolResponseIntercept(scopeUUID string, name string, priority int32, breakChain bool, fn ToolSanitizeFunc) error {
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_register_tool_response_intercept(
+		cScopeUUID, cName, C.int32_t(priority), C._Bool(breakChain),
+		C.NatNexusToolSanitizeFn(C.goToolSanitizeTrampoline),
+		id,
+		C.NatNexusFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterToolResponseIntercept removes a scope-local tool response
+// intercept by name.
+func ScopeDeregisterToolResponseIntercept(scopeUUID string, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_deregister_tool_response_intercept(cScopeUUID, cName))
+}
+
+// ScopeRegisterToolExecutionIntercept registers a scope-local tool execution
+// intercept following the middleware chain pattern.
+func ScopeRegisterToolExecutionIntercept(scopeUUID string, name string, priority int32, execFn ToolExecutionInterceptFunc) error {
+	execID := registerClosure(execFn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_register_tool_execution_intercept(
+		cScopeUUID, cName, C.int32_t(priority),
+		C.NatNexusToolExecInterceptCb(C.goToolExecInterceptTrampoline),
+		execID,
+		C.NatNexusFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterToolExecutionIntercept removes a scope-local tool execution
+// intercept by name.
+func ScopeDeregisterToolExecutionIntercept(scopeUUID string, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_deregister_tool_execution_intercept(cScopeUUID, cName))
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local guardrail/intercept registration (LLM)
+// ---------------------------------------------------------------------------
+
+// ScopeRegisterLlmSanitizeRequestGuardrail registers a scope-local guardrail
+// that sanitizes LLM request data.
+func ScopeRegisterLlmSanitizeRequestGuardrail(scopeUUID string, name string, priority int32, fn LLMRequestFunc) error {
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_register_llm_sanitize_request_guardrail(
+		cScopeUUID, cName, C.int32_t(priority),
+		C.NatNexusLlmRequestCb(C.goLlmRequestTrampoline),
+		id,
+		C.NatNexusFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterLlmSanitizeRequestGuardrail removes a scope-local LLM
+// sanitize-request guardrail by name.
+func ScopeDeregisterLlmSanitizeRequestGuardrail(scopeUUID string, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_deregister_llm_sanitize_request_guardrail(cScopeUUID, cName))
+}
+
+// ScopeRegisterLlmSanitizeResponseGuardrail registers a scope-local guardrail
+// that sanitizes LLM response data.
+func ScopeRegisterLlmSanitizeResponseGuardrail(scopeUUID string, name string, priority int32, fn LLMResponseFunc) error {
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_register_llm_sanitize_response_guardrail(
+		cScopeUUID, cName, C.int32_t(priority),
+		C.NatNexusLlmResponseFn(C.goLlmResponseTrampoline),
+		id,
+		C.NatNexusFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterLlmSanitizeResponseGuardrail removes a scope-local LLM
+// sanitize-response guardrail by name.
+func ScopeDeregisterLlmSanitizeResponseGuardrail(scopeUUID string, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_deregister_llm_sanitize_response_guardrail(cScopeUUID, cName))
+}
+
+// ScopeRegisterLlmConditionalExecutionGuardrail registers a scope-local
+// guardrail that conditionally gates LLM execution.
+func ScopeRegisterLlmConditionalExecutionGuardrail(scopeUUID string, name string, priority int32, fn LLMConditionalFunc) error {
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_register_llm_conditional_execution_guardrail(
+		cScopeUUID, cName, C.int32_t(priority),
+		C.NatNexusLlmConditionalCb(C.goLlmConditionalTrampoline),
+		id,
+		C.NatNexusFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterLlmConditionalExecutionGuardrail removes a scope-local LLM
+// conditional-execution guardrail by name.
+func ScopeDeregisterLlmConditionalExecutionGuardrail(scopeUUID string, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_deregister_llm_conditional_execution_guardrail(cScopeUUID, cName))
+}
+
+// ScopeRegisterLlmRequestIntercept registers a scope-local intercept that
+// transforms the LLM request.
+func ScopeRegisterLlmRequestIntercept(scopeUUID string, name string, priority int32, breakChain bool, fn LLMRequestFunc) error {
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_register_llm_request_intercept(
+		cScopeUUID, cName, C.int32_t(priority), C._Bool(breakChain),
+		C.NatNexusLlmRequestCb(C.goLlmRequestTrampoline),
+		id,
+		C.NatNexusFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterLlmRequestIntercept removes a scope-local LLM request
+// intercept by name.
+func ScopeDeregisterLlmRequestIntercept(scopeUUID string, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_deregister_llm_request_intercept(cScopeUUID, cName))
+}
+
+// ScopeRegisterLlmExecutionIntercept registers a scope-local LLM execution
+// intercept following the middleware chain pattern.
+func ScopeRegisterLlmExecutionIntercept(scopeUUID string, name string, priority int32, execFn LLMExecutionInterceptFunc) error {
+	execID := registerClosure(execFn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_register_llm_execution_intercept(
+		cScopeUUID, cName, C.int32_t(priority),
+		C.NatNexusLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
+		execID,
+		C.NatNexusFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterLlmExecutionIntercept removes a scope-local LLM execution
+// intercept by name.
+func ScopeDeregisterLlmExecutionIntercept(scopeUUID string, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_deregister_llm_execution_intercept(cScopeUUID, cName))
+}
+
+// ScopeRegisterLlmStreamExecutionIntercept registers a scope-local streaming
+// LLM execution intercept following the middleware chain pattern.
+func ScopeRegisterLlmStreamExecutionIntercept(scopeUUID string, name string, priority int32, execFn LLMExecutionInterceptFunc) error {
+	execID := registerClosure(execFn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_register_llm_stream_execution_intercept(
+		cScopeUUID, cName, C.int32_t(priority),
+		C.NatNexusLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
+		execID,
+		C.NatNexusFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterLlmStreamExecutionIntercept removes a scope-local LLM stream
+// execution intercept by name.
+func ScopeDeregisterLlmStreamExecutionIntercept(scopeUUID string, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_deregister_llm_stream_execution_intercept(cScopeUUID, cName))
+}
+
+// ---------------------------------------------------------------------------
+// Scope-local subscriber registration
+// ---------------------------------------------------------------------------
+
+// ScopeRegisterSubscriber registers a scope-local event subscriber.
+func ScopeRegisterSubscriber(scopeUUID string, name string, fn EventSubscriberFunc) error {
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_register_subscriber(
+		cScopeUUID, cName,
+		C.NatNexusEventSubscriberFn(C.goEventSubscriberTrampoline),
+		id,
+		C.NatNexusFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterSubscriber removes a scope-local event subscriber by name.
+func ScopeDeregisterSubscriber(scopeUUID string, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nat_nexus_scope_deregister_subscriber(cScopeUUID, cName))
 }
 
 // ---------------------------------------------------------------------------

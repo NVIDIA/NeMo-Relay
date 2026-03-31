@@ -133,6 +133,102 @@ func DeregisterLlmConditionalExecution(name string) error {
 	return nat_nexus.DeregisterLlmConditionalExecutionGuardrail(name)
 }
 
+// --- Scope-local Tool Sanitize Request ---
+
+// ScopeRegisterToolSanitizeRequest registers a scope-local guardrail that
+// sanitizes tool request arguments. This is a shorthand for
+// [nat_nexus.ScopeRegisterToolSanitizeRequestGuardrail].
+func ScopeRegisterToolSanitizeRequest(scopeUUID string, name string, priority int32, fn nat_nexus.ToolSanitizeFunc) error {
+	return nat_nexus.ScopeRegisterToolSanitizeRequestGuardrail(scopeUUID, name, priority, fn)
+}
+
+// ScopeDeregisterToolSanitizeRequest removes a scope-local tool sanitize-request
+// guardrail by name. This is a shorthand for
+// [nat_nexus.ScopeDeregisterToolSanitizeRequestGuardrail].
+func ScopeDeregisterToolSanitizeRequest(scopeUUID string, name string) error {
+	return nat_nexus.ScopeDeregisterToolSanitizeRequestGuardrail(scopeUUID, name)
+}
+
+// --- Scope-local Tool Sanitize Response ---
+
+// ScopeRegisterToolSanitizeResponse registers a scope-local guardrail that
+// sanitizes tool response data. This is a shorthand for
+// [nat_nexus.ScopeRegisterToolSanitizeResponseGuardrail].
+func ScopeRegisterToolSanitizeResponse(scopeUUID string, name string, priority int32, fn nat_nexus.ToolSanitizeFunc) error {
+	return nat_nexus.ScopeRegisterToolSanitizeResponseGuardrail(scopeUUID, name, priority, fn)
+}
+
+// ScopeDeregisterToolSanitizeResponse removes a scope-local tool
+// sanitize-response guardrail by name. This is a shorthand for
+// [nat_nexus.ScopeDeregisterToolSanitizeResponseGuardrail].
+func ScopeDeregisterToolSanitizeResponse(scopeUUID string, name string) error {
+	return nat_nexus.ScopeDeregisterToolSanitizeResponseGuardrail(scopeUUID, name)
+}
+
+// --- Scope-local Tool Conditional Execution ---
+
+// ScopeRegisterToolConditionalExecution registers a scope-local guardrail that
+// conditionally gates tool execution. This is a shorthand for
+// [nat_nexus.ScopeRegisterToolConditionalExecutionGuardrail].
+func ScopeRegisterToolConditionalExecution(scopeUUID string, name string, priority int32, fn nat_nexus.ToolConditionalFunc) error {
+	return nat_nexus.ScopeRegisterToolConditionalExecutionGuardrail(scopeUUID, name, priority, fn)
+}
+
+// ScopeDeregisterToolConditionalExecution removes a scope-local tool
+// conditional-execution guardrail by name. This is a shorthand for
+// [nat_nexus.ScopeDeregisterToolConditionalExecutionGuardrail].
+func ScopeDeregisterToolConditionalExecution(scopeUUID string, name string) error {
+	return nat_nexus.ScopeDeregisterToolConditionalExecutionGuardrail(scopeUUID, name)
+}
+
+// --- Scope-local LLM Sanitize Request ---
+
+// ScopeRegisterLlmSanitizeRequest registers a scope-local guardrail that
+// sanitizes the LLM request data. This is a shorthand for
+// [nat_nexus.ScopeRegisterLlmSanitizeRequestGuardrail].
+func ScopeRegisterLlmSanitizeRequest(scopeUUID string, name string, priority int32, fn nat_nexus.LLMRequestFunc) error {
+	return nat_nexus.ScopeRegisterLlmSanitizeRequestGuardrail(scopeUUID, name, priority, fn)
+}
+
+// ScopeDeregisterLlmSanitizeRequest removes a scope-local LLM sanitize-request
+// guardrail by name. This is a shorthand for
+// [nat_nexus.ScopeDeregisterLlmSanitizeRequestGuardrail].
+func ScopeDeregisterLlmSanitizeRequest(scopeUUID string, name string) error {
+	return nat_nexus.ScopeDeregisterLlmSanitizeRequestGuardrail(scopeUUID, name)
+}
+
+// --- Scope-local LLM Sanitize Response ---
+
+// ScopeRegisterLlmSanitizeResponse registers a scope-local guardrail that
+// sanitizes LLM response data. This is a shorthand for
+// [nat_nexus.ScopeRegisterLlmSanitizeResponseGuardrail].
+func ScopeRegisterLlmSanitizeResponse(scopeUUID string, name string, priority int32, fn nat_nexus.LLMResponseFunc) error {
+	return nat_nexus.ScopeRegisterLlmSanitizeResponseGuardrail(scopeUUID, name, priority, fn)
+}
+
+// ScopeDeregisterLlmSanitizeResponse removes a scope-local LLM
+// sanitize-response guardrail by name. This is a shorthand for
+// [nat_nexus.ScopeDeregisterLlmSanitizeResponseGuardrail].
+func ScopeDeregisterLlmSanitizeResponse(scopeUUID string, name string) error {
+	return nat_nexus.ScopeDeregisterLlmSanitizeResponseGuardrail(scopeUUID, name)
+}
+
+// --- Scope-local LLM Conditional Execution ---
+
+// ScopeRegisterLlmConditionalExecution registers a scope-local guardrail that
+// conditionally gates LLM execution. This is a shorthand for
+// [nat_nexus.ScopeRegisterLlmConditionalExecutionGuardrail].
+func ScopeRegisterLlmConditionalExecution(scopeUUID string, name string, priority int32, fn nat_nexus.LLMConditionalFunc) error {
+	return nat_nexus.ScopeRegisterLlmConditionalExecutionGuardrail(scopeUUID, name, priority, fn)
+}
+
+// ScopeDeregisterLlmConditionalExecution removes a scope-local LLM
+// conditional-execution guardrail by name. This is a shorthand for
+// [nat_nexus.ScopeDeregisterLlmConditionalExecutionGuardrail].
+func ScopeDeregisterLlmConditionalExecution(scopeUUID string, name string) error {
+	return nat_nexus.ScopeDeregisterLlmConditionalExecutionGuardrail(scopeUUID, name)
+}
+
 // --- Tool Conditional Execution (standalone) ---
 
 // ToolConditionalExecution runs the registered tool conditional execution

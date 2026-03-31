@@ -64,6 +64,7 @@ python/nat_nexus/
   guardrails.py     # Guardrail registration
   intercepts.py     # Intercept registration
   subscribers.py    # Event subscriber registration
+  scope_local.py    # Scope-local middleware registration
   typed.py          # Codec-based typed wrappers
 ```
 
@@ -107,6 +108,27 @@ request = nat_nexus.LLMRequest(
     content={"messages": [{"role": "user", "content": "Hello"}], "model": "gpt-4"},
 )
 response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
+```
+
+### Scope-Local Middleware
+
+```python
+import nat_nexus
+
+handle = nat_nexus.scope.push("session", nat_nexus.ScopeType.Agent)
+
+# Register middleware bound to this scope
+nat_nexus.scope_local.register_tool_conditional_execution(
+    handle, "session_guard", 10,
+    lambda name, args: "blocked" if name == "rm" else None,
+)
+nat_nexus.scope_local.register_subscriber(
+    handle, "session_logger", lambda event: print(event.name),
+)
+
+# ... middleware is active while scope is on the stack ...
+
+nat_nexus.scope.pop(handle)  # both registrations automatically removed
 ```
 
 ### Context Isolation
@@ -183,6 +205,32 @@ console.log("LLM response: ", response);
 
 popScope(handle);
 process.exit(0);
+```
+
+### Scope-Local Middleware
+
+```javascript
+import {
+    pushScope, popScope, ScopeType,
+    scopeRegisterToolConditionalExecution,
+    scopeRegisterSubscriber,
+} from './index.js';
+
+const handle = pushScope("session", ScopeType.Agent, null, null);
+
+// Register middleware bound to this scope
+scopeRegisterToolConditionalExecution(
+    handle, "session_guard", 10,
+    (name, args) => name === "rm" ? "blocked" : null,
+);
+scopeRegisterSubscriber(
+    handle, "session_logger",
+    (event) => console.log(event.name),
+);
+
+// ... middleware is active while scope is on the stack ...
+
+popScope(handle);  // both registrations automatically removed
 ```
 
 ### Typed Wrappers
@@ -278,6 +326,35 @@ func main() {
 }
 ```
 
+### Scope-Local Middleware
+
+```go
+import (
+    "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus"
+    "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/scope"
+)
+
+handle, _ := scope.Push("session", nat_nexus.ScopeTypeAgent, 0, nil)
+
+// Register middleware bound to this scope
+nat_nexus.ScopeRegisterToolConditionalExecution(handle, "session_guard", 10,
+    func(name string, args json.RawMessage) *string {
+        if name == "rm" {
+            reason := "blocked"
+            return &reason
+        }
+        return nil
+    },
+)
+nat_nexus.ScopeRegisterSubscriber(handle, "session_logger",
+    func(event json.RawMessage) { fmt.Println("event:", string(event)) },
+)
+
+// ... middleware is active while scope is on the stack ...
+
+scope.Pop(handle)  // both registrations automatically removed
+```
+
 ### CGo Callback Pattern
 
 Go uses trampolines — C-compatible function pointers that bridge Rust callbacks to Go functions:
@@ -335,6 +412,31 @@ import {
 const handle = pushScope("agent", 0 /* SCOPE_TYPE_AGENT */, null, null);
 // ... operations ...
 popScope(handle);
+```
+
+### Scope-Local Middleware
+
+```javascript
+import {
+    pushScope, popScope,
+    scope_register_tool_conditional_execution,
+    scope_register_subscriber,
+} from './pkg/nvidia_nat_nexus_wasm.js';
+
+const handle = pushScope("session", 0 /* SCOPE_TYPE_AGENT */, null, null);
+
+scope_register_tool_conditional_execution(
+    handle, "session_guard", 10,
+    (name, args) => name === "rm" ? "blocked" : null,
+);
+scope_register_subscriber(
+    handle, "session_logger",
+    (event) => console.log(event),
+);
+
+// ... operations ...
+
+popScope(handle);  // auto-cleanup
 ```
 
 ### Differences from Node.js
