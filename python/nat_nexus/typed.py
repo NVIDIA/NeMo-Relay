@@ -197,7 +197,7 @@ class BestEffortAnyCodec(Codec[Any]):
         ``to_json`` and dispatches to the appropriate reconstruction strategy.
         Falls through to returning the raw data if no tag is recognised.
         """
-        if data and "data" in data:
+        if isinstance(data, dict) and "data" in data:
             if "__nv_pydantic__" in data:
                 try:
                     path = data["__nv_pydantic__"]
@@ -230,7 +230,7 @@ class BestEffortAnyCodec(Codec[Any]):
                     pass  # Fall through
 
             # If fallback string exists and data exists, return the string
-            if "__nv_fallback_str__" in data and "data" in data:
+            if "__nv_fallback_str__" in data:
                 # Only the string is recoverable; return as string
                 return data["data"]
 
@@ -483,9 +483,10 @@ async def llm_stream_execute(
 
 __all__ = [
     "Codec",
+    "BestEffortAnyCodec",
+    "DataclassCodec",
     "JsonPassthrough",
     "PydanticCodec",
-    "DataclassCodec",
     "tool_execute",
     "llm_execute",
     "llm_stream_execute",
