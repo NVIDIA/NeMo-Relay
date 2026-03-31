@@ -5,8 +5,9 @@
 
 import dataclasses
 
+import pytest
 from nat_nexus import LLMRequest, intercepts, typed
-from nat_nexus.typed import Codec, DataclassCodec, JsonPassthrough
+from nat_nexus.typed import BestEffortAnyCodec, Codec, DataclassCodec, JsonPassthrough
 
 # ---------------------------------------------------------------------------
 # Test models
@@ -515,3 +516,159 @@ class TestTypedLlmExecuteCustomCodec:
         )
         assert isinstance(result, int)
         assert result == 42
+
+
+# ---------------------------------------------------------------------------
+# BestEffortAnyCodec tests
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class BEPoint:
+    x: int
+    y: int
+
+
+class TestBestEffortAnyCodec:
+    """Tests for BestEffortAnyCodec round-trip and from_json edge cases."""
+
+    def setup_method(self):
+        self.codec = BestEffortAnyCodec()
+
+    # -- Round-trip: JSON-native types --
+
+    def test_roundtrip_int(self):
+        assert self.codec.from_json(self.codec.to_json(42)) == 42
+
+    def test_roundtrip_zero(self):
+        assert self.codec.from_json(self.codec.to_json(0)) == 0
+
+    def test_roundtrip_float(self):
+        assert self.codec.from_json(self.codec.to_json(3.14)) == 3.14
+
+    def test_roundtrip_string(self):
+        assert self.codec.from_json(self.codec.to_json("hello")) == "hello"
+
+    def test_roundtrip_empty_string(self):
+        assert self.codec.from_json(self.codec.to_json("")) == ""
+
+    def test_roundtrip_string_containing_data(self):
+        """String containing 'data' should not trigger tag dispatch."""
+        assert self.codec.from_json(self.codec.to_json("some data here")) == "some data here"
+
+    def test_roundtrip_bool_true(self):
+        assert self.codec.from_json(self.codec.to_json(True)) is True
+
+    def test_roundtrip_bool_false(self):
+        assert self.codec.from_json(self.codec.to_json(False)) is False
+
+    def test_roundtrip_none(self):
+        assert self.codec.from_json(self.codec.to_json(None)) is None
+
+    def test_roundtrip_list(self):
+        assert self.codec.from_json(self.codec.to_json([1, 2, 3])) == [1, 2, 3]
+
+    def test_roundtrip_empty_list(self):
+        assert self.codec.from_json(self.codec.to_json([])) == []
+
+    def test_roundtrip_dict(self):
+        assert self.codec.from_json(self.codec.to_json({"a": 1})) == {"a": 1}
+
+    def test_roundtrip_empty_dict(self):
+        assert self.codec.from_json(self.codec.to_json({})) == {}
+
+    def test_roundtrip_nested(self):
+        val = {"items": [1, "two", None, {"nested": True}]}
+        assert self.codec.from_json(self.codec.to_json(val)) == val
+
+    # -- Round-trip: dataclass --
+
+    def test_roundtrip_dataclass(self):
+        pt = BEPoint(x=1, y=2)
+        encoded = self.codec.to_json(pt)
+        assert isinstance(encoded, dict)
+        assert "__nv_dataclass__" in encoded
+        restored = self.codec.from_json(encoded)
+        assert isinstance(restored, BEPoint)
+        assert restored == pt
+
+    # -- Round-trip: pydantic (if available) --
+
+    def test_roundtrip_pydantic(self):
+        pydantic = pytest.importorskip("pydantic")
+
+        class PydPoint(pydantic.BaseModel):
+            x: int
+            y: int
+
+        pt = PydPoint(x=3, y=4)
+        encoded = self.codec.to_json(pt)
+        assert isinstance(encoded, dict)
+        assert "__nv_pydantic__" in encoded
+        restored = self.codec.from_json(encoded)
+        assert isinstance(restored, PydPoint)
+        assert restored.x == 3
+        assert restored.y == 4
+
+    # -- Round-trip: pickle fallback (BestEffortAnyCodec uses pickle
+    #    internally for non-JSON-serializable types; this tests that
+    #    existing code path) --
+
+    def test_roundtrip_frozenset(self):
+        """Non-JSON-serializable objects use the pickle fallback path."""
+        val = frozenset([1, 2, 3])
+        encoded = self.codec.to_json(val)
+        assert isinstance(encoded, dict)
+        assert "__nv_pickle__" in encoded
+        restored = self.codec.from_json(encoded)
+        assert restored == val
+
+    # -- from_json: non-dict inputs (the original bug) --
+
+    @pytest.mark.parametrize(
+        "value",
+        [42, 0, -1, 3.14, "hello", "data", "", [1, 2], [], [1, "data", 3]],
+        ids=[
+            "int",
+            "zero",
+            "negative",
+            "float",
+            "string",
+            "string_data",
+            "empty_string",
+            "list",
+            "empty_list",
+            "list_with_data",
+        ],
+    )
+    def test_from_json_non_dict_passthrough(self, value):
+        """from_json must return non-dict values unchanged without raising."""
+        assert self.codec.from_json(value) == value
+
+    @pytest.mark.parametrize("value", [None, True, False])
+    def test_from_json_singleton_passthrough(self, value):
+        """from_json must return singletons by identity."""
+        assert self.codec.from_json(value) is value
+
+    # -- from_json: untagged dicts pass through --
+
+    def test_from_json_untagged_dict(self):
+        val = {"key": "value", "data": 123}
+        assert self.codec.from_json(val) == val
+
+    def test_from_json_empty_dict(self):
+        assert self.codec.from_json({}) == {}
+
+    # -- to_json: tagging --
+
+    def test_to_json_dataclass_tagged(self):
+        encoded = self.codec.to_json(BEPoint(x=0, y=0))
+        assert "__nv_dataclass__" in encoded
+        assert encoded["data"] == {"x": 0, "y": 0}
+
+    def test_to_json_native_types_untagged(self):
+        """JSON-native types should pass through without tags."""
+        for val in [42, "text", 3.14, True, None, [1], {"k": "v"}]:
+            encoded = self.codec.to_json(val)
+            if isinstance(encoded, dict):
+                assert not any(k.startswith("__nv_") for k in encoded)
