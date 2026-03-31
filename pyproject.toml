@@ -7,7 +7,7 @@ build-backend = "maturin"
 
 [project]
 name = "nvidia-nat-nexus"
-version = "0.1.0"
+dynamic = ["version"]
 requires-python = ">=3.11"
 
 [tool.maturin]

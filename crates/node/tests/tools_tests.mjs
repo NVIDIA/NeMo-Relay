@@ -55,11 +55,17 @@ describe('Tool lifecycle', () => {
   it('tool call generates events', async () => {
     const events = [];
     registerSubscriber('node_tool_evt_sub', (e) => events.push(e));
-    const handle = toolCall('evt_tool', {}, null, null, null, null);
-    toolCallEnd(handle, {}, null, null);
-    await new Promise(r => setTimeout(r, 50));
-    assert.ok(events.length >= 2, 'Expected at least 2 events');
-    deregisterSubscriber('node_tool_evt_sub');
+    try {
+      const handle = toolCall('evt_tool', {}, null, null, null, null);
+      toolCallEnd(handle, {}, null, null);
+      const deadline = Date.now() + 2000;
+      while (events.length < 2 && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 10));
+      }
+      assert.ok(events.length >= 2, 'Expected at least 2 events');
+    } finally {
+      deregisterSubscriber('node_tool_evt_sub');
+    }
   });
 });
 

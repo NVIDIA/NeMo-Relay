@@ -64,12 +64,18 @@ describe('LLM lifecycle', () => {
   it('llm call generates events', async () => {
     const events = [];
     registerSubscriber('node_llm_evt_sub', (e) => events.push(e));
-    const native = makeNative();
-    const handle = llmCall('evt_llm', native, null, null, null, null, null);
-    llmCallEnd(handle, {}, null, null);
-    await new Promise(r => setTimeout(r, 50));
-    assert.ok(events.length >= 2, 'Expected at least 2 events');
-    deregisterSubscriber('node_llm_evt_sub');
+    try {
+      const native = makeNative();
+      const handle = llmCall('evt_llm', native, null, null, null, null, null);
+      llmCallEnd(handle, {}, null, null);
+      const deadline = Date.now() + 2000;
+      while (events.length < 2 && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 10));
+      }
+      assert.ok(events.length >= 2, 'Expected at least 2 events');
+    } finally {
+      deregisterSubscriber('node_llm_evt_sub');
+    }
   });
 });
 

@@ -12,6 +12,8 @@ stages:
   - check
   - build
   - test
+  - package
+  - upload
 
 variables:
   NEXUS_CI_GO_VERSION: "1.26.1"
@@ -34,6 +36,30 @@ default:
         - $UV_CACHE_DIR
   before_script:
     - mkdir -p ${NEXUS_CI_WORKSPACE_TMP}
+
+.install_build_essential: &install_build_essential
+    - echo "Installing build-essential"
+    - apt-get update -qq && apt-get install -y --no-install-recommends build-essential
+
+.install_nodejs: &install_nodejs
+    - echo "Installing NodeJS"
+    - curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NEXUS_CI_NVM_VERSION}/install.sh | bash
+    - \. "$HOME/.nvm/nvm.sh"
+    - nvm install ${NEXUS_CI_NODE_VERSION}
+    - echo "NodeJS and NPM versions:"
+    - node --version && npm --version
+
+.install_uv_and_python: &install_uv_and_python
+    - echo "Installing uv"
+    - curl -LsSf https://astral.sh/uv/${NEXUS_CI_UV_VERSION}/install.sh | sh
+    - echo "Installing Python"
+    - UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${NEXUS_CI_DEFAULT_PYTHON_VER}
+    - export PYO3_PYTHON=$(uv python find --managed-python ${NEXUS_CI_DEFAULT_PYTHON_VER})
+
+.setup_venv: &setup_venv
+    - uv venv --python=${NEXUS_CI_DEFAULT_PYTHON_VER} --seed ${NEXUS_CI_WORKSPACE_TMP}/.venv
+    - source ${NEXUS_CI_WORKSPACE_TMP}/.venv/bin/activate
+    - uv sync --active --reinstall-package nvidia-nat-nexus
 
 check:precommit:
   stage: check
@@ -58,13 +84,8 @@ check:precommit:
     - echo "Installing Go"
     - curl -LsSf https://go.dev/dl/go${NEXUS_CI_GO_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xzf -
     - export PATH=$PATH:/usr/local/go/bin
-    - echo "Installing uv"
-    - curl -LsSf https://astral.sh/uv/${NEXUS_CI_UV_VERSION}/install.sh | sh
-    - echo "Installing Python and Python tools"
-    - UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${NEXUS_CI_DEFAULT_PYTHON_VER}
-    - uv venv --python=${NEXUS_CI_DEFAULT_PYTHON_VER} --seed ${NEXUS_CI_WORKSPACE_TMP}/.venv
-    - source ${NEXUS_CI_WORKSPACE_TMP}/.venv/bin/activate
-    - uv sync --active
+    - *install_uv_and_python
+    - *setup_venv
     - echo "Running pre-commit"
     - |
       if [ -n "${CI_MERGE_REQUEST_DIFF_BASE_SHA}" ]; then
@@ -90,19 +111,13 @@ build:
       - crates/wasm/pkg/
       - python/nat_nexus/*.so
   script:
-    - echo "Installing build tools"
-    - apt-get update -qq && apt-get install -y --no-install-recommends build-essential
-    - echo "Installing uv & Python"
-    - curl -LsSf https://astral.sh/uv/${NEXUS_CI_UV_VERSION}/install.sh | sh
-    - UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${NEXUS_CI_DEFAULT_PYTHON_VER}
-    - export PYO3_PYTHON=$(uv python find --managed-python ${NEXUS_CI_DEFAULT_PYTHON_VER})
+    - *install_build_essential
+    - *install_uv_and_python
     - echo "Building Nexus"
     - cargo build --release --workspace
     - cargo test --no-run --release --workspace
     - echo "Building Python Extension"
-    - uv venv --python=${NEXUS_CI_DEFAULT_PYTHON_VER} --seed ${NEXUS_CI_WORKSPACE_TMP}/.venv
-    - source ${NEXUS_CI_WORKSPACE_TMP}/.venv/bin/activate
-    - uv sync --active --reinstall-package nvidia-nat-nexus
+    - *setup_venv
     - echo "Building WASM package"
     - cargo install wasm-pack
     - wasm-pack build --release crates/wasm
@@ -157,12 +172,7 @@ test:nodejs_tests:
         coverage_format: cobertura
         path: cobertura-coverage.xml
   script:
-    - echo "Installing NodeJS"
-    - curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NEXUS_CI_NVM_VERSION}/install.sh | bash
-    - \. "$HOME/.nvm/nvm.sh"
-    - nvm install ${NEXUS_CI_NODE_VERSION}
-    - echo "NodeJS and NPM versions:"
-    - node --version && npm --version
+    - *install_nodejs
     - echo "Installing test dependencies"
     - cd crates/node && npm install && npm install -g c8 && npm run build && cd ../..
     - echo "Running NodeJS tests"
@@ -192,9 +202,7 @@ test:python_tests:
     - uv cache prune --ci
   script:
     - echo "Creating UV environment"
-    - uv venv --python=${NEXUS_CI_DEFAULT_PYTHON_VER} --seed ${NEXUS_CI_WORKSPACE_TMP}/.venv
-    - source ${NEXUS_CI_WORKSPACE_TMP}/.venv/bin/activate
-    - uv sync --active
+    - *setup_venv
     - echo "Running Python tests"
     - pytest
         --cov=nat_nexus --cov-report term-missing
@@ -214,12 +222,8 @@ test:rust_tests:
     reports:
       junit: target/nextest/ci/rust_junit_report.xml
   script:
-    - echo "Installing build tools"
-    - apt-get update -qq && apt-get install -y --no-install-recommends build-essential
-    - echo "Installing uv & Python"
-    - curl -LsSf https://astral.sh/uv/${NEXUS_CI_UV_VERSION}/install.sh | sh
-    - UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${NEXUS_CI_DEFAULT_PYTHON_VER}
-    - export PYO3_PYTHON=$(uv python find --managed-python ${NEXUS_CI_DEFAULT_PYTHON_VER})
+    - *install_build_essential
+    - *install_uv_and_python
     - echo "Installing cargo-nextest"
     - cargo install cargo-nextest --locked
     - echo "Running Rust tests"
@@ -234,13 +238,86 @@ test:wasm_tests:
   needs:
     - job: build
   script:
-    - echo "Installing NodeJS"
-    - curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NEXUS_CI_NVM_VERSION}/install.sh | bash
-    - \. "$HOME/.nvm/nvm.sh"
-    - nvm install ${NEXUS_CI_NODE_VERSION}
-    - echo "NodeJS and NPM versions:"
-    - node --version && npm --version
+    - *install_nodejs
     - echo "Installing wasm-pack"
     - cargo install wasm-pack
     - echo "Running WASM tests"
     - wasm-pack test --release --node crates/wasm
+
+package:wheel:x86_64:
+  stage: package
+  image:
+    name: rust:${NEXUS_CI_RUST_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
+    pull_policy: if-not-present
+  needs:
+    - job: build
+  artifacts:
+    name: "wheel-x86_64"
+    when: on_success
+    paths:
+      - ${NEXUS_CI_WORKSPACE_TMP}/wheels/
+  script:
+    - *install_build_essential
+    - *install_uv_and_python
+    - *setup_venv
+    - |
+      if [ -z "${CI_COMMIT_TAG}" ]; then
+        echo "Non-release build: appending commit hash to version"
+        if ! sed -i "s/^version = \"\(.*\)\"/version = \"\1+${CI_COMMIT_SHORT_SHA}\"/" Cargo.toml; then
+          echo "Error: Failed to modify version in Cargo.toml"
+          exit 1
+        fi
+        # Verify the modification succeeded
+        if ! grep -q "version = \".*+${CI_COMMIT_SHORT_SHA}\"" Cargo.toml; then
+          echo "Error: Version modification did not apply correctly"
+          exit 1
+        fi
+      else
+        echo "Tagged release ${CI_COMMIT_TAG}: using version as-is"
+      fi
+    - echo "Building x86_64 wheel"
+    - maturin build --release --target x86_64-unknown-linux-gnu --out ${NEXUS_CI_WORKSPACE_TMP}/wheels
+    - |
+      if [ ! -d ${NEXUS_CI_WORKSPACE_TMP}/wheels ] || [ -z "$(ls -A ${NEXUS_CI_WORKSPACE_TMP}/wheels/*.whl 2>/dev/null)" ]; then
+        echo "Error: No wheels found in ${NEXUS_CI_WORKSPACE_TMP}/wheels/"
+        exit 1
+      fi
+    - echo "Uploading wheel to GitLab package registry"
+    - |
+      set -e
+      UV_PUBLISH_USERNAME=gitlab-ci-token \
+      UV_PUBLISH_PASSWORD="${CI_JOB_TOKEN}" \
+      UV_PUBLISH_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi" \
+      uv publish --no-progress ${NEXUS_CI_WORKSPACE_TMP}/wheels/*.whl
+  after_script:
+    - uv cache prune --ci
+
+upload:artifactory:
+  stage: upload
+  image:
+    name: ghcr.io/astral-sh/uv:${NEXUS_CI_UV_VERSION}-${NEXUS_CI_DEBIAN_VERSION}-slim
+    pull_policy: if-not-present
+  needs:
+    - job: package:wheel:x86_64
+      artifacts: true
+  script:
+    - |
+      if [[ -z "${NEXUS_CI_ARTIFACTORY_USER}" || -z "${NEXUS_CI_ARTIFACTORY_KEY}" || -z "${NEXUS_CI_ARTIFACTORY_URL}" ]]; then
+          echo "Error: uploading to artifactory requires the following environment variables: NEXUS_CI_ARTIFACTORY_USER, NEXUS_CI_ARTIFACTORY_KEY, NEXUS_CI_ARTIFACTORY_URL."
+          exit 1
+      fi
+    - |
+      if [ ! -d ${NEXUS_CI_WORKSPACE_TMP}/wheels ] || [ -z "$(ls -A ${NEXUS_CI_WORKSPACE_TMP}/wheels/*.whl 2>/dev/null)" ]; then
+        echo "Error: No wheels found in ${NEXUS_CI_WORKSPACE_TMP}/wheels/"
+        exit 1
+      fi
+    - echo "Uploading wheels to Artifactory"
+    - |
+      set -e
+      UV_PUBLISH_USERNAME="${NEXUS_CI_ARTIFACTORY_USER}" \
+      UV_PUBLISH_PASSWORD="${NEXUS_CI_ARTIFACTORY_KEY}" \
+      UV_PUBLISH_URL="${NEXUS_CI_ARTIFACTORY_URL}" \
+      uv publish --no-progress ${NEXUS_CI_WORKSPACE_TMP}/wheels/*.whl
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_BRANCH == 'main'

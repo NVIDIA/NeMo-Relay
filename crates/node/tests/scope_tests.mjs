@@ -123,34 +123,51 @@ describe('Subscribers', () => {
   it('subscriber receives events', async () => {
     const events = [];
     registerSubscriber('node_event_collector', (e) => events.push(e));
-    const scope = pushScope('sub_test', ScopeType.Agent, null, null);
-    popScope(scope);
-    // Subscriber callbacks are NonBlocking — wait for the event loop to drain
-    await new Promise(r => setTimeout(r, 50));
-    assert.ok(events.length > 0, 'Expected at least one event');
-    deregisterSubscriber('node_event_collector');
+    try {
+      const scope = pushScope('sub_test', ScopeType.Agent, null, null);
+      popScope(scope);
+      const deadline = Date.now() + 2000;
+      while (events.length < 1 && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 10));
+      }
+      assert.ok(events.length > 0, 'Expected at least one event');
+    } finally {
+      deregisterSubscriber('node_event_collector');
+    }
   });
 
   it('subscriber event properties', async () => {
     let captured = null;
     registerSubscriber('node_prop_collector', (e) => { if (!captured) captured = e; });
-    const scope = pushScope('prop_test', ScopeType.Function, null, null);
-    popScope(scope);
-    await new Promise(r => setTimeout(r, 50));
-    assert.ok(captured, 'Expected an event');
-    assert.ok(typeof captured.uuid === 'string');
-    assert.ok(typeof captured.timestamp === 'string');
-    assert.ok(typeof captured.event_type === 'number');
-    deregisterSubscriber('node_prop_collector');
+    try {
+      const scope = pushScope('prop_test', ScopeType.Function, null, null);
+      popScope(scope);
+      const deadline = Date.now() + 2000;
+      while (!captured && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 10));
+      }
+      assert.ok(captured, 'Expected an event');
+      assert.ok(typeof captured.uuid === 'string');
+      assert.ok(typeof captured.timestamp === 'string');
+      assert.ok(typeof captured.event_type === 'number');
+    } finally {
+      deregisterSubscriber('node_prop_collector');
+    }
   });
 
   it('mark events', async () => {
     const events = [];
     registerSubscriber('node_mark_collector', (e) => events.push(e));
-    event('mark_event', null, { marker: 'test' }, null);
-    await new Promise(r => setTimeout(r, 50));
-    const found = events.some(e => e.event_type === 2); // Mark = 2
-    assert.ok(found, 'Expected a Mark event (eventType=2)');
-    deregisterSubscriber('node_mark_collector');
+    try {
+      event('mark_event', null, { marker: 'test' }, null);
+      const deadline = Date.now() + 2000;
+      while (!events.some(e => e.event_type === 2) && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 10));
+      }
+      const found = events.some(e => e.event_type === 2); // Mark = 2
+      assert.ok(found, 'Expected a Mark event (eventType=2)');
+    } finally {
+      deregisterSubscriber('node_mark_collector');
+    }
   });
 });
