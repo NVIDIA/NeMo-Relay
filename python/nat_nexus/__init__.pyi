@@ -727,7 +727,7 @@ def nat_nexus_tool_response_intercepts(name: str, result: Json) -> Json:
     """
     ...
 
-def nat_nexus_llm_request_intercepts(request: LLMRequest) -> LLMRequest:
+def nat_nexus_llm_request_intercepts(name: str, request: LLMRequest) -> LLMRequest:
     """Run the registered LLM request intercept chain.
 
     Returns the transformed ``LLMRequest``.

@@ -458,7 +458,7 @@ class TestScopeLocalExecutionIntercept:
                 handle,
                 "sl_exec_intercept",
                 1,
-                lambda args, next_fn: {"from": "intercept"},
+                lambda name, args, next_fn: {"from": "intercept"},
             )
             result = await tools.execute("exec_int_tool", {}, my_tool)
 
@@ -477,7 +477,7 @@ class TestScopeLocalExecutionIntercept:
         def my_tool(args):
             return {"value": args["x"] * 2}
 
-        def intercept_fn(args, next_fn):
+        def intercept_fn(name, args, next_fn):
             # Cannot call next_fn here — it returns a Future.
             args["x"] = args["x"] + 1
             return {"value": args["x"] * 2, "intercepted": True}

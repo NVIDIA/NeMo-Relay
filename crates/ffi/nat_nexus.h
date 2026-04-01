@@ -1246,7 +1246,9 @@ NatNexusStatus nat_nexus_tool_response_intercepts(const char *name,
  * # Safety
  * All pointers must be valid. `out` must be non-null.
  */
-NatNexusStatus nat_nexus_llm_request_intercepts(const char *native_json, char **out);
+NatNexusStatus nat_nexus_llm_request_intercepts(const char *name,
+                                                const char *native_json,
+                                                char **out);
 
 /**
  * Run the registered LLM conditional execution guardrail chain.

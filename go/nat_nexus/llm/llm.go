@@ -63,8 +63,8 @@ func StreamExecute(name string, native interface{}, fn nat_nexus.LLMExecutionFun
 // RequestIntercepts runs the registered LLM request intercept chain on the
 // given request and returns the transformed request. This is a shorthand for
 // [nat_nexus.LlmRequestIntercepts].
-func RequestIntercepts(request json.RawMessage) (json.RawMessage, error) {
-	return nat_nexus.LlmRequestIntercepts(request)
+func RequestIntercepts(name string, request json.RawMessage) (json.RawMessage, error) {
+	return nat_nexus.LlmRequestIntercepts(name, request)
 }
 
 // ConditionalExecution runs the registered LLM conditional execution guardrail

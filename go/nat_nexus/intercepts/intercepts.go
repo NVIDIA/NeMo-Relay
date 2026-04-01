@@ -245,6 +245,6 @@ func ToolResponseIntercepts(name string, result json.RawMessage) (json.RawMessag
 // LlmRequestIntercepts runs the registered LLM request intercept chain and
 // returns the transformed request. This is a shorthand for
 // [nat_nexus.LlmRequestIntercepts].
-func LlmRequestIntercepts(request json.RawMessage) (json.RawMessage, error) {
-	return nat_nexus.LlmRequestIntercepts(request)
+func LlmRequestIntercepts(name string, request json.RawMessage) (json.RawMessage, error) {
+	return nat_nexus.LlmRequestIntercepts(name, request)
 }

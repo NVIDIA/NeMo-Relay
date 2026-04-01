@@ -2676,10 +2676,18 @@ pub unsafe extern "C" fn nat_nexus_tool_response_intercepts(
 /// All pointers must be valid. `out` must be non-null.
 #[no_mangle]
 pub unsafe extern "C" fn nat_nexus_llm_request_intercepts(
+    name: *const c_char,
     native_json: *const c_char,
     out: *mut *mut c_char,
 ) -> NatNexusStatus {
     clear_last_error();
+    let name_str = if name.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(name) }
+            .to_str()
+            .unwrap_or_default()
+    };
     let native = match c_str_to_json(native_json) {
         Some(j) => j,
         None => return NatNexusStatus::InvalidJson,
@@ -2691,7 +2699,7 @@ pub unsafe extern "C" fn nat_nexus_llm_request_intercepts(
             return NatNexusStatus::InvalidJson;
         }
     };
-    match core::nat_nexus_llm_request_intercepts(request) {
+    match core::nat_nexus_llm_request_intercepts(name_str, request) {
         Ok(transformed) => {
             let result_json = serde_json::to_value(&transformed).unwrap_or(serde_json::Value::Null);
             unsafe { *out = json_to_c_string(&result_json) };

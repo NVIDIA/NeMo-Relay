@@ -1475,10 +1475,10 @@ pub fn tool_response_intercepts(name: String, result: Json) -> Result<Json> {
 /// The `request` should be a JSON object with `headers` and `content` fields matching
 /// the `LLMRequest` schema. Returns the transformed request as JSON.
 #[napi]
-pub fn llm_request_intercepts(request: Json) -> Result<Json> {
+pub fn llm_request_intercepts(name: String, request: Json) -> Result<Json> {
     let llm_request: core_types::LLMRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
-    core::nat_nexus_llm_request_intercepts(llm_request)
+    core::nat_nexus_llm_request_intercepts(&name, llm_request)
         .map(|r| serde_json::to_value(&r).unwrap_or(Json::Null))
         .map_err(to_napi_err)
 }

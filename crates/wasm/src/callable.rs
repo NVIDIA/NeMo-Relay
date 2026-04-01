@@ -125,9 +125,9 @@ pub fn wrap_js_tool_exec_fn(
 /// deserializes the result back into an `LLMRequest`.
 pub fn wrap_js_llm_request_intercept_fn(
     func: Function,
-) -> Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync> {
+) -> Box<dyn Fn(&str, LLMRequest) -> LLMRequest + Send + Sync> {
     let func = SendWrapper::new(func);
-    Box::new(move |request: LLMRequest| {
+    Box::new(move |_name: &str, request: LLMRequest| {
         let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
         let js_req = json_to_js(&req_json);
         match func.call1(&JsValue::NULL, &js_req) {
@@ -315,12 +315,12 @@ pub fn wrap_js_event_subscriber(
 pub fn wrap_js_tool_exec_intercept_fn(
     func: Function,
 ) -> Arc<
-    dyn Fn(Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+    dyn Fn(&str, Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
         + Sync,
 > {
     let func = SendWrapper::new(func);
-    Arc::new(move |args: Json, next: ToolExecutionNextFn| {
+    Arc::new(move |_name: &str, args: Json, next: ToolExecutionNextFn| {
         let js_args = json_to_js(&args);
         let js_next =
             wasm_bindgen::closure::Closure::once_into_js(move |next_args: JsValue| -> JsValue {
@@ -362,45 +362,52 @@ pub fn wrap_js_tool_exec_intercept_fn(
 pub fn wrap_js_llm_exec_intercept_fn(
     func: Function,
 ) -> Arc<
-    dyn Fn(LLMRequest, LlmExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+    dyn Fn(
+            &str,
+            LLMRequest,
+            LlmExecutionNextFn,
+        ) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
         + Sync,
 > {
     let func = SendWrapper::new(func);
-    Arc::new(move |request: LLMRequest, next: LlmExecutionNextFn| {
-        let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
-        let js_request = json_to_js(&req_json);
-        let js_next =
-            wasm_bindgen::closure::Closure::once_into_js(move |next_val: JsValue| -> JsValue {
-                let next_json = js_to_json(&next_val).unwrap_or(Json::Null);
-                let next_request: LLMRequest = serde_json::from_value(next_json).unwrap_or(request);
-                let future = next(next_request);
-                wasm_bindgen_futures::future_to_promise(async move {
-                    let result = future
-                        .await
-                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-                    Ok(json_to_js(&result))
-                })
-                .into()
-            });
-        let result = func.call2(&JsValue::NULL, &js_request, &js_next);
-        Box::pin(SendWrapper::new(async move {
-            match result {
-                Ok(val) => {
-                    if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
-                        match JsFuture::from(promise.clone()).await {
-                            Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| NexusError::Internal(js_error_message(&e))),
-                            Err(e) => Err(NexusError::Internal(js_error_message(&e))),
+    Arc::new(
+        move |_name: &str, request: LLMRequest, next: LlmExecutionNextFn| {
+            let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+            let js_request = json_to_js(&req_json);
+            let js_next =
+                wasm_bindgen::closure::Closure::once_into_js(move |next_val: JsValue| -> JsValue {
+                    let next_json = js_to_json(&next_val).unwrap_or(Json::Null);
+                    let next_request: LLMRequest =
+                        serde_json::from_value(next_json).unwrap_or(request);
+                    let future = next(next_request);
+                    wasm_bindgen_futures::future_to_promise(async move {
+                        let result = future
+                            .await
+                            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                        Ok(json_to_js(&result))
+                    })
+                    .into()
+                });
+            let result = func.call2(&JsValue::NULL, &js_request, &js_next);
+            Box::pin(SendWrapper::new(async move {
+                match result {
+                    Ok(val) => {
+                        if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
+                            match JsFuture::from(promise.clone()).await {
+                                Ok(resolved) => js_to_json(&resolved)
+                                    .map_err(|e| NexusError::Internal(js_error_message(&e))),
+                                Err(e) => Err(NexusError::Internal(js_error_message(&e))),
+                            }
+                        } else {
+                            js_to_json(&val).map_err(|e| NexusError::Internal(js_error_message(&e)))
                         }
-                    } else {
-                        js_to_json(&val).map_err(|e| NexusError::Internal(js_error_message(&e)))
                     }
+                    Err(e) => Err(NexusError::Internal(js_error_message(&e))),
                 }
-                Err(e) => Err(NexusError::Internal(js_error_message(&e))),
-            }
-        }))
-    })
+            }))
+        },
+    )
 }
 
 /// Wrap a JS function `(request, next) => result | Promise<result>` for LLM stream execution intercept.
@@ -412,6 +419,7 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
     func: Function,
 ) -> Arc<
     dyn Fn(
+            &str,
             LLMRequest,
             LlmStreamExecutionNextFn,
         ) -> Pin<
@@ -427,7 +435,7 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
 > {
     let func = SendWrapper::new(func);
     Arc::new(
-        move |request: LLMRequest, _next: LlmStreamExecutionNextFn| {
+        move |_name: &str, request: LLMRequest, _next: LlmStreamExecutionNextFn| {
             // For stream execution intercepts, we ignore `next` and produce a single-item stream
             // from the JS function's result, matching the existing WASM stream execution pattern.
             let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);

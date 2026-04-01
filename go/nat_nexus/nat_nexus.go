@@ -186,7 +186,7 @@ extern int32_t nat_nexus_scope_deregister_subscriber(const char* scope_uuid, con
 extern int32_t nat_nexus_tool_request_intercepts(const char* name, const char* args_json, char** out);
 extern int32_t nat_nexus_tool_conditional_execution(const char* name, const char* args_json);
 extern int32_t nat_nexus_tool_response_intercepts(const char* name, const char* result_json, char** out);
-extern int32_t nat_nexus_llm_request_intercepts(const char* request_json, char** out);
+extern int32_t nat_nexus_llm_request_intercepts(const char* name, const char* request_json, char** out);
 extern int32_t nat_nexus_llm_conditional_execution(const char* request_json);
 // Error
 extern const char* nat_nexus_last_error();
@@ -1681,12 +1681,14 @@ func ToolResponseIntercepts(name string, result json.RawMessage) (json.RawMessag
 
 // LlmRequestIntercepts runs the registered LLM request intercept chain on the
 // given request (serialized as JSON) and returns the transformed request JSON.
-func LlmRequestIntercepts(request json.RawMessage) (json.RawMessage, error) {
+func LlmRequestIntercepts(name string, request json.RawMessage) (json.RawMessage, error) {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
 	cRequest := C.CString(string(request))
 	defer C.free(unsafe.Pointer(cRequest))
 
 	var out *C.char
-	status := C.nat_nexus_llm_request_intercepts(cRequest, &out)
+	status := C.nat_nexus_llm_request_intercepts(cName, cRequest, &out)
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}

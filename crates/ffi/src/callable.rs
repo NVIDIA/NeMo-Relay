@@ -235,12 +235,12 @@ pub fn wrap_tool_exec_intercept_fn(
     user_data: *mut libc::c_void,
     free_fn: NatNexusFreeFn,
 ) -> Arc<
-    dyn Fn(Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+    dyn Fn(&str, Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
         + Sync,
 > {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |args: Json, next: ToolExecutionNextFn| {
+    Arc::new(move |_name: &str, args: Json, next: ToolExecutionNextFn| {
         let ud = ud.clone();
         Box::pin(async move {
             // Package the Rust next fn into an FFI-safe pair
@@ -286,54 +286,60 @@ pub fn wrap_llm_exec_intercept_fn(
     user_data: *mut libc::c_void,
     free_fn: NatNexusFreeFn,
 ) -> Arc<
-    dyn Fn(LLMRequest, LlmExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+    dyn Fn(
+            &str,
+            LLMRequest,
+            LlmExecutionNextFn,
+        ) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
         + Sync,
 > {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |request: LLMRequest, next: LlmExecutionNextFn| {
-        let ud = ud.clone();
-        Box::pin(async move {
-            let next_box = Box::new(next);
-            let next_ctx = Box::into_raw(next_box) as *mut libc::c_void;
+    Arc::new(
+        move |_name: &str, request: LLMRequest, next: LlmExecutionNextFn| {
+            let ud = ud.clone();
+            Box::pin(async move {
+                let next_box = Box::new(next);
+                let next_ctx = Box::into_raw(next_box) as *mut libc::c_void;
 
-            /// C trampoline that calls the boxed Rust next fn.
-            /// Takes a JSON string representing an LLMRequest, deserializes it,
-            /// and calls the Rust LlmExecutionNextFn.
-            unsafe extern "C" fn llm_next_trampoline(
-                native_json: *const c_char,
-                next_ctx: *mut libc::c_void,
-            ) -> *mut c_char {
-                let next = unsafe { Box::from_raw(next_ctx as *mut LlmExecutionNextFn) };
-                let request = if native_json.is_null() {
-                    LLMRequest {
-                        headers: serde_json::Map::new(),
-                        content: Json::Null,
+                /// C trampoline that calls the boxed Rust next fn.
+                /// Takes a JSON string representing an LLMRequest, deserializes it,
+                /// and calls the Rust LlmExecutionNextFn.
+                unsafe extern "C" fn llm_next_trampoline(
+                    native_json: *const c_char,
+                    next_ctx: *mut libc::c_void,
+                ) -> *mut c_char {
+                    let next = unsafe { Box::from_raw(next_ctx as *mut LlmExecutionNextFn) };
+                    let request = if native_json.is_null() {
+                        LLMRequest {
+                            headers: serde_json::Map::new(),
+                            content: Json::Null,
+                        }
+                    } else {
+                        let s = unsafe { CStr::from_ptr(native_json) }.to_string_lossy();
+                        serde_json::from_str::<LLMRequest>(&s).unwrap_or(LLMRequest {
+                            headers: serde_json::Map::new(),
+                            content: Json::Null,
+                        })
+                    };
+                    let handle = tokio::runtime::Handle::current();
+                    let result = tokio::task::block_in_place(|| handle.block_on(next(request)));
+                    match result {
+                        Ok(json) => json_to_c_string(&json),
+                        Err(_) => std::ptr::null_mut(),
                     }
-                } else {
-                    let s = unsafe { CStr::from_ptr(native_json) }.to_string_lossy();
-                    serde_json::from_str::<LLMRequest>(&s).unwrap_or(LLMRequest {
-                        headers: serde_json::Map::new(),
-                        content: Json::Null,
-                    })
-                };
-                let handle = tokio::runtime::Handle::current();
-                let result = tokio::task::block_in_place(|| handle.block_on(next(request)));
-                match result {
-                    Ok(json) => json_to_c_string(&json),
-                    Err(_) => std::ptr::null_mut(),
                 }
-            }
 
-            let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
-            let c_request = json_to_c_string(&request_json);
-            let result_ptr = unsafe { cb(ud.ptr, c_request, llm_next_trampoline, next_ctx) };
-            unsafe { nat_nexus_string_free_internal(c_request) };
-            let result = ptr_to_json(result_ptr);
-            unsafe { nat_nexus_string_free_internal(result_ptr) };
-            Ok(result)
-        })
-    })
+                let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+                let c_request = json_to_c_string(&request_json);
+                let result_ptr = unsafe { cb(ud.ptr, c_request, llm_next_trampoline, next_ctx) };
+                unsafe { nat_nexus_string_free_internal(c_request) };
+                let result = ptr_to_json(result_ptr);
+                unsafe { nat_nexus_string_free_internal(result_ptr) };
+                Ok(result)
+            })
+        },
+    )
 }
 
 /// Wrap a C LLM stream execution intercept callback.
@@ -345,6 +351,7 @@ pub fn wrap_llm_stream_exec_intercept_fn(
     free_fn: NatNexusFreeFn,
 ) -> Arc<
     dyn Fn(
+            &str,
             LLMRequest,
             LlmStreamExecutionNextFn,
         ) -> Pin<
@@ -357,7 +364,7 @@ pub fn wrap_llm_stream_exec_intercept_fn(
 > {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(
-        move |request: LLMRequest, _next: LlmStreamExecutionNextFn| {
+        move |_name: &str, request: LLMRequest, _next: LlmStreamExecutionNextFn| {
             let ud = ud.clone();
             Box::pin(async move {
                 // For stream intercepts from C, we ignore next and just call the C callback
@@ -408,9 +415,9 @@ pub fn wrap_llm_request_intercept_fn(
     cb: NatNexusLlmRequestCb,
     user_data: *mut libc::c_void,
     free_fn: NatNexusFreeFn,
-) -> Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync> {
+) -> Box<dyn Fn(&str, LLMRequest) -> LLMRequest + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(move |request: LLMRequest| {
+    Box::new(move |_name: &str, request: LLMRequest| {
         let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
         let result_ptr = unsafe { cb(ud.ptr, ffi_req) };
         // Free the input request

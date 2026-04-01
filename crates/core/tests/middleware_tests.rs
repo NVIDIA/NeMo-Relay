@@ -430,7 +430,7 @@ async fn test_execution_intercept_calls_next() {
     nat_nexus_register_tool_execution_intercept(
         "passthrough",
         1,
-        Arc::new(|args, next| {
+        Arc::new(|_name, args, next| {
             Box::pin(async move {
                 // Call next — this should reach the original callable
                 next(args).await
@@ -481,7 +481,7 @@ async fn test_execution_intercept_skips_next() {
     nat_nexus_register_tool_execution_intercept(
         "short_circuit",
         1,
-        Arc::new(|_args, _next| {
+        Arc::new(|_name, _args, _next| {
             Box::pin(async move {
                 // Return a custom result without calling next
                 Ok(json!({"intercepted": true}))
@@ -533,7 +533,7 @@ async fn test_execution_intercept_chain_ordering() {
     nat_nexus_register_tool_execution_intercept(
         "exec_p1",
         1,
-        Arc::new(move |args, next| {
+        Arc::new(move |_name, args, next| {
             let o = o1.clone();
             Box::pin(async move {
                 o.lock().unwrap().push("intercept_1_before".into());
@@ -550,7 +550,7 @@ async fn test_execution_intercept_chain_ordering() {
     nat_nexus_register_tool_execution_intercept(
         "exec_p2",
         2,
-        Arc::new(move |args, next| {
+        Arc::new(move |_name, args, next| {
             let o = o2.clone();
             Box::pin(async move {
                 o.lock().unwrap().push("intercept_2_before".into());
@@ -609,7 +609,7 @@ async fn test_execution_intercept_modifies_args() {
     nat_nexus_register_tool_execution_intercept(
         "arg_modifier",
         1,
-        Arc::new(|mut args, next| {
+        Arc::new(|_name, mut args, next| {
             Box::pin(async move {
                 args.as_object_mut()
                     .unwrap()
@@ -898,7 +898,7 @@ async fn test_scope_local_execution_intercept_cleanup() {
         &handle.uuid,
         "scoped_exec",
         1,
-        Arc::new(move |args, next| {
+        Arc::new(move |_name, args, next| {
             ic.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move { next(args).await })
         }),
@@ -1049,7 +1049,7 @@ async fn test_scope_local_and_global_execution_intercept_merge() {
     nat_nexus_register_tool_execution_intercept(
         "global_exec",
         10,
-        Arc::new(move |args, next| {
+        Arc::new(move |_name, args, next| {
             let o = og.clone();
             Box::pin(async move {
                 o.lock().unwrap().push("global_before".into());
@@ -1067,7 +1067,7 @@ async fn test_scope_local_and_global_execution_intercept_merge() {
         &handle.uuid,
         "local_exec",
         5,
-        Arc::new(move |args, next| {
+        Arc::new(move |_name, args, next| {
             let o = ol.clone();
             Box::pin(async move {
                 o.lock().unwrap().push("local_before".into());
@@ -1193,7 +1193,7 @@ async fn test_conditional_rejection_prevents_execution() {
     nat_nexus_register_tool_execution_intercept(
         "should_not_execute",
         1,
-        Arc::new(move |args, next| {
+        Arc::new(move |_name, args, next| {
             ec.store(true, Ordering::SeqCst);
             Box::pin(async move { next(args).await })
         }),
@@ -1590,7 +1590,7 @@ async fn test_full_pipeline_integration() {
     nat_nexus_register_tool_execution_intercept(
         "exec_intercept",
         1,
-        Arc::new(move |args, next| {
+        Arc::new(move |_name, args, next| {
             let o = o4.clone();
             Box::pin(async move {
                 o.lock().unwrap().push("execution_intercept".into());
@@ -1879,7 +1879,7 @@ async fn test_llm_request_intercept_transforms() {
         "llm_req_i",
         1,
         false,
-        Box::new(|mut req: LLMRequest| {
+        Box::new(|_name: &str, mut req: LLMRequest| {
             req.headers.insert("x-intercepted".into(), json!(true));
             req
         }),
@@ -1891,7 +1891,7 @@ async fn test_llm_request_intercept_transforms() {
         content: json!({"prompt": "hello"}),
     };
 
-    let result = nat_nexus_llm_request_intercepts(request).unwrap();
+    let result = nat_nexus_llm_request_intercepts("test_llm", request).unwrap();
     assert_eq!(result.headers["x-intercepted"], true);
 
     // Cleanup
@@ -1911,7 +1911,7 @@ async fn test_llm_execution_intercept_chain() {
     nat_nexus_register_llm_execution_intercept(
         "llm_exec_1",
         1,
-        Arc::new(move |req, next| {
+        Arc::new(move |_name, req, next| {
             let o = o1.clone();
             Box::pin(async move {
                 o.lock().unwrap().push("intercept_before".into());
