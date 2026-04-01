@@ -248,11 +248,15 @@ pub fn wrap_js_llm_exec_fn(
 ///
 /// The collector is called with each intercepted chunk during a streaming LLM response.
 /// It is used to accumulate chunks on the JavaScript side for aggregation.
+/// If the JS function throws, the error is currently swallowed and treated as
+/// `Ok(())` because `ErrorStrategy::Fatal` aborts the process on JS exceptions.
+/// For practical purposes, a non-throwing collector always returns `Ok(())`.
 pub fn wrap_js_collector_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn FnMut(Json) + Send> {
+) -> Box<dyn FnMut(Json) -> Result<()> + Send> {
     Box::new(move |chunk: Json| {
         func.call(chunk, ThreadsafeFunctionCallMode::Blocking);
+        Ok(())
     })
 }
 

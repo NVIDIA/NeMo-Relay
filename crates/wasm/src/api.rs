@@ -475,9 +475,11 @@ pub async fn nat_nexus_llm_stream_call_execute(
         .unwrap_or_else(nvidia_nat_nexus_core::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
 
-    let wrapped_collector: Box<dyn FnMut(serde_json::Value) + Send> = match collector {
+    let wrapped_collector: Box<
+        dyn FnMut(serde_json::Value) -> nvidia_nat_nexus_core::Result<()> + Send,
+    > = match collector {
         Some(cb) => callable::wrap_js_collector_fn(cb),
-        None => Box::new(|_: serde_json::Value| {}),
+        None => Box::new(|_: serde_json::Value| Ok(())),
     };
 
     let wrapped_finalizer: Box<dyn FnOnce() -> serde_json::Value + Send> = match finalizer {

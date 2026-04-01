@@ -11,15 +11,17 @@
 //! ## Pipeline
 //!
 //! ```text
-//! raw chunk (Json) → collector(chunk) + yield chunk
-//! stream ends → finalizer() → Json → SanitizeResponseGuardrails → END event
+//! raw chunk (Json) -> collector(chunk) -> Ok(()) -> yield chunk
+//!                                      -> Err(e) -> terminate stream with error
+//! stream ends -> finalizer() -> Json -> SanitizeResponseGuardrails -> END event
 //! ```
 //!
 //! The **collector** receives each chunk (Json) and can accumulate state
-//! (e.g., concatenating tokens). The **finalizer** is called once when the
-//! stream is exhausted and returns the aggregated response as [`Json`]. That
-//! aggregated response then flows through sanitize response guardrails before
-//! being included in the END event.
+//! (e.g., concatenating tokens). If the collector returns `Err`, the stream
+//! terminates immediately with that error. The **finalizer** is called once
+//! when the stream is exhausted and returns the aggregated response as [`Json`].
+//! That aggregated response then flows through sanitize response guardrails
+//! before being included in the END event.
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -34,6 +36,7 @@ use crate::types::*;
 /// Wraps an inner `Stream<Item = Result<Json>>` of raw chunks and:
 ///
 /// 1. Passes each chunk to the user-supplied **collector** closure.
+///    If the collector returns `Err`, the stream terminates with that error.
 /// 2. On stream exhaustion, calls the **finalizer** to produce an aggregated
 ///    [`Json`] response, runs sanitize response guardrails on it, then emits
 ///    the LLM END event.
@@ -41,7 +44,7 @@ pub struct LlmStreamWrapper {
     inner: Pin<Box<dyn Stream<Item = Result<Json>> + Send>>,
     handle: LLMHandle,
     scope_stack: ScopeStackHandle,
-    collector: Box<dyn FnMut(Json) + Send>,
+    collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
     finalizer: Option<Box<dyn FnOnce() -> Json + Send>>,
     data: Option<Json>,
     metadata: Option<Json>,
@@ -55,18 +58,19 @@ impl LlmStreamWrapper {
     /// correct scope stack is used when the stream is later polled, even if
     /// polling happens on a different task or thread.
     ///
-    /// - `inner` — the raw stream of Json chunks from the LLM provider.
-    /// - `handle` — the [`LLMHandle`] for this call (used for the `End` event).
-    /// - `collector` — called with each chunk; use this to accumulate
-    ///   streaming tokens or forward them to another sink.
-    /// - `finalizer` — called once when the stream is exhausted; must return the
+    /// - `inner` -- the raw stream of Json chunks from the LLM provider.
+    /// - `handle` -- the [`LLMHandle`] for this call (used for the `End` event).
+    /// - `collector` -- called with each chunk; use this to accumulate
+    ///   streaming tokens or forward them to another sink. Return `Ok(())`
+    ///   to continue the stream, or `Err(NexusError)` to terminate it.
+    /// - `finalizer` -- called once when the stream is exhausted; must return the
     ///   aggregated response as [`Json`]. The returned value flows through
     ///   sanitize response guardrails.
-    /// - `data` / `metadata` — optional values passed through to the `End` event.
+    /// - `data` / `metadata` -- optional values passed through to the `End` event.
     pub fn new(
         inner: Pin<Box<dyn Stream<Item = Result<Json>> + Send>>,
         handle: LLMHandle,
-        collector: Box<dyn FnMut(Json) + Send>,
+        collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
         finalizer: Box<dyn FnOnce() -> Json + Send>,
         data: Option<Json>,
         metadata: Option<Json>,
@@ -134,9 +138,15 @@ impl Stream for LlmStreamWrapper {
         // Poll the inner stream
         match this.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(raw_chunk))) => {
-                // Feed chunk to the collector
-                (this.collector)(raw_chunk.clone());
-                Poll::Ready(Some(Ok(raw_chunk)))
+                // Feed chunk to the collector; if it returns Err, terminate the stream
+                match (this.collector)(raw_chunk.clone()) {
+                    Ok(()) => Poll::Ready(Some(Ok(raw_chunk))),
+                    Err(e) => {
+                        this.ended = true;
+                        this.emit_end_event();
+                        Poll::Ready(Some(Err(e)))
+                    }
+                }
             }
             Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
             Poll::Ready(None) => {
