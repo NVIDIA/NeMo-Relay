@@ -5,6 +5,7 @@ package nat_nexus
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -277,4 +278,225 @@ func TestMarkEvent(t *testing.T) {
 		t.Fatal("mark event was not received")
 	}
 	mu.Unlock()
+}
+
+// ============================================================================
+// Deeply nested scopes
+// ============================================================================
+
+func TestDeeplyNestedScopes(t *testing.T) {
+	const depth = 15
+	handles := make([]*ScopeHandle, depth)
+
+	for i := 0; i < depth; i++ {
+		name := fmt.Sprintf("level_%02d", i)
+		h, err := PushScope(name, ScopeTypeFunction)
+		if err != nil {
+			t.Fatalf("PushScope at depth %d failed: %v", i, err)
+		}
+		handles[i] = h
+	}
+
+	// Verify current scope is the deepest
+	current, err := GetHandle()
+	if err != nil {
+		t.Fatalf("GetHandle failed: %v", err)
+	}
+	if current.Name() != "level_14" {
+		t.Fatalf("expected 'level_14', got '%s'", current.Name())
+	}
+
+	// Pop all in reverse order, verifying each level
+	for i := depth - 1; i >= 0; i-- {
+		err := PopScope(handles[i])
+		if err != nil {
+			t.Fatalf("PopScope at depth %d failed: %v", i, err)
+		}
+		if i > 0 {
+			current, err := GetHandle()
+			if err != nil {
+				t.Fatalf("GetHandle after pop at depth %d failed: %v", i, err)
+			}
+			expectedName := fmt.Sprintf("level_%02d", i-1)
+			if current.Name() != expectedName {
+				t.Fatalf("after pop depth %d: expected '%s', got '%s'", i, expectedName, current.Name())
+			}
+		}
+	}
+}
+
+func TestPushScopeWithCombinedAttributes(t *testing.T) {
+	attrs := ScopeAttrParallel | ScopeAttrRelocatable
+	handle, err := PushScope("combined_attrs", ScopeTypeAgent, WithScopeAttributes(attrs))
+	if err != nil {
+		t.Fatalf("PushScope failed: %v", err)
+	}
+	defer PopScope(handle)
+
+	if handle.Attributes()&ScopeAttrParallel == 0 {
+		t.Fatal("expected PARALLEL attribute")
+	}
+	if handle.Attributes()&ScopeAttrRelocatable == 0 {
+		t.Fatal("expected RELOCATABLE attribute")
+	}
+}
+
+func TestScopeWithDataAndMetadata(t *testing.T) {
+	handle, err := PushScope("data_scope", ScopeTypeAgent,
+		WithData(json.RawMessage(`{"user_id": "u123"}`)),
+		WithMetadata(json.RawMessage(`{"trace_id": "t456"}`)),
+	)
+	if err != nil {
+		t.Fatalf("PushScope failed: %v", err)
+	}
+	defer PopScope(handle)
+
+	data := handle.Data()
+	if data == nil {
+		t.Fatal("expected non-nil data")
+	}
+	var d map[string]interface{}
+	json.Unmarshal(data, &d)
+	if d["user_id"] != "u123" {
+		t.Fatalf("expected user_id=u123, got %v", d["user_id"])
+	}
+
+	meta := handle.Metadata()
+	if meta == nil {
+		t.Fatal("expected non-nil metadata")
+	}
+	var m map[string]interface{}
+	json.Unmarshal(meta, &m)
+	if m["trace_id"] != "t456" {
+		t.Fatalf("expected trace_id=t456, got %v", m["trace_id"])
+	}
+}
+
+func TestScopeEventWithDataAndMetadata(t *testing.T) {
+	var capturedData, capturedMeta json.RawMessage
+	var mu sync.Mutex
+
+	RegisterSubscriber("go_evt_data_meta_sub", func(event *Event) {
+		if event.Type() == EventTypeMark {
+			mu.Lock()
+			capturedData = append(json.RawMessage(nil), event.Data()...)
+			capturedMeta = append(json.RawMessage(nil), event.Metadata()...)
+			mu.Unlock()
+		}
+	})
+
+	EmitEvent("data_meta_mark",
+		WithEventData(json.RawMessage(`{"payload": "hello"}`)),
+		WithEventMetadata(json.RawMessage(`{"version": 2}`)),
+	)
+	DeregisterSubscriber("go_evt_data_meta_sub")
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var d map[string]interface{}
+	json.Unmarshal(capturedData, &d)
+	if d["payload"] != "hello" {
+		t.Fatalf("expected payload=hello, got %v", d["payload"])
+	}
+
+	var m map[string]interface{}
+	json.Unmarshal(capturedMeta, &m)
+	if m["version"].(float64) != 2 {
+		t.Fatalf("expected version=2, got %v", m["version"])
+	}
+}
+
+func TestConcurrentScopePushPop(t *testing.T) {
+	const goroutines = 10
+	var wg sync.WaitGroup
+	errCh := make(chan error, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			stack, err := NewScopeStack()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer stack.Close()
+
+			stack.Run(func() {
+				for j := 0; j < 5; j++ {
+					name := "concurrent_scope"
+					h, err := PushScope(name, ScopeTypeFunction)
+					if err != nil {
+						errCh <- err
+						return
+					}
+					if err := PopScope(h); err != nil {
+						errCh <- err
+						return
+					}
+				}
+			})
+		}(i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Fatalf("concurrent scope operation failed: %v", err)
+	}
+}
+
+func TestSubscriberReceivesAllEventFields(t *testing.T) {
+	type eventData struct {
+		uuid       string
+		name       string
+		eventType  EventType
+		timestamp  string
+		parentUUID string
+		rootUUID   string
+		scopeType  string
+	}
+	var events []eventData
+	var mu sync.Mutex
+
+	RegisterSubscriber("go_full_evt_sub", func(event *Event) {
+		mu.Lock()
+		events = append(events, eventData{
+			uuid:       event.UUID(),
+			name:       event.Name(),
+			eventType:  event.Type(),
+			timestamp:  event.Timestamp(),
+			parentUUID: event.ParentUUID(),
+			rootUUID:   event.RootUUID(),
+			scopeType:  event.ScopeType(),
+		})
+		mu.Unlock()
+	})
+
+	handle, _ := PushScope("field_test", ScopeTypeAgent)
+	PopScope(handle)
+	DeregisterSubscriber("go_full_evt_sub")
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(events) < 2 {
+		t.Fatalf("expected at least 2 events, got %d", len(events))
+	}
+
+	start := events[0]
+	if start.eventType != EventTypeStart {
+		t.Fatalf("expected Start event, got %d", start.eventType)
+	}
+	if start.uuid == "" {
+		t.Fatal("event UUID is empty")
+	}
+	if start.timestamp == "" {
+		t.Fatal("event timestamp is empty")
+	}
+	if start.name != "field_test" {
+		t.Fatalf("expected name 'field_test', got '%s'", start.name)
+	}
 }
