@@ -40,7 +40,12 @@ pub fn wrap_js_tool_fn(
                 Ok(())
             },
         );
-        rx.recv().unwrap_or(Json::Null)
+        // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
+        // errors through the type system. Log the error so failures are not silent.
+        rx.recv().unwrap_or_else(|e| {
+            eprintln!("nat_nexus: JS tool callback failed: {e}");
+            Json::Null
+        })
     })
 }
 
@@ -67,7 +72,12 @@ pub fn wrap_js_tool_conditional_fn(
                 Ok(())
             },
         );
-        rx.recv().unwrap_or(None)
+        // TODO: This closure returns Option<String> (not Result), so we cannot propagate
+        // errors through the type system. Log the error so failures are not silent.
+        rx.recv().unwrap_or_else(|e| {
+            eprintln!("nat_nexus: JS tool conditional callback failed: {e}");
+            None
+        })
     })
 }
 
@@ -114,7 +124,12 @@ pub fn wrap_js_llm_request_intercept_fn(
                 Ok(())
             },
         );
-        let result = rx.recv().unwrap_or(Json::Null);
+        // TODO: This closure returns LLMRequest (not Result), so we cannot propagate
+        // errors through the type system. Log the error so failures are not silent.
+        let result = rx.recv().unwrap_or_else(|e| {
+            eprintln!("nat_nexus: JS LLM request intercept callback failed: {e}");
+            Json::Null
+        });
         serde_json::from_value(result).unwrap_or(request)
     })
 }
@@ -137,7 +152,12 @@ pub fn wrap_js_llm_sanitize_request_fn(
                 Ok(())
             },
         );
-        let result = rx.recv().unwrap_or(Json::Null);
+        // TODO: This closure returns LLMRequest (not Result), so we cannot propagate
+        // errors through the type system. Log the error so failures are not silent.
+        let result = rx.recv().unwrap_or_else(|e| {
+            eprintln!("nat_nexus: JS LLM sanitize request callback failed: {e}");
+            Json::Null
+        });
         serde_json::from_value(result).unwrap_or(request)
     })
 }
@@ -151,14 +171,19 @@ pub fn wrap_js_llm_response_fn(
         let func = func.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         func.call_with_return_value(
-            response,
+            response.clone(),
             ThreadsafeFunctionCallMode::Blocking,
             move |val: Json| {
                 let _ = tx.send(val);
                 Ok(())
             },
         );
-        rx.recv().unwrap_or(Json::Null)
+        // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
+        // errors through the type system. Log the error and fall back to original response.
+        rx.recv().unwrap_or_else(|e| {
+            eprintln!("nat_nexus: JS LLM response callback failed: {e}");
+            response
+        })
     })
 }
 
@@ -184,7 +209,12 @@ pub fn wrap_js_llm_conditional_fn(
                 Ok(())
             },
         );
-        rx.recv().unwrap_or(None)
+        // TODO: This closure returns Option<String> (not Result), so we cannot propagate
+        // errors through the type system. Log the error so failures are not silent.
+        rx.recv().unwrap_or_else(|e| {
+            eprintln!("nat_nexus: JS LLM conditional callback failed: {e}");
+            None
+        })
     })
 }
 
@@ -244,7 +274,12 @@ pub fn wrap_js_finalizer_fn(
                 Ok(())
             },
         );
-        rx.recv().unwrap_or(Json::Null)
+        // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
+        // errors through the type system. Log the error so failures are not silent.
+        rx.recv().unwrap_or_else(|e| {
+            eprintln!("nat_nexus: JS finalizer callback failed: {e}");
+            Json::Null
+        })
     })
 }
 
@@ -271,7 +306,7 @@ pub fn wrap_js_event_subscriber(
 /// callable receives `(args, nextHandle)` and uses the runtime-provided helper.
 ///
 /// For simplicity in the initial implementation, the intercept callable skips `next`
-/// and acts as a full replacement — matching the previous behavior while accepting
+/// and acts as a full replacement -- matching the previous behavior while accepting
 /// the new `(args, next)` Rust signature.
 pub fn wrap_js_tool_exec_intercept_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
