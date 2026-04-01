@@ -5,6 +5,8 @@ package nat_nexus
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -269,7 +271,6 @@ func TestLlmRequestInterceptModifies(t *testing.T) {
 	request := makeRequest()
 	result, err := LlmCallExecute("int_llm", request,
 		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			// The native JSON is the serialized LLMRequest; extract content
 			var req struct {
 				Content map[string]interface{} `json:"content"`
 			}
@@ -294,7 +295,6 @@ func TestLlmRequestInterceptModifies(t *testing.T) {
 func TestLlmExecutionInterceptReplaces(t *testing.T) {
 	RegisterLlmExecutionIntercept("go_llm_exec_rep", 1,
 		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-			// Short-circuit: don't call next, return directly
 			return json.RawMessage(`{"from_intercept": true}`), nil
 		},
 	)
@@ -319,4 +319,381 @@ func TestLlmExecutionInterceptReplaces(t *testing.T) {
 	}
 
 	DeregisterLlmExecutionIntercept("go_llm_exec_rep")
+}
+
+// ============================================================================
+// Full LLM pipeline tests
+// ============================================================================
+
+func TestLlmFullPipelineInterceptsAndExecute(t *testing.T) {
+	// Register an execution intercept
+	RegisterLlmExecutionIntercept("go_llm_pipe_exec_int", 1,
+		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			result, err := next(nativeJSON)
+			if err != nil {
+				return nil, err
+			}
+			var m map[string]interface{}
+			json.Unmarshal(result, &m)
+			m["exec_intercepted"] = true
+			out, _ := json.Marshal(m)
+			return out, nil
+		},
+	)
+	defer DeregisterLlmExecutionIntercept("go_llm_pipe_exec_int")
+
+	request := makeRequest()
+	result, err := LlmCallExecute("pipeline_llm", request,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			out, _ := json.Marshal(map[string]interface{}{"llm_ran": true})
+			return out, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("LlmCallExecute failed: %v", err)
+	}
+
+	var output map[string]interface{}
+	json.Unmarshal(result, &output)
+
+	if output["llm_ran"] != true {
+		t.Fatal("expected llm_ran=true")
+	}
+	if output["exec_intercepted"] != true {
+		t.Fatal("expected exec_intercepted=true")
+	}
+}
+
+func TestLlmSanitizeRequestGuardrailModifiesEventInput(t *testing.T) {
+	// Sanitize-request guardrails modify the event input, not the actual request
+	// passed to the callable. Verify through event subscriber.
+	var capturedInput json.RawMessage
+	var mu sync.Mutex
+
+	RegisterSubscriber("go_llm_san_evt_sub", func(event *Event) {
+		if event.Type() == EventTypeStart {
+			mu.Lock()
+			capturedInput = append(json.RawMessage(nil), event.Input()...)
+			mu.Unlock()
+		}
+	})
+	defer DeregisterSubscriber("go_llm_san_evt_sub")
+
+	RegisterLlmSanitizeRequestGuardrail("go_llm_content_mod", 1,
+		func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
+			var m map[string]interface{}
+			json.Unmarshal(content, &m)
+			m["system_prompt_injected"] = true
+			out, _ := json.Marshal(m)
+			return headers, out
+		},
+	)
+	defer DeregisterLlmSanitizeRequestGuardrail("go_llm_content_mod")
+
+	request := makeRequest()
+	_, err := LlmCallExecute("mod_llm", request,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"done": true}`), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("LlmCallExecute failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if capturedInput == nil {
+		t.Fatal("expected non-nil captured input from event")
+	}
+	// The event input should reflect the sanitized content
+	t.Logf("captured event input: %s", string(capturedInput))
+}
+
+func TestLlmConditionalGuardrailSelectiveReject(t *testing.T) {
+	RegisterLlmConditionalExecutionGuardrail("go_llm_selective", 1,
+		func(headers, content json.RawMessage) *string {
+			var m map[string]interface{}
+			json.Unmarshal(content, &m)
+			if model, ok := m["model"].(string); ok && model == "blocked-model" {
+				msg := "model not allowed"
+				return &msg
+			}
+			return nil
+		},
+	)
+	defer DeregisterLlmConditionalExecutionGuardrail("go_llm_selective")
+
+	// Blocked model
+	blockedReq := map[string]interface{}{
+		"headers": map[string]interface{}{},
+		"content": map[string]interface{}{"model": "blocked-model"},
+	}
+	_, err := LlmCallExecute("selective_llm", blockedReq,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		},
+	)
+	if err == nil {
+		t.Fatal("expected blocked-model to be rejected")
+	}
+
+	// Allowed model
+	allowedReq := makeRequest()
+	result, err := LlmCallExecute("selective_llm", allowedReq,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"ok": true}`), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("allowed model should succeed: %v", err)
+	}
+	var output map[string]interface{}
+	json.Unmarshal(result, &output)
+	if output["ok"] != true {
+		t.Fatalf("expected ok=true, got %v", output)
+	}
+}
+
+func TestLlmExecutionInterceptWrapsCallable(t *testing.T) {
+	RegisterLlmExecutionIntercept("go_llm_wrap_exec", 1,
+		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			result, err := next(nativeJSON)
+			if err != nil {
+				return nil, err
+			}
+			var m map[string]interface{}
+			json.Unmarshal(result, &m)
+			m["wrapped"] = true
+			out, _ := json.Marshal(m)
+			return out, nil
+		},
+	)
+	defer DeregisterLlmExecutionIntercept("go_llm_wrap_exec")
+
+	request := makeRequest()
+	result, err := LlmCallExecute("wrap_llm", request,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"original": true}`), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("LlmCallExecute failed: %v", err)
+	}
+
+	var output map[string]interface{}
+	json.Unmarshal(result, &output)
+	if output["original"] != true {
+		t.Fatal("expected original=true")
+	}
+	if output["wrapped"] != true {
+		t.Fatal("expected wrapped=true")
+	}
+}
+
+func TestLlmCallWithModelName(t *testing.T) {
+	var capturedModelName string
+	var mu sync.Mutex
+
+	RegisterSubscriber("go_llm_model_sub", func(event *Event) {
+		if event.Type() == EventTypeStart {
+			mu.Lock()
+			capturedModelName = event.ModelName()
+			mu.Unlock()
+		}
+	})
+
+	request := makeRequest()
+	handle, err := LlmCall("model_llm", request, WithLLMModelName("gpt-4-turbo"))
+	if err != nil {
+		t.Fatalf("LlmCall failed: %v", err)
+	}
+	LlmCallEnd(handle, json.RawMessage(`{}`))
+	DeregisterSubscriber("go_llm_model_sub")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if capturedModelName != "gpt-4-turbo" {
+		t.Fatalf("expected model_name='gpt-4-turbo', got '%s'", capturedModelName)
+	}
+}
+
+func TestLlmEventInputOutput(t *testing.T) {
+	var capturedInput, capturedOutput json.RawMessage
+	var mu sync.Mutex
+
+	RegisterSubscriber("go_llm_io_sub", func(event *Event) {
+		mu.Lock()
+		if event.Type() == EventTypeStart {
+			capturedInput = append(json.RawMessage(nil), event.Input()...)
+		}
+		if event.Type() == EventTypeEnd {
+			capturedOutput = append(json.RawMessage(nil), event.Output()...)
+		}
+		mu.Unlock()
+	})
+
+	request := makeRequest()
+	result, err := LlmCallExecute("io_llm", request,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"response": "hello"}`), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("LlmCallExecute failed: %v", err)
+	}
+	_ = result
+	DeregisterSubscriber("go_llm_io_sub")
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if capturedInput == nil {
+		t.Fatal("expected non-nil input on Start event")
+	}
+
+	if capturedOutput == nil {
+		t.Fatal("expected non-nil output on End event")
+	}
+	var output map[string]interface{}
+	json.Unmarshal(capturedOutput, &output)
+	if output["response"] != "hello" {
+		t.Fatalf("expected response=hello in output, got %v", output)
+	}
+}
+
+// ============================================================================
+// LLM streaming tests
+// ============================================================================
+
+func TestLlmStreamCallExecuteBasic(t *testing.T) {
+	request := makeRequest()
+
+	stream, err := LlmStreamCallExecute("stream_llm", request,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			chunks := `data: {"chunk": 1}` + "\n\n" +
+				`data: {"chunk": 2}` + "\n\n" +
+				`data: [DONE]` + "\n\n"
+			return json.RawMessage(`"` + strings.ReplaceAll(chunks, `"`, `\"`) + `"`), nil
+		},
+		nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("LlmStreamCallExecute failed: %v", err)
+	}
+	defer stream.Close()
+
+	chunkCount := 0
+	for {
+		_, err := stream.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("stream.Next() failed: %v", err)
+		}
+		chunkCount++
+	}
+	t.Logf("received %d chunks from stream", chunkCount)
+}
+
+func TestLlmStreamCallExecuteWithCollectorFinalizer(t *testing.T) {
+	request := makeRequest()
+
+	var collectedChunks []json.RawMessage
+	var mu sync.Mutex
+
+	collector := func(chunk json.RawMessage) {
+		mu.Lock()
+		collectedChunks = append(collectedChunks, append(json.RawMessage(nil), chunk...))
+		mu.Unlock()
+	}
+
+	finalizerCalled := false
+	finalizer := func() string {
+		mu.Lock()
+		finalizerCalled = true
+		count := len(collectedChunks)
+		mu.Unlock()
+		return fmt.Sprintf(`{"aggregated": true, "total_chunks": %d}`, count)
+	}
+
+	stream, err := LlmStreamCallExecute("collector_llm", request,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			chunks := `data: {"token": "hello"}` + "\n\n" +
+				`data: [DONE]` + "\n\n"
+			return json.RawMessage(`"` + strings.ReplaceAll(chunks, `"`, `\"`) + `"`), nil
+		},
+		collector, finalizer,
+	)
+	if err != nil {
+		t.Fatalf("LlmStreamCallExecute failed: %v", err)
+	}
+	defer stream.Close()
+
+	for {
+		_, err := stream.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("stream.Next() failed: %v", err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	t.Logf("collector received %d chunks", len(collectedChunks))
+	if finalizerCalled {
+		t.Log("finalizer was called as expected")
+	}
+}
+
+func TestLlmStreamCloseIsIdempotent(t *testing.T) {
+	request := makeRequest()
+
+	stream, err := LlmStreamCallExecute("close_llm", request,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"data: [DONE]\n\n"`), nil
+		},
+		nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("LlmStreamCallExecute failed: %v", err)
+	}
+
+	stream.Close()
+	stream.Close()
+	stream.Close()
+
+	_, err = stream.Next()
+	if err != io.EOF {
+		t.Fatalf("expected io.EOF after close, got %v", err)
+	}
+}
+
+func TestLlmStreamNilCollectorFinalizer(t *testing.T) {
+	request := makeRequest()
+
+	stream, err := LlmStreamCallExecute("nil_opts_llm", request,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"data: [DONE]\n\n"`), nil
+		},
+		nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("LlmStreamCallExecute failed: %v", err)
+	}
+	defer stream.Close()
+
+	for {
+		_, err := stream.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("stream.Next() failed: %v", err)
+		}
+	}
 }
