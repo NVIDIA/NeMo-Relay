@@ -80,16 +80,6 @@ var (
 	closureNextID     atomic.Uint64
 )
 
-// collectorMu protects the active collector/finalizer callbacks during a
-// streaming LLM call. Because the FFI collector/finalizer callbacks do not
-// carry user_data, we use thread-local-like global state set immediately
-// before the blocking FFI call.
-var (
-	collectorMu     sync.Mutex
-	activeCollector CollectorFunc
-	activeFinalizer FinalizerFunc
-)
-
 // registerClosure stores fn in the global registry and returns an
 // unsafe.Pointer that encodes the registry key. The returned pointer is
 // suitable for passing as void* user_data to C callbacks.
@@ -299,34 +289,6 @@ func goLlmExecTrampoline(userData unsafe.Pointer, nativeJSON *C.char) *C.char {
 		return C.CString(`{"error":"` + err.Error() + `"}`)
 	}
 	return C.CString(string(result))
-}
-
-//export goCollectorTrampoline
-func goCollectorTrampoline(chunk *C.char) {
-	// The collector callback doesn't use user_data; it is stored separately
-	// and invoked directly by the FFI layer. However, for the Go binding we
-	// need to route through the closure registry. The closure ID is encoded
-	// in the global collectorClosureID variable set before the FFI call.
-	goChunk := json.RawMessage(C.GoString(chunk))
-	collectorMu.Lock()
-	fn := activeCollector
-	collectorMu.Unlock()
-	if fn != nil {
-		fn(goChunk)
-	}
-}
-
-//export goFinalizerTrampoline
-func goFinalizerTrampoline() *C.char {
-	collectorMu.Lock()
-	fn := activeFinalizer
-	activeFinalizer = nil
-	collectorMu.Unlock()
-	if fn != nil {
-		result := fn()
-		return C.CString(result)
-	}
-	return C.CString("null")
 }
 
 //export goToolExecInterceptTrampoline
