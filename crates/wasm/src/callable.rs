@@ -249,11 +249,21 @@ pub fn wrap_js_llm_exec_fn(
 ///
 /// The collector is called with each intercepted Json chunk during a streaming LLM response.
 /// It is used to accumulate chunks on the JavaScript side for aggregation.
-pub fn wrap_js_collector_fn(func: Function) -> Box<dyn FnMut(Json) + Send> {
+/// If the JS function throws, the exception is converted to a `NexusError::Internal`
+/// and returned as `Err`, which terminates the stream.
+pub fn wrap_js_collector_fn(func: Function) -> Box<dyn FnMut(Json) -> Result<()> + Send> {
     let func = SendWrapper::new(func);
     Box::new(move |chunk: Json| {
         let js_chunk = json_to_js(&chunk);
-        let _ = func.call1(&JsValue::NULL, &js_chunk);
+        match func.call1(&JsValue::NULL, &js_chunk) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let msg = e
+                    .as_string()
+                    .unwrap_or_else(|| "JS collector threw an exception".to_string());
+                Err(NexusError::Internal(msg))
+            }
+        }
     })
 }
 

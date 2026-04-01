@@ -545,21 +545,27 @@ pub fn wrap_llm_stream_exec_fn(
     })
 }
 
-/// Wrap a C collector callback into a `Box<dyn FnMut(Json) + Send>` for use
-/// by the core runtime. Each intercepted chunk Json is serialized to a JSON
-/// string and passed to the callback.
+/// Wrap a C collector callback into a `Box<dyn FnMut(Json) -> Result<()> + Send>`
+/// for use by the core runtime. Each intercepted chunk Json is serialized to a
+/// JSON string and passed to the callback.
+///
+/// Because the C collector callback signature returns `void`, the wrapper
+/// always returns `Ok(())`. C callers that need to signal errors from the
+/// collector should use a side-channel (e.g., setting a flag) and check it
+/// after the stream is consumed.
 ///
 /// # Safety
 /// The caller must ensure `cb` remains valid for the lifetime of the returned
 /// closure. The C callback is invoked synchronously from the stream-consumption
 /// task.
-pub fn wrap_collector_fn(cb: NatNexusCollectorCb) -> Box<dyn FnMut(Json) + Send> {
+pub fn wrap_collector_fn(cb: NatNexusCollectorCb) -> Box<dyn FnMut(Json) -> Result<()> + Send> {
     // NatNexusCollectorCb is a plain `extern "C" fn` pointer (no user_data),
     // which is Copy + Send, so it can be moved into the closure directly.
     Box::new(move |chunk: Json| {
         let c_chunk = json_to_c_string(&chunk);
         unsafe { cb(c_chunk) };
         unsafe { nat_nexus_string_free_internal(c_chunk) };
+        Ok(())
     })
 }
 

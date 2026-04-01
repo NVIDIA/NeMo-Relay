@@ -741,9 +741,11 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
     let default_fn: nvidia_nat_nexus_core::LlmStreamExecutionNextFn =
         Box::new(move |request| exec_fn(request));
 
-    let wrapped_collector: Box<dyn FnMut(serde_json::Value) + Send> = match collector {
+    let wrapped_collector: Box<
+        dyn FnMut(serde_json::Value) -> nvidia_nat_nexus_core::Result<()> + Send,
+    > = match collector {
         Some(cb) => wrap_collector_fn(cb),
-        None => Box::new(|_: serde_json::Value| {}),
+        None => Box::new(|_: serde_json::Value| Ok(())),
     };
 
     let wrapped_finalizer: Box<dyn FnOnce() -> serde_json::Value + Send> = match finalizer {

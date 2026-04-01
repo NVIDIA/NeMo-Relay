@@ -38,14 +38,15 @@ fn make_stream(items: Vec<Result<Json>>) -> Pin<Box<dyn Stream<Item = Result<Jso
 /// can be inspected after the stream is consumed.
 #[allow(clippy::type_complexity)]
 fn make_collector_finalizer() -> (
-    Box<dyn FnMut(Json) + Send>,
+    Box<dyn FnMut(Json) -> Result<()> + Send>,
     Box<dyn FnOnce() -> Json + Send>,
     Arc<Mutex<Vec<Json>>>,
 ) {
     let collected = Arc::new(Mutex::new(Vec::<Json>::new()));
     let cc = collected.clone();
-    let collector: Box<dyn FnMut(Json) + Send> = Box::new(move |chunk| {
+    let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(move |chunk| {
         cc.lock().unwrap().push(chunk);
+        Ok(())
     });
     let fc = collected.clone();
     let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(move || {
@@ -267,7 +268,7 @@ async fn test_stream_wrapper_finalizer_called_on_exhaustion() {
     let items = vec![Ok(json!("chunk"))];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
-    let collector: Box<dyn FnMut(Json) + Send> = Box::new(|_| {});
+    let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(|_| Ok(()));
     let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(move || {
         *fc.lock().unwrap() = true;
         json!({"finalized": true})
@@ -299,8 +300,9 @@ async fn test_stream_wrapper_error_skips_collector_finalizer() {
     ))];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
-    let collector: Box<dyn FnMut(Json) + Send> = Box::new(move |_| {
+    let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(move |_| {
         *cc.lock().unwrap() += 1;
+        Ok(())
     });
     let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(move || {
         *fc.lock().unwrap() = true;
@@ -376,4 +378,60 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
 
     drop(captured);
     nat_nexus_deregister_subscriber("end_event_test").unwrap();
+}
+
+#[tokio::test]
+async fn test_stream_wrapper_collector_error_terminates_stream() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    let collector_calls = Arc::new(Mutex::new(0u32));
+    let cc = collector_calls.clone();
+
+    let items = vec![
+        Ok(json!("chunk1")),
+        Ok(json!("chunk2")),
+        Ok(json!("chunk3")),
+    ];
+    let inner = make_stream(items);
+    let handle = make_llm_handle("test_llm");
+
+    // Collector that fails on the second chunk
+    let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(move |_chunk| {
+        let mut count = cc.lock().unwrap();
+        *count += 1;
+        if *count >= 2 {
+            Err(nvidia_nat_nexus_core::NexusError::Internal(
+                "collector error".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    });
+    let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| Json::Null);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+
+    // First chunk should succeed
+    let first = wrapper.next().await;
+    assert!(first.is_some());
+    assert!(first.unwrap().is_ok());
+
+    // Second chunk: collector returns Err, stream should yield the error
+    let second = wrapper.next().await;
+    assert!(second.is_some());
+    let second_result = second.unwrap();
+    assert!(second_result.is_err());
+    match second_result {
+        Err(nvidia_nat_nexus_core::NexusError::Internal(msg)) => {
+            assert_eq!(msg, "collector error");
+        }
+        other => panic!("expected Internal error, got {other:?}"),
+    }
+
+    // Stream should be terminated (ended = true), yielding None
+    let third = wrapper.next().await;
+    assert!(third.is_none());
+
+    // Collector was called exactly twice (once for chunk1, once for chunk2)
+    assert_eq!(*collector_calls.lock().unwrap(), 2);
 }

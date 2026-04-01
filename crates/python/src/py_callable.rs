@@ -768,20 +768,21 @@ pub fn wrap_py_llm_stream_exec_fn(
 ///
 /// The collector is invoked with each intercepted chunk (after stream response
 /// intercepts have been applied). It receives a single JSON-converted Python
-/// object argument and returns nothing.
-pub fn wrap_py_collector_fn(py_fn: Py<PyAny>) -> Box<dyn FnMut(Json) + Send> {
+/// object argument. If the Python callable raises an exception, it is converted
+/// to a `NexusError::Internal` and returned as `Err`, which terminates the
+/// stream. If the callable returns normally (including `None`), the collector
+/// returns `Ok(())`.
+pub fn wrap_py_collector_fn(
+    py_fn: Py<PyAny>,
+) -> Box<dyn FnMut(Json) -> std::result::Result<(), NexusError> + Send> {
     Box::new(move |chunk: Json| {
         Python::attach(|py| {
-            let py_chunk = match json_to_py(py, &chunk) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("nat_nexus: json_to_py failed in collector: {e}");
-                    return;
-                }
-            };
-            if let Err(e) = py_fn.call1(py, (py_chunk,)) {
-                eprintln!("nat_nexus: Python collector callable failed: {e}");
-            }
+            let py_chunk = json_to_py(py, &chunk)
+                .map_err(|e| NexusError::Internal(format!("collector json_to_py failed: {e}")))?;
+            py_fn
+                .call1(py, (py_chunk,))
+                .map_err(|e| NexusError::Internal(format!("Python collector error: {e}")))?;
+            Ok(())
         })
     })
 }

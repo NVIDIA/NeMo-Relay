@@ -549,10 +549,11 @@ pub async fn llm_stream_call_execute(
     let llm_request: core_types::LLMRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
 
-    let wrapped_collector: Box<dyn FnMut(Json) + Send> = match collector {
-        Some(cb) => callable::wrap_js_collector_fn(cb),
-        None => Box::new(|_: Json| {}),
-    };
+    let wrapped_collector: Box<dyn FnMut(Json) -> nvidia_nat_nexus_core::Result<()> + Send> =
+        match collector {
+            Some(cb) => callable::wrap_js_collector_fn(cb),
+            None => Box::new(|_: Json| Ok(())),
+        };
 
     let wrapped_finalizer: Box<dyn FnOnce() -> Json + Send> = match finalizer {
         Some(cb) => callable::wrap_js_finalizer_fn(cb),

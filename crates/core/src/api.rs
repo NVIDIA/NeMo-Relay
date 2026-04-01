@@ -1002,7 +1002,8 @@ pub async fn nat_nexus_llm_call_execute(
 /// is emitted.
 ///
 /// - `collector` — called with each chunk (Json); use this to accumulate
-///   streaming tokens or forward them to another sink.
+///   streaming tokens or forward them to another sink. Return `Ok(())` to
+///   continue or `Err(NexusError)` to terminate the stream.
 /// - `finalizer` — called once when the stream is exhausted; returns the
 ///   aggregated response as [`Json`].
 ///
@@ -1012,7 +1013,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
     name: &str,
     request: LLMRequest,
     func: LlmStreamExecutionNextFn,
-    collector: Box<dyn FnMut(Json) + Send>,
+    collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
     finalizer: Box<dyn FnOnce() -> Json + Send>,
     parent: Option<ScopeHandle>,
     attributes: LLMAttributes,
@@ -2219,8 +2220,9 @@ mod tests {
 
         let collected = Arc::new(Mutex::new(Vec::new()));
         let cc = collected.clone();
-        let collector: Box<dyn FnMut(Json) + Send> = Box::new(move |chunk| {
+        let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(move |chunk| {
             cc.lock().unwrap().push(chunk);
+            Ok(())
         });
         let fc = collected.clone();
         let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(move || {
@@ -2298,7 +2300,7 @@ mod tests {
             content: json!({"messages": []}),
         };
 
-        let collector: Box<dyn FnMut(Json) + Send> = Box::new(|_| {});
+        let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(|_| Ok(()));
         let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| Json::Null);
 
         let result = nat_nexus_llm_stream_call_execute(
