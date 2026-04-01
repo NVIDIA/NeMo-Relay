@@ -33,7 +33,7 @@ uv run pytest -k test_typed      # run a single module
 cargo build --release -p nvidia-nat-nexus-ffi
 cd go/nat_nexus && \
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" \
-go test -v ./...
+go test -race -v ./...
 cd -
 
 # ── Node.js (requires native addon) ────────────────────────
@@ -52,6 +52,18 @@ cargo test --workspace && uv run pytest
 - **`TEST_MUTEX`** (`context_isolation_tests.rs`, `stream_tests.rs`,
   `scope_local_tests.rs`): Static mutex that serializes tests touching global
   state, preventing interference between concurrent test threads.
+
+> **Note:** When running core tests locally and encountering intermittent
+> failures caused by shared global state, pass `--test-threads=1` to force
+> serial execution:
+>
+> ```bash
+> cargo test -p nvidia-nat-nexus-core -- --test-threads=1
+> ```
+>
+> CI already serializes via `TEST_MUTEX`, but single-threaded mode eliminates
+> any residual timing sensitivity.
+
 - **`reset_global()`**: Resets `NatNexusContextState` to a clean default.
 - **`make_llm_handle()`**: Creates an `LLMHandle` with defaults for stream tests.
 - **`make_stream()`**: Builds a `tokio_stream` from `Vec<Result<Json>>`.
@@ -76,6 +88,10 @@ cargo test --workspace && uv run pytest
 
 - Standard `testing` package. Helper functions like `makeRequest()` defined
   inline in test files.
+- Always run Go tests with the `-race` flag (`go test -race ./...`) to enable
+  the race detector. The CGo callback trampolines bridge goroutines and the
+  Rust runtime, so race detection is essential for catching unsafe concurrent
+  access.
 
 ## Pre-Commit Hooks
 
@@ -95,6 +111,18 @@ The `.pre-commit-config.yaml` enforces quality gates before every commit:
 | `gofmt` | Go formatting |
 | `go vet` | Go static analysis |
 
+## Coverage
+
+Python tests use `pytest-cov` for coverage measurement. Run with coverage
+enabled:
+
+```bash
+uv run pytest --cov=nat_nexus --cov-report=term-missing
+```
+
+The project targets **90%** line coverage for the Python wrapper module.
+Coverage reports are also generated in CI and attached as pipeline artifacts.
+
 ## Writing New Tests
 
 ### Conventions
@@ -109,6 +137,10 @@ The `.pre-commit-config.yaml` enforces quality gates before every commit:
    and call `reset_global()` before touching the default context.
 5. **Async by default** (Python): Use `async def test_*` — `pytest-asyncio`
    handles the event loop.
+6. **WASM has two test modes**: Unit tests run via `cargo test -p nvidia-nat-nexus-wasm`
+   (standard Rust test harness). Integration tests that exercise the full
+   `wasm-bindgen` JavaScript interop require `wasm-pack test --node crates/wasm`,
+   which compiles to WebAssembly and runs under Node.js. Both must pass.
 
 ### Adding a Rust Core Test
 
@@ -166,12 +198,17 @@ describe('New feature', () => {
 ```go
 // go/nat_nexus/<domain>_test.go
 func TestNewFeature(t *testing.T) {
-    stack := nat_nexus.NewScopeStack()
+    stack, err := nat_nexus.NewScopeStack()
+    if err != nil {
+        t.Fatalf("NewScopeStack failed: %v", err)
+    }
     defer stack.Close()
     stack.Run(func() {
-        handle, err := scope.Push("test", nat_nexus.ScopeTypeAgent, 0, nil)
-        require.NoError(t, err)
-        scope.Pop(handle)
+        handle, err := nat_nexus.PushScope("test", nat_nexus.ScopeTypeAgent)
+        if err != nil {
+            t.Fatalf("PushScope failed: %v", err)
+        }
+        nat_nexus.PopScope(handle)
     })
 }
 ```

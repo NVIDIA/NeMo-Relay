@@ -87,6 +87,8 @@ crates/
     tests/
       context_isolation_tests.rs
       stream_tests.rs
+      scope_local_tests.rs
+      middleware_tests.rs
 
   python/          # PyO3 bindings
   ffi/             # C FFI (used by Go via CGo)
@@ -96,6 +98,7 @@ crates/
 python/            # Python wrapper package (nat_nexus/)
   nat_nexus/
     __init__.py        # Re-exports all submodules and types
+    __init__.pyi       # Type stubs for the native C extension
     scope.py           # Scope operations
     tools.py           # Tool lifecycle
     llm.py             # LLM lifecycle

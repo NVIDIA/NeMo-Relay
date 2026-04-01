@@ -196,7 +196,8 @@ func(request) yields TResponseChunk instances
 Intercepts see JSON, not typed objects. This means intercepts work uniformly regardless of codec choice:
 
 ```python
-def intercept_fn(name, args):
+def intercept_fn(tool_name, args):
+    # tool_name is the tool being called (e.g. "search")
     # args is a plain dict, not a SearchArgs dataclass
     args["limit"] = 99
     return args

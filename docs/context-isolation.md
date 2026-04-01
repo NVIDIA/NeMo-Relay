@@ -126,7 +126,7 @@ go func() {
 ```javascript
 const stack = createScopeStack();
 setThreadScopeStack(stack);
-pushScope("agent", ScopeType.Agent, null, null);
+pushScope("agent", ScopeType.Agent, null, null, null, null);
 // ... operations use this stack ...
 ```
 
@@ -259,9 +259,9 @@ for _, agentID := range agents {
 wg.Wait()
 ```
 
-## ATIF Export with Root UUID Filtering
+## ATIF Export with Scope-Based Filtering
 
-When exporting trajectories, pass `root_uuid` to isolate a single agent's events:
+When exporting trajectories, pass `root_uuid` to isolate a single agent's events (or any scope UUID to export a sub-tree):
 
 ```python
 exporter = AtifExporter()

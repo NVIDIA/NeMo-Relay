@@ -237,7 +237,7 @@ def register_tool_execution(scope_handle, name, priority, fn):
         scope_handle: The ``ScopeHandle`` to register under.
         name: Unique intercept name.
         priority: Priority (ascending order).
-        fn: ``async (args: Any, next) -> Any``.
+        fn: ``async (tool_name: str, args: Any, next) -> Any``.
     """
     return _register_tool_execution(scope_handle.uuid, name, priority, fn)
 
@@ -316,7 +316,7 @@ def register_llm_request(scope_handle, name, priority, break_chain, fn):
         name: Unique intercept name.
         priority: Priority (ascending order).
         break_chain: If ``True``, no lower-priority intercepts run after this one.
-        fn: ``(request: LLMRequest) -> LLMRequest``.
+        fn: ``(name: str, request: LLMRequest) -> LLMRequest``.
     """
     return _register_llm_request(scope_handle.uuid, name, priority, break_chain, fn)
 
@@ -333,7 +333,7 @@ def register_llm_execution(scope_handle, name, priority, fn):
         scope_handle: The ``ScopeHandle`` to register under.
         name: Unique intercept name.
         priority: Priority (ascending order).
-        fn: ``async (request: LLMRequest, next) -> Any``.
+        fn: ``async (name: str, request: LLMRequest, next) -> Any``.
     """
     return _register_llm_execution(scope_handle.uuid, name, priority, fn)
 

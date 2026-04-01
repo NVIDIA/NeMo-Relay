@@ -59,7 +59,7 @@ uv sync                                  # Create venv, install deps, build nati
 uv run pytest                            # Runs tests in python/tests/
 
 # Test — Go (requires FFI lib built first)
-cd go/nat_nexus && CGO_LDFLAGS="-L../../target/release" go test -v ./...
+cd go/nat_nexus && CGO_LDFLAGS="-L../../target/release" go test -race -v ./...
 
 # Test — Node.js (requires native addon built first)
 cd crates/node && npm install && npm run build   # Build .node addon

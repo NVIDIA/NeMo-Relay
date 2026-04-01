@@ -64,25 +64,31 @@ flowchart LR
 
     subgraph "ATIF Steps"
         US["user step<br/>(source='user')"]
-        AS["agent step<br/>(source='agent')"]
-        SS["system step<br/>(source='system')"]
+        AS["agent step<br/>(source='agent')<br/>+ promoted tool_calls"]
+        SS["system step<br/>(source='system')<br/>merged observations"]
     end
 
     LS --> US
     LE --> AS
-    TS --> AS
+    TS -.->|skipped| AS
     TE --> SS
     MK --> SS
 ```
 
 | Event | ATIF Step | Source | Content |
 |-------|-----------|--------|---------|
-| LLM Start | User step | `"user"` | `message` = post-guardrail LLM request (`event.input`) |
-| LLM End | Agent step | `"agent"` | `message` = post-guardrail LLM response (`event.output`) |
-| Tool Start | Agent step | `"agent"` | `tool_calls` array with function name and arguments |
-| Tool End | System step | `"system"` | `observation` with tool results |
-| Mark | System step | `"system"` | `message` = event data |
+| LLM Start | User step | `"user"` | `message` = extracted messages array from LLM request (`event.input`), stripping model/max_tokens/etc. |
+| LLM End | Agent step | `"agent"` | `message` = response content; `tool_calls` promoted from response; `metrics` extracted from token_usage |
+| Tool Start | *(skipped)* | — | Tool calls come from the LLM End step's promoted `tool_calls` instead |
+| Tool End | System step | `"system"` | `observation` with tool results; consecutive Tool End events are **merged** into a single step |
+| Mark (with data) | System step | `"system"` | `message` = event data |
 | Scope Start/End | — | — | Skipped |
+
+### Key Design Decisions
+
+- **Tool Start is skipped**: Tool calls are promoted from the LLM End response (which contains the `tool_calls` array from the model), avoiding duplicate entries.
+- **Consecutive Tool End events merge**: When multiple tools run in sequence (e.g., parallel tool calls), their observations are combined into a single system step with multiple results.
+- **Function-name correlation**: Tool End observations are correlated with the preceding LLM End's promoted `tool_calls` by matching `function_name` to derive `source_call_id`.
 
 ## Trajectory Schema
 
@@ -131,29 +137,34 @@ flowchart LR
 }
 ```
 
-**Agent step with tool_calls** (from Tool Start):
+**Agent step with tool_calls** (from LLM End — tool calls are promoted from the response):
 
 ```json
 {
-    "step_id": 3,
+    "step_id": 2,
     "source": "agent",
-    "message": null,
-    "timestamp": "2026-03-12T10:00:02Z",
+    "message": {"content": "I'll search for that."},
+    "timestamp": "2026-03-12T10:00:01Z",
+    "model_name": "gpt-4",
     "tool_calls": [
         {
             "tool_call_id": "call_abc123",
             "function_name": "search",
             "arguments": {"query": "Nexus docs"}
         }
-    ]
+    ],
+    "metrics": {
+        "prompt_tokens": 150,
+        "completion_tokens": 50
+    }
 }
 ```
 
-**System step with observation** (from Tool End):
+**System step with observation** (from Tool End — consecutive tool ends are merged):
 
 ```json
 {
-    "step_id": 4,
+    "step_id": 3,
     "source": "system",
     "message": null,
     "timestamp": "2026-03-12T10:00:03Z",
@@ -162,6 +173,10 @@ flowchart LR
             {
                 "source_call_id": "call_abc123",
                 "content": {"items": ["result1", "result2"]}
+            },
+            {
+                "source_call_id": "call_def456",
+                "content": {"summary": "Nexus is a runtime framework"}
             }
         ]
     }
@@ -170,12 +185,16 @@ flowchart LR
 
 ### Tool Call Correlation
 
-Tool Start events generate a `tool_call_id` (from the explicit `tool_call_id` parameter or the event UUID as fallback). Tool End events reference this ID via `observation.results[].source_call_id`, linking invocations to their results:
+Tool calls promoted from the LLM End response carry `tool_call_id` values. Tool End observations are correlated with these promoted calls using two strategies:
+
+1. **Explicit `tool_call_id`** — if the Tool End event has its own `tool_call_id`, that is used directly
+2. **Function-name lookup** — otherwise, the tool's `name` is matched against the preceding LLM End's promoted `tool_calls` by `function_name`
 
 ```
-Tool Start (step 3)                    Tool End (step 4)
+LLM End (step 2)                       Tool End (step 3)
   tool_calls[0].tool_call_id ──────→  observation.results[0].source_call_id
        "call_abc123"                        "call_abc123"
+  (function_name: "search")            (event.name: "search")
 ```
 
 ### Metrics
@@ -192,9 +211,11 @@ Optional per-step and final aggregate metrics:
 }
 ```
 
-## Root UUID Filtering
+## Scope-Based Filtering
 
-In multi-agent scenarios, each agent's scope stack has a unique root UUID. Export with `root_uuid` to isolate:
+When exporting, pass a scope UUID to filter events to a specific scope and all its descendants. This works with any scope in the hierarchy — not just the root scope.
+
+In multi-agent scenarios, each agent's scope stack has a unique root UUID. Use `root_uuid` to isolate:
 
 ```python
 # Two agents running concurrently
@@ -215,6 +236,17 @@ trajectory_b = exporter.export(root_uuid=root_b)
 trajectory_all = exporter.export(root_uuid=None)
 ```
 
+You can also filter by a non-root scope to export a sub-tree of the execution:
+
+```python
+with nat_nexus.scope.scope("sub_agent", nat_nexus.ScopeType.Agent) as handle:
+    # ... sub-agent operations ...
+    pass
+
+# Export only the sub-agent's trajectory
+trajectory_sub = exporter.export(root_uuid=handle.uuid)
+```
+
 Without filtering, all events from all agents appear in a single trajectory.
 
 ## Language Bindings
@@ -232,5 +264,7 @@ Without filtering, all events from all agents appear in a single trajectory.
 - Events carry **post-guardrail** data in `input`/`output` fields — the trajectory reflects sanitized values
 - Steps are ordered by timestamp
 - `model_name` propagates from LLM call parameters to ATIF steps
+- Tool calls are **promoted** from LLM End responses (not from Tool Start events), matching the OpenAI-style response format where the model emits `tool_calls` as part of its reply
+- Consecutive Tool End observations are **merged** into a single system step, keeping the trajectory compact when parallel tools execute
 - `clear()` removes all collected events, allowing exporter reuse across sessions
 - Thread-safe: `Arc<Mutex<>>` protects the internal event buffer

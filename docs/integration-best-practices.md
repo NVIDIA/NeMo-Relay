@@ -646,3 +646,13 @@ Before submitting your integration:
 - [ ] **Tests** — scope lifecycle, graceful no-op, error swallowing
 - [ ] **Patch generated** — `patches/<framework>/0001-add-nat-nexus-integration.patch`
 - [ ] **SPDX headers** — Apache-2.0 on all new files
+
+---
+
+## Other Languages
+
+This guide focuses on Python integrations. For Go, Node.js, and WASM
+integration patterns, see [Language Bindings](language-bindings.md) which
+covers setup, usage examples, and language-specific considerations for each
+binding layer. The same architectural principles apply: lazy import,
+transparent fallback, scope lifecycle management, and thread/async safety.

@@ -154,7 +154,7 @@ stream = await nat_nexus.llm.stream_execute(
 
 ```python
 # Run LLM request intercept chain only
-transformed = nat_nexus.llm.request_intercepts(request: LLMRequest) -> LLMRequest
+transformed = nat_nexus.llm.request_intercepts(name: str, request: LLMRequest) -> LLMRequest
 
 # Run conditional execution guardrails only (raises on rejection)
 nat_nexus.llm.conditional_execution(request: LLMRequest) -> None
@@ -240,7 +240,7 @@ nat_nexus.intercepts.register_tool_response(
 # Execution middleware chain
 nat_nexus.intercepts.register_tool_execution(
     name: str, priority: int,
-    fn: Callable[[dict, Callable], Awaitable[dict]],  # (args, next) -> result
+    fn: Callable[[str, dict, Callable], Awaitable[dict]],  # (tool_name, args, next) -> result
 ) -> None
 
 # Deregister
@@ -255,19 +255,19 @@ nat_nexus.intercepts.deregister_tool_execution(name: str) -> bool
 # Transform LLM request
 nat_nexus.intercepts.register_llm_request(
     name: str, priority: int, break_chain: bool,
-    fn: Callable[[LLMRequest], LLMRequest],
+    fn: Callable[[str, LLMRequest], LLMRequest],         # (llm_name, request) -> request
 ) -> None
 
 # Execution middleware chain
 nat_nexus.intercepts.register_llm_execution(
     name: str, priority: int,
-    fn: Callable[[LLMRequest, Callable], Awaitable[dict]],  # (request, next) -> result
+    fn: Callable[[str, LLMRequest, Callable], Awaitable[dict]],  # (llm_name, request, next) -> result
 ) -> None
 
 # Stream execution middleware chain
 nat_nexus.intercepts.register_llm_stream_execution(
     name: str, priority: int,
-    fn: Callable[[LLMRequest, Callable], Awaitable[AsyncIterator[dict]]],
+    fn: Callable[[str, LLMRequest, Callable], Awaitable[AsyncIterator[dict]]],  # (llm_name, request, next) -> stream
 ) -> None
 
 # Deregister
@@ -413,23 +413,23 @@ nat_nexus.scope_local.register_tool_response_intercept(
 
 nat_nexus.scope_local.register_tool_execution_intercept(
     handle: ScopeHandle, name: str, priority: int,
-    fn: Callable[[dict, Callable], Awaitable[dict]],
+    fn: Callable[[str, dict, Callable], Awaitable[dict]],  # (tool_name, args, next) -> result
 ) -> None
 
 # LLM intercepts (scope-local)
 nat_nexus.scope_local.register_llm_request_intercept(
     handle: ScopeHandle, name: str, priority: int, break_chain: bool,
-    fn: Callable[[LLMRequest], LLMRequest],
+    fn: Callable[[str, LLMRequest], LLMRequest],           # (llm_name, request) -> request
 ) -> None
 
 nat_nexus.scope_local.register_llm_execution_intercept(
     handle: ScopeHandle, name: str, priority: int,
-    fn: Callable[[LLMRequest, Callable], Awaitable[dict]],
+    fn: Callable[[str, LLMRequest, Callable], Awaitable[dict]],  # (llm_name, request, next) -> result
 ) -> None
 
 nat_nexus.scope_local.register_llm_stream_execution_intercept(
     handle: ScopeHandle, name: str, priority: int,
-    fn: Callable[[LLMRequest, Callable], Awaitable[AsyncIterator[dict]]],
+    fn: Callable[[str, LLMRequest, Callable], Awaitable[AsyncIterator[dict]]],  # (llm_name, request, next) -> stream
 ) -> None
 ```
 
@@ -458,6 +458,7 @@ from nat_nexus import AtifExporter
 
 exporter = AtifExporter()
 # ... run operations ...
-trajectory = exporter.export(root_uuid=None)  # JSON string
+trajectory = exporter.export(root_uuid=None)  # dict (ATIF trajectory)
+trajectory_json = exporter.export_json(root_uuid=None)  # JSON string
 exporter.clear()
 ```

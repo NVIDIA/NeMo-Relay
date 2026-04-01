@@ -160,7 +160,7 @@ class TestLLMIntercepts:
         assert intercepts.deregister_llm_execution("py_llm_exec")
 
     def test_stream_execution_intercept(self):
-        def stream_fn(name, request, next):
+        def stream_fn(request, next):
             async def gen():
                 yield {"token": "test"}
 

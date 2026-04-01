@@ -76,23 +76,175 @@ Example::
 """
 
 from nat_nexus._native import (
-    nat_nexus_llm_call as call,
+    nat_nexus_llm_call as _native_llm_call,
 )
 from nat_nexus._native import (
-    nat_nexus_llm_call_end as call_end,
+    nat_nexus_llm_call_end as _native_llm_call_end,
 )
 from nat_nexus._native import (
-    nat_nexus_llm_call_execute as execute,
+    nat_nexus_llm_call_execute as _native_llm_call_execute,
 )
 from nat_nexus._native import (
-    nat_nexus_llm_conditional_execution as conditional_execution,
+    nat_nexus_llm_conditional_execution as _native_llm_conditional_execution,
 )
 from nat_nexus._native import (
-    nat_nexus_llm_request_intercepts as request_intercepts,
+    nat_nexus_llm_request_intercepts as _native_llm_request_intercepts,
 )
 from nat_nexus._native import (
-    nat_nexus_llm_stream_call_execute as stream_execute,
+    nat_nexus_llm_stream_call_execute as _native_llm_stream_call_execute,
 )
+
+
+def call(name, request, *, handle=None, attributes=None, data=None, metadata=None, model_name=None):
+    """Begin an LLM call manually.
+
+    Emits a ``Start`` event and returns an ``LLMHandle`` that must later be
+    passed to ``call_end()`` to complete the LLM call lifecycle.
+
+    Args:
+        name: Model/provider name.
+        request: An ``LLMRequest`` object with headers and content.
+        handle: Optional parent scope handle. Defaults to the current top of stack.
+        attributes: Optional ``LLMAttributes`` bitflags.
+        data: Optional JSON-serializable application data payload.
+        metadata: Optional JSON-serializable metadata payload.
+        model_name: Optional LLM model identifier propagated to events for ATIF export.
+
+    Returns:
+        An ``LLMHandle`` for use with ``call_end()``.
+    """
+    return _native_llm_call(
+        name, request, handle=handle, attributes=attributes, data=data, metadata=metadata, model_name=model_name
+    )
+
+
+def call_end(handle, response, *, data=None, metadata=None):
+    """End a manual LLM call.
+
+    Records the response and emits an ``End`` event.
+
+    Args:
+        handle: The ``LLMHandle`` returned by ``call()``.
+        response: JSON-serializable LLM response.
+        data: Optional JSON-serializable application data payload.
+        metadata: Optional JSON-serializable metadata payload.
+    """
+    return _native_llm_call_end(handle, response, data=data, metadata=metadata)
+
+
+def execute(name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None):
+    """Execute an LLM call through the full middleware pipeline.
+
+    Runs conditional-execution guardrails -> request intercepts ->
+    sanitize-request guardrails -> execution intercepts -> *func* ->
+    sanitize-response guardrails. On rejection, only a standalone ``Mark``
+    event is emitted (no ``Start``/``End`` pair) and ``GuardrailRejected``
+    is raised.
+
+    Args:
+        name: Model/provider name.
+        request: An ``LLMRequest`` object with headers and content.
+        func: Async callable ``(LLMRequest) -> response`` that performs the LLM call.
+        handle: Optional parent scope handle. Defaults to the current top of stack.
+        attributes: Optional ``LLMAttributes`` bitflags.
+        data: Optional JSON-serializable application data payload.
+        metadata: Optional JSON-serializable metadata payload.
+        model_name: Optional LLM model identifier propagated to events for ATIF export.
+
+    Returns:
+        An awaitable that resolves to the (possibly transformed) LLM response.
+
+    Raises:
+        GuardrailRejected: If a conditional-execution guardrail rejects the call.
+    """
+    return _native_llm_call_execute(
+        name, request, func, handle=handle, attributes=attributes, data=data, metadata=metadata, model_name=model_name
+    )
+
+
+def stream_execute(
+    name,
+    request,
+    func,
+    collector,
+    finalizer,
+    *,
+    handle=None,
+    attributes=None,
+    data=None,
+    metadata=None,
+    model_name=None,
+):
+    """Execute a streaming LLM call through the full middleware pipeline.
+
+    Like ``execute()``, conditional-execution guardrails run first on the
+    ``LLMRequest``. The execution function returns an async iterator of Json
+    chunks. The ``collector`` callable is invoked with each chunk. The
+    ``finalizer`` callable is invoked once when the stream is exhausted and
+    returns the aggregated response.
+
+    Args:
+        name: Model/provider name.
+        request: An ``LLMRequest`` object with headers and content.
+        func: Async callable ``(LLMRequest) -> AsyncIterator[Json]`` returning chunks.
+        collector: Callable ``(chunk: Json) -> None`` invoked with each intercepted chunk.
+        finalizer: Callable ``() -> Any`` invoked once when the stream ends; returns
+            the aggregated response.
+        handle: Optional parent scope handle. Defaults to the current top of stack.
+        attributes: Optional ``LLMAttributes`` bitflags.
+        data: Optional JSON-serializable application data payload.
+        metadata: Optional JSON-serializable metadata payload.
+        model_name: Optional LLM model identifier propagated to events for ATIF export.
+
+    Returns:
+        An awaitable ``LlmStream`` async iterator of Json chunks.
+
+    Raises:
+        GuardrailRejected: If a conditional-execution guardrail rejects the call.
+    """
+    return _native_llm_stream_call_execute(
+        name,
+        request,
+        func,
+        collector,
+        finalizer,
+        handle=handle,
+        attributes=attributes,
+        data=data,
+        metadata=metadata,
+        model_name=model_name,
+    )
+
+
+def request_intercepts(request):
+    """Run the registered LLM request intercept chain.
+
+    Applies all registered LLM request intercepts in priority order to
+    the given request.
+
+    Args:
+        request: An ``LLMRequest`` object to transform.
+
+    Returns:
+        The transformed ``LLMRequest`` after all intercepts have been applied.
+    """
+    return _native_llm_request_intercepts(request)
+
+
+def conditional_execution(request):
+    """Run the registered LLM conditional-execution guardrail chain.
+
+    Evaluates all registered conditional-execution guardrails in priority
+    order against the given request.
+
+    Args:
+        request: An ``LLMRequest`` object to evaluate.
+
+    Raises:
+        RuntimeError: If any guardrail rejects the LLM call.
+    """
+    return _native_llm_conditional_execution(request)
+
 
 __all__ = [
     "call",

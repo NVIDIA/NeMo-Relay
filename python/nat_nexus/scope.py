@@ -74,7 +74,14 @@ def _ensure_scope_stack() -> None:
 
 
 def get_handle() -> Any:
-    """Return the current (topmost) ScopeHandle from the scope stack."""
+    """Return the current (topmost) ScopeHandle from the scope stack.
+
+    Returns:
+        The current ``ScopeHandle`` at the top of the scope stack.
+
+    Raises:
+        RuntimeError: If the scope stack is empty.
+    """
     _ensure_scope_stack()
     return _native_get_handle()
 
@@ -85,20 +92,41 @@ def push(
     """Push a new child scope onto the scope stack.
 
     If *handle* is omitted, the scope is parented to the current top of stack.
-    Returns the new ``ScopeHandle``.
+
+    Args:
+        name: Human-readable scope name.
+        scope_type: The kind of scope (e.g. ``ScopeType.Agent``).
+        handle: Optional parent scope handle. Defaults to the current top of stack.
+        attributes: Optional ``ScopeAttributes`` bitflags.
+        data: Optional JSON-serializable application data to attach to the scope.
+        metadata: Optional JSON-serializable metadata to attach to the scope.
+
+    Returns:
+        The newly created ``ScopeHandle``.
     """
     _ensure_scope_stack()
     return _native_push_scope(name, scope_type, handle=handle, attributes=attributes, data=data, metadata=metadata)
 
 
 def pop(handle: Any) -> None:
-    """Remove a scope from the stack and emit an ``End`` event."""
+    """Remove a scope from the stack and emit an ``End`` event.
+
+    Args:
+        handle: The ``ScopeHandle`` returned by ``push()`` or ``scope()``.
+    """
     _ensure_scope_stack()
     _native_pop_scope(handle)
 
 
 def event(name: str, *, handle: Any = None, data: Any = None, metadata: Any = None) -> None:
-    """Emit a ``Mark`` event under the current or specified scope."""
+    """Emit a ``Mark`` event under the current or specified scope.
+
+    Args:
+        name: Event name.
+        handle: Optional parent scope handle. Defaults to the current top of stack.
+        data: Optional JSON-serializable application data.
+        metadata: Optional JSON-serializable metadata.
+    """
     _ensure_scope_stack()
     _native_event(name, handle=handle, data=data, metadata=metadata)
 
@@ -107,11 +135,22 @@ def event(name: str, *, handle: Any = None, data: Any = None, metadata: Any = No
 def scope(
     name: str, scope_type: Any, *, handle: Any = None, attributes: Any = None, data: Any = None, metadata: Any = None
 ) -> Any:
-    """
-    Push a new child scope onto the scope stack, ensuring the stack is pop'd at the end
+    """Context manager that pushes a new child scope and pops it on exit.
 
     If *handle* is omitted, the scope is parented to the current top of stack.
-    Returns the new ``ScopeHandle``.
+    The scope is automatically popped when the context manager exits, even if
+    an exception is raised.
+
+    Args:
+        name: Human-readable scope name.
+        scope_type: The kind of scope (e.g. ``ScopeType.Agent``).
+        handle: Optional parent scope handle. Defaults to the current top of stack.
+        attributes: Optional ``ScopeAttributes`` bitflags.
+        data: Optional JSON-serializable application data to attach to the scope.
+        metadata: Optional JSON-serializable metadata to attach to the scope.
+
+    Yields:
+        The newly created ``ScopeHandle``.
     """
     _ensure_scope_stack()
     try:

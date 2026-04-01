@@ -18,7 +18,7 @@ flowchart TD
     B -->|"Allowed (None)"| D[Request Intercepts<br/>priority order, optional break_chain]
     D --> E[Sanitize Request Guardrails]
     E --> F["Emit Start event<br/>(input = sanitized args)"]
-    F --> G[Execution Intercept Chain<br/>middleware pattern with next]
+    F --> G["Execution Intercept Chain<br/>(tool_name, args, next)"]
     G --> H["func(args)"]
     H --> I[Response Intercepts<br/>priority order, optional break_chain]
     I --> J[Sanitize Response Guardrails]
@@ -56,7 +56,7 @@ flowchart TD
     B -->|"Allowed (None)"| D["Request Intercepts<br/>(LLMRequest → LLMRequest)"]
     D --> E["Sanitize Request Guardrails<br/>(LLMRequest → LLMRequest)"]
     E --> F["Emit Start event<br/>(input = sanitized request)"]
-    F --> G["Execution Intercept Chain<br/>(LLMRequest, next) → Json"]
+    F --> G["Execution Intercept Chain<br/>(llm_name, LLMRequest, next) → Json"]
     G --> H["func(request) → Json"]
     H --> I["Sanitize Response Guardrails<br/>(Json → Json)"]
     I --> J["Emit End event<br/>(output = sanitized response)"]
@@ -169,18 +169,18 @@ Intercept C (priority=10)                     ← skipped
 
 ## Execution Intercept Chain Building
 
-Execution intercepts are composed into a nested chain. The **lowest** priority intercept wraps closest to the original function:
+Execution intercepts are composed into a nested chain. Every execution intercept receives the operation name (tool name or LLM name) as its first parameter, enabling name-aware transformations. The **lowest** priority intercept wraps closest to the original function:
 
 ```
 Registered: [intercept_A(priority=1), intercept_B(priority=5)]
 
 Built chain:
-  intercept_A(args, next=intercept_B(args, next=original_func))
+  intercept_A(name, args, next=intercept_B(name, args, next=original_func))
 
 Execution order:
-  1. intercept_A receives args and next
+  1. intercept_A receives name, args and next
   2. intercept_A calls next(args)
-  3. intercept_B receives args and next
+  3. intercept_B receives name, args and next
   4. intercept_B calls next(args)
   5. original_func(args) executes
   6. Results propagate back up the chain

@@ -839,17 +839,17 @@ def nat_nexus_deregister_tool_response_intercept(name: str) -> bool:
 def nat_nexus_register_tool_execution_intercept(
     name: str,
     priority: int,
-    callable: Callable[[Json, Callable[[Json], Awaitable[Json]]], Awaitable[Json]],
+    callable: Callable[[str, Json, Callable[[Json], Awaitable[Json]]], Awaitable[Json]],
 ) -> None:
     """Register a tool execution intercept (middleware chain pattern).
 
-    ``callable``: ``async (args, next) -> result`` — intercept function.
+    ``callable``: ``async (tool_name, args, next) -> result`` — intercept function.
     Call ``await next(args)`` to invoke the next intercept or original
     implementation. Skip calling ``next`` to short-circuit the chain.
 
     Example::
 
-        async def cache_intercept(args, next):
+        async def cache_intercept(tool_name, args, next):
             key = json.dumps(args, sort_keys=True)
             if key in cache:
                 return cache[key]
@@ -916,11 +916,11 @@ def nat_nexus_register_llm_request_intercept(
     name: str,
     priority: int,
     break_chain: bool,
-    callable: Callable[[LLMRequest], LLMRequest],
+    callable: Callable[[str, LLMRequest], LLMRequest],
 ) -> None:
     """Register an LLM request intercept.
 
-    Callback: ``(request: LLMRequest) -> LLMRequest`` — transforms the LLM request.
+    Callback: ``(name: str, request: LLMRequest) -> LLMRequest`` — transforms the LLM request.
     """
     ...
 
@@ -931,17 +931,17 @@ def nat_nexus_deregister_llm_request_intercept(name: str) -> bool:
 def nat_nexus_register_llm_execution_intercept(
     name: str,
     priority: int,
-    callable: Callable[[LLMRequest, Callable[[LLMRequest], Awaitable[Json]]], Awaitable[Json]],
+    callable: Callable[[str, LLMRequest, Callable[[LLMRequest], Awaitable[Json]]], Awaitable[Json]],
 ) -> None:
     """Register an LLM execution intercept (middleware chain pattern).
 
-    ``callable``: ``async (request, next) -> response`` — intercept function.
+    ``callable``: ``async (name, request, next) -> response`` — intercept function.
     Call ``await next(request)`` to invoke the next intercept or original
     implementation. Skip calling ``next`` to short-circuit the chain.
 
     Example::
 
-        async def logging_intercept(request: LLMRequest, next):
+        async def logging_intercept(name: str, request: LLMRequest, next):
             print(f"LLM request: {request.content['model']}")
             response = await next(request)
             print(f"LLM response tokens: {len(str(response))}")
@@ -1103,7 +1103,7 @@ def nat_nexus_scope_register_tool_execution_intercept(
     scope_uuid: str,
     name: str,
     priority: int,
-    callable: Callable[[Json, Callable[[Json], Awaitable[Json]]], Awaitable[Json]],
+    callable: Callable[[str, Json, Callable[[Json], Awaitable[Json]]], Awaitable[Json]],
 ) -> None:
     """Register a scope-local tool execution intercept (middleware chain pattern).
 
@@ -1111,7 +1111,7 @@ def nat_nexus_scope_register_tool_execution_intercept(
         scope_uuid: UUID string of the scope to register under.
         name: Unique intercept name.
         priority: Priority (ascending order).
-        callable: ``async (args, next) -> result``.
+        callable: ``async (tool_name, args, next) -> result``.
     """
     ...
 
@@ -1183,7 +1183,7 @@ def nat_nexus_scope_register_llm_request_intercept(
     name: str,
     priority: int,
     break_chain: bool,
-    callable: Callable[[LLMRequest], LLMRequest],
+    callable: Callable[[str, LLMRequest], LLMRequest],
 ) -> None:
     """Register a scope-local LLM request intercept.
 
@@ -1192,7 +1192,7 @@ def nat_nexus_scope_register_llm_request_intercept(
         name: Unique intercept name.
         priority: Priority (ascending order).
         break_chain: If ``True``, no lower-priority intercepts run after this one.
-        callable: ``(request: LLMRequest) -> LLMRequest``.
+        callable: ``(name: str, request: LLMRequest) -> LLMRequest``.
     """
     ...
 
@@ -1204,7 +1204,7 @@ def nat_nexus_scope_register_llm_execution_intercept(
     scope_uuid: str,
     name: str,
     priority: int,
-    callable: Callable[[LLMRequest, Callable[[LLMRequest], Awaitable[Json]]], Awaitable[Json]],
+    callable: Callable[[str, LLMRequest, Callable[[LLMRequest], Awaitable[Json]]], Awaitable[Json]],
 ) -> None:
     """Register a scope-local LLM execution intercept (middleware chain pattern).
 
@@ -1212,7 +1212,7 @@ def nat_nexus_scope_register_llm_execution_intercept(
         scope_uuid: UUID string of the scope to register under.
         name: Unique intercept name.
         priority: Priority (ascending order).
-        callable: ``async (request, next) -> response``.
+        callable: ``async (name, request, next) -> response``.
     """
     ...
 
