@@ -28,6 +28,13 @@ use nvidia_nat_nexus_core::{
 use crate::convert::{js_to_json, json_to_js};
 use crate::types::WasmEvent;
 
+/// Extract a human-readable error message from a `JsValue`.
+///
+/// Tries `.as_string()` first (for string errors), then falls back to debug format.
+fn js_error_message(e: &JsValue) -> String {
+    e.as_string().unwrap_or_else(|| format!("{e:?}"))
+}
+
 /// Wrap a JS function `(name, args) => result` for tool sanitize/intercept.
 pub fn wrap_js_tool_fn(func: Function) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
     let func = SendWrapper::new(func);
@@ -35,8 +42,22 @@ pub fn wrap_js_tool_fn(func: Function) -> Box<dyn Fn(&str, Json) -> Json + Send 
         let js_name = JsValue::from_str(name);
         let js_args = json_to_js(&args);
         match func.call2(&JsValue::NULL, &js_name, &js_args) {
-            Ok(result) => js_to_json(&result).unwrap_or(Json::Null),
-            Err(_) => Json::Null,
+            // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
+            // errors through the type system. Log errors so failures are not silent.
+            Ok(result) => js_to_json(&result).unwrap_or_else(|e| {
+                eprintln!(
+                    "nat_nexus: JS tool callback result conversion failed: {}",
+                    js_error_message(&e)
+                );
+                Json::Null
+            }),
+            Err(e) => {
+                eprintln!(
+                    "nat_nexus: JS tool callback threw: {}",
+                    js_error_message(&e)
+                );
+                Json::Null
+            }
         }
     })
 }
@@ -57,7 +78,15 @@ pub fn wrap_js_tool_conditional_fn(
                     result.as_string()
                 }
             }
-            Err(_) => None,
+            // TODO: This closure returns Option<String> (not Result), so we cannot propagate
+            // errors through the type system. Log the error so failures are not silent.
+            Err(e) => {
+                eprintln!(
+                    "nat_nexus: JS tool conditional callback threw: {}",
+                    js_error_message(&e)
+                );
+                None
+            }
         }
     })
 }
@@ -77,14 +106,14 @@ pub fn wrap_js_tool_exec_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| NexusError::Internal(format!("{e:?}"))),
-                            Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
+                                .map_err(|e| NexusError::Internal(js_error_message(&e))),
+                            Err(e) => Err(NexusError::Internal(js_error_message(&e))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| NexusError::Internal(format!("{e:?}")))
+                        js_to_json(&val).map_err(|e| NexusError::Internal(js_error_message(&e)))
                     }
                 }
-                Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
+                Err(e) => Err(NexusError::Internal(js_error_message(&e))),
             }
         }))
     })
@@ -102,11 +131,25 @@ pub fn wrap_js_llm_request_intercept_fn(
         let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
         let js_req = json_to_js(&req_json);
         match func.call1(&JsValue::NULL, &js_req) {
+            // TODO: This closure returns LLMRequest (not Result), so we cannot propagate
+            // errors through the type system. Log errors so failures are not silent.
             Ok(result) => {
-                let result_json = js_to_json(&result).unwrap_or(Json::Null);
+                let result_json = js_to_json(&result).unwrap_or_else(|e| {
+                    eprintln!(
+                        "nat_nexus: JS LLM request intercept result conversion failed: {}",
+                        js_error_message(&e)
+                    );
+                    Json::Null
+                });
                 serde_json::from_value(result_json).unwrap_or(request)
             }
-            Err(_) => request,
+            Err(e) => {
+                eprintln!(
+                    "nat_nexus: JS LLM request intercept callback threw: {}",
+                    js_error_message(&e)
+                );
+                request
+            }
         }
     })
 }
@@ -120,11 +163,25 @@ pub fn wrap_js_llm_sanitize_request_fn(
         let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
         let js_req = json_to_js(&req_json);
         match func.call1(&JsValue::NULL, &js_req) {
+            // TODO: This closure returns LLMRequest (not Result), so we cannot propagate
+            // errors through the type system. Log errors so failures are not silent.
             Ok(result) => {
-                let result_json = js_to_json(&result).unwrap_or(Json::Null);
+                let result_json = js_to_json(&result).unwrap_or_else(|e| {
+                    eprintln!(
+                        "nat_nexus: JS LLM sanitize request result conversion failed: {}",
+                        js_error_message(&e)
+                    );
+                    Json::Null
+                });
                 serde_json::from_value(result_json).unwrap_or(request)
             }
-            Err(_) => request,
+            Err(e) => {
+                eprintln!(
+                    "nat_nexus: JS LLM sanitize request callback threw: {}",
+                    js_error_message(&e)
+                );
+                request
+            }
         }
     })
 }
@@ -145,7 +202,15 @@ pub fn wrap_js_llm_conditional_fn(
                     result.as_string()
                 }
             }
-            Err(_) => None,
+            // TODO: This closure returns Option<String> (not Result), so we cannot propagate
+            // errors through the type system. Log the error so failures are not silent.
+            Err(e) => {
+                eprintln!(
+                    "nat_nexus: JS LLM conditional callback threw: {}",
+                    js_error_message(&e)
+                );
+                None
+            }
         }
     })
 }
@@ -167,14 +232,14 @@ pub fn wrap_js_llm_exec_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| NexusError::Internal(format!("{e:?}"))),
-                            Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
+                                .map_err(|e| NexusError::Internal(js_error_message(&e))),
+                            Err(e) => Err(NexusError::Internal(js_error_message(&e))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| NexusError::Internal(format!("{e:?}")))
+                        js_to_json(&val).map_err(|e| NexusError::Internal(js_error_message(&e)))
                     }
                 }
-                Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
+                Err(e) => Err(NexusError::Internal(js_error_message(&e))),
             }
         }))
     })
@@ -200,8 +265,22 @@ pub fn wrap_js_collector_fn(func: Function) -> Box<dyn FnMut(Json) + Send> {
 pub fn wrap_js_finalizer_fn(func: Function) -> Box<dyn FnOnce() -> Json + Send> {
     let func = SendWrapper::new(func);
     Box::new(move || match func.call0(&JsValue::NULL) {
-        Ok(result) => js_to_json(&result).unwrap_or(Json::Null),
-        Err(_) => Json::Null,
+        // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
+        // errors through the type system. Log errors so failures are not silent.
+        Ok(result) => js_to_json(&result).unwrap_or_else(|e| {
+            eprintln!(
+                "nat_nexus: JS finalizer result conversion failed: {}",
+                js_error_message(&e)
+            );
+            Json::Null
+        }),
+        Err(e) => {
+            eprintln!(
+                "nat_nexus: JS finalizer callback threw: {}",
+                js_error_message(&e)
+            );
+            Json::Null
+        }
     })
 }
 
@@ -252,14 +331,14 @@ pub fn wrap_js_tool_exec_intercept_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| NexusError::Internal(format!("{e:?}"))),
-                            Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
+                                .map_err(|e| NexusError::Internal(js_error_message(&e))),
+                            Err(e) => Err(NexusError::Internal(js_error_message(&e))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| NexusError::Internal(format!("{e:?}")))
+                        js_to_json(&val).map_err(|e| NexusError::Internal(js_error_message(&e)))
                     }
                 }
-                Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
+                Err(e) => Err(NexusError::Internal(js_error_message(&e))),
             }
         }))
     })
@@ -301,14 +380,14 @@ pub fn wrap_js_llm_exec_intercept_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| NexusError::Internal(format!("{e:?}"))),
-                            Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
+                                .map_err(|e| NexusError::Internal(js_error_message(&e))),
+                            Err(e) => Err(NexusError::Internal(js_error_message(&e))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| NexusError::Internal(format!("{e:?}")))
+                        js_to_json(&val).map_err(|e| NexusError::Internal(js_error_message(&e)))
                     }
                 }
-                Err(e) => Err(NexusError::Internal(format!("{e:?}"))),
+                Err(e) => Err(NexusError::Internal(js_error_message(&e))),
             }
         }))
     })
@@ -350,14 +429,15 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
                         if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                             match JsFuture::from(promise.clone()).await {
                                 Ok(resolved) => js_to_json(&resolved)
-                                    .map_err(|e| NexusError::Internal(format!("{e:?}")))?,
-                                Err(e) => return Err(NexusError::Internal(format!("{e:?}"))),
+                                    .map_err(|e| NexusError::Internal(js_error_message(&e)))?,
+                                Err(e) => return Err(NexusError::Internal(js_error_message(&e))),
                             }
                         } else {
-                            js_to_json(&val).map_err(|e| NexusError::Internal(format!("{e:?}")))?
+                            js_to_json(&val)
+                                .map_err(|e| NexusError::Internal(js_error_message(&e)))?
                         }
                     }
-                    Err(e) => return Err(NexusError::Internal(format!("{e:?}"))),
+                    Err(e) => return Err(NexusError::Internal(js_error_message(&e))),
                 };
                 let stream = tokio_stream::once(Ok(val));
                 Ok(Box::pin(stream)
@@ -377,8 +457,22 @@ pub fn wrap_js_llm_response_fn(func: Function) -> Box<dyn Fn(Json) -> Json + Sen
     Box::new(move |response: Json| {
         let js_resp = json_to_js(&response);
         match func.call1(&JsValue::NULL, &js_resp) {
-            Ok(result) => js_to_json(&result).unwrap_or(response),
-            Err(_) => response,
+            // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
+            // errors through the type system. Log errors and fall back to original response.
+            Ok(result) => js_to_json(&result).unwrap_or_else(|e| {
+                eprintln!(
+                    "nat_nexus: JS LLM response callback result conversion failed: {}",
+                    js_error_message(&e)
+                );
+                response.clone()
+            }),
+            Err(e) => {
+                eprintln!(
+                    "nat_nexus: JS LLM response callback threw: {}",
+                    js_error_message(&e)
+                );
+                response
+            }
         }
     })
 }
