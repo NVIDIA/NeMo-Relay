@@ -27,7 +27,7 @@ import (
 //
 // Usage pattern:
 //
-//	stream, err := nat_nexus.LlmStreamCallExecute("chat", req, myExecFn)
+//	stream, err := nat_nexus.LlmStreamCallExecute("chat", req, myExecFn, collector, finalizer)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
@@ -46,16 +46,25 @@ import (
 //
 // The stream is not safe for concurrent use. If not closed explicitly, the
 // underlying C resources are freed automatically by a Go runtime finalizer.
+//
+// Each stream carries its own collector and finalizer callbacks, so multiple
+// streams can operate concurrently without interfering with one another.
 type LlmStream struct {
-	ptr    *C.FfiStream
-	closed bool
+	ptr       *C.FfiStream
+	closed    bool
+	collector CollectorFunc
+	finalizer FinalizerFunc
 }
 
-func newLlmStream(ptr *C.FfiStream) *LlmStream {
+func newLlmStream(ptr *C.FfiStream, collector CollectorFunc, finalizer FinalizerFunc) *LlmStream {
 	if ptr == nil {
 		return nil
 	}
-	s := &LlmStream{ptr: ptr}
+	s := &LlmStream{
+		ptr:       ptr,
+		collector: collector,
+		finalizer: finalizer,
+	}
 	runtime.SetFinalizer(s, func(s *LlmStream) {
 		s.Close()
 	})
@@ -65,7 +74,13 @@ func newLlmStream(ptr *C.FfiStream) *LlmStream {
 // Next returns the next chunk from the stream as a JSON value. It returns
 // [io.EOF] when the stream is exhausted and all chunks have been consumed.
 // Any registered stream response intercepts are applied to each chunk before
-// it is returned. If the stream has already been closed, Next returns io.EOF.
+// it is returned.
+//
+// If a collector function was provided when creating the stream, it is called
+// with each chunk. When the stream is exhausted (EOF), the finalizer function
+// (if provided) is called exactly once.
+//
+// If the stream has already been closed, Next returns io.EOF.
 func (s *LlmStream) Next() (json.RawMessage, error) {
 	if s.closed || s.ptr == nil {
 		return nil, io.EOF
@@ -79,9 +94,18 @@ func (s *LlmStream) Next() (json.RawMessage, error) {
 		// Chunk available
 		text := C.GoString(chunk)
 		C.nat_nexus_string_free(chunk)
-		return json.RawMessage(text), nil
+		msg := json.RawMessage(text)
+		// Feed chunk to the per-stream collector if one was provided.
+		if s.collector != nil {
+			s.collector(msg)
+		}
+		return msg, nil
 	case 0:
-		// Stream done
+		// Stream done -- invoke the per-stream finalizer if one was provided.
+		if s.finalizer != nil {
+			s.finalizer()
+			s.finalizer = nil // ensure single invocation
+		}
 		return nil, io.EOF
 	default:
 		// Error
@@ -92,10 +116,16 @@ func (s *LlmStream) Next() (json.RawMessage, error) {
 // Close releases the underlying C stream resources. It is safe to call Close
 // multiple times; subsequent calls are no-ops. After Close is called, any
 // further calls to [LlmStream.Next] return [io.EOF].
+//
+// If the stream has not been fully consumed, the finalizer (if provided) will
+// NOT be called. Callers should consume the stream to completion or explicitly
+// handle finalization if needed before closing early.
 func (s *LlmStream) Close() {
 	if !s.closed && s.ptr != nil {
 		C.nat_nexus_stream_free(s.ptr)
 		s.ptr = nil
 		s.closed = true
+		s.collector = nil
+		s.finalizer = nil
 	}
 }

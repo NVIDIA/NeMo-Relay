@@ -220,8 +220,6 @@ extern char* goLlmConditionalTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmExecTrampoline(void*, const char*);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NatNexusToolExecNextFn, void*);
 extern char* goLlmExecInterceptTrampoline(void*, const char*, NatNexusLlmExecNextFn, void*);
-extern void goCollectorTrampoline(const char*);
-extern char* goFinalizerTrampoline();
 */
 import "C"
 
@@ -784,34 +782,14 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 	defer C.free(unsafe.Pointer(cName))
 	defer C.free(unsafe.Pointer(cRequest))
 
-	// Set the active collector/finalizer for the duration of the blocking FFI call.
-	// The C collector/finalizer callbacks are plain function pointers (no user_data),
-	// so we route through global state protected by collectorMu.
-	collectorMu.Lock()
-	activeCollector = collector
-	activeFinalizer = finalizer
-	collectorMu.Unlock()
-
-	defer func() {
-		collectorMu.Lock()
-		activeCollector = nil
-		activeFinalizer = nil
-		collectorMu.Unlock()
-	}()
-
-	var cCollector C.Option_NatNexusCollectorCb
-	if collector != nil {
-		cCollector = C.makeOptCollectorCb(C.NatNexusCollectorCb(C.goCollectorTrampoline))
-	} else {
-		cCollector = C.makeOptCollectorCb(nil)
-	}
-
-	var cFinalizer C.Option_NatNexusFinalizerCb
-	if finalizer != nil {
-		cFinalizer = C.makeOptFinalizerCb(C.NatNexusFinalizerCb(C.goFinalizerTrampoline))
-	} else {
-		cFinalizer = C.makeOptFinalizerCb(nil)
-	}
+	// Pass nil collector/finalizer to the FFI. The FFI collector/finalizer
+	// callbacks lack user_data parameters, making them unsuitable for
+	// concurrent streams (all streams would share a single global
+	// callback). Instead, we store the collector/finalizer on the
+	// returned LlmStream and invoke them from LlmStream.Next(), which
+	// provides natural per-stream isolation.
+	cCollector := C.makeOptCollectorCb(nil)
+	cFinalizer := C.makeOptFinalizerCb(nil)
 
 	var out *C.FfiStream
 	status := C.nat_nexus_llm_stream_call_execute(
@@ -829,7 +807,7 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}
-	return newLlmStream(out), nil
+	return newLlmStream(out, collector, finalizer), nil
 }
 
 // ---------------------------------------------------------------------------
