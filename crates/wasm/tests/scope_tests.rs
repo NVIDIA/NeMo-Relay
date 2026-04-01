@@ -145,6 +145,169 @@ fn test_all_scope_types() {
 }
 
 // ===========================================================================
+// withScope (context manager)
+// ===========================================================================
+
+#[wasm_bindgen_test]
+fn test_with_scope_normal_return() {
+    let before = nat_nexus_get_handle().unwrap();
+    let before_uuid = before.uuid();
+
+    // Callback that returns the handle's uuid
+    let cb = js_fn1("handle", "return handle.uuid");
+    let result = nat_nexus_with_scope(
+        "with_scope_test",
+        SCOPE_TYPE_AGENT,
+        &cb,
+        None,
+        None,
+        JsValue::NULL,
+        JsValue::NULL,
+    )
+    .unwrap();
+
+    // The callback should have received a handle with a uuid
+    assert!(result.is_string(), "Expected string uuid from callback");
+
+    // Scope should be popped
+    let after = nat_nexus_get_handle().unwrap();
+    assert_eq!(
+        after.uuid(),
+        before_uuid,
+        "Scope should be popped after withScope"
+    );
+}
+
+#[wasm_bindgen_test]
+fn test_with_scope_callback_receives_handle() {
+    // Store handle properties in a global for inspection
+    js_sys::eval("globalThis.__wasm_ws_handle = null; true").unwrap();
+    let cb = js_fn1("handle", "globalThis.__wasm_ws_handle = handle");
+    nat_nexus_with_scope(
+        "handle_check",
+        SCOPE_TYPE_FUNCTION,
+        &cb,
+        None,
+        None,
+        JsValue::NULL,
+        JsValue::NULL,
+    )
+    .unwrap();
+
+    let handle = js_sys::eval("globalThis.__wasm_ws_handle").unwrap();
+    assert!(
+        !handle.is_null() && !handle.is_undefined(),
+        "Handle should be set"
+    );
+
+    // Check that the handle has expected properties (WasmScopeHandle getters)
+    let uuid = js_sys::Reflect::get(&handle, &"uuid".into()).unwrap();
+    assert!(uuid.is_string(), "Handle should have uuid string");
+
+    let name = js_sys::Reflect::get(&handle, &"name".into()).unwrap();
+    assert_eq!(name.as_string().unwrap(), "handle_check");
+
+    let scope_type = js_sys::Reflect::get(&handle, &"scopeType".into()).unwrap();
+    assert_eq!(scope_type.as_f64().unwrap() as i32, SCOPE_TYPE_FUNCTION);
+
+    js_sys::eval("delete globalThis.__wasm_ws_handle").unwrap();
+}
+
+#[wasm_bindgen_test]
+fn test_with_scope_pops_on_throw() {
+    let before = nat_nexus_get_handle().unwrap();
+    let before_uuid = before.uuid();
+
+    let cb = js_fn1("handle", "throw new Error('test error')");
+    let result = nat_nexus_with_scope(
+        "throw_test",
+        SCOPE_TYPE_TOOL,
+        &cb,
+        None,
+        None,
+        JsValue::NULL,
+        JsValue::NULL,
+    );
+
+    // Should have returned an error
+    assert!(result.is_err(), "Expected error from throwing callback");
+
+    // Scope should still be popped
+    let after = nat_nexus_get_handle().unwrap();
+    assert_eq!(
+        after.uuid(),
+        before_uuid,
+        "Scope should be popped after throw"
+    );
+}
+
+#[wasm_bindgen_test]
+fn test_with_scope_nested() {
+    let before = nat_nexus_get_handle().unwrap();
+    let before_uuid = before.uuid();
+
+    // Push outer scope manually so we can nest a withScope inside it.
+    let outer = nat_nexus_push_scope(
+        "outer",
+        SCOPE_TYPE_AGENT,
+        None,
+        None,
+        JsValue::NULL,
+        JsValue::NULL,
+    )
+    .unwrap();
+    let outer_uuid = outer.uuid();
+
+    // Use withScope for the inner scope — the callback returns parentUuid.
+    let inner_cb = js_fn1("handle", "return handle.parentUuid");
+    let inner_parent = nat_nexus_with_scope(
+        "inner",
+        SCOPE_TYPE_FUNCTION,
+        &inner_cb,
+        None,
+        None,
+        JsValue::NULL,
+        JsValue::NULL,
+    )
+    .unwrap()
+    .as_string()
+    .unwrap_or_default();
+
+    // The inner scope's parent should be the outer scope.
+    assert_eq!(
+        inner_parent, outer_uuid,
+        "Inner scope's parent should be the outer scope"
+    );
+
+    // After withScope returns, the inner scope is popped; outer should be on top.
+    let current = nat_nexus_get_handle().unwrap();
+    assert_eq!(
+        current.uuid(),
+        outer_uuid,
+        "Outer scope should be on top after inner withScope completes"
+    );
+
+    // Pop the outer scope.
+    nat_nexus_pop_scope(&outer).unwrap();
+
+    // Stack should be back to original.
+    let after = nat_nexus_get_handle().unwrap();
+    assert_eq!(after.uuid(), before_uuid, "All scopes should be popped");
+
+    // Clean up globals.
+    let _ =
+        js_sys::Reflect::delete_property(&js_sys::global(), &JsValue::from_str("__wasm_inner_cb"));
+    let _ = js_sys::Reflect::delete_property(
+        &js_sys::global(),
+        &JsValue::from_str("__wasm_inner_parent"),
+    );
+    let _ = js_sys::Reflect::delete_property(
+        &js_sys::global(),
+        &JsValue::from_str("__wasm_outer_uuid"),
+    );
+}
+
+// ===========================================================================
 // Events
 // ===========================================================================
 
