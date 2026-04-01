@@ -898,8 +898,8 @@ fn nat_nexus_tool_response_intercepts<'py>(
 /// Returns:
 ///     The (possibly transformed) ``LLMRequest``.
 #[pyfunction]
-fn nat_nexus_llm_request_intercepts(request: PyLLMRequest) -> PyResult<PyLLMRequest> {
-    let result = core::nat_nexus_llm_request_intercepts(request.inner).map_err(to_py_err)?;
+fn nat_nexus_llm_request_intercepts(name: &str, request: PyLLMRequest) -> PyResult<PyLLMRequest> {
+    let result = core::nat_nexus_llm_request_intercepts(name, request.inner).map_err(to_py_err)?;
     Ok(PyLLMRequest { inner: result })
 }
 

@@ -801,7 +801,7 @@ pub async fn nat_nexus_tool_call_execute(
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.tool_build_execution_chain(func, &sl)
+        state.tool_build_execution_chain(name, func, &sl)
     };
     let result = exec_future(intercepted_args).await?;
 
@@ -954,7 +954,7 @@ pub async fn nat_nexus_llm_call_execute(
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.llm_request_intercepts_chain(request, &sl)
+        state.llm_request_intercepts_chain(name, request, &sl)
     };
 
     // LLM call start (sanitize guardrails happen inside nat_nexus_llm_call)
@@ -977,7 +977,7 @@ pub async fn nat_nexus_llm_call_execute(
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.llm_build_execution_chain(func, &sl)
+        state.llm_build_execution_chain(name, func, &sl)
     };
     let response = exec_future(intercepted_request).await?;
 
@@ -1053,7 +1053,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.llm_request_intercepts_chain(request, &sl)
+        state.llm_request_intercepts_chain(name, request, &sl)
     };
 
     // LLM call start (sanitize guardrails happen inside nat_nexus_llm_call)
@@ -1076,7 +1076,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.llm_stream_build_execution_chain(func, &sl)
+        state.llm_stream_build_execution_chain(name, func, &sl)
     };
     let raw_stream = exec_future(intercepted_request).await?;
 
@@ -1145,7 +1145,7 @@ pub fn nat_nexus_tool_response_intercepts(name: &str, result: Json) -> Result<Js
 /// Returns the transformed [`LLMRequest`] after all intercepts have been applied.
 /// This allows invoking request intercepts independently of the full
 /// [`nat_nexus_llm_call_execute`] pipeline.
-pub fn nat_nexus_llm_request_intercepts(request: LLMRequest) -> Result<LLMRequest> {
+pub fn nat_nexus_llm_request_intercepts(name: &str, request: LLMRequest) -> Result<LLMRequest> {
     let ss = current_scope_stack();
     let ss_guard = ss.read().expect("scope stack lock poisoned");
     let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_request_intercepts);
@@ -1153,7 +1153,7 @@ pub fn nat_nexus_llm_request_intercepts(request: LLMRequest) -> Result<LLMReques
     let state = ctx
         .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
-    Ok(state.llm_request_intercepts_chain(request, &sl))
+    Ok(state.llm_request_intercepts_chain(name, request, &sl))
 }
 
 /// Runs the registered LLM conditional execution guardrail chain.
@@ -1673,7 +1673,7 @@ mod tests {
         nat_nexus_register_tool_execution_intercept(
             "exec_intercept",
             1,
-            Arc::new(|_args: Json, _next: ToolExecutionNextFn| {
+            Arc::new(|_name: &str, _args: Json, _next: ToolExecutionNextFn| {
                 Box::pin(async move { Ok(json!({"from_intercept": true})) })
                     as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>
             }),
@@ -1897,7 +1897,7 @@ mod tests {
             "llm_req_intercept",
             1,
             false,
-            Box::new(|mut req: LLMRequest| {
+            Box::new(|_name: &str, mut req: LLMRequest| {
                 req.headers.insert("intercepted".into(), json!(true));
                 req
             }),
@@ -1944,7 +1944,7 @@ mod tests {
         nat_nexus_register_llm_execution_intercept(
             "llm_exec_intercept",
             1,
-            Arc::new(|_req: LLMRequest, _next: LlmExecutionNextFn| {
+            Arc::new(|_name: &str, _req: LLMRequest, _next: LlmExecutionNextFn| {
                 Box::pin(async move { Ok(json!({"from_intercept": true})) })
                     as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>
             }),
@@ -2038,7 +2038,7 @@ mod tests {
         nat_nexus_register_tool_execution_intercept(
             "i1",
             1,
-            Arc::new(|a: Json, _next: ToolExecutionNextFn| {
+            Arc::new(|_name: &str, a: Json, _next: ToolExecutionNextFn| {
                 Box::pin(async move { Ok(a) })
                     as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>
             }),
@@ -2047,12 +2047,10 @@ mod tests {
         assert!(nat_nexus_register_tool_execution_intercept(
             "i1",
             1,
-            Arc::new(
-                |a: Json, _next: ToolExecutionNextFn| Box::pin(async move { Ok(a) })
-                    as Pin<
-                        Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>,
-                    >
-            ),
+            Arc::new(|_name: &str, a: Json, _next: ToolExecutionNextFn| Box::pin(
+                async move { Ok(a) }
+            )
+                as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>),
         )
         .is_err());
         assert!(nat_nexus_deregister_tool_execution_intercept("i1").unwrap());
@@ -2099,8 +2097,15 @@ mod tests {
     fn test_llm_request_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_llm_request_intercept("i1", 1, false, Box::new(|r| r)).unwrap();
-        assert!(nat_nexus_register_llm_request_intercept("i1", 1, false, Box::new(|r| r)).is_err());
+        nat_nexus_register_llm_request_intercept("i1", 1, false, Box::new(|_name: &str, r| r))
+            .unwrap();
+        assert!(nat_nexus_register_llm_request_intercept(
+            "i1",
+            1,
+            false,
+            Box::new(|_name: &str, r| r)
+        )
+        .is_err());
         assert!(nat_nexus_deregister_llm_request_intercept("i1").unwrap());
     }
 
@@ -2111,10 +2116,16 @@ mod tests {
         nat_nexus_register_llm_execution_intercept(
             "i1",
             1,
-            Arc::new(|_request: LLMRequest, _next: LlmExecutionNextFn| {
-                Box::pin(async move { Ok(json!({})) })
-                    as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>
-            }),
+            Arc::new(
+                |_name: &str, _request: LLMRequest, _next: LlmExecutionNextFn| {
+                    Box::pin(async move { Ok(json!({})) })
+                        as Pin<
+                            Box<
+                                dyn std::future::Future<Output = crate::error::Result<Json>> + Send,
+                            >,
+                        >
+                },
+            ),
         )
         .unwrap();
         assert!(nat_nexus_deregister_llm_execution_intercept("i1").unwrap());
@@ -2127,27 +2138,29 @@ mod tests {
         nat_nexus_register_llm_stream_execution_intercept(
             "i1",
             1,
-            Arc::new(|_request: LLMRequest, _next: LlmStreamExecutionNextFn| {
-                Box::pin(async move {
-                    let stream: Pin<Box<dyn Stream<Item = crate::error::Result<Json>> + Send>> =
-                        Box::pin(tokio_stream::empty());
-                    Ok(stream)
-                })
-                    as Pin<
-                        Box<
-                            dyn std::future::Future<
-                                    Output = crate::error::Result<
-                                        Pin<
-                                            Box<
-                                                dyn Stream<Item = crate::error::Result<Json>>
-                                                    + Send,
+            Arc::new(
+                |_name: &str, _request: LLMRequest, _next: LlmStreamExecutionNextFn| {
+                    Box::pin(async move {
+                        let stream: Pin<Box<dyn Stream<Item = crate::error::Result<Json>> + Send>> =
+                            Box::pin(tokio_stream::empty());
+                        Ok(stream)
+                    })
+                        as Pin<
+                            Box<
+                                dyn std::future::Future<
+                                        Output = crate::error::Result<
+                                            Pin<
+                                                Box<
+                                                    dyn Stream<Item = crate::error::Result<Json>>
+                                                        + Send,
+                                                >,
                                             >,
                                         >,
-                                    >,
-                                > + Send,
-                        >,
-                    >
-            }),
+                                    > + Send,
+                            >,
+                        >
+                },
+            ),
         )
         .unwrap();
         assert!(nat_nexus_deregister_llm_stream_execution_intercept("i1").unwrap());
@@ -2479,7 +2492,7 @@ mod tests {
             "add_field",
             10,
             false,
-            Box::new(|mut request: LLMRequest| {
+            Box::new(|_name: &str, mut request: LLMRequest| {
                 request
                     .content
                     .as_object_mut()
@@ -2494,7 +2507,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        let result = nat_nexus_llm_request_intercepts(request).unwrap();
+        let result = nat_nexus_llm_request_intercepts("test_llm", request).unwrap();
         assert_eq!(result.content["intercepted"], true);
         assert_eq!(result.content["messages"], json!([]));
 

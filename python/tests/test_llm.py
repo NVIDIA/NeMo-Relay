@@ -147,7 +147,7 @@ class TestLLMGuardrailsAsync:
 class TestLLMIntercepts:
     def test_request_intercept(self):
         # Request intercepts now operate on LLMRequest
-        intercepts.register_llm_request("py_llm_req", 1, False, lambda request: request)
+        intercepts.register_llm_request("py_llm_req", 1, False, lambda name, request: request)
         assert intercepts.deregister_llm_request("py_llm_req")
 
     def test_execution_intercept(self):
@@ -155,12 +155,12 @@ class TestLLMIntercepts:
         intercepts.register_llm_execution(
             "py_llm_exec",
             1,
-            lambda request, next: {"intercepted": True},
+            lambda name, request, next: {"intercepted": True},
         )
         assert intercepts.deregister_llm_execution("py_llm_exec")
 
     def test_stream_execution_intercept(self):
-        def stream_fn(request, next):
+        def stream_fn(name, request, next):
             async def gen():
                 yield {"token": "test"}
 
@@ -184,7 +184,7 @@ class TestLLMIntercepts:
 
 class TestLLMInterceptsAsync:
     async def test_request_intercept_modifies(self):
-        def intercept_fn(request):
+        def intercept_fn(name, request):
             # Request intercepts now operate on LLMRequest
             content = request.content
             content["intercepted"] = True
@@ -205,7 +205,7 @@ class TestLLMInterceptsAsync:
         intercepts.register_llm_execution(
             "py_llm_exec_rep",
             1,
-            lambda request, next: {"from_intercept": True},
+            lambda name, request, next: {"from_intercept": True},
         )
 
         def original_func(request):

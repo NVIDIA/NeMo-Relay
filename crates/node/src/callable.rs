@@ -110,9 +110,9 @@ pub fn wrap_js_tool_exec_fn(
 /// deserialized back into an `LLMRequest`.
 pub fn wrap_js_llm_request_intercept_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync> {
+) -> Box<dyn Fn(&str, LLMRequest) -> LLMRequest + Send + Sync> {
     let func = Arc::new(func);
-    Box::new(move |request: LLMRequest| {
+    Box::new(move |_name: &str, request: LLMRequest| {
         let func = func.clone();
         let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
         let (tx, rx) = std::sync::mpsc::channel();
@@ -315,12 +315,12 @@ pub fn wrap_js_event_subscriber(
 pub fn wrap_js_tool_exec_intercept_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Arc<
-    dyn Fn(Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+    dyn Fn(&str, Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
         + Sync,
 > {
     let func = Arc::new(func);
-    Arc::new(move |args: Json, _next: ToolExecutionNextFn| {
+    Arc::new(move |_name: &str, args: Json, _next: ToolExecutionNextFn| {
         let func = func.clone();
         Box::pin(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -344,27 +344,33 @@ pub fn wrap_js_tool_exec_intercept_fn(
 pub fn wrap_js_llm_exec_intercept_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Arc<
-    dyn Fn(LLMRequest, LlmExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+    dyn Fn(
+            &str,
+            LLMRequest,
+            LlmExecutionNextFn,
+        ) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
         + Sync,
 > {
     let func = Arc::new(func);
-    Arc::new(move |request: LLMRequest, _next: LlmExecutionNextFn| {
-        let func = func.clone();
-        let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
-        Box::pin(async move {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            func.call_with_return_value(
-                req_json,
-                ThreadsafeFunctionCallMode::Blocking,
-                move |val: Json| {
-                    let _ = tx.send(val);
-                    Ok(())
-                },
-            );
-            rx.await.map_err(|e| NexusError::Internal(e.to_string()))
-        })
-    })
+    Arc::new(
+        move |_name: &str, request: LLMRequest, _next: LlmExecutionNextFn| {
+            let func = func.clone();
+            let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+            Box::pin(async move {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                func.call_with_return_value(
+                    req_json,
+                    ThreadsafeFunctionCallMode::Blocking,
+                    move |val: Json| {
+                        let _ = tx.send(val);
+                        Ok(())
+                    },
+                );
+                rx.await.map_err(|e| NexusError::Internal(e.to_string()))
+            })
+        },
+    )
 }
 
 /// Wrap a JS function `(request, next) => result` for LLM stream execution intercept.
@@ -376,6 +382,7 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Arc<
     dyn Fn(
+            &str,
             LLMRequest,
             LlmStreamExecutionNextFn,
         ) -> Pin<
@@ -391,7 +398,7 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
 > {
     let func = Arc::new(func);
     Arc::new(
-        move |request: LLMRequest, _next: LlmStreamExecutionNextFn| {
+        move |_name: &str, request: LLMRequest, _next: LlmStreamExecutionNextFn| {
             let func = func.clone();
             let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             Box::pin(async move {

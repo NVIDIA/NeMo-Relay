@@ -1533,12 +1533,15 @@ pub fn nat_nexus_tool_response_intercepts_wasm(
 
 /// Runs the registered LLM request intercept chain on the given `LLMRequest`.
 #[wasm_bindgen(js_name = "llmRequestIntercepts")]
-pub fn nat_nexus_llm_request_intercepts_wasm(request: JsValue) -> Result<JsValue, JsValue> {
+pub fn nat_nexus_llm_request_intercepts_wasm(
+    name: &str,
+    request: JsValue,
+) -> Result<JsValue, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
         .map_err(|e| to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string())))?;
-    let result =
-        nvidia_nat_nexus_core::nat_nexus_llm_request_intercepts(llm_request).map_err(to_js_err)?;
+    let result = nvidia_nat_nexus_core::nat_nexus_llm_request_intercepts(name, llm_request)
+        .map_err(to_js_err)?;
     let result_json = serde_json::to_value(&result)
         .map_err(|e| to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string())))?;
     Ok(json_to_js(&result_json))
