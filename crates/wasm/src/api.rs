@@ -24,7 +24,9 @@
 //! where errors are thrown as JavaScript exceptions.
 
 use js_sys::Function;
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
 use nvidia_nat_nexus_core::types as core_types;
 
@@ -83,6 +85,87 @@ pub fn nat_nexus_push_scope(
 #[wasm_bindgen(js_name = "popScope")]
 pub fn nat_nexus_pop_scope(handle: &WasmScopeHandle) -> Result<(), JsValue> {
     nvidia_nat_nexus_core::nat_nexus_pop_scope(&handle.inner.uuid).map_err(to_js_err)
+}
+
+/// Pushes a scope, invokes the callback, then pops the scope automatically.
+///
+/// Creates a child scope with the given `name` and `scope_type`, calls the
+/// `callback` with a `WasmScopeHandle`, and guarantees the scope is popped
+/// when the callback returns (whether normally or by throwing). If the callback
+/// returns a `Promise`, the scope is popped after the Promise settles.
+///
+/// - `name` - Human-readable scope name.
+/// - `scope_type` - Integer scope type constant (e.g. `SCOPE_TYPE_AGENT`).
+/// - `callback` - A JS function `(handle) => result` or `(handle) => Promise<result>`.
+/// - `parent` - Optional parent scope handle; uses the current top if omitted.
+/// - `attributes` - Optional bitfield of scope attribute flags.
+/// - `data` - Optional JSON application data payload.
+/// - `metadata` - Optional JSON metadata payload.
+#[wasm_bindgen(js_name = "withScope")]
+pub fn nat_nexus_with_scope(
+    name: &str,
+    scope_type: i32,
+    callback: &Function,
+    parent: Option<WasmScopeHandle>,
+    attributes: Option<u32>,
+    data: JsValue,
+    metadata: JsValue,
+) -> Result<JsValue, JsValue> {
+    let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
+    let scope_handle = nvidia_nat_nexus_core::nat_nexus_push_scope(
+        name,
+        i32_to_scope_type(scope_type),
+        parent.as_ref().map(|h| &h.inner),
+        attrs,
+        opt_js_to_json(&data)?,
+        opt_js_to_json(&metadata)?,
+    )
+    .map(WasmScopeHandle::from)
+    .map_err(to_js_err)?;
+
+    let scope_uuid = scope_handle.inner.uuid;
+
+    // Call the callback with the scope handle.
+    let scope_handle_js: JsValue = scope_handle.into();
+    let result = callback.call1(&JsValue::NULL, &scope_handle_js);
+
+    match result {
+        Ok(ref val) if val.has_type::<js_sys::Promise>() => {
+            // Callback returned a Promise — defer pop to settlement.
+            let promise: JsValue = val.clone();
+
+            let then_uuid = scope_uuid;
+            let then_cb = Closure::once(move |resolved: JsValue| -> JsValue {
+                let _ = nvidia_nat_nexus_core::nat_nexus_pop_scope(&then_uuid);
+                resolved
+            });
+
+            let catch_uuid = scope_uuid;
+            let catch_cb = Closure::once(move |rejected: JsValue| -> JsValue {
+                let _ = nvidia_nat_nexus_core::nat_nexus_pop_scope(&catch_uuid);
+                // Re-throw by returning a rejected promise
+                js_sys::Promise::reject(&rejected).into()
+            });
+
+            // Chain .then(onFulfilled, onRejected) via JS interop.
+            let then_fn: Function = then_cb.into_js_value().unchecked_into();
+            let catch_fn: Function = catch_cb.into_js_value().unchecked_into();
+            let then_method: Function =
+                js_sys::Reflect::get(&promise, &"then".into())?.unchecked_into();
+            let chained = then_method.call2(&promise, &then_fn, &catch_fn)?;
+            Ok(chained)
+        }
+        Ok(val) => {
+            // Synchronous return — pop immediately.
+            let _ = nvidia_nat_nexus_core::nat_nexus_pop_scope(&scope_uuid);
+            Ok(val)
+        }
+        Err(err) => {
+            // Callback threw — pop and propagate the error.
+            let _ = nvidia_nat_nexus_core::nat_nexus_pop_scope(&scope_uuid);
+            Err(err)
+        }
+    }
 }
 
 /// Emits a custom event to all registered subscribers.

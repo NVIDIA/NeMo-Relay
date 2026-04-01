@@ -10,6 +10,7 @@ const lib = require('../index.js');
 
 const {
   getHandle, pushScope, popScope, event,
+  withScope,
   registerSubscriber, deregisterSubscriber,
   ScopeType,
   SCOPE_ATTR_PARALLEL, SCOPE_ATTR_RELOCATABLE,
@@ -75,6 +76,81 @@ describe('Scope operations', () => {
       assert.equal(scope.scopeType, st);
       popScope(scope);
     }
+  });
+});
+
+// ===========================================================================
+// withScope (context manager)
+// ===========================================================================
+
+describe('withScope', () => {
+  it('passes handle info to callback and auto-pops scope', async () => {
+    const before = getHandle();
+    let receivedHandle = null;
+    await withScope('with_scope_test', ScopeType.Agent, (handle) => {
+      receivedHandle = handle;
+    });
+    assert.ok(receivedHandle, 'callback should receive handle');
+    assert.ok(receivedHandle.uuid, 'handle should have uuid');
+    assert.equal(receivedHandle.name, 'with_scope_test');
+    assert.equal(receivedHandle.scopeType, ScopeType.Agent);
+
+    // Scope should be popped
+    const after = getHandle();
+    assert.equal(after.uuid, before.uuid, 'scope should be popped after withScope');
+  });
+
+  it('returns callback result', async () => {
+    const result = await withScope('result_test', ScopeType.Function, () => {
+      return { value: 42 };
+    });
+    assert.deepEqual(result, { value: 42 });
+  });
+
+  it('returns async callback result', async () => {
+    const result = await withScope('async_test', ScopeType.Function, async () => {
+      await new Promise(r => setTimeout(r, 10));
+      return { async: true };
+    });
+    assert.deepEqual(result, { async: true });
+  });
+
+  it('pops scope on synchronous throw', async () => {
+    const before = getHandle();
+    await assert.rejects(
+      () => withScope('throw_test', ScopeType.Tool, () => {
+        throw new Error('test error');
+      }),
+      /test error/,
+    );
+    const after = getHandle();
+    assert.equal(after.uuid, before.uuid, 'scope should be popped after throw');
+  });
+
+  it('pops scope on async rejection', async () => {
+    const before = getHandle();
+    await assert.rejects(
+      () => withScope('reject_test', ScopeType.Tool, async () => {
+        await new Promise(r => setTimeout(r, 10));
+        throw new Error('async error');
+      }),
+      /async error/,
+    );
+    const after = getHandle();
+    assert.equal(after.uuid, before.uuid, 'scope should be popped after rejection');
+  });
+
+  it('nested withScope calls', async () => {
+    const before = getHandle();
+    await withScope('outer', ScopeType.Agent, async (outerHandle) => {
+      assert.equal(outerHandle.name, 'outer');
+      await withScope('inner', ScopeType.Function, async (innerHandle) => {
+        assert.equal(innerHandle.name, 'inner');
+        assert.equal(innerHandle.parentUuid, outerHandle.uuid);
+      });
+    });
+    const after = getHandle();
+    assert.equal(after.uuid, before.uuid, 'all scopes should be popped');
   });
 });
 

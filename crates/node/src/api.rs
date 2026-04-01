@@ -154,6 +154,81 @@ pub fn pop_scope(handle: &JsScopeHandle) -> Result<()> {
     core::nat_nexus_pop_scope(&handle.inner.uuid).map_err(to_napi_err)
 }
 
+/// Push a scope, run a callback, then pop the scope automatically.
+///
+/// Creates a child scope with the given `name` and `scopeType`, invokes the
+/// `callback` with the new scope handle, and guarantees that the scope is popped
+/// when the callback completes (whether it returns normally, throws, or returns a
+/// rejected Promise). Supports both synchronous and async (Promise-returning)
+/// callbacks.
+///
+/// Optional `handle` sets the parent scope; `attributes` is a bitfield of scope
+/// attribute flags; `data` and `metadata` are JSON payloads attached to the scope.
+///
+/// Returns a Promise that resolves with the callback's return value.
+#[allow(clippy::too_many_arguments)]
+#[napi(ts_return_type = "Promise<unknown>")]
+pub fn with_scope(
+    env: Env,
+    name: String,
+    scope_type: ScopeType,
+    callback: napi::JsFunction,
+    handle: Option<&JsScopeHandle>,
+    attributes: Option<u32>,
+    data: Option<Json>,
+    metadata: Option<Json>,
+) -> Result<JsObject> {
+    let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
+    let scope_handle = core::nat_nexus_push_scope(
+        &name,
+        scope_type.into(),
+        handle.map(|h| &h.inner),
+        attrs,
+        opt_json(data),
+        opt_json(metadata),
+    )
+    .map(JsScopeHandle::from)
+    .map_err(to_napi_err)?;
+
+    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_uuid = scope_handle.inner.uuid;
+    let scope_name = scope_handle.inner.name.clone();
+    let scope_type_int: u32 = ScopeType::from(scope_handle.inner.scope_type) as u32;
+    let scope_attrs = scope_handle.inner.attributes.bits();
+    let scope_parent_uuid = scope_handle.inner.parent_uuid.map(|u| u.to_string());
+
+    // Create a promise-aware wrapper so we handle both sync and async callbacks.
+    let pa_fn = std::sync::Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &callback).map_err(|e| {
+            // Pop scope before propagating error
+            let _ = core::nat_nexus_pop_scope(&scope_uuid);
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
+        })?,
+    );
+
+    env.execute_tokio_future(
+        async move {
+            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+                .scope(scope_stack, async move {
+                    let handle_json = serde_json::json!({
+                        "uuid": scope_uuid.to_string(),
+                        "name": scope_name,
+                        "scopeType": scope_type_int,
+                        "attributes": scope_attrs,
+                        "parentUuid": scope_parent_uuid,
+                    });
+
+                    let result = pa_fn.call(handle_json).await;
+                    // Always pop the scope, even on error
+                    let _ = core::nat_nexus_pop_scope(&scope_uuid);
+                    result.map_err(to_napi_err)
+                })
+                .await
+        },
+        |_env, result| Ok(result),
+    )
+}
+
 /// Emit a custom mark event on the current scope.
 ///
 /// Emits a named event with optional `data` and `metadata` payloads. If `handle` is provided,
