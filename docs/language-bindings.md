@@ -402,15 +402,82 @@ cargo test -p nvidia-nat-nexus-wasm
 wasm-pack test --node crates/wasm
 ```
 
-### Usage
+### Build Targets
+
+`wasm-pack` supports several output targets depending on your runtime
+environment:
+
+```bash
+# Bundler (webpack, Vite, Rollup, etc.) — default
+wasm-pack build crates/wasm --target bundler
+
+# Standalone web (loads via <script type="module">, no bundler needed)
+wasm-pack build crates/wasm --target web
+
+# Node.js (CommonJS, for server-side or CLI usage)
+wasm-pack build crates/wasm --target nodejs
+```
+
+| Target | Output | Use Case |
+|--------|--------|----------|
+| `bundler` | ES module with `.wasm` sidecar | Bundled web apps (webpack, Vite) |
+| `web` | ES module with manual `init()` | Standalone `<script type="module">` |
+| `nodejs` | CommonJS with Node.js WASM loader | Server-side, CLI, or testing |
+
+When using `--target web`, you must call the default-exported `init()` function
+before invoking any other API:
 
 ```javascript
-import {
+import init, { pushScope, popScope } from './pkg/nvidia_nat_nexus_wasm.js';
+
+await init();  // loads and instantiates the .wasm binary
+// Now the API is ready
+```
+
+### Usage
+
+The following example demonstrates the full lifecycle: initializing the module,
+pushing a scope, registering a tool, executing the tool through the middleware
+pipeline, registering a guardrail, and popping the scope.
+
+```javascript
+import init, {
     pushScope, popScope,
+    toolCallExecute,
+    registerToolConditionalExecutionGuardrail,
+    SCOPE_TYPE_AGENT,
 } from './pkg/nvidia_nat_nexus_wasm.js';
 
-const handle = pushScope("agent", 0 /* SCOPE_TYPE_AGENT */, null, null);
-// ... operations ...
+// Required for --target web; no-op when using bundler or nodejs targets
+await init();
+
+// 1. Push a scope
+const handle = pushScope("my_agent", SCOPE_TYPE_AGENT, null, null, null, null);
+
+// 2. Register a guardrail that blocks dangerous tools
+registerToolConditionalExecutionGuardrail(
+    "block_dangerous", 1,
+    (name, args) => name === "rm" ? "blocked: dangerous tool" : null,
+);
+
+// 3. Define a tool function
+async function searchFunc(args) {
+    return { results: [`result for: ${args.q}`] };
+}
+
+// 4. Execute a tool through the full middleware pipeline
+const result = await toolCallExecute(
+    "search",
+    { q: "test" },
+    searchFunc,
+    null,  // parent (uses current scope)
+    null,  // attributes
+    null,  // data
+    null,  // metadata
+);
+console.log("Tool result:", result);
+
+// 5. Pop the scope
 popScope(handle);
 ```
 
@@ -439,12 +506,120 @@ scope_register_subscriber(
 popScope(handle);  // auto-cleanup
 ```
 
+### Streaming LLM Example
+
+The WASM binding supports streaming LLM responses through a collector/finalizer
+pattern. The `llmStreamCallExecute` function returns a `WasmLlmStream` object
+whose `next()` method yields `{ value, done }` chunks, compatible with the
+JavaScript async iterator protocol.
+
+```javascript
+import init, {
+    pushScope, popScope,
+    llmStreamCallExecute,
+    SCOPE_TYPE_AGENT,
+} from './pkg/nvidia_nat_nexus_wasm.js';
+
+await init();
+
+const handle = pushScope("llm_agent", SCOPE_TYPE_AGENT, null, null, null, null);
+
+// Collector: accumulates chunks as they arrive
+const chunks = [];
+function collector(chunk) {
+    chunks.push(chunk);
+}
+
+// Finalizer: called once when the stream ends; returns the aggregated response
+function finalizer() {
+    return { full_response: chunks.map(c => c.text || "").join("") };
+}
+
+// LLM function that returns a streaming response (simulated here)
+async function llmFunc(request) {
+    return { response: "streamed content" };
+}
+
+const request = {
+    headers: { "Authorization": "Bearer ..." },
+    content: { messages: [{ role: "user", content: "Hello" }], model: "gpt-4" },
+};
+
+// Execute the streaming call
+const stream = await llmStreamCallExecute(
+    "gpt-4",
+    request,
+    llmFunc,
+    collector,    // optional: receives each chunk
+    finalizer,    // optional: produces aggregated response on stream end
+    null,         // parent
+    null,         // attributes
+    null,         // data
+    null,         // metadata
+    "gpt-4",     // model_name
+);
+
+// Consume the stream
+while (true) {
+    const { value, done } = await stream.next();
+    if (done) break;
+    console.log("Chunk:", value);
+}
+
+popScope(handle);
+```
+
+### Promise-Aware `withScope`
+
+The `withScope` helper pushes a scope, runs a callback, and automatically pops
+the scope when the callback completes. If the callback returns a `Promise`,
+the scope remains active until the Promise settles (resolves or rejects),
+making it safe for async workflows:
+
+```javascript
+import { withScope, toolCallExecute, SCOPE_TYPE_AGENT } from './pkg/nvidia_nat_nexus_wasm.js';
+
+// Synchronous callback — scope is popped immediately on return
+const syncResult = withScope("sync_op", SCOPE_TYPE_AGENT, (handle) => {
+    return { status: "done" };
+});
+
+// Async callback — scope stays active until the Promise resolves
+const asyncResult = await withScope("async_op", SCOPE_TYPE_AGENT, async (handle) => {
+    const result = await toolCallExecute("search", { q: "test" }, searchFunc, null, null, null, null);
+    return result;
+});
+// Scope is automatically popped here, even if the Promise rejects
+```
+
+`withScope` also accepts optional `parent`, `attributes`, `data`, and
+`metadata` arguments after the callback, mirroring `pushScope`.
+
+### Browser CORS Requirements
+
+When deploying WASM modules in a browser, `SharedArrayBuffer` (required by
+some multi-threaded WASM configurations) is only available in
+[cross-origin-isolated](https://developer.mozilla.org/en-US/docs/Web/API/crossOriginIsolated)
+contexts. Your server must send the following HTTP headers:
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+Without these headers, browsers will block `SharedArrayBuffer` usage and
+the WASM module may fail to initialize. Note that Nexus WASM is
+single-threaded by default, so `SharedArrayBuffer` is only required if you
+opt into threaded builds (e.g., with `wasm-bindgen-rayon`).
+
 ### Differences from Node.js
 
-- Functions are prefixed with `natNexus` in some cases (via `#[wasm_bindgen(js_name = "...")]`)
+- Functions use camelCase JS names (via `#[wasm_bindgen(js_name = "...")]`)
 - Single-threaded (no worker thread isolation)
 - Uses `wasm_bindgen_futures::spawn_local()` for async execution
-- Stream objects expose an async `next()` method
+- Stream objects expose an async `next()` method returning `{ value, done }`
+- Scope type constants are exported as integer values (`SCOPE_TYPE_AGENT = 0`,
+  `SCOPE_TYPE_FUNCTION = 1`, etc.) rather than an enum object
 
 ## Comparison Table
 

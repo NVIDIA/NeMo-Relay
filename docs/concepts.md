@@ -143,12 +143,12 @@ Intercepts transform requests, responses, or replace execution functions entirel
 
 | Intercept | Callback Signature | Purpose |
 |-----------|--------------------|---------|
-| **Request** (Tool) | `(name, args) -> args` | Transform tool arguments |
-| **Response** (Tool) | `(name, result) -> result` | Transform tool results |
-| **Execution** (Tool) | `(args, next) -> result` | Middleware chain — call `next` or short-circuit |
-| **Request** (LLM) | `(request) -> request` | Transform LLM request |
-| **Execution** (LLM) | `(request, next) -> result` | Middleware chain |
-| **Stream Execution** (LLM) | `(request, next) -> stream` | Middleware chain for streaming |
+| **Request** (Tool) | `(tool_name, args) -> args` | Transform tool arguments |
+| **Response** (Tool) | `(tool_name, result) -> result` | Transform tool results |
+| **Execution** (Tool) | `(tool_name, args, next) -> result` | Middleware chain — call `next` or short-circuit |
+| **Request** (LLM) | `(llm_name, request) -> request` | Transform LLM request |
+| **Execution** (LLM) | `(llm_name, request, next) -> result` | Middleware chain |
+| **Stream Execution** (LLM) | `(llm_name, request, next) -> stream` | Middleware chain for streaming |
 
 Request and response intercepts support `break_chain` — when `true`, no lower-priority intercepts run after.
 
@@ -157,13 +157,13 @@ Request and response intercepts support `break_chain` — when `true`, no lower-
 Execution intercepts follow the middleware pattern. Each receives a `next` function to call the next intercept (or the original function):
 
 ```python
-async def logging_intercept(request, next):
-    print(f"Request: {request}")
+async def logging_intercept(name, request, next):
+    print(f"[{name}] Request: {request}")
     result = await next(request)
-    print(f"Response: {result}")
+    print(f"[{name}] Response: {result}")
     return result
 
-async def caching_intercept(request, next):
+async def caching_intercept(name, request, next):
     cached = cache.get(request)
     if cached:
         return cached          # Short-circuit — skip remaining chain
@@ -172,7 +172,7 @@ async def caching_intercept(request, next):
     return result
 ```
 
-The chain is built from innermost (lowest priority) to outermost (highest priority):
+All execution intercepts receive the operation name (tool name or LLM name) as the first parameter, enabling name-aware transformations. The chain is built from innermost (lowest priority) to outermost (highest priority):
 
 ```
 Call order: highest_priority → ... → lowest_priority → original_func

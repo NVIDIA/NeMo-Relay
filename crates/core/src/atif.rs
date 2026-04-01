@@ -4,10 +4,32 @@
 //! ATIF (Agent Trajectory Interchange Format) exporter.
 //!
 //! This module provides types and an exporter that collects lifecycle events
-//! from the Nexus runtime and converts them into ATIF trajectories.
+//! from the Nexus runtime and converts them into ATIF trajectories conforming
+//! to the ATIF v1.6 schema.
+//!
+//! # Overview
 //!
 //! The [`AtifExporter`] registers as an event subscriber, collects all events,
 //! and can export them as an [`AtifTrajectory`] via [`AtifExporter::export`].
+//!
+//! # Event-to-Step Mapping
+//!
+//! The core conversion from Nexus events to ATIF steps follows these rules:
+//!
+//! | Nexus Event     | ATIF Step               | Notes                                |
+//! |-----------------|-------------------------|--------------------------------------|
+//! | LLM Start       | `user` step             | Messages extracted from LLMRequest   |
+//! | LLM End         | `agent` step            | Response content, tool_calls promoted|
+//! | Tool Start      | *(skipped)*             | tool_calls come from LLM End instead |
+//! | Tool End        | `system` observation     | Consecutive tool ends merged         |
+//! | Mark (with data)| `system` step           | Custom event data preserved          |
+//! | Scope Start/End | *(skipped)*             | Structural events, not trajectory    |
+//!
+//! # Concurrent Agent Isolation
+//!
+//! When exporting, pass a `scope_uuid` to [`AtifExporter::export`] to filter
+//! events to a specific agent's root scope and its descendants. This enables
+//! concurrent agents to produce independent trajectory files.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -19,7 +41,10 @@ use crate::context::EventSubscriberFn;
 use crate::json::Json;
 use crate::types::{Event, EventType, ScopeType};
 
-/// The ATIF schema version produced by this exporter.
+/// The ATIF schema version string embedded in all exported trajectories.
+///
+/// Currently `"ATIF-v1.6"`. This constant is used by [`AtifTrajectory`]
+/// serialization and verified by downstream consumers to ensure compatibility.
 pub const ATIF_SCHEMA_VERSION: &str = "ATIF-v1.6";
 
 // ---------------------------------------------------------------------------

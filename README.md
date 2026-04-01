@@ -5,7 +5,51 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Agent Toolkit Nexus
 
-Multi-language agent runtime for execution scope management, lifecycle events, and middleware (guardrails/intercepts) on tool and LLM calls. Rust core with Python, Go, Node.js, and WASM bindings.
+## What is Nexus?
+
+Nexus is a multi-language agent runtime framework that gives AI agent developers a unified way to manage execution scopes, lifecycle events, and middleware pipelines across tool and LLM calls. Built as a high-performance Rust core with native bindings for Python, Go, Node.js, and WebAssembly, Nexus provides:
+
+- **Hierarchical scope management** -- organize agent execution into nested scopes with automatic cleanup, enabling clean multi-tenant and concurrent agent isolation.
+- **Middleware pipelines** -- plug in guardrails (sanitize or gate requests/responses) and intercepts (transform requests, wrap execution) with priority-based ordering and short-circuit support.
+- **Lifecycle event tracking** -- subscribe to structured events emitted at every stage of the tool/LLM call lifecycle, with typed fields for input, output, model name, tool call ID, and root scope UUID.
+- **ATIF trajectory export** -- automatically collect lifecycle events and export them as [ATIF v1.6](https://github.com/nvidia/ATIF) trajectory files for evaluation and debugging.
+- **Stream wrapping** -- buffer and parse SSE events from streaming LLM responses, feeding chunks to collectors and calling finalizers on stream end.
+
+Write your agent logic once and instrument it with Nexus middleware and events that work consistently across all supported languages.
+
+## Getting Started
+
+Install the Python package and run your first instrumented agent call in a few lines:
+
+```python
+import nat_nexus
+
+# Subscribe to lifecycle events
+nat_nexus.subscribers.register("logger", lambda event: print(f"[{event.event_type}] {event.name}"))
+
+# Execute a tool call inside an agent scope (inside an async function)
+with nat_nexus.scope.scope("my-agent", nat_nexus.ScopeType.Agent):
+    result = await nat_nexus.tools.execute("search", {"query": "hello"}, my_tool_func)
+```
+
+For complete quick-start examples in all supported languages, see the [Language Bindings](docs/language-bindings.md) guide. A fully worked example with LangChain integration is available in [examples/](examples/).
+
+## Documentation
+
+Comprehensive documentation lives in the [docs/](docs/) directory. Start with the [Documentation Index](docs/README.md) for a guided reading order.
+
+| Document | Description |
+|----------|-------------|
+| [Architecture Overview](docs/architecture.md) | High-level system design, binding layers, and data flow |
+| [Core Concepts](docs/concepts.md) | Scopes, handles, events, and the middleware pipeline |
+| [API Reference](docs/api-reference.md) | Complete function signatures for all operations |
+| [Middleware Pipeline](docs/middleware-pipeline.md) | Detailed pipeline ordering for tool and LLM calls |
+| [Typed Wrappers](docs/typed-wrappers.md) | Codec-based typed APIs for Python and Node.js |
+| [Context Isolation](docs/context-isolation.md) | Multi-tenant and concurrent scope stack management |
+| [ATIF Export](docs/atif-export.md) | Agent Trajectory Interchange Format export |
+| [Language Bindings](docs/language-bindings.md) | Per-language usage guides and naming conventions |
+| [Integration Best Practices](docs/integration-best-practices.md) | Patterns for integrating Nexus into existing agent frameworks |
+| [Testing](docs/testing.md) | Testing strategy and how to run tests across all languages |
 
 ## Repository Structure
 
@@ -18,6 +62,8 @@ crates/
   wasm/       # wasm-bindgen WebAssembly bindings
 python/       # Python wrapper module (nat_nexus/)
 go/           # Go CGo bindings
+docs/         # Comprehensive documentation
+examples/     # Runnable example scripts
 ```
 
 ## Prerequisites
@@ -86,20 +132,20 @@ uv run pytest                          # Runs tests in python/tests/
 ```bash
 cd go/nat_nexus && \
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" \
-go test -v ./...
+go test -race -v ./...
 ```
 
 ## Dev Tooling
 
 Pre-commit hooks run automatically on `git commit` after setup (`uv run pre-commit install`). The hooks enforce:
 
-**General** — trailing whitespace, EOF fixup, YAML/TOML/JSON validity, merge conflict markers, large file check (500 KB max).
+**General** -- trailing whitespace, EOF fixup, YAML/TOML/JSON validity, merge conflict markers, large file check (500 KB max).
 
-**Python** — [Ruff](https://docs.astral.sh/ruff/) for linting (`E`, `F`, `W`, `I` rules) and formatting (line length 120, double quotes). [ty](https://github.com/astral-sh/ty) for type checking.
+**Python** -- [Ruff](https://docs.astral.sh/ruff/) for linting (`E`, `F`, `W`, `I` rules) and formatting (line length 120, double quotes). [ty](https://github.com/astral-sh/ty) for type checking.
 
-**Rust** — `cargo fmt` for formatting, `cargo clippy` with `-D warnings` for lints, `cargo deny` for license/advisory auditing (configured in `deny.toml`).
+**Rust** -- `cargo fmt` for formatting, `cargo clippy` with `-D warnings` for lints, `cargo deny` for license/advisory auditing (configured in `deny.toml`).
 
-**Go** — `gofmt` for formatting, `go vet` for static analysis.
+**Go** -- `gofmt` for formatting, `go vet` for static analysis.
 
 ## Architecture Overview
 
@@ -182,9 +228,17 @@ flowchart TB
 
 Key mechanisms:
 
-- **Intercept chains** — priority-ordered middleware that can transform requests; supports `break_chain` for short-circuit. Execution intercepts wrap the callable in a middleware chain pattern.
-- **Guardrails** — sanitize (modify) or gate (allow/reject) at request and response boundaries.
-- **Stream wrapping** — `LlmStreamWrapper` buffers and parses SSE events, feeding chunks to the collector and calling the finalizer on stream end.
-- **Event subscribers** — observer pattern with named subscribers for lifecycle events. Events carry typed lifecycle fields (`input`, `output`, `model_name`, `tool_call_id`, `root_uuid`) in addition to custom `data`/`metadata`.
-- **Context propagation** — `tokio::task_local` for async, thread-local for sync paths.
-- **ATIF trajectory export** — `AtifExporter` registers as an event subscriber and exports [ATIF v1.6](https://github.com/nvidia/ATIF) trajectories from collected lifecycle events. LLM calls map to user/agent steps; tool calls map to tool_calls/observations. Filter by `root_uuid` to isolate concurrent agents. Available in all bindings.
+- **Intercept chains** -- priority-ordered middleware that can transform requests; supports `break_chain` for short-circuit. Execution intercepts wrap the callable in a middleware chain pattern.
+- **Guardrails** -- sanitize (modify) or gate (allow/reject) at request and response boundaries.
+- **Stream wrapping** -- `LlmStreamWrapper` buffers and parses SSE events, feeding chunks to the collector and calling the finalizer on stream end.
+- **Event subscribers** -- observer pattern with named subscribers for lifecycle events. Events carry typed lifecycle fields (`input`, `output`, `model_name`, `tool_call_id`, `root_uuid`) in addition to custom `data`/`metadata`.
+- **Context propagation** -- `tokio::task_local` for async, thread-local for sync paths.
+- **ATIF trajectory export** -- `AtifExporter` registers as an event subscriber and exports [ATIF v1.6](https://github.com/nvidia/ATIF) trajectories from collected lifecycle events. LLM calls map to user/agent steps; tool calls map to tool_calls/observations. Filter by `root_uuid` to isolate concurrent agents. Available in all bindings.
+
+## Contributing
+
+See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for development setup, coding standards, and the pull request process.
+
+## License
+
+Nexus is licensed under the [Apache License 2.0](LICENSE). All source files must include SPDX license headers.

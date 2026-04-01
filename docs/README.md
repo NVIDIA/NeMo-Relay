@@ -19,6 +19,10 @@ Nexus is a multi-language agent runtime framework providing execution scope mana
 | [Context Isolation](context-isolation.md) | Multi-tenant and concurrent scope stack management |
 | [ATIF Export](atif-export.md) | Agent Trajectory Interchange Format export |
 | [Language Bindings](language-bindings.md) | Per-language usage guides and naming conventions |
+| [Testing](testing.md) | Test commands, helpers, coverage, and conventions |
+| [Integration Best Practices](integration-best-practices.md) | Patterns for integrating Nexus into agent frameworks |
+
+See also: [Contributing Guide](../.github/CONTRIBUTING.md) for development setup, branch naming, and PR process.
 
 ## Quick Start
 
