@@ -40,11 +40,24 @@ use crate::py_types::PyLLMRequest;
 pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
     Box::new(move |name: &str, args: Json| {
         Python::attach(|py| {
-            let py_args = json_to_py(py, &args).expect("json_to_py failed");
-            let result = py_fn
-                .call1(py, (name, py_args))
-                .expect("Python callable failed");
-            py_to_json(result.bind(py)).expect("py_to_json failed")
+            let py_args = match json_to_py(py, &args) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("nat_nexus: json_to_py failed in tool fn for '{name}': {e}");
+                    return args.clone();
+                }
+            };
+            let result = match py_fn.call1(py, (name, py_args)) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("nat_nexus: Python tool callable failed for '{name}': {e}");
+                    return args.clone();
+                }
+            };
+            py_to_json(result.bind(py)).unwrap_or_else(|e| {
+                eprintln!("nat_nexus: py_to_json failed in tool fn for '{name}': {e}");
+                args.clone()
+            })
         })
     })
 }
@@ -55,15 +68,32 @@ pub fn wrap_py_tool_conditional_fn(
 ) -> Box<dyn Fn(&str, &Json) -> Option<String> + Send + Sync> {
     Box::new(move |name: &str, args: &Json| {
         Python::attach(|py| {
-            let py_args = json_to_py(py, args).expect("json_to_py failed");
-            let result = py_fn
-                .call1(py, (name, py_args))
-                .expect("Python callable failed");
+            let py_args = match json_to_py(py, args) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Some(format!(
+                        "tool conditional guardrail error for '{name}': json_to_py failed: {e}"
+                    ));
+                }
+            };
+            let result = match py_fn.call1(py, (name, py_args)) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Some(format!(
+                        "tool conditional guardrail error for '{name}': callable failed: {e}"
+                    ));
+                }
+            };
             let bound = result.bind(py);
             if bound.is_none() {
                 None
             } else {
-                Some(bound.extract::<String>().expect("Expected str or None"))
+                match bound.extract::<String>() {
+                    Ok(s) => Some(s),
+                    Err(e) => Some(format!(
+                        "tool conditional guardrail error for '{name}': expected str or None: {e}"
+                    )),
+                }
             }
         })
     })
@@ -480,12 +510,26 @@ pub fn wrap_py_llm_sanitize_request_fn(
 ) -> Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync> {
     Box::new(move |request: LLMRequest| {
         Python::attach(|py| {
-            let py_req = PyLLMRequest { inner: request };
-            let result = py_fn.call1(py, (py_req,)).expect("Python callable failed");
-            result
-                .extract::<PyLLMRequest>(py)
-                .expect("Expected LLMRequest")
-                .inner
+            let py_req = PyLLMRequest {
+                inner: request.clone(),
+            };
+            let result = match py_fn.call1(py, (py_req,)) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("nat_nexus: LLM sanitize request guardrail callable failed: {e}");
+                    return request;
+                }
+            };
+            match result.extract::<PyLLMRequest>(py) {
+                Ok(r) => r.inner,
+                Err(e) => {
+                    eprintln!(
+                        "nat_nexus: LLM sanitize request guardrail returned unexpected type \
+                         (expected LLMRequest): {e}"
+                    );
+                    request
+                }
+            }
         })
     })
 }
@@ -499,12 +543,23 @@ pub fn wrap_py_llm_conditional_fn(
             let py_req = PyLLMRequest {
                 inner: request.clone(),
             };
-            let result = py_fn.call1(py, (py_req,)).expect("Python callable failed");
+            let result = match py_fn.call1(py, (py_req,)) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Some(format!("LLM conditional guardrail callable failed: {e}"));
+                }
+            };
             let bound = result.bind(py);
             if bound.is_none() {
                 None
             } else {
-                Some(bound.extract::<String>().expect("Expected str or None"))
+                match bound.extract::<String>() {
+                    Ok(s) => Some(s),
+                    Err(e) => Some(format!(
+                        "LLM conditional guardrail returned unexpected type \
+                         (expected str or None): {e}"
+                    )),
+                }
             }
         })
     })
@@ -516,14 +571,26 @@ pub fn wrap_py_llm_request_intercept_fn(
 ) -> Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync> {
     Box::new(move |request: LLMRequest| {
         Python::attach(|py| {
-            let py_req = PyLLMRequest { inner: request };
-            let result = py_fn
-                .call1(py, (py_req,))
-                .expect("request intercept failed");
-            result
-                .extract::<PyLLMRequest>(py)
-                .expect("Expected LLMRequest")
-                .inner
+            let py_req = PyLLMRequest {
+                inner: request.clone(),
+            };
+            let result = match py_fn.call1(py, (py_req,)) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("nat_nexus: LLM request intercept callable failed: {e}");
+                    return request;
+                }
+            };
+            match result.extract::<PyLLMRequest>(py) {
+                Ok(r) => r.inner,
+                Err(e) => {
+                    eprintln!(
+                        "nat_nexus: LLM request intercept returned unexpected type \
+                         (expected LLMRequest): {e}"
+                    );
+                    request
+                }
+            }
         })
     })
 }
@@ -705,10 +772,16 @@ pub fn wrap_py_llm_stream_exec_fn(
 pub fn wrap_py_collector_fn(py_fn: Py<PyAny>) -> Box<dyn FnMut(Json) + Send> {
     Box::new(move |chunk: Json| {
         Python::attach(|py| {
-            let py_chunk = json_to_py(py, &chunk).expect("json_to_py failed in collector");
-            py_fn
-                .call1(py, (py_chunk,))
-                .expect("Python collector callable failed");
+            let py_chunk = match json_to_py(py, &chunk) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("nat_nexus: json_to_py failed in collector: {e}");
+                    return;
+                }
+            };
+            if let Err(e) = py_fn.call1(py, (py_chunk,)) {
+                eprintln!("nat_nexus: Python collector callable failed: {e}");
+            }
         })
     })
 }
@@ -721,8 +794,17 @@ pub fn wrap_py_collector_fn(py_fn: Py<PyAny>) -> Box<dyn FnMut(Json) + Send> {
 pub fn wrap_py_finalizer_fn(py_fn: Py<PyAny>) -> Box<dyn FnOnce() -> Json + Send> {
     Box::new(move || {
         Python::attach(|py| {
-            let result = py_fn.call0(py).expect("Python finalizer callable failed");
-            py_to_json(result.bind(py)).expect("py_to_json failed in finalizer")
+            let result = match py_fn.call0(py) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("nat_nexus: Python finalizer callable failed: {e}");
+                    return Json::Null;
+                }
+            };
+            py_to_json(result.bind(py)).unwrap_or_else(|e| {
+                eprintln!("nat_nexus: py_to_json failed in finalizer: {e}");
+                Json::Null
+            })
         })
     })
 }
@@ -733,9 +815,26 @@ pub fn wrap_py_llm_sanitize_response_fn(
 ) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
     Box::new(move |response: Json| {
         Python::attach(|py| {
-            let py_resp = json_to_py(py, &response).expect("json_to_py failed");
-            let result = py_fn.call1(py, (py_resp,)).expect("Python callable failed");
-            py_to_json(result.bind(py)).expect("py_to_json failed")
+            let py_resp = match json_to_py(py, &response) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!(
+                        "nat_nexus: json_to_py failed in LLM sanitize response guardrail: {e}"
+                    );
+                    return response.clone();
+                }
+            };
+            let result = match py_fn.call1(py, (py_resp,)) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("nat_nexus: LLM sanitize response guardrail callable failed: {e}");
+                    return response.clone();
+                }
+            };
+            py_to_json(result.bind(py)).unwrap_or_else(|e| {
+                eprintln!("nat_nexus: py_to_json failed in LLM sanitize response guardrail: {e}");
+                response.clone()
+            })
         })
     })
 }
