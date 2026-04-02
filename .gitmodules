@@ -10,3 +10,6 @@
 [submodule "third_party/openclaw"]
 	path = third_party/openclaw
 	url = https://github.com/openclaw/openclaw
+[submodule "third_party/langgraph"]
+	path = third_party/langgraph
+	url = https://github.com/langchain-ai/langgraph.git
