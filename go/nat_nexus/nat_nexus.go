@@ -538,11 +538,13 @@ func ToolCallEnd(handle *ToolHandle, result json.RawMessage, opts ...ToolCallOpt
 
 // ToolCallExecute runs a complete tool call lifecycle through the full
 // middleware pipeline: conditional-execution guardrails (on raw args),
-// request intercepts, sanitize-request guardrails, execution intercepts,
-// the provided fn, sanitize-response guardrails.
+// request intercepts, sanitize-request guardrails for the emitted Start event
+// payload, execution intercepts, the provided fn, and sanitize-response
+// guardrails for the emitted End event payload.
 // On rejection, only a standalone Mark event is emitted (no Start/End pair)
 // and GuardrailRejected is returned. This is the recommended high-level API
-// for tool invocations.
+// for tool invocations. Sanitize guardrails do not rewrite the value passed
+// into fn or the value returned to the caller.
 func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, opts ...ToolCallOption) (json.RawMessage, error) {
 	o := &toolCallOptions{}
 	for _, opt := range opts {
@@ -703,11 +705,13 @@ func LlmCallEnd(handle *LLMHandle, response json.RawMessage, opts ...LLMCallOpti
 
 // LlmCallExecute runs a complete LLM call lifecycle through the full
 // middleware pipeline: conditional-execution guardrails (on raw request),
-// request intercepts, sanitize-request guardrails, execution intercepts,
-// the provided fn, sanitize-response guardrails.
+// request intercepts, sanitize-request guardrails for the emitted Start event
+// payload, execution intercepts, the provided fn, and sanitize-response
+// guardrails for the emitted End event payload.
 // On rejection, only a standalone Mark event is emitted (no Start/End pair)
 // and GuardrailRejected is returned. This is the recommended high-level API
-// for non-streaming LLM invocations.
+// for non-streaming LLM invocations. Sanitize guardrails do not rewrite the
+// request passed into fn or the value returned to the caller.
 func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts ...LLMCallOption) (json.RawMessage, error) {
 	o := &llmCallOptions{}
 	for _, opt := range opts {
@@ -748,7 +752,9 @@ func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts 
 
 // LlmStreamCallExecute runs a streaming LLM call lifecycle. Like
 // [LlmCallExecute], conditional-execution guardrails run first on the raw
-// request. If accepted, it runs the remaining middleware pipeline and returns
+// request. Sanitize-request guardrails affect the emitted Start event payload,
+// while sanitize-response guardrails affect only the aggregated End event
+// payload. If accepted, it runs the remaining middleware pipeline and returns
 // an [LlmStream] that yields individual SSE (Server-Sent Event) chunks.
 // Stream execution intercepts are applied to each chunk as it is consumed.
 // The caller must call [LlmStream.Next] repeatedly until [io.EOF] is

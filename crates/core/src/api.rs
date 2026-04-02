@@ -155,9 +155,13 @@ macro_rules! execution_intercept_registry_api {
 // ---------------------------------------------------------------------------
 
 guardrail_registry_api!(
-    /// Register a tool request sanitize guardrail that transforms tool arguments before execution.
+    /// Register a tool request sanitize guardrail that rewrites the payload recorded on tool
+    /// lifecycle events.
     ///
     /// Callback signature: `(tool_name: &str, args: Json) -> Json`.
+    /// In the managed `*_execute` APIs, sanitize guardrails are observability-oriented:
+    /// they affect the `Start` event payload, but request intercepts still control the
+    /// actual execution input.
     ///
     /// # Errors
     ///
@@ -169,9 +173,12 @@ guardrail_registry_api!(
 );
 
 guardrail_registry_api!(
-    /// Register a tool response sanitize guardrail that transforms tool results after execution.
+    /// Register a tool response sanitize guardrail that rewrites the payload recorded on tool
+    /// lifecycle events.
     ///
     /// Callback signature: `(tool_name: &str, result: Json) -> Json`.
+    /// In the managed `*_execute` APIs, sanitize guardrails affect the `End` event payload,
+    /// not the value returned to the caller.
     nat_nexus_register_tool_sanitize_response_guardrail,
     nat_nexus_deregister_tool_sanitize_response_guardrail,
     tool_sanitize_response_guardrails,
@@ -223,9 +230,12 @@ execution_intercept_registry_api!(
 // ---------------------------------------------------------------------------
 
 guardrail_registry_api!(
-    /// Register an LLM request sanitize guardrail that transforms the request before execution.
+    /// Register an LLM request sanitize guardrail that rewrites the payload recorded on LLM
+    /// lifecycle events.
     ///
     /// Callback signature: `(request: LLMRequest) -> LLMRequest`.
+    /// In the managed `*_execute` APIs, sanitize guardrails affect the `Start` event payload,
+    /// while request intercepts still control the request passed into execution.
     nat_nexus_register_llm_sanitize_request_guardrail,
     nat_nexus_deregister_llm_sanitize_request_guardrail,
     llm_sanitize_request_guardrails,
@@ -233,9 +243,12 @@ guardrail_registry_api!(
 );
 
 guardrail_registry_api!(
-    /// Register an LLM response sanitize guardrail that transforms the response after execution.
+    /// Register an LLM response sanitize guardrail that rewrites the payload recorded on LLM
+    /// lifecycle events.
     ///
     /// Callback signature: `(response: Json) -> Json`.
+    /// In the managed `*_execute` APIs, sanitize guardrails affect the `End` event payload,
+    /// not the value returned to the caller.
     nat_nexus_register_llm_sanitize_response_guardrail,
     nat_nexus_deregister_llm_sanitize_response_guardrail,
     llm_sanitize_response_guardrails,
@@ -717,9 +730,9 @@ pub fn nat_nexus_tool_call_end(
 }
 
 /// Executes a complete tool call lifecycle: conditional guardrails (on the raw
-/// request), request intercepts, sanitize guardrails, execution (with middleware
-/// chain of execution intercepts), and sanitize response
-/// guardrails.
+/// request), request intercepts, sanitize guardrails for lifecycle event
+/// payloads, execution (with middleware chain of execution intercepts), and
+/// sanitize response guardrails for lifecycle event payloads.
 ///
 /// Conditional execution guardrails run **before** request intercepts so that
 /// they gate on the unmodified input. On rejection, only a standalone `Mark`
@@ -880,8 +893,9 @@ pub fn nat_nexus_llm_call_end(
 }
 
 /// Executes a complete non-streaming LLM call lifecycle: conditional guardrails,
-/// request intercepts, sanitize guardrails, execution (with optional intercept
-/// override), and sanitize response guardrails.
+/// request intercepts, sanitize guardrails for lifecycle event payloads,
+/// execution (with optional intercept override), and sanitize response
+/// guardrails for lifecycle event payloads.
 ///
 /// The entire pipeline operates on [`LLMRequest`]. Conditional execution
 /// guardrails run **before** request intercepts so that they gate on the

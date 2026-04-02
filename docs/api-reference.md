@@ -78,6 +78,11 @@ result = await nat_nexus.tools.execute(
 ) -> dict
 ```
 
+In managed execute APIs, sanitize-request and sanitize-response guardrails are
+observability-oriented: they rewrite the payload recorded on lifecycle events,
+but request intercepts still control what `func(...)` receives and callers
+still receive the raw execution result.
+
 ### Standalone Middleware
 
 ```python
@@ -146,6 +151,11 @@ stream = await nat_nexus.llm.stream_execute(
     model_name: str | None = None,
 ) -> LlmStream
 ```
+
+For managed LLM execute APIs, sanitize guardrails affect lifecycle event
+payloads (`Start.input`, `End.output`) rather than the request passed into
+`func(...)` or the value returned to the caller. Use request intercepts to
+rewrite execution inputs.
 
 ### Standalone Middleware
 
