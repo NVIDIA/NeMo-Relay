@@ -52,3 +52,4 @@ $RECYCLE.BIN/
 
 # Temporary files
 .tmp/
+.planning/

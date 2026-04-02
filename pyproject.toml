@@ -36,7 +36,7 @@ default-groups = ["dev", "test"]
 package = true
 
 [tool.pytest.ini_options]
-testpaths = ["python/tests"]
+testpaths = ["python/tests", "third_party/langgraph_tests"]
 asyncio_mode = "auto"
 
 [tool.ty.analysis]
