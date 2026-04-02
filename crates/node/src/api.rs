@@ -367,10 +367,11 @@ pub fn tool_call_end(
 /// Execute a tool call end-to-end with full lifecycle management.
 ///
 /// Runs conditional-execution guardrails (on raw args) → request intercepts →
-/// sanitize-request guardrails → execution intercepts → `func` → response
-/// intercepts → sanitize-response guardrails. On rejection, only a standalone
-/// Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned.
-/// Returns the final (possibly intercepted) tool result.
+/// sanitize-request guardrails for the emitted `Start` event payload →
+/// execution intercepts → `func` → sanitize-response guardrails for the emitted
+/// `End` event payload. On rejection, only a standalone Mark event is emitted
+/// (no Start/End pair) and `GuardrailRejected` is returned. Returns the final
+/// execution result; sanitize guardrails do not rewrite the caller-visible value.
 #[allow(clippy::too_many_arguments)]
 #[napi(ts_return_type = "Promise<unknown>")]
 pub fn tool_call_execute(
@@ -530,11 +531,13 @@ pub fn llm_call_end(
 /// Execute an LLM call end-to-end with full lifecycle management.
 ///
 /// Runs conditional-execution guardrails (on raw request) → request intercepts →
-/// sanitize-request guardrails → execution intercepts → `func` → response
-/// intercepts → sanitize-response guardrails. On rejection, only a standalone
-/// Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned.
-/// The `request` should be a JSON object with `headers` and `content` fields matching
-/// the `LLMRequest` schema. Returns the final (possibly intercepted) LLM response.
+/// sanitize-request guardrails for the emitted `Start` event payload →
+/// execution intercepts → `func` → sanitize-response guardrails for the emitted
+/// `End` event payload. On rejection, only a standalone Mark event is emitted
+/// (no Start/End pair) and `GuardrailRejected` is returned. The `request`
+/// should be a JSON object with `headers` and `content` fields matching the
+/// `LLMRequest` schema. Returns the final execution response; sanitize
+/// guardrails do not rewrite the caller-visible value.
 #[allow(clippy::too_many_arguments)]
 #[napi(ts_return_type = "Promise<unknown>")]
 pub fn llm_call_execute(
@@ -585,8 +588,10 @@ pub fn llm_call_execute(
 /// Execute a streaming LLM call end-to-end with full lifecycle management.
 ///
 /// Like `llmCallExecute`, conditional-execution guardrails run first on the raw request.
+/// Sanitize-request guardrails only affect the emitted `Start` event payload, and
+/// sanitize-response guardrails only affect the aggregated `End` event payload.
 /// Returns an `LlmStream` whose `next()` method yields response chunks incrementally.
-/// The `func` callback receives the request as JSON and its response is streamed back.
+/// The `func` callback receives the intercepted request as JSON and its response is streamed back.
 /// Stream-level intercepts are applied to each chunk.
 /// The `request` should be a JSON object with `headers` and `content` fields matching
 /// the `LLMRequest` schema.
