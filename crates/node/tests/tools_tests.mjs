@@ -15,7 +15,6 @@ const {
   registerToolSanitizeResponseGuardrail, deregisterToolSanitizeResponseGuardrail,
   registerToolConditionalExecutionGuardrail, deregisterToolConditionalExecutionGuardrail,
   registerToolRequestIntercept, deregisterToolRequestIntercept,
-  registerToolResponseIntercept, deregisterToolResponseIntercept,
   registerToolExecutionIntercept, deregisterToolExecutionIntercept,
   registerSubscriber, deregisterSubscriber,
   ScopeType, TOOL_ATTR_LOCAL,
@@ -127,11 +126,6 @@ describe('Tool intercepts', () => {
     deregisterToolRequestIntercept('node_tool_req_int');
   });
 
-  it('response intercept register/deregister', () => {
-    registerToolResponseIntercept('node_tool_resp_int', 10, false, (name, result) => { result.processed = true; return result; });
-    deregisterToolResponseIntercept('node_tool_resp_int');
-  });
-
   it('execution intercept register/deregister', () => {
     registerToolExecutionIntercept('node_tool_exec_int', 10, (args) => ({ intercepted: true }));
     deregisterToolExecutionIntercept('node_tool_exec_int');
@@ -153,13 +147,6 @@ describe('Tool intercepts', () => {
     const result = await toolCallExecute('mod_tool', { original: true }, (args) => args, null, null, null, null);
     assert.equal(result.added, 'yes');
     deregisterToolRequestIntercept('node_tool_req_mod');
-  });
-
-  it('response intercept modifies result', async () => {
-    registerToolResponseIntercept('node_tool_resp_mod', 10, false, (name, result) => { result.post_processed = true; return result; });
-    const result = await toolCallExecute('resp_mod_tool', {}, (args) => ({ value: 42 }), null, null, null, null);
-    assert.equal(result.post_processed, true);
-    deregisterToolResponseIntercept('node_tool_resp_mod');
   });
 
   it('execution intercept replaces func', async () => {

@@ -665,36 +665,6 @@ pub fn deregister_tool_request_intercept(name: &str) -> Result<bool, JsValue> {
     nvidia_nat_nexus_core::nat_nexus_deregister_tool_request_intercept(name).map_err(to_js_err)
 }
 
-/// Registers an intercept that transforms tool response data.
-///
-/// - `name` - Unique intercept name.
-/// - `priority` - Execution priority (lower runs first).
-/// - `break_chain` - If `true`, stops further intercepts from running after this one.
-/// - `func` - JS function `(name, result) => transformedResult`.
-#[wasm_bindgen(js_name = "registerToolResponseIntercept")]
-pub fn register_tool_response_intercept(
-    name: &str,
-    priority: i32,
-    break_chain: bool,
-    func: Function,
-) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_register_tool_response_intercept(
-        name,
-        priority,
-        break_chain,
-        callable::wrap_js_tool_fn(func),
-    )
-    .map_err(to_js_err)
-}
-
-/// Removes a previously registered tool response intercept by name.
-///
-/// Returns `true` if the intercept was found and removed.
-#[wasm_bindgen(js_name = "deregisterToolResponseIntercept")]
-pub fn deregister_tool_response_intercept(name: &str) -> Result<bool, JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_deregister_tool_response_intercept(name).map_err(to_js_err)
-}
-
 /// Registers a tool execution intercept following the middleware chain pattern.
 ///
 /// - `name` - Unique intercept name.
@@ -1096,47 +1066,6 @@ pub fn scope_deregister_tool_request_intercept(
         .map_err(to_js_err)
 }
 
-/// Registers a scope-local intercept that transforms tool response data.
-///
-/// - `scope_uuid` - UUID of the scope to register on.
-/// - `name` - Unique intercept name.
-/// - `priority` - Execution priority (lower runs first).
-/// - `break_chain` - If `true`, stops further intercepts from running after this one.
-/// - `func` - JS function `(name, result) => transformedResult`.
-#[wasm_bindgen(js_name = "scopeRegisterToolResponseIntercept")]
-pub fn scope_register_tool_response_intercept(
-    scope_uuid: &str,
-    name: &str,
-    priority: i32,
-    break_chain: bool,
-    func: Function,
-) -> Result<(), JsValue> {
-    let uuid = uuid::Uuid::parse_str(scope_uuid)
-        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_register_tool_response_intercept(
-        &uuid,
-        name,
-        priority,
-        break_chain,
-        callable::wrap_js_tool_fn(func),
-    )
-    .map_err(to_js_err)
-}
-
-/// Removes a scope-local tool response intercept by name.
-///
-/// Returns `true` if the intercept was found and removed from the specified scope.
-#[wasm_bindgen(js_name = "scopeDeregisterToolResponseIntercept")]
-pub fn scope_deregister_tool_response_intercept(
-    scope_uuid: &str,
-    name: &str,
-) -> Result<bool, JsValue> {
-    let uuid = uuid::Uuid::parse_str(scope_uuid)
-        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_deregister_tool_response_intercept(&uuid, name)
-        .map_err(to_js_err)
-}
-
 /// Registers a scope-local tool execution intercept following the middleware chain pattern.
 ///
 /// - `scope_uuid` - UUID of the scope to register on.
@@ -1517,18 +1446,6 @@ pub fn nat_nexus_tool_request_intercepts_wasm(
 pub fn nat_nexus_tool_conditional_execution_wasm(name: &str, args: JsValue) -> Result<(), JsValue> {
     let args_json = js_to_json(&args)?;
     nvidia_nat_nexus_core::nat_nexus_tool_conditional_execution(name, &args_json).map_err(to_js_err)
-}
-
-/// Runs the registered tool response intercept chain on the given result.
-#[wasm_bindgen(js_name = "toolResponseIntercepts")]
-pub fn nat_nexus_tool_response_intercepts_wasm(
-    name: &str,
-    result: JsValue,
-) -> Result<JsValue, JsValue> {
-    let result_json = js_to_json(&result)?;
-    let transformed = nvidia_nat_nexus_core::nat_nexus_tool_response_intercepts(name, result_json)
-        .map_err(to_js_err)?;
-    Ok(json_to_js(&transformed))
 }
 
 /// Runs the registered LLM request intercept chain on the given `LLMRequest`.

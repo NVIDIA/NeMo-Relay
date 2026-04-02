@@ -258,13 +258,6 @@ fn test_tool_request_intercept() {
 }
 
 #[wasm_bindgen_test]
-fn test_tool_response_intercept() {
-    let func = js_fn2("name, result", "result.processed = true; return result");
-    register_tool_response_intercept("wasm_tool_resp_int", 10, false, func).unwrap();
-    deregister_tool_response_intercept("wasm_tool_resp_int").unwrap();
-}
-
-#[wasm_bindgen_test]
 fn test_tool_execution_intercept() {
     let exec = js_fn1("args", "return {intercepted: true}");
     register_tool_execution_intercept("wasm_tool_exec_int", 10, exec).unwrap();
@@ -311,34 +304,6 @@ async fn test_tool_request_intercept_modifies_args() {
     assert_eq!(added.as_string().unwrap(), "yes");
 
     deregister_tool_request_intercept("wasm_tool_req_mod").unwrap();
-}
-
-#[wasm_bindgen_test]
-async fn test_tool_response_intercept_modifies_result() {
-    let func = js_fn2(
-        "name, result",
-        "result.post_processed = true; return result",
-    );
-    register_tool_response_intercept("wasm_tool_resp_mod", 10, false, func).unwrap();
-
-    let exec = js_fn1("args", "return {value: 42}");
-    let args = parse_json(r#"{}"#);
-    let result = nat_nexus_tool_call_execute(
-        "resp_mod_tool",
-        args,
-        exec,
-        None,
-        None,
-        JsValue::NULL,
-        JsValue::NULL,
-    )
-    .await
-    .unwrap();
-
-    let pp = js_sys::Reflect::get(&result, &"post_processed".into()).unwrap();
-    assert!(pp.as_bool().unwrap());
-
-    deregister_tool_response_intercept("wasm_tool_resp_mod").unwrap();
 }
 
 #[wasm_bindgen_test]

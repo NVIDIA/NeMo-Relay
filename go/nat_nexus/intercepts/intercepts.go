@@ -9,11 +9,10 @@
 //
 // Intercept categories for both tools and LLMs:
 //   - Request: transforms request arguments/parameters; supports breakChain.
-//   - Response (tool only): transforms response data; supports breakChain.
 //   - Execution: middleware chain — each intercept receives a next function.
 //   - StreamExecution (LLM only): middleware chain for streaming calls.
 //
-// When breakChain is true on a request or response intercept, no lower-priority
+// When breakChain is true on a request intercept, no lower-priority
 // intercepts in the chain are invoked after it.
 //
 // Example usage:
@@ -51,21 +50,6 @@ func RegisterToolRequest(name string, priority int32, breakChain bool, fn nat_ne
 // shorthand for [nat_nexus.DeregisterToolRequestIntercept].
 func DeregisterToolRequest(name string) error {
 	return nat_nexus.DeregisterToolRequestIntercept(name)
-}
-
-// --- Tool Response ---
-
-// RegisterToolResponse registers an intercept that transforms tool response
-// data. When breakChain is true, no lower-priority intercepts run after this
-// one. This is a shorthand for [nat_nexus.RegisterToolResponseIntercept].
-func RegisterToolResponse(name string, priority int32, breakChain bool, fn nat_nexus.ToolSanitizeFunc) error {
-	return nat_nexus.RegisterToolResponseIntercept(name, priority, breakChain, fn)
-}
-
-// DeregisterToolResponse removes a tool response intercept by name. This is a
-// shorthand for [nat_nexus.DeregisterToolResponseIntercept].
-func DeregisterToolResponse(name string) error {
-	return nat_nexus.DeregisterToolResponseIntercept(name)
 }
 
 // --- Tool Execution ---
@@ -146,21 +130,6 @@ func ScopeDeregisterToolRequest(scopeUUID string, name string) error {
 	return nat_nexus.ScopeDeregisterToolRequestIntercept(scopeUUID, name)
 }
 
-// --- Scope-local Tool Response ---
-
-// ScopeRegisterToolResponse registers a scope-local intercept that transforms
-// tool response data. This is a shorthand for
-// [nat_nexus.ScopeRegisterToolResponseIntercept].
-func ScopeRegisterToolResponse(scopeUUID string, name string, priority int32, breakChain bool, fn nat_nexus.ToolSanitizeFunc) error {
-	return nat_nexus.ScopeRegisterToolResponseIntercept(scopeUUID, name, priority, breakChain, fn)
-}
-
-// ScopeDeregisterToolResponse removes a scope-local tool response intercept by
-// name. This is a shorthand for [nat_nexus.ScopeDeregisterToolResponseIntercept].
-func ScopeDeregisterToolResponse(scopeUUID string, name string) error {
-	return nat_nexus.ScopeDeregisterToolResponseIntercept(scopeUUID, name)
-}
-
 // --- Scope-local Tool Execution ---
 
 // ScopeRegisterToolExecution registers a scope-local tool execution intercept
@@ -229,15 +198,6 @@ func ScopeDeregisterLlmStreamExecution(scopeUUID string, name string) error {
 // [nat_nexus.ToolRequestIntercepts].
 func ToolRequestIntercepts(name string, args json.RawMessage) (json.RawMessage, error) {
 	return nat_nexus.ToolRequestIntercepts(name, args)
-}
-
-// --- Tool Response Intercepts (standalone) ---
-
-// ToolResponseIntercepts runs the registered tool response intercept chain and
-// returns the transformed result. This is a shorthand for
-// [nat_nexus.ToolResponseIntercepts].
-func ToolResponseIntercepts(name string, result json.RawMessage) (json.RawMessage, error) {
-	return nat_nexus.ToolResponseIntercepts(name, result)
 }
 
 // --- LLM Request Intercepts (standalone) ---

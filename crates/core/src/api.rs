@@ -15,11 +15,11 @@
 //! - **Guardrail registration** — `nat_nexus_register_*_guardrail` /
 //!   `nat_nexus_deregister_*_guardrail` for tool and LLM sanitize/conditional guardrails
 //! - **Intercept registration** — `nat_nexus_register_*_intercept` /
-//!   `nat_nexus_deregister_*_intercept` for tool and LLM request/response/execution intercepts
+//!   `nat_nexus_deregister_*_intercept` for tool and LLM request/execution intercepts
 //! - **Subscriber registration** — [`nat_nexus_register_subscriber`],
 //!   [`nat_nexus_deregister_subscriber`]
 //! - **Standalone middleware chains** — [`nat_nexus_tool_request_intercepts`],
-//!   [`nat_nexus_tool_conditional_execution`], [`nat_nexus_tool_response_intercepts`],
+//!   [`nat_nexus_tool_conditional_execution`],
 //!   [`nat_nexus_llm_request_intercepts`], [`nat_nexus_llm_conditional_execution`]
 //!
 //! All functions operate on the global context singleton returned by
@@ -204,17 +204,6 @@ intercept_registry_api!(
     nat_nexus_register_tool_request_intercept,
     nat_nexus_deregister_tool_request_intercept,
     tool_request_intercepts,
-    ToolInterceptFn
-);
-
-intercept_registry_api!(
-    /// Register a tool response intercept that transforms the result after execution.
-    ///
-    /// Callback signature: `(tool_name: &str, result: Json) -> Json`.
-    /// Set `break_chain = true` to prevent lower-priority intercepts from running.
-    nat_nexus_register_tool_response_intercept,
-    nat_nexus_deregister_tool_response_intercept,
-    tool_response_intercepts,
     ToolInterceptFn
 );
 
@@ -455,13 +444,6 @@ scope_local_intercept_registry_api!(
     nat_nexus_scope_register_tool_request_intercept,
     nat_nexus_scope_deregister_tool_request_intercept,
     tool_request_intercepts,
-    ToolInterceptFn
-);
-scope_local_intercept_registry_api!(
-    /// Register a scope-local tool response intercept.
-    nat_nexus_scope_register_tool_response_intercept,
-    nat_nexus_scope_deregister_tool_response_intercept,
-    tool_response_intercepts,
     ToolInterceptFn
 );
 scope_local_execution_intercept_registry_api!(
@@ -728,7 +710,7 @@ pub fn nat_nexus_tool_call_end(
 
 /// Executes a complete tool call lifecycle: conditional guardrails (on the raw
 /// request), request intercepts, sanitize guardrails, execution (with middleware
-/// chain of execution intercepts), response intercepts, and sanitize response
+/// chain of execution intercepts), and sanitize response
 /// guardrails.
 ///
 /// Conditional execution guardrails run **before** request intercepts so that
@@ -804,18 +786,6 @@ pub async fn nat_nexus_tool_call_execute(
         state.tool_build_execution_chain(name, func, &sl)
     };
     let result = exec_future(intercepted_args).await?;
-
-    // Response intercepts
-    let result = {
-        let ss = current_scope_stack();
-        let ss_guard = ss.read().expect("scope stack lock poisoned");
-        let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_response_intercepts);
-        let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.tool_response_intercepts_chain(name, result, &sl)
-    };
 
     // Tool call end (scope-local sanitize response guardrails are picked up inside nat_nexus_tool_call_end)
     nat_nexus_tool_call_end(&handle, result.clone(), data, metadata)?;
@@ -1122,22 +1092,6 @@ pub fn nat_nexus_tool_conditional_execution(name: &str, args: &Json) -> Result<(
         return Err(NexusError::GuardrailRejected(err));
     }
     Ok(())
-}
-
-/// Runs the registered tool response intercept chain on the given result.
-///
-/// Returns the transformed result after all intercepts have been applied.
-/// This allows invoking response intercepts independently of the full
-/// [`nat_nexus_tool_call_execute`] pipeline.
-pub fn nat_nexus_tool_response_intercepts(name: &str, result: Json) -> Result<Json> {
-    let ss = current_scope_stack();
-    let ss_guard = ss.read().expect("scope stack lock poisoned");
-    let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_response_intercepts);
-    let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
-    Ok(state.tool_response_intercepts_chain(name, result, &sl))
 }
 
 /// Runs the registered LLM request intercept chain on the given [`LLMRequest`].
@@ -1571,46 +1525,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_tool_call_execute_with_response_intercept() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        reset_global();
-
-        nat_nexus_register_tool_response_intercept(
-            "resp_intercept",
-            1,
-            false,
-            Box::new(|_name, mut result| {
-                result
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("response_intercepted".into(), json!(true));
-                result
-            }),
-        )
-        .unwrap();
-
-        let func: ToolExecutionNextFn =
-            Box::new(|_args| Box::pin(async move { Ok(json!({"output": "raw"})) }));
-
-        let result = nat_nexus_tool_call_execute(
-            "tool",
-            json!({}),
-            func,
-            None,
-            ToolAttributes::empty(),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(result["output"], "raw");
-        assert_eq!(result["response_intercepted"], true);
-
-        nat_nexus_deregister_tool_response_intercept("resp_intercept").unwrap();
-    }
-
-    #[tokio::test]
     async fn test_tool_call_execute_conditional_rejection() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
@@ -2020,18 +1934,6 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_response_intercept_registration() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        reset_global();
-        nat_nexus_register_tool_response_intercept("i1", 1, false, Box::new(|_n, r| r)).unwrap();
-        assert!(
-            nat_nexus_register_tool_response_intercept("i1", 1, false, Box::new(|_n, r| r))
-                .is_err()
-        );
-        assert!(nat_nexus_deregister_tool_response_intercept("i1").unwrap());
-    }
-
-    #[test]
     fn test_tool_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
@@ -2192,7 +2094,6 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
         assert!(!nat_nexus_deregister_tool_request_intercept("nope").unwrap());
-        assert!(!nat_nexus_deregister_tool_response_intercept("nope").unwrap());
         assert!(!nat_nexus_deregister_tool_execution_intercept("nope").unwrap());
         assert!(!nat_nexus_deregister_llm_request_intercept("nope").unwrap());
         assert!(!nat_nexus_deregister_llm_execution_intercept("nope").unwrap());
@@ -2462,25 +2363,6 @@ mod tests {
         }
 
         nat_nexus_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
-    }
-
-    #[test]
-    fn test_tool_response_intercepts_standalone() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        reset_global();
-
-        nat_nexus_register_tool_response_intercept(
-            "wrap",
-            10,
-            false,
-            Box::new(|_name, result| json!({"wrapped": result})),
-        )
-        .unwrap();
-
-        let result = nat_nexus_tool_response_intercepts("tool", json!("hello")).unwrap();
-        assert_eq!(result["wrapped"], "hello");
-
-        nat_nexus_deregister_tool_response_intercept("wrap").unwrap();
     }
 
     #[test]

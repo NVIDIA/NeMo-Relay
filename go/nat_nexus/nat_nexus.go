@@ -108,9 +108,6 @@ extern int32_t nat_nexus_deregister_tool_conditional_execution_guardrail(const c
 // Tool intercepts
 extern int32_t nat_nexus_register_tool_request_intercept(const char* name, int32_t priority, _Bool break_chain, NatNexusToolSanitizeFn cb, void* user_data, NatNexusFreeFn free_fn);
 extern int32_t nat_nexus_deregister_tool_request_intercept(const char* name);
-extern int32_t nat_nexus_register_tool_response_intercept(const char* name, int32_t priority, _Bool break_chain, NatNexusToolSanitizeFn cb, void* user_data, NatNexusFreeFn free_fn);
-extern int32_t nat_nexus_deregister_tool_response_intercept(const char* name);
-
 // Middleware chain intercept callback types (must be declared before use in externs)
 typedef char* (*NatNexusToolExecNextFn)(const char* args_json, void* next_ctx);
 typedef char* (*NatNexusToolExecInterceptCb)(void* user_data, const char* args_json, NatNexusToolExecNextFn next_fn, void* next_ctx);
@@ -157,8 +154,6 @@ extern int32_t nat_nexus_scope_deregister_tool_conditional_execution_guardrail(c
 // Scope-local tool intercepts
 extern int32_t nat_nexus_scope_register_tool_request_intercept(const char* scope_uuid, const char* name, int32_t priority, _Bool break_chain, NatNexusToolSanitizeFn cb, void* user_data, NatNexusFreeFn free_fn);
 extern int32_t nat_nexus_scope_deregister_tool_request_intercept(const char* scope_uuid, const char* name);
-extern int32_t nat_nexus_scope_register_tool_response_intercept(const char* scope_uuid, const char* name, int32_t priority, _Bool break_chain, NatNexusToolSanitizeFn cb, void* user_data, NatNexusFreeFn free_fn);
-extern int32_t nat_nexus_scope_deregister_tool_response_intercept(const char* scope_uuid, const char* name);
 extern int32_t nat_nexus_scope_register_tool_execution_intercept(const char* scope_uuid, const char* name, int32_t priority, NatNexusToolExecInterceptCb exec_cb, void* exec_user_data, NatNexusFreeFn exec_free);
 extern int32_t nat_nexus_scope_deregister_tool_execution_intercept(const char* scope_uuid, const char* name);
 
@@ -185,7 +180,6 @@ extern int32_t nat_nexus_scope_deregister_subscriber(const char* scope_uuid, con
 // Standalone middleware chains
 extern int32_t nat_nexus_tool_request_intercepts(const char* name, const char* args_json, char** out);
 extern int32_t nat_nexus_tool_conditional_execution(const char* name, const char* args_json);
-extern int32_t nat_nexus_tool_response_intercepts(const char* name, const char* result_json, char** out);
 extern int32_t nat_nexus_llm_request_intercepts(const char* name, const char* request_json, char** out);
 extern int32_t nat_nexus_llm_conditional_execution(const char* request_json);
 // Error
@@ -543,7 +537,7 @@ func ToolCallEnd(handle *ToolHandle, result json.RawMessage, opts ...ToolCallOpt
 // ToolCallExecute runs a complete tool call lifecycle through the full
 // middleware pipeline: conditional-execution guardrails (on raw args),
 // request intercepts, sanitize-request guardrails, execution intercepts,
-// the provided fn, response intercepts, sanitize-response guardrails.
+// the provided fn, sanitize-response guardrails.
 // On rejection, only a standalone Mark event is emitted (no Start/End pair)
 // and GuardrailRejected is returned. This is the recommended high-level API
 // for tool invocations.
@@ -708,7 +702,7 @@ func LlmCallEnd(handle *LLMHandle, response json.RawMessage, opts ...LLMCallOpti
 // LlmCallExecute runs a complete LLM call lifecycle through the full
 // middleware pipeline: conditional-execution guardrails (on raw request),
 // request intercepts, sanitize-request guardrails, execution intercepts,
-// the provided fn, response intercepts, sanitize-response guardrails.
+// the provided fn, sanitize-response guardrails.
 // On rejection, only a standalone Mark event is emitted (no Start/End pair)
 // and GuardrailRejected is returned. This is the recommended high-level API
 // for non-streaming LLM invocations.
@@ -754,7 +748,7 @@ func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts 
 // [LlmCallExecute], conditional-execution guardrails run first on the raw
 // request. If accepted, it runs the remaining middleware pipeline and returns
 // an [LlmStream] that yields individual SSE (Server-Sent Event) chunks.
-// Stream response intercepts are applied to each chunk as it is consumed.
+// Stream execution intercepts are applied to each chunk as it is consumed.
 // The caller must call [LlmStream.Next] repeatedly until [io.EOF] is
 // returned, then call [LlmStream.Close].
 //
@@ -916,31 +910,6 @@ func DeregisterToolRequestIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nat_nexus_deregister_tool_request_intercept(cName))
-}
-
-// RegisterToolResponseIntercept registers an intercept that transforms tool
-// response data after the tool returns. Intercepts run in priority order (lower
-// values first). When breakChain is true, no lower-priority intercepts in the
-// chain are invoked after this one, allowing early short-circuiting of the
-// pipeline.
-func RegisterToolResponseIntercept(name string, priority int32, breakChain bool, fn ToolSanitizeFunc) error {
-	id := registerClosure(fn)
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nat_nexus_register_tool_response_intercept(
-		cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NatNexusToolSanitizeFn(C.goToolSanitizeTrampoline),
-		id,
-		C.NatNexusFreeFn(C.goFreeTrampoline),
-	))
-}
-
-// DeregisterToolResponseIntercept removes a previously registered tool response
-// intercept by name.
-func DeregisterToolResponseIntercept(name string) error {
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nat_nexus_deregister_tool_response_intercept(cName))
 }
 
 // RegisterToolExecutionIntercept registers an execution intercept following
@@ -1388,32 +1357,6 @@ func ScopeDeregisterToolRequestIntercept(scopeUUID string, name string) error {
 	return checkStatus(C.nat_nexus_scope_deregister_tool_request_intercept(cScopeUUID, cName))
 }
 
-// ScopeRegisterToolResponseIntercept registers a scope-local intercept that
-// transforms tool response data.
-func ScopeRegisterToolResponseIntercept(scopeUUID string, name string, priority int32, breakChain bool, fn ToolSanitizeFunc) error {
-	id := registerClosure(fn)
-	cScopeUUID := C.CString(scopeUUID)
-	defer C.free(unsafe.Pointer(cScopeUUID))
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nat_nexus_scope_register_tool_response_intercept(
-		cScopeUUID, cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NatNexusToolSanitizeFn(C.goToolSanitizeTrampoline),
-		id,
-		C.NatNexusFreeFn(C.goFreeTrampoline),
-	))
-}
-
-// ScopeDeregisterToolResponseIntercept removes a scope-local tool response
-// intercept by name.
-func ScopeDeregisterToolResponseIntercept(scopeUUID string, name string) error {
-	cScopeUUID := C.CString(scopeUUID)
-	defer C.free(unsafe.Pointer(cScopeUUID))
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nat_nexus_scope_deregister_tool_response_intercept(cScopeUUID, cName))
-}
-
 // ScopeRegisterToolExecutionIntercept registers a scope-local tool execution
 // intercept following the middleware chain pattern.
 func ScopeRegisterToolExecutionIntercept(scopeUUID string, name string, priority int32, execFn ToolExecutionInterceptFunc) error {
@@ -1660,23 +1603,6 @@ func ToolConditionalExecution(name string, args json.RawMessage) error {
 
 	status := C.nat_nexus_tool_conditional_execution(cName, cArgs)
 	return checkStatus(status)
-}
-
-// ToolResponseIntercepts runs the registered tool response intercept chain on
-// the given result and returns the transformed result.
-func ToolResponseIntercepts(name string, result json.RawMessage) (json.RawMessage, error) {
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-	cResult := C.CString(string(result))
-	defer C.free(unsafe.Pointer(cResult))
-
-	var out *C.char
-	status := C.nat_nexus_tool_response_intercepts(cName, cResult, &out)
-	if err := checkStatus(status); err != nil {
-		return nil, err
-	}
-	defer C.nat_nexus_string_free(out)
-	return json.RawMessage(C.GoString(out)), nil
 }
 
 // LlmRequestIntercepts runs the registered LLM request intercept chain on the

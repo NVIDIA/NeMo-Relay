@@ -13,7 +13,6 @@ const {
   deregisterToolSanitizeResponseGuardrail,
   deregisterToolConditionalExecutionGuardrail,
   deregisterToolRequestIntercept,
-  deregisterToolResponseIntercept,
   deregisterToolExecutionIntercept,
   deregisterLlmSanitizeRequestGuardrail,
   deregisterLlmSanitizeResponseGuardrail,
@@ -37,7 +36,6 @@ describe('Deregister nonexistent', () => {
 
   it('tool intercepts', () => {
     assert.equal(deregisterToolRequestIntercept('nx'), false);
-    assert.equal(deregisterToolResponseIntercept('nx'), false);
     assert.equal(deregisterToolExecutionIntercept('nx'), false);
   });
 

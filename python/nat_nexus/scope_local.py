@@ -20,7 +20,6 @@ The scope handle's ``.uuid`` is used to look up the scope in the scope stack.
 **Tool intercepts** (scope-local):
 
     register_tool_request(scope_handle, name, priority, break_chain, fn)
-    register_tool_response(scope_handle, name, priority, break_chain, fn)
     register_tool_execution(scope_handle, name, priority, fn)
 
 **LLM guardrails** (scope-local):
@@ -85,9 +84,6 @@ from nat_nexus._native import (
     nat_nexus_scope_deregister_tool_request_intercept as _deregister_tool_request,
 )
 from nat_nexus._native import (
-    nat_nexus_scope_deregister_tool_response_intercept as _deregister_tool_response,
-)
-from nat_nexus._native import (
     nat_nexus_scope_deregister_tool_sanitize_request_guardrail as _deregister_tool_sanitize_request,
 )
 from nat_nexus._native import (
@@ -122,9 +118,6 @@ from nat_nexus._native import (
 )
 from nat_nexus._native import (
     nat_nexus_scope_register_tool_request_intercept as _register_tool_request,
-)
-from nat_nexus._native import (
-    nat_nexus_scope_register_tool_response_intercept as _register_tool_response,
 )
 from nat_nexus._native import (
     nat_nexus_scope_register_tool_sanitize_request_guardrail as _register_tool_sanitize_request,
@@ -210,24 +203,6 @@ def register_tool_request(scope_handle, name, priority, break_chain, fn):
 def deregister_tool_request(scope_handle, name):
     """Remove a scope-local tool request intercept. Returns ``True`` if found."""
     return _deregister_tool_request(scope_handle.uuid, name)
-
-
-def register_tool_response(scope_handle, name, priority, break_chain, fn):
-    """Register a scope-local tool response intercept.
-
-    Args:
-        scope_handle: The ``ScopeHandle`` to register under.
-        name: Unique intercept name.
-        priority: Priority (ascending order).
-        break_chain: If ``True``, no lower-priority intercepts run after this one.
-        fn: ``(tool_name: str, result: Any) -> Any``.
-    """
-    return _register_tool_response(scope_handle.uuid, name, priority, break_chain, fn)
-
-
-def deregister_tool_response(scope_handle, name):
-    """Remove a scope-local tool response intercept. Returns ``True`` if found."""
-    return _deregister_tool_response(scope_handle.uuid, name)
 
 
 def register_tool_execution(scope_handle, name, priority, fn):
@@ -392,8 +367,6 @@ __all__ = [
     # Tool intercepts
     "register_tool_request",
     "deregister_tool_request",
-    "register_tool_response",
-    "deregister_tool_response",
     "register_tool_execution",
     "deregister_tool_execution",
     # LLM guardrails

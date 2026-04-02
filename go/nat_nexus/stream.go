@@ -73,7 +73,7 @@ func newLlmStream(ptr *C.FfiStream, collector CollectorFunc, finalizer Finalizer
 
 // Next returns the next chunk from the stream as a JSON value. It returns
 // [io.EOF] when the stream is exhausted and all chunks have been consumed.
-// Any registered stream response intercepts are applied to each chunk before
+// Any registered stream execution intercepts are applied to each chunk before
 // it is returned.
 //
 // If a collector function was provided when creating the stream, it is called

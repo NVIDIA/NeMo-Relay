@@ -81,22 +81,6 @@ func TestAlreadyExistsErrorOnDuplicateToolRequestIntercept(t *testing.T) {
 	}
 }
 
-func TestAlreadyExistsErrorOnDuplicateToolResponseIntercept(t *testing.T) {
-	name := "go_err_dup_resp_int"
-	fn := func(n string, args json.RawMessage) json.RawMessage { return args }
-
-	err := RegisterToolResponseIntercept(name, 1, false, fn)
-	if err != nil {
-		t.Fatalf("first register failed: %v", err)
-	}
-	defer DeregisterToolResponseIntercept(name)
-
-	err = RegisterToolResponseIntercept(name, 1, false, fn)
-	if err == nil {
-		t.Fatal("expected error for duplicate registration")
-	}
-}
-
 func TestAlreadyExistsErrorOnDuplicateToolExecutionIntercept(t *testing.T) {
 	name := "go_err_dup_exec_int"
 	fn := func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {

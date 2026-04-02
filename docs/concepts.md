@@ -144,13 +144,12 @@ Intercepts transform requests, responses, or replace execution functions entirel
 | Intercept | Callback Signature | Purpose |
 |-----------|--------------------|---------|
 | **Request** (Tool) | `(tool_name, args) -> args` | Transform tool arguments |
-| **Response** (Tool) | `(tool_name, result) -> result` | Transform tool results |
 | **Execution** (Tool) | `(tool_name, args, next) -> result` | Middleware chain — call `next` or short-circuit |
 | **Request** (LLM) | `(llm_name, request) -> request` | Transform LLM request |
 | **Execution** (LLM) | `(llm_name, request, next) -> result` | Middleware chain |
 | **Stream Execution** (LLM) | `(llm_name, request, next) -> stream` | Middleware chain for streaming |
 
-Request and response intercepts support `break_chain` — when `true`, no lower-priority intercepts run after.
+Request intercepts support `break_chain` — when `true`, no lower-priority intercepts run after.
 
 ### Execution Intercept Chain
 

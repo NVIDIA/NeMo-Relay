@@ -11,7 +11,6 @@ const { typedToolExecute, typedLlmExecute, typedLlmStreamExecute, JsonPassthroug
 
 const {
   registerToolRequestIntercept, deregisterToolRequestIntercept,
-  registerToolResponseIntercept, deregisterToolResponseIntercept,
 } = lib;
 
 // ===========================================================================
@@ -120,26 +119,6 @@ describe('typedToolExecute', () => {
     assert.ok(!(seen[0] instanceof Point));
 
     deregisterToolRequestIntercept('typed_node_req');
-  });
-
-  it('response intercepts modify JSON before deserialization', async () => {
-    registerToolResponseIntercept('typed_node_resp', 10, false, (name, result) => {
-      result.x = 999;
-      return result;
-    });
-
-    const result = await typedToolExecute(
-      'resp_int_tool',
-      new Point(1, 1),
-      (p) => new Point(p.x, p.y),
-      pointCodec,
-      pointCodec,
-    );
-
-    assert.ok(result instanceof Point);
-    assert.equal(result.x, 999);
-
-    deregisterToolResponseIntercept('typed_node_resp');
   });
 
   it('with options (attributes, data, metadata)', async () => {

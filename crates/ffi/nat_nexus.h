@@ -365,7 +365,7 @@ NatNexusStatus nat_nexus_tool_call_end(const struct FfiToolHandle *handle,
 /**
  * Execute a tool call end-to-end: run conditional-execution guardrails (on raw
  * args), then request intercepts, sanitize-request guardrails, execution
- * intercepts, the callback, response intercepts, and sanitize-response
+ * intercepts, the callback, and sanitize-response
  * guardrails. On rejection, only a standalone Mark event is emitted (no
  * Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
  * thread until completion.
@@ -443,7 +443,7 @@ NatNexusStatus nat_nexus_llm_call_end(const struct FfiLLMHandle *handle,
 /**
  * Execute an LLM call end-to-end: run conditional-execution guardrails (on raw
  * request), then request intercepts, sanitize-request guardrails, execution
- * intercepts, the callback, response intercepts, and sanitize-response
+ * intercepts, the callback, and sanitize-response
  * guardrails. On rejection, only a standalone Mark event is emitted (no
  * Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
  * thread until completion.
@@ -1217,22 +1217,6 @@ NatNexusStatus nat_nexus_tool_request_intercepts(const char *name,
  * All pointers must be valid.
  */
 NatNexusStatus nat_nexus_tool_conditional_execution(const char *name, const char *args_json);
-
-/**
- * Run the registered tool response intercept chain on the given result.
- *
- * # Parameters
- * - `name`: Tool name (null-terminated C string).
- * - `result_json`: Tool result as a JSON C string.
- * - `out`: On success, receives the transformed JSON string (caller must free
- *   with `nat_nexus_string_free`).
- *
- * # Safety
- * All pointers must be valid. `out` must be non-null.
- */
-NatNexusStatus nat_nexus_tool_response_intercepts(const char *name,
-                                                  const char *result_json,
-                                                  char **out);
 
 /**
  * Run the registered LLM request intercept chain on the given request.

@@ -20,8 +20,7 @@ flowchart TD
     E --> F["Emit Start event<br/>(input = sanitized args)"]
     F --> G["Execution Intercept Chain<br/>(tool_name, args, next)"]
     G --> H["func(args)"]
-    H --> I[Response Intercepts<br/>priority order, optional break_chain]
-    I --> J[Sanitize Response Guardrails]
+    H --> J[Sanitize Response Guardrails]
     J --> K["Emit End event<br/>(output = sanitized result)"]
     K --> L[Return result]
 
@@ -39,9 +38,8 @@ flowchart TD
 | 4 | Start Event | — | — | — |
 | 5 | Execution Intercepts | Args + `next` function | Yes (skip `next`) | Yes |
 | 6 | User Function | Final args | — | — |
-| 7 | Response Intercepts | Result (piped through chain) | No | Yes |
-| 8 | Sanitize Response Guards | Intercepted result | No | Yes |
-| 9 | End Event | — | — | — |
+| 7 | Sanitize Response Guards | Result | No | Yes |
+| 8 | End Event | — | — | — |
 
 **Key design choice**: Conditional guardrails run *before* request intercepts so they gate on the original, unmodified input.
 
@@ -155,11 +153,11 @@ Scope-local "tool" scope:  [request_logger(50)]
 Effective pipeline order:  compliance_check(1) → pii_redactor(5) → request_logger(50) → audit_logger(100)
 ```
 
-This merge applies to every middleware stage: conditional execution guardrails, sanitize request/response guardrails, request/response intercepts, execution intercepts, and event subscribers.
+This merge applies to every middleware stage: conditional execution guardrails, sanitize request/response guardrails, request intercepts, execution intercepts, and event subscribers.
 
 ### Break Chain
 
-Request and response intercepts support `break_chain=True`. When set, no lower-priority intercepts in that stage run after:
+Request intercepts support `break_chain=True`. When set, no lower-priority intercepts in that stage run after:
 
 ```
 Intercept A (priority=1, break_chain=False)  ← runs

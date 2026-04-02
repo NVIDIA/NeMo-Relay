@@ -689,7 +689,7 @@ async def nat_nexus_llm_stream_call_execute(
         func: Async callable ``(LLMRequest) -> AsyncIterator[Json]`` returning
             Json chunks.
         collector: A callable ``(chunk: Json) -> None`` invoked with each
-            intercepted chunk after stream response intercepts have been applied.
+            intercepted chunk after stream execution intercepts have been applied.
         finalizer: A callable ``() -> Any`` invoked once when the stream is
             exhausted. Its return value is the aggregated response.
         handle: Optional parent scope handle.
@@ -717,13 +717,6 @@ def nat_nexus_tool_conditional_execution(name: str, args: Json) -> None:
     """Run the registered tool conditional execution guardrail chain.
 
     Raises ``RuntimeError`` if any guardrail rejects.
-    """
-    ...
-
-def nat_nexus_tool_response_intercepts(name: str, result: Json) -> Json:
-    """Run the registered tool response intercept chain.
-
-    Returns the transformed result.
     """
     ...
 
@@ -818,22 +811,6 @@ def nat_nexus_register_tool_request_intercept(
 
 def nat_nexus_deregister_tool_request_intercept(name: str) -> bool:
     """Remove a tool request intercept. Returns ``True`` if found."""
-    ...
-
-def nat_nexus_register_tool_response_intercept(
-    name: str,
-    priority: int,
-    break_chain: bool,
-    callable: Callable[[str, Json], Json],
-) -> None:
-    """Register a tool response intercept.
-
-    Callback: ``(tool_name, result) -> transformed_result``.
-    """
-    ...
-
-def nat_nexus_deregister_tool_response_intercept(name: str) -> bool:
-    """Remove a tool response intercept. Returns ``True`` if found."""
     ...
 
 def nat_nexus_register_tool_execution_intercept(
@@ -1075,28 +1052,6 @@ def nat_nexus_scope_register_tool_request_intercept(
 
 def nat_nexus_scope_deregister_tool_request_intercept(scope_uuid: str, name: str) -> bool:
     """Remove a scope-local tool request intercept. Returns ``True`` if found."""
-    ...
-
-def nat_nexus_scope_register_tool_response_intercept(
-    scope_uuid: str,
-    name: str,
-    priority: int,
-    break_chain: bool,
-    callable: Callable[[str, Json], Json],
-) -> None:
-    """Register a scope-local tool response intercept.
-
-    Args:
-        scope_uuid: UUID string of the scope to register under.
-        name: Unique intercept name.
-        priority: Priority (ascending order).
-        break_chain: If ``True``, no lower-priority intercepts run after this one.
-        callable: ``(tool_name, result) -> transformed_result``.
-    """
-    ...
-
-def nat_nexus_scope_deregister_tool_response_intercept(scope_uuid: str, name: str) -> bool:
-    """Remove a scope-local tool response intercept. Returns ``True`` if found."""
     ...
 
 def nat_nexus_scope_register_tool_execution_intercept(

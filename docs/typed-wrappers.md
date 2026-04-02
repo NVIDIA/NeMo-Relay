@@ -130,7 +130,6 @@ args: TArgs
   │                                                    │
   │                         result_codec.to_json() ←───┘
   │                               │
-  │                         response intercepts
   │                         sanitize response guards
   │                               │
   ├─ result_codec.from_json() ←──┘

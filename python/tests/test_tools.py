@@ -174,10 +174,6 @@ class TestToolIntercepts:
         assert intercepts.deregister_tool_request("py_req_int")
         assert not intercepts.deregister_tool_request("py_req_int")
 
-    def test_response_intercept_register_deregister(self):
-        intercepts.register_tool_response("py_resp_int", 1, False, lambda n, r: r)
-        assert intercepts.deregister_tool_response("py_resp_int")
-
     def test_execution_intercept_register_deregister(self):
         intercepts.register_tool_execution(
             "py_exec_int",
@@ -209,22 +205,6 @@ class TestToolInterceptsAsync:
         assert result["intercepted"] is True
 
         intercepts.deregister_tool_request("py_req_mod")
-
-    async def test_response_intercept_modifies_result(self):
-        def intercept_fn(name, result):
-            result["post_processed"] = True
-            return result
-
-        intercepts.register_tool_response("py_resp_mod", 1, False, intercept_fn)
-
-        def func(args):
-            return {"output": "raw"}
-
-        result = await tools.execute("resp_tool", {}, func)
-        assert result["output"] == "raw"
-        assert result["post_processed"] is True
-
-        intercepts.deregister_tool_response("py_resp_mod")
 
     async def test_execution_intercept_replaces_func(self):
         intercepts.register_tool_execution(

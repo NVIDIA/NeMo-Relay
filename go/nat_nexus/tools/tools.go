@@ -40,8 +40,8 @@ func CallEnd(handle *nat_nexus.ToolHandle, result json.RawMessage, opts ...nat_n
 
 // Execute runs a complete tool call lifecycle with the full middleware pipeline
 // (conditional-execution guardrails, request intercepts, sanitize-request
-// guardrails, execution intercepts, fn, response intercepts, sanitize-response
-// guardrails) and returns the final result JSON. This is a shorthand for
+// guardrails, execution intercepts, fn, sanitize-response guardrails) and
+// returns the final result JSON. This is a shorthand for
 // [nat_nexus.ToolCallExecute].
 func Execute(name string, args json.RawMessage, fn nat_nexus.ToolExecutionFunc, opts ...nat_nexus.ToolCallOption) (json.RawMessage, error) {
 	return nat_nexus.ToolCallExecute(name, args, fn, opts...)
@@ -59,11 +59,4 @@ func RequestIntercepts(name string, args json.RawMessage) (json.RawMessage, erro
 // reason if blocked. This is a shorthand for [nat_nexus.ToolConditionalExecution].
 func ConditionalExecution(name string, args json.RawMessage) error {
 	return nat_nexus.ToolConditionalExecution(name, args)
-}
-
-// ResponseIntercepts runs the registered tool response intercept chain on the
-// given result and returns the transformed result. This is a shorthand for
-// [nat_nexus.ToolResponseIntercepts].
-func ResponseIntercepts(name string, result json.RawMessage) (json.RawMessage, error) {
-	return nat_nexus.ToolResponseIntercepts(name, result)
 }

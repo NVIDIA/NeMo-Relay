@@ -16,11 +16,11 @@ pipeline stages. Adding a new middleware type requires changes across all layers
 
 See `docs/middleware-pipeline.md` for the full pipeline diagrams. The pipeline order is:
 
-**Tool execute**: conditional guardrails → request intercepts → sanitize request →
-execution intercepts → callable → response intercepts → sanitize response
+**Tool execute**: conditional guardrails → request intercepts →
+sanitize request (for events) | execution intercept chain(callable) → sanitize response
 
-**LLM execute**: conditional guardrails → request intercepts → sanitize request →
-execution intercepts → callable → sanitize response
+**LLM execute**: conditional guardrails → request intercepts →
+sanitize request (for events) | execution intercept chain(callable) → sanitize response
 
 ## Steps
 

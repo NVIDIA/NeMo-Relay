@@ -306,7 +306,7 @@ pub unsafe extern "C" fn nat_nexus_tool_call_end(
 
 /// Execute a tool call end-to-end: run conditional-execution guardrails (on raw
 /// args), then request intercepts, sanitize-request guardrails, execution
-/// intercepts, the callback, response intercepts, and sanitize-response
+/// intercepts, the callback, and sanitize-response
 /// guardrails. On rejection, only a standalone Mark event is emitted (no
 /// Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
 /// thread until completion.
@@ -530,7 +530,7 @@ pub unsafe extern "C" fn nat_nexus_llm_call_end(
 
 /// Execute an LLM call end-to-end: run conditional-execution guardrails (on raw
 /// request), then request intercepts, sanitize-request guardrails, execution
-/// intercepts, the callback, response intercepts, and sanitize-response
+/// intercepts, the callback, and sanitize-response
 /// guardrails. On rejection, only a standalone Mark event is emitted (no
 /// Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
 /// thread until completion.
@@ -1060,32 +1060,6 @@ ffi_intercept_tool_api!(
     nat_nexus_deregister_tool_request_intercept,
     core::nat_nexus_register_tool_request_intercept,
     core::nat_nexus_deregister_tool_request_intercept,
-    wrap_tool_sanitize_fn
-);
-
-ffi_intercept_tool_api!(
-    /// Register a tool response intercept. The callback can transform tool
-    /// results after execution. Runs before response guardrails in the
-    /// middleware pipeline.
-    ///
-    /// # Parameters
-    /// - `name`: Unique intercept name.
-    /// - `priority`: Execution priority (lower runs first).
-    /// - `break_chain`: If true, stop processing further intercepts after this one.
-    /// - `cb`: Transform callback that receives tool name and result JSON, returns modified result JSON.
-    /// - `user_data`: Opaque pointer passed to `cb`.
-    /// - `free_fn`: Optional destructor for `user_data`.
-    ///
-    /// # Safety
-    /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nat_nexus_register_tool_response_intercept,
-    /// Deregister a tool response intercept by name.
-    ///
-    /// # Safety
-    /// `name` must be a valid C string.
-    nat_nexus_deregister_tool_response_intercept,
-    core::nat_nexus_register_tool_response_intercept,
-    core::nat_nexus_deregister_tool_response_intercept,
     wrap_tool_sanitize_fn
 );
 
@@ -2019,31 +1993,6 @@ ffi_scope_intercept_tool_api!(
     wrap_tool_sanitize_fn
 );
 
-ffi_scope_intercept_tool_api!(
-    /// Register a scope-local tool response intercept.
-    ///
-    /// # Parameters
-    /// - `scope_uuid`: UUID of the target scope (null-terminated C string).
-    /// - `name`: Unique intercept name.
-    /// - `priority`: Execution priority (lower runs first).
-    /// - `break_chain`: If true, stop processing further intercepts after this one.
-    /// - `cb`: Transform callback.
-    /// - `user_data`: Opaque pointer passed to `cb`.
-    /// - `free_fn`: Optional destructor for `user_data`.
-    ///
-    /// # Safety
-    /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
-    nat_nexus_scope_register_tool_response_intercept,
-    /// Deregister a scope-local tool response intercept by name.
-    ///
-    /// # Safety
-    /// `scope_uuid` and `name` must be valid C strings.
-    nat_nexus_scope_deregister_tool_response_intercept,
-    core::nat_nexus_scope_register_tool_response_intercept,
-    core::nat_nexus_scope_deregister_tool_response_intercept,
-    wrap_tool_sanitize_fn
-);
-
 /// Register a scope-local tool execution intercept following the middleware
 /// chain pattern.
 ///
@@ -2626,40 +2575,6 @@ pub unsafe extern "C" fn nat_nexus_tool_conditional_execution(
     };
     match core::nat_nexus_tool_conditional_execution(&name, &args) {
         Ok(()) => NatNexusStatus::Ok,
-        Err(e) => status_from_error(&e),
-    }
-}
-
-/// Run the registered tool response intercept chain on the given result.
-///
-/// # Parameters
-/// - `name`: Tool name (null-terminated C string).
-/// - `result_json`: Tool result as a JSON C string.
-/// - `out`: On success, receives the transformed JSON string (caller must free
-///   with `nat_nexus_string_free`).
-///
-/// # Safety
-/// All pointers must be valid. `out` must be non-null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_tool_response_intercepts(
-    name: *const c_char,
-    result_json: *const c_char,
-    out: *mut *mut c_char,
-) -> NatNexusStatus {
-    clear_last_error();
-    let name = match c_str_to_string(name) {
-        Ok(s) => s,
-        Err(status) => return status,
-    };
-    let result = match c_str_to_json(result_json) {
-        Some(r) => r,
-        None => return NatNexusStatus::InvalidJson,
-    };
-    match core::nat_nexus_tool_response_intercepts(&name, result) {
-        Ok(transformed) => {
-            unsafe { *out = json_to_c_string(&transformed) };
-            NatNexusStatus::Ok
-        }
         Err(e) => status_from_error(&e),
     }
 }

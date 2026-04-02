@@ -119,7 +119,7 @@ func unregisterClosure(userData unsafe.Pointer) {
 
 // ToolSanitizeFunc is a callback that receives a tool name and its arguments
 // as JSON, and returns the (possibly modified) arguments. It is used by both
-// sanitize guardrails and request/response intercepts for tools.
+// sanitize guardrails and request intercepts for tools.
 type ToolSanitizeFunc func(name string, args json.RawMessage) json.RawMessage
 
 // ToolConditionalFunc is a callback that decides whether a tool call should

@@ -225,30 +225,6 @@ class TestTypedToolExecute:
 
         intercepts.deregister_tool_request("typed_req_int")
 
-    async def test_response_intercepts_see_json(self):
-        """Response intercepts operate on JSON dicts, not typed objects."""
-
-        def intercept_fn(name, result):
-            result["total"] = 42
-            return result
-
-        intercepts.register_tool_response("typed_resp_int", 1, False, intercept_fn)
-
-        async def search(args: SearchArgs) -> SearchResult:
-            return SearchResult(items=["a"], total=1)
-
-        result = await typed.tool_execute(
-            "resp_intercepted",
-            SearchArgs(query="x"),
-            search,
-            search_args_codec,
-            search_result_codec,
-        )
-        assert isinstance(result, SearchResult)
-        assert result.total == 42
-
-        intercepts.deregister_tool_response("typed_resp_int")
-
     async def test_mixed_codecs(self):
         """Use different codec types for args and result."""
 

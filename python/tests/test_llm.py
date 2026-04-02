@@ -178,7 +178,6 @@ class TestLLMIntercepts:
         assert not intercepts.deregister_llm_execution("nope")
         assert not intercepts.deregister_llm_stream_execution("nope")
         assert not intercepts.deregister_tool_request("nope")
-        assert not intercepts.deregister_tool_response("nope")
         assert not intercepts.deregister_tool_execution("nope")
 
 

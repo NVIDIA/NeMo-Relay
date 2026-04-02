@@ -25,7 +25,6 @@ const {
   scopeRegisterToolSanitizeResponseGuardrail, scopeDeregisterToolSanitizeResponseGuardrail,
   scopeRegisterToolConditionalExecutionGuardrail, scopeDeregisterToolConditionalExecutionGuardrail,
   scopeRegisterToolRequestIntercept, scopeDeregisterToolRequestIntercept,
-  scopeRegisterToolResponseIntercept, scopeDeregisterToolResponseIntercept,
   scopeRegisterToolExecutionIntercept, scopeDeregisterToolExecutionIntercept,
   scopeRegisterSubscriber, scopeDeregisterSubscriber,
   registerToolSanitizeRequestGuardrail, deregisterToolSanitizeRequestGuardrail,
