@@ -286,7 +286,7 @@ async fn test_stream_wrapper_finalizer_called_on_exhaustion() {
 }
 
 #[tokio::test]
-async fn test_stream_wrapper_error_skips_collector_finalizer() {
+async fn test_stream_wrapper_error_skips_collector_and_finalizes_immediately() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
@@ -317,10 +317,63 @@ async fn test_stream_wrapper_error_skips_collector_finalizer() {
     // Collector should not have been called for the error
     assert_eq!(*collector_calls.lock().unwrap(), 0);
 
-    // Stream ends after error, finalizer gets called on None
-    let _ = wrapper.next().await;
-    // Finalizer is called when stream ends (even after error)
+    // Finalizer is called on the first error poll; callers do not need to poll again.
     assert!(*finalizer_called.lock().unwrap());
+
+    // Stream is terminated after the error.
+    assert!(wrapper.next().await.is_none());
+}
+
+#[tokio::test]
+async fn test_stream_wrapper_error_emits_end_event_on_first_error_poll() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    nat_nexus_register_subscriber(
+        "stream_error_end_test",
+        Box::new(move |e: &Event| {
+            captured.lock().unwrap().push(e.clone());
+        }),
+    )
+    .unwrap();
+
+    let items: Vec<Result<Json>> = vec![Err(nvidia_nat_nexus_core::NexusError::Internal(
+        "error".into(),
+    ))];
+    let inner = make_stream(items);
+    let request = LLMRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"messages": []}),
+    };
+    let handle = nat_nexus_llm_call(
+        "stream_error_llm",
+        &request,
+        None,
+        LLMAttributes::STREAMING,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(|_| Ok(()));
+    let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| json!({"partial": true}));
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+
+    let result = wrapper.next().await.unwrap();
+    assert!(result.is_err());
+
+    let events = events.lock().unwrap();
+    let end_event = events
+        .iter()
+        .find(|event| event.event_type == EventType::End)
+        .expect("expected END event on first error poll");
+    assert_eq!(end_event.output.as_ref(), Some(&json!({"partial": true})));
+
+    drop(events);
+    nat_nexus_deregister_subscriber("stream_error_end_test").unwrap();
 }
 
 #[tokio::test]
