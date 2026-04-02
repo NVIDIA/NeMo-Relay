@@ -171,21 +171,39 @@ impl ScopeStack {
         self.stack.iter().find(|h| h.uuid == *uuid)
     }
 
-    /// Removes a scope by UUID and returns it, or `None` if not found or if
-    /// the UUID belongs to the root scope (which cannot be removed).
+    /// Removes the current top scope by UUID and returns it.
+    ///
+    /// Returns [`NexusError::InvalidArgument`] if the UUID exists in the stack
+    /// but does not belong to the current top scope, or if it refers to the
+    /// immovable root scope.
     ///
     /// Also removes any scope-local registries associated with the scope.
-    pub fn remove(&mut self, uuid: &Uuid) -> Option<ScopeHandle> {
-        // Never remove the root (index 0)
-        if let Some(pos) = self.stack.iter().position(|h| h.uuid == *uuid) {
-            if pos == 0 {
-                return None; // cannot remove root
+    pub fn remove(&mut self, uuid: &Uuid) -> Result<ScopeHandle> {
+        let top = self
+            .stack
+            .last()
+            .expect("scope stack should never be empty");
+
+        if top.uuid == *uuid {
+            if self.stack.len() == 1 {
+                return Err(NexusError::InvalidArgument(
+                    "root scope cannot be removed".into(),
+                ));
             }
             self.scope_registries.remove(uuid);
-            Some(self.stack.remove(pos))
-        } else {
-            None
+            return Ok(self
+                .stack
+                .pop()
+                .expect("scope stack should contain a removable top scope"));
         }
+
+        if self.stack.iter().any(|h| h.uuid == *uuid) {
+            return Err(NexusError::InvalidArgument(
+                "scope handle is not at the top of the stack".into(),
+            ));
+        }
+
+        Err(NexusError::NotFound("scope handle not found".into()))
     }
 
     /// Returns a mutable reference to the scope-local registries for the given
@@ -361,14 +379,13 @@ pub fn task_scope_push(handle: ScopeHandle) {
 
 /// Removes a scope handle by UUID from the current execution context's scope stack.
 ///
-/// Returns the removed handle on success, or [`NexusError::NotFound`] if the
-/// UUID is not in the stack (or refers to the immovable root scope).
+/// Returns the removed handle on success, [`NexusError::NotFound`] if the UUID
+/// is not in the stack, or [`NexusError::InvalidArgument`] if it is not the
+/// current top scope or refers to the immovable root scope.
 pub fn task_scope_remove(uuid: &Uuid) -> Result<ScopeHandle> {
     let stack = current_scope_stack();
     let mut guard = stack.write().expect("scope stack lock poisoned");
-    guard
-        .remove(uuid)
-        .ok_or_else(|| NexusError::NotFound("scope handle not found".into()))
+    guard.remove(uuid)
 }
 
 // ---------------------------------------------------------------------------
@@ -1180,7 +1197,8 @@ mod tests {
     fn test_scope_stack_cannot_remove_root() {
         let mut stack = ScopeStack::new();
         let root_uuid = stack.top().uuid;
-        assert!(stack.remove(&root_uuid).is_none());
+        let err = stack.remove(&root_uuid).unwrap_err();
+        assert!(matches!(err, NexusError::InvalidArgument(_)));
         assert_eq!(stack.top().name, "root");
     }
 
@@ -1188,7 +1206,8 @@ mod tests {
     fn test_scope_stack_remove_nonexistent() {
         let mut stack = ScopeStack::new();
         let random_uuid = Uuid::new_v4();
-        assert!(stack.remove(&random_uuid).is_none());
+        let err = stack.remove(&random_uuid).unwrap_err();
+        assert!(matches!(err, NexusError::NotFound(_)));
     }
 
     #[test]
@@ -1227,18 +1246,18 @@ mod tests {
         stack.push(h3);
         assert_eq!(stack.top().name, "c");
 
-        stack.remove(&u3);
+        stack.remove(&u3).unwrap();
         assert_eq!(stack.top().name, "b");
 
-        stack.remove(&u2);
+        stack.remove(&u2).unwrap();
         assert_eq!(stack.top().name, "a");
 
-        stack.remove(&u1);
+        stack.remove(&u1).unwrap();
         assert_eq!(stack.top().name, "root");
     }
 
     #[test]
-    fn test_scope_stack_remove_middle() {
+    fn test_scope_stack_remove_middle_rejected() {
         let mut stack = ScopeStack::new();
         let h1 = ScopeHandle::new(
             "a".into(),
@@ -1259,8 +1278,8 @@ mod tests {
         let u1 = h1.uuid;
         stack.push(h1);
         stack.push(h2);
-        // Remove middle element
-        stack.remove(&u1);
+        let err = stack.remove(&u1).unwrap_err();
+        assert!(matches!(err, NexusError::InvalidArgument(_)));
         assert_eq!(stack.top().name, "b");
     }
 

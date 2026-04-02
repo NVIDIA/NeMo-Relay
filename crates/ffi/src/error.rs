@@ -86,6 +86,7 @@ impl From<&NexusError> for NatNexusStatus {
         match e {
             NexusError::AlreadyExists(_) => NatNexusStatus::AlreadyExists,
             NexusError::NotFound(_) => NatNexusStatus::NotFound,
+            NexusError::InvalidArgument(_) => NatNexusStatus::InvalidArg,
             NexusError::ScopeStackEmpty => NatNexusStatus::ScopeStackEmpty,
             NexusError::GuardrailRejected(_) => NatNexusStatus::GuardrailRejected,
             NexusError::Internal(_) => NatNexusStatus::Internal,

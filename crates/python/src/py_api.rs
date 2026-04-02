@@ -141,10 +141,11 @@ fn nat_nexus_push_scope(
 /// Remove a scope from the stack and emit an ``End`` event.
 ///
 /// Args:
-///     handle: The scope handle returned by ``push``.
+///     handle: The current top-of-stack scope handle returned by ``push``.
 ///
 /// Raises:
-///     RuntimeError: If the scope is not found on the stack.
+///     RuntimeError: If the scope is not the current top scope or is not found
+///         on the stack.
 #[pyfunction]
 fn nat_nexus_pop_scope(handle: &PyScopeHandle) -> PyResult<()> {
     core::nat_nexus_pop_scope(&handle.inner.uuid).map_err(to_py_err)

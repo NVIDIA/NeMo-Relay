@@ -30,6 +30,14 @@ pub enum NexusError {
     #[error("not found: {0}")]
     NotFound(String),
 
+    /// A function argument was invalid for the requested operation.
+    ///
+    /// Returned when a provided value is well-formed but violates an API
+    /// precondition, such as attempting to pop a scope that is not currently
+    /// at the top of the stack.
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
+
     /// The scope stack is empty.
     ///
     /// This should not occur under normal operation because the root scope is
@@ -73,6 +81,12 @@ mod tests {
     fn test_scope_stack_empty_display() {
         let e = NexusError::ScopeStackEmpty;
         assert_eq!(format!("{e}"), "scope stack empty");
+    }
+
+    #[test]
+    fn test_invalid_argument_display() {
+        let e = NexusError::InvalidArgument("bad scope".into());
+        assert_eq!(format!("{e}"), "invalid argument: bad scope");
     }
 
     #[test]
