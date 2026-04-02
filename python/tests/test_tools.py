@@ -105,6 +105,22 @@ class TestToolsAsync:
         )
         assert result["key"] == "value"
 
+    async def test_execute_failure_emits_end_event(self):
+        events = []
+        subscribers.register("py_tool_exec_failure_sub", lambda e: events.append(e))
+
+        def failing(args):
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await tools.execute("failing_tool", {"x": 1}, failing)
+
+        subscribers.deregister("py_tool_exec_failure_sub")
+
+        assert [e.event_type for e in events] == [EventType.Start, EventType.End]
+        assert events[0].uuid == events[1].uuid
+        assert events[1].output is None
+
 
 class TestToolGuardrails:
     def test_sanitize_request_guardrail(self):
