@@ -13,15 +13,17 @@
 //! ```text
 //! raw chunk (Json) -> collector(chunk) -> Ok(()) -> yield chunk
 //!                                      -> Err(e) -> terminate stream with error
+//! upstream error -> terminate stream with error -> finalizer() -> Json -> SanitizeResponseGuardrails -> END event
 //! stream ends -> finalizer() -> Json -> SanitizeResponseGuardrails -> END event
 //! ```
 //!
 //! The **collector** receives each chunk (Json) and can accumulate state
 //! (e.g., concatenating tokens). If the collector returns `Err`, the stream
-//! terminates immediately with that error. The **finalizer** is called once
-//! when the stream is exhausted and returns the aggregated response as [`Json`].
-//! That aggregated response then flows through sanitize response guardrails
-//! before being included in the END event.
+//! terminates immediately with that error. Upstream stream errors also
+//! terminate the stream immediately. The **finalizer** is called once when the
+//! stream terminates and returns the aggregated response as [`Json`]. That
+//! aggregated response then flows through sanitize response guardrails before
+//! being included in the END event.
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -95,6 +97,14 @@ impl LlmStreamWrapper {
         &self.scope_stack
     }
 
+    fn finish(&mut self) {
+        if self.ended {
+            return;
+        }
+        self.ended = true;
+        self.emit_end_event();
+    }
+
     /// Emit the LLM END event with aggregated response data.
     ///
     /// Calls the finalizer to produce the aggregated response, runs sanitize
@@ -142,16 +152,17 @@ impl Stream for LlmStreamWrapper {
                 match (this.collector)(raw_chunk.clone()) {
                     Ok(()) => Poll::Ready(Some(Ok(raw_chunk))),
                     Err(e) => {
-                        this.ended = true;
-                        this.emit_end_event();
+                        this.finish();
                         Poll::Ready(Some(Err(e)))
                     }
                 }
             }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
+            Poll::Ready(Some(Err(e))) => {
+                this.finish();
+                Poll::Ready(Some(Err(e)))
+            }
             Poll::Ready(None) => {
-                this.ended = true;
-                this.emit_end_event();
+                this.finish();
                 Poll::Ready(None)
             }
             Poll::Pending => Poll::Pending,
