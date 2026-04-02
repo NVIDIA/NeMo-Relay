@@ -568,10 +568,24 @@ class TestBestEffortAnyCodec:
         assert isinstance(restored, BEPoint)
         assert restored == pt
 
+    def test_roundtrip_function_local_dataclass(self):
+        @dataclasses.dataclass
+        class LocalPoint:
+            x: int
+            y: int
+
+        pt = LocalPoint(x=7, y=8)
+        encoded = self.codec.to_json(pt)
+        assert isinstance(encoded, dict)
+        assert "__nv_dataclass__" in encoded
+        restored = self.codec.from_json(encoded)
+        assert isinstance(restored, LocalPoint)
+        assert restored == pt
+
     # -- Round-trip: pydantic (if available) --
 
     def test_roundtrip_pydantic(self):
-        pydantic = pytest.importorskip("pydantic")
+        import pydantic
 
         class PydPoint(pydantic.BaseModel):
             x: int
@@ -581,6 +595,7 @@ class TestBestEffortAnyCodec:
         encoded = self.codec.to_json(pt)
         assert isinstance(encoded, dict)
         assert "__nv_pydantic__" in encoded
+        assert encoded["data"] == {"x": 3, "y": 4}
         restored = self.codec.from_json(encoded)
         assert isinstance(restored, PydPoint)
         assert restored.x == 3

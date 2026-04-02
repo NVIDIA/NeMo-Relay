@@ -26,6 +26,7 @@ dev = [
     "uv~=0.10.0",
 ]
 test = [
+    "pydantic>=2",
     "pytest>=8",
     "pytest-asyncio>=0.26",
     "pytest-cov~=7.0",

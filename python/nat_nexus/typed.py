@@ -42,6 +42,7 @@ import importlib
 import json
 import pickle
 import typing
+import weakref
 from typing import Any, AsyncIterator, Awaitable, Callable, Generic, TypeVar, overload
 
 from nat_nexus import llm, tools
@@ -54,6 +55,46 @@ TArgs = TypeVar("TArgs")
 TResult = TypeVar("TResult")
 TResponse = TypeVar("TResponse")
 TResponseChunk = TypeVar("TResponseChunk")
+
+_RUNTIME_TYPE_REGISTRY: weakref.WeakValueDictionary[str, type[Any]] = weakref.WeakValueDictionary()
+
+
+def _register_runtime_type(type_obj: type[Any]) -> str:
+    token = f"{type_obj.__module__}.{type_obj.__qualname__}:{id(type_obj)}"
+    _RUNTIME_TYPE_REGISTRY[token] = type_obj
+    return token
+
+
+def _resolve_runtime_type(token: object) -> type[Any] | None:
+    if not isinstance(token, str):
+        return None
+
+    resolved = _RUNTIME_TYPE_REGISTRY.get(token)
+    return resolved if isinstance(resolved, type) else None
+
+
+def _resolve_importable_type(path: object) -> type[Any] | None:
+    if not isinstance(path, str) or not path:
+        return None
+
+    parts = path.split(".")
+    for split_at in range(len(parts) - 1, 0, -1):
+        mod_name = ".".join(parts[:split_at])
+        qualname_parts = parts[split_at:]
+        if "<locals>" in qualname_parts:
+            continue
+
+        try:
+            resolved: object = importlib.import_module(mod_name)
+            for part in qualname_parts:
+                resolved = getattr(resolved, part)
+        except (ImportError, AttributeError):
+            continue
+
+        if isinstance(resolved, type):
+            return resolved
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -149,16 +190,17 @@ class BestEffortAnyCodec(Codec[Any]):
     def to_json(self, value: Any) -> Any:
         """Serialize an arbitrary Python value to a JSON-serializable form.
 
-        Tries, in order: Pydantic ``model_dump_json``, ``dataclasses.asdict``,
+        Tries, in order: Pydantic ``model_dump()``, ``dataclasses.asdict()``,
         native JSON encoding, pickle fallback, and finally ``str()`` as a last
         resort.  Each encoding is tagged with a ``__nv_*__`` key so that
         ``from_json`` can reconstruct the original type.
         """
         try:
-            if hasattr(value, "model_dump_json"):
+            if hasattr(value, "model_dump"):
                 return {
                     "__nv_pydantic__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
-                    "data": value.model_dump_json(),
+                    "__nv_runtime_type__": _register_runtime_type(value.__class__),
+                    "data": value.model_dump(mode="json"),
                 }
         except Exception:
             pass  # Don't fail if pydantic not available
@@ -167,6 +209,7 @@ class BestEffortAnyCodec(Codec[Any]):
         if dataclasses.is_dataclass(value):
             return {
                 "__nv_dataclass__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
+                "__nv_runtime_type__": _register_runtime_type(value.__class__),
                 "data": dataclasses.asdict(value),
             }
 
@@ -200,11 +243,10 @@ class BestEffortAnyCodec(Codec[Any]):
         if isinstance(data, dict) and "data" in data:
             if "__nv_pydantic__" in data:
                 try:
-                    path = data["__nv_pydantic__"]
-                    mod_name, _, cls_name = path.rpartition(".")
-                    mod = importlib.import_module(mod_name)
-                    cls = getattr(mod, cls_name)
-                    if hasattr(cls, "model_validate"):
+                    cls = _resolve_runtime_type(data.get("__nv_runtime_type__")) or _resolve_importable_type(
+                        data["__nv_pydantic__"]
+                    )
+                    if cls is not None and hasattr(cls, "model_validate"):
                         return cls.model_validate(data["data"])
                 except Exception:
                     pass  # Fallback on raw dict
@@ -212,11 +254,10 @@ class BestEffortAnyCodec(Codec[Any]):
             # Try to reconstruct a dataclass
             if "__nv_dataclass__" in data:
                 try:
-                    path = data["__nv_dataclass__"]
-                    mod_name, _, cls_name = path.rpartition(".")
-                    mod = importlib.import_module(mod_name)
-                    cls = getattr(mod, cls_name)
-                    if dataclasses.is_dataclass(cls):
+                    cls = _resolve_runtime_type(data.get("__nv_runtime_type__")) or _resolve_importable_type(
+                        data["__nv_dataclass__"]
+                    )
+                    if cls is not None and dataclasses.is_dataclass(cls):
                         return cls(**data["data"])
                 except Exception:
                     pass  # Fallback on raw dict

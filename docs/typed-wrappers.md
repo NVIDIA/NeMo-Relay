@@ -77,11 +77,15 @@ codec = PydanticCodec(User)
 
 Heuristic codec for arbitrary Python values. Encoding priority:
 
-1. Pydantic `BaseModel` → `{"__nv_pydantic__": "module.Class", "data": json_str}`
+1. Pydantic `BaseModel` → `{"__nv_pydantic__": "module.Class", "data": json_obj}`
 2. Dataclass → `{"__nv_dataclass__": "module.Class", "data": dict}`
 3. JSON-serializable → pass through
 4. Pickle fallback → `{"__nv_pickle__": "module.Class", "data": b64}`
 5. String fallback → `{"__nv_fallback_str__": "module.Class", "data": str}`
+
+For importable classes, `BestEffortAnyCodec` reconstructs by module path. For
+function-local Pydantic/dataclass types, it also keeps an in-process runtime
+type registry so values can still round-trip within the current Python process.
 
 ### Custom Codecs
 
