@@ -716,6 +716,24 @@ pub fn nat_nexus_tool_call_end(
     Ok(())
 }
 
+fn emit_tool_end_without_output(
+    handle: &ToolHandle,
+    data: Option<Json>,
+    metadata: Option<Json>,
+) -> Result<()> {
+    let ss = current_scope_stack();
+    let ss_guard = ss.read().expect("scope stack lock poisoned");
+    let root_uuid = Some(ss_guard.root_uuid());
+    let sl_subs = ss_guard.collect_scope_local_subscribers();
+    let ctx = global_context();
+    let state = ctx
+        .read()
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
+
+    state.end_tool_handle(handle, data, metadata, None, root_uuid, &sl_subs);
+    Ok(())
+}
+
 /// Executes a complete tool call lifecycle: conditional guardrails (on the raw
 /// request), request intercepts, sanitize guardrails, execution (with middleware
 /// chain of execution intercepts), and sanitize response
@@ -793,12 +811,17 @@ pub async fn nat_nexus_tool_call_execute(
             .map_err(|e| NexusError::Internal(e.to_string()))?;
         state.tool_build_execution_chain(name, func, &sl)
     };
-    let result = exec_future(intercepted_args).await?;
-
-    // Tool call end (scope-local sanitize response guardrails are picked up inside nat_nexus_tool_call_end)
-    nat_nexus_tool_call_end(&handle, result.clone(), data, metadata)?;
-
-    Ok(result)
+    match exec_future(intercepted_args).await {
+        Ok(result) => {
+            // Tool call end (scope-local sanitize response guardrails are picked up inside nat_nexus_tool_call_end)
+            nat_nexus_tool_call_end(&handle, result.clone(), data, metadata)?;
+            Ok(result)
+        }
+        Err(err) => {
+            let _ = emit_tool_end_without_output(&handle, data, metadata);
+            Err(err)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -876,6 +899,24 @@ pub fn nat_nexus_llm_call_end(
         root_uuid,
         &sl_subs,
     );
+    Ok(())
+}
+
+fn emit_llm_end_without_output(
+    handle: &LLMHandle,
+    data: Option<Json>,
+    metadata: Option<Json>,
+) -> Result<()> {
+    let ss = current_scope_stack();
+    let ss_guard = ss.read().expect("scope stack lock poisoned");
+    let root_uuid = Some(ss_guard.root_uuid());
+    let sl_subs = ss_guard.collect_scope_local_subscribers();
+    let ctx = global_context();
+    let state = ctx
+        .read()
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
+
+    state.end_llm_handle(handle, data, metadata, None, root_uuid, &sl_subs);
     Ok(())
 }
 
@@ -957,12 +998,17 @@ pub async fn nat_nexus_llm_call_execute(
             .map_err(|e| NexusError::Internal(e.to_string()))?;
         state.llm_build_execution_chain(name, func, &sl)
     };
-    let response = exec_future(intercepted_request).await?;
-
-    // LLM call end (sanitize response guardrails happen inside nat_nexus_llm_call_end)
-    nat_nexus_llm_call_end(&handle, response.clone(), data, metadata)?;
-
-    Ok(response)
+    match exec_future(intercepted_request).await {
+        Ok(response) => {
+            // LLM call end (sanitize response guardrails happen inside nat_nexus_llm_call_end)
+            nat_nexus_llm_call_end(&handle, response.clone(), data, metadata)?;
+            Ok(response)
+        }
+        Err(err) => {
+            let _ = emit_llm_end_without_output(&handle, data, metadata);
+            Err(err)
+        }
+    }
 }
 
 /// Executes a complete streaming LLM call lifecycle.
@@ -1056,11 +1102,18 @@ pub async fn nat_nexus_llm_stream_call_execute(
             .map_err(|e| NexusError::Internal(e.to_string()))?;
         state.llm_stream_build_execution_chain(name, func, &sl)
     };
-    let raw_stream = exec_future(intercepted_request).await?;
-
-    // Wrap in LlmStreamWrapper which handles collector/finalizer and END event
-    let wrapper = LlmStreamWrapper::new(raw_stream, handle, collector, finalizer, data, metadata);
-    Ok(Box::pin(wrapper))
+    match exec_future(intercepted_request).await {
+        Ok(raw_stream) => {
+            // Wrap in LlmStreamWrapper which handles collector/finalizer and END event
+            let wrapper =
+                LlmStreamWrapper::new(raw_stream, handle, collector, finalizer, data, metadata);
+            Ok(Box::pin(wrapper))
+        }
+        Err(err) => {
+            let _ = emit_llm_end_without_output(&handle, data, metadata);
+            Err(err)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1551,6 +1604,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_tool_call_execute_failure_emits_end_event() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        nat_nexus_register_subscriber(
+            "tool_exec_failure_sub",
+            Box::new(move |e: &crate::types::Event| {
+                captured.lock().unwrap().push(e.clone());
+            }),
+        )
+        .unwrap();
+
+        let func: ToolExecutionNextFn =
+            Arc::new(|_args| Box::pin(async move { Err(NexusError::Internal("boom".into())) }));
+
+        let err = nat_nexus_tool_call_execute(
+            "failing_tool",
+            json!({"input": true}),
+            func,
+            None,
+            ToolAttributes::empty(),
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, NexusError::Internal(_)));
+
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[0].event_type, EventType::Start);
+        assert_eq!(captured[1].event_type, EventType::End);
+        assert_eq!(captured[0].uuid, captured[1].uuid);
+        assert!(captured[1].output.is_none());
+
+        drop(captured);
+        nat_nexus_deregister_subscriber("tool_exec_failure_sub").unwrap();
+    }
+
+    #[tokio::test]
     async fn test_tool_call_execute_with_request_intercept() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
@@ -1804,6 +1900,54 @@ mod tests {
         .unwrap();
 
         assert_eq!(result["echo"], content);
+    }
+
+    #[tokio::test]
+    async fn test_llm_call_execute_failure_emits_end_event() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        nat_nexus_register_subscriber(
+            "llm_exec_failure_sub",
+            Box::new(move |e: &crate::types::Event| {
+                captured.lock().unwrap().push(e.clone());
+            }),
+        )
+        .unwrap();
+
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
+        let func: LlmExecutionNextFn =
+            Arc::new(|_req| Box::pin(async move { Err(NexusError::Internal("boom".into())) }));
+
+        let err = nat_nexus_llm_call_execute(
+            "failing_llm",
+            request,
+            func,
+            None,
+            LLMAttributes::empty(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, NexusError::Internal(_)));
+
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[0].event_type, EventType::Start);
+        assert_eq!(captured[1].event_type, EventType::End);
+        assert_eq!(captured[0].uuid, captured[1].uuid);
+        assert!(captured[1].output.is_none());
+
+        drop(captured);
+        nat_nexus_deregister_subscriber("llm_exec_failure_sub").unwrap();
     }
 
     #[tokio::test]
@@ -2232,6 +2376,55 @@ mod tests {
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0]["token"], "hello");
         assert_eq!(chunks[1]["token"], "world");
+    }
+
+    #[tokio::test]
+    async fn test_llm_stream_call_execute_setup_failure_emits_end_event() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        nat_nexus_register_subscriber(
+            "llm_stream_exec_failure_sub",
+            Box::new(move |e: &crate::types::Event| {
+                captured.lock().unwrap().push(e.clone());
+            }),
+        )
+        .unwrap();
+
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
+        let func: LlmStreamExecutionNextFn =
+            Arc::new(|_req| Box::pin(async move { Err(NexusError::Internal("boom".into())) }));
+
+        let result = nat_nexus_llm_stream_call_execute(
+            "failing_stream_llm",
+            request,
+            func,
+            Box::new(|_chunk| Ok(())),
+            Box::new(|| json!({"unused": true})),
+            None,
+            LLMAttributes::empty(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(matches!(result, Err(NexusError::Internal(_))));
+
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[0].event_type, EventType::Start);
+        assert_eq!(captured[1].event_type, EventType::End);
+        assert_eq!(captured[0].uuid, captured[1].uuid);
+        assert!(captured[1].output.is_none());
+
+        drop(captured);
+        nat_nexus_deregister_subscriber("llm_stream_exec_failure_sub").unwrap();
     }
 
     #[tokio::test]
