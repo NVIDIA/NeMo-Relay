@@ -184,6 +184,7 @@ test:nodejs_tests:
     - echo "Running NodeJS tests"
     - c8 --reporter=cobertura --reports-dir=${CI_PROJECT_DIR}
         node --test
+        --test-force-exit
         --test-reporter=spec --test-reporter-destination=stdout
         --test-reporter=junit --test-reporter-destination=${CI_PROJECT_DIR}/nodejs_junit.xml
         crates/node/tests/*.mjs

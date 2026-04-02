@@ -63,6 +63,68 @@ pub fn end_stream(stream_id: f64) {
     STREAM_CHANNELS.lock().unwrap().remove(&id);
 }
 
+#[allow(clippy::enum_variant_names)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum PromiseAwareKey {
+    GlobalToolExecution(String),
+    GlobalLlmExecution(String),
+    GlobalLlmStreamExecution(String),
+    ScopeToolExecution { scope_uuid: String, name: String },
+    ScopeLlmExecution { scope_uuid: String, name: String },
+    ScopeLlmStreamExecution { scope_uuid: String, name: String },
+}
+
+impl PromiseAwareKey {
+    fn scope_uuid(&self) -> Option<&str> {
+        match self {
+            Self::ScopeToolExecution { scope_uuid, .. }
+            | Self::ScopeLlmExecution { scope_uuid, .. }
+            | Self::ScopeLlmStreamExecution { scope_uuid, .. } => Some(scope_uuid),
+            Self::GlobalToolExecution(_)
+            | Self::GlobalLlmExecution(_)
+            | Self::GlobalLlmStreamExecution(_) => None,
+        }
+    }
+}
+
+static PROMISE_AWARE_REGISTRATIONS: std::sync::LazyLock<
+    StdMutex<HashMap<PromiseAwareKey, std::sync::Arc<crate::promise_call::PromiseAwareFn>>>,
+> = std::sync::LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+fn remember_promise_aware(
+    key: PromiseAwareKey,
+    pa_fn: std::sync::Arc<crate::promise_call::PromiseAwareFn>,
+) {
+    if let Some(previous) = PROMISE_AWARE_REGISTRATIONS
+        .lock()
+        .unwrap()
+        .insert(key, pa_fn)
+    {
+        previous.close();
+    }
+}
+
+fn forget_promise_aware(key: &PromiseAwareKey) {
+    if let Some(pa_fn) = PROMISE_AWARE_REGISTRATIONS.lock().unwrap().remove(key) {
+        pa_fn.close();
+    }
+}
+
+fn forget_scope_local_promise_aware(scope_uuid: &str) {
+    let mut registrations = PROMISE_AWARE_REGISTRATIONS.lock().unwrap();
+    let keys = registrations
+        .keys()
+        .filter(|key| key.scope_uuid() == Some(scope_uuid))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    for key in keys {
+        if let Some(pa_fn) = registrations.remove(&key) {
+            pa_fn.close();
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Scope stack isolation
 // ---------------------------------------------------------------------------
@@ -151,7 +213,9 @@ pub fn push_scope(
 /// Throws if the handle does not match the current top scope.
 #[napi]
 pub fn pop_scope(handle: &JsScopeHandle) -> Result<()> {
-    core::nat_nexus_pop_scope(&handle.inner.uuid).map_err(to_napi_err)
+    core::nat_nexus_pop_scope(&handle.inner.uuid).map_err(to_napi_err)?;
+    forget_scope_local_promise_aware(&handle.inner.uuid.to_string());
+    Ok(())
 }
 
 /// Push a scope, run a callback, then pop the scope automatically.
@@ -219,8 +283,10 @@ pub fn with_scope(
                     });
 
                     let result = pa_fn.call(handle_json).await;
-                    // Always pop the scope, even on error
-                    let _ = core::nat_nexus_pop_scope(&scope_uuid);
+                    // Always pop the scope, even on error.
+                    if core::nat_nexus_pop_scope(&scope_uuid).is_ok() {
+                        forget_scope_local_promise_aware(&scope_uuid.to_string());
+                    }
                     result.map_err(to_napi_err)
                 })
                 .await
@@ -762,16 +828,25 @@ napi_intercept_tool_api!(
 /// the chain.
 #[napi]
 pub fn register_tool_execution_intercept(
+    env: Env,
     name: String,
     priority: i32,
-    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    callable: JsFunction,
 ) -> Result<()> {
+    let key = PromiseAwareKey::GlobalToolExecution(name.clone());
+    let pa_fn = std::sync::Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|e| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
+        })?,
+    );
     core::nat_nexus_register_tool_execution_intercept(
         &name,
         priority,
-        callable::wrap_js_tool_exec_intercept_fn(callable),
+        callable::wrap_js_tool_exec_intercept_fn(pa_fn.clone()),
     )
-    .map_err(to_napi_err)
+    .map_err(to_napi_err)?;
+    remember_promise_aware(key, pa_fn);
+    Ok(())
 }
 
 /// Deregister a tool execution intercept by name.
@@ -779,7 +854,13 @@ pub fn register_tool_execution_intercept(
 /// Returns `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_tool_execution_intercept(name: String) -> Result<bool> {
-    core::nat_nexus_deregister_tool_execution_intercept(&name).map_err(to_napi_err)
+    let key = PromiseAwareKey::GlobalToolExecution(name.clone());
+    let removed =
+        core::nat_nexus_deregister_tool_execution_intercept(&name).map_err(to_napi_err)?;
+    if removed {
+        forget_promise_aware(&key);
+    }
+    Ok(removed)
 }
 
 // ---------------------------------------------------------------------------
@@ -905,16 +986,25 @@ pub fn deregister_llm_request_intercept(name: String) -> Result<bool> {
 /// short-circuit the chain.
 #[napi]
 pub fn register_llm_execution_intercept(
+    env: Env,
     name: String,
     priority: i32,
-    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    callable: JsFunction,
 ) -> Result<()> {
+    let key = PromiseAwareKey::GlobalLlmExecution(name.clone());
+    let pa_fn = std::sync::Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|e| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
+        })?,
+    );
     core::nat_nexus_register_llm_execution_intercept(
         &name,
         priority,
-        callable::wrap_js_llm_exec_intercept_fn(callable),
+        callable::wrap_js_llm_exec_intercept_fn(pa_fn.clone()),
     )
-    .map_err(to_napi_err)
+    .map_err(to_napi_err)?;
+    remember_promise_aware(key, pa_fn);
+    Ok(())
 }
 
 /// Deregister an LLM execution intercept by name.
@@ -922,26 +1012,41 @@ pub fn register_llm_execution_intercept(
 /// Returns `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_llm_execution_intercept(name: String) -> Result<bool> {
-    core::nat_nexus_deregister_llm_execution_intercept(&name).map_err(to_napi_err)
+    let key = PromiseAwareKey::GlobalLlmExecution(name.clone());
+    let removed = core::nat_nexus_deregister_llm_execution_intercept(&name).map_err(to_napi_err)?;
+    if removed {
+        forget_promise_aware(&key);
+    }
+    Ok(removed)
 }
 
 /// Register a streaming LLM execution intercept following the middleware chain pattern.
 ///
 /// The `callable` receives the request and a `next` function. Call `next(request)` to
-/// invoke the next intercept or original streaming implementation; skip calling `next`
-/// to short-circuit the chain.
+/// invoke the next intercept or original streaming implementation; in Node the
+/// returned promise resolves to an array of downstream JSON chunks. Skip calling
+/// `next` to short-circuit the chain.
 #[napi]
 pub fn register_llm_stream_execution_intercept(
+    env: Env,
     name: String,
     priority: i32,
-    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    callable: JsFunction,
 ) -> Result<()> {
+    let key = PromiseAwareKey::GlobalLlmStreamExecution(name.clone());
+    let pa_fn = std::sync::Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|e| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
+        })?,
+    );
     core::nat_nexus_register_llm_stream_execution_intercept(
         &name,
         priority,
-        callable::wrap_js_llm_stream_exec_intercept_fn(callable),
+        callable::wrap_js_llm_stream_exec_intercept_fn(pa_fn.clone()),
     )
-    .map_err(to_napi_err)
+    .map_err(to_napi_err)?;
+    remember_promise_aware(key, pa_fn);
+    Ok(())
 }
 
 /// Deregister an LLM stream execution intercept by name.
@@ -949,7 +1054,13 @@ pub fn register_llm_stream_execution_intercept(
 /// Returns `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_llm_stream_execution_intercept(name: String) -> Result<bool> {
-    core::nat_nexus_deregister_llm_stream_execution_intercept(&name).map_err(to_napi_err)
+    let key = PromiseAwareKey::GlobalLlmStreamExecution(name.clone());
+    let removed =
+        core::nat_nexus_deregister_llm_stream_execution_intercept(&name).map_err(to_napi_err)?;
+    if removed {
+        forget_promise_aware(&key);
+    }
+    Ok(removed)
 }
 
 // ---------------------------------------------------------------------------
@@ -1132,20 +1243,32 @@ napi_scope_intercept_tool_api!(
 /// the chain.
 #[napi]
 pub fn scope_register_tool_execution_intercept(
+    env: Env,
     scope_uuid: String,
     name: String,
     priority: i32,
-    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    callable: JsFunction,
 ) -> Result<()> {
+    let key = PromiseAwareKey::ScopeToolExecution {
+        scope_uuid: scope_uuid.clone(),
+        name: name.clone(),
+    };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    let pa_fn = std::sync::Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|e| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
+        })?,
+    );
     core::nat_nexus_scope_register_tool_execution_intercept(
         &uuid,
         &name,
         priority,
-        callable::wrap_js_tool_exec_intercept_fn(callable),
+        callable::wrap_js_tool_exec_intercept_fn(pa_fn.clone()),
     )
-    .map_err(to_napi_err)
+    .map_err(to_napi_err)?;
+    remember_promise_aware(key, pa_fn);
+    Ok(())
 }
 
 /// Deregister a scope-local tool execution intercept by name.
@@ -1153,9 +1276,18 @@ pub fn scope_register_tool_execution_intercept(
 /// Returns `true` if an intercept with that name was found and removed from the specified scope.
 #[napi]
 pub fn scope_deregister_tool_execution_intercept(scope_uuid: String, name: String) -> Result<bool> {
+    let key = PromiseAwareKey::ScopeToolExecution {
+        scope_uuid: scope_uuid.clone(),
+        name: name.clone(),
+    };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_deregister_tool_execution_intercept(&uuid, &name).map_err(to_napi_err)
+    let removed = core::nat_nexus_scope_deregister_tool_execution_intercept(&uuid, &name)
+        .map_err(to_napi_err)?;
+    if removed {
+        forget_promise_aware(&key);
+    }
+    Ok(removed)
 }
 
 // ---------------------------------------------------------------------------
@@ -1318,20 +1450,32 @@ pub fn scope_deregister_llm_request_intercept(scope_uuid: String, name: String) 
 /// short-circuit the chain.
 #[napi]
 pub fn scope_register_llm_execution_intercept(
+    env: Env,
     scope_uuid: String,
     name: String,
     priority: i32,
-    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    callable: JsFunction,
 ) -> Result<()> {
+    let key = PromiseAwareKey::ScopeLlmExecution {
+        scope_uuid: scope_uuid.clone(),
+        name: name.clone(),
+    };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    let pa_fn = std::sync::Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|e| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
+        })?,
+    );
     core::nat_nexus_scope_register_llm_execution_intercept(
         &uuid,
         &name,
         priority,
-        callable::wrap_js_llm_exec_intercept_fn(callable),
+        callable::wrap_js_llm_exec_intercept_fn(pa_fn.clone()),
     )
-    .map_err(to_napi_err)
+    .map_err(to_napi_err)?;
+    remember_promise_aware(key, pa_fn);
+    Ok(())
 }
 
 /// Deregister a scope-local LLM execution intercept by name.
@@ -1339,32 +1483,54 @@ pub fn scope_register_llm_execution_intercept(
 /// Returns `true` if an intercept with that name was found and removed from the specified scope.
 #[napi]
 pub fn scope_deregister_llm_execution_intercept(scope_uuid: String, name: String) -> Result<bool> {
+    let key = PromiseAwareKey::ScopeLlmExecution {
+        scope_uuid: scope_uuid.clone(),
+        name: name.clone(),
+    };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_deregister_llm_execution_intercept(&uuid, &name).map_err(to_napi_err)
+    let removed = core::nat_nexus_scope_deregister_llm_execution_intercept(&uuid, &name)
+        .map_err(to_napi_err)?;
+    if removed {
+        forget_promise_aware(&key);
+    }
+    Ok(removed)
 }
 
 /// Register a scope-local streaming LLM execution intercept following the middleware chain pattern.
 ///
 /// The `callable` receives the request and a `next` function. Call `next(request)` to
-/// invoke the next intercept or original streaming implementation; skip calling `next`
-/// to short-circuit the chain.
+/// invoke the next intercept or original streaming implementation; in Node the
+/// returned promise resolves to an array of downstream JSON chunks. Skip calling
+/// `next` to short-circuit the chain.
 #[napi]
 pub fn scope_register_llm_stream_execution_intercept(
+    env: Env,
     scope_uuid: String,
     name: String,
     priority: i32,
-    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    callable: JsFunction,
 ) -> Result<()> {
+    let key = PromiseAwareKey::ScopeLlmStreamExecution {
+        scope_uuid: scope_uuid.clone(),
+        name: name.clone(),
+    };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    let pa_fn = std::sync::Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &callable).map_err(|e| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
+        })?,
+    );
     core::nat_nexus_scope_register_llm_stream_execution_intercept(
         &uuid,
         &name,
         priority,
-        callable::wrap_js_llm_stream_exec_intercept_fn(callable),
+        callable::wrap_js_llm_stream_exec_intercept_fn(pa_fn.clone()),
     )
-    .map_err(to_napi_err)
+    .map_err(to_napi_err)?;
+    remember_promise_aware(key, pa_fn);
+    Ok(())
 }
 
 /// Deregister a scope-local LLM stream execution intercept by name.
@@ -1375,10 +1541,18 @@ pub fn scope_deregister_llm_stream_execution_intercept(
     scope_uuid: String,
     name: String,
 ) -> Result<bool> {
+    let key = PromiseAwareKey::ScopeLlmStreamExecution {
+        scope_uuid: scope_uuid.clone(),
+        name: name.clone(),
+    };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_deregister_llm_stream_execution_intercept(&uuid, &name)
-        .map_err(to_napi_err)
+    let removed = core::nat_nexus_scope_deregister_llm_stream_execution_intercept(&uuid, &name)
+        .map_err(to_napi_err)?;
+    if removed {
+        forget_promise_aware(&key);
+    }
+    Ok(removed)
 }
 
 // ---------------------------------------------------------------------------

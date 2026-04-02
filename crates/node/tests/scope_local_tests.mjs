@@ -305,22 +305,28 @@ describe('Priority merge of global and scope-local middleware', () => {
   });
 
   it('scope-local execution intercept and global intercept merge', async () => {
-    lib.registerToolExecutionIntercept('sl_merge_global_exec', 5, (args) => {
-      return { ...args, global_exec: true };
+    lib.registerToolExecutionIntercept('sl_merge_global_exec', 5, async (args, next) => {
+      const result = await next({ ...args, from_global: true });
+      return { ...result, global_exec: true };
     });
 
     const scope = pushScope('sl_merge_exec_scope', ScopeType.Agent, null, null);
-    scopeRegisterToolExecutionIntercept(scope.uuid, 'sl_merge_local_exec', 15, (args) => {
-      return { ...args, scope_exec: true };
+    scopeRegisterToolExecutionIntercept(scope.uuid, 'sl_merge_local_exec', 15, async (args, next) => {
+      const result = await next({ ...args, from_scope: true });
+      return { ...result, scope_exec: true };
     });
 
     const result = await toolCallExecute(
       'sl_merge_exec_tool', { base: true }, (args) => args,
       null, null, null, null,
     );
-    // At least one of the execution intercepts should have run
-    assert.ok(result.global_exec || result.scope_exec,
-      'At least one execution intercept should have run');
+    assert.deepEqual(result, {
+      base: true,
+      from_global: true,
+      from_scope: true,
+      scope_exec: true,
+      global_exec: true,
+    });
 
     scopeDeregisterToolExecutionIntercept(scope.uuid, 'sl_merge_local_exec');
     popScope(scope);
