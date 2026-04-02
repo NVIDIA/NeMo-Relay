@@ -5,6 +5,7 @@ package nat_nexus
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -321,6 +322,21 @@ func TestLlmExecutionInterceptReplaces(t *testing.T) {
 	DeregisterLlmExecutionIntercept("go_llm_exec_rep")
 }
 
+func TestLlmCallableErrorPropagation(t *testing.T) {
+	request := makeRequest()
+	_, err := LlmCallExecute("error_llm", request,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return nil, errors.New("llm internal failure")
+		},
+	)
+	if err == nil {
+		t.Fatal("expected llm callable error to propagate")
+	}
+	if !strings.Contains(err.Error(), "llm internal failure") {
+		t.Fatalf("expected propagated llm error message, got %v", err)
+	}
+}
+
 // ============================================================================
 // Full LLM pipeline tests
 // ============================================================================
@@ -488,6 +504,28 @@ func TestLlmExecutionInterceptWrapsCallable(t *testing.T) {
 	}
 	if output["wrapped"] != true {
 		t.Fatal("expected wrapped=true")
+	}
+}
+
+func TestLlmExecutionInterceptSeesNextError(t *testing.T) {
+	RegisterLlmExecutionIntercept("go_llm_wrap_exec_err", 1,
+		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			return next(nativeJSON)
+		},
+	)
+	defer DeregisterLlmExecutionIntercept("go_llm_wrap_exec_err")
+
+	request := makeRequest()
+	_, err := LlmCallExecute("wrap_llm_err", request,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return nil, errors.New("llm next failure")
+		},
+	)
+	if err == nil {
+		t.Fatal("expected llm next error to propagate through intercept")
+	}
+	if !strings.Contains(err.Error(), "llm next failure") {
+		t.Fatalf("expected propagated llm next error message, got %v", err)
 	}
 }
 

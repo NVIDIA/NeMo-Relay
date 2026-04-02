@@ -94,6 +94,8 @@ extern int32_t nat_nexus_llm_stream_call_execute(
 	const char* model_name,
 	FfiStream** out);
 
+extern void nat_nexus_set_last_error_message(const char* msg);
+
 // Tool guardrails
 typedef char* (*NatNexusToolSanitizeFn)(void* user_data, const char* name, const char* args_json);
 extern int32_t nat_nexus_register_tool_sanitize_request_guardrail(const char* name, int32_t priority, NatNexusToolSanitizeFn cb, void* user_data, NatNexusFreeFn free_fn);
