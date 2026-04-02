@@ -10,7 +10,7 @@ const lib = require('../index.js');
 
 const {
   pushScope, popScope,
-  llmCall, llmCallEnd, llmCallExecute,
+  llmCall, llmCallEnd, llmCallExecute, llmStreamCallExecute,
   registerLlmSanitizeRequestGuardrail, deregisterLlmSanitizeRequestGuardrail,
   registerLlmSanitizeResponseGuardrail, deregisterLlmSanitizeResponseGuardrail,
   registerLlmConditionalExecutionGuardrail, deregisterLlmConditionalExecutionGuardrail,
@@ -134,12 +134,12 @@ describe('LLM intercepts', () => {
   });
 
   it('execution intercept', () => {
-    registerLlmExecutionIntercept('node_llm_exec_int', 10, (native) => ({ replaced: true }));
+    registerLlmExecutionIntercept('node_llm_exec_int', 10, async (native, next) => next(native));
     deregisterLlmExecutionIntercept('node_llm_exec_int');
   });
 
   it('stream execution intercept', () => {
-    registerLlmStreamExecutionIntercept('node_llm_stream_exec', 10, (native) => ({ stream_result: true }));
+    registerLlmStreamExecutionIntercept('node_llm_stream_exec', 10, async (native, next) => next(native));
     deregisterLlmStreamExecutionIntercept('node_llm_stream_exec');
   });
 
@@ -162,11 +162,53 @@ describe('LLM intercepts', () => {
     deregisterLlmRequestIntercept('node_llm_req_mod');
   });
 
-  it('execution intercept replaces func', async () => {
-    registerLlmExecutionIntercept('node_llm_exec_repl', 10, (native) => ({ replaced: true }));
+  it('execution intercept composes with next', async () => {
+    registerLlmExecutionIntercept('node_llm_exec_repl', 10, async (native, next) => {
+      native.content.intercepted = true;
+      const result = await next(native);
+      return { ...result, wrapped: true };
+    });
     const native = makeNative();
-    const result = await llmCallExecute('repl_llm', native, (n) => ({ original: true }), null, null, null, null, null);
-    assert.equal(result.replaced, true);
+    const result = await llmCallExecute('repl_llm', native, (n) => ({ original: !n.content.intercepted }), null, null, null, null, null);
+    assert.equal(result.original, false);
+    assert.equal(result.wrapped, true);
     deregisterLlmExecutionIntercept('node_llm_exec_repl');
+  });
+
+  it('stream execution intercept composes with next', async () => {
+    registerLlmStreamExecutionIntercept('node_llm_stream_exec_repl', 10, async (native, next) => {
+      native.content.intercepted = true;
+      const chunks = await next(native);
+      return [...chunks, { wrapped: native.content.intercepted }];
+    });
+
+    const native = makeNative();
+    const seen = [];
+    const stream = await llmStreamCallExecute(
+      'stream_llm',
+      native,
+      (wrapper) => {
+        lib.pushStreamChunk(wrapper.__nat_nexus_stream_id, { chunk: wrapper.__nat_nexus_native.content.intercepted });
+        lib.endStream(wrapper.__nat_nexus_stream_id);
+      },
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+    );
+
+    for (;;) {
+      const chunk = await stream.next();
+      if (chunk === null) {
+        break;
+      }
+      seen.push(chunk);
+    }
+
+    assert.deepEqual(seen, [{ chunk: true }, { wrapped: true }]);
+    deregisterLlmStreamExecutionIntercept('node_llm_stream_exec_repl');
   });
 });

@@ -15,12 +15,14 @@ use std::sync::Arc;
 
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use serde_json::Value as Json;
+use tokio_stream::StreamExt;
 
 use nvidia_nat_nexus_core::types::LLMRequest;
 use nvidia_nat_nexus_core::{
     LlmExecutionNextFn, LlmStreamExecutionNextFn, NexusError, Result, ToolExecutionNextFn,
 };
 
+use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
 use crate::types::JsEvent;
 
 /// Wrap a JS function `(name: string, args: object) => object` for tool sanitize/intercept.
@@ -300,49 +302,29 @@ pub fn wrap_js_event_subscriber(
 
 /// Wrap a JS function `(args, next) => result` for tool execution intercept.
 ///
-/// The JS callback receives the tool arguments and a `next` callback. The `next` callback
-/// is a one-shot function `(args) => Promise<result>` that invokes the next layer in
-/// the middleware chain.
-///
-/// Since NAPI `ThreadsafeFunction` cannot pass dynamic JS function objects directly, the
-/// `next` is provided as a JSON-serialized opaque handle. The JS side should call a
-/// companion `callToolNext(handle, args)` API function, or more practically, the intercept
-/// callable receives `(args, nextHandle)` and uses the runtime-provided helper.
-///
-/// For simplicity in the initial implementation, the intercept callable skips `next`
-/// and acts as a full replacement -- matching the previous behavior while accepting
-/// the new `(args, next)` Rust signature.
+/// The JS callback receives the tool arguments and a real `next(args)` function
+/// that returns a Promise for the downstream result.
 pub fn wrap_js_tool_exec_intercept_fn(
-    func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    func: Arc<PromiseAwareFn>,
 ) -> Arc<
     dyn Fn(&str, Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
         + Sync,
 > {
-    let func = Arc::new(func);
-    Arc::new(move |_name: &str, args: Json, _next: ToolExecutionNextFn| {
+    Arc::new(move |_name: &str, args: Json, next: ToolExecutionNextFn| {
         let func = func.clone();
-        Box::pin(async move {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            func.call_with_return_value(
-                args,
-                ThreadsafeFunctionCallMode::Blocking,
-                move |val: Json| {
-                    let _ = tx.send(val);
-                    Ok(())
-                },
-            );
-            rx.await.map_err(|e| NexusError::Internal(e.to_string()))
-        })
+        let next_json: JsonNextFn = Arc::new(move |next_args| next(next_args));
+        Box::pin(async move { func.call_with_json_next(args, next_json).await })
     })
 }
 
 /// Wrap a JS function `(request, next) => result` for LLM execution intercept.
 ///
-/// See `wrap_js_tool_exec_intercept_fn` for the `next` parameter discussion.
-/// The JS callback receives the `LLMRequest` serialized as a plain JSON object.
+/// The JS callback receives the `LLMRequest` serialized as a plain JSON object
+/// and a real `next(request)` function that returns a Promise for the downstream
+/// result.
 pub fn wrap_js_llm_exec_intercept_fn(
-    func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    func: Arc<PromiseAwareFn>,
 ) -> Arc<
     dyn Fn(
             &str,
@@ -352,34 +334,33 @@ pub fn wrap_js_llm_exec_intercept_fn(
         + Send
         + Sync,
 > {
-    let func = Arc::new(func);
     Arc::new(
-        move |_name: &str, request: LLMRequest, _next: LlmExecutionNextFn| {
+        move |_name: &str, request: LLMRequest, next: LlmExecutionNextFn| {
             let func = func.clone();
             let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
-            Box::pin(async move {
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                func.call_with_return_value(
-                    req_json,
-                    ThreadsafeFunctionCallMode::Blocking,
-                    move |val: Json| {
-                        let _ = tx.send(val);
-                        Ok(())
-                    },
-                );
-                rx.await.map_err(|e| NexusError::Internal(e.to_string()))
-            })
+            let next_json: JsonNextFn = Arc::new(move |next_request_json| {
+                let next = next.clone();
+                Box::pin(async move {
+                    let next_request: LLMRequest = serde_json::from_value(next_request_json)
+                        .map_err(|e| {
+                            NexusError::Internal(format!("invalid LLMRequest from JS next: {e}"))
+                        })?;
+                    next(next_request).await
+                })
+            });
+            Box::pin(async move { func.call_with_json_next(req_json, next_json).await })
         },
     )
 }
 
 /// Wrap a JS function `(request, next) => result` for LLM stream execution intercept.
 ///
-/// The intercept callable produces a single JSON result which is wrapped into a
-/// single-item stream internally. The JS callback receives the `LLMRequest`
-/// serialized as a plain JSON object.
+/// The JS callback receives the `LLMRequest` serialized as a plain JSON object
+/// and a real `next(request)` function whose Promise resolves to an array of
+/// downstream JSON chunks. Returning an array preserves streaming semantics;
+/// returning any other JSON value produces a single-chunk stream.
 pub fn wrap_js_llm_stream_exec_intercept_fn(
-    func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    func: Arc<PromiseAwareFn>,
 ) -> Arc<
     dyn Fn(
             &str,
@@ -396,23 +377,32 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
         > + Send
         + Sync,
 > {
-    let func = Arc::new(func);
     Arc::new(
-        move |_name: &str, request: LLMRequest, _next: LlmStreamExecutionNextFn| {
+        move |_name: &str, request: LLMRequest, next: LlmStreamExecutionNextFn| {
             let func = func.clone();
             let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+            let next_stream: JsonStreamNextFn = Arc::new(move |next_request_json| {
+                let next = next.clone();
+                Box::pin(async move {
+                    let next_request: LLMRequest = serde_json::from_value(next_request_json)
+                        .map_err(|e| {
+                            NexusError::Internal(format!("invalid LLMRequest from JS next: {e}"))
+                        })?;
+                    let mut stream = next(next_request).await?;
+                    let mut chunks = Vec::new();
+                    while let Some(item) = stream.next().await {
+                        chunks.push(item?);
+                    }
+                    Ok(chunks)
+                })
+            });
             Box::pin(async move {
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                func.call_with_return_value(
-                    req_json,
-                    ThreadsafeFunctionCallMode::Blocking,
-                    move |val: Json| {
-                        let _ = tx.send(val);
-                        Ok(())
-                    },
-                );
-                let result = rx.await.map_err(|e| NexusError::Internal(e.to_string()))?;
-                let stream = tokio_stream::once(Ok(result));
+                let result = func.call_with_stream_next(req_json, next_stream).await?;
+                let chunks = match result {
+                    Json::Array(values) => values.into_iter().map(Ok).collect::<Vec<_>>(),
+                    value => vec![Ok(value)],
+                };
+                let stream = tokio_stream::iter(chunks);
                 Ok(Box::pin(stream)
                     as Pin<
                         Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>,
