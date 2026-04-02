@@ -244,10 +244,11 @@ fn nat_nexus_tool_call_end(
 /// Execute a tool call through the full middleware pipeline.
 ///
 /// Runs conditional-execution guardrails (on raw args) → request intercepts →
-/// sanitize-request guardrails → execution intercepts → the supplied
-/// function → sanitize-response guardrails, then
-/// returns the final result. On rejection, only a standalone ``Mark`` event
-/// is emitted (no ``Start``/``End`` pair) and ``GuardrailRejected`` is raised.
+/// sanitize-request guardrails (for the emitted ``Start`` event payload) →
+/// execution intercepts → the supplied function → sanitize-response
+/// guardrails (for the emitted ``End`` event payload), then returns the final
+/// result. On rejection, only a standalone ``Mark`` event is emitted (no
+/// ``Start``/``End`` pair) and ``GuardrailRejected`` is raised.
 ///
 /// Args:
 ///     name: Tool name.
@@ -259,7 +260,9 @@ fn nat_nexus_tool_call_end(
 ///     metadata: Optional JSON-serializable metadata.
 ///
 /// Returns:
-///     An awaitable that resolves to the (possibly transformed) tool result.
+///     An awaitable that resolves to the tool result after execution
+///     intercepts. Sanitize guardrails do not rewrite the value returned to
+///     the caller.
 #[pyfunction]
 #[pyo3(signature = (name, args, func, *, handle=None, attributes=None, data=None, metadata=None))]
 #[allow(clippy::too_many_arguments)]
@@ -378,10 +381,11 @@ fn nat_nexus_llm_call_end(
 /// Execute an LLM call through the full middleware pipeline.
 ///
 /// Runs conditional-execution guardrails (on raw request) → request intercepts →
-/// sanitize-request guardrails → execution intercepts → the supplied
-/// function → sanitize-response guardrails, then
-/// returns the final response. On rejection, only a standalone ``Mark`` event
-/// is emitted (no ``Start``/``End`` pair) and ``GuardrailRejected`` is raised.
+/// sanitize-request guardrails (for the emitted ``Start`` event payload) →
+/// execution intercepts → the supplied function → sanitize-response
+/// guardrails (for the emitted ``End`` event payload), then returns the final
+/// response. On rejection, only a standalone ``Mark`` event is emitted (no
+/// ``Start``/``End`` pair) and ``GuardrailRejected`` is raised.
 ///
 /// Args:
 ///     name: Model/provider name.
@@ -393,7 +397,9 @@ fn nat_nexus_llm_call_end(
 ///     metadata: Optional JSON-serializable metadata.
 ///
 /// Returns:
-///     An awaitable that resolves to the (possibly transformed) LLM response.
+///     An awaitable that resolves to the LLM response after execution
+///     intercepts. Sanitize guardrails do not rewrite the value returned to
+///     the caller.
 #[pyfunction]
 #[pyo3(signature = (name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None))]
 #[allow(clippy::too_many_arguments)]

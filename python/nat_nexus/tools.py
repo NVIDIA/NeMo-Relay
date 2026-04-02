@@ -18,8 +18,8 @@ Functions:
     execute(name, args, func, *, handle=None, attributes=None, data=None, metadata=None)
         Execute a tool call through the full middleware pipeline (conditional-
         execution guardrails on raw args → request intercepts →
-        sanitize-request guardrails → execution intercepts → *func* →
-        sanitize-response guardrails). On rejection,
+        sanitize-request guardrails for event payloads → execution intercepts → *func* →
+        sanitize-response guardrails for event payloads). On rejection,
         only a standalone Mark event is emitted and ``GuardrailRejected`` is
         raised. Returns an awaitable of the final result.
 
@@ -102,10 +102,10 @@ def execute(name, args, func, *, handle=None, attributes=None, data=None, metada
     """Execute a tool call through the full middleware pipeline.
 
     Runs conditional-execution guardrails (on raw args) -> request intercepts ->
-    sanitize-request guardrails -> execution intercepts -> *func* -> response
-    intercepts -> sanitize-response guardrails. On rejection, only a standalone
-    ``Mark`` event is emitted (no ``Start``/``End`` pair) and
-    ``GuardrailRejected`` is raised.
+    sanitize-request guardrails for the emitted ``Start`` event ->
+    execution intercepts -> *func* -> sanitize-response guardrails for the
+    emitted ``End`` event. On rejection, only a standalone ``Mark`` event is
+    emitted (no ``Start``/``End`` pair) and ``GuardrailRejected`` is raised.
 
     Args:
         name: Tool name identifier.
@@ -117,7 +117,8 @@ def execute(name, args, func, *, handle=None, attributes=None, data=None, metada
         metadata: Optional JSON-serializable metadata payload.
 
     Returns:
-        An awaitable that resolves to the (possibly transformed) tool result.
+        An awaitable that resolves to the execution result after intercepts.
+        Sanitize guardrails only affect recorded event payloads.
 
     Raises:
         GuardrailRejected: If a conditional-execution guardrail rejects the call.
