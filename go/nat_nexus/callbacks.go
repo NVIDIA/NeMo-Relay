@@ -94,8 +94,13 @@ func registerClosure(fn interface{}) unsafe.Pointer {
 	closureRegistryMu.Lock()
 	closureRegistry[id] = fn
 	closureRegistryMu.Unlock()
-	// Heap-allocate the ID so we have a real pointer for C's void*.
-	p := new(uintptr)
+
+	// Allocate the callback token in C-owned memory so we don't pass a Go
+	// pointer through C and can release it explicitly on deregistration.
+	p := (*uintptr)(C.malloc(C.size_t(unsafe.Sizeof(uintptr(0)))))
+	if p == nil {
+		panic("nat_nexus: failed to allocate callback token")
+	}
 	*p = id
 	return unsafe.Pointer(p)
 }
@@ -117,6 +122,7 @@ func unregisterClosure(userData unsafe.Pointer) {
 	closureRegistryMu.Lock()
 	delete(closureRegistry, id)
 	closureRegistryMu.Unlock()
+	C.free(userData)
 }
 
 // ---------------------------------------------------------------------------
