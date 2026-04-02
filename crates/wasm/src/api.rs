@@ -23,6 +23,8 @@
 //! All functions use `JsValue` for JSON payloads and return `Result<T, JsValue>`
 //! where errors are thrown as JavaScript exceptions.
 
+use std::sync::Arc;
+
 use js_sys::Function;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
@@ -283,7 +285,7 @@ pub async fn nat_nexus_tool_call_execute(
         .unwrap_or_else(nvidia_nat_nexus_core::task_scope_top);
     let exec_fn = callable::wrap_js_tool_exec_fn(func);
     let default_fn: nvidia_nat_nexus_core::ToolExecutionNextFn =
-        Box::new(move |args| exec_fn(args));
+        Arc::new(move |args| exec_fn(args));
 
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
     let data_json = opt_js_to_json(&data)?;
@@ -409,7 +411,7 @@ pub async fn nat_nexus_llm_call_execute(
         .unwrap_or_else(nvidia_nat_nexus_core::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
     let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn =
-        Box::new(move |request| exec_fn(request));
+        Arc::new(move |request| exec_fn(request));
 
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
     let data_json = opt_js_to_json(&data)?;
@@ -487,8 +489,8 @@ pub async fn nat_nexus_llm_stream_call_execute(
         None => Box::new(|| serde_json::Value::Null),
     };
 
-    // Bridge LlmExecutionFn -> LlmStreamExecutionNextFn (FnOnce)
-    let default_fn: nvidia_nat_nexus_core::LlmStreamExecutionNextFn = Box::new(move |request| {
+    // Bridge LlmExecutionFn -> LlmStreamExecutionNextFn
+    let default_fn: nvidia_nat_nexus_core::LlmStreamExecutionNextFn = Arc::new(move |request| {
         let fut = exec_fn(request);
         Box::pin(async move {
             let result = fut.await?;

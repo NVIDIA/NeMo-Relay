@@ -310,8 +310,9 @@ pub fn wrap_js_event_subscriber(
 
 /// Wrap a JS function `(args, next) => result | Promise<result>` for tool execution intercept.
 ///
-/// The `next` parameter passed to JS is a one-shot function `(args) => Promise<result>`
-/// that invokes the next layer in the middleware chain.
+/// The `next` parameter passed to JS is a reusable function `(args) => Promise<result>`
+/// that invokes the next layer in the middleware chain. It can be called multiple times
+/// to support retry patterns.
 pub fn wrap_js_tool_exec_intercept_fn(
     func: Function,
 ) -> Arc<
@@ -322,9 +323,11 @@ pub fn wrap_js_tool_exec_intercept_fn(
     let func = SendWrapper::new(func);
     Arc::new(move |_name: &str, args: Json, next: ToolExecutionNextFn| {
         let js_args = json_to_js(&args);
-        let js_next =
-            wasm_bindgen::closure::Closure::once_into_js(move |next_args: JsValue| -> JsValue {
+        let next_clone = next.clone();
+        let js_next = wasm_bindgen::closure::Closure::<dyn Fn(JsValue) -> JsValue>::new(
+            move |next_args: JsValue| -> JsValue {
                 let args_json = js_to_json(&next_args).unwrap_or(Json::Null);
+                let next = next_clone.clone();
                 let future = next(args_json);
                 wasm_bindgen_futures::future_to_promise(async move {
                     let result = future
@@ -333,9 +336,12 @@ pub fn wrap_js_tool_exec_intercept_fn(
                     Ok(json_to_js(&result))
                 })
                 .into()
-            });
-        let result = func.call2(&JsValue::NULL, &js_args, &js_next);
+            },
+        );
+        let js_next_val = js_next.as_ref().clone();
+        let result = func.call2(&JsValue::NULL, &js_args, &js_next_val);
         Box::pin(SendWrapper::new(async move {
+            let _closure_guard = js_next; // prevent drop until future completes
             match result {
                 Ok(val) => {
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
@@ -356,9 +362,10 @@ pub fn wrap_js_tool_exec_intercept_fn(
 
 /// Wrap a JS function `(request, next) => result | Promise<result>` for LLM execution intercept.
 ///
-/// The `next` parameter passed to JS is a one-shot function `(request) => Promise<result>`
-/// that invokes the next layer in the middleware chain. The `LLMRequest` is serialized to
-/// JSON before passing to JS; when JS calls `next`, the argument is deserialized back.
+/// The `next` parameter passed to JS is a reusable function `(request) => Promise<result>`
+/// that invokes the next layer in the middleware chain. It can be called multiple times
+/// to support retry patterns. The `LLMRequest` is serialized to JSON before passing to
+/// JS; when JS calls `next`, the argument is deserialized back.
 pub fn wrap_js_llm_exec_intercept_fn(
     func: Function,
 ) -> Arc<
@@ -375,11 +382,13 @@ pub fn wrap_js_llm_exec_intercept_fn(
         move |_name: &str, request: LLMRequest, next: LlmExecutionNextFn| {
             let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             let js_request = json_to_js(&req_json);
-            let js_next =
-                wasm_bindgen::closure::Closure::once_into_js(move |next_val: JsValue| -> JsValue {
+            let next_clone = next.clone();
+            let js_next = wasm_bindgen::closure::Closure::<dyn Fn(JsValue) -> JsValue>::new(
+                move |next_val: JsValue| -> JsValue {
                     let next_json = js_to_json(&next_val).unwrap_or(Json::Null);
                     let next_request: LLMRequest =
-                        serde_json::from_value(next_json).unwrap_or(request);
+                        serde_json::from_value(next_json).unwrap_or(request.clone());
+                    let next = next_clone.clone();
                     let future = next(next_request);
                     wasm_bindgen_futures::future_to_promise(async move {
                         let result = future
@@ -388,9 +397,12 @@ pub fn wrap_js_llm_exec_intercept_fn(
                         Ok(json_to_js(&result))
                     })
                     .into()
-                });
-            let result = func.call2(&JsValue::NULL, &js_request, &js_next);
+                },
+            );
+            let js_next_val = js_next.as_ref().clone();
+            let result = func.call2(&JsValue::NULL, &js_request, &js_next_val);
             Box::pin(SendWrapper::new(async move {
+                let _closure_guard = js_next; // prevent drop until future completes
                 match result {
                     Ok(val) => {
                         if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {

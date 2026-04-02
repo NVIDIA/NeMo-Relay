@@ -40,10 +40,10 @@ pub type ToolSanitizeFn = Box<dyn Fn(&str, Json) -> Json + Send + Sync>;
 pub type ToolConditionalFn = Box<dyn Fn(&str, &Json) -> Option<String> + Send + Sync>;
 /// Tool request intercept: `(tool_name, value) -> transformed`.
 pub type ToolInterceptFn = Box<dyn Fn(&str, Json) -> Json + Send + Sync>;
-/// Tool execution "next" function (FnOnce — each chain link is single-use):
+/// Tool execution "next" function (reusable — supports retries):
 /// `(args) -> Future<Result<Json>>`.
 pub type ToolExecutionNextFn =
-    Box<dyn FnOnce(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send>;
+    Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
 /// Tool execution intercept function: `(name, args, next) -> Future<Result<Json>>`.
 /// Uses `Arc` because chain-building needs to clone it.
 pub type ToolExecutionFn = Arc<
@@ -60,10 +60,10 @@ pub type LlmSanitizeResponseFn = Box<dyn Fn(Json) -> Json + Send + Sync>;
 pub type LlmConditionalFn = Box<dyn Fn(&LLMRequest) -> Option<String> + Send + Sync>;
 /// LLM request intercept: `(name, request) -> transformed_request`.
 pub type LlmRequestInterceptFn = Box<dyn Fn(&str, LLMRequest) -> LLMRequest + Send + Sync>;
-/// LLM execution "next" function (FnOnce — each chain link is single-use):
+/// LLM execution "next" function (reusable — supports retries):
 /// `(request) -> Future<Result<Json>>`.
 pub type LlmExecutionNextFn =
-    Box<dyn FnOnce(LLMRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send>;
+    Arc<dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
 /// LLM execution intercept function: `(name, request, next) -> Future<Result<Json>>`.
 /// Uses `Arc` because chain-building needs to clone it.
 pub type LlmExecutionFn = Arc<
@@ -75,17 +75,18 @@ pub type LlmExecutionFn = Arc<
         + Send
         + Sync,
 >;
-/// LLM streaming execution "next" function (FnOnce):
+/// LLM streaming execution "next" function (reusable — supports retries):
 /// `(request) -> Future<Result<Stream<Item = Result<Json>>>>`.
-pub type LlmStreamExecutionNextFn = Box<
-    dyn FnOnce(
+pub type LlmStreamExecutionNextFn = Arc<
+    dyn Fn(
             LLMRequest,
         ) -> Pin<
             Box<
                 dyn Future<Output = Result<Pin<Box<dyn Stream<Item = Result<Json>> + Send>>>>
                     + Send,
             >,
-        > + Send,
+        > + Send
+        + Sync,
 >;
 /// LLM streaming execution intercept function: `(name, request, next) -> Future<Result<Stream>>`.
 /// Uses `Arc` because chain-building needs to clone it.
@@ -887,8 +888,9 @@ impl NatNexusContextState {
     }
 
     /// Build a middleware chain of all matching tool execution intercepts.
-    /// Returns a single `FnOnce` that, when called, runs through the chain
+    /// Returns a single callable that, when called, runs through the chain
     /// and ultimately calls `default_fn` if no intercept short-circuits.
+    /// The returned callable is reusable and supports retry patterns.
     ///
     /// Intercepts are sorted by priority ascending. The lowest-priority
     /// (first) matching intercept becomes the outermost wrapper.
@@ -905,9 +907,9 @@ impl NatNexusContextState {
         let mut next = default_fn;
         let name = name.to_string();
         for (callable, _) in matching.into_iter().rev() {
-            let current_next = next;
+            let current_next = next.clone();
             let n = name.clone();
-            next = Box::new(move |args| callable(&n, args, current_next));
+            next = Arc::new(move |args| callable(&n, args, current_next.clone()));
         }
         next
     }
@@ -983,8 +985,9 @@ impl NatNexusContextState {
     }
 
     /// Build a middleware chain of all matching LLM execution intercepts.
-    /// Returns a single `FnOnce` that, when called, runs through the chain
+    /// Returns a single callable that, when called, runs through the chain
     /// and ultimately calls `default_fn` if no intercept short-circuits.
+    /// The returned callable is reusable and supports retry patterns.
     /// Merges global + scope-local entries by priority.
     pub fn llm_build_execution_chain(
         &self,
@@ -998,16 +1001,17 @@ impl NatNexusContextState {
         let mut next = default_fn;
         let name = name.to_string();
         for (callable, _) in matching.into_iter().rev() {
-            let current_next = next;
+            let current_next = next.clone();
             let n = name.clone();
-            next = Box::new(move |request| callable(&n, request, current_next));
+            next = Arc::new(move |request| callable(&n, request, current_next.clone()));
         }
         next
     }
 
     /// Build a middleware chain of all matching LLM streaming execution intercepts.
-    /// Returns a single `FnOnce` that, when called, runs through the chain
+    /// Returns a single callable that, when called, runs through the chain
     /// and ultimately calls `default_fn` if no intercept short-circuits.
+    /// The returned callable is reusable and supports retry patterns.
     /// Merges global + scope-local entries by priority.
     #[allow(clippy::type_complexity)]
     pub fn llm_stream_build_execution_chain(
@@ -1024,9 +1028,9 @@ impl NatNexusContextState {
         let mut next = default_fn;
         let name = name.to_string();
         for (callable, _) in matching.into_iter().rev() {
-            let current_next = next;
+            let current_next = next.clone();
             let n = name.clone();
-            next = Box::new(move |request| callable(&n, request, current_next));
+            next = Arc::new(move |request| callable(&n, request, current_next.clone()));
         }
         next
     }
@@ -1820,7 +1824,7 @@ mod tests {
     async fn test_tool_build_execution_chain_no_intercepts() {
         let ctx = NatNexusContextState::new();
         let default_fn: ToolExecutionNextFn =
-            Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
+            Arc::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
         let chain = ctx.tool_build_execution_chain("test_tool", default_fn, &[]);
         let result = chain(serde_json::json!({})).await.unwrap();
         assert_eq!(result["default"], true);
@@ -1845,7 +1849,7 @@ mod tests {
             )
             .unwrap();
         let default_fn: ToolExecutionNextFn =
-            Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
+            Arc::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
         let chain = ctx.tool_build_execution_chain("test_tool", default_fn, &[]);
         let result = chain(serde_json::json!({})).await.unwrap();
         // Intercept passes through, so default should run
@@ -1870,7 +1874,7 @@ mod tests {
             )
             .unwrap();
         let default_fn: ToolExecutionNextFn =
-            Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
+            Arc::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
         let chain = ctx.tool_build_execution_chain("test_tool", default_fn, &[]);
         let result = chain(serde_json::json!({})).await.unwrap();
         // Intercept short-circuits (skips next), so intercept result should be returned
@@ -1902,7 +1906,7 @@ mod tests {
             )
             .unwrap();
         let default_fn: ToolExecutionNextFn =
-            Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
+            Arc::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
         let chain = ctx.tool_build_execution_chain("test_tool", default_fn, &[]);
         let result = chain(serde_json::json!({})).await.unwrap();
         // Intercept calls next, then wraps result
@@ -1957,7 +1961,7 @@ mod tests {
             )
             .unwrap();
         let default_fn: ToolExecutionNextFn =
-            Box::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
+            Arc::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
         let chain = ctx.tool_build_execution_chain("test_tool", default_fn, &[]);
         let result = chain(serde_json::json!({})).await.unwrap();
         // Both intercepts call next, so all three flags should be set
@@ -2135,7 +2139,7 @@ mod tests {
             content: serde_json::json!({"messages": []}),
         };
         let default_fn: LlmExecutionNextFn =
-            Box::new(|_req| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
+            Arc::new(|_req| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
         let chain = ctx.llm_build_execution_chain("test_llm", default_fn, &[]);
         let result = chain(request).await.unwrap();
         assert_eq!(result["default"], true);
@@ -2149,7 +2153,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: serde_json::json!({"messages": []}),
         };
-        let default_fn: LlmStreamExecutionNextFn = Box::new(|_req| {
+        let default_fn: LlmStreamExecutionNextFn = Arc::new(|_req| {
             Box::pin(async {
                 let stream: Pin<Box<dyn Stream<Item = Result<Json>> + Send>> =
                     Box::pin(futures::stream::once(async {

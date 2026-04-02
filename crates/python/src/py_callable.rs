@@ -158,10 +158,11 @@ pub fn wrap_py_tool_exec_fn(
 /// Python-callable wrapper for the Rust `ToolExecutionNextFn`.
 ///
 /// The Python intercept calls `await next(args)` to invoke the next layer
-/// in the middleware chain (or the original default function).
+/// in the middleware chain (or the original default function).  The wrapper
+/// is reusable — calling `next` multiple times is supported (retry patterns).
 #[pyclass]
 struct PyToolNextFn {
-    inner: std::sync::Mutex<Option<ToolExecutionNextFn>>,
+    inner: ToolExecutionNextFn,
 }
 
 #[pymethods]
@@ -171,9 +172,7 @@ impl PyToolNextFn {
         py: Python<'py>,
         args: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let next = self.inner.lock().unwrap().take().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("next() called more than once")
-        })?;
+        let next = self.inner.clone();
         let json_args = py_to_json(args)?;
         let future = next(json_args);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -186,17 +185,16 @@ impl PyToolNextFn {
 }
 
 /// Python-callable wrapper for the Rust `LlmExecutionNextFn`.
+/// Reusable — calling `next` multiple times is supported (retry patterns).
 #[pyclass]
 struct PyLlmNextFn {
-    inner: std::sync::Mutex<Option<LlmExecutionNextFn>>,
+    inner: LlmExecutionNextFn,
 }
 
 #[pymethods]
 impl PyLlmNextFn {
     fn __call__<'py>(&self, py: Python<'py>, request: PyLLMRequest) -> PyResult<Bound<'py, PyAny>> {
-        let next = self.inner.lock().unwrap().take().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("next() called more than once")
-        })?;
+        let next = self.inner.clone();
         let future = next(request.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let result = future
@@ -208,17 +206,16 @@ impl PyLlmNextFn {
 }
 
 /// Python-callable wrapper for the Rust `LlmStreamExecutionNextFn`.
+/// Reusable — calling `next` multiple times is supported (retry patterns).
 #[pyclass]
 struct PyLlmStreamNextFn {
-    inner: std::sync::Mutex<Option<LlmStreamExecutionNextFn>>,
+    inner: LlmStreamExecutionNextFn,
 }
 
 #[pymethods]
 impl PyLlmStreamNextFn {
     fn __call__<'py>(&self, py: Python<'py>, request: PyLLMRequest) -> PyResult<Bound<'py, PyAny>> {
-        let next = self.inner.lock().unwrap().take().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("next() called more than once")
-        })?;
+        let next = self.inner.clone();
         let future = next(request.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let rust_stream = future
@@ -267,9 +264,7 @@ pub fn wrap_py_tool_exec_intercept_fn(
             > = Python::attach(|py| {
                 let py_args = json_to_py(py, &args)
                     .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
-                let py_next = PyToolNextFn {
-                    inner: std::sync::Mutex::new(Some(next)),
-                };
+                let py_next = PyToolNextFn { inner: next };
                 let result = py_fn
                     .call1(
                         py,
@@ -337,9 +332,7 @@ pub fn wrap_py_llm_exec_intercept_fn(
                     Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
                 > = Python::attach(|py| {
                     let py_req = PyLLMRequest { inner: request };
-                    let py_next = PyLlmNextFn {
-                        inner: std::sync::Mutex::new(Some(next)),
-                    };
+                    let py_next = PyLlmNextFn { inner: next };
                     let result = py_fn
                         .call1(
                             py,
@@ -416,9 +409,7 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                 // Call the Python function to get the async iterator object
                 let async_iter: Py<PyAny> = Python::attach(|py| {
                     let py_req = PyLLMRequest { inner: request };
-                    let py_next = PyLlmStreamNextFn {
-                        inner: std::sync::Mutex::new(Some(next)),
-                    };
+                    let py_next = PyLlmStreamNextFn { inner: next };
                     py_fn
                         .call1(
                             py,

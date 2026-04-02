@@ -323,7 +323,7 @@ pub fn tool_call_execute(
         .unwrap_or_else(core::task_scope_top);
     let exec_fn = callable::wrap_js_tool_exec_fn(func);
     let default_fn: nvidia_nat_nexus_core::ToolExecutionNextFn =
-        Box::new(move |args| exec_fn(args));
+        std::sync::Arc::new(move |args| exec_fn(args));
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
 
     env.execute_tokio_future(
@@ -381,7 +381,7 @@ pub fn tool_call_execute_async(
         })?,
     );
 
-    let exec_fn: nvidia_nat_nexus_core::ToolExecutionNextFn = Box::new(move |args| {
+    let exec_fn: nvidia_nat_nexus_core::ToolExecutionNextFn = std::sync::Arc::new(move |args| {
         let pa_fn = pa_fn.clone();
         Box::pin(async move { pa_fn.call(args).await })
     });
@@ -489,7 +489,8 @@ pub fn llm_call_execute(
     let llm_request: core_types::LLMRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
-    let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn = Box::new(move |req| exec_fn(req));
+    let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn =
+        std::sync::Arc::new(move |req| exec_fn(req));
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
 
     env.execute_tokio_future(
@@ -566,7 +567,7 @@ pub async fn llm_stream_call_execute(
     // so it knows where to send chunks.
     let func = std::sync::Arc::new(func);
     let default_fn: nvidia_nat_nexus_core::LlmStreamExecutionNextFn =
-        Box::new(move |req: core_types::LLMRequest| {
+        std::sync::Arc::new(move |req: core_types::LLMRequest| {
             let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             register_stream_channel(stream_id, tx);

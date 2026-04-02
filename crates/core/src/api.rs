@@ -1469,7 +1469,7 @@ mod tests {
         reset_global();
 
         let func: ToolExecutionNextFn =
-            Box::new(|args| Box::pin(async move { Ok(json!({"result": args["input"]})) }));
+            Arc::new(|args| Box::pin(async move { Ok(json!({"result": args["input"]})) }));
 
         let result = nat_nexus_tool_call_execute(
             "exec_tool",
@@ -1504,7 +1504,7 @@ mod tests {
         )
         .unwrap();
 
-        let func: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+        let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
         let result = nat_nexus_tool_call_execute(
             "tool",
@@ -1547,7 +1547,7 @@ mod tests {
         .unwrap();
 
         let func: ToolExecutionNextFn =
-            Box::new(|_args| Box::pin(async move { Ok(json!({"should_not_reach": true})) }));
+            Arc::new(|_args| Box::pin(async move { Ok(json!({"should_not_reach": true})) }));
 
         let result = nat_nexus_tool_call_execute(
             "tool",
@@ -1595,7 +1595,7 @@ mod tests {
         .unwrap();
 
         let func: ToolExecutionNextFn =
-            Box::new(|_args| Box::pin(async move { Ok(json!({"from_original": true})) }));
+            Arc::new(|_args| Box::pin(async move { Ok(json!({"from_original": true})) }));
 
         let result = nat_nexus_tool_call_execute(
             "tool",
@@ -1718,7 +1718,7 @@ mod tests {
         reset_global();
 
         let func: LlmExecutionNextFn =
-            Box::new(|req: LLMRequest| Box::pin(async move { Ok(json!({"echo": req.content})) }));
+            Arc::new(|req: LLMRequest| Box::pin(async move { Ok(json!({"echo": req.content})) }));
 
         let request = LLMRequest {
             headers: serde_json::Map::new(),
@@ -1764,7 +1764,7 @@ mod tests {
         )
         .unwrap();
 
-        let func: LlmExecutionNextFn = Box::new(|_req| Box::pin(async move { Ok(json!({})) }));
+        let func: LlmExecutionNextFn = Arc::new(|_req| Box::pin(async move { Ok(json!({})) }));
 
         let request = LLMRequest {
             headers: serde_json::Map::new(),
@@ -1818,7 +1818,7 @@ mod tests {
         )
         .unwrap();
 
-        let func: LlmExecutionNextFn = Box::new(|req: LLMRequest| {
+        let func: LlmExecutionNextFn = Arc::new(|req: LLMRequest| {
             let saw = req
                 .headers
                 .get("intercepted")
@@ -1866,7 +1866,7 @@ mod tests {
         .unwrap();
 
         let func: LlmExecutionNextFn =
-            Box::new(|_req| Box::pin(async move { Ok(json!({"from_original": true})) }));
+            Arc::new(|_req| Box::pin(async move { Ok(json!({"from_original": true})) }));
 
         let request = LLMRequest {
             headers: serde_json::Map::new(),
@@ -2109,7 +2109,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let func: LlmStreamExecutionNextFn = Box::new(|_request: LLMRequest| {
+        let func: LlmStreamExecutionNextFn = Arc::new(|_request: LLMRequest| {
             Box::pin(async move {
                 let items = vec![Ok(json!({"token": "hello"})), Ok(json!({"token": "world"}))];
                 let stream: Pin<Box<dyn Stream<Item = crate::error::Result<Json>> + Send>> =
@@ -2192,7 +2192,7 @@ mod tests {
         )
         .unwrap();
 
-        let func: LlmStreamExecutionNextFn = Box::new(|_request: LLMRequest| {
+        let func: LlmStreamExecutionNextFn = Arc::new(|_request: LLMRequest| {
             Box::pin(async move {
                 let stream: Pin<Box<dyn Stream<Item = crate::error::Result<Json>> + Send>> =
                     Box::pin(tokio_stream::empty());

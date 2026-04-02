@@ -7,7 +7,7 @@
 //! [`NatNexusStatus`]. On failure, call [`nat_nexus_last_error`] to retrieve
 //! the error message.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use libc::c_char;
 use nvidia_nat_nexus_core as core;
@@ -369,7 +369,7 @@ pub unsafe extern "C" fn nat_nexus_tool_call_execute(
 
     let exec_fn = wrap_tool_exec_fn(func, func_user_data, func_free);
     let default_fn: nvidia_nat_nexus_core::ToolExecutionNextFn =
-        Box::new(move |args| exec_fn(args));
+        Arc::new(move |args| exec_fn(args));
 
     let scope_stack = core::current_scope_stack();
     let result = tokio_runtime().block_on(nvidia_nat_nexus_core::TASK_SCOPE_STACK.scope(
@@ -611,7 +611,7 @@ pub unsafe extern "C" fn nat_nexus_llm_call_execute(
 
     let exec_fn = wrap_llm_exec_fn(func, func_user_data, func_free);
     let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn =
-        Box::new(move |request| exec_fn(request));
+        Arc::new(move |request| exec_fn(request));
 
     let scope_stack = core::current_scope_stack();
     let result = tokio_runtime().block_on(nvidia_nat_nexus_core::TASK_SCOPE_STACK.scope(
@@ -739,7 +739,7 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
 
     let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
     let default_fn: nvidia_nat_nexus_core::LlmStreamExecutionNextFn =
-        Box::new(move |request| exec_fn(request));
+        Arc::new(move |request| exec_fn(request));
 
     let wrapped_collector: Box<
         dyn FnMut(serde_json::Value) -> nvidia_nat_nexus_core::Result<()> + Send,
