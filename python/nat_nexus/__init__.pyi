@@ -561,9 +561,10 @@ def nat_nexus_tool_call_execute(
     """Execute a tool call through the full middleware pipeline.
 
     Runs conditional-execution guardrails (on raw args) → request intercepts →
-    sanitize-request guardrails → execution intercepts → func → response
-    intercepts → sanitize-response guardrails. On rejection, only a standalone
-    ``Mark`` event is emitted (no ``Start``/``End`` pair) and
+    sanitize-request guardrails (for the emitted ``Start`` event payload) →
+    execution intercepts → func → response intercepts →
+    sanitize-response guardrails (for the emitted ``End`` event payload). On
+    rejection, only a standalone ``Mark`` event is emitted (no ``Start``/``End`` pair) and
     ``GuardrailRejected`` is raised.
 
     Args:
@@ -576,7 +577,9 @@ def nat_nexus_tool_call_execute(
         metadata: Optional metadata.
 
     Returns:
-        An awaitable that resolves to the (possibly transformed) tool result.
+        An awaitable that resolves to the tool result after execution
+        intercepts. Sanitize guardrails do not rewrite the value returned to
+        the caller.
 
     Example::
 
@@ -636,8 +639,9 @@ def nat_nexus_llm_call_execute(
     """Execute an LLM call through the full middleware pipeline.
 
     Runs conditional-execution guardrails → request intercepts →
-    sanitize-request guardrails → execution intercepts → func →
-    sanitize-response guardrails. On rejection, only a standalone
+    sanitize-request guardrails (for the emitted ``Start`` event payload) →
+    execution intercepts → func → sanitize-response guardrails (for the
+    emitted ``End`` event payload). On rejection, only a standalone
     ``Mark`` event is emitted (no ``Start``/``End`` pair) and
     ``GuardrailRejected`` is raised.
 
@@ -651,7 +655,9 @@ def nat_nexus_llm_call_execute(
         metadata: Optional metadata.
 
     Returns:
-        An awaitable that resolves to the (possibly transformed) LLM response.
+        An awaitable that resolves to the LLM response after execution
+        intercepts. Sanitize guardrails do not rewrite the value returned to
+        the caller.
 
     Example::
 
@@ -986,7 +992,10 @@ def nat_nexus_scope_register_tool_sanitize_request_guardrail(
         scope_uuid: UUID string of the scope to register under.
         name: Unique guardrail name.
         priority: Priority (ascending order).
-        guardrail: ``(tool_name, args) -> sanitized_args``.
+        guardrail: ``(tool_name, args) -> sanitized_args``. In managed
+            ``tools.execute(...)`` calls, the sanitized value is used for the
+            emitted ``Start`` event payload and does not replace the arguments
+            passed to ``func(...)``.
     """
     ...
 
@@ -1003,7 +1012,10 @@ def nat_nexus_scope_register_tool_sanitize_response_guardrail(
         scope_uuid: UUID string of the scope to register under.
         name: Unique guardrail name.
         priority: Priority (ascending order).
-        guardrail: ``(tool_name, result) -> sanitized_result``.
+        guardrail: ``(tool_name, result) -> sanitized_result``. In managed
+            ``tools.execute(...)`` calls, the sanitized value is used for the
+            emitted ``End`` event payload and does not replace the value
+            returned to the caller.
     """
     ...
 
@@ -1087,7 +1099,10 @@ def nat_nexus_scope_register_llm_sanitize_request_guardrail(
         scope_uuid: UUID string of the scope to register under.
         name: Unique guardrail name.
         priority: Priority (ascending order).
-        guardrail: ``(request) -> sanitized_request``.
+        guardrail: ``(request) -> sanitized_request``. In managed
+            ``llm.execute(...)`` and ``llm.stream_execute(...)`` calls, the
+            sanitized value is used for the emitted ``Start`` event payload and
+            does not replace the request passed to ``func(...)``.
     """
     ...
 
@@ -1104,7 +1119,10 @@ def nat_nexus_scope_register_llm_sanitize_response_guardrail(
         scope_uuid: UUID string of the scope to register under.
         name: Unique guardrail name.
         priority: Priority (ascending order).
-        guardrail: ``(response: dict) -> dict``.
+        guardrail: ``(response: dict) -> dict``. In managed
+            ``llm.execute(...)`` and ``llm.stream_execute(...)`` calls, the
+            sanitized value is used for the emitted ``End`` event payload and
+            does not replace the value returned to the caller.
     """
     ...
 

@@ -186,6 +186,7 @@ sequenceDiagram
     Ints-->>Core: transformed request
     Core->>Guards: sanitize_request(request)
     Guards-->>Core: sanitized request
+    Note over Core,Subs: Sanitized request is used for emitted Start payloads only.
     Core->>Subs: emit Start event (input=sanitized)
     Core->>Ints: execution_intercept_chain(request)
     Ints->>Func: func(request)
@@ -193,6 +194,7 @@ sequenceDiagram
     Ints-->>Core: response
     Core->>Guards: sanitize_response(response)
     Guards-->>Core: sanitized response
+    Note over Core,Subs: Sanitized response is used for emitted End payloads only.
     Core->>Subs: emit End event (output=sanitized)
     Core-->>App: response
 ```

@@ -138,7 +138,10 @@ def register_tool_sanitize_request(scope_handle, name, priority, guardrail):
         scope_handle: The ``ScopeHandle`` to register under.
         name: Unique guardrail name.
         priority: Priority (ascending order).
-        guardrail: ``(tool_name: str, args: Any) -> Any``.
+        guardrail: ``(tool_name: str, args: Any) -> Any``. In managed
+            ``tools.execute(...)`` calls, the returned value is used for the
+            emitted ``Start`` event payload and does not replace the arguments
+            passed to ``func(...)``.
     """
     return _register_tool_sanitize_request(scope_handle.uuid, name, priority, guardrail)
 
@@ -155,7 +158,10 @@ def register_tool_sanitize_response(scope_handle, name, priority, guardrail):
         scope_handle: The ``ScopeHandle`` to register under.
         name: Unique guardrail name.
         priority: Priority (ascending order).
-        guardrail: ``(tool_name: str, result: Any) -> Any``.
+        guardrail: ``(tool_name: str, result: Any) -> Any``. In managed
+            ``tools.execute(...)`` calls, the returned value is used for the
+            emitted ``End`` event payload and does not replace the value
+            returned to the caller.
     """
     return _register_tool_sanitize_response(scope_handle.uuid, name, priority, guardrail)
 
@@ -234,7 +240,10 @@ def register_llm_sanitize_request(scope_handle, name, priority, guardrail):
         scope_handle: The ``ScopeHandle`` to register under.
         name: Unique guardrail name.
         priority: Priority (ascending order).
-        guardrail: ``(request: LLMRequest) -> LLMRequest``.
+        guardrail: ``(request: LLMRequest) -> LLMRequest``. In managed
+            ``llm.execute(...)`` and ``llm.stream_execute(...)`` calls, the
+            returned value is used for the emitted ``Start`` event payload and
+            does not replace the request passed to ``func(...)``.
     """
     return _register_llm_sanitize_request(scope_handle.uuid, name, priority, guardrail)
 
@@ -251,7 +260,10 @@ def register_llm_sanitize_response(scope_handle, name, priority, guardrail):
         scope_handle: The ``ScopeHandle`` to register under.
         name: Unique guardrail name.
         priority: Priority (ascending order).
-        guardrail: ``(response: dict) -> dict``.
+        guardrail: ``(response: dict) -> dict``. In managed
+            ``llm.execute(...)`` and ``llm.stream_execute(...)`` calls, the
+            returned value is used for the emitted ``End`` event payload and
+            does not replace the value returned to the caller.
     """
     return _register_llm_sanitize_response(scope_handle.uuid, name, priority, guardrail)
 

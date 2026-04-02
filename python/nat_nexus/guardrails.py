@@ -6,6 +6,11 @@
 Guardrails run inside the middleware pipeline and can sanitize or gate requests
 and responses. They are priority-ordered (ascending) and registered by name.
 
+Sanitize guardrails are currently observability-oriented in the managed
+``execute`` APIs: they affect the payload captured on lifecycle events, but
+they do not rewrite the values passed to the user callable or returned to the
+caller.
+
 **Tool guardrails** — callback signatures:
 
     register_tool_sanitize_request(name, priority, fn)
@@ -92,7 +97,7 @@ def register_tool_sanitize_request(name: str, priority: int, guardrail: Callable
     """Register a tool sanitize-request guardrail.
 
     The guardrail callback receives the tool name and arguments and returns
-    sanitized arguments that replace the originals in the pipeline.
+    sanitized arguments for the emitted ``Start`` event payload.
 
     Args:
         name: Unique guardrail name.
@@ -122,7 +127,7 @@ def register_tool_sanitize_response(name: str, priority: int, guardrail: Callabl
     """Register a tool sanitize-response guardrail.
 
     The guardrail callback receives the tool name and result and returns
-    a sanitized result that replaces the original in the pipeline.
+    a sanitized result for the emitted ``End`` event payload.
 
     Args:
         name: Unique guardrail name.
@@ -189,7 +194,7 @@ def register_llm_sanitize_request(name: str, priority: int, guardrail: Callable[
     """Register an LLM sanitize-request guardrail.
 
     The guardrail callback receives the LLM request and returns a sanitized
-    ``LLMRequest`` that replaces the original in the pipeline.
+    ``LLMRequest`` for the emitted ``Start`` event payload.
 
     Args:
         name: Unique guardrail name.
@@ -219,7 +224,7 @@ def register_llm_sanitize_response(name: str, priority: int, guardrail: Callable
     """Register an LLM sanitize-response guardrail.
 
     The guardrail callback receives the LLM response dict and returns a
-    sanitized dict that replaces the original in the pipeline.
+    sanitized dict for the emitted ``End`` event payload.
 
     Args:
         name: Unique guardrail name.

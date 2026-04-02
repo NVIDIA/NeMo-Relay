@@ -7,6 +7,13 @@ SPDX-License-Identifier: Apache-2.0
 
 This document describes the exact ordering of middleware stages for tool and LLM calls.
 
+Important: sanitize guardrails are currently **observability-oriented** in the
+managed `execute` / `stream_execute` APIs. They affect the payload recorded on
+lifecycle events (`Start.input`, `End.output`) but do **not** rewrite the value
+passed into `func(...)` or the value returned to the caller. If you need to
+modify execution inputs, use request intercepts. If you need to wrap or replace
+execution, use execution intercepts.
+
 ## Tool Execute Pipeline
 
 `tools.execute(name, args, func)` runs the following stages in order:
@@ -16,11 +23,11 @@ flowchart TD
     A["tools.execute(name, args, func)"] --> B{Conditional Execution<br/>Guardrails}
     B -->|"Rejected (reason)"| C["Emit Mark event<br/>Raise GuardrailRejected"]
     B -->|"Allowed (None)"| D[Request Intercepts<br/>priority order, optional break_chain]
-    D --> E[Sanitize Request Guardrails]
+    D --> E[Sanitize Request Guardrails<br/>(event payload only)]
     E --> F["Emit Start event<br/>(input = sanitized args)"]
-    F --> G["Execution Intercept Chain<br/>(tool_name, args, next)"]
-    G --> H["func(args)"]
-    H --> J[Sanitize Response Guardrails]
+    F --> G["Execution Intercept Chain<br/>(tool_name, intercepted args, next)"]
+    G --> H["func(intercepted args)"]
+    H --> J[Sanitize Response Guardrails<br/>(event payload only)]
     J --> K["Emit End event<br/>(output = sanitized result)"]
     K --> L[Return result]
 
@@ -34,11 +41,11 @@ flowchart TD
 |---|-------|-------------|-------------|----------------|
 | 1 | Conditional Execution Guards | Raw args (unmodified) | Yes | No |
 | 2 | Request Intercepts | Args (piped through chain) | No | Yes |
-| 3 | Sanitize Request Guards | Intercepted args | No | Yes |
+| 3 | Sanitize Request Guards | Intercepted args recorded on the Start event | No | Yes, for observability |
 | 4 | Start Event | — | — | — |
 | 5 | Execution Intercepts | Args + `next` function | Yes (skip `next`) | Yes |
-| 6 | User Function | Final args | — | — |
-| 7 | Sanitize Response Guards | Result | No | Yes |
+| 6 | User Function | Intercepted args | — | — |
+| 7 | Sanitize Response Guards | Result recorded on the End event | No | Yes, for observability |
 | 8 | End Event | — | — | — |
 
 **Key design choice**: Conditional guardrails run *before* request intercepts so they gate on the original, unmodified input.
@@ -52,11 +59,11 @@ flowchart TD
     A["llm.execute(name, request, func)"] --> B{Conditional Execution<br/>Guardrails}
     B -->|"Rejected (reason)"| C["Emit Mark event<br/>Raise GuardrailRejected"]
     B -->|"Allowed (None)"| D["Request Intercepts<br/>(LLMRequest → LLMRequest)"]
-    D --> E["Sanitize Request Guardrails<br/>(LLMRequest → LLMRequest)"]
+    D --> E["Sanitize Request Guardrails<br/>(event payload only)"]
     E --> F["Emit Start event<br/>(input = sanitized request)"]
-    F --> G["Execution Intercept Chain<br/>(llm_name, LLMRequest, next) → Json"]
-    G --> H["func(request) → Json"]
-    H --> I["Sanitize Response Guardrails<br/>(Json → Json)"]
+    F --> G["Execution Intercept Chain<br/>(llm_name, intercepted request, next) → Json"]
+    G --> H["func(intercepted request) → Json"]
+    H --> I["Sanitize Response Guardrails<br/>(event payload only)"]
     I --> J["Emit End event<br/>(output = sanitized response)"]
     J --> K[Return response Json]
 
@@ -69,18 +76,22 @@ flowchart TD
 ```
 LLMRequest  ──→  Conditional Guards  ──→  Request Intercepts  ──→  Sanitize Request
     │                                                                      │
-    │                                                              LLMRequest
+    │                                                   Start event input only
     │                                                                      │
     │                          Execution Intercept Chain  ←────────────────┘
     │                                      │
-    │                               func(LLMRequest) → Json
+    │                        func(intercepted LLMRequest) → Json
     │                                      │
-    │                          Sanitize Response (Json)
+    │                     Sanitize Response (End event output only)
     │                                      │
-    └──────────────────────────────── Return Json
+    └──────────────────────────────── Return raw execution Json
 ```
 
-Note: Request intercepts and sanitize request guardrails all operate on `LLMRequest`. Execution functions receive `LLMRequest` and return plain `Json`. Sanitize response guardrails also operate on plain `Json`.
+Note: request intercepts and sanitize request guardrails all operate on
+`LLMRequest`, but only request intercepts affect what the execution function
+receives. Sanitize request/response guardrails currently affect the values
+recorded on lifecycle events, while execution functions still receive the
+intercepted request and callers still receive the raw execution response.
 
 ## LLM Stream Execute Pipeline
 
@@ -91,7 +102,7 @@ flowchart TD
     A["llm.stream_execute(...)"] --> B{Conditional Execution<br/>Guardrails}
     B -->|Rejected| C[Mark event + error]
     B -->|Allowed| D[Request Intercepts]
-    D --> E[Sanitize Request Guardrails]
+    D --> E[Sanitize Request Guardrails<br/>(Start event payload only)]
     E --> F[Emit Start event]
     F --> G[Execution Intercept Chain]
     G --> H["func(request) → AsyncIterator"]
@@ -103,7 +114,7 @@ flowchart TD
     L --> M[Yield chunk to caller]
     K -->|Stream exhausted| N["finalizer() → aggregated Json"]
     N --> O["aggregated Json"]
-    O --> P[Sanitize Response Guardrails]
+    O --> P[Sanitize Response Guardrails<br/>(End event payload only)]
     P --> Q[Emit End event]
 
     style C fill:#f66,stroke:#333
@@ -124,7 +135,8 @@ def finalizer():
     return {"full_response": "".join(c["token"] for c in chunks)}
 ```
 
-The **finalizer** runs once when the stream is exhausted and returns the aggregated response that flows through sanitize response guardrails.
+The **finalizer** runs once when the stream is exhausted and returns the
+aggregated response that is then sanitized for the emitted `End` event.
 
 ## Priority Ordering
 

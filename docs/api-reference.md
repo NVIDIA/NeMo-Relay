@@ -161,6 +161,12 @@ nat_nexus.llm.conditional_execution(request: LLMRequest) -> None
 
 All guardrails are priority-ordered (ascending — lower numbers run first). Names must be unique.
 
+Sanitize guardrails currently affect recorded lifecycle payloads rather than
+managed execution I/O. In `tools.execute(...)`, `llm.execute(...)`, and
+`llm.stream_execute(...)`, they rewrite `Start.input` / `End.output` on emitted
+events. They do not rewrite the arguments passed to `func(...)` or the value
+returned to the caller.
+
 ### Tool Guardrails
 
 ```python
@@ -350,6 +356,11 @@ Additionally:
 ## Scope-Local Registration
 
 Scope-local middleware is bound to a specific scope and automatically cleaned up when that scope is popped. The API mirrors the global registration functions but takes an additional `handle` parameter.
+
+Scope-local sanitize guardrails have the same managed-execution behavior as the
+global ones: in `tools.execute(...)`, `llm.execute(...)`, and
+`llm.stream_execute(...)` they rewrite emitted lifecycle payloads, not the
+arguments passed to `func(...)` or the value returned to the caller.
 
 ### Scope-Local Guardrails
 

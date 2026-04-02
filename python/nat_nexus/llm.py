@@ -20,10 +20,10 @@ Functions:
 
         - conditional-execution guardrails (on ``LLMRequest``)
         - request intercepts (on ``LLMRequest``)
-        - sanitize-request guardrails (on ``LLMRequest``)
+        - sanitize-request guardrails (for the emitted ``Start`` event payload)
         - execution intercepts
         - *func*
-        - sanitize-response guardrails
+        - sanitize-response guardrails (for the emitted ``End`` event payload)
 
         On rejection, only a standalone Mark event is emitted (no Start/End
         pair) and ``GuardrailRejected`` is raised.
@@ -136,10 +136,10 @@ def execute(name, request, func, *, handle=None, attributes=None, data=None, met
     """Execute an LLM call through the full middleware pipeline.
 
     Runs conditional-execution guardrails -> request intercepts ->
-    sanitize-request guardrails -> execution intercepts -> *func* ->
-    sanitize-response guardrails. On rejection, only a standalone ``Mark``
-    event is emitted (no ``Start``/``End`` pair) and ``GuardrailRejected``
-    is raised.
+    sanitize-request guardrails for the emitted ``Start`` event ->
+    execution intercepts -> *func* -> sanitize-response guardrails for the
+    emitted ``End`` event. On rejection, only a standalone ``Mark`` event is
+    emitted (no ``Start``/``End`` pair) and ``GuardrailRejected`` is raised.
 
     Args:
         name: Model/provider name.
@@ -152,7 +152,8 @@ def execute(name, request, func, *, handle=None, attributes=None, data=None, met
         model_name: Optional LLM model identifier propagated to events for ATIF export.
 
     Returns:
-        An awaitable that resolves to the (possibly transformed) LLM response.
+        An awaitable that resolves to the execution response after intercepts.
+        Sanitize guardrails only affect recorded event payloads.
 
     Raises:
         GuardrailRejected: If a conditional-execution guardrail rejects the call.
@@ -181,7 +182,7 @@ def stream_execute(
     ``LLMRequest``. The execution function returns an async iterator of Json
     chunks. The ``collector`` callable is invoked with each chunk. The
     ``finalizer`` callable is invoked once when the stream is exhausted and
-    returns the aggregated response.
+    returns the aggregated response used for the emitted ``End`` event.
 
     Args:
         name: Model/provider name.
