@@ -496,7 +496,8 @@ def nat_nexus_pop_scope(handle: ScopeHandle) -> None:
     """Remove a scope from the stack and emit an End event.
 
     Args:
-        handle: The scope handle returned by ``nat_nexus_push_scope``.
+        handle: The current top-of-stack scope handle returned by
+            ``nat_nexus_push_scope``.
     """
     ...
 

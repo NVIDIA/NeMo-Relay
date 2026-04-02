@@ -585,19 +585,27 @@ pub fn nat_nexus_push_scope(
 
 /// Removes a scope from the scope stack by UUID and emits an `End` event.
 ///
-/// Returns [`NexusError::NotFound`] if the UUID is not in the stack.
+/// Returns [`NexusError::NotFound`] if the UUID is not in the stack, or
+/// [`NexusError::InvalidArgument`] if it does not identify the current top
+/// scope.
 pub fn nat_nexus_pop_scope(handle_uuid: &Uuid) -> Result<()> {
     // Emit the End event while still holding the read lock so scope-local
     // subscribers (including those on the scope being popped) are dispatched.
     let ss = current_scope_stack();
     {
         let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let top = ss_guard.top();
+        if top.uuid != *handle_uuid {
+            if ss_guard.find(handle_uuid).is_some() {
+                return Err(NexusError::InvalidArgument(
+                    "scope handle is not at the top of the stack".into(),
+                ));
+            }
+            return Err(NexusError::NotFound("scope handle not found".into()));
+        }
         let root_uuid = Some(ss_guard.root_uuid());
         let sl_subs = ss_guard.collect_scope_local_subscribers();
-        let scope = ss_guard
-            .find(handle_uuid)
-            .ok_or_else(|| NexusError::NotFound("scope handle not found".into()))?
-            .clone();
+        let scope = top.clone();
         let ctx = global_context();
         let state = ctx
             .read()
@@ -1270,6 +1278,62 @@ mod tests {
         reset_global();
         let result = nat_nexus_pop_scope(&Uuid::new_v4());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pop_non_top_scope_rejected_without_end_event() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        nat_nexus_register_subscriber(
+            "capture_scope_events",
+            Box::new(move |event: &crate::types::Event| {
+                captured
+                    .lock()
+                    .unwrap()
+                    .push((event.name.clone(), event.event_type));
+            }),
+        )
+        .unwrap();
+
+        let parent = nat_nexus_push_scope(
+            "parent",
+            ScopeType::Agent,
+            None,
+            ScopeAttributes::empty(),
+            None,
+            None,
+        )
+        .unwrap();
+        let child = nat_nexus_push_scope(
+            "child",
+            ScopeType::Function,
+            Some(&parent),
+            ScopeAttributes::empty(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let err = nat_nexus_pop_scope(&parent.uuid).unwrap_err();
+        assert!(matches!(err, NexusError::InvalidArgument(_)));
+        assert_eq!(nat_nexus_get_handle().unwrap().uuid, child.uuid);
+
+        let events = events.lock().unwrap();
+        let parent_end_count = events
+            .iter()
+            .filter(|(name, event_type)| {
+                name.as_deref() == Some("parent") && *event_type == EventType::End
+            })
+            .count();
+        assert_eq!(parent_end_count, 0);
+
+        drop(events);
+        nat_nexus_pop_scope(&child.uuid).unwrap();
+        nat_nexus_pop_scope(&parent.uuid).unwrap();
+        nat_nexus_deregister_subscriber("capture_scope_events").unwrap();
     }
 
     #[test]

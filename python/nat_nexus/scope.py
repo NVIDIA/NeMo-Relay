@@ -112,7 +112,8 @@ def pop(handle: Any) -> None:
     """Remove a scope from the stack and emit an ``End`` event.
 
     Args:
-        handle: The ``ScopeHandle`` returned by ``push()`` or ``scope()``.
+        handle: The current top-of-stack ``ScopeHandle`` returned by
+            ``push()`` or ``scope()``.
     """
     _ensure_scope_stack()
     _native_pop_scope(handle)
