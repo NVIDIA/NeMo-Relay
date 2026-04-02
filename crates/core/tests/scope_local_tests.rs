@@ -151,7 +151,7 @@ async fn test_auto_cleanup_on_scope_pop() {
     .unwrap();
 
     // Verify it runs before pop.
-    let func: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result = nat_nexus_tool_call_execute(
         "tool",
         json!({"v": 1}),
@@ -169,7 +169,7 @@ async fn test_auto_cleanup_on_scope_pop() {
     nat_nexus_pop_scope(&handle.uuid).unwrap();
 
     // Now execute again — the field should NOT appear.
-    let func2: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func2: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result2 = nat_nexus_tool_call_execute(
         "tool",
         json!({"v": 2}),
@@ -250,7 +250,7 @@ async fn test_priority_merge_global_and_scope_local() {
     )
     .unwrap();
 
-    let func: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result = nat_nexus_tool_call_execute(
         "tool",
         json!({}),
@@ -412,7 +412,7 @@ async fn test_scope_isolation_between_stacks() {
 
     // Execute on stack A — should see agent_a's intercept only
     set_thread_scope_stack(stack_a.clone());
-    let func_a: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func_a: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result_a = nat_nexus_tool_call_execute(
         "tool",
         json!({}),
@@ -428,7 +428,7 @@ async fn test_scope_isolation_between_stacks() {
 
     // Execute on stack B — should see agent_b's intercept only
     set_thread_scope_stack(stack_b.clone());
-    let func_b: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func_b: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result_b = nat_nexus_tool_call_execute(
         "tool",
         json!({}),
@@ -535,7 +535,7 @@ async fn test_nested_scope_inheritance() {
     .unwrap();
 
     // Execute within scope B — should see global + scope_a + scope_b
-    let func: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result = nat_nexus_tool_call_execute(
         "tool",
         json!({}),
@@ -665,7 +665,7 @@ async fn test_scope_local_conditional_execution_guardrail() {
     .unwrap();
 
     // Call to banned_tool should be rejected
-    let func_banned: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func_banned: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let err = nat_nexus_tool_call_execute(
         "banned_tool",
         json!({"input": 1}),
@@ -686,7 +686,7 @@ async fn test_scope_local_conditional_execution_guardrail() {
     }
 
     // Call to a different tool should succeed
-    let func_ok: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func_ok: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result = nat_nexus_tool_call_execute(
         "allowed_tool",
         json!({"input": 2}),

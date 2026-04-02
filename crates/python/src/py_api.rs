@@ -8,6 +8,8 @@
 //! The Python wrapper modules (`nat_nexus.scope`, `nat_nexus.tools`, etc.)
 //! re-export these under shorter, idiomatic names.
 
+use std::sync::Arc;
+
 use nvidia_nat_nexus_core as core;
 use nvidia_nat_nexus_core::types as core_types;
 use pyo3::prelude::*;
@@ -278,9 +280,8 @@ fn nat_nexus_tool_call_execute<'py>(
     let data_json = opt_py_to_json(data)?;
     let metadata_json = opt_py_to_json(metadata)?;
     let exec_fn = py_callable::wrap_py_tool_exec_fn(func);
-    // Wrap the Fn-returning default callable into a FnOnce (ToolExecutionNextFn)
     let default_fn: nvidia_nat_nexus_core::ToolExecutionNextFn =
-        Box::new(move |args| exec_fn(args));
+        Arc::new(move |args| exec_fn(args));
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
 
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
@@ -413,7 +414,7 @@ fn nat_nexus_llm_call_execute<'py>(
     let data_json = opt_py_to_json(data)?;
     let metadata_json = opt_py_to_json(metadata)?;
     let exec_fn = py_callable::wrap_py_llm_exec_fn(func);
-    let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn = Box::new(move |req| exec_fn(req));
+    let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn = Arc::new(move |req| exec_fn(req));
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
 
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
@@ -484,7 +485,7 @@ fn nat_nexus_llm_stream_call_execute<'py>(
     let metadata_json = opt_py_to_json(metadata)?;
     let exec_fn = py_callable::wrap_py_llm_stream_exec_fn(func);
     let default_fn: nvidia_nat_nexus_core::LlmStreamExecutionNextFn =
-        Box::new(move |req| exec_fn(req));
+        Arc::new(move |req| exec_fn(req));
     let collector_fn = py_callable::wrap_py_collector_fn(collector);
     let finalizer_fn = py_callable::wrap_py_finalizer_fn(finalizer);
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);

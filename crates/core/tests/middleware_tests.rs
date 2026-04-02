@@ -392,7 +392,7 @@ async fn test_execution_intercept_calls_next() {
     .unwrap();
 
     let oc = original_called.clone();
-    let func: ToolExecutionNextFn = Box::new(move |args| {
+    let func: ToolExecutionNextFn = Arc::new(move |args| {
         oc.store(true, Ordering::SeqCst);
         Box::pin(async move { Ok(args) })
     });
@@ -443,7 +443,7 @@ async fn test_execution_intercept_skips_next() {
     .unwrap();
 
     let oc = original_called.clone();
-    let func: ToolExecutionNextFn = Box::new(move |args| {
+    let func: ToolExecutionNextFn = Arc::new(move |args| {
         oc.store(true, Ordering::SeqCst);
         Box::pin(async move { Ok(args) })
     });
@@ -515,7 +515,7 @@ async fn test_execution_intercept_chain_ordering() {
     .unwrap();
 
     let o_orig = order.clone();
-    let func: ToolExecutionNextFn = Box::new(move |args| {
+    let func: ToolExecutionNextFn = Arc::new(move |args| {
         o_orig.lock().unwrap().push("original".into());
         Box::pin(async move { Ok(args) })
     });
@@ -572,7 +572,7 @@ async fn test_execution_intercept_modifies_args() {
     )
     .unwrap();
 
-    let func: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
     let result = nat_nexus_tool_call_execute(
         "tool",
@@ -612,7 +612,7 @@ async fn test_conditional_guardrail_rejects() {
     )
     .unwrap();
 
-    let func: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
     let result = nat_nexus_tool_call_execute(
         "tool",
@@ -651,7 +651,7 @@ async fn test_conditional_guardrail_allows() {
     )
     .unwrap();
 
-    let func: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
     let result = nat_nexus_tool_call_execute(
         "tool",
@@ -693,7 +693,7 @@ async fn test_conditional_guardrail_first_rejection_wins() {
     )
     .unwrap();
 
-    let func: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
     let result = nat_nexus_tool_call_execute(
         "tool",
@@ -740,7 +740,7 @@ async fn test_conditional_guardrail_tool_name_filtering() {
     .unwrap();
 
     // Dangerous tool is rejected
-    let func1: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func1: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let err = nat_nexus_tool_call_execute(
         "dangerous_tool",
         json!({}),
@@ -754,7 +754,7 @@ async fn test_conditional_guardrail_tool_name_filtering() {
     assert!(err.is_err());
 
     // Safe tool is allowed
-    let func2: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func2: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let ok = nat_nexus_tool_call_execute(
         "safe_tool",
         json!({}),
@@ -858,7 +858,7 @@ async fn test_scope_local_execution_intercept_cleanup() {
     .unwrap();
 
     // Execute -- intercept should fire
-    let func: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let _ = nat_nexus_tool_call_execute(
         "tool",
         json!({}),
@@ -876,7 +876,7 @@ async fn test_scope_local_execution_intercept_cleanup() {
     nat_nexus_pop_scope(&handle.uuid).unwrap();
 
     // Execute again -- intercept should NOT fire
-    let func2: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func2: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let _ = nat_nexus_tool_call_execute(
         "tool",
         json!({}),
@@ -1032,7 +1032,7 @@ async fn test_scope_local_and_global_execution_intercept_merge() {
     .unwrap();
 
     let oo = order.clone();
-    let func: ToolExecutionNextFn = Box::new(move |args| {
+    let func: ToolExecutionNextFn = Arc::new(move |args| {
         oo.lock().unwrap().push("original".into());
         Box::pin(async move { Ok(args) })
     });
@@ -1101,7 +1101,7 @@ async fn test_conditional_rejection_prevents_intercepts() {
     )
     .unwrap();
 
-    let func: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result = nat_nexus_tool_call_execute(
         "tool",
         json!({}),
@@ -1154,7 +1154,7 @@ async fn test_conditional_rejection_prevents_execution() {
 
     let original_called = Arc::new(AtomicBool::new(false));
     let oc = original_called.clone();
-    let func: ToolExecutionNextFn = Box::new(move |args| {
+    let func: ToolExecutionNextFn = Arc::new(move |args| {
         oc.store(true, Ordering::SeqCst);
         Box::pin(async move { Ok(args) })
     });
@@ -1565,7 +1565,7 @@ async fn test_full_pipeline_integration() {
     .unwrap();
 
     let o_orig = order.clone();
-    let func: ToolExecutionNextFn = Box::new(move |args| {
+    let func: ToolExecutionNextFn = Arc::new(move |args| {
         o_orig.lock().unwrap().push("original_execution".into());
         Box::pin(async move { Ok(args) })
     });
@@ -1773,7 +1773,7 @@ async fn test_llm_conditional_guardrail_rejects() {
     .unwrap();
 
     let func: LlmExecutionNextFn =
-        Box::new(|_req| Box::pin(async move { Ok(json!({"response": "ok"})) }));
+        Arc::new(|_req| Box::pin(async move { Ok(json!({"response": "ok"})) }));
 
     let request = LLMRequest {
         headers: serde_json::Map::new(),
@@ -1860,7 +1860,7 @@ async fn test_llm_execution_intercept_chain() {
     .unwrap();
 
     let oo = order.clone();
-    let func: LlmExecutionNextFn = Box::new(move |_req| {
+    let func: LlmExecutionNextFn = Arc::new(move |_req| {
         oo.lock().unwrap().push("original".into());
         Box::pin(async move { Ok(json!({"response": "done"})) })
     });
@@ -1947,7 +1947,7 @@ async fn test_empty_chain_passthrough() {
     reset_global();
     setup_isolated_thread();
 
-    let func: ToolExecutionNextFn = Box::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
     let result = nat_nexus_tool_call_execute(
         "tool",

@@ -252,7 +252,8 @@ pub fn wrap_tool_exec_intercept_fn(
                 args_json: *const c_char,
                 next_ctx: *mut libc::c_void,
             ) -> *mut c_char {
-                let next = unsafe { Box::from_raw(next_ctx as *mut ToolExecutionNextFn) };
+                let next_arc = unsafe { &*(next_ctx as *const ToolExecutionNextFn) };
+                let next = next_arc.clone();
                 let args = if args_json.is_null() {
                     Json::Null
                 } else {
@@ -272,6 +273,7 @@ pub fn wrap_tool_exec_intercept_fn(
 
             let c_args = json_to_c_string(&args);
             let result_ptr = unsafe { cb(ud.ptr, c_args, tool_next_trampoline, next_ctx) };
+            unsafe { drop(Box::from_raw(next_ctx as *mut ToolExecutionNextFn)) };
             unsafe { nat_nexus_string_free_internal(c_args) };
             let result = ptr_to_json(result_ptr);
             unsafe { nat_nexus_string_free_internal(result_ptr) };
@@ -309,7 +311,8 @@ pub fn wrap_llm_exec_intercept_fn(
                     native_json: *const c_char,
                     next_ctx: *mut libc::c_void,
                 ) -> *mut c_char {
-                    let next = unsafe { Box::from_raw(next_ctx as *mut LlmExecutionNextFn) };
+                    let next_arc = unsafe { &*(next_ctx as *const LlmExecutionNextFn) };
+                    let next = next_arc.clone();
                     let request = if native_json.is_null() {
                         LLMRequest {
                             headers: serde_json::Map::new(),
@@ -333,6 +336,7 @@ pub fn wrap_llm_exec_intercept_fn(
                 let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
                 let c_request = json_to_c_string(&request_json);
                 let result_ptr = unsafe { cb(ud.ptr, c_request, llm_next_trampoline, next_ctx) };
+                unsafe { drop(Box::from_raw(next_ctx as *mut LlmExecutionNextFn)) };
                 unsafe { nat_nexus_string_free_internal(c_request) };
                 let result = ptr_to_json(result_ptr);
                 unsafe { nat_nexus_string_free_internal(result_ptr) };
