@@ -26,10 +26,11 @@ use tokio_stream::Stream;
 
 use nvidia_nat_nexus_core::types::LLMRequest;
 use nvidia_nat_nexus_core::{
-    LlmExecutionNextFn, LlmStreamExecutionNextFn, Result, ToolExecutionNextFn,
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, NexusError, Result, ToolExecutionNextFn,
 };
 
 use crate::convert::json_to_c_string;
+use crate::error::{last_error_message, set_last_error};
 use crate::types::{FfiEvent, FfiLLMRequest};
 
 // ---------------------------------------------------------------------------
@@ -219,7 +220,7 @@ pub fn wrap_tool_exec_fn(
             let c_args = json_to_c_string(&args);
             let result_ptr = unsafe { cb(ud.ptr, c_args) };
             unsafe { nat_nexus_string_free_internal(c_args) };
-            let result = ptr_to_json(result_ptr);
+            let result = json_result_from_ptr(result_ptr, "tool execution callback failed")?;
             unsafe { nat_nexus_string_free_internal(result_ptr) };
             Ok(result)
         })
@@ -267,7 +268,10 @@ pub fn wrap_tool_exec_intercept_fn(
                 let result = tokio::task::block_in_place(|| handle.block_on(next(args)));
                 match result {
                     Ok(json) => json_to_c_string(&json),
-                    Err(_) => std::ptr::null_mut(),
+                    Err(e) => {
+                        set_last_error(&e.to_string());
+                        std::ptr::null_mut()
+                    }
                 }
             }
 
@@ -275,7 +279,8 @@ pub fn wrap_tool_exec_intercept_fn(
             let result_ptr = unsafe { cb(ud.ptr, c_args, tool_next_trampoline, next_ctx) };
             unsafe { drop(Box::from_raw(next_ctx as *mut ToolExecutionNextFn)) };
             unsafe { nat_nexus_string_free_internal(c_args) };
-            let result = ptr_to_json(result_ptr);
+            let result =
+                json_result_from_ptr(result_ptr, "tool execution intercept callback failed")?;
             unsafe { nat_nexus_string_free_internal(result_ptr) };
             Ok(result)
         })
@@ -329,7 +334,10 @@ pub fn wrap_llm_exec_intercept_fn(
                     let result = tokio::task::block_in_place(|| handle.block_on(next(request)));
                     match result {
                         Ok(json) => json_to_c_string(&json),
-                        Err(_) => std::ptr::null_mut(),
+                        Err(e) => {
+                            set_last_error(&e.to_string());
+                            std::ptr::null_mut()
+                        }
                     }
                 }
 
@@ -338,7 +346,8 @@ pub fn wrap_llm_exec_intercept_fn(
                 let result_ptr = unsafe { cb(ud.ptr, c_request, llm_next_trampoline, next_ctx) };
                 unsafe { drop(Box::from_raw(next_ctx as *mut LlmExecutionNextFn)) };
                 unsafe { nat_nexus_string_free_internal(c_request) };
-                let result = ptr_to_json(result_ptr);
+                let result =
+                    json_result_from_ptr(result_ptr, "LLM execution intercept callback failed")?;
                 unsafe { nat_nexus_string_free_internal(result_ptr) };
                 Ok(result)
             })
@@ -386,7 +395,10 @@ pub fn wrap_llm_stream_exec_intercept_fn(
                 let result_ptr =
                     unsafe { cb(ud.ptr, c_request, noop_llm_next, std::ptr::null_mut()) };
                 unsafe { nat_nexus_string_free_internal(c_request) };
-                let result = ptr_to_json(result_ptr);
+                let result = json_result_from_ptr(
+                    result_ptr,
+                    "LLM stream execution intercept callback failed",
+                )?;
                 unsafe { nat_nexus_string_free_internal(result_ptr) };
                 let stream = tokio_stream::once(Ok(result));
                 Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
@@ -513,7 +525,7 @@ pub fn wrap_llm_exec_fn(
             let c_request = json_to_c_string(&request_json);
             let result_ptr = unsafe { cb(ud.ptr, c_request) };
             unsafe { nat_nexus_string_free_internal(c_request) };
-            let result = ptr_to_json(result_ptr);
+            let result = json_result_from_ptr(result_ptr, "LLM execution callback failed")?;
             unsafe { nat_nexus_string_free_internal(result_ptr) };
             Ok(result)
         })
@@ -546,7 +558,7 @@ pub fn wrap_llm_stream_exec_fn(
             let c_request = json_to_c_string(&request_json);
             let result_ptr = unsafe { cb(ud.ptr, c_request) };
             unsafe { nat_nexus_string_free_internal(c_request) };
-            let result = ptr_to_json(result_ptr);
+            let result = json_result_from_ptr(result_ptr, "LLM stream execution callback failed")?;
             unsafe { nat_nexus_string_free_internal(result_ptr) };
             // The C callback returns the full response as a single JSON value for stream
             // We emit it as a single-item stream
@@ -620,6 +632,14 @@ fn ptr_to_json(ptr: *mut c_char) -> Json {
     }
     let s = unsafe { CStr::from_ptr(ptr) }.to_string_lossy();
     serde_json::from_str(&s).unwrap_or(Json::Null)
+}
+
+fn json_result_from_ptr(ptr: *mut c_char, fallback: &str) -> Result<Json> {
+    if ptr.is_null() {
+        let message = last_error_message().unwrap_or_else(|| fallback.to_string());
+        return Err(NexusError::Internal(message));
+    }
+    Ok(ptr_to_json(ptr))
 }
 
 fn ptr_to_opt_string(ptr: *mut c_char) -> Option<String> {

@@ -1270,6 +1270,18 @@ void nat_nexus_string_free(char *ptr);
 const char *nat_nexus_last_error(void);
 
 /**
+ * Set the thread-local last-error message from foreign code.
+ *
+ * Intended for callback trampolines that need to propagate an error through
+ * the existing FFI last-error channel.
+ *
+ * # Safety
+ * `msg` must be either null or a valid, null-terminated C string for the
+ * duration of this call.
+ */
+void nat_nexus_set_last_error_message(const char *msg);
+
+/**
  * Free a scope handle previously returned by the runtime.
  *
  * # Safety

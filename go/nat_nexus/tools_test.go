@@ -584,18 +584,12 @@ func TestToolCallableErrorPropagation(t *testing.T) {
 			return nil, errors.New("tool internal failure")
 		},
 	)
-	// The error from the tool callable should propagate through the pipeline.
-	// Depending on the FFI error handling, this may come back as a wrapped error.
-	// We check that we get some form of result (the FFI wraps errors in JSON).
-	// If the FFI wraps errors, we at least get a result containing the error message.
-	// If it propagates the error, err will be non-nil.
-	// Either way, the system should not panic.
-	if err != nil {
-		// Error propagated correctly
-		return
+	if err == nil {
+		t.Fatal("expected tool callable error to propagate")
 	}
-	// If no error, the result should contain error info (FFI wraps tool errors in JSON)
-	t.Log("tool error was wrapped in result JSON (expected FFI behavior)")
+	if !strings.Contains(err.Error(), "tool internal failure") {
+		t.Fatalf("expected propagated tool error message, got %v", err)
+	}
 }
 
 func TestToolExecutionInterceptWrapsCallable(t *testing.T) {
@@ -648,6 +642,27 @@ func TestToolExecutionInterceptWrapsCallable(t *testing.T) {
 	}
 	if output["after_exec"] != true {
 		t.Fatal("expected after_exec=true")
+	}
+}
+
+func TestToolExecutionInterceptSeesNextError(t *testing.T) {
+	RegisterToolExecutionIntercept("go_wrap_exec_err", 1,
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			return next(args)
+		},
+	)
+	defer DeregisterToolExecutionIntercept("go_wrap_exec_err")
+
+	_, err := ToolCallExecute("wrap_tool_err", json.RawMessage(`{"input": 1}`),
+		func(args json.RawMessage) (json.RawMessage, error) {
+			return nil, errors.New("tool next failure")
+		},
+	)
+	if err == nil {
+		t.Fatal("expected tool next error to propagate through intercept")
+	}
+	if !strings.Contains(err.Error(), "tool next failure") {
+		t.Fatalf("expected propagated tool next error message, got %v", err)
 	}
 }
 

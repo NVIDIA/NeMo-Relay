@@ -11,6 +11,7 @@
 //! it via [`clear_last_error`].
 
 use std::cell::RefCell;
+use std::ffi::CStr;
 use std::ffi::CString;
 
 use libc::c_char;
@@ -65,6 +66,15 @@ pub fn clear_last_error() {
     });
 }
 
+/// Retrieve the last error message set on this thread, if any.
+pub fn last_error_message() -> Option<String> {
+    LAST_ERROR.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map(|s| s.to_string_lossy().into_owned())
+    })
+}
+
 /// Retrieve the last error message set on this thread, or null if no error
 /// has occurred since the last [`clear_last_error`] call.
 ///
@@ -79,6 +89,26 @@ pub extern "C" fn nat_nexus_last_error() -> *const c_char {
             .map(|s| s.as_ptr())
             .unwrap_or(std::ptr::null())
     })
+}
+
+/// Set the thread-local last-error message from foreign code.
+///
+/// Intended for callback trampolines that need to propagate an error through
+/// the existing FFI last-error channel.
+///
+/// # Safety
+/// `msg` must be either null or a valid, null-terminated C string for the
+/// duration of this call.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_set_last_error_message(msg: *const c_char) {
+    if msg.is_null() {
+        set_last_error("unknown callback error");
+        return;
+    }
+    match unsafe { CStr::from_ptr(msg) }.to_str() {
+        Ok(s) => set_last_error(s),
+        Err(_) => set_last_error("callback error was not valid UTF-8"),
+    }
 }
 
 impl From<&NexusError> for NatNexusStatus {

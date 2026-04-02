@@ -58,12 +58,12 @@ extern FfiLLMRequest* nat_nexus_llm_request_new(const char* headers_json, const 
 extern char* nat_nexus_llm_request_headers(const FfiLLMRequest* ptr);
 extern char* nat_nexus_llm_request_content(const FfiLLMRequest* ptr);
 extern void nat_nexus_string_free(char* ptr);
+extern void nat_nexus_set_last_error_message(const char* msg);
 */
 import "C"
 
 import (
 	"encoding/json"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -79,6 +79,12 @@ var (
 	closureRegistry   = make(map[uintptr]interface{})
 	closureNextID     atomic.Uint64
 )
+
+func setLastErrorMessage(msg string) {
+	cMsg := C.CString(msg)
+	defer C.free(unsafe.Pointer(cMsg))
+	C.nat_nexus_set_last_error_message(cMsg)
+}
 
 // registerClosure stores fn in the global registry and returns an
 // unsafe.Pointer that encodes the registry key. The returned pointer is
@@ -212,7 +218,8 @@ func goToolExecTrampoline(userData unsafe.Pointer, argsJSON *C.char) *C.char {
 	goArgs := json.RawMessage(C.GoString(argsJSON))
 	result, err := fn(goArgs)
 	if err != nil {
-		return C.CString(`{"error":"` + err.Error() + `"}`)
+		setLastErrorMessage(err.Error())
+		return nil
 	}
 	return C.CString(string(result))
 }
@@ -286,7 +293,8 @@ func goLlmExecTrampoline(userData unsafe.Pointer, nativeJSON *C.char) *C.char {
 
 	result, err := fn(goJSON)
 	if err != nil {
-		return C.CString(`{"error":"` + err.Error() + `"}`)
+		setLastErrorMessage(err.Error())
+		return nil
 	}
 	return C.CString(string(result))
 }
@@ -300,14 +308,15 @@ func goToolExecInterceptTrampoline(userData unsafe.Pointer, argsJSON *C.char, ne
 		defer C.free(unsafe.Pointer(cArgs))
 		result := C.callToolExecNext(nextFn, cArgs, nextCtx)
 		if result == nil {
-			return nil, errors.New("next returned nil")
+			return nil, lastError()
 		}
 		defer C.nat_nexus_string_free(result)
 		return json.RawMessage(C.GoString(result)), nil
 	}
 	result, err := fn(goArgs, goNext)
 	if err != nil {
-		return C.CString(`{"error":"` + err.Error() + `"}`)
+		setLastErrorMessage(err.Error())
+		return nil
 	}
 	return C.CString(string(result))
 }
@@ -323,7 +332,7 @@ func goLlmExecInterceptTrampoline(userData unsafe.Pointer, nativeJSON *C.char, n
 
 		result := C.callLlmExecNext(nextFn, cJSON, nextCtx)
 		if result == nil {
-			return nil, errors.New("next returned nil")
+			return nil, lastError()
 		}
 		defer C.nat_nexus_string_free(result)
 		return json.RawMessage(C.GoString(result)), nil
@@ -331,7 +340,8 @@ func goLlmExecInterceptTrampoline(userData unsafe.Pointer, nativeJSON *C.char, n
 
 	result, err := fn(goJSON, goNext)
 	if err != nil {
-		return C.CString(`{"error":"` + err.Error() + `"}`)
+		setLastErrorMessage(err.Error())
+		return nil
 	}
 	return C.CString(string(result))
 }
