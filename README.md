@@ -104,6 +104,7 @@ cargo build --release -p nvidia-nat-nexus-ffi
 
 ```bash
 cd crates/node && npm install && npm run build
+cd crates/node && npm install && npm test
 ```
 
 ### WASM

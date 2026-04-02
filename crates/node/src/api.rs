@@ -43,6 +43,24 @@ fn register_stream_channel(id: u64, tx: StreamSender) {
     STREAM_CHANNELS.lock().unwrap().insert(id, tx);
 }
 
+fn remove_stream_channel(id: u64) {
+    STREAM_CHANNELS.lock().unwrap().remove(&id);
+}
+
+fn ensure_stream_callback_queued(
+    id: u64,
+    status: napi::Status,
+) -> nvidia_nat_nexus_core::Result<()> {
+    if status == napi::Status::Ok {
+        return Ok(());
+    }
+
+    remove_stream_channel(id);
+    Err(nvidia_nat_nexus_core::NexusError::Internal(format!(
+        "failed to queue JS stream producer callback: {status:?}",
+    )))
+}
+
 /// Push a chunk into the stream identified by `streamId`.
 /// Called from JavaScript during async generator iteration.
 #[napi]
@@ -60,7 +78,7 @@ pub fn push_stream_chunk(stream_id: f64, chunk: Json) -> bool {
 #[napi]
 pub fn end_stream(stream_id: f64) {
     let id = stream_id as u64;
-    STREAM_CHANNELS.lock().unwrap().remove(&id);
+    remove_stream_channel(id);
 }
 
 #[allow(clippy::enum_variant_names)]
@@ -652,9 +670,11 @@ pub async fn llm_stream_call_execute(
 
             // NonBlocking: queue the call on the JS event loop and return immediately.
             // The JS function starts async iteration and pushes chunks via pushStreamChunk.
-            func.call(wrapper, ThreadsafeFunctionCallMode::NonBlocking);
+            let call_status = func.call(wrapper, ThreadsafeFunctionCallMode::NonBlocking);
 
             Box::pin(async move {
+                ensure_stream_callback_queued(stream_id, call_status)?;
+
                 let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
                 Ok(Box::pin(stream)
                     as std::pin::Pin<
@@ -700,6 +720,45 @@ pub async fn llm_stream_call_execute(
             })
         })
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ensure_stream_callback_queued_keeps_channel_on_success() {
+        let id = 42;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        register_stream_channel(id, tx);
+
+        let result = ensure_stream_callback_queued(id, napi::Status::Ok);
+
+        assert!(result.is_ok());
+        assert!(push_stream_chunk(
+            id as f64,
+            serde_json::json!({"ok": true})
+        ));
+        remove_stream_channel(id);
+    }
+
+    #[test]
+    fn test_ensure_stream_callback_queued_cleans_up_channel_on_failure() {
+        let id = 43;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        register_stream_channel(id, tx);
+
+        let result = ensure_stream_callback_queued(id, napi::Status::Closing);
+
+        assert!(matches!(
+            result,
+            Err(nvidia_nat_nexus_core::NexusError::Internal(_))
+        ));
+        assert!(!push_stream_chunk(
+            id as f64,
+            serde_json::json!({"ok": false})
+        ));
+    }
 }
 
 // ---------------------------------------------------------------------------

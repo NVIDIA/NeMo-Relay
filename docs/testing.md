@@ -37,8 +37,7 @@ go test -race -v ./...
 cd -
 
 # ── Node.js (requires native addon) ────────────────────────
-cd crates/node && npm install && npm run build
-node --test tests/*.mjs
+cd crates/node && npm install && npm test
 cd -
 
 # ── Full suite ─────────────────────────────────────────────

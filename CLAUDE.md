@@ -62,8 +62,7 @@ uv run pytest                            # Runs tests in python/tests/
 cd go/nat_nexus && CGO_LDFLAGS="-L../../target/release" go test -race -v ./...
 
 # Test — Node.js (requires native addon built first)
-cd crates/node && npm install && npm run build   # Build .node addon
-node --test crates/node/tests/*.mjs              # Run all Node.js tests
+cd crates/node && npm install && npm test        # Build debug addon and run all Node.js tests
 
 # Build — WASM
 wasm-pack build crates/wasm              # Produces pkg/ with .wasm, .js, .d.ts

@@ -37,12 +37,7 @@ This crate compiles to a native `.node` addon using NAPI-RS, exposing the full N
 cd crates/node
 npm install
 npm run build
-```
-
-To run tests from the repository root after building:
-
-```bash
-node --test crates/node/tests/*.mjs
+npm test
 ```
 
 ## Documentation

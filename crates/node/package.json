@@ -20,7 +20,9 @@
   },
   "scripts": {
     "build": "napi build --platform --release",
-    "build-debug": "napi build --platform"
+    "build-debug": "napi build --platform",
+    "pretest": "npm run build-debug",
+    "test": "node --test --test-force-exit tests/*.mjs"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2"
