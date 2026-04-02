@@ -158,7 +158,7 @@ if nat_nexus.scope_stack_active():
 cd crates/node
 npm install
 npm run build        # Build .node addon
-node --test tests/*.mjs  # Run tests
+npm test             # Build debug addon and run JS integration tests
 ```
 
 ### Usage
