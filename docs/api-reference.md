@@ -84,9 +84,6 @@ result = await nat_nexus.tools.execute(
 # Run request intercept chain only
 transformed_args = nat_nexus.intercepts.tool_request_intercepts(name: str, args: dict) -> dict
 
-# Run response intercept chain only
-transformed_result = nat_nexus.intercepts.tool_response_intercepts(name: str, result: dict) -> dict
-
 # Run conditional execution guardrails only (raises on rejection)
 nat_nexus.tools.conditional_execution(name: str, args: dict) -> None
 ```
@@ -231,12 +228,6 @@ nat_nexus.intercepts.register_tool_request(
     fn: Callable[[str, dict], dict],               # (tool_name, args) -> args
 ) -> None
 
-# Transform tool response
-nat_nexus.intercepts.register_tool_response(
-    name: str, priority: int, break_chain: bool,
-    fn: Callable[[str, dict], dict],               # (tool_name, result) -> result
-) -> None
-
 # Execution middleware chain
 nat_nexus.intercepts.register_tool_execution(
     name: str, priority: int,
@@ -245,7 +236,6 @@ nat_nexus.intercepts.register_tool_execution(
 
 # Deregister
 nat_nexus.intercepts.deregister_tool_request(name: str) -> bool
-nat_nexus.intercepts.deregister_tool_response(name: str) -> bool
 nat_nexus.intercepts.deregister_tool_execution(name: str) -> bool
 ```
 
@@ -402,11 +392,6 @@ nat_nexus.scope_local.register_llm_conditional_execution(
 ```python
 # Tool intercepts (scope-local)
 nat_nexus.scope_local.register_tool_request_intercept(
-    handle: ScopeHandle, name: str, priority: int, break_chain: bool,
-    fn: Callable[[str, dict], dict],
-) -> None
-
-nat_nexus.scope_local.register_tool_response_intercept(
     handle: ScopeHandle, name: str, priority: int, break_chain: bool,
     fn: Callable[[str, dict], dict],
 ) -> None

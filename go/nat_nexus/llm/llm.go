@@ -40,7 +40,7 @@ func CallEnd(handle *nat_nexus.LLMHandle, response json.RawMessage, opts ...nat_
 
 // Execute runs a complete LLM call lifecycle with the full middleware pipeline
 // (conditional-execution guardrails, request intercepts, sanitize-request
-// guardrails, execution intercepts, fn, response intercepts, sanitize-response
+// guardrails, execution intercepts, fn, sanitize-response
 // guardrails) and returns the final response JSON. This is a shorthand for
 // [nat_nexus.LlmCallExecute].
 func Execute(name string, native interface{}, fn nat_nexus.LLMExecutionFunc, opts ...nat_nexus.LLMCallOption) (json.RawMessage, error) {

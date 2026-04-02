@@ -19,7 +19,6 @@ fn test_deregister_nonexistent_tool_guardrails() {
 #[wasm_bindgen_test]
 fn test_deregister_nonexistent_tool_intercepts() {
     assert!(!deregister_tool_request_intercept("nx").unwrap());
-    assert!(!deregister_tool_response_intercept("nx").unwrap());
     assert!(!deregister_tool_execution_intercept("nx").unwrap());
 }
 

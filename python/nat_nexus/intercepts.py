@@ -13,9 +13,6 @@ lower-priority intercepts run after this one.
     register_tool_request(name, priority, break_chain, fn)
         ``fn(tool_name: str, args: Json) -> Json`` — transform tool arguments.
 
-    register_tool_response(name, priority, break_chain, fn)
-        ``fn(tool_name: str, result: Json) -> Json`` — transform tool result.
-
     register_tool_execution(name, priority, fn)
         ``fn`` is ``async (tool_name: str, args: Json, next) -> Json`` —
         middleware intercept. Call ``await next(args)`` to invoke the next
@@ -71,9 +68,6 @@ from nat_nexus._native import (
     nat_nexus_deregister_tool_request_intercept as _native_deregister_tool_request,
 )
 from nat_nexus._native import (
-    nat_nexus_deregister_tool_response_intercept as _native_deregister_tool_response,
-)
-from nat_nexus._native import (
     nat_nexus_register_llm_execution_intercept as _native_register_llm_execution,
 )
 from nat_nexus._native import (
@@ -87,9 +81,6 @@ from nat_nexus._native import (
 )
 from nat_nexus._native import (
     nat_nexus_register_tool_request_intercept as _native_register_tool_request,
-)
-from nat_nexus._native import (
-    nat_nexus_register_tool_response_intercept as _native_register_tool_response,
 )
 
 Json = Any
@@ -129,37 +120,6 @@ def deregister_tool_request(name: str) -> bool:
         ``False`` otherwise.
     """
     return _native_deregister_tool_request(name)
-
-
-def register_tool_response(name: str, priority: int, break_chain: bool, fn: Callable[[str, Json], Json]) -> None:
-    """Register a tool response intercept.
-
-    The intercept callback receives the tool name and result and returns
-    a transformed result that replaces the original in the pipeline.
-
-    Args:
-        name: Unique intercept name.
-        priority: Priority (ascending order; lower runs first).
-        break_chain: If ``True``, no lower-priority intercepts run after this one.
-        fn: Callable ``(tool_name: str, result: Json) -> Json``.
-
-    Raises:
-        RuntimeError: If an intercept with this name already exists.
-    """
-    return _native_register_tool_response(name, priority, break_chain, fn)
-
-
-def deregister_tool_response(name: str) -> bool:
-    """Remove a tool response intercept.
-
-    Args:
-        name: Name of the intercept to remove.
-
-    Returns:
-        ``True`` if an intercept with the given name was found and removed,
-        ``False`` otherwise.
-    """
-    return _native_deregister_tool_response(name)
 
 
 def register_tool_execution(
@@ -308,8 +268,6 @@ def deregister_llm_stream_execution(name: str) -> bool:
 __all__ = [
     "register_tool_request",
     "deregister_tool_request",
-    "register_tool_response",
-    "deregister_tool_response",
     "register_tool_execution",
     "deregister_tool_execution",
     "register_llm_request",

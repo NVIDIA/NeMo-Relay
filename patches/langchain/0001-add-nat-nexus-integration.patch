@@ -844,7 +844,7 @@ index 0000000000..65de480427
 +    async iterator of dict chunks (already converted via ``model_dump()``).
 +    ``JsonPassthrough`` passes each chunk through with zero overhead.
 +    Returns an ``LlmStream`` async-iterable whose chunks have already
-+    passed through stream-response intercepts.
++    passed through stream execution intercepts.
 +    """
 +    codec = nat_nexus.typed.JsonPassthrough()
 +    return await nat_nexus.typed.llm_stream_execute(  # type: ignore[union-attr]

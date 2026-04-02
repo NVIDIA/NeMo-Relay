@@ -19,7 +19,7 @@ Functions:
         Execute a tool call through the full middleware pipeline (conditional-
         execution guardrails on raw args → request intercepts →
         sanitize-request guardrails → execution intercepts → *func* →
-        response intercepts → sanitize-response guardrails). On rejection,
+        sanitize-response guardrails). On rejection,
         only a standalone Mark event is emitted and ``GuardrailRejected`` is
         raised. Returns an awaitable of the final result.
 
@@ -30,10 +30,6 @@ Functions:
     conditional_execution(name, args)
         Run the registered tool conditional execution guardrail chain.
         Raises ``RuntimeError`` if any guardrail rejects.
-
-    response_intercepts(name, result)
-        Run the registered tool response intercept chain on the given result.
-        Returns the transformed result.
 
 Example::
 
@@ -62,9 +58,6 @@ from nat_nexus._native import (
 )
 from nat_nexus._native import (
     nat_nexus_tool_request_intercepts as _native_tool_request_intercepts,
-)
-from nat_nexus._native import (
-    nat_nexus_tool_response_intercepts as _native_tool_response_intercepts,
 )
 
 
@@ -166,20 +159,4 @@ def conditional_execution(name, args):
     return _native_tool_conditional_execution(name, args)
 
 
-def response_intercepts(name, result):
-    """Run the registered tool response intercept chain.
-
-    Applies all registered tool response intercepts in priority order to
-    the given result.
-
-    Args:
-        name: Tool name identifier.
-        result: JSON-serializable tool result to transform.
-
-    Returns:
-        The transformed result after all intercepts have been applied.
-    """
-    return _native_tool_response_intercepts(name, result)
-
-
-__all__ = ["call", "call_end", "execute", "request_intercepts", "conditional_execution", "response_intercepts"]
+__all__ = ["call", "call_end", "execute", "request_intercepts", "conditional_execution"]

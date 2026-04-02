@@ -242,16 +242,6 @@ func TestToolRequestInterceptRegisterDeregister(t *testing.T) {
 	DeregisterToolRequestIntercept("go_req_int")
 }
 
-func TestToolResponseInterceptRegisterDeregister(t *testing.T) {
-	err := RegisterToolResponseIntercept("go_resp_int", 1, false,
-		func(name string, result json.RawMessage) json.RawMessage { return result },
-	)
-	if err != nil {
-		t.Fatalf("register failed: %v", err)
-	}
-	DeregisterToolResponseIntercept("go_resp_int")
-}
-
 func TestToolExecutionInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterToolExecutionIntercept("go_exec_int", 1,
 		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
@@ -304,35 +294,6 @@ func TestToolRequestInterceptModifiesArgs(t *testing.T) {
 	}
 
 	DeregisterToolRequestIntercept("go_req_mod")
-}
-
-func TestToolResponseInterceptModifiesResult(t *testing.T) {
-	RegisterToolResponseIntercept("go_resp_mod", 1, false,
-		func(name string, result json.RawMessage) json.RawMessage {
-			var m map[string]interface{}
-			json.Unmarshal(result, &m)
-			m["post_processed"] = true
-			out, _ := json.Marshal(m)
-			return out
-		},
-	)
-
-	result, err := ToolCallExecute("resp_tool", json.RawMessage(`{}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"output": "raw"}`), nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("execute failed: %v", err)
-	}
-
-	var output map[string]interface{}
-	json.Unmarshal(result, &output)
-	if output["output"] != "raw" || output["post_processed"] != true {
-		t.Fatalf("expected output + post_processed, got %v", output)
-	}
-
-	DeregisterToolResponseIntercept("go_resp_mod")
 }
 
 func TestToolExecutionInterceptReplacesFunc(t *testing.T) {
@@ -421,18 +382,6 @@ func TestToolFullPipelineInterceptsAndExecute(t *testing.T) {
 	)
 	defer DeregisterToolRequestIntercept("go_pipe_req_int")
 
-	// Register a response intercept that adds a flag
-	RegisterToolResponseIntercept("go_pipe_resp_int", 1, false,
-		func(name string, result json.RawMessage) json.RawMessage {
-			var m map[string]interface{}
-			json.Unmarshal(result, &m)
-			m["response_intercepted"] = true
-			out, _ := json.Marshal(m)
-			return out
-		},
-	)
-	defer DeregisterToolResponseIntercept("go_pipe_resp_int")
-
 	// Register an execution intercept that wraps the callable
 	RegisterToolExecutionIntercept("go_pipe_exec_int", 1,
 		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
@@ -472,9 +421,6 @@ func TestToolFullPipelineInterceptsAndExecute(t *testing.T) {
 	}
 	if output["exec_intercepted"] != true {
 		t.Fatal("expected exec_intercepted=true from execution intercept")
-	}
-	if output["response_intercepted"] != true {
-		t.Fatal("expected response_intercepted=true from response intercept")
 	}
 }
 

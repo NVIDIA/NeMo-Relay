@@ -124,7 +124,7 @@ pub type NatNexusEventSubscriberCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, event: *const FfiEvent);
 
 /// Callback for collecting intercepted stream chunks. Invoked with each chunk
-/// (after stream response intercepts have been applied) as a null-terminated
+/// (after stream execution intercepts have been applied) as a null-terminated
 /// C string. The string is only valid for the duration of the call.
 pub type NatNexusCollectorCb = unsafe extern "C" fn(chunk: *const c_char);
 

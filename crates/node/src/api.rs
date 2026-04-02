@@ -754,21 +754,6 @@ napi_intercept_tool_api!(
     callable::wrap_js_tool_fn
 );
 
-napi_intercept_tool_api!(
-    /// Register an intercept that transforms tool response data.
-    ///
-    /// The `callable` receives `(toolName, result)` and returns transformed result. If `breakChain`
-    /// is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first.
-    register_tool_response_intercept,
-    /// Deregister a tool response intercept by name.
-    ///
-    /// Returns `true` if an intercept with that name was found and removed.
-    deregister_tool_response_intercept,
-    core::nat_nexus_register_tool_response_intercept,
-    core::nat_nexus_deregister_tool_response_intercept,
-    callable::wrap_js_tool_fn
-);
-
 /// Register a tool execution intercept following the middleware chain pattern.
 ///
 /// The `callable` receives the args and a `next` function. Call `next(args)` to invoke
@@ -1139,21 +1124,6 @@ napi_scope_intercept_tool_api!(
     callable::wrap_js_tool_fn
 );
 
-napi_scope_intercept_tool_api!(
-    /// Register a scope-local intercept that transforms tool response data.
-    ///
-    /// The `callable` receives `(toolName, result)` and returns transformed result. If `breakChain`
-    /// is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first.
-    scope_register_tool_response_intercept,
-    /// Deregister a scope-local tool response intercept by name.
-    ///
-    /// Returns `true` if an intercept with that name was found and removed from the specified scope.
-    scope_deregister_tool_response_intercept,
-    core::nat_nexus_scope_register_tool_response_intercept,
-    core::nat_nexus_scope_deregister_tool_response_intercept,
-    callable::wrap_js_tool_fn
-);
-
 /// Register a scope-local tool execution intercept following the middleware chain pattern.
 ///
 /// The `callable` receives the args and a `next` function. Call `next(args)` to invoke
@@ -1462,13 +1432,6 @@ pub fn tool_request_intercepts(name: String, args: Json) -> Result<Json> {
 #[napi]
 pub fn tool_conditional_execution(name: String, args: Json) -> Result<()> {
     core::nat_nexus_tool_conditional_execution(&name, &args).map_err(to_napi_err)
-}
-
-/// Run the registered tool response intercept chain on the given result.
-/// Returns the transformed result.
-#[napi]
-pub fn tool_response_intercepts(name: String, result: Json) -> Result<Json> {
-    core::nat_nexus_tool_response_intercepts(&name, result).map_err(to_napi_err)
 }
 
 /// Run the registered LLM request intercept chain on the given request.

@@ -38,8 +38,7 @@
 //! 3. **Conditional-execution guardrails** -- gate whether execution proceeds.
 //! 4. **Execution intercepts** -- optionally replace the execution function.
 //! 5. **Execution** -- the actual tool/LLM function runs.
-//! 6. **Response intercepts** -- transform the response/result.
-//! 7. **Sanitize-response guardrails** -- sanitize the response data.
+//! 6. **Sanitize-response guardrails** -- sanitize the response data.
 
 #![allow(dead_code)]
 

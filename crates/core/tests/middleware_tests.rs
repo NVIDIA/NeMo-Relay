@@ -364,54 +364,6 @@ fn test_no_break_chain_runs_all_intercepts() {
     nat_nexus_deregister_tool_request_intercept("second").unwrap();
 }
 
-/// Verify break_chain works with response intercepts too.
-#[test]
-fn test_break_chain_on_response_intercepts() {
-    let _lock = TEST_MUTEX.lock().unwrap();
-    reset_global();
-    setup_isolated_thread();
-
-    let second_called = Arc::new(AtomicBool::new(false));
-
-    nat_nexus_register_tool_response_intercept(
-        "resp_breaker",
-        1,
-        true, // break_chain
-        Box::new(|_name, mut result| {
-            result
-                .as_object_mut()
-                .unwrap()
-                .insert("resp_breaker".into(), json!(true));
-            result
-        }),
-    )
-    .unwrap();
-
-    let sc = second_called.clone();
-    nat_nexus_register_tool_response_intercept(
-        "resp_after",
-        2,
-        false,
-        Box::new(move |_name, result| {
-            sc.store(true, Ordering::SeqCst);
-            result
-        }),
-    )
-    .unwrap();
-
-    let result = nat_nexus_tool_response_intercepts("tool", json!({})).unwrap();
-
-    assert_eq!(result["resp_breaker"], true);
-    assert!(
-        !second_called.load(Ordering::SeqCst),
-        "Second response intercept should not run"
-    );
-
-    // Cleanup
-    nat_nexus_deregister_tool_response_intercept("resp_breaker").unwrap();
-    nat_nexus_deregister_tool_response_intercept("resp_after").unwrap();
-}
-
 // =========================================================================
 // Execution Intercepts (Middleware Chain) Tests
 // =========================================================================
@@ -1535,7 +1487,7 @@ fn test_concurrent_register_and_read() {
 // =========================================================================
 
 /// End-to-end test: request intercepts, sanitize guardrails, conditional
-/// guardrails, execution intercepts, response intercepts, sanitize response
+/// guardrails, execution intercepts, sanitize response
 /// guardrails -- all in one tool_call_execute call.
 #[tokio::test]
 async fn test_full_pipeline_integration() {
@@ -1600,26 +1552,13 @@ async fn test_full_pipeline_integration() {
     )
     .unwrap();
 
-    // Response intercept
-    let o5 = order.clone();
-    nat_nexus_register_tool_response_intercept(
-        "resp_intercept",
-        1,
-        false,
-        Box::new(move |_name, result| {
-            o5.lock().unwrap().push("response_intercept".into());
-            result
-        }),
-    )
-    .unwrap();
-
     // Sanitize response guardrail
-    let o6 = order.clone();
+    let o5 = order.clone();
     nat_nexus_register_tool_sanitize_response_guardrail(
         "sanitize_resp",
         1,
         Box::new(move |_name, result| {
-            o6.lock().unwrap().push("sanitize_response".into());
+            o5.lock().unwrap().push("sanitize_response".into());
             result
         }),
     )
@@ -1648,8 +1587,7 @@ async fn test_full_pipeline_integration() {
     // 2. request_intercept (transforms args)
     // 3. sanitize_request (inside nat_nexus_tool_call)
     // 4. execution_intercept -> original_execution
-    // 5. response_intercept
-    // 6. sanitize_response (inside nat_nexus_tool_call_end)
+    // 5. sanitize_response (inside nat_nexus_tool_call_end)
     let recorded = order.lock().unwrap();
     assert_eq!(
         *recorded,
@@ -1659,7 +1597,6 @@ async fn test_full_pipeline_integration() {
             "sanitize_request",
             "execution_intercept",
             "original_execution",
-            "response_intercept",
             "sanitize_response",
         ],
         "Full pipeline should execute in the correct order"
@@ -1674,7 +1611,6 @@ async fn test_full_pipeline_integration() {
     nat_nexus_deregister_tool_sanitize_request_guardrail("sanitize_req").unwrap();
     nat_nexus_deregister_tool_conditional_execution_guardrail("conditional").unwrap();
     nat_nexus_deregister_tool_execution_intercept("exec_intercept").unwrap();
-    nat_nexus_deregister_tool_response_intercept("resp_intercept").unwrap();
     nat_nexus_deregister_tool_sanitize_response_guardrail("sanitize_resp").unwrap();
 }
 

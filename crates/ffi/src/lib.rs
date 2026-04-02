@@ -17,9 +17,7 @@
 //! 2. **Sanitize-request guardrails** -- validate/sanitize the request.
 //! 3. **Conditional-execution guardrails** -- gate whether the call proceeds.
 //! 4. **Execution intercepts** -- optionally replace the call implementation.
-//! 5. **Actual execution** -- invoke the user-provided callback.
-//! 6. **Response intercepts** -- transform the response.
-//! 7. **Sanitize-response guardrails** -- validate/sanitize the response.
+//! 5. **Sanitize-response guardrails** -- validate/sanitize the response.
 //!
 //! # Error Handling
 //!

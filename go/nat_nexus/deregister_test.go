@@ -24,7 +24,6 @@ func TestDeregisterNonexistentGuardrails(t *testing.T) {
 
 func TestDeregisterNonexistentIntercepts(t *testing.T) {
 	DeregisterToolRequestIntercept("nonexistent")
-	DeregisterToolResponseIntercept("nonexistent")
 	DeregisterToolExecutionIntercept("nonexistent")
 	DeregisterLlmRequestIntercept("nonexistent")
 	DeregisterLlmExecutionIntercept("nonexistent")
@@ -50,7 +49,6 @@ func TestDeregisterNonexistentSubscriberIsSafe(t *testing.T) {
 
 func TestDeregisterNonexistentInterceptsIsSafe(t *testing.T) {
 	_ = DeregisterToolRequestIntercept("go_dereg_safe_tri")
-	_ = DeregisterToolResponseIntercept("go_dereg_safe_tresp")
 	_ = DeregisterToolExecutionIntercept("go_dereg_safe_tei")
 	_ = DeregisterLlmRequestIntercept("go_dereg_safe_lri")
 	_ = DeregisterLlmExecutionIntercept("go_dereg_safe_lei")
@@ -228,9 +226,6 @@ func TestDeregisterAllInterceptTypes(t *testing.T) {
 	RegisterToolRequestIntercept("go_dereg_all_req_int", 1, false,
 		func(n string, args json.RawMessage) json.RawMessage { return args },
 	)
-	RegisterToolResponseIntercept("go_dereg_all_resp_int", 1, false,
-		func(n string, args json.RawMessage) json.RawMessage { return args },
-	)
 	RegisterToolExecutionIntercept("go_dereg_all_exec_int", 1,
 		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 			return next(args)
@@ -239,9 +234,6 @@ func TestDeregisterAllInterceptTypes(t *testing.T) {
 
 	if err := DeregisterToolRequestIntercept("go_dereg_all_req_int"); err != nil {
 		t.Fatalf("deregister req intercept failed: %v", err)
-	}
-	if err := DeregisterToolResponseIntercept("go_dereg_all_resp_int"); err != nil {
-		t.Fatalf("deregister resp intercept failed: %v", err)
 	}
 	if err := DeregisterToolExecutionIntercept("go_dereg_all_exec_int"); err != nil {
 		t.Fatalf("deregister exec intercept failed: %v", err)

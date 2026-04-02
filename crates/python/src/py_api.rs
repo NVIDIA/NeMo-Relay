@@ -243,7 +243,7 @@ fn nat_nexus_tool_call_end(
 ///
 /// Runs conditional-execution guardrails (on raw args) → request intercepts →
 /// sanitize-request guardrails → execution intercepts → the supplied
-/// function → response intercepts → sanitize-response guardrails, then
+/// function → sanitize-response guardrails, then
 /// returns the final result. On rejection, only a standalone ``Mark`` event
 /// is emitted (no ``Start``/``End`` pair) and ``GuardrailRejected`` is raised.
 ///
@@ -378,7 +378,7 @@ fn nat_nexus_llm_call_end(
 ///
 /// Runs conditional-execution guardrails (on raw request) → request intercepts →
 /// sanitize-request guardrails → execution intercepts → the supplied
-/// function → response intercepts → sanitize-response guardrails, then
+/// function → sanitize-response guardrails, then
 /// returns the final response. On rejection, only a standalone ``Mark`` event
 /// is emitted (no ``Start``/``End`` pair) and ``GuardrailRejected`` is raised.
 ///
@@ -443,7 +443,7 @@ fn nat_nexus_llm_call_execute<'py>(
 /// Like ``llm_call_execute``, conditional-execution guardrails run first on
 /// the raw request. If accepted, the execution function returns an async
 /// iterator of JSON chunks. The runtime wraps the stream with
-/// ``LlmStreamWrapper`` so that stream-response intercepts can inspect or
+/// ``LlmStreamWrapper`` so that stream execution intercepts can inspect or
 /// transform each chunk in flight.
 ///
 /// Args:
@@ -451,7 +451,7 @@ fn nat_nexus_llm_call_execute<'py>(
 ///     request: An ``LLMRequest`` with headers and content.
 ///     func: An async callable ``(LLMRequest) -> AsyncIterator[Any]`` that returns JSON chunks.
 ///     collector: A callable ``(Any) -> None`` invoked with each intercepted chunk
-///         (after stream response intercepts have been applied).
+///         (after stream execution intercepts have been applied).
 ///     finalizer: A callable ``() -> Any`` invoked once when the stream is exhausted.
 ///         Its return value is the aggregated response (converted to JSON).
 ///     handle: Optional parent scope handle.
@@ -633,18 +633,6 @@ py_intercept_tool_api!(
     nat_nexus_deregister_tool_request_intercept,
     core::nat_nexus_register_tool_request_intercept,
     core::nat_nexus_deregister_tool_request_intercept,
-    py_callable::wrap_py_tool_fn
-);
-
-py_intercept_tool_api!(
-    /// Register a tool response intercept.
-    ///
-    /// Callback: ``(tool_name: str, result: Any) -> Any`` — transforms tool result.
-    /// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
-    nat_nexus_register_tool_response_intercept,
-    nat_nexus_deregister_tool_response_intercept,
-    core::nat_nexus_register_tool_response_intercept,
-    core::nat_nexus_deregister_tool_response_intercept,
     py_callable::wrap_py_tool_fn
 );
 
@@ -866,28 +854,6 @@ fn nat_nexus_tool_conditional_execution(name: &str, args: &Bound<'_, PyAny>) -> 
     core::nat_nexus_tool_conditional_execution(name, &args_json).map_err(to_py_err)
 }
 
-/// Run the registered tool response intercept chain on the given result.
-///
-/// Returns the transformed result after all intercepts have been applied.
-///
-/// Args:
-///     name: Tool name.
-///     result: Tool result (any JSON-serializable object).
-///
-/// Returns:
-///     The (possibly transformed) result.
-#[pyfunction]
-fn nat_nexus_tool_response_intercepts<'py>(
-    py: Python<'py>,
-    name: &str,
-    result: &Bound<'py, PyAny>,
-) -> PyResult<Py<PyAny>> {
-    let result_json = py_to_json(result)?;
-    let transformed =
-        core::nat_nexus_tool_response_intercepts(name, result_json).map_err(to_py_err)?;
-    json_to_py(py, &transformed)
-}
-
 /// Run the registered LLM request intercept chain on the given request.
 ///
 /// Returns the transformed request after all intercepts have been applied.
@@ -1056,15 +1022,6 @@ py_scope_local_intercept_tool_api!(
     nat_nexus_scope_deregister_tool_request_intercept,
     core::nat_nexus_scope_register_tool_request_intercept,
     core::nat_nexus_scope_deregister_tool_request_intercept,
-    py_callable::wrap_py_tool_fn
-);
-
-py_scope_local_intercept_tool_api!(
-    /// Register a scope-local tool response intercept.
-    nat_nexus_scope_register_tool_response_intercept,
-    nat_nexus_scope_deregister_tool_response_intercept,
-    core::nat_nexus_scope_register_tool_response_intercept,
-    core::nat_nexus_scope_deregister_tool_response_intercept,
     py_callable::wrap_py_tool_fn
 );
 
@@ -1367,14 +1324,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_register_tool_response_intercept,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        nat_nexus_deregister_tool_response_intercept,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
         nat_nexus_register_tool_execution_intercept,
         m
     )?)?;
@@ -1475,14 +1424,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_register_tool_response_intercept,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_deregister_tool_response_intercept,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
         nat_nexus_scope_register_tool_execution_intercept,
         m
     )?)?;
@@ -1550,7 +1491,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Standalone middleware chains
     m.add_function(wrap_pyfunction!(nat_nexus_tool_request_intercepts, m)?)?;
     m.add_function(wrap_pyfunction!(nat_nexus_tool_conditional_execution, m)?)?;
-    m.add_function(wrap_pyfunction!(nat_nexus_tool_response_intercepts, m)?)?;
     m.add_function(wrap_pyfunction!(nat_nexus_llm_request_intercepts, m)?)?;
     m.add_function(wrap_pyfunction!(nat_nexus_llm_conditional_execution, m)?)?;
 

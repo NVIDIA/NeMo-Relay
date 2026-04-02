@@ -106,7 +106,7 @@ index 0000000..c220118
 +    The *func* callable receives an ``LLMRequest`` and should return an
 +    async iterator of dict chunks. ``JsonPassthrough`` passes each chunk
 +    through with zero overhead. Returns an ``LlmStream`` async-iterable
-+    whose chunks have already passed through stream-response intercepts.
++    whose chunks have already passed through stream execution intercepts.
 +    """
 +    codec = nat_nexus.typed.JsonPassthrough()
 +    return await nat_nexus.typed.llm_stream_execute(  # type: ignore[union-attr]

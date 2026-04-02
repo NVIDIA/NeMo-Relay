@@ -45,8 +45,7 @@
 //! 2. **Sanitize request guardrails** — sanitize/normalize the request
 //! 3. **Conditional execution guardrails** — gate execution (reject if criteria not met)
 //! 4. **Execution intercepts** — optionally replace the execution function entirely
-//! 5. **Response intercepts** — transform the response after execution
-//! 6. **Sanitize response guardrails** — sanitize/normalize the response
+//! 5. **Sanitize response guardrails** — sanitize/normalize the response
 //!
 //! All middleware is priority-ordered (ascending) and registered by name for
 //! easy addition and removal at runtime.

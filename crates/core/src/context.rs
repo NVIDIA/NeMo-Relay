@@ -38,7 +38,7 @@ use crate::types::*;
 pub type ToolSanitizeFn = Box<dyn Fn(&str, Json) -> Json + Send + Sync>;
 /// Tool conditional execution guardrail: `(tool_name, args) -> Option<rejection_reason>`.
 pub type ToolConditionalFn = Box<dyn Fn(&str, &Json) -> Option<String> + Send + Sync>;
-/// Tool request/response intercept: `(tool_name, value) -> transformed`.
+/// Tool request intercept: `(tool_name, value) -> transformed`.
 pub type ToolInterceptFn = Box<dyn Fn(&str, Json) -> Json + Send + Sync>;
 /// Tool execution "next" function (FnOnce — each chain link is single-use):
 /// `(args) -> Future<Result<Json>>`.
@@ -374,7 +374,7 @@ pub fn task_scope_remove(uuid: &Uuid) -> Result<ScopeHandle> {
 // Scope-local registries
 // ---------------------------------------------------------------------------
 
-/// Per-scope middleware registries. Mirrors the 12 sorted registries plus
+/// Per-scope middleware registries. Mirrors the 11 sorted registries plus
 /// event subscribers from [`NatNexusContextState`], but scoped to a single
 /// scope in the stack. Created lazily on first scope-local registration and
 /// dropped automatically when the scope is popped.
@@ -383,7 +383,6 @@ pub struct ScopeLocalRegistries {
     pub tool_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
     pub tool_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<ToolConditionalFn>>,
     pub tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
-    pub tool_response_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
     pub tool_execution_intercepts: SortedRegistry<ExecutionIntercept<ToolExecutionFn>>,
     pub llm_sanitize_request_guardrails: SortedRegistry<GuardrailEntry<LlmSanitizeRequestFn>>,
     pub llm_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<LlmSanitizeResponseFn>>,
@@ -402,7 +401,6 @@ impl ScopeLocalRegistries {
             tool_sanitize_response_guardrails: SortedRegistry::new(|e| e.priority),
             tool_conditional_execution_guardrails: SortedRegistry::new(|e| e.priority),
             tool_request_intercepts: SortedRegistry::new(|e| e.priority),
-            tool_response_intercepts: SortedRegistry::new(|e| e.priority),
             tool_execution_intercepts: SortedRegistry::new(|e| e.priority),
             llm_sanitize_request_guardrails: SortedRegistry::new(|e| e.priority),
             llm_sanitize_response_guardrails: SortedRegistry::new(|e| e.priority),
@@ -492,7 +490,7 @@ pub fn merge_execution_intercept_callables<F: Clone>(
 /// The central state object holding all registered middleware and event subscribers.
 ///
 /// This struct contains sorted registries for every category of guardrail and
-/// intercept (tool and LLM, request and response), as well as event subscribers.
+/// intercept (tool and LLM; request and execution intercepts), as well as event subscribers.
 /// It also provides methods for running middleware chains and managing handle
 /// lifecycle events.
 ///
@@ -508,8 +506,6 @@ pub struct NatNexusContextState {
 
     /// Registry of tool request intercepts.
     pub tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
-    /// Registry of tool response intercepts.
-    pub tool_response_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
     /// Registry of tool execution intercepts (middleware chain pattern).
     pub tool_execution_intercepts: SortedRegistry<ExecutionIntercept<ToolExecutionFn>>,
 
@@ -539,7 +535,6 @@ impl NatNexusContextState {
             tool_sanitize_response_guardrails: SortedRegistry::new(|e| e.priority),
             tool_conditional_execution_guardrails: SortedRegistry::new(|e| e.priority),
             tool_request_intercepts: SortedRegistry::new(|e| e.priority),
-            tool_response_intercepts: SortedRegistry::new(|e| e.priority),
             tool_execution_intercepts: SortedRegistry::new(|e| e.priority),
             llm_sanitize_request_guardrails: SortedRegistry::new(|e| e.priority),
             llm_sanitize_response_guardrails: SortedRegistry::new(|e| e.priority),
@@ -882,25 +877,6 @@ impl NatNexusContextState {
     ) -> Json {
         let entries = merge_intercept_entries(&self.tool_request_intercepts, scope_locals);
         let mut v = args;
-        for entry in entries {
-            v = (entry.callable)(name, v);
-            if entry.break_chain {
-                break;
-            }
-        }
-        v
-    }
-
-    /// Runs the tool response intercept chain, piping the result through each intercept (with optional break).
-    /// Merges global + scope-local entries by priority.
-    pub fn tool_response_intercepts_chain(
-        &self,
-        name: &str,
-        result: Json,
-        scope_locals: &[&SortedRegistry<Intercept<ToolInterceptFn>>],
-    ) -> Json {
-        let entries = merge_intercept_entries(&self.tool_response_intercepts, scope_locals);
-        let mut v = result;
         for entry in entries {
             v = (entry.callable)(name, v);
             if entry.break_chain {
@@ -1838,26 +1814,6 @@ mod tests {
         assert_eq!(result["from_i1"], true);
         // i2 should NOT have run due to break_chain
         assert!(result.get("from_i2").is_none());
-    }
-
-    #[test]
-    fn test_tool_response_intercepts_chain() {
-        let mut ctx = NatNexusContextState::new();
-        ctx.tool_response_intercepts
-            .register(
-                "i1".into(),
-                Intercept {
-                    priority: 1,
-                    break_chain: false,
-                    callable: Box::new(
-                        |_name: &str, result: Json| serde_json::json!({"wrapped": result}),
-                    ),
-                },
-            )
-            .unwrap();
-
-        let result = ctx.tool_response_intercepts_chain("tool", serde_json::json!("original"), &[]);
-        assert_eq!(result["wrapped"], "original");
     }
 
     #[tokio::test]
