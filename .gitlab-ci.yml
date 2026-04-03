@@ -126,7 +126,7 @@ build:
     - pushd crates/node && npm install && npm run build && popd
     - echo "Building WASM package"
     - cargo install wasm-pack
-    - wasm-pack build --release crates/wasm
+    - wasm-pack build --release crates/wasm --scope nvidia
   after_script:
     - uv cache prune --ci
 
@@ -251,55 +251,7 @@ test:wasm_tests:
     - echo "Running WASM tests"
     - wasm-pack test --release --node crates/wasm
 
-package:wheel:x86_64:
-  stage: package
-  image:
-    name: rust:${NEXUS_CI_RUST_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
-    pull_policy: if-not-present
-  needs:
-    - job: build
-  artifacts:
-    name: "wheel-x86_64"
-    when: on_success
-    paths:
-      - ${NEXUS_CI_WORKSPACE_TMP}/wheels/
-  script:
-    - *install_build_essential
-    - *install_uv_and_python
-    - *setup_venv
-    - |
-      if [ -z "${CI_COMMIT_TAG}" ]; then
-        echo "Non-release build: appending commit hash to version"
-        if ! sed -i "s/^version = \"\(.*\)\"/version = \"\1+${CI_COMMIT_SHORT_SHA}\"/" Cargo.toml; then
-          echo "Error: Failed to modify version in Cargo.toml"
-          exit 1
-        fi
-        # Verify the modification succeeded
-        if ! grep -q "version = \".*+${CI_COMMIT_SHORT_SHA}\"" Cargo.toml; then
-          echo "Error: Version modification did not apply correctly"
-          exit 1
-        fi
-      else
-        echo "Tagged release ${CI_COMMIT_TAG}: using version as-is"
-      fi
-    - echo "Building x86_64 wheel"
-    - maturin build --release --target x86_64-unknown-linux-gnu --out ${NEXUS_CI_WORKSPACE_TMP}/wheels
-    - |
-      if [ ! -d ${NEXUS_CI_WORKSPACE_TMP}/wheels ] || [ -z "$(ls -A ${NEXUS_CI_WORKSPACE_TMP}/wheels/*.whl 2>/dev/null)" ]; then
-        echo "Error: No wheels found in ${NEXUS_CI_WORKSPACE_TMP}/wheels/"
-        exit 1
-      fi
-    - echo "Uploading wheel to GitLab package registry"
-    - |
-      set -e
-      UV_PUBLISH_USERNAME=gitlab-ci-token \
-      UV_PUBLISH_PASSWORD="${CI_JOB_TOKEN}" \
-      UV_PUBLISH_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi" \
-      uv publish --no-progress ${NEXUS_CI_WORKSPACE_TMP}/wheels/*.whl
-  after_script:
-    - uv cache prune --ci
-
-package:npm:x86_64:
+package:nodejs:x86_64:
   stage: package
   image:
     name: node:${NEXUS_CI_NODE_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
@@ -308,7 +260,7 @@ package:npm:x86_64:
     - job: build
       artifacts: true
   artifacts:
-    name: "npm-x86_64"
+    name: "nodejs-x86_64"
     when: on_success
     paths:
       - ${NEXUS_CI_WORKSPACE_TMP}/npm/*.tgz
@@ -366,6 +318,109 @@ package:npm:x86_64:
       npm config set "${REGISTRY_KEY}:_authToken" "${CI_JOB_TOKEN}"
       npm publish ${NPM_PUBLISH_ARGS} ${NEXUS_CI_WORKSPACE_TMP}/npm/*.tgz
 
+package:wasm:x86_64:
+  stage: package
+  image:
+    name: node:${NEXUS_CI_NODE_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
+    pull_policy: if-not-present
+  needs:
+    - job: build
+      artifacts: true
+  artifacts:
+    name: "wasm-x86_64"
+    when: on_success
+    paths:
+      - ${NEXUS_CI_WORKSPACE_TMP}/wasm/*.tgz
+  script:
+    - |
+      set -e
+      if [ -z "${CI_COMMIT_TAG}" ]; then
+        echo "Non-release build: appending commit hash to version"
+        NPM_PUBLISH_ARGS="--tag dev"
+        node -e "
+          try {
+            const fs = require('fs');
+            const sha = process.env.CI_COMMIT_SHORT_SHA;
+
+            const pkgPath = 'crates/wasm/pkg/package.json';
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            if (!pkg.version) {
+              console.error('Error: package.json missing version field');
+              process.exit(1);
+            }
+            pkg.version = pkg.version + '-' + sha;
+            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+            console.log('crates/wasm/pkg/package.json version updated to ' + pkg.version);
+          } catch (err) {
+            console.error('Error updating version in crates/wasm/pkg/package.json:', err);
+            process.exit(1);
+          }
+        "
+      else
+        echo "Tagged release ${CI_COMMIT_TAG}: using version as-is"
+        NPM_PUBLISH_ARGS=""
+      fi
+      echo "Packing x86_64 wasm package"
+      mkdir -p ${NEXUS_CI_WORKSPACE_TMP}/wasm
+      pushd crates/wasm/pkg
+      npm pack --pack-destination ${NEXUS_CI_WORKSPACE_TMP}/wasm
+      popd
+      echo "Publishing wasm package to GitLab package registry"
+      REGISTRY_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/npm/"
+      REGISTRY_KEY="${REGISTRY_URL#https:}"
+      npm config set "@nvidia:registry" "${REGISTRY_URL}"
+      npm config set "${REGISTRY_KEY}:_authToken" "${CI_JOB_TOKEN}"
+      npm publish ${NPM_PUBLISH_ARGS} ${NEXUS_CI_WORKSPACE_TMP}/wasm/*.tgz
+
+package:wheel:x86_64:
+  stage: package
+  image:
+    name: rust:${NEXUS_CI_RUST_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
+    pull_policy: if-not-present
+  needs:
+    - job: build
+  artifacts:
+    name: "wheel-x86_64"
+    when: on_success
+    paths:
+      - ${NEXUS_CI_WORKSPACE_TMP}/wheels/
+  script:
+    - *install_build_essential
+    - *install_uv_and_python
+    - *setup_venv
+    - |
+      if [ -z "${CI_COMMIT_TAG}" ]; then
+        echo "Non-release build: appending commit hash to version"
+        if ! sed -i "s/^version = \"\(.*\)\"/version = \"\1+${CI_COMMIT_SHORT_SHA}\"/" Cargo.toml; then
+          echo "Error: Failed to modify version in Cargo.toml"
+          exit 1
+        fi
+        # Verify the modification succeeded
+        if ! grep -q "version = \".*+${CI_COMMIT_SHORT_SHA}\"" Cargo.toml; then
+          echo "Error: Version modification did not apply correctly"
+          exit 1
+        fi
+      else
+        echo "Tagged release ${CI_COMMIT_TAG}: using version as-is"
+      fi
+    - echo "Building x86_64 wheel"
+    - maturin build --release --target x86_64-unknown-linux-gnu --out ${NEXUS_CI_WORKSPACE_TMP}/wheels
+    - |
+      if [ ! -d ${NEXUS_CI_WORKSPACE_TMP}/wheels ] || [ -z "$(ls -A ${NEXUS_CI_WORKSPACE_TMP}/wheels/*.whl 2>/dev/null)" ]; then
+        echo "Error: No wheels found in ${NEXUS_CI_WORKSPACE_TMP}/wheels/"
+        exit 1
+      fi
+    - echo "Uploading wheel to GitLab package registry"
+    - |
+      set -e
+      UV_PUBLISH_USERNAME=gitlab-ci-token \
+      UV_PUBLISH_PASSWORD="${CI_JOB_TOKEN}" \
+      UV_PUBLISH_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi" \
+      uv publish --no-progress ${NEXUS_CI_WORKSPACE_TMP}/wheels/*.whl
+  after_script:
+    - uv cache prune --ci
+
+
 publish:artifactory:wheel:
   stage: publish
   image:
@@ -401,7 +456,9 @@ publish:artifactory:npm:
     name: node:${NEXUS_CI_NODE_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   needs:
-    - job: package:npm:x86_64
+    - job: package:nodejs:x86_64
+      artifacts: true
+    - job: package:wasm:x86_64
       artifacts: true
   script:
     - |
@@ -422,7 +479,7 @@ publish:artifactory:npm:
         NPM_PUBLISH_ARGS=""
       fi
       RETURN_CODE=0
-      for pkg in ${NEXUS_CI_WORKSPACE_TMP}/npm/*.tgz; do
+      for pkg in $(ls ${NEXUS_CI_WORKSPACE_TMP}/npm/*.tgz ${NEXUS_CI_WORKSPACE_TMP}/wasm/*.tgz 2>/dev/null); do
         filename=$(basename "$pkg")
         echo "Uploading ${filename} to Artifactory"
         npm publish ${NPM_PUBLISH_ARGS} "$pkg"

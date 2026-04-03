@@ -34,7 +34,7 @@ This crate compiles the Nexus core API to WebAssembly via `wasm-bindgen`, making
 ## Build
 
 ```bash
-wasm-pack build crates/wasm
+wasm-pack build crates/wasm --scope nvidia
 ```
 
 This produces a `pkg/` directory containing `.wasm`, `.js`, and `.d.ts` files ready for bundling or direct import.

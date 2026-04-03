@@ -590,6 +590,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "nat-nexus-wasm"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "nvidia-nat-nexus-core",
+ "send_wrapper",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -665,24 +683,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "uuid",
-]
-
-[[package]]
-name = "nvidia-nat-nexus-wasm"
-version = "0.1.0"
-dependencies = [
- "js-sys",
- "nvidia-nat-nexus-core",
- "send_wrapper",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "tokio",
- "tokio-stream",
- "uuid",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "wasm-bindgen-test",
 ]
 
 [[package]]
