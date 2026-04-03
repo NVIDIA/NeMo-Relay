@@ -25,9 +25,11 @@ node_modules/
 crates/node/*.node
 crates/node/index.js
 crates/node/index.d.ts
+crates/node/coverage/
 
 # WASM
 crates/wasm/pkg/
+crates/wasm/pkg-test/
 
 # Shared libraries
 *.dylib
@@ -35,6 +37,14 @@ crates/wasm/pkg/
 
 # Testing / caches
 .pytest_cache/
+.uv-cache/
+.cache/pre-commit/
+.coverage
+*.profraw
+*.profdata
+go/nat_nexus/coverage.out
+go_junit_report.xml
+*.dSYM/
 
 # OS — macOS
 .DS_Store

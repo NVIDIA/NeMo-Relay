@@ -4,8 +4,8 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
 
-use nat_nexus_wasm::api::*;
-use nat_nexus_wasm::types::*;
+use nvidia_nat_nexus_wasm::api::*;
+use nvidia_nat_nexus_wasm::types::*;
 
 // ===========================================================================
 // Context isolation

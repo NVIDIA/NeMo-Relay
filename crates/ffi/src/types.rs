@@ -307,6 +307,9 @@ pub unsafe extern "C" fn nat_nexus_scope_handle_data(ptr: *const FfiScopeHandle)
 pub unsafe extern "C" fn nat_nexus_scope_handle_metadata(
     ptr: *const FfiScopeHandle,
 ) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
     match &unsafe { &*ptr }.0.metadata {
         Some(m) => json_to_c_string(m),
         None => std::ptr::null_mut(),
@@ -679,5 +682,147 @@ pub unsafe extern "C" fn nat_nexus_event_scope_type(ptr: *const FfiEvent) -> *mu
     match &unsafe { &*ptr }.0.scope_type {
         Some(st) => str_to_c_string(&format!("{:?}", st)),
         None => std::ptr::null_mut(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::{CStr, CString};
+
+    use serde_json::json;
+    use uuid::Uuid;
+
+    fn take_string(ptr: *mut c_char) -> Option<String> {
+        if ptr.is_null() {
+            return None;
+        }
+        let value = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap().to_string();
+        unsafe { crate::convert::nat_nexus_string_free(ptr) };
+        Some(value)
+    }
+
+    #[test]
+    fn test_scope_handle_accessors_and_null_metadata_guard() {
+        assert!(unsafe { nat_nexus_scope_handle_metadata(std::ptr::null()) }.is_null());
+
+        let parent_uuid = Uuid::new_v4();
+        let handle = FfiScopeHandle(core_types::ScopeHandle::new(
+            "scope".into(),
+            core_types::ScopeType::Tool,
+            core_types::ScopeAttributes::PARALLEL,
+            Some(parent_uuid),
+            Some(json!({"data": true})),
+            Some(json!({"meta": true})),
+        ));
+
+        assert_eq!(
+            take_string(unsafe { nat_nexus_scope_handle_name(&handle) }),
+            Some("scope".into())
+        );
+        assert_eq!(
+            unsafe { nat_nexus_scope_handle_scope_type(&handle) } as i32,
+            NatNexusScopeType::Tool as i32
+        );
+        assert_eq!(
+            unsafe { nat_nexus_scope_handle_attributes(&handle) },
+            core_types::ScopeAttributes::PARALLEL.bits()
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_scope_handle_parent_uuid(&handle) }),
+            Some(parent_uuid.to_string())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_scope_handle_data(&handle) }),
+            Some(r#"{"data":true}"#.into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_scope_handle_metadata(&handle) }),
+            Some(r#"{"meta":true}"#.into())
+        );
+    }
+
+    #[test]
+    fn test_llm_request_and_event_accessors() {
+        let headers = CString::new(r#"{"header":"value"}"#).unwrap();
+        let content = CString::new(r#"{"prompt":"hi"}"#).unwrap();
+        let request_ptr = unsafe { nat_nexus_llm_request_new(headers.as_ptr(), content.as_ptr()) };
+        assert!(!request_ptr.is_null());
+        assert_eq!(
+            take_string(unsafe { nat_nexus_llm_request_headers(request_ptr) }),
+            Some(r#"{"header":"value"}"#.into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_llm_request_content(request_ptr) }),
+            Some(r#"{"prompt":"hi"}"#.into())
+        );
+        unsafe { nat_nexus_llm_request_free(request_ptr) };
+
+        let mut event = core_types::Event::new(
+            Some(Uuid::new_v4()),
+            Uuid::new_v4(),
+            Some("ffi-event".into()),
+            Some(json!({"data": 1})),
+            Some(json!({"meta": 2})),
+            None,
+            core_types::EventType::Start,
+            Some(core_types::ScopeType::Guardrail),
+        );
+        event.input = Some(json!({"input": true}));
+        event.output = Some(json!({"output": true}));
+        event.model_name = Some("model".into());
+        event.tool_call_id = Some("tool-call-id".into());
+        event.root_uuid = Some(Uuid::new_v4());
+        let ffi_event = FfiEvent(event.clone());
+
+        assert_eq!(
+            unsafe { nat_nexus_event_type(&ffi_event) } as i32,
+            NatNexusEventType::Start as i32
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_name(&ffi_event) }),
+            Some("ffi-event".into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_data(&ffi_event) }),
+            Some(r#"{"data":1}"#.into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_metadata(&ffi_event) }),
+            Some(r#"{"meta":2}"#.into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_input(&ffi_event) }),
+            Some(r#"{"input":true}"#.into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_output(&ffi_event) }),
+            Some(r#"{"output":true}"#.into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_model_name(&ffi_event) }),
+            Some("model".into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_tool_call_id(&ffi_event) }),
+            Some("tool-call-id".into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_scope_type(&ffi_event) }),
+            Some("Guardrail".into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_parent_uuid(&ffi_event) }),
+            event.parent_uuid.map(|uuid| uuid.to_string())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_root_uuid(&ffi_event) }),
+            event.root_uuid.map(|uuid| uuid.to_string())
+        );
+        assert!(
+            take_string(unsafe { nat_nexus_event_timestamp(&ffi_event) })
+                .unwrap()
+                .contains('T')
+        );
     }
 }

@@ -35,6 +35,8 @@ use crate::types::*;
 static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(0);
 
 type StreamSender = tokio::sync::mpsc::UnboundedSender<nvidia_nat_nexus_core::Result<Json>>;
+type RustJsonStream =
+    std::pin::Pin<Box<dyn tokio_stream::Stream<Item = nvidia_nat_nexus_core::Result<Json>> + Send>>;
 
 static STREAM_CHANNELS: std::sync::LazyLock<StdMutex<HashMap<u64, StreamSender>>> =
     std::sync::LazyLock::new(|| StdMutex::new(HashMap::new()));
@@ -59,6 +61,17 @@ fn ensure_stream_callback_queued(
     Err(nvidia_nat_nexus_core::NexusError::Internal(format!(
         "failed to queue JS stream producer callback: {status:?}",
     )))
+}
+
+async fn forward_stream_to_channel(
+    mut stream: RustJsonStream,
+    tx: tokio::sync::mpsc::Sender<nvidia_nat_nexus_core::Result<Json>>,
+) {
+    while let Some(item) = stream.next().await {
+        if tx.send(item).await.is_err() {
+            break;
+        }
+    }
 }
 
 /// Push a chunk into the stream identified by `streamId`.
@@ -603,6 +616,66 @@ pub fn llm_call_execute(
     )
 }
 
+/// Execute an LLM call end-to-end, supporting both sync and async (Promise-returning) callbacks.
+///
+/// Same lifecycle as `llmCallExecute` (guardrails → intercepts → func → response processing),
+/// but transparently handles JS callbacks that return Promises.
+#[allow(clippy::too_many_arguments)]
+#[napi(ts_return_type = "Promise<unknown>")]
+pub fn llm_call_execute_async(
+    env: Env,
+    name: String,
+    request: Json,
+    func: JsFunction,
+    handle: Option<&JsScopeHandle>,
+    attributes: Option<u32>,
+    data: Option<Json>,
+    metadata: Option<Json>,
+    model_name: Option<String>,
+) -> Result<JsObject> {
+    let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
+    let parent = handle
+        .map(|h| h.inner.clone())
+        .unwrap_or_else(core::task_scope_top);
+    let llm_request: core_types::LLMRequest = serde_json::from_value(request)
+        .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
+    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+
+    let pa_fn = std::sync::Arc::new(
+        crate::promise_call::PromiseAwareFn::new(&env, &func).map_err(|e| {
+            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
+        })?,
+    );
+
+    let exec_fn: nvidia_nat_nexus_core::LlmExecutionNextFn = std::sync::Arc::new(move |req| {
+        let pa_fn = pa_fn.clone();
+        let req_json = serde_json::to_value(&req).unwrap_or(Json::Null);
+        Box::pin(async move { pa_fn.call(req_json).await })
+    });
+
+    env.execute_tokio_future(
+        async move {
+            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+                .scope(scope_stack, async move {
+                    core::nat_nexus_llm_call_execute(
+                        &name,
+                        llm_request,
+                        exec_fn,
+                        Some(parent),
+                        attrs,
+                        opt_json(data),
+                        opt_json(metadata),
+                        model_name,
+                    )
+                    .await
+                    .map_err(to_napi_err)
+                })
+                .await
+        },
+        |_env, result| Ok(result),
+    )
+}
+
 /// Execute a streaming LLM call end-to-end with full lifecycle management.
 ///
 /// Like `llmCallExecute`, conditional-execution guardrails run first on the raw request.
@@ -619,8 +692,9 @@ pub fn llm_call_execute(
 /// callback is invoked once when the stream is exhausted and must return a JSON value
 /// representing the aggregated response.
 #[allow(clippy::too_many_arguments)]
-#[napi]
-pub async fn llm_stream_call_execute(
+#[napi(ts_return_type = "Promise<LlmStream>")]
+pub fn llm_stream_call_execute(
+    env: Env,
     name: String,
     request: Json,
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
@@ -631,7 +705,7 @@ pub async fn llm_stream_call_execute(
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
-) -> Result<LlmStream> {
+) -> Result<JsObject> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent = handle
         .map(|h| h.inner.clone())
@@ -688,78 +762,41 @@ pub async fn llm_stream_call_execute(
 
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
 
-    nvidia_nat_nexus_core::TASK_SCOPE_STACK
-        .scope(scope_stack, async move {
-            let rust_stream = core::nat_nexus_llm_stream_call_execute(
-                &name,
-                llm_request,
-                default_fn,
-                wrapped_collector,
-                wrapped_finalizer,
-                Some(parent),
-                attrs,
-                opt_json(data),
-                opt_json(metadata),
-                model_name,
-            )
-            .await
-            .map_err(to_napi_err)?;
+    env.execute_tokio_future(
+        async move {
+            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+                .scope(scope_stack, async move {
+                    let rust_stream = core::nat_nexus_llm_stream_call_execute(
+                        &name,
+                        llm_request,
+                        default_fn,
+                        wrapped_collector,
+                        wrapped_finalizer,
+                        Some(parent),
+                        attrs,
+                        opt_json(data),
+                        opt_json(metadata),
+                        model_name,
+                    )
+                    .await
+                    .map_err(to_napi_err)?;
 
-            let (tx, rx) = tokio::sync::mpsc::channel(32);
-            tokio::spawn(async move {
-                let mut stream = rust_stream;
-                while let Some(item) = stream.next().await {
-                    if tx.send(item).await.is_err() {
-                        break;
-                    }
-                }
-            });
+                    let (tx, rx) = tokio::sync::mpsc::channel(32);
+                    tokio::spawn(forward_stream_to_channel(rust_stream, tx));
 
-            Ok(LlmStream {
-                receiver: tokio::sync::Mutex::new(rx),
-            })
-        })
-        .await
+                    Ok(LlmStream {
+                        receiver: tokio::sync::Mutex::new(rx),
+                    })
+                })
+                .await
+        },
+        |_env, result| Ok(result),
+    )
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_ensure_stream_callback_queued_keeps_channel_on_success() {
-        let id = 42;
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        register_stream_channel(id, tx);
-
-        let result = ensure_stream_callback_queued(id, napi::Status::Ok);
-
-        assert!(result.is_ok());
-        assert!(push_stream_chunk(
-            id as f64,
-            serde_json::json!({"ok": true})
-        ));
-        remove_stream_channel(id);
-    }
-
-    #[test]
-    fn test_ensure_stream_callback_queued_cleans_up_channel_on_failure() {
-        let id = 43;
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        register_stream_channel(id, tx);
-
-        let result = ensure_stream_callback_queued(id, napi::Status::Closing);
-
-        assert!(matches!(
-            result,
-            Err(nvidia_nat_nexus_core::NexusError::Internal(_))
-        ));
-        assert!(!push_stream_chunk(
-            id as f64,
-            serde_json::json!({"ok": false})
-        ));
-    }
-}
+#[path = "api_coverage_tests.rs"]
+mod coverage_tests;
 
 // ---------------------------------------------------------------------------
 // Tool guardrail registrations
@@ -1661,38 +1698,78 @@ pub fn scope_deregister_subscriber(scope_uuid: String, name: String) -> Result<b
 
 /// Run the registered tool request intercept chain on the given arguments.
 /// Returns the transformed arguments.
-#[napi]
-pub fn tool_request_intercepts(name: String, args: Json) -> Result<Json> {
-    core::nat_nexus_tool_request_intercepts(&name, args).map_err(to_napi_err)
+#[napi(ts_return_type = "Promise<unknown>")]
+pub fn tool_request_intercepts(env: Env, name: String, args: Json) -> Result<JsObject> {
+    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    env.execute_tokio_future(
+        async move {
+            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+                .scope(scope_stack, async move {
+                    core::nat_nexus_tool_request_intercepts(&name, args).map_err(to_napi_err)
+                })
+                .await
+        },
+        |_env, result| Ok(result),
+    )
 }
 
 /// Run the registered tool conditional execution guardrail chain.
 /// Throws if any guardrail rejects.
-#[napi]
-pub fn tool_conditional_execution(name: String, args: Json) -> Result<()> {
-    core::nat_nexus_tool_conditional_execution(&name, &args).map_err(to_napi_err)
+#[napi(ts_return_type = "Promise<void>")]
+pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<JsObject> {
+    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    env.execute_tokio_future(
+        async move {
+            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+                .scope(scope_stack, async move {
+                    core::nat_nexus_tool_conditional_execution(&name, &args).map_err(to_napi_err)
+                })
+                .await
+        },
+        |env, _| env.get_undefined(),
+    )
 }
 
 /// Run the registered LLM request intercept chain on the given request.
 /// The `request` should be a JSON object with `headers` and `content` fields matching
 /// the `LLMRequest` schema. Returns the transformed request as JSON.
-#[napi]
-pub fn llm_request_intercepts(name: String, request: Json) -> Result<Json> {
+#[napi(ts_return_type = "Promise<unknown>")]
+pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<JsObject> {
     let llm_request: core_types::LLMRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
-    core::nat_nexus_llm_request_intercepts(&name, llm_request)
-        .map(|r| serde_json::to_value(&r).unwrap_or(Json::Null))
-        .map_err(to_napi_err)
+    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    env.execute_tokio_future(
+        async move {
+            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+                .scope(scope_stack, async move {
+                    core::nat_nexus_llm_request_intercepts(&name, llm_request)
+                        .map(|r| serde_json::to_value(&r).unwrap_or(Json::Null))
+                        .map_err(to_napi_err)
+                })
+                .await
+        },
+        |_env, result| Ok(result),
+    )
 }
 
 /// Run the registered LLM conditional execution guardrail chain.
 /// Throws if any guardrail rejects. The `request` should be a JSON object with `headers`
 /// and `content` fields matching the `LLMRequest` schema.
-#[napi]
-pub fn llm_conditional_execution(request: Json) -> Result<()> {
+#[napi(ts_return_type = "Promise<void>")]
+pub fn llm_conditional_execution(env: Env, request: Json) -> Result<JsObject> {
     let llm_request: core_types::LLMRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
-    core::nat_nexus_llm_conditional_execution(&llm_request).map_err(to_napi_err)
+    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    env.execute_tokio_future(
+        async move {
+            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+                .scope(scope_stack, async move {
+                    core::nat_nexus_llm_conditional_execution(&llm_request).map_err(to_napi_err)
+                })
+                .await
+        },
+        |env, _| env.get_undefined(),
+    )
 }
 
 // ---------------------------------------------------------------------------

@@ -217,19 +217,20 @@ def stream_execute(
     )
 
 
-def request_intercepts(request):
+def request_intercepts(name, request):
     """Run the registered LLM request intercept chain.
 
     Applies all registered LLM request intercepts in priority order to
     the given request.
 
     Args:
+        name: LLM name identifier.
         request: An ``LLMRequest`` object to transform.
 
     Returns:
         The transformed ``LLMRequest`` after all intercepts have been applied.
     """
-    return _native_llm_request_intercepts(request)
+    return _native_llm_request_intercepts(name, request)
 
 
 def conditional_execution(request):

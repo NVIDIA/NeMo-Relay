@@ -22,3 +22,7 @@ pub fn to_napi_err(e: NexusError) -> napi::Error {
 pub fn opt_json(val: Option<Json>) -> Option<Json> {
     val.filter(|v| !v.is_null())
 }
+
+#[cfg(test)]
+#[path = "convert_coverage_tests.rs"]
+mod coverage_tests;

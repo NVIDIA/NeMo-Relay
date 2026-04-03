@@ -12,6 +12,7 @@ stages:
   - check
   - build
   - test
+  - report
   - package
   - publish
 
@@ -56,6 +57,33 @@ default:
     - UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${NEXUS_CI_DEFAULT_PYTHON_VER}
     - export PYO3_PYTHON=$(uv python find --managed-python ${NEXUS_CI_DEFAULT_PYTHON_VER})
 
+.export_managed_python_runtime: &export_managed_python_runtime
+    - |
+      export PYO3_PYTHON="$(uv python find --managed-python ${NEXUS_CI_DEFAULT_PYTHON_VER})"
+      eval "$("$PYO3_PYTHON" - <<'PY'
+      import shlex
+      import sys
+      import sysconfig
+
+      def emit(name, value):
+          print(f"export {name}={shlex.quote(value or '')}")
+
+      emit("PYTHONHOME", sys.base_prefix)
+      emit("PYTHON_STDLIB", sysconfig.get_path("stdlib"))
+      emit("PYTHON_PLATSTDLIB", sysconfig.get_path("platstdlib"))
+      emit("PYTHON_LIBDIR", sysconfig.get_config_var("LIBDIR"))
+      PY
+      )"
+      export PYTHONPATH="${PYTHON_STDLIB}:${PYTHON_PLATSTDLIB}"
+      if [ -n "${PYTHON_LIBDIR}" ]; then
+        export LD_LIBRARY_PATH="${PYTHON_LIBDIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+      fi
+
+.install_go: &install_go
+    - echo "Installing Go"
+    - curl -LsSf https://go.dev/dl/go${NEXUS_CI_GO_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+    - export PATH=$PATH:/usr/local/go/bin
+
 .setup_venv: &setup_venv
     - uv venv --python=${NEXUS_CI_DEFAULT_PYTHON_VER} --seed ${NEXUS_CI_WORKSPACE_TMP}/.venv
     - source ${NEXUS_CI_WORKSPACE_TMP}/.venv/bin/activate
@@ -81,9 +109,7 @@ check:precommit:
     - rustup component add rustfmt clippy
     - cargo fetch --locked
     - cargo install cargo-deny --locked
-    - echo "Installing Go"
-    - curl -LsSf https://go.dev/dl/go${NEXUS_CI_GO_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xzf -
-    - export PATH=$PATH:/usr/local/go/bin
+    - *install_go
     - *install_uv_and_python
     - *setup_venv
     - echo "Running pre-commit"
@@ -130,8 +156,8 @@ build:
   after_script:
     - uv cache prune --ci
 
-# Test stages are listed  in alphabetical order
-test:go_tests:
+# Test stages are listed in alphabetical order
+test:go:
   stage: test
   timeout: 30 minutes
   image:
@@ -145,7 +171,9 @@ test:go_tests:
       junit: go_junit_report.xml
       coverage_report:
         coverage_format: cobertura
-        path: go_coverage_report.xml
+        path: target/coverage/go_coverage_report.xml
+    paths:
+      - target/coverage/go_coverage_report.xml
   variables:
     CGO_LDFLAGS: "-L${CI_PROJECT_DIR}/target/release"
     LD_LIBRARY_PATH: "${CI_PROJECT_DIR}/target/release"
@@ -157,12 +185,13 @@ test:go_tests:
       - go install github.com/jstemmer/go-junit-report/v2@latest
       - go install github.com/boumenot/gocover-cobertura@latest
       - echo "Running Go tests:"
+      - mkdir -p ${CI_PROJECT_DIR}/target/coverage
       - go test -v -coverprofile=coverage.out ./... 2>&1
           | tee /dev/stderr
           | go-junit-report -set-exit-code > ${CI_PROJECT_DIR}/go_junit_report.xml
-      - gocover-cobertura < coverage.out > ${CI_PROJECT_DIR}/go_coverage_report.xml
+      - gocover-cobertura < coverage.out > ${CI_PROJECT_DIR}/target/coverage/go_coverage_report.xml
 
-test:nodejs_tests:
+test:node:
   stage: test
   timeout: 30 minutes
   image:
@@ -173,50 +202,79 @@ test:nodejs_tests:
   artifacts:
     when: always
     reports:
-      junit: nodejs_junit.xml
+      junit: target/coverage/nodejs_junit.xml
       coverage_report:
         coverage_format: cobertura
-        path: cobertura-coverage.xml
+        path: target/coverage/cobertura-coverage.xml
+    paths:
+      - target/coverage/cobertura-coverage.xml
+      - target/coverage/coverage-summary.json
+      - target/coverage/node-rust.xml
   script:
+    - *install_build_essential
     - *install_nodejs
-    - echo "Installing test dependencies"
-    - pushd crates/node && npm install && npm install -g c8 && popd
-    - echo "Running NodeJS tests"
-    - c8 --reporter=cobertura --reports-dir=${CI_PROJECT_DIR}
-        node --test
-        --test-force-exit
-        --test-reporter=spec --test-reporter-destination=stdout
-        --test-reporter=junit --test-reporter-destination=${CI_PROJECT_DIR}/nodejs_junit.xml
-        crates/node/tests/*.mjs
+    - cargo install cargo-llvm-cov --locked
+    - mkdir -p target/coverage
+    - eval "$(cargo llvm-cov show-env --sh)"
+    - cargo llvm-cov clean --workspace
+    - cargo test -p nvidia-nat-nexus-node --lib
+    - echo "Running NodeJS tests and coverage"
+    - |
+      pushd crates/node
+      npm install
+      npm install -g c8
+      npm run build-debug
+      c8 --reporter=cobertura --reporter=json-summary --reports-dir="${CI_PROJECT_DIR}/target/coverage" \
+        node --test \
+          --test-force-exit \
+          --test-reporter=spec --test-reporter-destination=stdout \
+          --test-reporter=junit --test-reporter-destination="${CI_PROJECT_DIR}/target/coverage/nodejs_junit.xml" \
+          tests/*.mjs
+      popd
+    - cargo llvm-cov report -p nvidia-nat-nexus-node --ignore-filename-regex '.*/src/.*_tests\.rs$' --cobertura --output-path target/coverage/node-rust.xml
 
-test:python_tests:
+test:python:
   stage: test
   timeout: 30 minutes
   image:
-    name: ghcr.io/astral-sh/uv:${NEXUS_CI_UV_VERSION}-python${NEXUS_CI_DEFAULT_PYTHON_VER}-${NEXUS_CI_DEBIAN_VERSION}
+    name: rust:${NEXUS_CI_RUST_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   needs:
     - job: build
-  coverage: /TOTAL.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/
   artifacts:
     when: always
     reports:
-      junit: pytest_junit_report*.xml
+      junit: target/coverage/pytest_junit_report.xml
       coverage_report:
-        coverage_format: cobertura  # or jacoco
-        path: pytest_coverage_report*.xml
+        coverage_format: cobertura
+        path: target/coverage/pytest_coverage_report.xml
+    paths:
+      - target/coverage/pytest_coverage_report.xml
+      - target/coverage/python-rust.xml
   after_script:
     - uv cache prune --ci
   script:
-    - echo "Creating UV environment"
-    - *setup_venv
-    - echo "Running Python tests"
-    - pytest
-        --cov=nat_nexus --cov-report term-missing
-        --junit-xml=${CI_PROJECT_DIR}/pytest_junit_report.xml
-        --cov-report xml:${CI_PROJECT_DIR}/pytest_coverage_report.xml
+    - *install_build_essential
+    - *install_uv_and_python
+    - *export_managed_python_runtime
+    - cargo install cargo-llvm-cov --locked
+    - mkdir -p target/coverage
+    - |
+      set -e
+      eval "$(cargo llvm-cov show-env --sh)"
+      cargo llvm-cov clean --workspace
+      cargo test -p nvidia-nat-nexus-python --lib
+      uv venv --python=${NEXUS_CI_DEFAULT_PYTHON_VER} --seed ${NEXUS_CI_WORKSPACE_TMP}/.venv
+      source ${NEXUS_CI_WORKSPACE_TMP}/.venv/bin/activate
+      uv sync --active --reinstall-package nvidia-nat-nexus
+      uv run maturin develop
+      uv run pytest python/tests \
+        --cov=nat_nexus --cov-report term-missing \
+        --junit-xml=${CI_PROJECT_DIR}/target/coverage/pytest_junit_report.xml \
+        --cov-report xml:${CI_PROJECT_DIR}/target/coverage/pytest_coverage_report.xml
+      cargo llvm-cov report -p nvidia-nat-nexus-python --ignore-filename-regex '.*/src/.*_tests\.rs$' --cobertura --output-path target/coverage/python-rust.xml
 
-test:rust_tests:
+test:rust:
   stage: test
   timeout: 30 minutes
   image:
@@ -228,15 +286,23 @@ test:rust_tests:
     when: always
     reports:
       junit: target/nextest/ci/rust_junit_report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: target/coverage/rust-workspace.xml
+    paths:
+      - target/coverage/rust-workspace.xml
   script:
     - *install_build_essential
-    - *install_uv_and_python
     - echo "Installing cargo-nextest"
     - cargo install cargo-nextest --locked
-    - echo "Running Rust tests"
-    - cargo nextest run --workspace --release --profile ci
+    - cargo install cargo-llvm-cov --locked
+    - mkdir -p target/coverage
+    - eval "$(cargo llvm-cov show-env --sh)"
+    - cargo llvm-cov clean --workspace
+    - cargo nextest run --workspace --exclude nvidia-nat-nexus-node --exclude nvidia-nat-nexus-python --exclude nat-nexus-wasm --release --profile ci
+    - cargo llvm-cov report --release --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/src/(coverage_tests|.*_tests)\.rs$)' --cobertura --output-path target/coverage/rust-workspace.xml
 
-test:wasm_tests:
+test:wasm:
   stage: test
   timeout: 30 minutes
   image:
@@ -244,12 +310,75 @@ test:wasm_tests:
     pull_policy: if-not-present
   needs:
     - job: build
+  artifacts:
+    when: always
+    reports:
+      junit: target/coverage/wasm_junit.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: target/coverage/wasm-js.xml
+    paths:
+      - target/coverage/wasm-rust.xml
+      - target/coverage/wasm-js.xml
   script:
     - *install_nodejs
     - echo "Installing wasm-pack"
     - cargo install wasm-pack
-    - echo "Running WASM tests"
+    - echo "Installing cargo-llvm-cov"
+    - cargo install cargo-llvm-cov --locked
+    - mkdir -p target/coverage
+    - echo "Running native WASM crate unit tests with Rust coverage"
+    - |
+      (
+        eval "$(cargo llvm-cov show-env --sh)"
+        cargo llvm-cov clean --workspace
+        cargo test -p nat-nexus-wasm --lib --release
+        cargo llvm-cov report -p nat-nexus-wasm --release \
+          --ignore-filename-regex '.*/src/.*_tests\.rs$' \
+          --cobertura --output-path target/coverage/wasm-rust.xml
+      )
+    - echo "Running WASM behavior tests"
     - wasm-pack test --release --node crates/wasm
+    - echo "Building WASM Node package for coverage"
+    - wasm-pack build --release crates/wasm --target nodejs --out-dir pkg-test
+    - echo "Running WASM Node coverage harness"
+    - |
+      npx --yes c8 \
+        --include="crates/wasm/pkg-test/**/*.js" \
+        --exclude="crates/wasm/tests-js/**" \
+        --reporter=cobertura \
+        --reports-dir="${CI_PROJECT_DIR}/target/coverage/wasm-c8" \
+        node --test \
+          --test-force-exit \
+          --test-reporter=spec --test-reporter-destination=stdout \
+          --test-reporter=junit --test-reporter-destination="${CI_PROJECT_DIR}/target/coverage/wasm_junit.xml" \
+          crates/wasm/tests-js/*.mjs
+      mv "${CI_PROJECT_DIR}/target/coverage/wasm-c8/cobertura-coverage.xml" \
+        "${CI_PROJECT_DIR}/target/coverage/wasm-js.xml"
+
+coverage:aggregate:
+  stage: report
+  image:
+    name: python:${NEXUS_CI_DEFAULT_PYTHON_VER}-slim
+    pull_policy: if-not-present
+  needs:
+    - job: test:go
+      artifacts: true
+    - job: test:node
+      artifacts: true
+    - job: test:python
+      artifacts: true
+    - job: test:rust
+      artifacts: true
+    - job: test:wasm
+      artifacts: true
+  coverage: /TOTAL (\d+(?:\.\d+)?)%/
+  artifacts:
+    when: always
+    paths:
+      - target/coverage/project-coverage-summary.md
+  script:
+    - python3 scripts/aggregate_coverage.py target/coverage
 
 package:nodejs:x86_64:
   stage: package
@@ -318,7 +447,7 @@ package:nodejs:x86_64:
       npm config set "${REGISTRY_KEY}:_authToken" "${CI_JOB_TOKEN}"
       npm publish ${NPM_PUBLISH_ARGS} ${NEXUS_CI_WORKSPACE_TMP}/npm/*.tgz
 
-package:wasm:x86_64:
+package:wasm:bundler:
   stage: package
   image:
     name: node:${NEXUS_CI_NODE_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
@@ -327,7 +456,7 @@ package:wasm:x86_64:
     - job: build
       artifacts: true
   artifacts:
-    name: "wasm-x86_64"
+    name: "wasm-bundler"
     when: on_success
     paths:
       - ${NEXUS_CI_WORKSPACE_TMP}/wasm/*.tgz
@@ -458,7 +587,7 @@ publish:artifactory:npm:
   needs:
     - job: package:nodejs:x86_64
       artifacts: true
-    - job: package:wasm:x86_64
+    - job: package:wasm:bundler
       artifacts: true
   script:
     - |

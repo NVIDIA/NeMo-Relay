@@ -7,6 +7,10 @@ SPDX-License-Identifier: Apache-2.0
 
 wasm-bindgen WebAssembly bindings for the Nexus core runtime.
 
+The Cargo package name is `nat-nexus-wasm`. The compiled WASM library target
+and npm package are NVIDIA-branded (`nvidia_nat_nexus_wasm` and
+`@nvidia/nat-nexus-wasm`).
+
 ## Overview
 
 This crate compiles the Nexus core API to WebAssembly via `wasm-bindgen`, making it usable in both browser and Node.js environments. It provides the same API surface as other language bindings, adapted for the single-threaded WASM execution model using `send_wrapper` for thread-safety bridging.
@@ -42,7 +46,7 @@ This produces a `pkg/` directory containing `.wasm`, `.js`, and `.d.ts` files re
 To run unit tests:
 
 ```bash
-cargo test -p nvidia-nat-nexus-wasm
+cargo test -p nat-nexus-wasm
 wasm-pack test --node crates/wasm
 ```
 

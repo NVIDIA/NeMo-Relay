@@ -133,6 +133,19 @@ describe('typedToolExecute', () => {
     );
     assert.deepEqual(result, { v: 1 });
   });
+
+  it('awaits async tool functions before re-encoding results', async () => {
+    const result = await typedToolExecute(
+      'async_codec_tool',
+      new Point(2, 5),
+      async (p) => new Point(p.x + 1, p.y + 1),
+      pointCodec,
+      pointCodec,
+    );
+    assert.ok(result instanceof Point);
+    assert.equal(result.x, 3);
+    assert.equal(result.y, 6);
+  });
 });
 
 // ===========================================================================
@@ -179,6 +192,19 @@ describe('typedLlmExecute', () => {
       { modelName: 'gpt-4-turbo' },
     );
     assert.deepEqual(result, { ok: true });
+  });
+
+  it('awaits async llm functions before re-encoding responses', async () => {
+    const native = makeNative();
+    const result = await typedLlmExecute(
+      'async_codec_llm',
+      native,
+      async () => new Point(8, 13),
+      pointCodec,
+    );
+    assert.ok(result instanceof Point);
+    assert.equal(result.x, 8);
+    assert.equal(result.y, 13);
   });
 });
 

@@ -130,3 +130,83 @@ pub fn status_from_error(e: &NexusError) -> NatNexusStatus {
     set_last_error(&e.to_string());
     NatNexusStatus::from(e)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::{CStr, CString};
+
+    #[test]
+    fn test_last_error_round_trip_and_clear() {
+        clear_last_error();
+        assert_eq!(last_error_message(), None);
+        assert!(nat_nexus_last_error().is_null());
+
+        set_last_error("ffi failure");
+        assert_eq!(last_error_message(), Some("ffi failure".into()));
+
+        let raw = nat_nexus_last_error();
+        assert_eq!(
+            unsafe { CStr::from_ptr(raw) }.to_str().unwrap(),
+            "ffi failure"
+        );
+
+        clear_last_error();
+        assert_eq!(last_error_message(), None);
+        assert!(nat_nexus_last_error().is_null());
+    }
+
+    #[test]
+    fn test_set_last_error_message_handles_null_and_invalid_utf8() {
+        unsafe { nat_nexus_set_last_error_message(std::ptr::null()) };
+        assert_eq!(last_error_message(), Some("unknown callback error".into()));
+
+        let invalid_utf8 = [0xffu8, 0];
+        unsafe {
+            nat_nexus_set_last_error_message(invalid_utf8.as_ptr() as *const c_char);
+        }
+        assert_eq!(
+            last_error_message(),
+            Some("callback error was not valid UTF-8".into())
+        );
+
+        let valid = CString::new("callback failed").unwrap();
+        unsafe { nat_nexus_set_last_error_message(valid.as_ptr()) };
+        assert_eq!(last_error_message(), Some("callback failed".into()));
+    }
+
+    #[test]
+    fn test_status_from_error_maps_variants_and_sets_message() {
+        let cases = [
+            (
+                NexusError::AlreadyExists("dup".into()),
+                NatNexusStatus::AlreadyExists,
+            ),
+            (
+                NexusError::NotFound("missing".into()),
+                NatNexusStatus::NotFound,
+            ),
+            (
+                NexusError::InvalidArgument("bad arg".into()),
+                NatNexusStatus::InvalidArg,
+            ),
+            (
+                NexusError::GuardrailRejected("blocked".into()),
+                NatNexusStatus::GuardrailRejected,
+            ),
+            (
+                NexusError::Internal("boom".into()),
+                NatNexusStatus::Internal,
+            ),
+            (NexusError::ScopeStackEmpty, NatNexusStatus::ScopeStackEmpty),
+        ];
+
+        for (error, expected_status) in cases {
+            clear_last_error();
+            let status = status_from_error(&error);
+            assert_eq!(status, expected_status);
+            assert_eq!(NatNexusStatus::from(&error), expected_status);
+            assert!(last_error_message().unwrap().contains(&error.to_string()));
+        }
+    }
+}

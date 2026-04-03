@@ -423,3 +423,7 @@ pub const LLM_ATTR_STATELESS: u32 = core_types::LLMAttributes::STATELESS.bits();
 /// LLM attribute flag: the LLM call uses streaming responses.
 #[napi]
 pub const LLM_ATTR_STREAMING: u32 = core_types::LLMAttributes::STREAMING.bits();
+
+#[cfg(test)]
+#[path = "types_coverage_tests.rs"]
+mod coverage_tests;

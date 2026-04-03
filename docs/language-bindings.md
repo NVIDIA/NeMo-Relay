@@ -396,11 +396,15 @@ go func() {
 wasm-pack build crates/wasm --scope nvidia # Produces pkg/ with .wasm, .js, .d.ts
 
 # Unit tests
-cargo test -p nvidia-nat-nexus-wasm
+cargo test -p nat-nexus-wasm
 
 # Integration tests
 wasm-pack test --node crates/wasm
 ```
+
+The Cargo package remains `nat-nexus-wasm`, while the compiled WASM library
+target and generated npm package are NVIDIA-branded (`nvidia_nat_nexus_wasm`
+and `@nvidia/nat-nexus-wasm`).
 
 ### Build Targets
 

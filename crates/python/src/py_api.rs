@@ -20,9 +20,24 @@ use crate::convert::{json_to_py, opt_py_to_json, py_to_json};
 use crate::py_callable;
 use crate::py_types::*;
 
+pub(crate) type RustJsonStream = std::pin::Pin<
+    Box<dyn tokio_stream::Stream<Item = nvidia_nat_nexus_core::Result<serde_json::Value>> + Send>,
+>;
+
 /// Convert an [`NexusError`] into a Python `RuntimeError`.
 fn to_py_err(e: core::NexusError) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+}
+
+pub(crate) async fn forward_stream_to_channel(
+    mut stream: RustJsonStream,
+    tx: tokio::sync::mpsc::Sender<nvidia_nat_nexus_core::Result<serde_json::Value>>,
+) {
+    while let Some(item) = stream.next().await {
+        if tx.send(item).await.is_err() {
+            break;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -520,14 +535,7 @@ fn nat_nexus_llm_stream_call_execute<'py>(
                 let (tx, rx) = tokio::sync::mpsc::channel::<
                     nvidia_nat_nexus_core::Result<serde_json::Value>,
                 >(32);
-                tokio::spawn(async move {
-                    let mut stream = rust_stream;
-                    while let Some(item) = stream.next().await {
-                        if tx.send(item).await.is_err() {
-                            break; // receiver dropped
-                        }
-                    }
-                });
+                tokio::spawn(forward_stream_to_channel(rust_stream, tx));
 
                 Ok(PyLlmStream {
                     receiver: tokio::sync::Mutex::new(rx),

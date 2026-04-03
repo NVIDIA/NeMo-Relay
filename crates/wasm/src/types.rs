@@ -450,3 +450,119 @@ impl From<&core_types::Event> for WasmEvent {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    #[test]
+    fn test_scope_type_conversion_round_trip() {
+        let pairs = [
+            (SCOPE_TYPE_AGENT, core_types::ScopeType::Agent),
+            (SCOPE_TYPE_FUNCTION, core_types::ScopeType::Function),
+            (SCOPE_TYPE_TOOL, core_types::ScopeType::Tool),
+            (SCOPE_TYPE_LLM, core_types::ScopeType::Llm),
+            (SCOPE_TYPE_RETRIEVER, core_types::ScopeType::Retriever),
+            (SCOPE_TYPE_EMBEDDER, core_types::ScopeType::Embedder),
+            (SCOPE_TYPE_RERANKER, core_types::ScopeType::Reranker),
+            (SCOPE_TYPE_GUARDRAIL, core_types::ScopeType::Guardrail),
+            (SCOPE_TYPE_EVALUATOR, core_types::ScopeType::Evaluator),
+            (SCOPE_TYPE_CUSTOM, core_types::ScopeType::Custom),
+            (SCOPE_TYPE_UNKNOWN, core_types::ScopeType::Unknown),
+        ];
+
+        for (raw, scope_type) in pairs {
+            assert_eq!(i32_to_scope_type(raw), scope_type);
+            assert_eq!(scope_type_to_i32(scope_type), raw);
+        }
+        assert_eq!(i32_to_scope_type(999), core_types::ScopeType::Unknown);
+    }
+
+    #[test]
+    fn test_handle_wrappers_and_scope_stack_default() {
+        let parent_uuid = Uuid::new_v4();
+
+        let scope = WasmScopeHandle::from(core_types::ScopeHandle::new(
+            "scope".into(),
+            core_types::ScopeType::Guardrail,
+            core_types::ScopeAttributes::PARALLEL,
+            Some(parent_uuid),
+            Some(json!({"data": true})),
+            Some(json!({"meta": true})),
+        ));
+        assert_eq!(scope.name(), "scope");
+        assert_eq!(scope.scope_type(), SCOPE_TYPE_GUARDRAIL);
+        assert_eq!(scope.attributes(), SCOPE_PARALLEL);
+        assert_eq!(scope.parent_uuid(), Some(parent_uuid.to_string()));
+        assert!(!scope.uuid().is_empty());
+
+        let tool = WasmToolHandle::from(core_types::ToolHandle::new(
+            "tool".into(),
+            core_types::ToolAttributes::LOCAL,
+            Some(parent_uuid),
+            None,
+            None,
+        ));
+        assert_eq!(tool.name(), "tool");
+        assert_eq!(tool.attributes(), TOOL_LOCAL);
+        assert_eq!(tool.parent_uuid(), Some(parent_uuid.to_string()));
+        assert!(!tool.uuid().is_empty());
+
+        let llm = WasmLLMHandle::from(core_types::LLMHandle::new(
+            "llm".into(),
+            core_types::LLMAttributes::STATELESS | core_types::LLMAttributes::STREAMING,
+            Some(parent_uuid),
+            None,
+            None,
+        ));
+        assert_eq!(llm.name(), "llm");
+        assert_eq!(llm.attributes(), LLM_STATELESS | LLM_STREAMING);
+        assert_eq!(llm.parent_uuid(), Some(parent_uuid.to_string()));
+        assert!(!llm.uuid().is_empty());
+
+        let scope_stack = WasmScopeStack::default();
+        assert!(std::sync::Arc::strong_count(&scope_stack.inner) >= 1);
+    }
+
+    #[test]
+    fn test_wasm_event_conversion_maps_fields() {
+        let mut event = core_types::Event::new(
+            Some(Uuid::new_v4()),
+            Uuid::new_v4(),
+            Some("wasm-event".into()),
+            Some(json!({"data": 1})),
+            Some(json!({"meta": 2})),
+            None,
+            core_types::EventType::Mark,
+            Some(core_types::ScopeType::Custom),
+        );
+        event.input = Some(json!({"input": true}));
+        event.output = Some(json!({"output": true}));
+        event.model_name = Some("model".into());
+        event.tool_call_id = Some("tool-call-id".into());
+        event.root_uuid = Some(Uuid::new_v4());
+
+        let wasm_event = WasmEvent::from(&event);
+        assert_eq!(
+            wasm_event.parent_uuid,
+            event.parent_uuid.map(|uuid| uuid.to_string())
+        );
+        assert_eq!(wasm_event.uuid, event.uuid.to_string());
+        assert_eq!(wasm_event.name, Some("wasm-event".into()));
+        assert_eq!(wasm_event.data, Some(json!({"data": 1})));
+        assert_eq!(wasm_event.metadata, Some(json!({"meta": 2})));
+        assert_eq!(wasm_event.event_type, 2);
+        assert_eq!(wasm_event.scope_type, Some(SCOPE_TYPE_CUSTOM));
+        assert_eq!(wasm_event.input, Some(r#"{"input":true}"#.into()));
+        assert_eq!(wasm_event.output, Some(r#"{"output":true}"#.into()));
+        assert_eq!(wasm_event.model_name, Some("model".into()));
+        assert_eq!(wasm_event.tool_call_id, Some("tool-call-id".into()));
+        assert_eq!(
+            wasm_event.root_uuid,
+            event.root_uuid.map(|uuid| uuid.to_string())
+        );
+        assert!(!wasm_event.timestamp.is_empty());
+    }
+}

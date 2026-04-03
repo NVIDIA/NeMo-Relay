@@ -58,6 +58,33 @@ impl CallCompletion {
     }
 }
 
+fn rejection_message(
+    string_result: napi::Result<String>,
+    object_message_result: Option<napi::Result<String>>,
+) -> String {
+    if let Ok(value) = string_result {
+        value
+    } else if let Some(message_result) = object_message_result {
+        message_result.unwrap_or_else(|_| "unknown error".to_string())
+    } else {
+        "unknown error".to_string()
+    }
+}
+
+fn closed_tsfn_error() -> NexusError {
+    NexusError::Internal("PromiseAwareFn threadsafe function closed".into())
+}
+
+fn queue_status_result(status: napi::Status) -> NexusResult<()> {
+    if status == napi::Status::Ok {
+        Ok(())
+    } else {
+        Err(NexusError::Internal(format!(
+            "failed to queue threadsafe function call: {status:?}",
+        )))
+    }
+}
+
 fn json_to_unknown(env: &Env, value: Json) -> napi::Result<JsUnknown> {
     let raw = unsafe { <Json as ToNapiValue>::to_napi_value(env.raw(), value) }?;
     Ok(unsafe { JsUnknown::from_raw_unchecked(env.raw(), raw) })
@@ -117,15 +144,12 @@ fn build_completion_unknowns(
     })?;
 
     let reject = env.create_function_from_closure("__nat_nexus_reject", move |ctx| {
-        let message = if let Ok(value) = ctx.get::<String>(0) {
-            value
-        } else if let Ok(value) = ctx.get::<napi::JsObject>(0) {
-            value
-                .get_named_property::<String>("message")
-                .unwrap_or_else(|_| "unknown error".to_string())
-        } else {
-            "unknown error".to_string()
-        };
+        let message = rejection_message(
+            ctx.get::<String>(0),
+            ctx.get::<napi::JsObject>(0)
+                .ok()
+                .map(|value| value.get_named_property::<String>("message")),
+        );
         completion.send(Err(NexusError::Internal(message)));
         ctx.env.get_undefined()
     })?;
@@ -219,9 +243,13 @@ impl PromiseAwareFn {
 
     async fn call_inner(&self, args: Json, next: Option<NextFn>) -> NexusResult<Json> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        let tsfn = self.tsfn.lock().unwrap().as_ref().cloned().ok_or_else(|| {
-            NexusError::Internal("PromiseAwareFn threadsafe function closed".into())
-        })?;
+        let tsfn = self
+            .tsfn
+            .lock()
+            .unwrap()
+            .as_ref()
+            .cloned()
+            .ok_or_else(closed_tsfn_error)?;
         let status = tsfn.call(
             Ok(CallArgs {
                 args,
@@ -230,12 +258,7 @@ impl PromiseAwareFn {
             }),
             napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
         );
-
-        if status != napi::Status::Ok {
-            return Err(NexusError::Internal(format!(
-                "failed to queue threadsafe function call: {status:?}",
-            )));
-        }
+        queue_status_result(status)?;
 
         receiver
             .await
@@ -250,3 +273,7 @@ impl Drop for PromiseAwareFn {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "promise_call_coverage_tests.rs"]
+mod coverage_tests;
