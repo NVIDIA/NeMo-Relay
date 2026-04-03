@@ -110,7 +110,7 @@ cd crates/node && npm install && npm test
 ### WASM
 
 ```bash
-wasm-pack build crates/wasm
+wasm-pack build crates/wasm --scope nvidia
 ```
 
 ## Testing

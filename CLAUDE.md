@@ -65,7 +65,7 @@ cd go/nat_nexus && CGO_LDFLAGS="-L../../target/release" go test -race -v ./...
 cd crates/node && npm install && npm test        # Build debug addon and run all Node.js tests
 
 # Build — WASM
-wasm-pack build crates/wasm              # Produces pkg/ with .wasm, .js, .d.ts
+wasm-pack build crates/wasm  --scope nvidia      # Produces pkg/ with .wasm, .js, .d.ts
 ```
 
 ## Key Conventions

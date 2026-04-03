@@ -393,7 +393,7 @@ go func() {
 ### Setup
 
 ```bash
-wasm-pack build crates/wasm    # Produces pkg/ with .wasm, .js, .d.ts
+wasm-pack build crates/wasm --scope nvidia # Produces pkg/ with .wasm, .js, .d.ts
 
 # Unit tests
 cargo test -p nvidia-nat-nexus-wasm
@@ -409,13 +409,13 @@ environment:
 
 ```bash
 # Bundler (webpack, Vite, Rollup, etc.) — default
-wasm-pack build crates/wasm --target bundler
+wasm-pack build crates/wasm --scope nvidia --target bundler
 
 # Standalone web (loads via <script type="module">, no bundler needed)
-wasm-pack build crates/wasm --target web
+wasm-pack build crates/wasm --scope nvidia --target web
 
 # Node.js (CommonJS, for server-side or CLI usage)
-wasm-pack build crates/wasm --target nodejs
+wasm-pack build crates/wasm --scope nvidia --target nodejs
 ```
 
 | Target | Output | Use Case |

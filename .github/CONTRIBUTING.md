@@ -42,7 +42,7 @@ cargo build --release -p nvidia-nat-nexus-ffi
 cd crates/node && npm install && npm run build && cd ../..
 
 # Build WASM package
-wasm-pack build crates/wasm
+wasm-pack build crates/wasm --scope nvidia
 ```
 
 Verify everything works by running the test suites (see [Testing Requirements](#testing-requirements) below).
