@@ -7,6 +7,9 @@ SPDX-License-Identifier: Apache-2.0
 
 NexusProxy is a stateful telemetry tap that sits between your agent application and the Nexus runtime. It observes agent executions via event subscriptions, builds a prediction trie via online learning, and optionally injects scheduling hints into LLM requests for downstream inference engines like NVIDIA Dynamo.
 
+For public type signatures and the Python declarative proxy API, see
+[Proxy API Reference](proxy-api-reference.md).
+
 ## Overview
 
 NexusProxy does three things:
@@ -14,6 +17,26 @@ NexusProxy does three things:
 1. **Captures run telemetry** -- An event subscriber forwards Nexus lifecycle events (LLM start/end, tool start/end, agent scope boundaries) through an async channel to a background drain task.
 2. **Builds a prediction trie** -- The drain task accumulates run records and feeds them through a learner pipeline that computes latency sensitivity scores and streaming percentile statistics.
 3. **Injects AgentHints** -- When enabled, a DynamoIntercept reads the prediction trie from a hot cache and injects scheduling hints into LLM request bodies at `nvext.agent_hints`.
+
+## Build and Feature Requirements
+
+The Rust proxy crate lives at `crates/proxy` and is named
+`nvidia-nat-nexus-proxy`.
+
+```bash
+# Build with the default in-memory backend
+cargo build -p nvidia-nat-nexus-proxy
+
+# Build with Redis backend support enabled
+cargo build -p nvidia-nat-nexus-proxy --features redis-backend
+```
+
+Redis persistence is optional and requires the `redis-backend` feature in the
+Rust crate. If your packaging or binding build does not enable that feature,
+`RedisBackend` cannot be provided by the resulting build.
+
+For crate-level build and test commands, see
+[crates/proxy/README.md](../crates/proxy/README.md).
 
 ### Architecture
 
@@ -262,6 +285,9 @@ The decorator pushes a Nexus scope with metadata at JSON pointer `/nexus_proxy/l
 ```python
 backend = await nat_nexus.RedisBackend.connect("redis://127.0.0.1:6379", "nexus:")
 ```
+
+Redis support depends on building the Rust proxy crate with the
+`redis-backend` feature enabled.
 
 **`SensitivityConfig`** -- Controls the 4-signal sensitivity scoring model:
 

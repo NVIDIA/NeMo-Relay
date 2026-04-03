@@ -9,6 +9,9 @@ Typed wrappers provide a generic serialization layer that converts typed domain 
 
 Available in **Python** (`nat_nexus.typed`) and **Node.js** (`typed.js` / `typed.d.ts`).
 
+For function signatures and the Python public API surface, see
+[Typed API Reference](typed-api-reference.md).
+
 ## The Codec Pattern
 
 All typed wrappers use an explicit `Codec[T]` that defines bidirectional conversion:

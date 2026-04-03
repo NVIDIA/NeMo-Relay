@@ -7,6 +7,10 @@ SPDX-License-Identifier: Apache-2.0
 
 The online learning engine observes agent executions in real-time, builds statistical models of each node's behavior, and produces predictions for future calls. It operates entirely within the NexusProxy drain task -- no separate service or batch job is required.
 
+The implementation lives in the `nvidia-nat-nexus-proxy` crate. Redis-backed
+persistence is optional and depends on enabling the proxy crate's
+`redis-backend` feature.
+
 ## Overview
 
 ### Why It Matters
