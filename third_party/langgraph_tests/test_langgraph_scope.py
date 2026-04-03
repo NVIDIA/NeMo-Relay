@@ -61,16 +61,20 @@ class TestLangGraphScope:
 
         Validates SCOPE-01 (graph-level scope) and SCOPE-02 (node-level scope
         with parent-child relationship).
+
+        After Plan 15-02, push_node_scope pushes directly on the current stack
+        (no isolated branch scope stacks), so the node is a direct child of
+        the graph scope.
         """
         graph_handle = push_graph_scope("my_graph")
-        node_handle, branch_graph_handle = push_node_scope("my_node", "task-1")
+        node_handle, _, _ = push_node_scope("my_node", "task-1")
 
         node_events = [e for e in events if e.name == "my_node" and e.event_type == EventType.Start]
         assert len(node_events) == 1, f"Expected 1 node start event, got {len(node_events)}"
         node_start = node_events[0]
 
-        assert branch_graph_handle is not None, "Branch graph handle should exist"
-        assert node_start.parent_uuid == branch_graph_handle.uuid
+        # Node is now a direct child of the graph scope (no intermediate branch graph)
+        assert node_start.parent_uuid == graph_handle.uuid
 
         assert node_start.metadata.get("langgraph.node") is True
         assert node_start.metadata.get("langgraph.task_id") == "task-1"
@@ -83,8 +87,7 @@ class TestLangGraphScope:
         assert len(graph_starts) >= 1, "Expected at least 1 graph start event"
         assert graph_starts[0].metadata.get("langgraph.graph") is True
 
-        pop_node_scope(node_handle, branch_graph_handle)
-        set_thread_scope_stack(scope_stack)
+        pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)
 
     # -------------------------------------------------------------------
@@ -94,19 +97,16 @@ class TestLangGraphScope:
     def test_multi_node_graph_scope(self, scope_stack: Any, events: list[Any]) -> None:
         """Multiple sequential nodes share the same graph parent scope.
 
-        Validates SCOPE-02: each node scope is child of the graph scope.
+        Validates SCOPE-02: each node scope is a direct child of the graph scope.
         """
         graph_handle = push_graph_scope("seq_graph")
 
-        node_a_handle, branch_a_graph = push_node_scope("node_a", "task-a")
-        pop_node_scope(node_a_handle, branch_a_graph)
+        node_a_handle, _, _ = push_node_scope("node_a", "task-a")
+        pop_node_scope(node_a_handle)
 
-        set_thread_scope_stack(scope_stack)
+        node_b_handle, _, _ = push_node_scope("node_b", "task-b")
+        pop_node_scope(node_b_handle)
 
-        node_b_handle, branch_b_graph = push_node_scope("node_b", "task-b")
-        pop_node_scope(node_b_handle, branch_b_graph)
-
-        set_thread_scope_stack(scope_stack)
         pop_graph_scope(graph_handle)
 
         node_a_starts = [e for e in events if e.name == "node_a" and e.event_type == EventType.Start]
@@ -114,8 +114,9 @@ class TestLangGraphScope:
         assert len(node_a_starts) == 1, "Expected 1 node_a start event"
         assert len(node_b_starts) == 1, "Expected 1 node_b start event"
 
-        assert node_a_starts[0].parent_uuid == branch_a_graph.uuid
-        assert node_b_starts[0].parent_uuid == branch_b_graph.uuid
+        # Both nodes are direct children of the graph scope
+        assert node_a_starts[0].parent_uuid == graph_handle.uuid
+        assert node_b_starts[0].parent_uuid == graph_handle.uuid
 
         graph_scope_events = [
             e
@@ -125,7 +126,8 @@ class TestLangGraphScope:
             and e.metadata
             and e.metadata.get("langgraph.graph") is True
         ]
-        assert len(graph_scope_events) == 3
+        # Only 1 graph start event (no per-branch reconstructions)
+        assert len(graph_scope_events) == 1
 
         all_starts = [e for e in events if e.event_type == EventType.Start]
         node_a_idx = next(i for i, e in enumerate(all_starts) if e.name == "node_a")
@@ -137,22 +139,27 @@ class TestLangGraphScope:
     # -------------------------------------------------------------------
 
     def test_parallel_fanout_scope_isolation(self, scope_stack: Any, events: list[Any]) -> None:
-        """Parallel branches get independent scope stacks.
+        """Parallel branches get distinct node scopes as children of the graph scope.
 
-        Validates SCOPE-03: fan-out creates per-branch child scopes with
-        distinct scope stacks that do not interleave.
+        Validates SCOPE-03: fan-out creates per-branch child scopes.
+        After Plan 15-02, node scopes push directly on the current stack
+        (no per-branch isolated scope stacks). For true thread parallelism,
+        each thread gets its own scope stack via create_scope_stack.
         """
         graph_handle = push_graph_scope("parallel_graph")
-
-        ctx = contextvars.copy_context()
 
         branch_results: dict[str, dict[str, Any]] = {}
 
         def run_branch(name: str, task_id: str) -> None:
-            node_handle, branch_graph = push_node_scope(name, task_id)
+            # Each thread creates its own scope stack for isolation
+            stack = create_scope_stack()
+            set_thread_scope_stack(stack)
+            # Push a graph scope on this thread's stack to mirror the parent
+            branch_graph = push_graph_scope("parallel_graph")
+            node_handle, _, _ = push_node_scope(name, task_id)
             branch_results[name] = {
                 "node_uuid": node_handle.uuid,
-                "graph_uuid": branch_graph.uuid if branch_graph else None,
+                "graph_uuid": branch_graph.uuid,
                 "node_parent": None,
             }
             node_starts = [
@@ -166,10 +173,12 @@ class TestLangGraphScope:
             if node_starts:
                 branch_results[name]["node_parent"] = node_starts[0].parent_uuid
 
-            pop_node_scope(node_handle, branch_graph)
+            pop_node_scope(node_handle)
+            pop_graph_scope(branch_graph)
 
+        ctx = contextvars.copy_context()
         t1 = threading.Thread(target=ctx.run, args=(run_branch, "branch_a", "task-a"))
-        t2 = threading.Thread(target=ctx.run, args=(run_branch, "branch_b", "task-b"))
+        t2 = threading.Thread(target=contextvars.copy_context().run, args=(run_branch, "branch_b", "task-b"))
         t1.start()
         t2.start()
         t1.join()
@@ -183,9 +192,9 @@ class TestLangGraphScope:
 
         graph_a_uuid = branch_results["branch_a"]["graph_uuid"]
         graph_b_uuid = branch_results["branch_b"]["graph_uuid"]
-        assert graph_a_uuid is not None, "Branch A should have reconstructed graph scope"
-        assert graph_b_uuid is not None, "Branch B should have reconstructed graph scope"
-        assert graph_a_uuid != graph_b_uuid, "Parallel branches must have distinct reconstructed graph scope UUIDs"
+        assert graph_a_uuid is not None, "Branch A should have a graph scope"
+        assert graph_b_uuid is not None, "Branch B should have a graph scope"
+        assert graph_a_uuid != graph_b_uuid, "Parallel branches must have distinct graph scope UUIDs"
 
         assert branch_results["branch_a"]["node_parent"] == graph_a_uuid
         assert branch_results["branch_b"]["node_parent"] == graph_b_uuid
@@ -201,9 +210,8 @@ class TestLangGraphScope:
         import asyncio
 
         sync_graph = push_graph_scope("sync_graph")
-        sync_node, sync_branch_graph = push_node_scope("sync_node", "task-s")
-        pop_node_scope(sync_node, sync_branch_graph)
-        set_thread_scope_stack(scope_stack)
+        sync_node, _, _ = push_node_scope("sync_node", "task-s")
+        pop_node_scope(sync_node)
         pop_graph_scope(sync_graph)
 
         sync_events = list(events)
@@ -212,9 +220,8 @@ class TestLangGraphScope:
         async def async_path() -> None:
             set_thread_scope_stack(scope_stack)
             async_graph = push_graph_scope("async_graph")
-            async_node, async_branch_graph = push_node_scope("async_node", "task-a")
-            pop_node_scope(async_node, async_branch_graph)
-            set_thread_scope_stack(scope_stack)
+            async_node, _, _ = push_node_scope("async_node", "task-a")
+            pop_node_scope(async_node)
             pop_graph_scope(async_graph)
 
         asyncio.run(async_path())
@@ -249,7 +256,7 @@ class TestLangGraphScope:
     def test_llm_call_in_node_scope(self, scope_stack: Any, events: list[Any]) -> None:
         """LLM call within a node appears in event trace with node scope as parent."""
         graph_handle = push_graph_scope("llm_graph")
-        node_handle, branch_graph = push_node_scope("llm_node", "task-llm")
+        node_handle, _, _ = push_node_scope("llm_node", "task-llm")
 
         llm_handle = nat_nexus.llm.call(
             "test-model",
@@ -257,8 +264,7 @@ class TestLangGraphScope:
         )
         nat_nexus.llm.call_end(llm_handle, {"response": "hello"})
 
-        pop_node_scope(node_handle, branch_graph)
-        set_thread_scope_stack(scope_stack)
+        pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)
 
         llm_starts = [
@@ -282,13 +288,12 @@ class TestLangGraphScope:
     def test_tool_call_in_node_scope(self, scope_stack: Any, events: list[Any]) -> None:
         """Tool call within a node appears in event trace with node scope as parent."""
         graph_handle = push_graph_scope("tool_graph")
-        node_handle, branch_graph = push_node_scope("tool_node", "task-tool")
+        node_handle, _, _ = push_node_scope("tool_node", "task-tool")
 
         tool_handle = nat_nexus.tools.call("search_tool", {"query": "test"})
         nat_nexus.tools.call_end(tool_handle, {"results": ["a", "b"]})
 
-        pop_node_scope(node_handle, branch_graph)
-        set_thread_scope_stack(scope_stack)
+        pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)
 
         tool_starts = [e for e in events if e.name == "search_tool" and e.event_type == EventType.Start]
@@ -311,9 +316,8 @@ class TestLangGraphScope:
 
         assert langgraph_nexus_active() is True
 
-        node_handle, branch_graph = push_node_scope("single_node", "task-1")
-        pop_node_scope(node_handle, branch_graph)
-        set_thread_scope_stack(scope_stack)
+        node_handle, _, _ = push_node_scope("single_node", "task-1")
+        pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)
 
         assert langgraph_nexus_active() is False
@@ -323,9 +327,8 @@ class TestLangGraphScope:
             for e in events
             if e.metadata and e.metadata.get("langgraph.graph") is True and e.event_type == EventType.Start
         ]
-        assert len(graph_starts) == 2, (
-            f"Expected 2 graph start events (original + branch reconstruction), got {len(graph_starts)}"
-        )
+        # Only 1 graph start event (no per-branch reconstruction)
+        assert len(graph_starts) == 1, f"Expected 1 graph start event, got {len(graph_starts)}"
 
         node_starts = [
             e
@@ -344,9 +347,8 @@ class TestLangGraphScope:
     def test_scope_hierarchy_event_ordering(self, scope_stack: Any, events: list[Any]) -> None:
         """Full lifecycle ordering: graph-start, node-start, node-end, graph-end."""
         graph_handle = push_graph_scope("order_graph")
-        node_handle, branch_graph = push_node_scope("order_node", "task-ord")
-        pop_node_scope(node_handle, branch_graph)
-        set_thread_scope_stack(scope_stack)
+        node_handle, _, _ = push_node_scope("order_node", "task-ord")
+        pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)
 
         lifecycle = []
@@ -356,12 +358,12 @@ class TestLangGraphScope:
             elif e.metadata and e.metadata.get("langgraph.node"):
                 lifecycle.append(("node", e.event_type))
 
+        # With direct push (no branch reconstruction), ordering is:
+        # graph-start, node-start, node-end, graph-end
         expected = [
-            ("graph", EventType.Start),
             ("graph", EventType.Start),
             ("node", EventType.Start),
             ("node", EventType.End),
-            ("graph", EventType.End),
             ("graph", EventType.End),
         ]
         assert lifecycle == expected, f"Lifecycle event ordering mismatch.\nGot:      {lifecycle}\nExpected: {expected}"
@@ -418,7 +420,7 @@ class TestLangGraphSubgraph:
         """Subgraph creates 4-level scope hierarchy: graph -> node -> subgraph -> subgraph_node."""
         graph_handle = push_graph_scope("outer_graph")
 
-        node_handle, branch_graph_handle = push_node_scope("parent_node", "task-1")
+        node_handle, _, _ = push_node_scope("parent_node", "task-1")
 
         sub_handle, active_tok, info_tok = push_subgraph_scope("inner_graph")
 
@@ -449,8 +451,7 @@ class TestLangGraphSubgraph:
 
         nat_nexus.scope.pop(inner_node_handle)
         pop_subgraph_scope(sub_handle, active_tok, info_tok)
-        pop_node_scope(node_handle, branch_graph_handle)
-        set_thread_scope_stack(scope_stack)
+        pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)
 
     # -------------------------------------------------------------------
@@ -461,7 +462,7 @@ class TestLangGraphSubgraph:
         """push_subgraph_scope pushes on CURRENT stack and sets ContextVars correctly."""
         graph_handle = push_graph_scope("main_graph")
 
-        node_handle, branch_graph_handle = push_node_scope("a_node", "task-x")
+        node_handle, _, _ = push_node_scope("a_node", "task-x")
 
         assert _langgraph_nexus_active.get() is True
 
@@ -475,8 +476,7 @@ class TestLangGraphSubgraph:
         assert info.metadata.get("langgraph.subgraph") is True
 
         pop_subgraph_scope(sub_handle, active_tok, info_tok)
-        pop_node_scope(node_handle, branch_graph_handle)
-        set_thread_scope_stack(scope_stack)
+        pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)
 
     # -------------------------------------------------------------------
@@ -488,7 +488,7 @@ class TestLangGraphSubgraph:
         graph_handle = push_graph_scope("parent_graph")
         assert _graph_scope_info.get().graph_name == "parent_graph"
 
-        node_handle, branch_graph_handle = push_node_scope("some_node", "task-y")
+        node_handle, _, _ = push_node_scope("some_node", "task-y")
 
         sub_handle, active_tok, info_tok = push_subgraph_scope("child_graph")
         assert _graph_scope_info.get().graph_name == "child_graph"
@@ -501,8 +501,7 @@ class TestLangGraphSubgraph:
 
         assert _langgraph_nexus_active.get() is True
 
-        pop_node_scope(node_handle, branch_graph_handle)
-        set_thread_scope_stack(scope_stack)
+        pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)
 
     # -------------------------------------------------------------------
@@ -569,10 +568,10 @@ class TestLangGraphSubgraph:
                 edges = [{"source": f"node_{i}", "target": f"node_{i + 1}"} for i in range(node_count - 1)]
                 graph_handle = push_graph_scope(f"graph_{name}", graph_topology={"nodes": nodes, "edges": edges})
 
-                node_h, branch_graph = push_node_scope(f"{name}_node", f"task-{name}")
+                node_h, _, _ = push_node_scope(f"{name}_node", f"task-{name}")
                 sub_h, at, it = push_subgraph_scope(f"{name}_subgraph")
                 pop_subgraph_scope(sub_h, at, it)
-                pop_node_scope(node_h, branch_graph)
+                pop_node_scope(node_h)
 
                 set_thread_scope_stack(stack)
                 pop_graph_scope(graph_handle)

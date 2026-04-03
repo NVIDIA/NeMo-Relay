@@ -10,6 +10,7 @@ all types exported from the native Rust extension and all API functions.
 import contextvars
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
+from nat_nexus import proxy as proxy
 from nat_nexus import scope as scope
 from nat_nexus import typed as typed
 

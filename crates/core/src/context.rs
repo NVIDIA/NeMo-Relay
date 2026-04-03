@@ -16,6 +16,7 @@
 //! - **[`global_context`]** — returns the process-wide singleton context, lazily
 //!   initialized on first access.
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
@@ -155,6 +156,14 @@ impl ScopeStack {
             .expect("scope stack should never be empty")
     }
 
+    /// Returns a mutable reference to the top scope.
+    /// Always returns Some because the root is always present.
+    pub fn top_mut(&mut self) -> &mut ScopeHandle {
+        self.stack
+            .last_mut()
+            .expect("scope stack should never be empty")
+    }
+
     /// Returns the UUID of the root (bottom-most) scope.
     ///
     /// This is O(1) — just reads the first element of the scope stack vec.
@@ -164,6 +173,11 @@ impl ScopeStack {
             .first()
             .expect("scope stack should never be empty")
             .uuid
+    }
+
+    /// Returns a slice of all scope handles in the stack, from root to top.
+    pub fn scopes(&self) -> &[ScopeHandle] {
+        &self.stack
     }
 
     /// Finds a scope by UUID and returns a reference to it, or `None` if not found.
@@ -543,6 +557,11 @@ pub struct NatNexusContextState {
 
     /// Named event subscribers, keyed by subscriber name.
     pub event_subscribers: HashMap<String, EventSubscriberFn>,
+
+    /// Extension state map. Extensions register typed state by string key.
+    /// Core has no compile-time knowledge of concrete extension types.
+    /// Uses `Box<dyn Any + Send + Sync>` for type-erased, thread-safe storage.
+    pub extensions: HashMap<String, Box<dyn Any + Send + Sync>>,
 }
 
 impl NatNexusContextState {
@@ -561,7 +580,37 @@ impl NatNexusContextState {
             llm_execution_intercepts: SortedRegistry::new(|e| e.priority),
             llm_stream_execution_intercepts: SortedRegistry::new(|e| e.priority),
             event_subscribers: HashMap::new(),
+            extensions: HashMap::new(),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Extensions (type-erased storage)
+    // -----------------------------------------------------------------------
+
+    /// Store a typed extension value under a string key.
+    /// Overwrites any previous value for the same key (last-write-wins).
+    pub fn set_extension<T: Any + Send + Sync>(&mut self, key: impl Into<String>, value: T) {
+        self.extensions.insert(key.into(), Box::new(value));
+    }
+
+    /// Get a shared reference to a typed extension value.
+    /// Returns `None` if the key does not exist or the type does not match.
+    pub fn get_extension<T: Any + Send + Sync>(&self, key: &str) -> Option<&T> {
+        self.extensions.get(key).and_then(|v| v.downcast_ref::<T>())
+    }
+
+    /// Get a mutable reference to a typed extension value.
+    /// Returns `None` if the key does not exist or the type does not match.
+    pub fn get_extension_mut<T: Any + Send + Sync>(&mut self, key: &str) -> Option<&mut T> {
+        self.extensions
+            .get_mut(key)
+            .and_then(|v| v.downcast_mut::<T>())
+    }
+
+    /// Remove an extension by key. Returns `true` if the key existed.
+    pub fn remove_extension(&mut self, key: &str) -> bool {
+        self.extensions.remove(key).is_some()
     }
 
     // -----------------------------------------------------------------------
@@ -1281,6 +1330,24 @@ mod tests {
         let err = stack.remove(&u1).unwrap_err();
         assert!(matches!(err, NexusError::InvalidArgument(_)));
         assert_eq!(stack.top().name, "b");
+    }
+
+    #[test]
+    fn test_scope_stack_scopes_returns_all() {
+        let mut stack = ScopeStack::new();
+        assert_eq!(stack.scopes().len(), 1, "root only");
+        let child = ScopeHandle::new(
+            "child".into(),
+            ScopeType::Function,
+            ScopeAttributes::empty(),
+            None,
+            None,
+            None,
+        );
+        stack.push(child);
+        assert_eq!(stack.scopes().len(), 2);
+        assert_eq!(stack.scopes()[0].name, "root");
+        assert_eq!(stack.scopes()[1].name, "child");
     }
 
     // -- task_scope_remove error --
@@ -2334,5 +2401,104 @@ mod tests {
             SortedRegistry::new(|e| e.priority);
         let result = NatNexusContextState::run_intercept_chain(&reg, 42);
         assert_eq!(result, 42);
+    }
+
+    // -- Extension map tests --
+
+    #[test]
+    fn test_extension_set_and_get() {
+        let mut ctx = NatNexusContextState::new();
+        ctx.set_extension("greeting", "hello".to_string());
+        let val = ctx.get_extension::<String>("greeting");
+        assert_eq!(val, Some(&"hello".to_string()));
+    }
+
+    #[test]
+    fn test_extension_type_mismatch_returns_none() {
+        let mut ctx = NatNexusContextState::new();
+        ctx.set_extension("greeting", "hello".to_string());
+        // Try to retrieve as wrong type — should return None, not panic
+        let val = ctx.get_extension::<u32>("greeting");
+        assert!(val.is_none());
+    }
+
+    #[test]
+    fn test_extension_get_mut() {
+        #[derive(Debug, PartialEq)]
+        struct Counter {
+            count: u32,
+        }
+
+        let mut ctx = NatNexusContextState::new();
+        ctx.set_extension("counter", Counter { count: 0 });
+
+        // Mutate in-place via get_extension_mut
+        if let Some(counter) = ctx.get_extension_mut::<Counter>("counter") {
+            counter.count += 5;
+        }
+
+        let val = ctx.get_extension::<Counter>("counter");
+        assert_eq!(val, Some(&Counter { count: 5 }));
+    }
+
+    #[test]
+    fn test_extension_remove() {
+        let mut ctx = NatNexusContextState::new();
+        ctx.set_extension("temp", 42u64);
+
+        // First remove returns true (key existed)
+        assert!(ctx.remove_extension("temp"));
+        // Second remove returns false (key gone)
+        assert!(!ctx.remove_extension("temp"));
+        // Confirm it's gone
+        assert!(ctx.get_extension::<u64>("temp").is_none());
+    }
+
+    #[test]
+    fn test_extension_overwrite() {
+        let mut ctx = NatNexusContextState::new();
+        ctx.set_extension("version", 1u32);
+        ctx.set_extension("version", 2u32);
+        assert_eq!(ctx.get_extension::<u32>("version"), Some(&2u32));
+    }
+
+    #[test]
+    fn test_extension_missing_key() {
+        let ctx = NatNexusContextState::new();
+        let val = ctx.get_extension::<String>("nonexistent");
+        assert!(val.is_none());
+    }
+
+    #[test]
+    fn test_extension_through_global_context() {
+        // Write an extension through the global_context() singleton
+        {
+            let ctx = global_context();
+            let mut state = ctx.write().unwrap();
+            state.set_extension("global_test", vec![1u32, 2, 3]);
+        }
+
+        // Read it back through a separate lock acquisition
+        {
+            let ctx = global_context();
+            let state = ctx.read().unwrap();
+            let val = state.get_extension::<Vec<u32>>("global_test");
+            assert_eq!(val, Some(&vec![1u32, 2, 3]));
+        }
+
+        // Clean up to avoid test pollution
+        {
+            let ctx = global_context();
+            let mut state = ctx.write().unwrap();
+            state.remove_extension("global_test");
+        }
+    }
+
+    #[test]
+    fn test_top_mut_modifies_metadata() {
+        let mut stack = ScopeStack::new();
+        assert!(stack.top_mut().metadata.is_none());
+        stack.top_mut().metadata = Some(serde_json::json!({"key": "value"}));
+        assert_eq!(stack.top().metadata.as_ref().unwrap()["key"], "value");
     }
 }

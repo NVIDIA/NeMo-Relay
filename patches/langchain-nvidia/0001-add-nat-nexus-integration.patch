@@ -1,9 +1,9 @@
 diff --git a/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nat_nexus.py b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nat_nexus.py
 new file mode 100644
-index 0000000..c220118
+index 0000000..1867dd5
 --- /dev/null
 +++ b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nat_nexus.py
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,137 @@
 +"""Thin bridge module for optional Nexus integration.
 +
 +When nat_nexus is installed and a scope stack has been initialized by the
@@ -21,6 +21,7 @@ index 0000000..c220118
 +from __future__ import annotations
 +
 +import asyncio
++import contextvars
 +from concurrent.futures import ThreadPoolExecutor
 +from typing import Any, Callable
 +
@@ -57,13 +58,34 @@ index 0000000..c220118
 +
 +def run_sync(coro: Any) -> Any:
 +    """Run *coro* synchronously, handling the case where an event loop is
-+    already running (e.g. Jupyter notebooks)."""
++    already running (e.g. Jupyter notebooks).
++
++    PATCH-01: When offloading to a ThreadPoolExecutor worker, propagate
++    both Python contextvars and the Rust thread-local scope stack so that
++    Nexus telemetry is preserved on the worker thread.
++    """
 +    try:
 +        asyncio.get_running_loop()
 +    except RuntimeError:
 +        # No loop running – we can just use asyncio.run.
 +        return asyncio.run(coro)
 +    # Loop already running – offload to a worker thread so we don't block.
++    # Propagate contextvars and scope stack to the worker thread.
++    ctx = contextvars.copy_context()
++    if _HAS_NAT_NEXUS:
++        try:
++            scope_stack = nat_nexus.get_scope_stack()
++
++            def _run_with_scope_stack() -> Any:
++                nat_nexus.set_thread_scope_stack(scope_stack)
++                return asyncio.run(coro)
++
++            with ThreadPoolExecutor(max_workers=1) as pool:
++                return pool.submit(
++                    ctx.run, _run_with_scope_stack
++                ).result()
++        except Exception:
++            pass  # Fall through to vanilla path
 +    with ThreadPoolExecutor(max_workers=1) as pool:
 +        return pool.submit(asyncio.run, coro).result()
 +
@@ -120,7 +142,7 @@ index 0000000..c220118
 +        model_name=model_name,
 +    )
 diff --git a/libs/ai-endpoints/langchain_nvidia_ai_endpoints/chat_models.py b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/chat_models.py
-index 07df9ab..2c70db2 100644
+index 07df9ab..48441a4 100644
 --- a/libs/ai-endpoints/langchain_nvidia_ai_endpoints/chat_models.py
 +++ b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/chat_models.py
 @@ -56,6 +56,7 @@ from langchain_core.utils.pydantic import is_basemodel_subclass
