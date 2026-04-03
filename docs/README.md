@@ -19,6 +19,8 @@ Nexus is a multi-language agent runtime framework providing execution scope mana
 | [Context Isolation](context-isolation.md) | Multi-tenant and concurrent scope stack management |
 | [ATIF Export](atif-export.md) | Agent Trajectory Interchange Format export |
 | [Language Bindings](language-bindings.md) | Per-language usage guides and naming conventions |
+| [Proxy Layer](proxy-layer.md) | NexusProxy configuration, DynamoIntercept, declarative and builder APIs |
+| [Online Learning Engine](online-learning-engine.md) | Prediction trie, sensitivity scoring, Redis persistence, and learner pipeline |
 | [Testing](testing.md) | Test commands, helpers, coverage, and conventions |
 | [Integration Best Practices](integration-best-practices.md) | Patterns for integrating Nexus into agent frameworks |
 

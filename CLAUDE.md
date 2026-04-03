@@ -5,6 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## Project Overview
 
 NeMo Agent Toolkit Nexus (Nexus) is a multi-language agent runtime framework providing execution scope management, lifecycle events, and middleware (guardrails/intercepts) for tool and LLM calls. The core is written in Rust with bindings for Python, Go, Node.js, and WebAssembly.
@@ -53,6 +55,7 @@ cargo test --workspace                   # All Rust tests (excludes nvidia-nat-n
 cargo test -p nvidia-nat-nexus-core             # Core tests only
 cargo test -p nat-nexus-wasm                    # WASM tests (unit tests via cargo test)
 wasm-pack test --node crates/wasm        # WASM integration tests (wasm-bindgen-test)
+cargo nextest run --workspace            # CI uses nextest (install: cargo install cargo-nextest --locked)
 
 # Test — Python
 uv sync                                  # Create venv, install deps, build native extension
@@ -66,6 +69,23 @@ cd crates/node && npm install && npm test        # Build debug addon and run all
 
 # Build — WASM
 wasm-pack build crates/wasm  --scope nvidia      # Produces pkg/ with .wasm, .js, .d.ts
+
+# Run a single test
+cargo test -p nvidia-nat-nexus-core -- <test_name>   # Rust (substring match)
+uv run pytest python/tests/test_scope.py             # Python (single file)
+uv run pytest -k "test_name"                         # Python (by name)
+cd go/nat_nexus && CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="../../target/release" go test -race -v -run TestFoo ./...
+node --test --test-name-pattern="pattern" crates/node/tests/*.mjs
+
+# Lint (also run automatically by pre-commit hooks)
+cargo fmt --check && cargo clippy -- -D warnings && cargo deny check
+uv run ruff check . && uv run ruff format --check . && uv run ty check
+cd go/nat_nexus && gofmt -l . && go vet ./...
+
+# Pre-commit setup (run once after cloning)
+uv run pre-commit install
+# Run manually on all files
+uv run pre-commit run --all-files
 ```
 
 ## Key Conventions

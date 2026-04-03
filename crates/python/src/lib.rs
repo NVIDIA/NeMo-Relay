@@ -17,6 +17,8 @@
 //!   accept `tool_call_id` and LLM calls accept `model_name` for ATIF correlation.
 //! - `py_callable` — Bridges between Python callables and Rust callback types
 //! - `py_context` — Notes on scope propagation between sync/async contexts
+//! - `py_proxy` — Python-facing proxy types (`NexusProxy`, `InMemoryBackend`,
+//!   `MetadataEnvelope`, `ParallelHint`)
 //! - `convert` — JSON ↔ Python conversion utilities
 
 use pyo3::prelude::*;
@@ -25,6 +27,8 @@ mod convert;
 mod py_api;
 mod py_callable;
 mod py_context;
+mod py_proxy;
+mod py_storage;
 mod py_types;
 
 /// The `_native` PyO3 module entry point. Registers all types and functions.
@@ -32,6 +36,7 @@ mod py_types;
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     py_types::register(m)?;
     py_api::register(m)?;
+    py_proxy::register(m)?;
     Ok(())
 }
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [workspace]
-members = ["crates/core", "crates/python", "crates/ffi", "crates/node", "crates/wasm"]
+members = ["crates/core", "crates/python", "crates/ffi", "crates/node", "crates/wasm", "crates/proxy"]
 resolver = "2"
 
 [workspace.package]

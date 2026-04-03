@@ -107,7 +107,7 @@ class TestEdgeWriteEvents:
     def test_edge_write_in_node_scope(self, scope_stack: Any, events: list[Any]) -> None:
         """Edge Write event parent_uuid matches node scope UUID when fired inside a node scope."""
         graph_handle = push_graph_scope("scope_ancestry_graph")
-        node_handle, graph_on_stack = push_node_scope("writer_node", "task-uuid-0001")
+        node_handle, _, _ = push_node_scope("writer_node", "task-uuid-0001")
 
         emit_edge_write(source_node="writer_node", channels=["result"], write_count=1)
 
@@ -119,6 +119,5 @@ class TestEdgeWriteEvents:
             f"node scope UUID ({node_handle.uuid}) -- confirms node-scope ancestry"
         )
 
-        pop_node_scope(node_handle, graph_on_stack)
-        set_thread_scope_stack(scope_stack)
+        pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)

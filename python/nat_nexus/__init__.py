@@ -53,6 +53,7 @@ Submodules:
     intercepts  - Intercept registration for tools and LLMs.
     subscribers - Event subscriber registration.
     scope_local - Scope-local guardrail, intercept, and subscriber registration.
+    proxy       - Proxy types, backends, and declarative proxy API.
 
 Types (available at top level):
     ScopeAttributes, ToolAttributes, LLMAttributes,
@@ -63,7 +64,7 @@ Types (available at top level):
 
 import contextvars
 
-from nat_nexus import guardrails, intercepts, llm, scope, scope_local, subscribers, tools, typed
+from nat_nexus import guardrails, intercepts, llm, proxy, scope, scope_local, subscribers, tools, typed
 from nat_nexus._native import (
     # ATIF exporter
     AtifExporter,
@@ -172,6 +173,7 @@ ScopeStack = _ScopeStack
 create_scope_stack = _create_scope_stack
 set_thread_scope_stack = _set_thread_scope_stack
 
+
 __all__ = [
     # Submodules
     "scope",
@@ -182,6 +184,7 @@ __all__ = [
     "subscribers",
     "scope_local",
     "typed",
+    "proxy",
     # Scope stack isolation
     "ScopeStack",
     "create_scope_stack",

@@ -403,11 +403,11 @@ class TestLLMInterceptsAsync:
             intercepts.deregister_llm_stream_execution("py_llm_stream_next")
 
     async def test_stream_execution_intercept_async_function_is_supported(self):
-        async def middleware(request, next):
+        def middleware(request, next):
             updated = LLMRequest(request.headers, {**request.content, "prefix": "async"})
-            upstream = await next(updated)
 
             async def gen():
+                upstream = await next(updated)
                 async for chunk in upstream:
                     yield {"token": f"{updated.content['prefix']}:{chunk['token']}"}
 
