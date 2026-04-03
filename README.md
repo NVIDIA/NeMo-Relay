@@ -34,20 +34,32 @@ with nat_nexus.scope.scope("my-agent", nat_nexus.ScopeType.Agent):
 
 For complete quick-start examples in all supported languages, see the [Language Bindings](docs/language-bindings.md) guide. A fully worked example with LangChain integration is available in [examples/](examples/).
 
+## Start Here
+
+- **Python users** -- start with [Getting Started: Python](docs/getting-started-python.md), then read [Language Bindings](docs/language-bindings.md).
+- **Node.js users** -- start with [Getting Started: Node.js](docs/getting-started-node.md), then read [Language Bindings](docs/language-bindings.md).
+- **Go users** -- start with [Getting Started: Go](docs/getting-started-go.md), then read [Language Bindings](docs/language-bindings.md).
+- **WASM users** -- start with [Getting Started: WebAssembly](docs/getting-started-wasm.md), then read [Language Bindings](docs/language-bindings.md).
+- **Proxy users** -- start with [Proxy Layer](docs/proxy-layer.md) and [Online Learning Engine](docs/online-learning-engine.md).
+- **Contributors** -- start with the canonical [Documentation Index](docs/README.md) and [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md).
+
 ## Documentation
 
-Comprehensive documentation lives in the [docs/](docs/) directory. Start with the [Documentation Index](docs/README.md) for a guided reading order.
+Comprehensive documentation lives in the [docs/](docs/) directory. The canonical docs index is [docs/README.md](docs/README.md), which includes guided reading paths by use case.
 
 | Document | Description |
 |----------|-------------|
 | [Architecture Overview](docs/architecture.md) | High-level system design, binding layers, and data flow |
 | [Core Concepts](docs/concepts.md) | Scopes, handles, events, and the middleware pipeline |
-| [API Reference](docs/api-reference.md) | Complete function signatures for all operations |
+| [API Reference](docs/api-reference.md) | Core runtime function signatures shared across bindings |
 | [Middleware Pipeline](docs/middleware-pipeline.md) | Detailed pipeline ordering for tool and LLM calls |
 | [Typed Wrappers](docs/typed-wrappers.md) | Codec-based typed APIs for Python and Node.js |
 | [Context Isolation](docs/context-isolation.md) | Multi-tenant and concurrent scope stack management |
 | [ATIF Export](docs/atif-export.md) | Agent Trajectory Interchange Format export |
 | [Language Bindings](docs/language-bindings.md) | Per-language usage guides and naming conventions |
+| [Recipes](docs/recipes.md) | Task-oriented patterns for logging, ATIF, proxy setup, and context propagation |
+| [Proxy Layer](docs/proxy-layer.md) | NexusProxy configuration, DynamoIntercept, declarative and builder APIs |
+| [Online Learning Engine](docs/online-learning-engine.md) | Prediction trie, sensitivity scoring, Redis persistence, and learner pipeline |
 | [Integration Best Practices](docs/integration-best-practices.md) | Patterns for integrating Nexus into existing agent frameworks |
 | [Testing](docs/testing.md) | Testing strategy and how to run tests across all languages |
 
@@ -60,6 +72,7 @@ crates/
   ffi/        # C FFI layer (used by Go, generates header via cbindgen)
   node/       # NAPI Node.js bindings
   wasm/       # wasm-bindgen WebAssembly bindings
+  proxy/      # Proxy layer with online learning and scheduling hints
 python/       # Python wrapper module (nat_nexus/)
 go/           # Go CGo bindings
 docs/         # Comprehensive documentation
@@ -115,25 +128,17 @@ wasm-pack build crates/wasm --scope nvidia
 
 ## Testing
 
-### Rust
+Use [docs/testing.md](docs/testing.md) for the full matrix. Common entry points:
 
 ```bash
-cargo test --workspace                 # All Rust tests
-cargo test -p nvidia-nat-nexus-core           # Core tests only
-```
-
-### Python
-
-```bash
-uv run pytest                          # Runs tests in python/tests/
-```
-
-### Go
-
-```bash
+cargo test --workspace                                # Core + proxy + Rust bindings
+uv run pytest                                         # Python
 cd go/nat_nexus && \
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" \
 go test -race -v ./...
+cd crates/node && npm install && npm test             # Node.js
+wasm-pack test --node crates/wasm                     # WASM
+cargo test -p nvidia-nat-nexus-proxy --features redis-backend redis_tests  # Proxy + Redis
 ```
 
 ## Dev Tooling

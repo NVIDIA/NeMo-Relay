@@ -5,7 +5,16 @@ SPDX-License-Identifier: Apache-2.0
 
 # API Reference
 
-This document covers the complete API surface. Function signatures are shown in Python; other bindings mirror the same operations with language-appropriate naming.
+This document covers the core runtime API surface shared across bindings.
+Function signatures are shown in Python; other bindings mirror the same
+operations with language-appropriate naming.
+
+See also:
+
+- [Typed API Reference](typed-api-reference.md) for `nat_nexus.typed` helper
+  functions and codec types.
+- [Proxy API Reference](proxy-api-reference.md) for `nat_nexus.proxy`,
+  `NexusProxy`, backend types, and declarative proxy lifecycle helpers.
 
 ## Scope Operations
 
@@ -37,7 +46,11 @@ nat_nexus.scope.event(
 
 ## Tool Lifecycle
 
-### Manual (Low-Level)
+### Advanced Manual Lifecycle (Low-Level)
+
+These APIs are for advanced integrations that need to drive lifecycle start/end
+manually. For normal application code and all quickstarts, prefer
+`nat_nexus.tools.execute(...)` so the runtime manages the full lifecycle.
 
 ```python
 # Begin a tool call — emits Start event
@@ -95,7 +108,11 @@ nat_nexus.tools.conditional_execution(name: str, args: dict) -> None
 
 ## LLM Lifecycle
 
-### Manual (Low-Level)
+### Advanced Manual Lifecycle (Low-Level)
+
+These APIs are for advanced integrations that need to drive lifecycle start/end
+manually. For normal application code and all quickstarts, prefer
+`nat_nexus.llm.execute(...)` or `nat_nexus.llm.stream_execute(...)`.
 
 ```python
 # Begin an LLM call — emits Start event

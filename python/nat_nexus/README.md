@@ -18,6 +18,7 @@ This package provides a thin Python layer over the native Rust extension (`_nati
 - **Scope context managers** -- Python context managers for automatic scope push/pop with cleanup.
 - **Async support** -- All async operations are exposed as native Python coroutines compatible with `asyncio`.
 - **Scope-local middleware** -- `scope_local.py` exposes scope-scoped guardrail, intercept, and subscriber registration.
+- **Typed and proxy helpers** -- `typed.py` and `proxy.py` expose higher-level typed wrappers and proxy lifecycle APIs.
 
 ## Key Files
 
@@ -33,6 +34,7 @@ This package provides a thin Python layer over the native Rust extension (`_nati
 | `subscribers.py` | Event subscriber registration |
 | `scope_local.py` | Scope-local middleware registration |
 | `typed.py` | Typed helper utilities |
+| `proxy.py` | Proxy types, backends, and declarative proxy helpers |
 
 ## Install
 
@@ -48,4 +50,7 @@ uv run pytest
 
 ## Documentation
 
-See [docs/api-reference.md](../../docs/api-reference.md) for the full Python API reference.
+See [docs/api-reference.md](../../docs/api-reference.md) for the core runtime
+API, [docs/typed-api-reference.md](../../docs/typed-api-reference.md) for typed
+helpers, and [docs/proxy-api-reference.md](../../docs/proxy-api-reference.md)
+for proxy APIs.

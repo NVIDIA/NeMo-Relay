@@ -119,19 +119,36 @@ uv run pytest
 # Go (requires FFI lib built with --release)
 cd go/nat_nexus && \
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" \
-go test -v ./...
+go test -race -v ./...
 
 # Node.js (requires native addon built)
-node --test crates/node/tests/*.mjs
+cd crates/node && npm install && npm test
 
 # WASM (unit tests)
-cargo test -p nvidia-nat-nexus-wasm
+cargo test -p nat-nexus-wasm
 
 # WASM (integration tests)
 wasm-pack test --node crates/wasm
 ```
 
 When adding new functionality, include tests in the appropriate test files for each affected language binding. Tests are organized by topic: types, scope, tools, LLM, deregister, context isolation, and scope-local.
+
+## Documentation Checklist
+
+If your change affects public behavior, bindings, examples, or workspace
+structure, update the corresponding docs in the same branch.
+
+Before opening a PR, check the following:
+
+1. `README.md` still reflects the current workspace members and top-level docs.
+2. `docs/README.md` still reflects the canonical doc set and reading paths.
+3. The relevant reference docs are updated for any public API change.
+4. The relevant crate or package README is updated when that surface changed.
+5. `examples/README.md` is updated if examples were added, moved, or removed.
+
+For documentation-heavy changes, prefer small targeted commits so the history
+shows entry-point changes, reference changes, examples, and maintenance updates
+separately.
 
 ## Pull Request Process
 
@@ -140,7 +157,8 @@ When adding new functionality, include tests in the appropriate test files for e
 1. Ensure all pre-commit hooks pass.
 2. Run the relevant test suites and confirm they pass.
 3. Verify your changes compile cleanly (`cargo build --workspace`).
-4. Rebase your branch on the latest `main` to avoid merge conflicts.
+4. Update the relevant documentation entry points and references.
+5. Rebase your branch on the latest `main` to avoid merge conflicts.
 
 ### PR Description
 
