@@ -140,6 +140,18 @@ describe('withScope', () => {
     assert.equal(after.uuid, before.uuid, 'scope should be popped after rejection');
   });
 
+  it('surfaces primitive rejection values as unknown error and still pops the scope', async () => {
+    const before = getHandle();
+    await assert.rejects(
+      () => withScope('primitive_reject_test', ScopeType.Tool, async () => {
+        throw 123;
+      }),
+      /unknown error/i,
+    );
+    const after = getHandle();
+    assert.equal(after.uuid, before.uuid, 'scope should be popped after primitive rejection');
+  });
+
   it('nested withScope calls', async () => {
     const before = getHandle();
     await withScope('outer', ScopeType.Agent, async (outerHandle) => {

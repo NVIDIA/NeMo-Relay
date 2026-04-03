@@ -25,6 +25,43 @@ use nvidia_nat_nexus_core::{
 use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
 use crate::types::JsEvent;
 
+fn recv_json_or_null(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) -> Json {
+    rx.recv().unwrap_or_else(|e| {
+        eprintln!("{error_prefix}: {e}");
+        Json::Null
+    })
+}
+
+fn recv_json_or_value(
+    rx: std::sync::mpsc::Receiver<Json>,
+    error_prefix: &str,
+    fallback: Json,
+) -> Json {
+    rx.recv().unwrap_or_else(|e| {
+        eprintln!("{error_prefix}: {e}");
+        fallback
+    })
+}
+
+fn recv_option_string_or_none(
+    rx: std::sync::mpsc::Receiver<Option<String>>,
+    error_prefix: &str,
+) -> Option<String> {
+    rx.recv().unwrap_or_else(|e| {
+        eprintln!("{error_prefix}: {e}");
+        None
+    })
+}
+
+fn recv_llm_request_or_value(
+    rx: std::sync::mpsc::Receiver<Json>,
+    error_prefix: &str,
+    fallback: LLMRequest,
+) -> LLMRequest {
+    let result = recv_json_or_null(rx, error_prefix);
+    serde_json::from_value(result).unwrap_or(fallback)
+}
+
 /// Wrap a JS function `(name: string, args: object) => object` for tool sanitize/intercept.
 pub fn wrap_js_tool_fn(
     func: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
@@ -44,10 +81,7 @@ pub fn wrap_js_tool_fn(
         );
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
-        rx.recv().unwrap_or_else(|e| {
-            eprintln!("nat_nexus: JS tool callback failed: {e}");
-            Json::Null
-        })
+        recv_json_or_null(rx, "nat_nexus: JS tool callback failed")
     })
 }
 
@@ -76,10 +110,7 @@ pub fn wrap_js_tool_conditional_fn(
         );
         // TODO: This closure returns Option<String> (not Result), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
-        rx.recv().unwrap_or_else(|e| {
-            eprintln!("nat_nexus: JS tool conditional callback failed: {e}");
-            None
-        })
+        recv_option_string_or_none(rx, "nat_nexus: JS tool conditional callback failed")
     })
 }
 
@@ -128,11 +159,11 @@ pub fn wrap_js_llm_request_intercept_fn(
         );
         // TODO: This closure returns LLMRequest (not Result), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
-        let result = rx.recv().unwrap_or_else(|e| {
-            eprintln!("nat_nexus: JS LLM request intercept callback failed: {e}");
-            Json::Null
-        });
-        serde_json::from_value(result).unwrap_or(request)
+        recv_llm_request_or_value(
+            rx,
+            "nat_nexus: JS LLM request intercept callback failed",
+            request,
+        )
     })
 }
 
@@ -156,11 +187,11 @@ pub fn wrap_js_llm_sanitize_request_fn(
         );
         // TODO: This closure returns LLMRequest (not Result), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
-        let result = rx.recv().unwrap_or_else(|e| {
-            eprintln!("nat_nexus: JS LLM sanitize request callback failed: {e}");
-            Json::Null
-        });
-        serde_json::from_value(result).unwrap_or(request)
+        recv_llm_request_or_value(
+            rx,
+            "nat_nexus: JS LLM sanitize request callback failed",
+            request,
+        )
     })
 }
 
@@ -182,10 +213,7 @@ pub fn wrap_js_llm_response_fn(
         );
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error and fall back to original response.
-        rx.recv().unwrap_or_else(|e| {
-            eprintln!("nat_nexus: JS LLM response callback failed: {e}");
-            response
-        })
+        recv_json_or_value(rx, "nat_nexus: JS LLM response callback failed", response)
     })
 }
 
@@ -213,10 +241,7 @@ pub fn wrap_js_llm_conditional_fn(
         );
         // TODO: This closure returns Option<String> (not Result), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
-        rx.recv().unwrap_or_else(|e| {
-            eprintln!("nat_nexus: JS LLM conditional callback failed: {e}");
-            None
-        })
+        recv_option_string_or_none(rx, "nat_nexus: JS LLM conditional callback failed")
     })
 }
 
@@ -282,10 +307,7 @@ pub fn wrap_js_finalizer_fn(
         );
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
-        rx.recv().unwrap_or_else(|e| {
-            eprintln!("nat_nexus: JS finalizer callback failed: {e}");
-            Json::Null
-        })
+        recv_json_or_null(rx, "nat_nexus: JS finalizer callback failed")
     })
 }
 
@@ -299,6 +321,10 @@ pub fn wrap_js_event_subscriber(
         func.call(event_json, ThreadsafeFunctionCallMode::NonBlocking);
     })
 }
+
+#[cfg(test)]
+#[path = "callable_coverage_tests.rs"]
+mod coverage_tests;
 
 /// Wrap a JS function `(args, next) => result` for tool execution intercept.
 ///

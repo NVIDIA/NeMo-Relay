@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 const lib = require('../index.js');
 
 const {
-  ScopeType, JsLlmRequest,
+  ScopeType, JsLlmRequest, JsScopeStack,
   SCOPE_ATTR_PARALLEL, SCOPE_ATTR_RELOCATABLE,
   TOOL_ATTR_LOCAL, LLM_ATTR_STATELESS, LLM_ATTR_STREAMING,
 } = lib;
@@ -51,5 +51,18 @@ describe('JsLlmRequest', () => {
     const req = new JsLlmRequest({ headers: { 'Content-Type': 'application/json' }, content: { model: 'gpt-4' } });
     assert.deepEqual(req.headers, { 'Content-Type': 'application/json' });
     assert.deepEqual(req.content, { model: 'gpt-4' });
+  });
+
+  it('coerces non-object headers to an empty object', () => {
+    const req = new JsLlmRequest({ headers: null, content: { model: 'gpt-4' } });
+    assert.deepEqual(req.headers, {});
+    assert.deepEqual(req.content, { model: 'gpt-4' });
+  });
+});
+
+describe('JsScopeStack', () => {
+  it('constructs a scope stack instance', () => {
+    const stack = new JsScopeStack();
+    assert.ok(stack instanceof JsScopeStack);
   });
 });

@@ -886,3 +886,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAtifExporter>()?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "py_types_coverage_tests.rs"]
+mod coverage_tests;

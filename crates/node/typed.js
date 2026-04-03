@@ -41,18 +41,17 @@ class JsonPassthrough {
 /**
  * Execute a tool call with explicit codec-based typed serialization.
  *
+ * Uses the Promise-aware native entrypoint so typed callbacks may return
+ * either plain values or Promises.
+ *
  * @template TArgs
  * @template TResult
- * @param {string} name - Tool name.
- * @param {TArgs} args - Typed tool arguments.
- * @param {function(TArgs): Promise<TResult>} func - The tool implementation.
- * @param {Codec<TArgs>} argsCodec - Codec for serializing/deserializing args.
- * @param {Codec<TResult>} resultCodec - Codec for serializing/deserializing the result.
- * @param {object} [options] - Optional parameters.
- * @param {JsScopeHandle} [options.handle] - Parent scope handle.
- * @param {number} [options.attributes] - Tool attribute bitflags.
- * @param {*} [options.data] - Application data.
- * @param {*} [options.metadata] - Metadata.
+ * @param {string} name
+ * @param {TArgs} args
+ * @param {function(TArgs): TResult | Promise<TResult>} func
+ * @param {Codec<TArgs>} argsCodec
+ * @param {Codec<TResult>} resultCodec
+ * @param {object} [options]
  * @returns {Promise<TResult>}
  */
 async function typedToolExecute(name, args, func, argsCodec, resultCodec, options) {
@@ -68,7 +67,7 @@ async function typedToolExecute(name, args, func, argsCodec, resultCodec, option
     return resultCodec.toJson(typedResult);
   };
 
-  const jsonResult = await lib.toolCallExecute(
+  const jsonResult = await lib.toolCallExecuteAsync(
     name,
     jsonArgs,
     jsonFunc,
@@ -108,7 +107,7 @@ async function typedLlmExecute(name, request, func, responseCodec, options) {
     return responseCodec.toJson(typedResult);
   };
 
-  const jsonResult = await lib.llmCallExecute(
+  const jsonResult = await lib.llmCallExecuteAsync(
     name,
     request,
     jsonFunc,

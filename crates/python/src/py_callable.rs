@@ -406,11 +406,12 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
         move |_name: &str, request: LLMRequest, next: LlmStreamExecutionNextFn| {
             let py_fn = py_fn.clone();
             Box::pin(async move {
-                // Call the Python function to get the async iterator object
-                let async_iter: Py<PyAny> = Python::attach(|py| {
+                // Call the Python function. It may return the async iterator directly,
+                // or a coroutine that resolves to one.
+                let async_iter: Py<PyAny> = match Python::attach(|py| {
                     let py_req = PyLLMRequest { inner: request };
                     let py_next = PyLlmStreamNextFn { inner: next };
-                    py_fn
+                    let result = py_fn
                         .call1(
                             py,
                             (
@@ -424,8 +425,29 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                                     .into_any(),
                             ),
                         )
-                        .map_err(|e: PyErr| NexusError::Internal(e.to_string()))
-                })?;
+                        .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
+
+                    let bound = result.bind(py);
+                    if bound.getattr("__await__").is_ok() {
+                        let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
+                            .map_err(|e| NexusError::Internal(e.to_string()))?;
+                        Ok::<
+                            Result<
+                                Py<PyAny>,
+                                Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>,
+                            >,
+                            NexusError,
+                        >(Err(Box::pin(future)
+                            as Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>))
+                    } else {
+                        Ok(Ok(result))
+                    }
+                })? {
+                    Ok(iter) => iter,
+                    Err(future) => future
+                        .await
+                        .map_err(|e| NexusError::Internal(e.to_string()))?,
+                };
 
                 let (tx, rx) =
                     tokio::sync::mpsc::channel::<nvidia_nat_nexus_core::Result<Json>>(32);

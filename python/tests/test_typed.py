@@ -81,6 +81,25 @@ prefix_codec = PrefixCodec()
 sum_codec = SumCodec()
 
 
+class BrokenValidatedModel:
+    @classmethod
+    def model_validate(cls, data):
+        raise ValueError("broken validation")
+
+
+class FaultyDumpValue:
+    def model_dump(self, mode=None):
+        raise RuntimeError("broken dump")
+
+
+class UnpickleableValue:
+    def __reduce_ex__(self, protocol):
+        raise TypeError("cannot pickle")
+
+    def __str__(self):
+        return "unpickleable"
+
+
 # ---------------------------------------------------------------------------
 # Codec unit tests
 # ---------------------------------------------------------------------------
@@ -131,6 +150,54 @@ class TestCustomCodec:
         codec = EnvelopeCodec()
         assert codec.to_json(42) == {"value": 42}
         assert codec.from_json({"value": 99}) == 99
+
+    def test_base_codec_methods_raise(self):
+        codec = Codec()
+        with pytest.raises(NotImplementedError):
+            codec.to_json("value")
+        with pytest.raises(NotImplementedError):
+            codec.from_json("value")
+
+
+class TestPydanticCodec:
+    def test_direct_roundtrip(self):
+        import pydantic
+
+        class Point(pydantic.BaseModel):
+            x: int
+            y: int
+
+        codec = typed.PydanticCodec(Point)
+        encoded = codec.to_json(Point(x=2, y=3))
+        restored = codec.from_json({"x": 5, "y": 8})
+
+        assert encoded == {"x": 2, "y": 3}
+        assert restored == Point(x=5, y=8)
+
+
+class TestTypedHelpers:
+    def test_register_and_resolve_runtime_type(self):
+        token = typed._register_runtime_type(SearchArgs)
+        assert typed._resolve_runtime_type(token) is SearchArgs
+
+    def test_resolve_runtime_type_non_string(self):
+        assert typed._resolve_runtime_type(123) is None
+
+    def test_resolve_importable_type_success(self):
+        path = f"{SearchArgs.__module__}.{SearchArgs.__qualname__}"
+        assert typed._resolve_importable_type(path) is SearchArgs
+
+    def test_resolve_importable_type_invalid_inputs(self):
+        assert typed._resolve_importable_type("") is None
+        assert typed._resolve_importable_type(123) is None
+        assert typed._resolve_importable_type("does.not.exist.Type") is None
+
+    def test_resolve_importable_type_skips_local_classes(self):
+        class LocalType:
+            pass
+
+        path = f"{LocalType.__module__}.{LocalType.__qualname__}"
+        assert typed._resolve_importable_type(path) is None
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +520,42 @@ class TestTypedLlmStreamExecute:
         assert collected[0] == "alpha"
         assert collected[1] == "beta"
 
+    async def test_stream_wrapper_closures_are_executed(self, monkeypatch):
+        collected: list[StreamChunk] = []
+
+        async def fake_stream_execute(name, request, func, collector, finalizer, **kwargs):
+            json_chunks = []
+            async for chunk in func(request):
+                json_chunks.append(chunk)
+                collector(chunk)
+            return {"chunks": json_chunks, "final": finalizer(), "kwargs": kwargs}
+
+        async def stream_func(request):
+            yield StreamChunk(token="hello")
+            yield StreamChunk(token="world")
+
+        def collector(chunk):
+            collected.append(chunk)
+
+        def finalizer():
+            return StreamResponse(chunks=[chunk.token for chunk in collected])
+
+        monkeypatch.setattr(typed.llm, "stream_execute", fake_stream_execute)
+
+        result = await typed.llm_stream_execute(
+            "wrapped_stream",
+            make_request(),
+            stream_func,
+            collector,
+            finalizer,
+            stream_chunk_codec,
+            stream_response_codec,
+        )
+
+        assert result["chunks"] == [{"token": "hello"}, {"token": "world"}]
+        assert result["final"] == {"chunks": ["hello", "world"]}
+        assert [chunk.token for chunk in collected] == ["hello", "world"]
+
 
 # ---------------------------------------------------------------------------
 # Additional sync-function tests with custom codecs
@@ -614,6 +717,15 @@ class TestBestEffortAnyCodec:
         restored = self.codec.from_json(encoded)
         assert restored == val
 
+    def test_faulty_model_dump_falls_back_to_pickle(self):
+        encoded = self.codec.to_json(FaultyDumpValue())
+        assert "__nv_pickle__" in encoded
+
+    def test_unpickleable_value_falls_back_to_string(self):
+        encoded = self.codec.to_json(UnpickleableValue())
+        assert encoded["__nv_fallback_str__"].endswith(".UnpickleableValue")
+        assert encoded["data"] == "unpickleable"
+
     # -- from_json: non-dict inputs (the original bug) --
 
     @pytest.mark.parametrize(
@@ -649,6 +761,28 @@ class TestBestEffortAnyCodec:
 
     def test_from_json_empty_dict(self):
         assert self.codec.from_json({}) == {}
+
+    def test_from_json_pydantic_validation_failure_returns_raw_dict(self):
+        data = {
+            "__nv_pydantic__": f"{BrokenValidatedModel.__module__}.{BrokenValidatedModel.__qualname__}",
+            "data": {"x": 1},
+        }
+        assert self.codec.from_json(data) == data
+
+    def test_from_json_dataclass_reconstruction_failure_returns_raw_dict(self):
+        data = {
+            "__nv_dataclass__": f"{BEPoint.__module__}.{BEPoint.__qualname__}",
+            "data": {"x": 1},
+        }
+        assert self.codec.from_json(data) == data
+
+    def test_from_json_invalid_pickle_returns_raw_dict(self):
+        data = {"__nv_pickle__": "broken.Type", "data": "not-base64"}
+        assert self.codec.from_json(data) == data
+
+    def test_from_json_fallback_string_returns_string(self):
+        data = {"__nv_fallback_str__": "broken.Type", "data": "fallback-value"}
+        assert self.codec.from_json(data) == "fallback-value"
 
     # -- to_json: tagging --
 

@@ -159,11 +159,53 @@ class TestToolGuardrails:
         guardrails.register_tool_conditional_execution("py_cond", 1, blocker)
         guardrails.deregister_tool_conditional_execution("py_cond")
 
+    def test_conditional_execution_direct(self):
+        guardrails.register_tool_conditional_execution("py_cond_direct", 1, lambda name, args: "blocked directly")
+        with pytest.raises(RuntimeError, match="guardrail rejected"):
+            tools.conditional_execution("direct_tool", {})
+        guardrails.deregister_tool_conditional_execution("py_cond_direct")
+
     def test_duplicate_guardrail_raises(self):
         guardrails.register_tool_sanitize_request("py_dup_guard", 1, lambda n, a: a)
         with pytest.raises(RuntimeError):
             guardrails.register_tool_sanitize_request("py_dup_guard", 1, lambda n, a: a)
         guardrails.deregister_tool_sanitize_request("py_dup_guard")
+
+    def test_sanitize_request_failure_falls_back_to_original_input(self):
+        events = []
+        subscribers.register("py_tool_sanitize_req_sub", lambda event: events.append(event))
+        guardrails.register_tool_sanitize_request(
+            "py_tool_sanitize_req_fail",
+            1,
+            lambda name, args: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        try:
+            handle = tools.call("tool_sanitize_req_fail", {"value": 1})
+            tools.call_end(handle, {"ok": True})
+        finally:
+            guardrails.deregister_tool_sanitize_request("py_tool_sanitize_req_fail")
+            subscribers.deregister("py_tool_sanitize_req_sub")
+
+        start = next(
+            event for event in events if event.name == "tool_sanitize_req_fail" and event.event_type == EventType.Start
+        )
+        assert start.input == {"value": 1}
+
+    def test_sanitize_response_invalid_return_falls_back_to_original_output(self):
+        events = []
+        subscribers.register("py_tool_sanitize_resp_sub", lambda event: events.append(event))
+        guardrails.register_tool_sanitize_response("py_tool_sanitize_resp_bad", 1, lambda name, result: object())
+        try:
+            handle = tools.call("tool_sanitize_resp_bad", {"value": 1})
+            tools.call_end(handle, {"ok": True})
+        finally:
+            guardrails.deregister_tool_sanitize_response("py_tool_sanitize_resp_bad")
+            subscribers.deregister("py_tool_sanitize_resp_sub")
+
+        end = next(
+            event for event in events if event.name == "tool_sanitize_resp_bad" and event.event_type == EventType.End
+        )
+        assert end.output == {"ok": True}
 
     def test_deregister_nonexistent(self):
         assert not guardrails.deregister_tool_sanitize_request("nonexistent")
@@ -190,6 +232,17 @@ class TestToolIntercepts:
         assert intercepts.deregister_tool_request("py_req_int")
         assert not intercepts.deregister_tool_request("py_req_int")
 
+    def test_request_intercepts_direct(self):
+        def intercept_fn(name, args):
+            args["direct"] = True
+            return args
+
+        intercepts.register_tool_request("py_req_int_direct", 1, False, intercept_fn)
+        transformed = tools.request_intercepts("direct_tool", {"input": True})
+        intercepts.deregister_tool_request("py_req_int_direct")
+
+        assert transformed["direct"] is True
+
     def test_execution_intercept_register_deregister(self):
         intercepts.register_tool_execution(
             "py_exec_int",
@@ -203,6 +256,22 @@ class TestToolIntercepts:
         with pytest.raises(RuntimeError):
             intercepts.register_tool_request("py_dup_int", 1, False, lambda n, a: a)
         intercepts.deregister_tool_request("py_dup_int")
+
+    def test_request_intercept_falls_back_on_exception(self):
+        intercepts.register_tool_request(
+            "py_req_raise", 1, False, lambda n, a: (_ for _ in ()).throw(RuntimeError("boom"))
+        )
+        try:
+            assert tools.request_intercepts("raise_tool", {"value": 1}) == {"value": 1}
+        finally:
+            intercepts.deregister_tool_request("py_req_raise")
+
+    def test_request_intercept_falls_back_on_unserializable_return(self):
+        intercepts.register_tool_request("py_req_bad_return", 1, False, lambda n, a: object())
+        try:
+            assert tools.request_intercepts("bad_return_tool", {"value": 1}) == {"value": 1}
+        finally:
+            intercepts.deregister_tool_request("py_req_bad_return")
 
 
 class TestToolInterceptsAsync:
@@ -238,6 +307,23 @@ class TestToolInterceptsAsync:
 
         intercepts.deregister_tool_execution("py_exec_replace")
 
+    async def test_execution_intercept_can_await_next(self):
+        async def middleware(name, args, next):
+            result = await next({"value": args["value"] + 1})
+            result["from_intercept"] = True
+            return result
+
+        intercepts.register_tool_execution("py_exec_next", 1, middleware)
+
+        def original(args):
+            return {"value": args["value"] * 2}
+
+        try:
+            result = await tools.execute("next_tool", {"value": 2}, original)
+            assert result == {"value": 6, "from_intercept": True}
+        finally:
+            intercepts.deregister_tool_execution("py_exec_next")
+
     async def test_request_intercept_break_chain(self):
         def first_fn(name, args):
             args["from_first"] = True
@@ -259,3 +345,25 @@ class TestToolInterceptsAsync:
 
         intercepts.deregister_tool_request("py_chain1")
         intercepts.deregister_tool_request("py_chain2")
+
+
+class TestToolGuardrailsEdgeCases:
+    def test_conditional_execution_invalid_return_type_raises(self):
+        guardrails.register_tool_conditional_execution("py_cond_bad_type", 1, lambda name, args: 123)
+        try:
+            with pytest.raises(RuntimeError, match="expected str or None"):
+                tools.conditional_execution("bad_type_tool", {})
+        finally:
+            guardrails.deregister_tool_conditional_execution("py_cond_bad_type")
+
+    def test_conditional_execution_callable_error_raises(self):
+        guardrails.register_tool_conditional_execution(
+            "py_cond_error",
+            1,
+            lambda name, args: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        try:
+            with pytest.raises(RuntimeError, match="callable failed"):
+                tools.conditional_execution("error_tool", {})
+        finally:
+            guardrails.deregister_tool_conditional_execution("py_cond_error")

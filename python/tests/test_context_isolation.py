@@ -148,3 +148,29 @@ def test_propagate_scope_to_thread_cross_thread():
 
     assert result["name"] == "parent_scope"
     nat_nexus.scope.pop(handle)
+
+
+def test_propagate_scope_to_thread_uses_native_active_stack_without_contextvar():
+    """Verify propagate_scope_to_thread uses current_scope_stack().
+
+    This covers the case where set_thread_scope_stack() initializes only the
+    Rust thread-local and the Python ContextVar is not initialized, so
+    propagate_scope_to_thread does not need get_scope_stack() in that case.
+    """
+    import threading
+
+    result = {}
+    stack = nat_nexus.create_scope_stack()
+
+    def worker():
+        nat_nexus.set_thread_scope_stack(stack)
+        propagated = nat_nexus.propagate_scope_to_thread()
+        result["active"] = nat_nexus.scope_stack_active()
+        result["repr"] = repr(propagated)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+
+    assert result["active"] is True
+    assert result["repr"] == "<ScopeStack>"

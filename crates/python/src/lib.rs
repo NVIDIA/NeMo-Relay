@@ -34,3 +34,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     py_api::register(m)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod coverage_tests;

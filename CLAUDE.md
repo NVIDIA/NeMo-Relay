@@ -51,7 +51,7 @@ cargo build --release -p nvidia-nat-nexus-ffi   # FFI shared lib (needed for Go)
 # Test — Rust
 cargo test --workspace                   # All Rust tests (excludes nvidia-nat-nexus-python if Python < 3.11)
 cargo test -p nvidia-nat-nexus-core             # Core tests only
-cargo test -p nvidia-nat-nexus-wasm             # WASM tests (unit tests via cargo test)
+cargo test -p nat-nexus-wasm                    # WASM tests (unit tests via cargo test)
 wasm-pack test --node crates/wasm        # WASM integration tests (wasm-bindgen-test)
 
 # Test — Python

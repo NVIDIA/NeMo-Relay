@@ -37,3 +37,7 @@ impl LlmStream {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "stream_coverage_tests.rs"]
+mod coverage_tests;

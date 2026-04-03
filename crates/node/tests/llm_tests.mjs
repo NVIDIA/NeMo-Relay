@@ -10,7 +10,7 @@ const lib = require('../index.js');
 
 const {
   pushScope, popScope,
-  llmCall, llmCallEnd, llmCallExecute, llmStreamCallExecute,
+  llmCall, llmCallEnd, llmCallExecute, llmCallExecuteAsync, llmStreamCallExecute, llmRequestIntercepts, llmConditionalExecution,
   registerLlmSanitizeRequestGuardrail, deregisterLlmSanitizeRequestGuardrail,
   registerLlmSanitizeResponseGuardrail, deregisterLlmSanitizeResponseGuardrail,
   registerLlmConditionalExecutionGuardrail, deregisterLlmConditionalExecutionGuardrail,
@@ -89,6 +89,38 @@ describe('LLM execute', () => {
     const result = await llmCallExecute('exec_llm', native, (n) => ({ response: 'hello from llm' }), null, null, null, null, null);
     assert.deepEqual(result, { response: 'hello from llm' });
   });
+
+  it('async execute awaits Promise-returning callbacks', async () => {
+    const result = await llmCallExecuteAsync(
+      'exec_async_llm',
+      makeNative(),
+      async (request) => ({ response: request.content.model }),
+      null,
+      LLM_ATTR_STATELESS,
+      { data: true },
+      { meta: true },
+      'async-model',
+    );
+    assert.deepEqual(result, { response: 'test-model' });
+  });
+
+  it('async execute surfaces plain string rejections', async () => {
+    await assert.rejects(
+      () => llmCallExecuteAsync(
+        'exec_async_llm_reject',
+        makeNative(),
+        async () => {
+          throw 'string llm error';
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+      ),
+      /string llm error/,
+    );
+  });
 });
 
 // ===========================================================================
@@ -101,9 +133,102 @@ describe('LLM guardrails', () => {
     deregisterLlmSanitizeRequestGuardrail('node_llm_san_req');
   });
 
+  it('sanitize request guardrail rewrites start event payload', async () => {
+    const events = [];
+    registerSubscriber('node_llm_san_req_evt', (e) => events.push(e));
+    registerLlmSanitizeRequestGuardrail('node_llm_san_req_evt_guard', 10, (request) => {
+      request.headers = { ...request.headers, 'X-Sanitized': 'yes' };
+      return request;
+    });
+
+    try {
+      const result = await llmCallExecute(
+        'san_req_evt_llm',
+        makeNative(),
+        (request) => ({ model: request.content.model }),
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(result, { model: 'test-model' });
+      const deadline = Date.now() + 2000;
+      while (!events.find((e) => e.name === 'san_req_evt_llm' && e.event_type === 0) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      const start = events.find((e) => e.name === 'san_req_evt_llm' && e.event_type === 0);
+      assert.deepEqual(JSON.parse(start.input), {
+        headers: { 'X-Sanitized': 'yes' },
+        content: { messages: [], model: 'test-model' },
+      });
+    } finally {
+      deregisterLlmSanitizeRequestGuardrail('node_llm_san_req_evt_guard');
+      deregisterSubscriber('node_llm_san_req_evt');
+    }
+  });
+
+  it('sanitize request guardrail falls back on malformed return', async () => {
+    registerLlmSanitizeRequestGuardrail('node_llm_san_req_bad', 10, () => null);
+    try {
+      const result = await llmCallExecute(
+        'san_req_bad_llm',
+        makeNative(),
+        (request) => ({ model: request.content.model, headers: request.headers }),
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(result, { model: 'test-model', headers: {} });
+    } finally {
+      deregisterLlmSanitizeRequestGuardrail('node_llm_san_req_bad');
+    }
+  });
+
+  it('conditional guardrail ignores non-string return values', async () => {
+    registerLlmConditionalExecutionGuardrail('node_llm_cond_non_string', 10, () => ({ blocked: true }));
+    const result = await llmCallExecute('llm_cond_non_string', makeNative(), () => ({ ok: true }), null, null, null, null, null);
+    assert.deepEqual(result, { ok: true });
+    deregisterLlmConditionalExecutionGuardrail('node_llm_cond_non_string');
+  });
+
   it('sanitize response guardrail', () => {
     registerLlmSanitizeResponseGuardrail('node_llm_san_resp', 10, (response) => { response.sanitized = true; return response; });
     deregisterLlmSanitizeResponseGuardrail('node_llm_san_resp');
+  });
+
+  it('sanitize response guardrail rewrites end event payload', async () => {
+    const events = [];
+    registerSubscriber('node_llm_san_resp_evt', (e) => events.push(e));
+    registerLlmSanitizeResponseGuardrail('node_llm_san_resp_evt_guard', 10, (response) => {
+      response.sanitized = true;
+      return response;
+    });
+
+    try {
+      const result = await llmCallExecute(
+        'san_resp_evt_llm',
+        makeNative(),
+        () => ({ ok: true }),
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(result, { ok: true });
+      const deadline = Date.now() + 2000;
+      while (!events.find((e) => e.name === 'san_resp_evt_llm' && e.event_type === 1) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      const end = events.find((e) => e.name === 'san_resp_evt_llm' && e.event_type === 1);
+      assert.deepEqual(JSON.parse(end.output), { ok: true, sanitized: true });
+    } finally {
+      deregisterLlmSanitizeResponseGuardrail('node_llm_san_resp_evt_guard');
+      deregisterSubscriber('node_llm_san_resp_evt');
+    }
   });
 
   it('conditional guardrail (allow)', () => {
@@ -162,6 +287,14 @@ describe('LLM intercepts', () => {
     deregisterLlmRequestIntercept('node_llm_req_mod');
   });
 
+  it('request intercept falls back to original request on malformed return', async () => {
+    registerLlmRequestIntercept('node_llm_req_bad', 10, false, () => null);
+    const native = makeNative();
+    const result = await llmCallExecute('bad_req_llm', native, (n) => ({ model: n.content.model }), null, null, null, null, null);
+    assert.equal(result.model, 'test-model');
+    deregisterLlmRequestIntercept('node_llm_req_bad');
+  });
+
   it('execution intercept composes with next', async () => {
     registerLlmExecutionIntercept('node_llm_exec_repl', 10, async (native, next) => {
       native.content.intercepted = true;
@@ -173,6 +306,38 @@ describe('LLM intercepts', () => {
     assert.equal(result.original, false);
     assert.equal(result.wrapped, true);
     deregisterLlmExecutionIntercept('node_llm_exec_repl');
+  });
+
+  it('execution intercept rejects invalid next request payloads', async () => {
+    registerLlmExecutionIntercept('node_llm_exec_invalid_next', 10, async (_native, next) => {
+      return next({ headers: 1, content: { model: 'broken' } });
+    });
+    await assert.rejects(
+      () => llmCallExecute('invalid_next_llm', makeNative(), () => ({ ok: true }), null, null, null, null, null),
+      /invalid LLMRequest from JS next/i,
+    );
+    deregisterLlmExecutionIntercept('node_llm_exec_invalid_next');
+  });
+
+  it('execution intercept propagates primitive rejection values as unknown error', async () => {
+    registerLlmExecutionIntercept('node_llm_exec_unknown_err', 10, async () => {
+      throw 42;
+    });
+    try {
+      await assert.rejects(
+        () => llmCallExecute('unknown_err_llm', makeNative(), () => ({ ok: true }), null, null, null, null, null),
+        /unknown error/i,
+      );
+    } finally {
+      deregisterLlmExecutionIntercept('node_llm_exec_unknown_err');
+    }
+  });
+
+  it('async execute falls back to unknown error for primitive rejections', async () => {
+    await assert.rejects(
+      () => llmCallExecuteAsync('primitive_reject_llm', makeNative(), async () => Promise.reject(42), null, null, null, null, null),
+      /unknown error/i,
+    );
   });
 
   it('stream execution intercept composes with next', async () => {
@@ -210,5 +375,130 @@ describe('LLM intercepts', () => {
 
     assert.deepEqual(seen, [{ chunk: true }, { wrapped: true }]);
     deregisterLlmStreamExecutionIntercept('node_llm_stream_exec_repl');
+  });
+
+  it('stream execution intercept can return a single scalar chunk', async () => {
+    registerLlmStreamExecutionIntercept('node_llm_stream_scalar', 10, async () => ({ scalar: true }));
+
+    const seen = [];
+    const stream = await llmStreamCallExecute(
+      'stream_scalar_llm',
+      makeNative(),
+      () => {
+        throw new Error('downstream stream should not be called');
+      },
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+    );
+
+    for (;;) {
+      const chunk = await stream.next();
+      if (chunk === null) {
+        break;
+      }
+      seen.push(chunk);
+    }
+
+    assert.deepEqual(seen, [{ scalar: true }]);
+    deregisterLlmStreamExecutionIntercept('node_llm_stream_scalar');
+  });
+
+  it('stream execution intercept rejects invalid next request payloads', async () => {
+    registerLlmStreamExecutionIntercept('node_llm_stream_invalid_next', 10, async (_native, next) => {
+      return next({ headers: 1, content: { model: 'broken' } });
+    });
+
+    await assert.rejects(
+      () => llmStreamCallExecute(
+        'stream_invalid_next_llm',
+        makeNative(),
+        (wrapper) => {
+          lib.pushStreamChunk(wrapper.__nat_nexus_stream_id, { chunk: true });
+          lib.endStream(wrapper.__nat_nexus_stream_id);
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+      ),
+      /invalid LLMRequest from JS next/i,
+    );
+
+    deregisterLlmStreamExecutionIntercept('node_llm_stream_invalid_next');
+  });
+
+  it('standalone request intercepts helper applies intercept chain', async () => {
+    registerLlmRequestIntercept('node_llm_req_helper', 10, false, (native) => {
+      native.content.helper = true;
+      return native;
+    });
+
+    const result = await llmRequestIntercepts('helper_llm', makeNative());
+    assert.equal(result.content.helper, true);
+    deregisterLlmRequestIntercept('node_llm_req_helper');
+  });
+
+  it('standalone conditional execution helper throws on rejection', async () => {
+    registerLlmConditionalExecutionGuardrail('node_llm_cond_helper', 10, () => 'llm blocked by helper');
+    try {
+      await assert.rejects(() => llmConditionalExecution(makeNative()), /guardrail rejected/i);
+    } finally {
+      deregisterLlmConditionalExecutionGuardrail('node_llm_cond_helper');
+    }
+  });
+
+  it('standalone conditional execution helper resolves when allowed', async () => {
+    registerLlmConditionalExecutionGuardrail('node_llm_cond_allow', 10, () => null);
+    try {
+      await assert.doesNotReject(() => llmConditionalExecution(makeNative()));
+    } finally {
+      deregisterLlmConditionalExecutionGuardrail('node_llm_cond_allow');
+    }
+  });
+});
+
+describe('LLM event fields', () => {
+  it('subscriber receives modelName and rootUuid fields', async () => {
+    const events = [];
+    const scope = pushScope('llm_event_parent', ScopeType.Agent, null, null);
+    registerSubscriber('node_llm_field_sub', (e) => events.push(e));
+    try {
+      const handle = llmCall(
+        'field_llm',
+        makeNative(),
+        scope,
+        LLM_ATTR_STATELESS,
+        { start: true },
+        { meta: true },
+        'gpt-field-model',
+      );
+      assert.equal(handle.attributes, LLM_ATTR_STATELESS);
+      assert.equal(handle.parentUuid, scope.uuid);
+      llmCallEnd(handle, { ok: true }, { end: true }, { final: true });
+
+      const deadline = Date.now() + 2000;
+      while (events.filter((e) => e.name === 'field_llm').length < 2 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      const start = events.find((e) => e.name === 'field_llm' && e.event_type === 0);
+      const end = events.find((e) => e.name === 'field_llm' && e.event_type === 1);
+      assert.equal(start.model_name, 'gpt-field-model');
+      assert.ok(start.root_uuid);
+      assert.equal(end.root_uuid, start.root_uuid);
+      assert.deepEqual(JSON.parse(start.input), { headers: {}, content: { messages: [], model: 'test-model' } });
+      assert.deepEqual(JSON.parse(end.output), { ok: true });
+    } finally {
+      deregisterSubscriber('node_llm_field_sub');
+      popScope(scope);
+    }
   });
 });

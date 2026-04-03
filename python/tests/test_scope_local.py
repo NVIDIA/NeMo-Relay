@@ -13,8 +13,10 @@ import pytest
 from nat_nexus import (
     Event,
     EventType,
+    LLMRequest,
     ScopeType,
     guardrails,
+    llm,
     scope,
     scope_local,
     subscribers,
@@ -535,3 +537,122 @@ class TestScopeLocalDeregistration:
         with scope.scope("dereg_none_scope", ScopeType.Agent) as handle:
             result = scope_local.deregister_tool_sanitize_request(handle, "nonexistent_guard")
             assert result is False
+
+
+class TestScopeLocalLlmWrappers:
+    def test_register_and_deregister_scope_local_wrappers(self):
+        """Scope-local wrapper functions round-trip through the native API for both tool and LLM middleware."""
+        request = LLMRequest({}, {"messages": [], "model": "scope-local"})
+
+        async def stream_intercept(request_inner, next_fn):
+            if False:
+                yield {}
+
+        with scope.scope("llm_scope_local_wrappers", ScopeType.Agent) as handle:
+            scope_local.register_tool_sanitize_response(handle, "sl_tool_resp_cov", 1, lambda name, result: result)
+            assert scope_local.deregister_tool_sanitize_response(handle, "sl_tool_resp_cov") is True
+
+            scope_local.register_tool_conditional_execution(handle, "sl_tool_cond_cov", 1, lambda name, args: None)
+            assert scope_local.deregister_tool_conditional_execution(handle, "sl_tool_cond_cov") is True
+
+            scope_local.register_tool_request(handle, "sl_tool_req_cov", 1, False, lambda name, args: args)
+            assert scope_local.deregister_tool_request(handle, "sl_tool_req_cov") is True
+
+            scope_local.register_tool_execution(handle, "sl_tool_exec_cov", 1, lambda name, args, next_fn: args)
+            assert scope_local.deregister_tool_execution(handle, "sl_tool_exec_cov") is True
+
+            scope_local.register_llm_sanitize_request(handle, "sl_llm_req_cov", 1, lambda req: req)
+            assert scope_local.deregister_llm_sanitize_request(handle, "sl_llm_req_cov") is True
+
+            scope_local.register_llm_sanitize_response(handle, "sl_llm_resp_cov", 1, lambda response: response)
+            assert scope_local.deregister_llm_sanitize_response(handle, "sl_llm_resp_cov") is True
+
+            scope_local.register_llm_conditional_execution(handle, "sl_llm_cond_cov", 1, lambda req: None)
+            assert scope_local.deregister_llm_conditional_execution(handle, "sl_llm_cond_cov") is True
+
+            scope_local.register_llm_request(handle, "sl_llm_int_cov", 1, False, lambda name, req: req)
+            assert scope_local.deregister_llm_request(handle, "sl_llm_int_cov") is True
+
+            scope_local.register_llm_execution(
+                handle,
+                "sl_llm_exec_cov",
+                1,
+                lambda name, req, next_fn: {"intercepted": True},
+            )
+            assert scope_local.deregister_llm_execution(handle, "sl_llm_exec_cov") is True
+
+            scope_local.register_llm_stream_execution(handle, "sl_llm_stream_cov", 1, stream_intercept)
+            assert scope_local.deregister_llm_stream_execution(handle, "sl_llm_stream_cov") is True
+
+            assert request.content["model"] == "scope-local"
+
+
+class TestScopeLocalLlmBehavior:
+    async def test_scope_local_llm_sanitize_request_rewrites_event_input(self):
+        events = []
+        request = LLMRequest({}, {"messages": [], "model": "scope-local"})
+
+        def sanitize_request(req):
+            return LLMRequest({"X-Scope-Local": "yes"}, req.content)
+
+        with scope.scope("sl_llm_sanitize_scope", ScopeType.Agent) as handle:
+            scope_local.register_subscriber(handle, "sl_llm_sanitize_sub", lambda event: events.append(event))
+            scope_local.register_llm_sanitize_request(handle, "sl_llm_sanitize", 1, sanitize_request)
+            result = await llm.execute("sl_llm_sanitize_call", request, lambda req: {"model": req.content["model"]})
+
+        assert result == {"model": "scope-local"}
+        start = next(
+            event for event in events if event.name == "sl_llm_sanitize_call" and event.event_type == EventType.Start
+        )
+        assert start.input == {
+            "headers": {"X-Scope-Local": "yes"},
+            "content": {"messages": [], "model": "scope-local"},
+        }
+
+    async def test_scope_local_llm_request_intercept_modifies_request(self):
+        request = LLMRequest({}, {"messages": [], "model": "scope-local"})
+
+        def intercept(name, req):
+            return LLMRequest(req.headers, {**req.content, "intercepted": True})
+
+        with scope.scope("sl_llm_request_scope", ScopeType.Agent) as handle:
+            scope_local.register_llm_request(handle, "sl_llm_request", 1, False, intercept)
+            result = await llm.execute(
+                "sl_llm_request_call",
+                request,
+                lambda req: {"intercepted": req.content.get("intercepted", False)},
+            )
+
+        assert result == {"intercepted": True}
+
+    async def test_scope_local_llm_execution_intercept_can_await_next(self):
+        request = LLMRequest({}, {"messages": [], "model": "scope-local"})
+
+        async def middleware(name, req, next_fn):
+            updated = LLMRequest(req.headers, {**req.content, "model": "via-scope-local"})
+            result = await next_fn(updated)
+            result["scope_local"] = True
+            return result
+
+        with scope.scope("sl_llm_execution_scope", ScopeType.Agent) as handle:
+            scope_local.register_llm_execution(handle, "sl_llm_execution", 1, middleware)
+            result = await llm.execute(
+                "sl_llm_execution_call",
+                request,
+                lambda req: {"model": req.content["model"]},
+            )
+
+        assert result == {"model": "via-scope-local", "scope_local": True}
+
+    async def test_scope_local_llm_conditional_execution_blocks(self):
+        request = LLMRequest({}, {"messages": [], "model": "scope-local"})
+
+        with scope.scope("sl_llm_conditional_scope", ScopeType.Agent) as handle:
+            scope_local.register_llm_conditional_execution(
+                handle,
+                "sl_llm_conditional",
+                1,
+                lambda req: "blocked by scope-local llm guardrail",
+            )
+            with pytest.raises(RuntimeError, match="guardrail rejected"):
+                await llm.execute("sl_llm_conditional_call", request, lambda req: {"should": "not-run"})

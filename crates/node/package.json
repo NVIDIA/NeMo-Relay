@@ -21,11 +21,14 @@
   "scripts": {
     "build": "napi build --platform --release",
     "build-debug": "napi build --platform",
+    "precoverage": "npm run build-debug",
     "pretest": "npm run build-debug",
-    "test": "node --test --test-force-exit tests/*.mjs"
+    "test": "node --test --test-force-exit tests/*.mjs",
+    "coverage": "c8 --reporter=text --reporter=json-summary --reporter=cobertura --reports-dir coverage node --test --test-force-exit tests/*.mjs"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^2"
+    "@napi-rs/cli": "^2",
+    "c8": "^11.0.0"
   },
   "license": "Apache-2.0"
 }
