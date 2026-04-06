@@ -173,6 +173,8 @@ guardrail_registry_api!(
     /// they affect the `Start` event payload, but request intercepts still control the
     /// actual execution input.
     ///
+    /// This callback is infallible. Handle failures inside the callback itself.
+    ///
     /// # Errors
     ///
     /// Returns [`NexusError::AlreadyExists`] if a guardrail with the given name is already registered.
@@ -189,6 +191,8 @@ guardrail_registry_api!(
     /// Callback signature: `(tool_name: &str, result: Json) -> Json`.
     /// In the managed `*_execute` APIs, sanitize guardrails affect the `End` event payload,
     /// not the value returned to the caller.
+    ///
+    /// This callback is infallible. Handle failures inside the callback itself.
     nat_nexus_register_tool_sanitize_response_guardrail,
     nat_nexus_deregister_tool_sanitize_response_guardrail,
     tool_sanitize_response_guardrails,
@@ -198,8 +202,9 @@ guardrail_registry_api!(
 guardrail_registry_api!(
     /// Register a tool conditional execution guardrail that can reject tool calls.
     ///
-    /// Callback signature: `(tool_name: &str, args: &Json) -> Option<String>`.
-    /// Return `None` to allow execution, `Some(reason)` to reject it.
+    /// Callback signature: `(tool_name: &str, args: &Json) -> Result<Option<String>>`.
+    /// Return `Ok(None)` to allow execution, `Ok(Some(reason))` to reject it.
+    /// Returning `Err(...)` aborts the originating Nexus call.
     nat_nexus_register_tool_conditional_execution_guardrail,
     nat_nexus_deregister_tool_conditional_execution_guardrail,
     tool_conditional_execution_guardrails,
@@ -216,8 +221,9 @@ guardrail_registry_api!(
 intercept_registry_api!(
     /// Register a tool request intercept that transforms arguments before sanitize guardrails.
     ///
-    /// Callback signature: `(tool_name: &str, args: Json) -> Json`.
+    /// Callback signature: `(tool_name: &str, args: Json) -> Result<Json>`.
     /// Set `break_chain = true` to prevent lower-priority intercepts from running.
+    /// Returning `Err(...)` aborts the originating Nexus call.
     nat_nexus_register_tool_request_intercept,
     nat_nexus_deregister_tool_request_intercept,
     tool_request_intercepts,
@@ -246,6 +252,8 @@ guardrail_registry_api!(
     /// Callback signature: `(request: LLMRequest) -> LLMRequest`.
     /// In the managed `*_execute` APIs, sanitize guardrails affect the `Start` event payload,
     /// while request intercepts still control the request passed into execution.
+    ///
+    /// This callback is infallible. Handle failures inside the callback itself.
     nat_nexus_register_llm_sanitize_request_guardrail,
     nat_nexus_deregister_llm_sanitize_request_guardrail,
     llm_sanitize_request_guardrails,
@@ -259,6 +267,8 @@ guardrail_registry_api!(
     /// Callback signature: `(response: Json) -> Json`.
     /// In the managed `*_execute` APIs, sanitize guardrails affect the `End` event payload,
     /// not the value returned to the caller.
+    ///
+    /// This callback is infallible. Handle failures inside the callback itself.
     nat_nexus_register_llm_sanitize_response_guardrail,
     nat_nexus_deregister_llm_sanitize_response_guardrail,
     llm_sanitize_response_guardrails,
@@ -268,8 +278,9 @@ guardrail_registry_api!(
 guardrail_registry_api!(
     /// Register an LLM conditional execution guardrail that can reject LLM calls.
     ///
-    /// Callback signature: `(request: &LLMRequest) -> Option<String>`.
-    /// Return `None` to allow execution, `Some(reason)` to reject it.
+    /// Callback signature: `(request: &LLMRequest) -> Result<Option<String>>`.
+    /// Return `Ok(None)` to allow execution, `Ok(Some(reason))` to reject it.
+    /// Returning `Err(...)` aborts the originating Nexus call.
     nat_nexus_register_llm_conditional_execution_guardrail,
     nat_nexus_deregister_llm_conditional_execution_guardrail,
     llm_conditional_execution_guardrails,
@@ -283,8 +294,9 @@ guardrail_registry_api!(
 intercept_registry_api!(
     /// Register an LLM request intercept that transforms the request before sanitize guardrails.
     ///
-    /// Callback signature: `(request: LLMRequest) -> LLMRequest`.
+    /// Callback signature: `(request: LLMRequest) -> Result<LLMRequest>`.
     /// Set `break_chain = true` to prevent lower-priority intercepts from running.
+    /// Returning `Err(...)` aborts the originating Nexus call.
     nat_nexus_register_llm_request_intercept,
     nat_nexus_deregister_llm_request_intercept,
     llm_request_intercepts,
@@ -364,7 +376,10 @@ macro_rules! scope_local_guardrail_registry_api {
             regs.$field
                 .register(
                     name.to_string(),
-                    GuardrailEntry { priority, guardrail },
+                    GuardrailEntry {
+                        priority,
+                        guardrail,
+                    },
                 )
                 .map_err(|e| NexusError::AlreadyExists(e))
         }
@@ -399,7 +414,11 @@ macro_rules! scope_local_intercept_registry_api {
             regs.$field
                 .register(
                     name.to_string(),
-                    Intercept { priority, break_chain, callable },
+                    Intercept {
+                        priority,
+                        break_chain,
+                        callable,
+                    },
                 )
                 .map_err(|e| NexusError::AlreadyExists(e))
         }
@@ -794,7 +813,7 @@ pub async fn nat_nexus_tool_call_execute(
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        if let Some(err) = state.tool_conditional_execution_chain(name, &args, &sl) {
+        if let Some(err) = state.tool_conditional_execution_chain(name, &args, &sl)? {
             drop(state);
             drop(ss_guard);
             let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
@@ -816,7 +835,7 @@ pub async fn nat_nexus_tool_call_execute(
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.tool_request_intercepts_chain(name, args, &sl)
+        state.tool_request_intercepts_chain(name, args, &sl)?
     };
 
     // Tool call start (scope-local sanitize request guardrails are picked up inside nat_nexus_tool_call)
@@ -982,7 +1001,7 @@ pub async fn nat_nexus_llm_call_execute(
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        if let Some(err) = state.llm_conditional_execution_chain(&request, &sl) {
+        if let Some(err) = state.llm_conditional_execution_chain(&request, &sl)? {
             drop(state);
             drop(ss_guard);
             let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
@@ -1004,7 +1023,7 @@ pub async fn nat_nexus_llm_call_execute(
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.llm_request_intercepts_chain(name, request, &sl)
+        state.llm_request_intercepts_chain(name, request, &sl)?
     };
 
     // LLM call start (sanitize guardrails happen inside nat_nexus_llm_call)
@@ -1057,10 +1076,11 @@ pub async fn nat_nexus_llm_call_execute(
 /// is emitted.
 ///
 /// - `collector` — called with each chunk (Json); use this to accumulate
-///   streaming tokens or forward them to another sink. Return `Ok(())` to
-///   continue or `Err(NexusError)` to terminate the stream.
+///   streaming tokens or forward them to another sink. This callback is
+///   fallible: return `Ok(())` to continue or `Err(NexusError)` to terminate
+///   the stream.
 /// - `finalizer` — called once when the stream is exhausted; returns the
-///   aggregated response as [`Json`].
+///   aggregated response as [`Json`]. This callback is infallible.
 ///
 /// Returns [`NexusError::GuardrailRejected`] if a conditional guardrail rejects the call.
 #[allow(clippy::too_many_arguments)]
@@ -1086,7 +1106,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        if let Some(err) = state.llm_conditional_execution_chain(&request, &sl) {
+        if let Some(err) = state.llm_conditional_execution_chain(&request, &sl)? {
             drop(state);
             drop(ss_guard);
             let mut rejection_data = data.clone().unwrap_or_else(|| json!({}));
@@ -1108,7 +1128,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.llm_request_intercepts_chain(name, request, &sl)
+        state.llm_request_intercepts_chain(name, request, &sl)?
     };
 
     // LLM call start (sanitize guardrails happen inside nat_nexus_llm_call)
@@ -1164,7 +1184,7 @@ pub fn nat_nexus_tool_request_intercepts(name: &str, args: Json) -> Result<Json>
     let state = ctx
         .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
-    Ok(state.tool_request_intercepts_chain(name, args, &sl))
+    state.tool_request_intercepts_chain(name, args, &sl)
 }
 
 /// Runs the registered tool conditional execution guardrail chain.
@@ -1180,7 +1200,7 @@ pub fn nat_nexus_tool_conditional_execution(name: &str, args: &Json) -> Result<(
     let state = ctx
         .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
-    if let Some(err) = state.tool_conditional_execution_chain(name, args, &sl) {
+    if let Some(err) = state.tool_conditional_execution_chain(name, args, &sl)? {
         return Err(NexusError::GuardrailRejected(err));
     }
     Ok(())
@@ -1199,7 +1219,7 @@ pub fn nat_nexus_llm_request_intercepts(name: &str, request: LLMRequest) -> Resu
     let state = ctx
         .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
-    Ok(state.llm_request_intercepts_chain(name, request, &sl))
+    state.llm_request_intercepts_chain(name, request, &sl)
 }
 
 /// Runs the registered LLM conditional execution guardrail chain.
@@ -1215,7 +1235,7 @@ pub fn nat_nexus_llm_conditional_execution(request: &LLMRequest) -> Result<()> {
     let state = ctx
         .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
-    if let Some(err) = state.llm_conditional_execution_chain(request, &sl) {
+    if let Some(err) = state.llm_conditional_execution_chain(request, &sl)? {
         return Err(NexusError::GuardrailRejected(err));
     }
     Ok(())
@@ -1778,7 +1798,7 @@ mod tests {
                 args.as_object_mut()
                     .unwrap()
                     .insert("added_by_intercept".into(), json!(true));
-                args
+                Ok(args)
             }),
         )
         .unwrap();
@@ -1821,7 +1841,7 @@ mod tests {
         nat_nexus_register_tool_conditional_execution_guardrail(
             "blocker",
             1,
-            Box::new(|_name, _args| Some("forbidden tool".into())),
+            Box::new(|_name, _args| Ok(Some("forbidden tool".into()))),
         )
         .unwrap();
 
@@ -2087,7 +2107,7 @@ mod tests {
         nat_nexus_register_llm_conditional_execution_guardrail(
             "llm_blocker",
             1,
-            Box::new(|_req: &LLMRequest| Some("blocked by policy".into())),
+            Box::new(|_req: &LLMRequest| Ok(Some("blocked by policy".into()))),
         )
         .unwrap();
 
@@ -2140,7 +2160,7 @@ mod tests {
             false,
             Box::new(|_name: &str, mut req: LLMRequest| {
                 req.headers.insert("intercepted".into(), json!(true));
-                req
+                Ok(req)
             }),
         )
         .unwrap();
@@ -2238,12 +2258,16 @@ mod tests {
     fn test_tool_conditional_execution_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_tool_conditional_execution_guardrail("g1", 1, Box::new(|_n, _a| None))
-            .unwrap();
+        nat_nexus_register_tool_conditional_execution_guardrail(
+            "g1",
+            1,
+            Box::new(|_n, _a| Ok(None)),
+        )
+        .unwrap();
         assert!(nat_nexus_register_tool_conditional_execution_guardrail(
             "g1",
             1,
-            Box::new(|_n, _a| None)
+            Box::new(|_n, _a| Ok(None))
         )
         .is_err());
         assert!(nat_nexus_deregister_tool_conditional_execution_guardrail("g1").unwrap());
@@ -2253,9 +2277,10 @@ mod tests {
     fn test_tool_request_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| a)).unwrap();
+        nat_nexus_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| Ok(a))).unwrap();
         assert!(
-            nat_nexus_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| a)).is_err()
+            nat_nexus_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| Ok(a)))
+                .is_err()
         );
         assert!(nat_nexus_deregister_tool_request_intercept("i1").unwrap());
     }
@@ -2311,12 +2336,12 @@ mod tests {
     fn test_llm_conditional_execution_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| None))
+        nat_nexus_register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| Ok(None)))
             .unwrap();
         assert!(nat_nexus_register_llm_conditional_execution_guardrail(
             "g1",
             1,
-            Box::new(|_r| None)
+            Box::new(|_r| Ok(None))
         )
         .is_err());
         assert!(nat_nexus_deregister_llm_conditional_execution_guardrail("g1").unwrap());
@@ -2326,13 +2351,13 @@ mod tests {
     fn test_llm_request_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_llm_request_intercept("i1", 1, false, Box::new(|_name: &str, r| r))
+        nat_nexus_register_llm_request_intercept("i1", 1, false, Box::new(|_name: &str, r| Ok(r)))
             .unwrap();
         assert!(nat_nexus_register_llm_request_intercept(
             "i1",
             1,
             false,
-            Box::new(|_name: &str, r| r)
+            Box::new(|_name: &str, r| Ok(r))
         )
         .is_err());
         assert!(nat_nexus_deregister_llm_request_intercept("i1").unwrap());
@@ -2564,7 +2589,7 @@ mod tests {
         nat_nexus_register_llm_conditional_execution_guardrail(
             "stream_blocker",
             1,
-            Box::new(|_req: &LLMRequest| Some("stream blocked".into())),
+            Box::new(|_req: &LLMRequest| Ok(Some("stream blocked".into()))),
         )
         .unwrap();
 
@@ -2700,7 +2725,7 @@ mod tests {
                 if let Some(obj) = args.as_object_mut() {
                     obj.insert("injected".into(), json!(true));
                 }
-                args
+                Ok(args)
             }),
         )
         .unwrap();
@@ -2729,7 +2754,7 @@ mod tests {
         nat_nexus_register_tool_conditional_execution_guardrail(
             "blocker",
             1,
-            Box::new(|_name, _args| Some("blocked".into())),
+            Box::new(|_name, _args| Ok(Some("blocked".into()))),
         )
         .unwrap();
 
@@ -2739,6 +2764,47 @@ mod tests {
         }
 
         nat_nexus_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
+    }
+
+    #[test]
+    fn test_tool_request_intercepts_standalone_callback_error() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        nat_nexus_register_tool_request_intercept(
+            "broken",
+            1,
+            false,
+            Box::new(|_name, _args| Err(NexusError::Internal("tool intercept failed".into()))),
+        )
+        .unwrap();
+
+        match nat_nexus_tool_request_intercepts("tool", json!({})) {
+            Err(NexusError::Internal(msg)) => assert_eq!(msg, "tool intercept failed"),
+            other => panic!("expected Internal error, got {other:?}"),
+        }
+
+        nat_nexus_deregister_tool_request_intercept("broken").unwrap();
+    }
+
+    #[test]
+    fn test_tool_conditional_execution_standalone_callback_error() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        nat_nexus_register_tool_conditional_execution_guardrail(
+            "broken",
+            1,
+            Box::new(|_name, _args| Err(NexusError::Internal("tool conditional failed".into()))),
+        )
+        .unwrap();
+
+        match nat_nexus_tool_conditional_execution("tool", &json!({})) {
+            Err(NexusError::Internal(msg)) => assert_eq!(msg, "tool conditional failed"),
+            other => panic!("expected Internal error, got {other:?}"),
+        }
+
+        nat_nexus_deregister_tool_conditional_execution_guardrail("broken").unwrap();
     }
 
     #[test]
@@ -2756,7 +2822,7 @@ mod tests {
                     .as_object_mut()
                     .unwrap()
                     .insert("intercepted".into(), json!(true));
-                request
+                Ok(request)
             }),
         )
         .unwrap();
@@ -2792,7 +2858,7 @@ mod tests {
         nat_nexus_register_llm_conditional_execution_guardrail(
             "blocker",
             1,
-            Box::new(|_req| Some("llm blocked".into())),
+            Box::new(|_req| Ok(Some("llm blocked".into()))),
         )
         .unwrap();
 
@@ -2806,5 +2872,58 @@ mod tests {
         }
 
         nat_nexus_deregister_llm_conditional_execution_guardrail("blocker").unwrap();
+    }
+
+    #[test]
+    fn test_llm_request_intercepts_standalone_callback_error() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        nat_nexus_register_llm_request_intercept(
+            "broken",
+            1,
+            false,
+            Box::new(|_name, _request| {
+                Err(NexusError::Internal("llm request intercept failed".into()))
+            }),
+        )
+        .unwrap();
+
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
+
+        match nat_nexus_llm_request_intercepts("test_llm", request) {
+            Err(NexusError::Internal(msg)) => assert_eq!(msg, "llm request intercept failed"),
+            other => panic!("expected Internal error, got {other:?}"),
+        }
+
+        nat_nexus_deregister_llm_request_intercept("broken").unwrap();
+    }
+
+    #[test]
+    fn test_llm_conditional_execution_standalone_callback_error() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        nat_nexus_register_llm_conditional_execution_guardrail(
+            "broken",
+            1,
+            Box::new(|_request| Err(NexusError::Internal("llm conditional failed".into()))),
+        )
+        .unwrap();
+
+        let request = LLMRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
+
+        match nat_nexus_llm_conditional_execution(&request) {
+            Err(NexusError::Internal(msg)) => assert_eq!(msg, "llm conditional failed"),
+            other => panic!("expected Internal error, got {other:?}"),
+        }
+
+        nat_nexus_deregister_llm_conditional_execution_guardrail("broken").unwrap();
     }
 }

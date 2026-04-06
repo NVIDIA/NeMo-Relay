@@ -55,6 +55,40 @@ Direct Rust users of `nvidia-nat-nexus-core` should note that
 `EventSubscriberFn` is an `Arc<dyn Fn(&Event) + Send + Sync>`. Register
 subscribers with `Arc::new(...)`, not `Box::new(...)`.
 
+## Callback Contracts
+
+Nexus intentionally distinguishes fallible callback surfaces from infallible
+ones:
+
+| Surface | Contract | Failure Behavior |
+|--------|----------|------------------|
+| Sanitize guardrails | Infallible | Handle failures inside the callback; there is no propagated error channel |
+| Conditional execution guardrails | Fallible | Callback failure aborts the originating Nexus call |
+| Request intercepts | Fallible | Callback failure aborts the originating Nexus call |
+| Execution intercepts | Fallible | Callback failure aborts the originating Nexus call |
+| Stream collector | Fallible | Callback failure aborts the stream |
+| Stream finalizer | Infallible | Handle failures inside the callback; there is no propagated error channel |
+| Subscribers | Infallible | Handle failures inside the callback; there is no propagated error channel |
+
+Language-specific error surfacing:
+
+- Rust uses `Result<...>` for fallible conditionals, request intercepts,
+  execution intercepts, and stream collectors.
+- Python uses normal callback return types; raising an exception from a
+  fallible callback propagates as `RuntimeError` from the originating Nexus API
+  call.
+- Node.js and WASM use normal callback return types; throwing from a fallible
+  callback propagates as the thrown JS exception from the originating Nexus API
+  call.
+- Go follows the FFI callback surface, which remains the least expressive
+  binding here; consult the Go API docs before assuming parity with the higher
+  level bindings.
+
+These contracts are canonical per surface. Bindings do not expose parallel
+"fallible" and "infallible" variants for the same conditional guardrail or
+request intercept shape; whether a callback is fallible depends on the surface
+you register, not on which helper name you choose internally.
+
 ## Python
 
 ### Setup
@@ -248,9 +282,9 @@ scopeRegisterSubscriber(
 popScope(handle);  // both registrations automatically removed
 ```
 
-For callback shapes that cannot throw directly through the core API
-(for example sanitize/intercept/finalizer callbacks), the Node binding also
-records the most recent binding-side callback failure. Read it with
+For infallible callback shapes that do not have an error return channel
+(for example sanitize guardrails, subscribers, and stream finalizers), the
+Node binding records the most recent binding-side callback failure. Read it with
 `getLastCallbackError()` and clear it with `clearLastCallbackError()`.
 
 ### Typed Wrappers
@@ -489,9 +523,9 @@ async function searchFunc(args) {
     return { results: [`result for: ${args.q}`] };
 }
 
-For callback shapes that cannot throw directly through the core API
-(for example sanitize/intercept/finalizer callbacks), the WASM binding also
-records the most recent binding-side callback failure. Read it with
+For infallible callback shapes that do not have an error return channel
+(for example sanitize guardrails, subscribers, and stream finalizers), the
+WASM binding also records the most recent binding-side callback failure. Read it with
 `getLastCallbackError()` and clear it with `clearLastCallbackError()`.
 
 // 4. Execute a tool through the full middleware pipeline

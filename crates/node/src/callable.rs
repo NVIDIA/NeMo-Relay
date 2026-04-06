@@ -19,7 +19,8 @@ use tokio_stream::StreamExt;
 
 use nvidia_nat_nexus_core::types::LLMRequest;
 use nvidia_nat_nexus_core::{
-    LlmExecutionNextFn, LlmStreamExecutionNextFn, NexusError, Result, ToolExecutionNextFn,
+    LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionNextFn,
+    NexusError, Result, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
 };
 
 use crate::convert::record_callback_error;
@@ -33,6 +34,11 @@ fn recv_json_or_null(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) ->
     })
 }
 
+fn recv_json_result(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) -> Result<Json> {
+    rx.recv()
+        .map_err(|e| NexusError::Internal(format!("{error_prefix}: {e}")))
+}
+
 fn recv_json_or_value(
     rx: std::sync::mpsc::Receiver<Json>,
     error_prefix: &str,
@@ -44,14 +50,17 @@ fn recv_json_or_value(
     })
 }
 
-fn recv_option_string_or_none(
-    rx: std::sync::mpsc::Receiver<Option<String>>,
+fn recv_option_string_result(
+    rx: std::sync::mpsc::Receiver<Json>,
     error_prefix: &str,
-) -> Option<String> {
-    rx.recv().unwrap_or_else(|e| {
-        record_callback_error(format!("{error_prefix}: {e}"));
-        None
-    })
+) -> Result<Option<String>> {
+    match recv_json_result(rx, error_prefix)? {
+        Json::Null => Ok(None),
+        Json::String(value) => Ok(Some(value)),
+        other => Err(NexusError::Internal(format!(
+            "{error_prefix}: expected string or null, got {other:?}",
+        ))),
+    }
 }
 
 fn recv_llm_request_or_value(
@@ -65,6 +74,18 @@ fn recv_llm_request_or_value(
             "{error_prefix}: failed to deserialize LLMRequest: {e}"
         ));
         fallback
+    })
+}
+
+fn recv_llm_request_result(
+    rx: std::sync::mpsc::Receiver<Json>,
+    error_prefix: &str,
+) -> Result<LLMRequest> {
+    let result = recv_json_result(rx, error_prefix)?;
+    serde_json::from_value(result).map_err(|e| {
+        NexusError::Internal(format!(
+            "{error_prefix}: failed to deserialize LLMRequest: {e}"
+        ))
     })
 }
 
@@ -97,10 +118,10 @@ pub fn wrap_js_tool_fn(
     })
 }
 
-/// Wrap a JS function `(name: string, args: object) => string | null` for tool conditional.
+/// Wrap a JS function `(name: string, args: object) => string | null` for tool conditional guardrails.
 pub fn wrap_js_tool_conditional_fn(
     func: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(&str, &Json) -> Option<String> + Send + Sync> {
+) -> ToolConditionalFn {
     let func = Arc::new(func);
     Box::new(move |name: &str, args: &Json| {
         let func = func.clone();
@@ -111,24 +132,42 @@ pub fn wrap_js_tool_conditional_fn(
             (name, args),
             ThreadsafeFunctionCallMode::Blocking,
             move |val: Json| {
-                let result = match val {
-                    Json::Null => None,
-                    Json::String(s) => Some(s),
-                    _ => None,
-                };
-                let _ = tx.send(result);
+                let _ = tx.send(val);
                 Ok(())
             },
         );
         if status != napi::Status::Ok {
-            record_callback_error(format!(
-                "nat_nexus: failed to queue JS tool conditional callback: {status:?}"
-            ));
-            return None;
+            return Err(NexusError::Internal(format!(
+                "failed to queue JS tool conditional callback: {status:?}",
+            )));
         }
-        // TODO: This closure returns Option<String> (not Result), so we cannot propagate
-        // errors through the type system. Log the error so failures are not silent.
-        recv_option_string_or_none(rx, "nat_nexus: JS tool conditional callback failed")
+        recv_option_string_result(rx, "JS tool conditional callback failed")
+    })
+}
+
+/// Wrap a JS function `(name: string, args: object) => object` for tool request intercepts.
+pub fn wrap_js_tool_request_intercept_fn(
+    func: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
+) -> ToolInterceptFn {
+    let func = Arc::new(func);
+    Box::new(move |name: &str, args: Json| {
+        let func = func.clone();
+        let name = name.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let status = func.call_with_return_value(
+            (name, args),
+            ThreadsafeFunctionCallMode::Blocking,
+            move |val: Json| {
+                let _ = tx.send(val);
+                Ok(())
+            },
+        );
+        if status != napi::Status::Ok {
+            return Err(NexusError::Internal(format!(
+                "failed to queue JS tool callback: {status:?}",
+            )));
+        }
+        recv_json_result(rx, "JS tool callback failed")
     })
 }
 
@@ -159,14 +198,10 @@ pub fn wrap_js_tool_exec_fn(
     })
 }
 
-/// Wrap a JS function `(request: object) => object` for LLM request intercepts.
-///
-/// The JS callback receives the `LLMRequest` serialized as a plain JSON object
-/// (`{ headers, content }`) and must return the same shape. The returned JSON is
-/// deserialized back into an `LLMRequest`.
+/// Wrap a JS function `(request: object) => request` for LLM request intercepts.
 pub fn wrap_js_llm_request_intercept_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(&str, LLMRequest) -> LLMRequest + Send + Sync> {
+) -> LlmRequestInterceptFn {
     let func = Arc::new(func);
     Box::new(move |_name: &str, request: LLMRequest| {
         let func = func.clone();
@@ -181,18 +216,11 @@ pub fn wrap_js_llm_request_intercept_fn(
             },
         );
         if status != napi::Status::Ok {
-            record_callback_error(format!(
-                "nat_nexus: failed to queue JS LLM request intercept callback: {status:?}"
-            ));
-            return request;
+            return Err(NexusError::Internal(format!(
+                "failed to queue JS LLM request intercept callback: {status:?}",
+            )));
         }
-        // TODO: This closure returns LLMRequest (not Result), so we cannot propagate
-        // errors through the type system. Log the error so failures are not silent.
-        recv_llm_request_or_value(
-            rx,
-            "nat_nexus: JS LLM request intercept callback failed",
-            request,
-        )
+        recv_llm_request_result(rx, "JS LLM request intercept callback failed")
     })
 }
 
@@ -258,10 +286,10 @@ pub fn wrap_js_llm_response_fn(
     })
 }
 
-/// Wrap a JS function for LLM conditional: `(request: object) => string | null`.
+/// Wrap a JS function for LLM conditional guardrails: `(request: object) => string | null`.
 pub fn wrap_js_llm_conditional_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(&LLMRequest) -> Option<String> + Send + Sync> {
+) -> LlmConditionalFn {
     let func = Arc::new(func);
     Box::new(move |request: &LLMRequest| {
         let func = func.clone();
@@ -271,24 +299,16 @@ pub fn wrap_js_llm_conditional_fn(
             req_json,
             ThreadsafeFunctionCallMode::Blocking,
             move |val: Json| {
-                let result = match val {
-                    Json::Null => None,
-                    Json::String(s) => Some(s),
-                    _ => None,
-                };
-                let _ = tx.send(result);
+                let _ = tx.send(val);
                 Ok(())
             },
         );
         if status != napi::Status::Ok {
-            record_callback_error(format!(
-                "nat_nexus: failed to queue JS LLM conditional callback: {status:?}"
-            ));
-            return None;
+            return Err(NexusError::Internal(format!(
+                "failed to queue JS LLM conditional callback: {status:?}",
+            )));
         }
-        // TODO: This closure returns Option<String> (not Result), so we cannot propagate
-        // errors through the type system. Log the error so failures are not silent.
-        recv_option_string_or_none(rx, "nat_nexus: JS LLM conditional callback failed")
+        recv_option_string_result(rx, "JS LLM conditional callback failed")
     })
 }
 

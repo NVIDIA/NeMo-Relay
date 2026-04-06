@@ -666,7 +666,7 @@ pub fn register_tool_request_intercept(
         name,
         priority,
         break_chain,
-        callable::wrap_js_tool_fn(func),
+        callable::wrap_js_tool_request_intercept_fn(func),
     )
     .map_err(to_js_err)
 }
@@ -1061,7 +1061,7 @@ pub fn scope_register_tool_request_intercept(
         name,
         priority,
         break_chain,
-        callable::wrap_js_tool_fn(func),
+        callable::wrap_js_tool_request_intercept_fn(func),
     )
     .map_err(to_js_err)
 }

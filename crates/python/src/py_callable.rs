@@ -30,7 +30,8 @@ use tokio_stream::Stream;
 
 use nvidia_nat_nexus_core::types::LLMRequest;
 use nvidia_nat_nexus_core::{
-    LlmExecutionNextFn, LlmStreamExecutionNextFn, NexusError, ToolExecutionNextFn,
+    LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionNextFn,
+    NexusError, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
 };
 
 use crate::convert::{json_to_py, py_to_json};
@@ -63,38 +64,46 @@ pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> Box<dyn Fn(&str, Json) -> Json + Sen
 }
 
 /// Wrap a Python callable `(str, Json) -> Optional[str]` for tool conditional guardrails.
-pub fn wrap_py_tool_conditional_fn(
-    py_fn: Py<PyAny>,
-) -> Box<dyn Fn(&str, &Json) -> Option<String> + Send + Sync> {
+pub fn wrap_py_tool_conditional_fn(py_fn: Py<PyAny>) -> ToolConditionalFn {
     Box::new(move |name: &str, args: &Json| {
         Python::attach(|py| {
-            let py_args = match json_to_py(py, args) {
-                Ok(v) => v,
-                Err(e) => {
-                    return Some(format!(
-                        "tool conditional guardrail error for '{name}': json_to_py failed: {e}"
-                    ));
-                }
-            };
-            let result = match py_fn.call1(py, (name, py_args)) {
-                Ok(v) => v,
-                Err(e) => {
-                    return Some(format!(
-                        "tool conditional guardrail error for '{name}': callable failed: {e}"
-                    ));
-                }
-            };
+            let py_args = json_to_py(py, args).map_err(|e| {
+                NexusError::Internal(format!(
+                    "tool conditional json_to_py failed for '{name}': {e}"
+                ))
+            })?;
+            let result = py_fn.call1(py, (name, py_args)).map_err(|e| {
+                NexusError::Internal(format!(
+                    "Python tool conditional callable failed for '{name}': {e}"
+                ))
+            })?;
             let bound = result.bind(py);
             if bound.is_none() {
-                None
+                Ok(None)
             } else {
-                match bound.extract::<String>() {
-                    Ok(s) => Some(s),
-                    Err(e) => Some(format!(
-                        "tool conditional guardrail error for '{name}': expected str or None: {e}"
-                    )),
-                }
+                bound.extract::<String>().map(Some).map_err(|e| {
+                    NexusError::Internal(format!(
+                        "tool conditional guardrail for '{name}' returned unexpected type (expected str or None): {e}"
+                    ))
+                })
             }
+        })
+    })
+}
+
+/// Wrap a Python callable `(str, Json) -> Json` for tool request intercepts.
+pub fn wrap_py_tool_request_intercept_fn(py_fn: Py<PyAny>) -> ToolInterceptFn {
+    Box::new(move |name: &str, args: Json| {
+        Python::attach(|py| {
+            let py_args = json_to_py(py, &args).map_err(|e| {
+                NexusError::Internal(format!("tool callback json_to_py failed for '{name}': {e}"))
+            })?;
+            let result = py_fn.call1(py, (name, py_args)).map_err(|e| {
+                NexusError::Internal(format!("Python tool callable failed for '{name}': {e}"))
+            })?;
+            py_to_json(result.bind(py)).map_err(|e| {
+                NexusError::Internal(format!("tool callback py_to_json failed for '{name}': {e}"))
+            })
         })
     })
 }
@@ -564,62 +573,47 @@ pub fn wrap_py_llm_sanitize_request_fn(
 }
 
 /// Wrap a Python callable `(LLMRequest) -> Optional[str]` for LLM conditional guardrails.
-pub fn wrap_py_llm_conditional_fn(
-    py_fn: Py<PyAny>,
-) -> Box<dyn Fn(&LLMRequest) -> Option<String> + Send + Sync> {
+pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
     Box::new(move |request: &LLMRequest| {
         Python::attach(|py| {
             let py_req = PyLLMRequest {
                 inner: request.clone(),
             };
-            let result = match py_fn.call1(py, (py_req,)) {
-                Ok(v) => v,
-                Err(e) => {
-                    return Some(format!("LLM conditional guardrail callable failed: {e}"));
-                }
-            };
+            let result = py_fn.call1(py, (py_req,)).map_err(|e| {
+                NexusError::Internal(format!("LLM conditional guardrail callable failed: {e}"))
+            })?;
             let bound = result.bind(py);
             if bound.is_none() {
-                None
+                Ok(None)
             } else {
-                match bound.extract::<String>() {
-                    Ok(s) => Some(s),
-                    Err(e) => Some(format!(
-                        "LLM conditional guardrail returned unexpected type \
-                         (expected str or None): {e}"
-                    )),
-                }
+                bound.extract::<String>().map(Some).map_err(|e| {
+                    NexusError::Internal(format!(
+                        "LLM conditional guardrail returned unexpected type (expected str or None): {e}"
+                    ))
+                })
             }
         })
     })
 }
 
 /// Wrap a Python callable `(LLMRequest) -> LLMRequest` for LLM request intercepts.
-pub fn wrap_py_llm_request_intercept_fn(
-    py_fn: Py<PyAny>,
-) -> Box<dyn Fn(&str, LLMRequest) -> LLMRequest + Send + Sync> {
+pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestInterceptFn {
     Box::new(move |name: &str, request: LLMRequest| {
         Python::attach(|py| {
             let py_req = PyLLMRequest {
                 inner: request.clone(),
             };
-            let result = match py_fn.call1(py, (name, py_req)) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("nat_nexus: LLM request intercept callable failed: {e}");
-                    return request;
-                }
-            };
-            match result.extract::<PyLLMRequest>(py) {
-                Ok(r) => r.inner,
-                Err(e) => {
-                    eprintln!(
-                        "nat_nexus: LLM request intercept returned unexpected type \
-                         (expected LLMRequest): {e}"
-                    );
-                    request
-                }
-            }
+            let result = py_fn.call1(py, (name, py_req)).map_err(|e| {
+                NexusError::Internal(format!("LLM request intercept callable failed: {e}"))
+            })?;
+            result
+                .extract::<PyLLMRequest>(py)
+                .map(|r| r.inner)
+                .map_err(|e| {
+                    NexusError::Internal(format!(
+                        "LLM request intercept returned unexpected type (expected LLMRequest): {e}"
+                    ))
+                })
         })
     })
 }

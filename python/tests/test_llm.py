@@ -266,7 +266,7 @@ class TestLLMIntercepts:
 
         assert transformed.content["direct"] is True
 
-    def test_request_intercept_falls_back_on_exception(self):
+    def test_request_intercept_raises_on_exception(self):
         intercepts.register_llm_request(
             "py_llm_req_raise",
             1,
@@ -274,16 +274,16 @@ class TestLLMIntercepts:
             lambda name, request: (_ for _ in ()).throw(RuntimeError("boom")),
         )
         try:
-            transformed = llm.request_intercepts("raise_llm", make_request())
-            assert transformed.content["model"] == "test-model"
+            with pytest.raises(RuntimeError, match="callable failed"):
+                llm.request_intercepts("raise_llm", make_request())
         finally:
             intercepts.deregister_llm_request("py_llm_req_raise")
 
-    def test_request_intercept_falls_back_on_invalid_return(self):
+    def test_request_intercept_raises_on_invalid_return(self):
         intercepts.register_llm_request("py_llm_req_bad_return", 1, False, lambda name, request: object())
         try:
-            transformed = llm.request_intercepts("bad_return_llm", make_request())
-            assert transformed.content["model"] == "test-model"
+            with pytest.raises(RuntimeError, match="expected LLMRequest"):
+                llm.request_intercepts("bad_return_llm", make_request())
         finally:
             intercepts.deregister_llm_request("py_llm_req_bad_return")
 

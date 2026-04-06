@@ -194,6 +194,28 @@ managed execution I/O. In `tools.execute(...)`, `llm.execute(...)`, and
 events. They do not rewrite the arguments passed to `func(...)` or the value
 returned to the caller.
 
+### Callback Contracts
+
+The callback contract is intentionally split between fallible and infallible
+surfaces:
+
+| Surface | Contract | Normal Return | Callback Failure |
+|---------|----------|---------------|------------------|
+| Tool/LLM sanitize guardrails | Infallible | Return sanitized value | Handle failures internally; there is no error channel |
+| Tool/LLM conditional execution guardrails | Fallible | Return `None` to allow or a rejection reason to block | Raising/throwing fails the originating Nexus API call |
+| Tool/LLM request intercepts | Fallible | Return transformed request | Raising/throwing fails the originating Nexus API call |
+| Tool/LLM execution intercepts | Fallible | Return/await transformed result | Raising/throwing fails the originating Nexus API call |
+| Stream collector | Fallible | Return normally for each chunk | Raising/throwing aborts the stream |
+| Stream finalizer | Infallible | Return the aggregated response | Handle failures internally; there is no error channel |
+| Event subscribers | Infallible | Return `None` | Handle failures internally; there is no error channel |
+
+For direct Rust users, the fallible rows above are expressed as `Result<...>`.
+In Python, Node.js, and WASM, they keep natural callback return types, but
+exceptions thrown from those callbacks propagate to the originating Nexus API
+call. There are not separate "fallible variants" of these callback surfaces:
+conditional guardrails and request/execution intercepts are the canonical
+fallible contract in every binding.
+
 ### Tool Guardrails
 
 ```python
@@ -315,7 +337,8 @@ nat_nexus.subscribers.deregister(name: str) -> bool
 Subscriber callbacks run synchronously on the calling thread, after Nexus has
 snapshotted the subscriber list and released its runtime locks. Subscribers may
 call other Nexus APIs, but should remain lightweight because they are still on
-the request path.
+the request path. Subscribers are infallible callbacks: they do not have an
+error return channel.
 
 ## Context Isolation
 
@@ -473,6 +496,11 @@ nat_nexus.scope_local.register_subscriber(
     fn: Callable[[Event], None],
 ) -> None
 ```
+
+Scope-local registrations follow the same callback contract split as the global
+ones: sanitize guardrails, subscribers, and stream finalizers are infallible;
+conditional execution guardrails, request intercepts, execution intercepts, and
+stream collectors are fallible.
 
 ### Cross-Language Names
 

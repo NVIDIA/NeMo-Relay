@@ -937,7 +937,7 @@ napi_intercept_tool_api!(
     deregister_tool_request_intercept,
     core::nat_nexus_register_tool_request_intercept,
     core::nat_nexus_deregister_tool_request_intercept,
-    callable::wrap_js_tool_fn
+    callable::wrap_js_tool_request_intercept_fn
 );
 
 /// Register a tool execution intercept following the middleware chain pattern.
@@ -1352,7 +1352,7 @@ napi_scope_intercept_tool_api!(
     scope_deregister_tool_request_intercept,
     core::nat_nexus_scope_register_tool_request_intercept,
     core::nat_nexus_scope_deregister_tool_request_intercept,
-    callable::wrap_js_tool_fn
+    callable::wrap_js_tool_request_intercept_fn
 );
 
 /// Register a scope-local tool execution intercept following the middleware chain pattern.

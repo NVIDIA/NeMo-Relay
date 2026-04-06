@@ -122,7 +122,6 @@ impl LlmStreamWrapper {
             let sl =
                 ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
             let sl_subs = ss_guard.collect_scope_local_subscribers();
-
             if let Ok(state) = global_context().read() {
                 let subscribers = state.collect_event_subscribers(&sl_subs);
                 let sanitized = state.llm_sanitize_response_chain(aggregated, &sl);
@@ -138,7 +137,6 @@ impl LlmStreamWrapper {
                 None
             }
         };
-
         if let Some((event, subscribers)) = event_snapshot {
             NatNexusContextState::emit_event(&event, &subscribers);
         }

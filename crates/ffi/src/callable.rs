@@ -26,11 +26,12 @@ use tokio_stream::Stream;
 
 use nvidia_nat_nexus_core::types::LLMRequest;
 use nvidia_nat_nexus_core::{
-    LlmExecutionNextFn, LlmStreamExecutionNextFn, NexusError, Result, ToolExecutionNextFn,
+    LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionNextFn,
+    NexusError, Result, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
 };
 
 use crate::convert::json_to_c_string;
-use crate::error::{last_error_message, set_last_error};
+use crate::error::{clear_last_error, last_error_message, set_last_error};
 use crate::types::{FfiEvent, FfiLLMRequest};
 
 // ---------------------------------------------------------------------------
@@ -194,14 +195,42 @@ pub fn wrap_tool_conditional_fn(
     cb: NatNexusToolConditionalCb,
     user_data: *mut libc::c_void,
     free_fn: NatNexusFreeFn,
-) -> Box<dyn Fn(&str, &Json) -> Option<String> + Send + Sync> {
+) -> ToolConditionalFn {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |name: &str, args: &Json| {
+        clear_last_error();
         let c_name = CString::new(name).unwrap_or_default();
         let c_args = json_to_c_string(args);
         let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
         unsafe { nat_nexus_string_free_internal(c_args) };
-        let result = ptr_to_opt_string(result_ptr);
+        let result = if result_ptr.is_null() {
+            match last_error_message() {
+                Some(message) => Err(NexusError::Internal(message)),
+                None => Ok(None),
+            }
+        } else {
+            Ok(ptr_to_opt_string(result_ptr))
+        };
+        unsafe { nat_nexus_string_free_internal(result_ptr) };
+        result
+    })
+}
+
+/// Wrap a C tool request intercept callback into a Rust closure for use by the core runtime.
+pub fn wrap_tool_request_intercept_fn(
+    cb: NatNexusToolSanitizeCb,
+    user_data: *mut libc::c_void,
+    free_fn: NatNexusFreeFn,
+) -> ToolInterceptFn {
+    let ud = make_user_data(user_data, free_fn);
+    Box::new(move |name: &str, args: Json| {
+        clear_last_error();
+        let c_name = CString::new(name).unwrap_or_default();
+        let c_args = json_to_c_string(&args);
+        let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
+        unsafe { nat_nexus_string_free_internal(c_args) };
+        let result =
+            json_result_from_ptr(result_ptr, "tool request intercept callback returned null");
         unsafe { nat_nexus_string_free_internal(result_ptr) };
         result
     })
@@ -431,21 +460,21 @@ pub fn wrap_llm_request_intercept_fn(
     cb: NatNexusLlmRequestCb,
     user_data: *mut libc::c_void,
     free_fn: NatNexusFreeFn,
-) -> Box<dyn Fn(&str, LLMRequest) -> LLMRequest + Send + Sync> {
+) -> LlmRequestInterceptFn {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |_name: &str, request: LLMRequest| {
+        clear_last_error();
         let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
         let result_ptr = unsafe { cb(ud.ptr, ffi_req) };
         // Free the input request
         unsafe { drop(Box::from_raw(ffi_req)) };
         if result_ptr.is_null() {
-            LLMRequest {
-                headers: serde_json::Map::new(),
-                content: Json::Null,
-            }
+            let message = last_error_message()
+                .unwrap_or_else(|| "LLM request intercept callback returned null".to_string());
+            Err(NexusError::Internal(message))
         } else {
             let result = unsafe { Box::from_raw(result_ptr) };
-            result.0
+            Ok(result.0)
         }
     })
 }
@@ -499,12 +528,20 @@ pub fn wrap_llm_conditional_fn(
     cb: NatNexusLlmConditionalCb,
     user_data: *mut libc::c_void,
     free_fn: NatNexusFreeFn,
-) -> Box<dyn Fn(&LLMRequest) -> Option<String> + Send + Sync> {
+) -> LlmConditionalFn {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |request: &LLMRequest| {
+        clear_last_error();
         let ffi_req = FfiLLMRequest(request.clone());
         let result_ptr = unsafe { cb(ud.ptr, &ffi_req) };
-        let result = ptr_to_opt_string(result_ptr);
+        let result = if result_ptr.is_null() {
+            match last_error_message() {
+                Some(message) => Err(NexusError::Internal(message)),
+                None => Ok(None),
+            }
+        } else {
+            Ok(ptr_to_opt_string(result_ptr))
+        };
         unsafe { nat_nexus_string_free_internal(result_ptr) };
         result
     })
@@ -883,10 +920,13 @@ mod tests {
         let wrapped_conditional =
             wrap_tool_conditional_fn(tool_conditional_cb, std::ptr::null_mut(), None);
         assert_eq!(
-            wrapped_conditional("tool", &json!({"block": true})),
+            wrapped_conditional("tool", &json!({"block": true})).unwrap(),
             Some("blocked".into())
         );
-        assert_eq!(wrapped_conditional("tool", &json!({"block": false})), None);
+        assert_eq!(
+            wrapped_conditional("tool", &json!({"block": false})).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -928,7 +968,7 @@ mod tests {
     fn test_wrap_llm_request_response_and_conditional_callbacks() {
         let request_intercept =
             wrap_llm_request_intercept_fn(llm_request_cb, std::ptr::null_mut(), None);
-        let intercepted = request_intercept("llm", make_request());
+        let intercepted = request_intercept("llm", make_request()).unwrap();
         assert_eq!(intercepted.content["intercepted"], json!(true));
 
         let sanitize_request =
@@ -942,10 +982,11 @@ mod tests {
             conditional(&LLMRequest {
                 headers: serde_json::Map::new(),
                 content: json!({"block": true}),
-            }),
+            })
+            .unwrap(),
             Some("blocked llm".into())
         );
-        assert_eq!(conditional(&make_request()), None);
+        assert_eq!(conditional(&make_request()).unwrap(), None);
 
         let wrapped_json = wrap_json_fn(json_cb, std::ptr::null_mut(), None);
         assert_eq!(wrapped_json(json!({"value": 1}))["wrapped"], json!(true));

@@ -649,7 +649,7 @@ py_intercept_tool_api!(
     nat_nexus_deregister_tool_request_intercept,
     core::nat_nexus_register_tool_request_intercept,
     core::nat_nexus_deregister_tool_request_intercept,
-    py_callable::wrap_py_tool_fn
+    py_callable::wrap_py_tool_request_intercept_fn
 );
 
 /// Register a tool execution intercept that can replace the tool function.
@@ -1038,7 +1038,7 @@ py_scope_local_intercept_tool_api!(
     nat_nexus_scope_deregister_tool_request_intercept,
     core::nat_nexus_scope_register_tool_request_intercept,
     core::nat_nexus_scope_deregister_tool_request_intercept,
-    py_callable::wrap_py_tool_fn
+    py_callable::wrap_py_tool_request_intercept_fn
 );
 
 /// Register a scope-local tool execution intercept.

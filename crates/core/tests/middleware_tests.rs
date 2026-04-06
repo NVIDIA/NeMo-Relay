@@ -141,7 +141,7 @@ fn test_request_intercept_priority_ordering() {
         false,
         Box::new(move |_name, args| {
             o1.lock().unwrap().push(1);
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -153,7 +153,7 @@ fn test_request_intercept_priority_ordering() {
         false,
         Box::new(move |_name, args| {
             o3.lock().unwrap().push(3);
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -165,7 +165,7 @@ fn test_request_intercept_priority_ordering() {
         false,
         Box::new(move |_name, args| {
             o2.lock().unwrap().push(2);
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -202,7 +202,7 @@ fn test_re_registration_at_different_priority_re_sorts() {
         false,
         Box::new(move |_name, args| {
             o_a.lock().unwrap().push("a_p10".into());
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -214,7 +214,7 @@ fn test_re_registration_at_different_priority_re_sorts() {
         false,
         Box::new(move |_name, args| {
             o_b.lock().unwrap().push("b_p20".into());
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -235,7 +235,7 @@ fn test_re_registration_at_different_priority_re_sorts() {
         false,
         Box::new(move |_name, args| {
             o_a2.lock().unwrap().push("a_p30".into());
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -279,7 +279,7 @@ fn test_break_chain_stops_subsequent_intercepts() {
             args.as_object_mut()
                 .unwrap()
                 .insert("breaker_ran".into(), json!(true));
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -294,7 +294,7 @@ fn test_break_chain_stops_subsequent_intercepts() {
             args.as_object_mut()
                 .unwrap()
                 .insert("after_ran".into(), json!(true));
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -334,7 +334,7 @@ fn test_no_break_chain_runs_all_intercepts() {
         false,
         Box::new(move |_name, args| {
             c1.fetch_add(1, Ordering::SeqCst);
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -346,7 +346,7 @@ fn test_no_break_chain_runs_all_intercepts() {
         false,
         Box::new(move |_name, args| {
             c2.fetch_add(1, Ordering::SeqCst);
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -608,7 +608,7 @@ async fn test_conditional_guardrail_rejects() {
     nat_nexus_register_tool_conditional_execution_guardrail(
         "rejector",
         1,
-        Box::new(|_name, _args| Some("not allowed".to_string())),
+        Box::new(|_name, _args| Ok(Some("not allowed".to_string()))),
     )
     .unwrap();
 
@@ -647,7 +647,7 @@ async fn test_conditional_guardrail_allows() {
     nat_nexus_register_tool_conditional_execution_guardrail(
         "allower",
         1,
-        Box::new(|_name, _args| None),
+        Box::new(|_name, _args| Ok(None)),
     )
     .unwrap();
 
@@ -682,14 +682,14 @@ async fn test_conditional_guardrail_first_rejection_wins() {
     nat_nexus_register_tool_conditional_execution_guardrail(
         "allows",
         1,
-        Box::new(|_name, _args| None),
+        Box::new(|_name, _args| Ok(None)),
     )
     .unwrap();
 
     nat_nexus_register_tool_conditional_execution_guardrail(
         "rejects",
         2,
-        Box::new(|_name, _args| Some("blocked by second".to_string())),
+        Box::new(|_name, _args| Ok(Some("blocked by second".to_string()))),
     )
     .unwrap();
 
@@ -731,9 +731,9 @@ async fn test_conditional_guardrail_tool_name_filtering() {
         1,
         Box::new(|name, _args| {
             if name == "dangerous_tool" {
-                Some("dangerous_tool is forbidden".to_string())
+                Ok(Some("dangerous_tool is forbidden".to_string()))
             } else {
-                None
+                Ok(None)
             }
         }),
     )
@@ -1084,7 +1084,7 @@ async fn test_conditional_rejection_prevents_intercepts() {
     nat_nexus_register_tool_conditional_execution_guardrail(
         "gate",
         1,
-        Box::new(|_name, _args| Some("blocked".to_string())),
+        Box::new(|_name, _args| Ok(Some("blocked".to_string()))),
     )
     .unwrap();
 
@@ -1096,7 +1096,7 @@ async fn test_conditional_rejection_prevents_intercepts() {
         false,
         Box::new(move |_name, args| {
             ic.store(true, Ordering::SeqCst);
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -1137,7 +1137,7 @@ async fn test_conditional_rejection_prevents_execution() {
     nat_nexus_register_tool_conditional_execution_guardrail(
         "gate2",
         1,
-        Box::new(|_name, _args| Some("no execution".to_string())),
+        Box::new(|_name, _args| Ok(Some("no execution".to_string()))),
     )
     .unwrap();
 
@@ -1395,7 +1395,7 @@ fn test_concurrent_intercept_mutations() {
                     &name,
                     i,
                     false,
-                    Box::new(|_name, args| args),
+                    Box::new(|_name, args| Ok(args)),
                 );
                 assert!(res.is_ok());
 
@@ -1508,7 +1508,7 @@ async fn test_full_pipeline_integration() {
             args.as_object_mut()
                 .unwrap()
                 .insert("intercepted".into(), json!(true));
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -1532,7 +1532,7 @@ async fn test_full_pipeline_integration() {
         1,
         Box::new(move |_name, _args| {
             o3.lock().unwrap().push("conditional".into());
-            None // Allow
+            Ok(None) // Allow
         }),
     )
     .unwrap();
@@ -1659,7 +1659,7 @@ fn test_duplicate_intercept_registration_returns_error() {
         "dup_intercept",
         1,
         false,
-        Box::new(|_name, args| args),
+        Box::new(|_name, args| Ok(args)),
     )
     .unwrap();
 
@@ -1667,7 +1667,7 @@ fn test_duplicate_intercept_registration_returns_error() {
         "dup_intercept",
         2,
         false,
-        Box::new(|_name, args| args),
+        Box::new(|_name, args| Ok(args)),
     );
 
     assert!(err.is_err());
@@ -1768,7 +1768,7 @@ async fn test_llm_conditional_guardrail_rejects() {
     nat_nexus_register_llm_conditional_execution_guardrail(
         "llm_gate",
         1,
-        Box::new(|_req| Some("LLM call rejected".to_string())),
+        Box::new(|_req| Ok(Some("LLM call rejected".to_string()))),
     )
     .unwrap();
 
@@ -1817,7 +1817,7 @@ async fn test_llm_request_intercept_transforms() {
         false,
         Box::new(|_name: &str, mut req: LLMRequest| {
             req.headers.insert("x-intercepted".into(), json!(true));
-            req
+            Ok(req)
         }),
     )
     .unwrap();
@@ -1919,7 +1919,7 @@ fn test_standalone_conditional_execution_rejects() {
     nat_nexus_register_tool_conditional_execution_guardrail(
         "standalone_gate",
         1,
-        Box::new(|_name, _args| Some("rejected by standalone".to_string())),
+        Box::new(|_name, _args| Ok(Some("rejected by standalone".to_string()))),
     )
     .unwrap();
 

@@ -555,6 +555,10 @@ void nat_nexus_stream_free(struct FfiStream *stream);
  * - `user_data`: Opaque pointer passed to `cb`.
  * - `free_fn`: Optional destructor for `user_data`.
  *
+ * The callback is fallible. To signal an internal callback failure instead of
+ * allow/reject, call [`crate::error::nat_nexus_set_last_error_message`] from C
+ * and return null.
+ *
  * # Safety
  * `name` must be a valid C string. `cb` must be a valid function pointer.
  */
@@ -669,6 +673,10 @@ NatNexusStatus nat_nexus_deregister_llm_sanitize_response_guardrail(const char *
  * - `user_data`: Opaque pointer passed to `cb`.
  * - `free_fn`: Optional destructor for `user_data`.
  *
+ * The callback is fallible. To signal an internal callback failure instead of
+ * allow/reject, call [`crate::error::nat_nexus_set_last_error_message`] from C
+ * and return null.
+ *
  * # Safety
  * `name` must be a valid C string. `cb` must be a valid function pointer.
  */
@@ -697,6 +705,9 @@ NatNexusStatus nat_nexus_deregister_llm_conditional_execution_guardrail(const ch
  * - `cb`: LLM request transform callback (receives/returns `FfiLLMRequest`).
  * - `user_data`: Opaque pointer passed to `cb`.
  * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * The callback is fallible. To signal failure, call
+ * [`crate::error::nat_nexus_set_last_error_message`] from C and return null.
  *
  * # Safety
  * `name` must be a valid C string. `cb` must be a valid function pointer.
@@ -926,6 +937,10 @@ NatNexusStatus nat_nexus_atif_exporter_clear(const struct FfiAtifExporter *expor
  * - `user_data`: Opaque pointer passed to `cb`.
  * - `free_fn`: Optional destructor for `user_data`.
  *
+ * The callback is fallible. To signal an internal callback failure instead of
+ * allow/reject, call [`crate::error::nat_nexus_set_last_error_message`] from C
+ * and return null.
+ *
  * # Safety
  * `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
  */
@@ -1047,6 +1062,10 @@ NatNexusStatus nat_nexus_scope_deregister_llm_sanitize_response_guardrail(const 
  * - `user_data`: Opaque pointer passed to `cb`.
  * - `free_fn`: Optional destructor for `user_data`.
  *
+ * The callback is fallible. To signal an internal callback failure instead of
+ * allow/reject, call [`crate::error::nat_nexus_set_last_error_message`] from C
+ * and return null.
+ *
  * # Safety
  * `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
  */
@@ -1077,6 +1096,9 @@ NatNexusStatus nat_nexus_scope_deregister_llm_conditional_execution_guardrail(co
  * - `cb`: LLM request transform callback.
  * - `user_data`: Opaque pointer passed to `cb`.
  * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * The callback is fallible. To signal failure, call
+ * [`crate::error::nat_nexus_set_last_error_message`] from C and return null.
  *
  * # Safety
  * `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.

@@ -65,7 +65,7 @@ function globalRegistrationCases() {
     ['llmSanReq', wasm.registerLlmSanitizeRequestGuardrail, wasm.deregisterLlmSanitizeRequestGuardrail, (name, register) => register(name, 1, (request) => request)],
     ['llmSanResp', wasm.registerLlmSanitizeResponseGuardrail, wasm.deregisterLlmSanitizeResponseGuardrail, (name, register) => register(name, 1, (response) => response)],
     ['llmCond', wasm.registerLlmConditionalExecutionGuardrail, wasm.deregisterLlmConditionalExecutionGuardrail, (name, register) => register(name, 1, () => undefined)],
-    ['llmReq', wasm.registerLlmRequestIntercept, wasm.deregisterLlmRequestIntercept, (name, register) => register(name, 1, false, (llmName, request) => request)],
+    ['llmReq', wasm.registerLlmRequestIntercept, wasm.deregisterLlmRequestIntercept, (name, register) => register(name, 1, false, (request) => request)],
     ['llmExec', wasm.registerLlmExecutionIntercept, wasm.deregisterLlmExecutionIntercept, (name, register) => register(name, 1, async (request, next) => next(request))],
     ['llmStreamExec', wasm.registerLlmStreamExecutionIntercept, wasm.deregisterLlmStreamExecutionIntercept, (name, register) => register(name, 1, async (request, next) => next(request))],
     ['subscriber', wasm.registerSubscriber, wasm.deregisterSubscriber, (name, register) => register(name, () => {})],
@@ -82,7 +82,7 @@ function scopeRegistrationCases(scopeUuid) {
     ['scopeLlmSanReq', wasm.scopeRegisterLlmSanitizeRequestGuardrail, wasm.scopeDeregisterLlmSanitizeRequestGuardrail, (uuid, name, register) => register(uuid, name, 1, (request) => request)],
     ['scopeLlmSanResp', wasm.scopeRegisterLlmSanitizeResponseGuardrail, wasm.scopeDeregisterLlmSanitizeResponseGuardrail, (uuid, name, register) => register(uuid, name, 1, (response) => response)],
     ['scopeLlmCond', wasm.scopeRegisterLlmConditionalExecutionGuardrail, wasm.scopeDeregisterLlmConditionalExecutionGuardrail, (uuid, name, register) => register(uuid, name, 1, () => undefined)],
-    ['scopeLlmReq', wasm.scopeRegisterLlmRequestIntercept, wasm.scopeDeregisterLlmRequestIntercept, (uuid, name, register) => register(uuid, name, 1, false, (llmName, request) => request)],
+    ['scopeLlmReq', wasm.scopeRegisterLlmRequestIntercept, wasm.scopeDeregisterLlmRequestIntercept, (uuid, name, register) => register(uuid, name, 1, false, (request) => request)],
     ['scopeLlmExec', wasm.scopeRegisterLlmExecutionIntercept, wasm.scopeDeregisterLlmExecutionIntercept, (uuid, name, register) => register(uuid, name, 1, async (request, next) => next(request))],
     ['scopeLlmStreamExec', wasm.scopeRegisterLlmStreamExecutionIntercept, wasm.scopeDeregisterLlmStreamExecutionIntercept, (uuid, name, register) => register(uuid, name, 1, async (request, next) => next(request))],
     ['scopeSubscriber', wasm.scopeRegisterSubscriber, wasm.scopeDeregisterSubscriber, (uuid, name, register) => register(uuid, name, () => {})],
@@ -370,7 +370,7 @@ test('tool, llm, stream, and exporter flows work from the generated Node package
 
   const request = { headers: { trace: '1' }, content: { model: 'demo-model', messages: [] } };
   const llmInterceptName = unique('llm_req');
-  wasm.registerLlmRequestIntercept(llmInterceptName, 1, false, (name, nextRequest) => ({
+  wasm.registerLlmRequestIntercept(llmInterceptName, 1, false, (nextRequest) => ({
     ...nextRequest,
     content: { ...nextRequest.content, intercepted: true },
   }));

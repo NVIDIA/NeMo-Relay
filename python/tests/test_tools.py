@@ -257,19 +257,21 @@ class TestToolIntercepts:
             intercepts.register_tool_request("py_dup_int", 1, False, lambda n, a: a)
         intercepts.deregister_tool_request("py_dup_int")
 
-    def test_request_intercept_falls_back_on_exception(self):
+    def test_request_intercept_raises_on_exception(self):
         intercepts.register_tool_request(
             "py_req_raise", 1, False, lambda n, a: (_ for _ in ()).throw(RuntimeError("boom"))
         )
         try:
-            assert tools.request_intercepts("raise_tool", {"value": 1}) == {"value": 1}
+            with pytest.raises(RuntimeError, match="callable failed"):
+                tools.request_intercepts("raise_tool", {"value": 1})
         finally:
             intercepts.deregister_tool_request("py_req_raise")
 
-    def test_request_intercept_falls_back_on_unserializable_return(self):
+    def test_request_intercept_raises_on_unserializable_return(self):
         intercepts.register_tool_request("py_req_bad_return", 1, False, lambda n, a: object())
         try:
-            assert tools.request_intercepts("bad_return_tool", {"value": 1}) == {"value": 1}
+            with pytest.raises(RuntimeError, match="py_to_json failed"):
+                tools.request_intercepts("bad_return_tool", {"value": 1})
         finally:
             intercepts.deregister_tool_request("py_req_bad_return")
 
