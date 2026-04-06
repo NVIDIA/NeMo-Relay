@@ -521,16 +521,25 @@ def run_sync(coro):
 
 ## 8. Patch Structure and File Layout
 
-Integrations are maintained as git patches applied to submodules under
-`third_party/`. Follow this directory structure:
+Integrations are maintained as git patches applied to local upstream checkouts
+under `third_party/`. The repository tracks only the patch files and a pinned
+manifest; the upstream clones themselves are bootstrapped locally and are not
+tracked as submodules on `main`. Follow this directory structure:
 
-```
+```text
 third_party/
-  <framework>/               # git submodule pointing to upstream repo
+  sources.lock               # tracked manifest (git-config syntax)
+  <framework>/               # local git checkout bootstrapped from sources.lock
 
 patches/
   <framework>/
     0001-add-nat-nexus-integration.patch
+```
+
+Bootstrap the local upstream checkouts before applying or refreshing patches:
+
+```bash
+./scripts/bootstrap-third-party.sh
 ```
 
 ### Files to add/modify
@@ -556,9 +565,7 @@ git diff HEAD -- . > ../../patches/<framework>/0001-add-nat-nexus-integration.pa
 ### Applying the patch
 
 ```bash
-cd third_party/<framework>
-git checkout .
-git apply ../../patches/<framework>/*.patch
+./scripts/apply-patches.sh
 ```
 
 ---
