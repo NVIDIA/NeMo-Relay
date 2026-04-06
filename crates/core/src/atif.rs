@@ -34,6 +34,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -84,6 +85,12 @@ pub struct AtifStep {
     /// LLM model name, if applicable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
+    /// Qualitative or quantitative measure of reasoning effort.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<Json>,
+    /// The agent's explicit internal reasoning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     /// Tool calls made by the agent in this step.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<AtifToolCall>>,
@@ -93,12 +100,15 @@ pub struct AtifStep {
     /// Token usage and cost metrics.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metrics: Option<AtifMetrics>,
+    /// Whether this step was copied from a previous trajectory for context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_copied_context: Option<bool>,
     /// Extra metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra: Option<Json>,
 }
 
-/// Token usage and cost metrics for a step or trajectory.
+/// Token usage and cost metrics for a single step.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AtifMetrics {
     /// Number of prompt tokens.
@@ -113,7 +123,39 @@ pub struct AtifMetrics {
     /// Cost in USD.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
-    /// Extra metrics.
+    /// Token IDs for prompt (input) tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_token_ids: Option<Vec<u64>>,
+    /// Token IDs for completion (response) tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_token_ids: Option<Vec<u64>>,
+    /// Log probability assigned to each generated token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logprobs: Option<Vec<f64>>,
+    /// Other metrics (e.g. reasoning_tokens, cache_creation_input_tokens).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra: Option<Json>,
+}
+
+/// Aggregate statistics for the entire trajectory (ATIF v1.6 final_metrics).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AtifFinalMetrics {
+    /// Sum of all prompt tokens across all steps, including cached tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_prompt_tokens: Option<u64>,
+    /// Sum of all completion tokens across all steps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_completion_tokens: Option<u64>,
+    /// Sum of all cached tokens across all steps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_cached_tokens: Option<u64>,
+    /// Total real monetary cost for the entire trajectory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_cost_usd: Option<f64>,
+    /// Total number of steps. If not equivalent to steps.len(), document in notes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_steps: Option<u64>,
+    /// Custom aggregate metrics.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra: Option<Json>,
 }
@@ -146,6 +188,63 @@ pub struct AtifObservationResult {
     pub content: Json,
 }
 
+/// Lineage node identifying a callable within an ATIF step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AtifAncestry {
+    /// Unique identifier for the callable node (scope UUID).
+    pub function_id: String,
+    /// Human-readable name of the callable node.
+    pub function_name: String,
+    /// Optional parent callable identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// Optional parent callable name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_name: Option<String>,
+}
+
+/// Invocation timing and correlation metadata for one execution occurrence.
+///
+/// `start_timestamp` and `end_timestamp` are always emitted together or not
+/// at all.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AtifInvocationInfo {
+    /// Invocation start timestamp in Unix epoch seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_timestamp: Option<f64>,
+    /// Invocation end timestamp in Unix epoch seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_timestamp: Option<f64>,
+    /// Stable invocation identifier for correlation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invocation_id: Option<String>,
+    /// Terminal status of the invocation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Runtime or framework label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub framework: Option<String>,
+}
+
+/// Lineage payload serialized into ATIF `Step.extra`.
+///
+/// `tool_ancestry[i]` and `tool_invocations[i]` align by index with
+/// `Step.tool_calls[i]`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AtifStepExtra {
+    /// Step-level callable lineage.
+    pub ancestry: AtifAncestry,
+    /// Step-level invocation timing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invocation: Option<AtifInvocationInfo>,
+    /// Per-tool callable lineage, aligned with `tool_calls`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_ancestry: Vec<AtifAncestry>,
+    /// Per-tool invocation timing, aligned with `tool_calls`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_invocations: Option<Vec<AtifInvocationInfo>>,
+}
+
 /// A complete ATIF trajectory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AtifTrajectory {
@@ -157,9 +256,15 @@ pub struct AtifTrajectory {
     pub agent: AtifAgentInfo,
     /// Ordered list of trajectory steps.
     pub steps: Vec<AtifStep>,
+    /// Custom information, design notes, or explanations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
     /// Aggregate metrics for the entire trajectory.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub final_metrics: Option<AtifMetrics>,
+    pub final_metrics: Option<AtifFinalMetrics>,
+    /// Reference to the continuation trajectory file if continued elsewhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continued_trajectory_ref: Option<String>,
     /// Extra metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra: Option<Json>,
@@ -263,7 +368,9 @@ impl AtifExporter {
             session_id: state.session_id.clone(),
             agent: state.agent_info.clone(),
             steps,
+            notes: None,
             final_metrics,
+            continued_trajectory_ref: None,
             extra: None,
         }
     }
@@ -328,15 +435,50 @@ fn extract_llm_response_message(output: &Json) -> Json {
     output.clone()
 }
 
+/// Known keys in token_usage that we extract to dedicated fields.
+const TOKEN_USAGE_KNOWN_KEYS: &[&str] = &[
+    "prompt_tokens",
+    "completion_tokens",
+    "cached_tokens",
+    "cost_usd",
+    "prompt_token_ids",
+    "completion_token_ids",
+    "logprobs",
+];
+
 /// Try to extract `AtifMetrics` from a `token_usage` object in the LLM response.
 ///
+/// Populates `extra` with any unknown token_usage keys (e.g. reasoning_tokens).
 /// Returns `None` if the response has no `token_usage` or it is not an object.
 fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
     let usage = output.as_object()?.get("token_usage")?.as_object()?;
-    // Only produce metrics if at least one field is present.
     let prompt = usage.get("prompt_tokens").and_then(Json::as_u64);
     let completion = usage.get("completion_tokens").and_then(Json::as_u64);
     let cached = usage.get("cached_tokens").and_then(Json::as_u64);
+    let cost = usage.get("cost_usd").and_then(Json::as_f64);
+    let prompt_ids = usage
+        .get("prompt_token_ids")
+        .and_then(Json::as_array)
+        .map(|a| a.iter().filter_map(Json::as_u64).collect());
+    let completion_ids = usage
+        .get("completion_token_ids")
+        .and_then(Json::as_array)
+        .map(|a| a.iter().filter_map(Json::as_u64).collect());
+    let logprobs = usage
+        .get("logprobs")
+        .and_then(Json::as_array)
+        .map(|a| a.iter().filter_map(Json::as_f64).collect());
+    let known: std::collections::HashSet<&str> = TOKEN_USAGE_KNOWN_KEYS.iter().copied().collect();
+    let extra_map: serde_json::Map<String, Json> = usage
+        .iter()
+        .filter(|(k, _)| !known.contains(k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let extra = if extra_map.is_empty() {
+        None
+    } else {
+        Some(Json::Object(extra_map))
+    };
     if prompt.is_none() && completion.is_none() && cached.is_none() {
         return None;
     }
@@ -344,9 +486,40 @@ fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
         prompt_tokens: prompt,
         completion_tokens: completion,
         cached_tokens: cached,
-        cost_usd: None,
-        extra: None,
+        cost_usd: cost,
+        prompt_token_ids: prompt_ids,
+        completion_token_ids: completion_ids,
+        logprobs,
+        extra,
     })
+}
+
+/// Extract `reasoning_effort` from an LLM request (string or number).
+///
+/// The request content may have `reasoning_effort` (e.g. `"high"`, `"medium"`,
+/// or a numeric value). Returns the value as Json for flexibility.
+fn extract_reasoning_effort(input: &Json) -> Option<Json> {
+    if let Some(obj) = input.as_object() {
+        if let Some(v) = obj.get("reasoning_effort") {
+            if !v.is_null() {
+                return Some(v.clone());
+            }
+        }
+    }
+    None
+}
+
+/// Extract `reasoning` (reasoning_content) from an LLM response output.
+///
+/// The agent's explicit internal reasoning may appear in the response under the
+/// `"reasoning"` key. Returns `None` if absent or not a string.
+fn extract_reasoning_content(output: &Json) -> Option<String> {
+    if let Some(obj) = output.as_object() {
+        if let Some(r) = obj.get("reasoning") {
+            return r.as_str().map(String::from);
+        }
+    }
+    None
 }
 
 /// Extract just the `messages` array from an LLM request payload.
@@ -425,11 +598,13 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
 
 /// Compute aggregate `final_metrics` by summing token counts across all steps.
 ///
-/// Returns `None` if no steps carry metrics.
-fn compute_final_metrics(steps: &[AtifStep]) -> Option<AtifMetrics> {
+/// Always returns `Some(AtifFinalMetrics)` with `total_steps` set. Token/cost
+/// fields are populated when at least one step carries metrics.
+fn compute_final_metrics(steps: &[AtifStep]) -> Option<AtifFinalMetrics> {
     let mut total_prompt: u64 = 0;
     let mut total_completion: u64 = 0;
     let mut total_cached: u64 = 0;
+    let mut total_cost: f64 = 0.0;
     let mut has_any = false;
 
     for step in steps {
@@ -438,24 +613,68 @@ fn compute_final_metrics(steps: &[AtifStep]) -> Option<AtifMetrics> {
             total_prompt += m.prompt_tokens.unwrap_or(0);
             total_completion += m.completion_tokens.unwrap_or(0);
             total_cached += m.cached_tokens.unwrap_or(0);
+            total_cost += m.cost_usd.unwrap_or(0.0);
         }
     }
 
-    if !has_any {
-        return None;
-    }
-
-    Some(AtifMetrics {
-        prompt_tokens: Some(total_prompt),
-        completion_tokens: Some(total_completion),
-        cached_tokens: if total_cached > 0 {
+    Some(AtifFinalMetrics {
+        total_prompt_tokens: if has_any { Some(total_prompt) } else { None },
+        total_completion_tokens: if has_any {
+            Some(total_completion)
+        } else {
+            None
+        },
+        total_cached_tokens: if has_any && total_cached > 0 {
             Some(total_cached)
         } else {
             None
         },
-        cost_usd: None,
+        total_cost_usd: if has_any && total_cost > 0.0 {
+            Some(total_cost)
+        } else {
+            None
+        },
+        total_steps: Some(steps.len() as u64),
         extra: None,
     })
+}
+
+// ---------------------------------------------------------------------------
+// AtifStepExtra helpers
+// ---------------------------------------------------------------------------
+
+/// Build an [`AtifAncestry`] from a Nexus [`Event`].
+///
+/// `name_map` is a pre-pass uuid → name lookup used to resolve `parent_name`.
+fn build_ancestry(
+    event: &Event,
+    name_map: &std::collections::HashMap<Uuid, String>,
+) -> AtifAncestry {
+    AtifAncestry {
+        function_id: event.uuid.to_string(),
+        function_name: event.name.clone().unwrap_or_default(),
+        parent_id: event.parent_uuid.map(|u| u.to_string()),
+        parent_name: event.parent_uuid.and_then(|u| name_map.get(&u)).cloned(),
+    }
+}
+
+/// Build an [`AtifInvocationInfo`] from start/end timestamps.
+///
+/// If `start_ts` is `None`, both timestamps are omitted to preserve the
+/// requirement that they are always emitted together or not at all.
+fn build_invocation_info(
+    start_ts: Option<DateTime<Utc>>,
+    end_ts: DateTime<Utc>,
+    invocation_id: Option<String>,
+    framework: &str,
+) -> AtifInvocationInfo {
+    AtifInvocationInfo {
+        start_timestamp: start_ts.map(|s| s.timestamp_millis() as f64 / 1000.0),
+        end_timestamp: start_ts.map(|_| end_ts.timestamp_millis() as f64 / 1000.0),
+        invocation_id,
+        status: Some("completed".to_string()),
+        framework: Some(framework.to_string()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -484,16 +703,85 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
     let mut sorted: Vec<&Event> = events.to_vec();
     sorted.sort_by_key(|e| e.timestamp);
 
+    // Pre-pass: build uuid → name and uuid → start_timestamp maps so that
+    // build_ancestry can resolve parent_name and build_invocation_info can
+    // emit paired start/end timestamps on End events.
+    let mut name_map: std::collections::HashMap<Uuid, String> = std::collections::HashMap::new();
+    let mut start_ts_map: std::collections::HashMap<Uuid, DateTime<Utc>> =
+        std::collections::HashMap::new();
+    for event in &sorted {
+        if event.event_type == EventType::Start {
+            if let Some(ref name) = event.name {
+                name_map.insert(event.uuid, name.clone());
+            }
+            start_ts_map.insert(event.uuid, event.timestamp);
+        }
+    }
+
     let mut steps = Vec::new();
-    // Track the most recent LLM End's promoted tool_calls for source_call_id correlation.
-    // Maps function_name → tool_call_id for the most recent LLM End step.
     let mut last_tool_call_map: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
-    // Buffer for merging consecutive Tool End observations.
     let mut pending_observations: Vec<AtifObservationResult> = Vec::new();
     let mut pending_obs_timestamp: Option<String> = None;
+    let mut current_reasoning_effort: Option<Json> = None;
+    // Deferred extra state for the current agent step. Written once when the
+    // next LLM Start arrives (or at end of loop), after all Tool End events
+    // for this turn have been accumulated.
+    let mut current_agent_step_idx: Option<usize> = None;
+    let mut current_agent_ancestry: Option<AtifAncestry> = None;
+    let mut current_agent_invocation: Option<AtifInvocationInfo> = None;
+    let mut pending_tool_ancestry: Vec<AtifAncestry> = Vec::new();
+    let mut pending_tool_invocations: Vec<AtifInvocationInfo> = Vec::new();
+    // Declaration order of tool_call_ids from the most recent LLM End event.
+    // Used to sort pending_tool_ancestry/invocations to match tool_calls[i].
+    let mut last_tool_call_order: Vec<String> = Vec::new();
 
-    // Flush any buffered observations into a single merged system step.
+    // Write the accumulated AtifStepExtra to the current agent step. Called
+    // when a new LLM Start arrives (closing the previous turn) and after the
+    // event loop ends.
+    let finalize_agent_extra = |steps: &mut Vec<AtifStep>,
+                                idx: &mut Option<usize>,
+                                ancestry: &mut Option<AtifAncestry>,
+                                invocation: &mut Option<AtifInvocationInfo>,
+                                tool_ancestry: &mut Vec<AtifAncestry>,
+                                tool_invocations: &mut Vec<AtifInvocationInfo>,
+                                tool_call_order: &[String]| {
+        if let (Some(i), Some(anc)) = (idx.take(), ancestry.take()) {
+            if let Some(step) = steps.get_mut(i) {
+                // Sort ancestry/invocations to match tool_calls declaration
+                // order. Tools may complete out of order (concurrent execution)
+                // but tool_ancestry[i] must align with tool_calls[i] by spec.
+                if !tool_call_order.is_empty() && !tool_ancestry.is_empty() {
+                    let mut pairs: Vec<(AtifAncestry, AtifInvocationInfo)> =
+                        std::mem::take(tool_ancestry)
+                            .into_iter()
+                            .zip(std::mem::take(tool_invocations))
+                            .collect();
+                    pairs.sort_by_key(|(_, inv)| {
+                        inv.invocation_id
+                            .as_deref()
+                            .and_then(|id| tool_call_order.iter().position(|o| o == id))
+                            .unwrap_or(usize::MAX)
+                    });
+                    let (sorted_anc, sorted_inv): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+                    *tool_ancestry = sorted_anc;
+                    *tool_invocations = sorted_inv;
+                }
+                let extra = AtifStepExtra {
+                    ancestry: anc,
+                    invocation: invocation.take(),
+                    tool_ancestry: std::mem::take(tool_ancestry),
+                    tool_invocations: if tool_invocations.is_empty() {
+                        None
+                    } else {
+                        Some(std::mem::take(tool_invocations))
+                    },
+                };
+                step.extra = serde_json::to_value(&extra).ok();
+            }
+        }
+    };
+
     let flush_observations = |steps: &mut Vec<AtifStep>,
                               obs: &mut Vec<AtifObservationResult>,
                               ts: &mut Option<String>| {
@@ -506,11 +794,14 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
             message: Json::Null,
             timestamp: ts.take(),
             model_name: None,
+            reasoning_effort: None,
+            reasoning_content: None,
             tool_calls: None,
             observation: Some(AtifObservation {
                 results: std::mem::take(obs),
             }),
             metrics: None,
+            is_copied_context: None,
             extra: None,
         });
     };
@@ -520,25 +811,46 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
             EventType::Start => {
                 match event.scope_type {
                     Some(ScopeType::Llm) => {
-                        // Flush pending observations before a new LLM turn
                         flush_observations(
                             &mut steps,
                             &mut pending_observations,
                             &mut pending_obs_timestamp,
                         );
-                        // LLM start -> user step (extract just the messages array)
+                        // Finalize the previous agent step now that all its
+                        // Tool End events have been seen.
+                        // Sort ancestry/invocations to match tool_calls declaration order.
+                        finalize_agent_extra(
+                            &mut steps,
+                            &mut current_agent_step_idx,
+                            &mut current_agent_ancestry,
+                            &mut current_agent_invocation,
+                            &mut pending_tool_ancestry,
+                            &mut pending_tool_invocations,
+                            &last_tool_call_order,
+                        );
                         if let Some(input) = &event.input {
                             let content = unwrap_llm_request(input);
+                            current_reasoning_effort = extract_reasoning_effort(&content);
+                            let ancestry = build_ancestry(event, &name_map);
+                            let extra = AtifStepExtra {
+                                ancestry,
+                                invocation: None, // user step: end time unknown
+                                tool_ancestry: Vec::new(),
+                                tool_invocations: None,
+                            };
                             steps.push(AtifStep {
                                 step_id: 0,
                                 source: "user".to_string(),
                                 message: extract_user_messages(&content),
                                 timestamp: Some(event.timestamp.to_rfc3339()),
                                 model_name: event.model_name.clone(),
+                                reasoning_effort: None,
+                                reasoning_content: None,
                                 tool_calls: None,
                                 observation: None,
                                 metrics: None,
-                                extra: None,
+                                is_copied_context: None,
+                                extra: serde_json::to_value(&extra).ok(),
                             });
                         }
                     }
@@ -553,17 +865,15 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
             EventType::End => {
                 match event.scope_type {
                     Some(ScopeType::Llm) => {
-                        // Flush pending observations before a new LLM end
                         flush_observations(
                             &mut steps,
                             &mut pending_observations,
                             &mut pending_obs_timestamp,
                         );
-                        // LLM end -> agent step
                         if let Some(output) = &event.output {
                             let tool_calls = extract_tool_calls(output);
-                            // Build correlation map for upcoming tool observations
                             last_tool_call_map.clear();
+                            last_tool_call_order.clear();
                             if let Some(ref tcs) = tool_calls {
                                 for tc in tcs {
                                     if !tc.function_name.is_empty() {
@@ -572,23 +882,43 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
                                             tc.tool_call_id.clone(),
                                         );
                                     }
+                                    last_tool_call_order.push(tc.tool_call_id.clone());
                                 }
                             }
+                            let reasoning_effort = current_reasoning_effort.take();
+                            let reasoning_content = extract_reasoning_content(output);
+                            let start_ts = start_ts_map.get(&event.uuid).copied();
+                            // Save ancestry and invocation for deferred write —
+                            // tool_ancestry is not yet known at this point.
+                            current_agent_ancestry = Some(build_ancestry(event, &name_map));
+                            current_agent_invocation = Some(build_invocation_info(
+                                start_ts,
+                                event.timestamp,
+                                Some(event.uuid.to_string()),
+                                "nexus",
+                            ));
                             steps.push(AtifStep {
                                 step_id: 0,
                                 source: "agent".to_string(),
                                 message: extract_llm_response_message(output),
                                 timestamp: Some(event.timestamp.to_rfc3339()),
                                 model_name: event.model_name.clone(),
+                                reasoning_effort,
+                                reasoning_content,
                                 tool_calls,
                                 observation: None,
                                 metrics: extract_metrics(output),
+                                is_copied_context: None,
                                 extra: None,
                             });
+                            current_agent_step_idx = Some(steps.len() - 1);
+                            pending_tool_ancestry.clear();
+                            pending_tool_invocations.clear();
                         }
                     }
                     Some(ScopeType::Tool) => {
-                        // Tool end -> buffer as observation result for merging
+                        // Tool end -> buffer as observation result for merging,
+                        // and append ancestry/invocation to the current agent step.
                         if let Some(output) = &event.output {
                             // Correlate: prefer event's own tool_call_id, then
                             // look up by function_name in the last LLM End's promoted calls.
@@ -602,9 +932,24 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
                                 pending_obs_timestamp = Some(event.timestamp.to_rfc3339());
                             }
                             pending_observations.push(AtifObservationResult {
-                                source_call_id,
+                                source_call_id: source_call_id.clone(),
                                 content: output.clone(),
                             });
+                        }
+                        // Accumulate tool ancestry/invocation for the current
+                        // agent step. Written to step.extra when finalized.
+                        if current_agent_step_idx.is_some() {
+                            let start_ts = start_ts_map.get(&event.uuid).copied();
+                            pending_tool_ancestry.push(build_ancestry(event, &name_map));
+                            pending_tool_invocations.push(build_invocation_info(
+                                start_ts,
+                                event.timestamp,
+                                event
+                                    .tool_call_id
+                                    .clone()
+                                    .or_else(|| Some(event.uuid.to_string())),
+                                "nexus",
+                            ));
                         }
                     }
                     _ => {
@@ -613,13 +958,11 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
                 }
             }
             EventType::Mark => {
-                // Flush pending observations before a mark event
                 flush_observations(
                     &mut steps,
                     &mut pending_observations,
                     &mut pending_obs_timestamp,
                 );
-                // Mark events: include if they have data
                 if let Some(data) = &event.data {
                     steps.push(AtifStep {
                         step_id: 0,
@@ -627,15 +970,29 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
                         message: data.clone(),
                         timestamp: Some(event.timestamp.to_rfc3339()),
                         model_name: None,
+                        reasoning_effort: None,
+                        reasoning_content: None,
                         tool_calls: None,
                         observation: None,
                         metrics: None,
+                        is_copied_context: None,
                         extra: None,
                     });
                 }
             }
         }
     }
+
+    // Finalize the last agent step's extra (no subsequent LLM Start to trigger it).
+    finalize_agent_extra(
+        &mut steps,
+        &mut current_agent_step_idx,
+        &mut current_agent_ancestry,
+        &mut current_agent_invocation,
+        &mut pending_tool_ancestry,
+        &mut pending_tool_invocations,
+        &last_tool_call_order,
+    );
 
     // Flush any remaining observations
     flush_observations(
@@ -681,7 +1038,10 @@ mod tests {
         assert_eq!(trajectory.session_id, "session-1");
         assert_eq!(trajectory.agent.name, "test-agent");
         assert!(trajectory.steps.is_empty());
-        assert!(trajectory.final_metrics.is_none());
+        // final_metrics is always Some now — carries total_steps even for empty trajectories
+        let fm = trajectory.final_metrics.as_ref().unwrap();
+        assert_eq!(fm.total_steps, Some(0));
+        assert!(fm.total_prompt_tokens.is_none());
     }
 
     #[test]
@@ -792,10 +1152,11 @@ mod tests {
         // Empty tool_calls should not produce AtifToolCall entries
         assert!(step2.tool_calls.is_none());
 
-        // final_metrics should aggregate
+        // final_metrics should aggregate using total_ prefixed fields (AtifFinalMetrics)
         let fm = trajectory.final_metrics.as_ref().unwrap();
-        assert_eq!(fm.prompt_tokens, Some(10));
-        assert_eq!(fm.completion_tokens, Some(20));
+        assert_eq!(fm.total_prompt_tokens, Some(10));
+        assert_eq!(fm.total_completion_tokens, Some(20));
+        assert_eq!(fm.total_steps, Some(2));
     }
 
     #[test]
@@ -837,7 +1198,10 @@ mod tests {
         // Non-object output is passed through as-is
         assert_eq!(trajectory.steps[1].message, json!("simple string response"));
         assert!(trajectory.steps[1].metrics.is_none());
-        assert!(trajectory.final_metrics.is_none());
+        // No token metrics on any step — token totals are None, but total_steps is still set
+        let fm = trajectory.final_metrics.as_ref().unwrap();
+        assert!(fm.total_prompt_tokens.is_none());
+        assert_eq!(fm.total_steps, Some(2));
     }
 
     #[test]
@@ -1006,6 +1370,8 @@ mod tests {
                 message: json!("Hello"),
                 timestamp: Some("2026-01-01T00:00:00Z".to_string()),
                 model_name: None,
+                reasoning_effort: None,
+                reasoning_content: None,
                 tool_calls: None,
                 observation: None,
                 metrics: Some(AtifMetrics {
@@ -1013,17 +1379,24 @@ mod tests {
                     completion_tokens: Some(20),
                     cached_tokens: None,
                     cost_usd: Some(0.001),
+                    prompt_token_ids: None,
+                    completion_token_ids: None,
+                    logprobs: None,
                     extra: None,
                 }),
+                is_copied_context: None,
                 extra: None,
             }],
-            final_metrics: Some(AtifMetrics {
-                prompt_tokens: Some(100),
-                completion_tokens: Some(200),
-                cached_tokens: Some(50),
-                cost_usd: Some(0.01),
+            notes: None,
+            final_metrics: Some(AtifFinalMetrics {
+                total_prompt_tokens: Some(100),
+                total_completion_tokens: Some(200),
+                total_cached_tokens: Some(50),
+                total_cost_usd: Some(0.01),
+                total_steps: Some(1),
                 extra: None,
             }),
+            continued_trajectory_ref: None,
             extra: None,
         };
 
@@ -1039,7 +1412,8 @@ mod tests {
         let metrics = deserialized.steps[0].metrics.as_ref().unwrap();
         assert_eq!(metrics.prompt_tokens, Some(10));
         let final_metrics = deserialized.final_metrics.as_ref().unwrap();
-        assert_eq!(final_metrics.prompt_tokens, Some(100));
+        assert_eq!(final_metrics.total_prompt_tokens, Some(100));
+        assert_eq!(final_metrics.total_steps, Some(1));
     }
 
     #[test]
@@ -1494,7 +1868,438 @@ mod tests {
 
         // Final metrics should aggregate both LLM calls
         let fm = trajectory.final_metrics.as_ref().unwrap();
-        assert_eq!(fm.prompt_tokens, Some(300));
-        assert_eq!(fm.completion_tokens, Some(80));
+        assert_eq!(fm.total_prompt_tokens, Some(300));
+        assert_eq!(fm.total_completion_tokens, Some(80));
+    }
+
+    #[test]
+    fn test_reasoning_content_extracted() {
+        // When an LLM End event carries output["reasoning"], the agent step
+        // should have reasoning_content populated.
+        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+        let llm_uuid = Uuid::new_v4();
+
+        let end = Event::builder(llm_uuid, EventType::End)
+            .scope_type(ScopeType::Llm)
+            .output(Some(json!({
+                "content": "The answer is 42.",
+                "role": "assistant",
+                "reasoning": "Let me think step by step. The question asks for the meaning of life...",
+                "token_usage": { "prompt_tokens": 10, "completion_tokens": 5 }
+            })))
+            .build();
+
+        {
+            let mut state = exporter.state.lock().unwrap();
+            state.events.push(end);
+        }
+
+        let trajectory = exporter.export(None);
+        let agent_step = &trajectory.steps[0];
+        assert_eq!(agent_step.source, "agent");
+        assert_eq!(
+            agent_step.reasoning_content,
+            Some(
+                "Let me think step by step. The question asks for the meaning of life..."
+                    .to_string()
+            )
+        );
+        // reasoning_content should not bleed into message
+        assert_eq!(agent_step.message, json!("The answer is 42."));
+    }
+
+    #[test]
+    fn test_reasoning_effort_propagated() {
+        // reasoning_effort is set on the LLM Start event input and must be
+        // carried forward to the agent step produced by the LLM End event.
+        // This tests the stateful current_reasoning_effort handoff.
+        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+        let llm_uuid = Uuid::new_v4();
+
+        let start = Event::builder(llm_uuid, EventType::Start)
+            .scope_type(ScopeType::Llm)
+            .input(Some(json!({
+                "messages": [{"role": "user", "content": "solve this"}],
+                "reasoning_effort": "high"
+            })))
+            .build();
+
+        let end = Event::builder(llm_uuid, EventType::End)
+            .scope_type(ScopeType::Llm)
+            .output(Some(json!({
+                "content": "Done.",
+                "role": "assistant"
+            })))
+            .build();
+
+        {
+            let mut state = exporter.state.lock().unwrap();
+            state.events.push(start);
+            state.events.push(end);
+        }
+
+        let trajectory = exporter.export(None);
+        // steps: user (LLM Start), agent (LLM End)
+        let agent_step = &trajectory.steps[1];
+        assert_eq!(agent_step.source, "agent");
+        assert_eq!(agent_step.reasoning_effort, Some(json!("high")));
+        // User step should NOT carry reasoning_effort
+        assert!(trajectory.steps[0].reasoning_effort.is_none());
+    }
+
+    #[test]
+    fn test_metrics_extra_captures_unknown_token_usage_keys() {
+        // Unknown keys in token_usage (e.g. reasoning_tokens) should be
+        // routed to metrics.extra rather than silently dropped.
+        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+        let llm_uuid = Uuid::new_v4();
+
+        let end = Event::builder(llm_uuid, EventType::End)
+            .scope_type(ScopeType::Llm)
+            .output(Some(json!({
+                "content": "ok",
+                "role": "assistant",
+                "token_usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 10,
+                    "reasoning_tokens": 150,
+                    "cache_creation_input_tokens": 5
+                }
+            })))
+            .build();
+
+        {
+            let mut state = exporter.state.lock().unwrap();
+            state.events.push(end);
+        }
+
+        let trajectory = exporter.export(None);
+        let metrics = trajectory.steps[0].metrics.as_ref().unwrap();
+        assert_eq!(metrics.prompt_tokens, Some(20));
+        assert_eq!(metrics.completion_tokens, Some(10));
+        // Unknown keys land in extra
+        let extra = metrics.extra.as_ref().unwrap();
+        assert_eq!(extra["reasoning_tokens"], json!(150));
+        assert_eq!(extra["cache_creation_input_tokens"], json!(5));
+        // Known keys do not appear in extra
+        assert!(extra.get("prompt_tokens").is_none());
+        assert!(extra.get("completion_tokens").is_none());
+    }
+
+    #[test]
+    fn test_step_extra_agent_ancestry() {
+        // Agent step extra.ancestry is populated with function_id, function_name,
+        // parent_id from the LLM End event.
+        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+        let agent_uuid = Uuid::new_v4();
+        let llm_uuid = Uuid::new_v4();
+
+        let llm_start = Event::builder(llm_uuid, EventType::Start)
+            .name("gpt-4")
+            .scope_type(ScopeType::Llm)
+            .parent_uuid(Some(agent_uuid))
+            .input(Some(
+                json!({"messages": [{"role": "user", "content": "hi"}]}),
+            ))
+            .build();
+
+        let llm_end = Event::builder(llm_uuid, EventType::End)
+            .name("gpt-4")
+            .scope_type(ScopeType::Llm)
+            .parent_uuid(Some(agent_uuid))
+            .output(Some(json!({"content": "hello", "role": "assistant"})))
+            .build();
+
+        {
+            let mut state = exporter.state.lock().unwrap();
+            state.events.push(llm_start);
+            state.events.push(llm_end);
+        }
+
+        let trajectory = exporter.export(None);
+        let agent_step = &trajectory.steps[1];
+        assert_eq!(agent_step.source, "agent");
+
+        let extra: AtifStepExtra =
+            serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
+        assert_eq!(extra.ancestry.function_id, llm_uuid.to_string());
+        assert_eq!(extra.ancestry.function_name, "gpt-4");
+        assert_eq!(extra.ancestry.parent_id, Some(agent_uuid.to_string()));
+    }
+
+    #[test]
+    fn test_step_extra_invocation_timestamps() {
+        // Agent step extra.invocation carries paired start_timestamp and end_timestamp.
+        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+        let llm_uuid = Uuid::new_v4();
+
+        let llm_start = Event::builder(llm_uuid, EventType::Start)
+            .name("gpt-4")
+            .scope_type(ScopeType::Llm)
+            .input(Some(json!({"messages": []})))
+            .build();
+
+        let llm_end = Event::builder(llm_uuid, EventType::End)
+            .name("gpt-4")
+            .scope_type(ScopeType::Llm)
+            .output(Some(json!({"content": "done", "role": "assistant"})))
+            .build();
+
+        {
+            let mut state = exporter.state.lock().unwrap();
+            state.events.push(llm_start);
+            state.events.push(llm_end);
+        }
+
+        let trajectory = exporter.export(None);
+        let agent_step = &trajectory.steps[1];
+        let extra: AtifStepExtra =
+            serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
+
+        let inv = extra.invocation.as_ref().unwrap();
+        assert!(inv.start_timestamp.is_some());
+        assert!(inv.end_timestamp.is_some());
+        // end must be >= start
+        assert!(inv.end_timestamp.unwrap() >= inv.start_timestamp.unwrap());
+        assert_eq!(inv.invocation_id, Some(llm_uuid.to_string()));
+        assert_eq!(inv.framework, Some("nexus".to_string()));
+    }
+
+    #[test]
+    fn test_step_extra_user_step_has_ancestry_no_invocation() {
+        // User step (LLM Start) gets ancestry but invocation is None —
+        // end time is unknown at the time the user step is emitted.
+        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+        let llm_uuid = Uuid::new_v4();
+
+        let llm_start = Event::builder(llm_uuid, EventType::Start)
+            .name("gpt-4")
+            .scope_type(ScopeType::Llm)
+            .input(Some(
+                json!({"messages": [{"role": "user", "content": "hi"}]}),
+            ))
+            .build();
+
+        let llm_end = Event::builder(llm_uuid, EventType::End)
+            .name("gpt-4")
+            .scope_type(ScopeType::Llm)
+            .output(Some(json!({"content": "hi back", "role": "assistant"})))
+            .build();
+
+        {
+            let mut state = exporter.state.lock().unwrap();
+            state.events.push(llm_start);
+            state.events.push(llm_end);
+        }
+
+        let trajectory = exporter.export(None);
+        let user_step = &trajectory.steps[0];
+        assert_eq!(user_step.source, "user");
+
+        let extra: AtifStepExtra =
+            serde_json::from_value(user_step.extra.clone().unwrap()).unwrap();
+        assert_eq!(extra.ancestry.function_id, llm_uuid.to_string());
+        assert!(extra.invocation.is_none());
+    }
+
+    #[test]
+    fn test_step_extra_tool_ancestry_aligned_with_tool_calls() {
+        // tool_ancestry[i] must align with tool_calls[i] on the agent step.
+        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+        let llm_uuid = Uuid::new_v4();
+        let tool1_uuid = Uuid::new_v4();
+        let tool2_uuid = Uuid::new_v4();
+
+        let llm_end = Event::builder(llm_uuid, EventType::End)
+            .scope_type(ScopeType::Llm)
+            .output(Some(json!({
+                "content": null,
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "search", "arguments": "{}"}},
+                    {"id": "c2", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+                ]
+            })))
+            .build();
+
+        let tool1_end = Event::builder(tool1_uuid, EventType::End)
+            .name("search")
+            .scope_type(ScopeType::Tool)
+            .output(Some(json!("result1")))
+            .tool_call_id(Some("c1".to_string()))
+            .build();
+
+        let tool2_end = Event::builder(tool2_uuid, EventType::End)
+            .name("lookup")
+            .scope_type(ScopeType::Tool)
+            .output(Some(json!("result2")))
+            .tool_call_id(Some("c2".to_string()))
+            .build();
+
+        {
+            let mut state = exporter.state.lock().unwrap();
+            state.events.push(llm_end);
+            state.events.push(tool1_end);
+            state.events.push(tool2_end);
+        }
+
+        let trajectory = exporter.export(None);
+        let agent_step = &trajectory.steps[0];
+        let extra: AtifStepExtra =
+            serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
+
+        assert_eq!(extra.tool_ancestry.len(), 2);
+        assert_eq!(extra.tool_ancestry[0].function_id, tool1_uuid.to_string());
+        assert_eq!(extra.tool_ancestry[0].function_name, "search");
+        assert_eq!(extra.tool_ancestry[1].function_id, tool2_uuid.to_string());
+        assert_eq!(extra.tool_ancestry[1].function_name, "lookup");
+
+        let tool_invocations = extra.tool_invocations.as_ref().unwrap();
+        assert_eq!(tool_invocations.len(), 2);
+        assert_eq!(tool_invocations[0].invocation_id, Some("c1".to_string()));
+        assert_eq!(tool_invocations[1].invocation_id, Some("c2".to_string()));
+    }
+
+    #[test]
+    fn test_step_extra_tool_ancestry_aligned_out_of_order_completion() {
+        // Tools complete in reverse order (c2 before c1) but ancestry must
+        // still align with tool_calls declaration order (c1=search, c2=lookup).
+        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+        let llm_uuid = Uuid::new_v4();
+        let tool1_uuid = Uuid::new_v4();
+        let tool2_uuid = Uuid::new_v4();
+
+        let llm_end = Event::builder(llm_uuid, EventType::End)
+            .scope_type(ScopeType::Llm)
+            .output(Some(json!({
+                "content": null,
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "search", "arguments": "{}"}},
+                    {"id": "c2", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+                ]
+            })))
+            .build();
+
+        // c2 (lookup) completes before c1 (search) — out of declaration order.
+        let mut tool2_end = Event::builder(tool2_uuid, EventType::End)
+            .name("lookup")
+            .scope_type(ScopeType::Tool)
+            .output(Some(json!("result2")))
+            .tool_call_id(Some("c2".to_string()))
+            .build();
+        tool2_end.timestamp = chrono::Utc::now();
+
+        let mut tool1_end = Event::builder(tool1_uuid, EventType::End)
+            .name("search")
+            .scope_type(ScopeType::Tool)
+            .output(Some(json!("result1")))
+            .tool_call_id(Some("c1".to_string()))
+            .build();
+        // Ensure tool1_end sorts after tool2_end by timestamp.
+        tool1_end.timestamp = tool2_end.timestamp + chrono::Duration::milliseconds(10);
+
+        {
+            let mut state = exporter.state.lock().unwrap();
+            state.events.push(llm_end);
+            state.events.push(tool2_end);
+            state.events.push(tool1_end);
+        }
+
+        let trajectory = exporter.export(None);
+        let agent_step = &trajectory.steps[0];
+        let extra: AtifStepExtra =
+            serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
+
+        // Despite out-of-order completion, ancestry aligns with tool_calls declaration order.
+        assert_eq!(extra.tool_ancestry.len(), 2);
+        assert_eq!(extra.tool_ancestry[0].function_name, "search"); // tool_calls[0] = c1
+        assert_eq!(extra.tool_ancestry[1].function_name, "lookup"); // tool_calls[1] = c2
+
+        let tool_invocations = extra.tool_invocations.as_ref().unwrap();
+        assert_eq!(tool_invocations.len(), 2);
+        assert_eq!(tool_invocations[0].invocation_id, Some("c1".to_string()));
+        assert_eq!(tool_invocations[1].invocation_id, Some("c2".to_string()));
+    }
+
+    #[test]
+    fn test_step_extra_tool_ancestry_does_not_bleed_across_turns() {
+        // Tool ancestry from turn 1 must not appear on the agent step of turn 2.
+        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+        let llm1_uuid = Uuid::new_v4();
+        let llm2_uuid = Uuid::new_v4();
+        let tool1_uuid = Uuid::new_v4();
+        let tool2_uuid = Uuid::new_v4();
+
+        // Turn 1: LLM call + one tool
+        let llm1_end = Event::builder(llm1_uuid, EventType::End)
+            .scope_type(ScopeType::Llm)
+            .output(Some(json!({
+                "content": null, "role": "assistant",
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "search", "arguments": "{}"}}
+                ]
+            })))
+            .build();
+        let tool1_end = Event::builder(tool1_uuid, EventType::End)
+            .name("search")
+            .scope_type(ScopeType::Tool)
+            .output(Some(json!("result1")))
+            .tool_call_id(Some("c1".to_string()))
+            .build();
+
+        // Turn 2: new LLM call + one different tool
+        let llm2_start = Event::builder(llm2_uuid, EventType::Start)
+            .scope_type(ScopeType::Llm)
+            .input(Some(json!({"messages": []})))
+            .build();
+        let llm2_end = Event::builder(llm2_uuid, EventType::End)
+            .scope_type(ScopeType::Llm)
+            .output(Some(json!({
+                "content": null, "role": "assistant",
+                "tool_calls": [
+                    {"id": "c2", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+                ]
+            })))
+            .build();
+        let tool2_end = Event::builder(tool2_uuid, EventType::End)
+            .name("lookup")
+            .scope_type(ScopeType::Tool)
+            .output(Some(json!("result2")))
+            .tool_call_id(Some("c2".to_string()))
+            .build();
+
+        {
+            let mut state = exporter.state.lock().unwrap();
+            state.events.push(llm1_end);
+            state.events.push(tool1_end);
+            state.events.push(llm2_start);
+            state.events.push(llm2_end);
+            state.events.push(tool2_end);
+        }
+
+        let trajectory = exporter.export(None);
+        // steps: agent(turn1), system(obs1), user(turn2), agent(turn2), system(obs2)
+        let agent1 = trajectory
+            .steps
+            .iter()
+            .find(|s| s.source == "agent" && s.step_id == 1)
+            .unwrap();
+        let agent2 = trajectory
+            .steps
+            .iter()
+            .find(|s| s.source == "agent" && s.step_id == 4)
+            .unwrap();
+
+        let extra1: AtifStepExtra = serde_json::from_value(agent1.extra.clone().unwrap()).unwrap();
+        let extra2: AtifStepExtra = serde_json::from_value(agent2.extra.clone().unwrap()).unwrap();
+
+        // Turn 1 agent step has only search
+        assert_eq!(extra1.tool_ancestry.len(), 1);
+        assert_eq!(extra1.tool_ancestry[0].function_name, "search");
+
+        // Turn 2 agent step has only lookup — no bleed from turn 1
+        assert_eq!(extra2.tool_ancestry.len(), 1);
+        assert_eq!(extra2.tool_ancestry[0].function_name, "lookup");
     }
 }
