@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Regenerate patches from the current working tree of third-party submodules.
+# Regenerate patches from the current working tree of local third-party checkouts.
 #
 # Usage:
 #   ./scripts/generate-patches.sh
@@ -10,11 +10,13 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+MANIFEST_FILE="$REPO_ROOT/third_party/sources.lock"
 
 generate_patches() {
-    local submodule="$1"
-    local target_dir="$REPO_ROOT/third_party/$submodule"
-    local patch_dir="$REPO_ROOT/patches/$submodule"
+    local path="$1"
+    local name="$2"
+    local target_dir="$REPO_ROOT/$path"
+    local patch_dir="$REPO_ROOT/patches/$name"
 
     if [[ ! -d "$target_dir/.git" ]] && [[ ! -f "$target_dir/.git" ]]; then
         echo "SKIP: $target_dir is not a git repo"
@@ -27,7 +29,7 @@ generate_patches() {
     has_untracked="$(git -C "$target_dir" ls-files --others --exclude-standard 2>/dev/null)"
 
     if [[ -z "$has_tracked" ]] && [[ -z "$has_untracked" ]]; then
-        echo "SKIP: $submodule has no changes"
+        echo "SKIP: $name has no changes"
         return
     fi
 
@@ -52,8 +54,10 @@ generate_patches() {
 }
 
 echo "Generating patches..."
-for dir in "$REPO_ROOT"/third_party/*/; do
-    submodule="$(basename "$dir")"
-    generate_patches "$submodule"
-done
+while read -r section_key path; do
+    manifest_name="${section_key#submodule.}"
+    manifest_name="${manifest_name%.path}"
+    name="$(basename "$manifest_name")"
+    generate_patches "$path" "$name"
+done < <(git config -f "$MANIFEST_FILE" --get-regexp '^submodule\..*\.path$')
 echo "Done."
