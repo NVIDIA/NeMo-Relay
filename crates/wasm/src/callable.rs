@@ -295,11 +295,9 @@ pub fn wrap_js_finalizer_fn(func: Function) -> Box<dyn FnOnce() -> Json + Send> 
 }
 
 /// Wrap a JS function for event subscriber: `(event) => void`.
-pub fn wrap_js_event_subscriber(
-    func: Function,
-) -> Box<dyn Fn(&nvidia_nat_nexus_core::Event) + Send + Sync> {
+pub fn wrap_js_event_subscriber(func: Function) -> nvidia_nat_nexus_core::EventSubscriberFn {
     let func = SendWrapper::new(func);
-    Box::new(move |event: &nvidia_nat_nexus_core::Event| {
+    std::sync::Arc::new(move |event: &nvidia_nat_nexus_core::Event| {
         let wasm_event = WasmEvent::from(event);
         let js_event = wasm_event
             .serialize(&serde_wasm_bindgen::Serializer::json_compatible())

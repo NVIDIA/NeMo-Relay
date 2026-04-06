@@ -870,10 +870,8 @@ pub fn wrap_py_llm_sanitize_response_fn(
 }
 
 /// Wrap a Python callable `(Event) -> None` for event subscribers.
-pub fn wrap_py_event_subscriber(
-    py_fn: Py<PyAny>,
-) -> Box<dyn Fn(&nvidia_nat_nexus_core::Event) + Send + Sync> {
-    Box::new(move |event: &nvidia_nat_nexus_core::Event| {
+pub fn wrap_py_event_subscriber(py_fn: Py<PyAny>) -> nvidia_nat_nexus_core::EventSubscriberFn {
+    Arc::new(move |event: &nvidia_nat_nexus_core::Event| {
         Python::attach(|py| {
             let py_event = crate::py_types::PyEvent {
                 inner: event.clone(),

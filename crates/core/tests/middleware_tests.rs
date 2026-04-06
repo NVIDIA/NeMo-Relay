@@ -946,7 +946,7 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
     let ec = events.clone();
     nat_nexus_register_subscriber(
         "merge_observer",
-        Box::new(move |e: &Event| {
+        Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
         }),
     )
@@ -1229,7 +1229,7 @@ fn test_sanitize_guardrails_pipe_data() {
     let ec = events.clone();
     nat_nexus_register_subscriber(
         "pipe_observer",
-        Box::new(move |e: &Event| {
+        Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
         }),
     )
@@ -1289,7 +1289,7 @@ fn test_response_sanitize_guardrails_pipe() {
     let ec = events.clone();
     nat_nexus_register_subscriber(
         "resp_observer",
-        Box::new(move |e: &Event| {
+        Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
         }),
     )

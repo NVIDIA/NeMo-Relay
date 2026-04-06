@@ -199,7 +199,7 @@ impl AtifExporter {
     /// [`nat_nexus_register_subscriber`](crate::api::nat_nexus_register_subscriber).
     pub fn subscriber(&self) -> EventSubscriberFn {
         let state = self.state.clone();
-        Box::new(move |event: &Event| {
+        Arc::new(move |event: &Event| {
             if let Ok(mut s) = state.lock() {
                 s.events.push(event.clone());
             }

@@ -124,7 +124,6 @@ graph LR
         TSP[Tool Sanitize<br/>Response Guards]
         TCE[Tool Conditional<br/>Execution Guards]
         TRI[Tool Request<br/>Intercepts]
-        TRSI[Tool Response<br/>Intercepts]
         TEI[Tool Execution<br/>Intercepts]
 
         LSR[LLM Sanitize<br/>Request Guards]

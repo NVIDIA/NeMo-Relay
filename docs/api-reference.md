@@ -312,6 +312,11 @@ nat_nexus.subscribers.register(
 nat_nexus.subscribers.deregister(name: str) -> bool
 ```
 
+Subscriber callbacks run synchronously on the calling thread, after Nexus has
+snapshotted the subscriber list and released its runtime locks. Subscribers may
+call other Nexus APIs, but should remain lightweight because they are still on
+the request path.
+
 ## Context Isolation
 
 ```python
@@ -379,6 +384,10 @@ Additionally:
 | `model_name` | `str \| None` | LLM model name |
 | `tool_call_id` | `str \| None` | Tool correlation ID |
 | `root_uuid` | `str \| None` | Root scope UUID |
+
+Scope `Start` events are emitted after the scope has been pushed, and scope
+`End` events are emitted after the scope has been popped. Subscribers that call
+`get_handle()` therefore observe the post-mutation active scope.
 
 ## Scope-Local Registration
 

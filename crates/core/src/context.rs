@@ -106,7 +106,10 @@ pub type LlmStreamExecutionFn = Arc<
 >;
 
 /// Event subscriber callback: `(event) -> ()`. Called for every lifecycle event.
-pub type EventSubscriberFn = Box<dyn Fn(&Event) + Send + Sync>;
+///
+/// Stored in an [`Arc`] so subscriber snapshots can be cloned and dispatched
+/// after releasing runtime locks.
+pub type EventSubscriberFn = Arc<dyn Fn(&Event) + Send + Sync>;
 
 // ---------------------------------------------------------------------------
 // Scope stack
@@ -248,11 +251,11 @@ impl ScopeStack {
     }
 
     /// Collects scope-local event subscribers in stack order (root to top).
-    pub fn collect_scope_local_subscribers(&self) -> Vec<&HashMap<String, EventSubscriberFn>> {
+    pub fn collect_scope_local_subscribers(&self) -> Vec<EventSubscriberFn> {
         self.stack
             .iter()
             .filter_map(|h| self.scope_registries.get(&h.uuid))
-            .map(|r| &r.event_subscribers)
+            .flat_map(|r| r.event_subscribers.values().cloned())
             .collect()
     }
 }
@@ -617,19 +620,22 @@ impl NatNexusContextState {
     // Event emission
     // -----------------------------------------------------------------------
 
-    /// Dispatches an event to all registered subscribers (global + scope-local).
-    pub fn emit_event(
+    /// Captures the current global plus scope-local event subscribers.
+    pub fn collect_event_subscribers(
         &self,
-        event: &Event,
-        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
-    ) {
-        for sub in self.event_subscribers.values() {
+        scope_local_subscribers: &[EventSubscriberFn],
+    ) -> Vec<EventSubscriberFn> {
+        let mut subscribers =
+            Vec::with_capacity(self.event_subscribers.len() + scope_local_subscribers.len());
+        subscribers.extend(self.event_subscribers.values().cloned());
+        subscribers.extend(scope_local_subscribers.iter().cloned());
+        subscribers
+    }
+
+    /// Dispatches an event to a pre-snapshotted subscriber list.
+    pub fn emit_event(event: &Event, subscribers: &[EventSubscriberFn]) {
+        for sub in subscribers {
             sub(event);
-        }
-        for subs in scope_local_subscribers {
-            for sub in subs.values() {
-                sub(event);
-            }
         }
     }
 
@@ -637,7 +643,7 @@ impl NatNexusContextState {
     // Handle creation / destruction
     // -----------------------------------------------------------------------
 
-    /// Creates and emits a standalone marker event (EventType::Mark).
+    /// Builds a standalone marker event (EventType::Mark).
     pub fn create_event(
         &self,
         name: &str,
@@ -645,40 +651,39 @@ impl NatNexusContextState {
         data: Option<Json>,
         metadata: Option<Json>,
         root_uuid: Option<Uuid>,
-        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
-    ) {
-        let event = Event::builder(Uuid::new_v4(), EventType::Mark)
+    ) -> Event {
+        Event::builder(Uuid::new_v4(), EventType::Mark)
             .parent_uuid(parent_uuid)
             .name(name)
             .data(data)
             .metadata(metadata)
             .root_uuid(root_uuid)
-            .build();
-        self.emit_event(&event, scope_local_subscribers);
+            .build()
     }
 
-    /// Creates a new scope handle and emits a Start event.
-    #[allow(clippy::too_many_arguments)]
+    /// Creates a new scope handle.
     pub fn create_scope_handle(
         &self,
         name: &str,
         parent_uuid: Option<Uuid>,
         scope_type: ScopeType,
         attributes: ScopeAttributes,
-        root_uuid: Option<Uuid>,
         data: Option<Json>,
         metadata: Option<Json>,
-        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
     ) -> ScopeHandle {
-        let handle = ScopeHandle::new(
+        ScopeHandle::new(
             name.to_string(),
             scope_type,
             attributes,
             parent_uuid,
             data,
             metadata,
-        );
-        let event = Event::builder(handle.uuid, EventType::Start)
+        )
+    }
+
+    /// Builds a Start event for the given scope handle.
+    pub fn build_scope_start_event(&self, handle: &ScopeHandle, root_uuid: Option<Uuid>) -> Event {
+        Event::builder(handle.uuid, EventType::Start)
             .parent_uuid(handle.parent_uuid)
             .name(handle.name.clone())
             .data(handle.data.clone())
@@ -686,19 +691,12 @@ impl NatNexusContextState {
             .attributes(HandleAttributes::Scope(handle.attributes))
             .scope_type(handle.scope_type)
             .root_uuid(root_uuid)
-            .build();
-        self.emit_event(&event, scope_local_subscribers);
-        handle
+            .build()
     }
 
-    /// Emits an End event for the given scope handle.
-    pub fn end_scope_handle(
-        &self,
-        scope: &ScopeHandle,
-        root_uuid: Option<Uuid>,
-        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
-    ) {
-        let event = Event::builder(scope.uuid, EventType::End)
+    /// Builds an End event for the given scope handle.
+    pub fn end_scope_handle(&self, scope: &ScopeHandle, root_uuid: Option<Uuid>) -> Event {
+        Event::builder(scope.uuid, EventType::End)
             .parent_uuid(scope.parent_uuid)
             .name(scope.name.clone())
             .data(scope.data.clone())
@@ -706,11 +704,10 @@ impl NatNexusContextState {
             .attributes(HandleAttributes::Scope(scope.attributes))
             .scope_type(scope.scope_type)
             .root_uuid(root_uuid)
-            .build();
-        self.emit_event(&event, scope_local_subscribers);
+            .build()
     }
 
-    /// Creates a new tool handle and emits a Start event.
+    /// Creates a new tool handle.
     ///
     /// The `input` field on the Start event is populated with the sanitized args.
     /// The `tool_call_id` is propagated from the handle to the event.
@@ -724,13 +721,20 @@ impl NatNexusContextState {
         data: Option<Json>,
         metadata: Option<Json>,
         tool_call_id: Option<String>,
-        input: Option<Json>,
-        root_uuid: Option<Uuid>,
-        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
     ) -> ToolHandle {
         let mut handle = ToolHandle::new(name.to_string(), attributes, parent_uuid, data, metadata);
         handle.tool_call_id = tool_call_id;
-        let event = Event::builder(handle.uuid, EventType::Start)
+        handle
+    }
+
+    /// Builds a Start event for the given tool handle.
+    pub fn build_tool_start_event(
+        &self,
+        handle: &ToolHandle,
+        input: Option<Json>,
+        root_uuid: Option<Uuid>,
+    ) -> Event {
+        Event::builder(handle.uuid, EventType::Start)
             .parent_uuid(handle.parent_uuid)
             .name(handle.name.clone())
             .data(handle.data.clone())
@@ -740,12 +744,10 @@ impl NatNexusContextState {
             .input(input)
             .tool_call_id(handle.tool_call_id.clone())
             .root_uuid(root_uuid)
-            .build();
-        self.emit_event(&event, scope_local_subscribers);
-        handle
+            .build()
     }
 
-    /// Emits an End event for the given tool handle, merging any additional data/metadata.
+    /// Builds an End event for the given tool handle, merging any additional data/metadata.
     ///
     /// The `output` field on the End event is populated with the sanitized result.
     pub fn end_tool_handle(
@@ -755,9 +757,8 @@ impl NatNexusContextState {
         metadata: Option<Json>,
         output: Option<Json>,
         root_uuid: Option<Uuid>,
-        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
-    ) {
-        let event = Event::builder(handle.uuid, EventType::End)
+    ) -> Event {
+        Event::builder(handle.uuid, EventType::End)
             .parent_uuid(handle.parent_uuid)
             .name(handle.name.clone())
             .data(merge_json(handle.data.clone(), data))
@@ -767,11 +768,10 @@ impl NatNexusContextState {
             .output(output)
             .tool_call_id(handle.tool_call_id.clone())
             .root_uuid(root_uuid)
-            .build();
-        self.emit_event(&event, scope_local_subscribers);
+            .build()
     }
 
-    /// Creates a new LLM handle and emits a Start event.
+    /// Creates a new LLM handle.
     ///
     /// The `input` field on the Start event is populated with the sanitized request.
     /// The `model_name` is propagated from the handle to the event.
@@ -785,13 +785,20 @@ impl NatNexusContextState {
         data: Option<Json>,
         metadata: Option<Json>,
         model_name: Option<String>,
-        input: Option<Json>,
-        root_uuid: Option<Uuid>,
-        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
     ) -> LLMHandle {
         let mut handle = LLMHandle::new(name.to_string(), attributes, parent_uuid, data, metadata);
         handle.model_name = model_name;
-        let event = Event::builder(handle.uuid, EventType::Start)
+        handle
+    }
+
+    /// Builds a Start event for the given LLM handle.
+    pub fn build_llm_start_event(
+        &self,
+        handle: &LLMHandle,
+        input: Option<Json>,
+        root_uuid: Option<Uuid>,
+    ) -> Event {
+        Event::builder(handle.uuid, EventType::Start)
             .parent_uuid(handle.parent_uuid)
             .name(handle.name.clone())
             .data(handle.data.clone())
@@ -801,12 +808,10 @@ impl NatNexusContextState {
             .input(input)
             .model_name(handle.model_name.clone())
             .root_uuid(root_uuid)
-            .build();
-        self.emit_event(&event, scope_local_subscribers);
-        handle
+            .build()
     }
 
-    /// Emits an End event for the given LLM handle, merging any additional data/metadata.
+    /// Builds an End event for the given LLM handle, merging any additional data/metadata.
     ///
     /// The `output` field on the End event is populated with the sanitized response.
     pub fn end_llm_handle(
@@ -816,9 +821,8 @@ impl NatNexusContextState {
         metadata: Option<Json>,
         output: Option<Json>,
         root_uuid: Option<Uuid>,
-        scope_local_subscribers: &[&HashMap<String, EventSubscriberFn>],
-    ) {
-        let event = Event::builder(handle.uuid, EventType::End)
+    ) -> Event {
+        Event::builder(handle.uuid, EventType::End)
             .parent_uuid(handle.parent_uuid)
             .name(handle.name.clone())
             .data(merge_json(handle.data.clone(), data))
@@ -828,8 +832,7 @@ impl NatNexusContextState {
             .output(output)
             .model_name(handle.model_name.clone())
             .root_uuid(root_uuid)
-            .build();
-        self.emit_event(&event, scope_local_subscribers);
+            .build()
     }
 
     // -----------------------------------------------------------------------
@@ -1144,15 +1147,13 @@ mod tests {
             ScopeAttributes::empty(),
             None,
             None,
-            None,
-            &[],
         );
         task_scope_push(handle.clone());
         let top = task_scope_top();
         assert_eq!(top.name, "test");
 
         let removed = task_scope_remove(&handle.uuid).unwrap();
-        ctx.end_scope_handle(&removed, None, &[]);
+        let _ = ctx.end_scope_handle(&removed, None);
 
         // After pop, root scope is on top again
         assert_eq!(task_scope_top().name, "root");
@@ -1168,12 +1169,11 @@ mod tests {
 
         ctx.event_subscribers.insert(
             "test_sub".into(),
-            Box::new(move |_event: &Event| {
+            Arc::new(move |_event: &Event| {
                 count_clone.fetch_add(1, Ordering::SeqCst);
             }),
         );
 
-        // create_scope_handle emits a START event
         let handle = ctx.create_scope_handle(
             "scope1",
             None,
@@ -1181,13 +1181,14 @@ mod tests {
             ScopeAttributes::empty(),
             None,
             None,
-            None,
-            &[],
         );
+        let start = ctx.build_scope_start_event(&handle, None);
+        let subscribers = ctx.collect_event_subscribers(&[]);
+        NatNexusContextState::emit_event(&start, &subscribers);
         assert_eq!(count.load(Ordering::SeqCst), 1);
 
-        // end_scope_handle emits an END event
-        ctx.end_scope_handle(&handle, None, &[]);
+        let end = ctx.end_scope_handle(&handle, None);
+        NatNexusContextState::emit_event(&end, &subscribers);
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 
@@ -1390,13 +1391,13 @@ mod tests {
 
         ctx.event_subscribers.insert(
             "s1".into(),
-            Box::new(move |_| {
+            Arc::new(move |_| {
                 c1c.fetch_add(1, Ordering::SeqCst);
             }),
         );
         ctx.event_subscribers.insert(
             "s2".into(),
-            Box::new(move |_| {
+            Arc::new(move |_| {
                 c2c.fetch_add(1, Ordering::SeqCst);
             }),
         );
@@ -1411,7 +1412,8 @@ mod tests {
             EventType::Mark,
             None,
         );
-        ctx.emit_event(&event, &[]);
+        let subscribers = ctx.collect_event_subscribers(&[]);
+        NatNexusContextState::emit_event(&event, &subscribers);
 
         assert_eq!(c1.load(Ordering::SeqCst), 1);
         assert_eq!(c2.load(Ordering::SeqCst), 1);
@@ -1419,7 +1421,6 @@ mod tests {
 
     #[test]
     fn test_emit_event_no_subscribers() {
-        let ctx = NatNexusContextState::new();
         // Should not panic with no subscribers
         let event = Event::new(
             None,
@@ -1431,7 +1432,7 @@ mod tests {
             EventType::Mark,
             None,
         );
-        ctx.emit_event(&event, &[]);
+        NatNexusContextState::emit_event(&event, &[]);
     }
 
     // -- create_event tests --
@@ -1446,19 +1447,20 @@ mod tests {
 
         ctx.event_subscribers.insert(
             "capture".into(),
-            Box::new(move |e: &Event| {
+            Arc::new(move |e: &Event| {
                 events_clone.lock().unwrap().push(e.clone());
             }),
         );
 
-        ctx.create_event(
+        let event = ctx.create_event(
             "my_mark",
             Some(Uuid::new_v4()),
             Some(serde_json::json!({"x": 1})),
             None,
             None,
-            &[],
         );
+        let subscribers = ctx.collect_event_subscribers(&[]);
+        NatNexusContextState::emit_event(&event, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1477,7 +1479,7 @@ mod tests {
         let ec = events.clone();
         ctx.event_subscribers.insert(
             "cap".into(),
-            Box::new(move |e: &Event| {
+            Arc::new(move |e: &Event| {
                 ec.lock().unwrap().push(e.clone());
             }),
         );
@@ -1489,9 +1491,10 @@ mod tests {
             ScopeAttributes::PARALLEL,
             None,
             None,
-            None,
-            &[],
         );
+        let event = ctx.build_scope_start_event(&handle, None);
+        let subscribers = ctx.collect_event_subscribers(&[]);
+        NatNexusContextState::emit_event(&event, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1513,7 +1516,7 @@ mod tests {
         let ec = events.clone();
         ctx.event_subscribers.insert(
             "cap".into(),
-            Box::new(move |e: &Event| {
+            Arc::new(move |e: &Event| {
                 ec.lock().unwrap().push(e.clone());
             }),
         );
@@ -1525,10 +1528,12 @@ mod tests {
             ScopeAttributes::empty(),
             None,
             None,
-            None,
-            &[],
         );
-        ctx.end_scope_handle(&handle, None, &[]);
+        let subscribers = ctx.collect_event_subscribers(&[]);
+        let start = ctx.build_scope_start_event(&handle, None);
+        NatNexusContextState::emit_event(&start, &subscribers);
+        let end = ctx.end_scope_handle(&handle, None);
+        NatNexusContextState::emit_event(&end, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -1546,22 +1551,22 @@ mod tests {
         let ec = events.clone();
         ctx.event_subscribers.insert(
             "cap".into(),
-            Box::new(move |e: &Event| {
+            Arc::new(move |e: &Event| {
                 ec.lock().unwrap().push(e.clone());
             }),
         );
 
-        let _handle = ctx.create_tool_handle(
+        let handle = ctx.create_tool_handle(
             "my_tool",
             None,
             ToolAttributes::LOCAL,
             Some(serde_json::json!({"k": "v"})),
             None,
             None,
-            None,
-            None,
-            &[],
         );
+        let subscribers = ctx.collect_event_subscribers(&[]);
+        let event = ctx.build_tool_start_event(&handle, None, None);
+        NatNexusContextState::emit_event(&event, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1583,7 +1588,7 @@ mod tests {
         let ec = events.clone();
         ctx.event_subscribers.insert(
             "cap".into(),
-            Box::new(move |e: &Event| {
+            Arc::new(move |e: &Event| {
                 ec.lock().unwrap().push(e.clone());
             }),
         );
@@ -1595,18 +1600,12 @@ mod tests {
             Some(serde_json::json!({"a": 1})),
             None,
             None,
-            None,
-            None,
-            &[],
         );
-        ctx.end_tool_handle(
-            &handle,
-            Some(serde_json::json!({"b": 2})),
-            None,
-            None,
-            None,
-            &[],
-        );
+        let subscribers = ctx.collect_event_subscribers(&[]);
+        let start = ctx.build_tool_start_event(&handle, None, None);
+        NatNexusContextState::emit_event(&start, &subscribers);
+        let end = ctx.end_tool_handle(&handle, Some(serde_json::json!({"b": 2})), None, None, None);
+        NatNexusContextState::emit_event(&end, &subscribers);
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];
@@ -1626,22 +1625,15 @@ mod tests {
         let ec = events.clone();
         ctx.event_subscribers.insert(
             "cap".into(),
-            Box::new(move |e: &Event| {
+            Arc::new(move |e: &Event| {
                 ec.lock().unwrap().push(e.clone());
             }),
         );
 
-        let _handle = ctx.create_llm_handle(
-            "llm",
-            None,
-            LLMAttributes::STREAMING,
-            None,
-            None,
-            None,
-            None,
-            None,
-            &[],
-        );
+        let handle = ctx.create_llm_handle("llm", None, LLMAttributes::STREAMING, None, None, None);
+        let subscribers = ctx.collect_event_subscribers(&[]);
+        let event = ctx.build_llm_start_event(&handle, None, None);
+        NatNexusContextState::emit_event(&event, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1661,7 +1653,7 @@ mod tests {
         let ec = events.clone();
         ctx.event_subscribers.insert(
             "cap".into(),
-            Box::new(move |e: &Event| {
+            Arc::new(move |e: &Event| {
                 ec.lock().unwrap().push(e.clone());
             }),
         );
@@ -1673,18 +1665,18 @@ mod tests {
             None,
             Some(serde_json::json!({"m1": true})),
             None,
-            None,
-            None,
-            &[],
         );
-        ctx.end_llm_handle(
+        let subscribers = ctx.collect_event_subscribers(&[]);
+        let start = ctx.build_llm_start_event(&handle, None, None);
+        NatNexusContextState::emit_event(&start, &subscribers);
+        let end = ctx.end_llm_handle(
             &handle,
             None,
             Some(serde_json::json!({"m2": false})),
             None,
             None,
-            &[],
         );
+        NatNexusContextState::emit_event(&end, &subscribers);
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];

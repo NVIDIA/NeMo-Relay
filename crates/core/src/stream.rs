@@ -30,7 +30,7 @@ use std::task::{Context, Poll};
 
 use tokio_stream::Stream;
 
-use crate::context::{current_scope_stack, global_context, ScopeStackHandle};
+use crate::context::{current_scope_stack, global_context, NatNexusContextState, ScopeStackHandle};
 use crate::error::Result;
 use crate::json::Json;
 use crate::types::*;
@@ -116,21 +116,31 @@ impl LlmStreamWrapper {
             Json::Null
         };
 
-        let ss_guard = self.scope_stack.read().expect("scope stack lock poisoned");
-        let root_uuid = Some(ss_guard.root_uuid());
-        let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
-        let sl_subs = ss_guard.collect_scope_local_subscribers();
+        let event_snapshot = {
+            let ss_guard = self.scope_stack.read().expect("scope stack lock poisoned");
+            let root_uuid = Some(ss_guard.root_uuid());
+            let sl =
+                ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
+            let sl_subs = ss_guard.collect_scope_local_subscribers();
 
-        if let Ok(state) = global_context().read() {
-            let sanitized = state.llm_sanitize_response_chain(aggregated, &sl);
-            state.end_llm_handle(
-                &self.handle,
-                self.data.clone(),
-                self.metadata.clone(),
-                Some(sanitized),
-                root_uuid,
-                &sl_subs,
-            );
+            if let Ok(state) = global_context().read() {
+                let subscribers = state.collect_event_subscribers(&sl_subs);
+                let sanitized = state.llm_sanitize_response_chain(aggregated, &sl);
+                let event = state.end_llm_handle(
+                    &self.handle,
+                    self.data.clone(),
+                    self.metadata.clone(),
+                    Some(sanitized),
+                    root_uuid,
+                );
+                Some((event, subscribers))
+            } else {
+                None
+            }
+        };
+
+        if let Some((event, subscribers)) = event_snapshot {
+            NatNexusContextState::emit_event(&event, &subscribers);
         }
     }
 }

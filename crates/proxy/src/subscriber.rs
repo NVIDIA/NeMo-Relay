@@ -24,8 +24,8 @@ use crate::types::{CallKind, CallRecord};
 ///
 /// # Hot-path safety
 ///
-/// The returned closure runs **synchronously** under the global context read
-/// lock (see `NatNexusContextState::emit_event`). It MUST NOT:
+/// The returned closure runs **synchronously** on the request path after Nexus
+/// releases its runtime locks. It MUST NOT:
 ///
 /// - Perform I/O
 /// - Acquire write locks on the global context
@@ -39,8 +39,8 @@ use crate::types::{CallKind, CallRecord};
 pub(crate) fn create_subscriber(
     tx: tokio::sync::mpsc::UnboundedSender<Event>,
 ) -> EventSubscriberFn {
-    Box::new(move |event: &Event| {
-        // CRITICAL: This runs under the global context read lock.
+    std::sync::Arc::new(move |event: &Event| {
+        // CRITICAL: This runs synchronously on the call path, so it must stay non-blocking.
         // MUST NOT: do I/O, acquire write locks, call Nexus APIs, or panic.
         // ONLY: clone + send. UnboundedSender::send() never blocks.
         let _ = tx.send(event.clone());

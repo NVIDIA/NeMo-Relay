@@ -314,9 +314,9 @@ pub fn wrap_js_finalizer_fn(
 /// Wrap a JS function for event subscriber: `(event: JsEvent) => void`.
 pub fn wrap_js_event_subscriber(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(&nvidia_nat_nexus_core::Event) + Send + Sync> {
+) -> nvidia_nat_nexus_core::EventSubscriberFn {
     let func = Arc::new(func);
-    Box::new(move |event: &nvidia_nat_nexus_core::Event| {
+    Arc::new(move |event: &nvidia_nat_nexus_core::Event| {
         let event_json = serde_json::to_value(JsEvent::from(event)).unwrap_or(Json::Null);
         func.call(event_json, ThreadsafeFunctionCallMode::NonBlocking);
     })

@@ -614,9 +614,9 @@ pub fn wrap_event_subscriber(
     cb: NatNexusEventSubscriberCb,
     user_data: *mut libc::c_void,
     free_fn: NatNexusFreeFn,
-) -> Box<dyn Fn(&nvidia_nat_nexus_core::Event) + Send + Sync> {
+) -> nvidia_nat_nexus_core::EventSubscriberFn {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(move |event: &nvidia_nat_nexus_core::Event| {
+    Arc::new(move |event: &nvidia_nat_nexus_core::Event| {
         let ffi_event = FfiEvent(event.clone());
         unsafe { cb(ud.ptr, &ffi_event) };
     })

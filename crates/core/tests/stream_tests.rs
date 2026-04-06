@@ -145,7 +145,7 @@ async fn test_stream_wrapper_emits_end_event() {
     let ec = events.clone();
     nat_nexus_register_subscriber(
         "stream_end_test",
-        Box::new(move |e: &Event| {
+        Arc::new(move |e: &Event| {
             ec.lock().unwrap().push((e.event_type, e.scope_type));
         }),
     )
@@ -333,7 +333,7 @@ async fn test_stream_wrapper_error_emits_end_event_on_first_error_poll() {
     let captured = events.clone();
     nat_nexus_register_subscriber(
         "stream_error_end_test",
-        Box::new(move |e: &Event| {
+        Arc::new(move |e: &Event| {
             captured.lock().unwrap().push(e.clone());
         }),
     )
@@ -385,7 +385,7 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
     let ec = events.clone();
     nat_nexus_register_subscriber(
         "end_event_test",
-        Box::new(move |e: &Event| {
+        Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
         }),
     )

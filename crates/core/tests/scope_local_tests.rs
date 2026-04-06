@@ -77,7 +77,7 @@ fn test_scope_local_guardrail_registration_and_execution() {
     let ec = events.clone();
     nat_nexus_register_subscriber(
         "sanitize_observer",
-        Box::new(move |e: &Event| {
+        Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
         }),
     )
@@ -580,7 +580,7 @@ fn test_scope_local_subscriber() {
     nat_nexus_scope_register_subscriber(
         &handle.uuid,
         "local_sub",
-        Box::new(move |e: &Event| {
+        Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.event_type);
         }),
     )
