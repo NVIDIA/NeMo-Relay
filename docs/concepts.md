@@ -110,6 +110,11 @@ Every lifecycle operation emits events to registered subscribers. Events carry:
 | `tool_call_id` | External correlation ID (tool events) |
 | `root_uuid` | Root scope UUID for concurrent isolation |
 
+Subscriber callbacks run synchronously on the calling thread, but Nexus snapshots
+the subscriber list and releases its runtime locks before invoking them. This
+means subscribers can safely call back into Nexus APIs without deadlocking, but
+they should still stay lightweight because they are on the request path.
+
 ### Event Types
 
 | Type | When Emitted |
@@ -117,6 +122,10 @@ Every lifecycle operation emits events to registered subscribers. Events carry:
 | `Start` | Scope pushed, tool/LLM call begins |
 | `End` | Scope popped, tool/LLM call ends |
 | `Mark` | Standalone marker (e.g., guardrail rejection, user annotation) |
+
+For scopes specifically, `Start` is emitted after the new scope is on the
+stack, and `End` is emitted after the scope has been removed. Subscribers that
+call `get_handle()` therefore observe the post-mutation active scope.
 
 ## Guardrails
 

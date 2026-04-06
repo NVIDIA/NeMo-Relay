@@ -73,7 +73,7 @@ The hot cache (`Arc<RwLock<HotCache>>`) holds the current execution plan, predic
 
 ### Event Flow
 
-When your agent executes LLM and tool calls through Nexus, the proxy's event subscriber is invoked synchronously under the global context read lock. The subscriber clones each event and sends it through a `tokio::sync::mpsc::unbounded_channel` -- this operation never blocks. The background drain task receives events and:
+When your agent executes LLM and tool calls through Nexus, the proxy's event subscriber is invoked synchronously on the calling thread after Nexus snapshots the subscriber list and releases its runtime locks. The subscriber clones each event and sends it through a `tokio::sync::mpsc::unbounded_channel` -- this operation never blocks. The background drain task receives events and:
 
 1. Groups events by `root_uuid` using a `RunAccumulator`
 2. Matches Start/End event pairs into `CallRecord` entries within a `RunRecord`

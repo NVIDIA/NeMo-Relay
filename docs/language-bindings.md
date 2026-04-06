@@ -7,6 +7,11 @@ SPDX-License-Identifier: Apache-2.0
 
 Nexus provides native bindings for Python, Node.js, Go, and WebAssembly. All bindings mirror the full API surface: scopes, tools, LLM, guardrails, intercepts, subscribers, and ATIF export.
 
+Across all bindings, subscriber callbacks run synchronously on the calling
+thread after Nexus snapshots the subscriber list and releases its runtime
+locks. They may call back into Nexus APIs, but they should remain lightweight
+because they still execute on the request path.
+
 ## Architecture
 
 ```mermaid
@@ -43,6 +48,12 @@ graph TD
 | Types | `PascalCase` | `PascalCase` | `PascalCase` | `PascalCase` | `FfiPascalCase` |
 | Enums | `ScopeType.Agent` | `ScopeTypeAgent` | `ScopeType.Agent` | `ScopeType.Agent` | `NatNexusScopeTypeAgent` |
 | Errors | `RuntimeError` | `error` | JS exception | JS exception | `NatNexusStatus` + `nat_nexus_last_error()` |
+
+## Rust Core Notes
+
+Direct Rust users of `nvidia-nat-nexus-core` should note that
+`EventSubscriberFn` is an `Arc<dyn Fn(&Event) + Send + Sync>`. Register
+subscribers with `Arc::new(...)`, not `Box::new(...)`.
 
 ## Python
 
@@ -130,6 +141,10 @@ nat_nexus.scope_local.register_subscriber(
 
 nat_nexus.scope.pop(handle)  # both registrations automatically removed
 ```
+
+During the scope's `Start` callback, `get_handle()` sees `handle` as the active
+scope. During its `End` callback, `get_handle()` sees the parent scope because
+the pop has already completed.
 
 ### Context Isolation
 

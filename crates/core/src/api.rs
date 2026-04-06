@@ -47,6 +47,16 @@ fn resolve_parent_uuid(parent: Option<&ScopeHandle>) -> Option<Uuid> {
     )
 }
 
+fn snapshot_event_subscribers(
+    scope_local_subscribers: Vec<EventSubscriberFn>,
+) -> Result<Vec<EventSubscriberFn>> {
+    let ctx = global_context();
+    let state = ctx
+        .read()
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
+    Ok(state.collect_event_subscribers(&scope_local_subscribers))
+}
+
 // ---------------------------------------------------------------------------
 // Macros for register/deregister API generation
 // ---------------------------------------------------------------------------
@@ -309,6 +319,10 @@ execution_intercept_registry_api!(
 
 /// Registers a named event subscriber that will be called for every lifecycle event.
 ///
+/// Subscriber callbacks run synchronously on the calling thread, but the
+/// runtime snapshots the subscriber list and releases its locks before
+/// invoking them.
+///
 /// Returns [`NexusError::AlreadyExists`] if a subscriber with the given name
 /// is already registered.
 pub fn nat_nexus_register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()> {
@@ -558,9 +572,10 @@ pub fn nat_nexus_get_handle() -> Result<ScopeHandle> {
 
 /// Creates a new scope and pushes it onto the scope stack.
 ///
-/// Emits a `Start` event to all subscribers. If `parent` is `None`, the current
-/// top of the scope stack is used as the parent. Optional `data` and `metadata`
-/// payloads are attached to the new scope handle.
+/// Emits a `Start` event to all subscribers after the scope has been pushed.
+/// If `parent` is `None`, the current top of the scope stack is used as the
+/// parent. Optional `data` and `metadata` payloads are attached to the new
+/// scope handle.
 ///
 /// Returns the new [`ScopeHandle`].
 pub fn nat_nexus_push_scope(
@@ -572,40 +587,35 @@ pub fn nat_nexus_push_scope(
     metadata: Option<Json>,
 ) -> Result<ScopeHandle> {
     let parent_uuid = resolve_parent_uuid(parent);
-    let handle = {
+    let (handle, event, subscribers) = {
         let ss = current_scope_stack();
         let ss_guard = ss.read().expect("scope stack lock poisoned");
         let root_uuid = Some(ss_guard.root_uuid());
         let sl_subs = ss_guard.collect_scope_local_subscribers();
+        let subscribers = snapshot_event_subscribers(sl_subs)?;
         let ctx = global_context();
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.create_scope_handle(
-            name,
-            parent_uuid,
-            scope_type,
-            attributes,
-            root_uuid,
-            data,
-            metadata,
-            &sl_subs,
-        )
+        let handle =
+            state.create_scope_handle(name, parent_uuid, scope_type, attributes, data, metadata);
+        let event = state.build_scope_start_event(&handle, root_uuid);
+        (handle, event, subscribers)
     };
     task_scope_push(handle.clone());
+    NatNexusContextState::emit_event(&event, &subscribers);
     Ok(handle)
 }
 
-/// Removes a scope from the scope stack by UUID and emits an `End` event.
+/// Removes a scope from the scope stack by UUID and emits an `End` event after
+/// the scope has been removed.
 ///
 /// Returns [`NexusError::NotFound`] if the UUID is not in the stack, or
 /// [`NexusError::InvalidArgument`] if it does not identify the current top
 /// scope.
 pub fn nat_nexus_pop_scope(handle_uuid: &Uuid) -> Result<()> {
-    // Emit the End event while still holding the read lock so scope-local
-    // subscribers (including those on the scope being popped) are dispatched.
     let ss = current_scope_stack();
-    {
+    let (scope, event, subscribers) = {
         let ss_guard = ss.read().expect("scope stack lock poisoned");
         let top = ss_guard.top();
         if top.uuid != *handle_uuid {
@@ -618,15 +628,18 @@ pub fn nat_nexus_pop_scope(handle_uuid: &Uuid) -> Result<()> {
         }
         let root_uuid = Some(ss_guard.root_uuid());
         let sl_subs = ss_guard.collect_scope_local_subscribers();
+        let subscribers = snapshot_event_subscribers(sl_subs)?;
         let scope = top.clone();
         let ctx = global_context();
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.end_scope_handle(&scope, root_uuid, &sl_subs);
-    }
-    // Now remove the scope (takes a write lock internally).
-    task_scope_remove(handle_uuid)?;
+        let event = state.end_scope_handle(&scope, root_uuid);
+        (scope, event, subscribers)
+    };
+    let removed = task_scope_remove(handle_uuid)?;
+    debug_assert_eq!(removed.uuid, scope.uuid);
+    NatNexusContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -641,15 +654,20 @@ pub fn nat_nexus_event(
     metadata: Option<Json>,
 ) -> Result<()> {
     let parent_uuid = resolve_parent_uuid(parent);
-    let ss = current_scope_stack();
-    let ss_guard = ss.read().expect("scope stack lock poisoned");
-    let root_uuid = Some(ss_guard.root_uuid());
-    let sl_subs = ss_guard.collect_scope_local_subscribers();
-    let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
-    state.create_event(name, parent_uuid, data, metadata, root_uuid, &sl_subs);
+    let (event, subscribers) = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let root_uuid = Some(ss_guard.root_uuid());
+        let sl_subs = ss_guard.collect_scope_local_subscribers();
+        let subscribers = snapshot_event_subscribers(sl_subs)?;
+        let ctx = global_context();
+        let state = ctx
+            .read()
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let event = state.create_event(name, parent_uuid, data, metadata, root_uuid);
+        (event, subscribers)
+    };
+    NatNexusContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -672,29 +690,26 @@ pub fn nat_nexus_tool_call(
     tool_call_id: Option<String>,
 ) -> Result<ToolHandle> {
     let parent_uuid = resolve_parent_uuid(parent);
-    let ss = current_scope_stack();
-    let ss_guard = ss.read().expect("scope stack lock poisoned");
-    let root_uuid = Some(ss_guard.root_uuid());
-    let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_sanitize_request_guardrails);
-    let sl_subs = ss_guard.collect_scope_local_subscribers();
-    let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
+    let (handle, event, subscribers) = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let root_uuid = Some(ss_guard.root_uuid());
+        let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_sanitize_request_guardrails);
+        let sl_subs = ss_guard.collect_scope_local_subscribers();
+        let subscribers = snapshot_event_subscribers(sl_subs)?;
+        let ctx = global_context();
+        let state = ctx
+            .read()
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
 
-    let sanitized_args = state.tool_sanitize_request_chain(name, args, &sl);
-
-    Ok(state.create_tool_handle(
-        name,
-        parent_uuid,
-        attributes,
-        data,
-        metadata,
-        tool_call_id,
-        Some(sanitized_args),
-        root_uuid,
-        &sl_subs,
-    ))
+        let sanitized_args = state.tool_sanitize_request_chain(name, args, &sl);
+        let handle =
+            state.create_tool_handle(name, parent_uuid, attributes, data, metadata, tool_call_id);
+        let event = state.build_tool_start_event(&handle, Some(sanitized_args), root_uuid);
+        (handle, event, subscribers)
+    };
+    NatNexusContextState::emit_event(&event, &subscribers);
+    Ok(handle)
 }
 
 /// Ends a tool call: runs response sanitize guardrails and emits an `End` event.
@@ -706,26 +721,24 @@ pub fn nat_nexus_tool_call_end(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
-    let ss = current_scope_stack();
-    let ss_guard = ss.read().expect("scope stack lock poisoned");
-    let root_uuid = Some(ss_guard.root_uuid());
-    let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_sanitize_response_guardrails);
-    let sl_subs = ss_guard.collect_scope_local_subscribers();
-    let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
+    let (event, subscribers) = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let root_uuid = Some(ss_guard.root_uuid());
+        let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_sanitize_response_guardrails);
+        let sl_subs = ss_guard.collect_scope_local_subscribers();
+        let subscribers = snapshot_event_subscribers(sl_subs)?;
+        let ctx = global_context();
+        let state = ctx
+            .read()
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
 
-    let sanitized_result = state.tool_sanitize_response_chain(&handle.name, result, &sl);
-
-    state.end_tool_handle(
-        handle,
-        data,
-        metadata,
-        Some(sanitized_result),
-        root_uuid,
-        &sl_subs,
-    );
+        let sanitized_result = state.tool_sanitize_response_chain(&handle.name, result, &sl);
+        let event =
+            state.end_tool_handle(handle, data, metadata, Some(sanitized_result), root_uuid);
+        (event, subscribers)
+    };
+    NatNexusContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -734,16 +747,20 @@ fn emit_tool_end_without_output(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
-    let ss = current_scope_stack();
-    let ss_guard = ss.read().expect("scope stack lock poisoned");
-    let root_uuid = Some(ss_guard.root_uuid());
-    let sl_subs = ss_guard.collect_scope_local_subscribers();
-    let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
-
-    state.end_tool_handle(handle, data, metadata, None, root_uuid, &sl_subs);
+    let (event, subscribers) = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let root_uuid = Some(ss_guard.root_uuid());
+        let sl_subs = ss_guard.collect_scope_local_subscribers();
+        let subscribers = snapshot_event_subscribers(sl_subs)?;
+        let ctx = global_context();
+        let state = ctx
+            .read()
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let event = state.end_tool_handle(handle, data, metadata, None, root_uuid);
+        (event, subscribers)
+    };
+    NatNexusContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -857,30 +874,27 @@ pub fn nat_nexus_llm_call(
     model_name: Option<String>,
 ) -> Result<LLMHandle> {
     let parent_uuid = resolve_parent_uuid(parent);
-    let ss = current_scope_stack();
-    let ss_guard = ss.read().expect("scope stack lock poisoned");
-    let root_uuid = Some(ss_guard.root_uuid());
-    let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_request_guardrails);
-    let sl_subs = ss_guard.collect_scope_local_subscribers();
-    let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
+    let (handle, event, subscribers) = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let root_uuid = Some(ss_guard.root_uuid());
+        let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_request_guardrails);
+        let sl_subs = ss_guard.collect_scope_local_subscribers();
+        let subscribers = snapshot_event_subscribers(sl_subs)?;
+        let ctx = global_context();
+        let state = ctx
+            .read()
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
 
-    let sanitized_request = state.llm_sanitize_request_chain(request.clone(), &sl);
-    let input = serde_json::to_value(&sanitized_request).unwrap_or(Json::Null);
-
-    Ok(state.create_llm_handle(
-        name,
-        parent_uuid,
-        attributes,
-        data,
-        metadata,
-        model_name,
-        Some(input),
-        root_uuid,
-        &sl_subs,
-    ))
+        let sanitized_request = state.llm_sanitize_request_chain(request.clone(), &sl);
+        let input = serde_json::to_value(&sanitized_request).unwrap_or(Json::Null);
+        let handle =
+            state.create_llm_handle(name, parent_uuid, attributes, data, metadata, model_name);
+        let event = state.build_llm_start_event(&handle, Some(input), root_uuid);
+        (handle, event, subscribers)
+    };
+    NatNexusContextState::emit_event(&event, &subscribers);
+    Ok(handle)
 }
 
 /// Ends an LLM call: runs response sanitize guardrails and emits an `End` event.
@@ -892,26 +906,24 @@ pub fn nat_nexus_llm_call_end(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
-    let ss = current_scope_stack();
-    let ss_guard = ss.read().expect("scope stack lock poisoned");
-    let root_uuid = Some(ss_guard.root_uuid());
-    let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
-    let sl_subs = ss_guard.collect_scope_local_subscribers();
-    let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
+    let (event, subscribers) = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let root_uuid = Some(ss_guard.root_uuid());
+        let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
+        let sl_subs = ss_guard.collect_scope_local_subscribers();
+        let subscribers = snapshot_event_subscribers(sl_subs)?;
+        let ctx = global_context();
+        let state = ctx
+            .read()
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
 
-    let sanitized_response = state.llm_sanitize_response_chain(response, &sl);
-
-    state.end_llm_handle(
-        handle,
-        data,
-        metadata,
-        Some(sanitized_response),
-        root_uuid,
-        &sl_subs,
-    );
+        let sanitized_response = state.llm_sanitize_response_chain(response, &sl);
+        let event =
+            state.end_llm_handle(handle, data, metadata, Some(sanitized_response), root_uuid);
+        (event, subscribers)
+    };
+    NatNexusContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -920,16 +932,21 @@ fn emit_llm_end_without_output(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
-    let ss = current_scope_stack();
-    let ss_guard = ss.read().expect("scope stack lock poisoned");
-    let root_uuid = Some(ss_guard.root_uuid());
-    let sl_subs = ss_guard.collect_scope_local_subscribers();
-    let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
+    let (event, subscribers) = {
+        let ss = current_scope_stack();
+        let ss_guard = ss.read().expect("scope stack lock poisoned");
+        let root_uuid = Some(ss_guard.root_uuid());
+        let sl_subs = ss_guard.collect_scope_local_subscribers();
+        let subscribers = snapshot_event_subscribers(sl_subs)?;
+        let ctx = global_context();
+        let state = ctx
+            .read()
+            .map_err(|e| NexusError::Internal(e.to_string()))?;
 
-    state.end_llm_handle(handle, data, metadata, None, root_uuid, &sl_subs);
+        let event = state.end_llm_handle(handle, data, metadata, None, root_uuid);
+        (event, subscribers)
+    };
+    NatNexusContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -1248,6 +1265,94 @@ mod tests {
     }
 
     #[test]
+    fn test_subscriber_callbacks_run_outside_runtime_locks() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        let lock_checks = Arc::new(Mutex::new(Vec::new()));
+        let captured = lock_checks.clone();
+        nat_nexus_register_subscriber(
+            "lock_probe",
+            Arc::new(move |_| {
+                let scope_stack_writable =
+                    crate::context::current_scope_stack().try_write().is_ok();
+                let global_context_writable = crate::context::global_context().try_write().is_ok();
+                captured
+                    .lock()
+                    .unwrap()
+                    .push((scope_stack_writable, global_context_writable));
+            }),
+        )
+        .unwrap();
+
+        let handle = nat_nexus_push_scope(
+            "probe",
+            ScopeType::Agent,
+            None,
+            ScopeAttributes::empty(),
+            None,
+            None,
+        )
+        .unwrap();
+        nat_nexus_pop_scope(&handle.uuid).unwrap();
+
+        let checks = lock_checks.lock().unwrap();
+        assert_eq!(checks.len(), 2);
+        assert!(checks
+            .iter()
+            .all(|(scope_ok, global_ok)| *scope_ok && *global_ok));
+
+        drop(checks);
+        nat_nexus_deregister_subscriber("lock_probe").unwrap();
+    }
+
+    #[test]
+    fn test_scope_events_observe_post_mutation_active_handle() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        reset_global();
+
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let captured = observations.clone();
+        nat_nexus_register_subscriber(
+            "scope_visibility",
+            Arc::new(move |event: &crate::types::Event| {
+                if event.scope_type != Some(ScopeType::Agent) {
+                    return;
+                }
+                if event.name.as_deref() != Some("visible_scope") {
+                    return;
+                }
+                let active_uuid = nat_nexus_get_handle().unwrap().uuid;
+                captured
+                    .lock()
+                    .unwrap()
+                    .push((event.event_type, active_uuid));
+            }),
+        )
+        .unwrap();
+
+        let handle = nat_nexus_push_scope(
+            "visible_scope",
+            ScopeType::Agent,
+            None,
+            ScopeAttributes::empty(),
+            None,
+            None,
+        )
+        .unwrap();
+        let parent_uuid = handle.parent_uuid.unwrap();
+        nat_nexus_pop_scope(&handle.uuid).unwrap();
+
+        let observations = observations.lock().unwrap();
+        assert_eq!(observations.len(), 2);
+        assert_eq!(observations[0], (EventType::Start, handle.uuid));
+        assert_eq!(observations[1], (EventType::End, parent_uuid));
+
+        drop(observations);
+        nat_nexus_deregister_subscriber("scope_visibility").unwrap();
+    }
+
+    #[test]
     fn test_subscriber_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
@@ -1255,14 +1360,14 @@ mod tests {
         let c = count.clone();
         nat_nexus_register_subscriber(
             "test_sub",
-            Box::new(move |_| {
+            Arc::new(move |_| {
                 c.fetch_add(1, Ordering::SeqCst);
             }),
         )
         .unwrap();
 
         // Duplicate should fail
-        assert!(nat_nexus_register_subscriber("test_sub", Box::new(|_| {}),).is_err());
+        assert!(nat_nexus_register_subscriber("test_sub", Arc::new(|_| {}),).is_err());
 
         // Push scope emits event
         let handle = nat_nexus_push_scope(
@@ -1356,7 +1461,7 @@ mod tests {
         let captured = events.clone();
         nat_nexus_register_subscriber(
             "capture_scope_events",
-            Box::new(move |event: &crate::types::Event| {
+            Arc::new(move |event: &crate::types::Event| {
                 captured
                     .lock()
                     .unwrap()
@@ -1432,7 +1537,7 @@ mod tests {
         let ec = events.clone();
         nat_nexus_register_subscriber(
             "evt_test",
-            Box::new(move |e: &crate::types::Event| {
+            Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push((e.name.clone(), e.event_type));
             }),
         )
@@ -1460,7 +1565,7 @@ mod tests {
         let ec = events.clone();
         nat_nexus_register_subscriber(
             "tool_test",
-            Box::new(move |e: &crate::types::Event| {
+            Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.event_type);
             }),
         )
@@ -1511,7 +1616,7 @@ mod tests {
         let ec = events.clone();
         nat_nexus_register_subscriber(
             "tool_san_test",
-            Box::new(move |e: &crate::types::Event| {
+            Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
             }),
         )
@@ -1563,7 +1668,7 @@ mod tests {
         let ec = events.clone();
         nat_nexus_register_subscriber(
             "tool_resp_test",
-            Box::new(move |e: &crate::types::Event| {
+            Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
             }),
         )
@@ -1626,7 +1731,7 @@ mod tests {
         let captured = events.clone();
         nat_nexus_register_subscriber(
             "tool_exec_failure_sub",
-            Box::new(move |e: &crate::types::Event| {
+            Arc::new(move |e: &crate::types::Event| {
                 captured.lock().unwrap().push(e.clone());
             }),
         )
@@ -1707,7 +1812,7 @@ mod tests {
         let ec = events.clone();
         nat_nexus_register_subscriber(
             "tool_reject_sub",
-            Box::new(move |e: &crate::types::Event| {
+            Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
             }),
         )
@@ -1801,7 +1906,7 @@ mod tests {
         let ec = events.clone();
         nat_nexus_register_subscriber(
             "llm_test",
-            Box::new(move |e: &crate::types::Event| {
+            Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.event_type);
             }),
         )
@@ -1853,7 +1958,7 @@ mod tests {
         let ec = events.clone();
         nat_nexus_register_subscriber(
             "llm_san_test",
-            Box::new(move |e: &crate::types::Event| {
+            Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
             }),
         )
@@ -1925,7 +2030,7 @@ mod tests {
         let captured = events.clone();
         nat_nexus_register_subscriber(
             "llm_exec_failure_sub",
-            Box::new(move |e: &crate::types::Event| {
+            Arc::new(move |e: &crate::types::Event| {
                 captured.lock().unwrap().push(e.clone());
             }),
         )
@@ -1973,7 +2078,7 @@ mod tests {
         let ec = events.clone();
         nat_nexus_register_subscriber(
             "llm_reject_sub",
-            Box::new(move |e: &crate::types::Event| {
+            Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
             }),
         )
@@ -2401,7 +2506,7 @@ mod tests {
         let captured = events.clone();
         nat_nexus_register_subscriber(
             "llm_stream_exec_failure_sub",
-            Box::new(move |e: &crate::types::Event| {
+            Arc::new(move |e: &crate::types::Event| {
                 captured.lock().unwrap().push(e.clone());
             }),
         )
@@ -2450,7 +2555,7 @@ mod tests {
         let ec = events.clone();
         nat_nexus_register_subscriber(
             "stream_reject_sub",
-            Box::new(move |e: &crate::types::Event| {
+            Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
             }),
         )
