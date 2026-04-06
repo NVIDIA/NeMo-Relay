@@ -948,6 +948,10 @@ ffi_guardrail_tool_api!(
 /// - `user_data`: Opaque pointer passed to `cb`.
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
+/// The callback is fallible. To signal an internal callback failure instead of
+/// allow/reject, call [`crate::error::nat_nexus_set_last_error_message`] from C
+/// and return null.
+///
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
@@ -1050,6 +1054,9 @@ ffi_intercept_tool_api!(
     /// - `user_data`: Opaque pointer passed to `cb`.
     /// - `free_fn`: Optional destructor for `user_data`.
     ///
+    /// The callback is fallible. To signal failure, call
+    /// [`crate::error::nat_nexus_set_last_error_message`] from C and return null.
+    ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
     nat_nexus_register_tool_request_intercept,
@@ -1060,7 +1067,7 @@ ffi_intercept_tool_api!(
     nat_nexus_deregister_tool_request_intercept,
     core::nat_nexus_register_tool_request_intercept,
     core::nat_nexus_deregister_tool_request_intercept,
-    wrap_tool_sanitize_fn
+    wrap_tool_request_intercept_fn
 );
 
 /// Register a tool execution intercept following the middleware chain pattern.
@@ -1232,6 +1239,10 @@ pub unsafe extern "C" fn nat_nexus_deregister_llm_sanitize_response_guardrail(
 /// - `user_data`: Opaque pointer passed to `cb`.
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
+/// The callback is fallible. To signal an internal callback failure instead of
+/// allow/reject, call [`crate::error::nat_nexus_set_last_error_message`] from C
+/// and return null.
+///
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[no_mangle]
@@ -1287,6 +1298,9 @@ pub unsafe extern "C" fn nat_nexus_deregister_llm_conditional_execution_guardrai
 /// - `cb`: LLM request transform callback (receives/returns `FfiLLMRequest`).
 /// - `user_data`: Opaque pointer passed to `cb`.
 /// - `free_fn`: Optional destructor for `user_data`.
+///
+/// The callback is fallible. To signal failure, call
+/// [`crate::error::nat_nexus_set_last_error_message`] from C and return null.
 ///
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
@@ -1857,6 +1871,10 @@ ffi_scope_guardrail_tool_api!(
 /// - `user_data`: Opaque pointer passed to `cb`.
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
+/// The callback is fallible. To signal an internal callback failure instead of
+/// allow/reject, call [`crate::error::nat_nexus_set_last_error_message`] from C
+/// and return null.
+///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
 #[no_mangle]
@@ -1980,6 +1998,9 @@ ffi_scope_intercept_tool_api!(
     /// - `user_data`: Opaque pointer passed to `cb`.
     /// - `free_fn`: Optional destructor for `user_data`.
     ///
+    /// The callback is fallible. To signal failure, call
+    /// [`crate::error::nat_nexus_set_last_error_message`] from C and return null.
+    ///
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
     nat_nexus_scope_register_tool_request_intercept,
@@ -1990,7 +2011,7 @@ ffi_scope_intercept_tool_api!(
     nat_nexus_scope_deregister_tool_request_intercept,
     core::nat_nexus_scope_register_tool_request_intercept,
     core::nat_nexus_scope_deregister_tool_request_intercept,
-    wrap_tool_sanitize_fn
+    wrap_tool_request_intercept_fn
 );
 
 /// Register a scope-local tool execution intercept following the middleware
@@ -2195,6 +2216,10 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_sanitize_response_guardr
 /// - `user_data`: Opaque pointer passed to `cb`.
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
+/// The callback is fallible. To signal an internal callback failure instead of
+/// allow/reject, call [`crate::error::nat_nexus_set_last_error_message`] from C
+/// and return null.
+///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
 #[no_mangle]
@@ -2262,6 +2287,9 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_conditional_execution_gu
 /// - `cb`: LLM request transform callback.
 /// - `user_data`: Opaque pointer passed to `cb`.
 /// - `free_fn`: Optional destructor for `user_data`.
+///
+/// The callback is fallible. To signal failure, call
+/// [`crate::error::nat_nexus_set_last_error_message`] from C and return null.
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.

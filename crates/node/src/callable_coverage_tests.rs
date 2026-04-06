@@ -12,7 +12,7 @@ fn make_request() -> LLMRequest {
 }
 
 #[test]
-fn test_recv_fallback_helpers_cover_error_paths() {
+fn test_recv_helpers_cover_error_paths() {
     let (tx, rx) = std::sync::mpsc::channel();
     drop(tx);
     assert_eq!(recv_json_or_null(rx, "tool"), Json::Null);
@@ -26,13 +26,23 @@ fn test_recv_fallback_helpers_cover_error_paths() {
 
     let (tx, rx) = std::sync::mpsc::channel();
     drop(tx);
-    assert_eq!(recv_option_string_or_none(rx, "cond"), None);
+    assert!(recv_option_string_result(rx, "cond")
+        .unwrap_err()
+        .to_string()
+        .contains("cond"));
 
     let request = make_request();
     let (tx, rx) = std::sync::mpsc::channel();
     drop(tx);
+    assert!(recv_llm_request_result(rx, "llm")
+        .unwrap_err()
+        .to_string()
+        .contains("llm"));
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(serde_json::to_value(&request).unwrap()).unwrap();
     assert_eq!(
-        recv_llm_request_or_value(rx, "llm", request.clone()).content,
+        recv_llm_request_result(rx, "llm").unwrap().content,
         request.content
     );
 }

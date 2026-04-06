@@ -161,7 +161,7 @@ impl DynamoIntercept {
                 }
             }
 
-            request
+            Ok(request)
         })
     }
 }

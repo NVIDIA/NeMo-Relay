@@ -38,9 +38,9 @@ use crate::types::*;
 /// Tool request/response sanitizer: `(tool_name, args_or_result) -> transformed`.
 pub type ToolSanitizeFn = Box<dyn Fn(&str, Json) -> Json + Send + Sync>;
 /// Tool conditional execution guardrail: `(tool_name, args) -> Option<rejection_reason>`.
-pub type ToolConditionalFn = Box<dyn Fn(&str, &Json) -> Option<String> + Send + Sync>;
+pub type ToolConditionalFn = Box<dyn Fn(&str, &Json) -> Result<Option<String>> + Send + Sync>;
 /// Tool request intercept: `(tool_name, value) -> transformed`.
-pub type ToolInterceptFn = Box<dyn Fn(&str, Json) -> Json + Send + Sync>;
+pub type ToolInterceptFn = Box<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>;
 /// Tool execution "next" function (reusable — supports retries):
 /// `(args) -> Future<Result<Json>>`.
 pub type ToolExecutionNextFn =
@@ -58,9 +58,9 @@ pub type LlmSanitizeRequestFn = Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sy
 /// LLM response sanitizer: `(response) -> sanitized_response`.
 pub type LlmSanitizeResponseFn = Box<dyn Fn(Json) -> Json + Send + Sync>;
 /// LLM conditional execution guardrail: `(request) -> Option<rejection_reason>`.
-pub type LlmConditionalFn = Box<dyn Fn(&LLMRequest) -> Option<String> + Send + Sync>;
+pub type LlmConditionalFn = Box<dyn Fn(&LLMRequest) -> Result<Option<String>> + Send + Sync>;
 /// LLM request intercept: `(name, request) -> transformed_request`.
-pub type LlmRequestInterceptFn = Box<dyn Fn(&str, LLMRequest) -> LLMRequest + Send + Sync>;
+pub type LlmRequestInterceptFn = Box<dyn Fn(&str, LLMRequest) -> Result<LLMRequest> + Send + Sync>;
 /// LLM execution "next" function (reusable — supports retries):
 /// `(request) -> Future<Result<Json>>`.
 pub type LlmExecutionNextFn =
@@ -926,15 +926,15 @@ impl NatNexusContextState {
         name: &str,
         args: &Json,
         scope_locals: &[&SortedRegistry<GuardrailEntry<ToolConditionalFn>>],
-    ) -> Option<String> {
+    ) -> Result<Option<String>> {
         let entries =
             merge_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals);
         for entry in entries {
-            if let Some(err) = (entry.guardrail)(name, args) {
-                return Some(err);
+            if let Some(err) = (entry.guardrail)(name, args)? {
+                return Ok(Some(err));
             }
         }
-        None
+        Ok(None)
     }
 
     /// Runs the tool request intercept chain, piping args through each intercept (with optional break).
@@ -944,16 +944,16 @@ impl NatNexusContextState {
         name: &str,
         args: Json,
         scope_locals: &[&SortedRegistry<Intercept<ToolInterceptFn>>],
-    ) -> Json {
+    ) -> Result<Json> {
         let entries = merge_intercept_entries(&self.tool_request_intercepts, scope_locals);
         let mut v = args;
         for entry in entries {
-            v = (entry.callable)(name, v);
+            v = (entry.callable)(name, v)?;
             if entry.break_chain {
                 break;
             }
         }
-        v
+        Ok(v)
     }
 
     /// Build a middleware chain of all matching tool execution intercepts.
@@ -1023,15 +1023,15 @@ impl NatNexusContextState {
         &self,
         request: &LLMRequest,
         scope_locals: &[&SortedRegistry<GuardrailEntry<LlmConditionalFn>>],
-    ) -> Option<String> {
+    ) -> Result<Option<String>> {
         let entries =
             merge_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals);
         for entry in entries {
-            if let Some(err) = (entry.guardrail)(request) {
-                return Some(err);
+            if let Some(err) = (entry.guardrail)(request)? {
+                return Ok(Some(err));
             }
         }
-        None
+        Ok(None)
     }
 
     /// Runs the LLM request intercept chain on `LLMRequest`, piping through each intercept (with optional break).
@@ -1041,16 +1041,16 @@ impl NatNexusContextState {
         name: &str,
         request: LLMRequest,
         scope_locals: &[&SortedRegistry<Intercept<LlmRequestInterceptFn>>],
-    ) -> LLMRequest {
+    ) -> Result<LLMRequest> {
         let entries = merge_intercept_entries(&self.llm_request_intercepts, scope_locals);
         let mut v = request;
         for entry in entries {
-            v = (entry.callable)(name, v);
+            v = (entry.callable)(name, v)?;
             if entry.break_chain {
                 break;
             }
         }
-        v
+        Ok(v)
     }
 
     /// Build a middleware chain of all matching LLM execution intercepts.
@@ -1781,13 +1781,13 @@ mod tests {
                 "g1".into(),
                 GuardrailEntry {
                     priority: 1,
-                    guardrail: Box::new(|_name: &str, _args: &Json| None),
+                    guardrail: Box::new(|_name: &str, _args: &Json| Ok(None)),
                 },
             )
             .unwrap();
 
         let result = ctx.tool_conditional_execution_chain("tool", &serde_json::json!({}), &[]);
-        assert!(result.is_none());
+        assert!(result.unwrap().is_none());
     }
 
     #[test]
@@ -1798,13 +1798,13 @@ mod tests {
                 "blocker".into(),
                 GuardrailEntry {
                     priority: 1,
-                    guardrail: Box::new(|_name: &str, _args: &Json| Some("not allowed".into())),
+                    guardrail: Box::new(|_name: &str, _args: &Json| Ok(Some("not allowed".into()))),
                 },
             )
             .unwrap();
 
         let result = ctx.tool_conditional_execution_chain("tool", &serde_json::json!({}), &[]);
-        assert_eq!(result, Some("not allowed".into()));
+        assert_eq!(result.unwrap(), Some("not allowed".into()));
     }
 
     #[test]
@@ -1815,7 +1815,7 @@ mod tests {
                 "g1".into(),
                 GuardrailEntry {
                     priority: 1,
-                    guardrail: Box::new(|_name: &str, _args: &Json| Some("first".into())),
+                    guardrail: Box::new(|_name: &str, _args: &Json| Ok(Some("first".into()))),
                 },
             )
             .unwrap();
@@ -1824,13 +1824,13 @@ mod tests {
                 "g2".into(),
                 GuardrailEntry {
                     priority: 2,
-                    guardrail: Box::new(|_name: &str, _args: &Json| Some("second".into())),
+                    guardrail: Box::new(|_name: &str, _args: &Json| Ok(Some("second".into()))),
                 },
             )
             .unwrap();
 
         let result = ctx.tool_conditional_execution_chain("tool", &serde_json::json!({}), &[]);
-        assert_eq!(result, Some("first".into()));
+        assert_eq!(result.unwrap(), Some("first".into()));
     }
 
     #[test]
@@ -1846,7 +1846,7 @@ mod tests {
                         args.as_object_mut()
                             .unwrap()
                             .insert("intercepted".into(), serde_json::json!(true));
-                        args
+                        Ok(args)
                     }),
                 },
             )
@@ -1854,6 +1854,7 @@ mod tests {
 
         let result =
             ctx.tool_request_intercepts_chain("tool", serde_json::json!({"original": true}), &[]);
+        let result = result.unwrap();
         assert_eq!(result["original"], true);
         assert_eq!(result["intercepted"], true);
     }
@@ -1871,7 +1872,7 @@ mod tests {
                         args.as_object_mut()
                             .unwrap()
                             .insert("from_i1".into(), serde_json::json!(true));
-                        args
+                        Ok(args)
                     }),
                 },
             )
@@ -1886,13 +1887,14 @@ mod tests {
                         args.as_object_mut()
                             .unwrap()
                             .insert("from_i2".into(), serde_json::json!(true));
-                        args
+                        Ok(args)
                     }),
                 },
             )
             .unwrap();
 
         let result = ctx.tool_request_intercepts_chain("tool", serde_json::json!({}), &[]);
+        let result = result.unwrap();
         assert_eq!(result["from_i1"], true);
         // i2 should NOT have run due to break_chain
         assert!(result.get("from_i2").is_none());
@@ -2106,7 +2108,7 @@ mod tests {
                 "g1".into(),
                 GuardrailEntry {
                     priority: 1,
-                    guardrail: Box::new(|_req: &LLMRequest| None),
+                    guardrail: Box::new(|_req: &LLMRequest| Ok(None)),
                 },
             )
             .unwrap();
@@ -2115,7 +2117,10 @@ mod tests {
             headers: serde_json::Map::new(),
             content: serde_json::json!({}),
         };
-        assert!(ctx.llm_conditional_execution_chain(&req, &[]).is_none());
+        assert!(ctx
+            .llm_conditional_execution_chain(&req, &[])
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -2126,7 +2131,7 @@ mod tests {
                 "blocker".into(),
                 GuardrailEntry {
                     priority: 1,
-                    guardrail: Box::new(|_req: &LLMRequest| Some("blocked".into())),
+                    guardrail: Box::new(|_req: &LLMRequest| Ok(Some("blocked".into()))),
                 },
             )
             .unwrap();
@@ -2136,7 +2141,7 @@ mod tests {
             content: serde_json::json!({}),
         };
         assert_eq!(
-            ctx.llm_conditional_execution_chain(&req, &[]),
+            ctx.llm_conditional_execution_chain(&req, &[]).unwrap(),
             Some("blocked".into())
         );
     }
@@ -2153,7 +2158,7 @@ mod tests {
                     callable: Box::new(|_name: &str, mut req: LLMRequest| {
                         req.headers
                             .insert("intercepted".into(), serde_json::json!(true));
-                        req
+                        Ok(req)
                     }),
                 },
             )
@@ -2163,7 +2168,9 @@ mod tests {
             headers: serde_json::Map::new(),
             content: serde_json::json!({"messages": []}),
         };
-        let result = ctx.llm_request_intercepts_chain("test_llm", request, &[]);
+        let result = ctx
+            .llm_request_intercepts_chain("test_llm", request, &[])
+            .unwrap();
         assert_eq!(result.headers["intercepted"], true);
         assert_eq!(result.content["messages"], serde_json::json!([]));
     }
@@ -2180,7 +2187,7 @@ mod tests {
                     callable: Box::new(|_name: &str, mut req: LLMRequest| {
                         req.headers
                             .insert("from_i1".into(), serde_json::json!(true));
-                        req
+                        Ok(req)
                     }),
                 },
             )
@@ -2194,7 +2201,7 @@ mod tests {
                     callable: Box::new(|_name: &str, mut req: LLMRequest| {
                         req.headers
                             .insert("from_i2".into(), serde_json::json!(true));
-                        req
+                        Ok(req)
                     }),
                 },
             )
@@ -2204,7 +2211,9 @@ mod tests {
             headers: serde_json::Map::new(),
             content: serde_json::json!({}),
         };
-        let result = ctx.llm_request_intercepts_chain("test_llm", request, &[]);
+        let result = ctx
+            .llm_request_intercepts_chain("test_llm", request, &[])
+            .unwrap();
         assert_eq!(result.headers["from_i1"], true);
         assert!(result.headers.get("from_i2").is_none());
     }

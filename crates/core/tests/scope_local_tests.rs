@@ -145,7 +145,7 @@ async fn test_auto_cleanup_on_scope_pop() {
             args.as_object_mut()
                 .unwrap()
                 .insert("ephemeral".into(), json!(true));
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -212,7 +212,7 @@ async fn test_priority_merge_global_and_scope_local() {
             args.as_object_mut()
                 .unwrap()
                 .insert("p10".into(), json!(true));
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -228,7 +228,7 @@ async fn test_priority_merge_global_and_scope_local() {
             args.as_object_mut()
                 .unwrap()
                 .insert("p30".into(), json!(true));
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -245,7 +245,7 @@ async fn test_priority_merge_global_and_scope_local() {
             args.as_object_mut()
                 .unwrap()
                 .insert("p20".into(), json!(true));
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -375,7 +375,7 @@ async fn test_scope_isolation_between_stacks() {
                 args.as_object_mut()
                     .unwrap()
                     .insert("agent".into(), json!("a"));
-                args
+                Ok(args)
             }),
         )
         .unwrap();
@@ -403,7 +403,7 @@ async fn test_scope_isolation_between_stacks() {
                 args.as_object_mut()
                     .unwrap()
                     .insert("agent".into(), json!("b"));
-                args
+                Ok(args)
             }),
         )
         .unwrap();
@@ -477,7 +477,7 @@ async fn test_nested_scope_inheritance() {
             args.as_object_mut()
                 .unwrap()
                 .insert("global".into(), json!(true));
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -503,7 +503,7 @@ async fn test_nested_scope_inheritance() {
             args.as_object_mut()
                 .unwrap()
                 .insert("scope_a".into(), json!(true));
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -529,7 +529,7 @@ async fn test_nested_scope_inheritance() {
             args.as_object_mut()
                 .unwrap()
                 .insert("scope_b".into(), json!(true));
-            args
+            Ok(args)
         }),
     )
     .unwrap();
@@ -656,9 +656,9 @@ async fn test_scope_local_conditional_execution_guardrail() {
         1,
         Box::new(|name, _args| {
             if name == "banned_tool" {
-                Some("banned_tool is not allowed in this scope".to_string())
+                Ok(Some("banned_tool is not allowed in this scope".to_string()))
             } else {
-                None
+                Ok(None)
             }
         }),
     )

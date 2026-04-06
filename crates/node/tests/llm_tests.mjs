@@ -187,11 +187,16 @@ describe('LLM guardrails', () => {
     }
   });
 
-  it('conditional guardrail ignores non-string return values', async () => {
+  it('conditional guardrail rejects non-string return values', async () => {
     registerLlmConditionalExecutionGuardrail('node_llm_cond_non_string', 10, () => ({ blocked: true }));
-    const result = await llmCallExecute('llm_cond_non_string', makeNative(), () => ({ ok: true }), null, null, null, null, null);
-    assert.deepEqual(result, { ok: true });
-    deregisterLlmConditionalExecutionGuardrail('node_llm_cond_non_string');
+    try {
+      await assert.rejects(
+        () => llmCallExecute('llm_cond_non_string', makeNative(), () => ({ ok: true }), null, null, null, null, null),
+        /expected string or null/i,
+      );
+    } finally {
+      deregisterLlmConditionalExecutionGuardrail('node_llm_cond_non_string');
+    }
   });
 
   it('sanitize response guardrail', () => {
@@ -287,12 +292,16 @@ describe('LLM intercepts', () => {
     deregisterLlmRequestIntercept('node_llm_req_mod');
   });
 
-  it('request intercept falls back to original request on malformed return', async () => {
+  it('request intercept rejects malformed return values', async () => {
     registerLlmRequestIntercept('node_llm_req_bad', 10, false, () => null);
-    const native = makeNative();
-    const result = await llmCallExecute('bad_req_llm', native, (n) => ({ model: n.content.model }), null, null, null, null, null);
-    assert.equal(result.model, 'test-model');
-    deregisterLlmRequestIntercept('node_llm_req_bad');
+    try {
+      await assert.rejects(
+        () => llmCallExecute('bad_req_llm', makeNative(), (n) => ({ model: n.content.model }), null, null, null, null, null),
+        /failed to deserialize llmrequest/i,
+      );
+    } finally {
+      deregisterLlmRequestIntercept('node_llm_req_bad');
+    }
   });
 
   it('execution intercept composes with next', async () => {

@@ -206,11 +206,16 @@ describe('Tool guardrails', () => {
     deregisterToolConditionalExecutionGuardrail('node_tool_block');
   });
 
-  it('conditional guardrail ignores non-string return values', async () => {
+  it('conditional guardrail rejects non-string return values', async () => {
     registerToolConditionalExecutionGuardrail('node_tool_cond_non_string', 10, () => ({ blocked: true }));
-    const result = await toolCallExecute('tool_cond_non_string', { ok: true }, (args) => args, null, null, null, null);
-    assert.deepEqual(result, { ok: true });
-    deregisterToolConditionalExecutionGuardrail('node_tool_cond_non_string');
+    try {
+      await assert.rejects(
+        () => toolCallExecute('tool_cond_non_string', { ok: true }, (args) => args, null, null, null, null),
+        /expected string or null/i,
+      );
+    } finally {
+      deregisterToolConditionalExecutionGuardrail('node_tool_cond_non_string');
+    }
   });
 
   it('duplicate guardrail fails', () => {
@@ -253,7 +258,7 @@ describe('Tool intercepts', () => {
     deregisterToolRequestIntercept('node_tool_req_mod');
   });
 
-  it('request intercept returns null on malformed output', async () => {
+  it('request intercept can return null JSON', async () => {
     registerToolRequestIntercept('node_tool_req_bad', 10, false, () => null);
     try {
       const result = await toolCallExecute('bad_tool', { original: true }, (args) => args, null, null, null, null);

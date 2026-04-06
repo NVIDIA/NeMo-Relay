@@ -18,7 +18,7 @@ use crate::py_callable::{
     wrap_py_llm_request_intercept_fn, wrap_py_llm_sanitize_request_fn,
     wrap_py_llm_sanitize_response_fn, wrap_py_llm_stream_exec_fn,
     wrap_py_llm_stream_exec_intercept_fn, wrap_py_tool_conditional_fn, wrap_py_tool_exec_fn,
-    wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn,
+    wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn, wrap_py_tool_request_intercept_fn,
 };
 use nvidia_nat_nexus_core::types::{Event, EventType, LLMRequest, ScopeType};
 use nvidia_nat_nexus_core::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
@@ -270,7 +270,8 @@ def event_fail(event):
         let tool_cond =
             wrap_py_tool_conditional_fn(module.getattr("tool_cond_bad").unwrap().unbind());
         assert!(tool_cond("demo", &json!({"x": 1}))
-            .unwrap()
+            .unwrap_err()
+            .to_string()
             .contains("expected str or None"));
 
         let request = make_request();
@@ -279,14 +280,27 @@ def event_fail(event):
         assert_eq!(llm_sanitize(request.clone()).content, request.content);
 
         let llm_cond = wrap_py_llm_conditional_fn(module.getattr("llm_cond_bad").unwrap().unbind());
-        assert!(llm_cond(&request).unwrap().contains("expected str or None"));
+        assert!(llm_cond(&request)
+            .unwrap_err()
+            .to_string()
+            .contains("expected str or None"));
         let llm_cond_none =
             wrap_py_llm_conditional_fn(module.getattr("llm_cond_none").unwrap().unbind());
-        assert_eq!(llm_cond_none(&request), None);
+        assert_eq!(llm_cond_none(&request).unwrap(), None);
 
         let llm_req =
             wrap_py_llm_request_intercept_fn(module.getattr("llm_req_bad").unwrap().unbind());
-        assert_eq!(llm_req("demo", request.clone()).content, request.content);
+        assert!(llm_req("demo", request.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("expected LLMRequest"));
+
+        let tool_req =
+            wrap_py_tool_request_intercept_fn(module.getattr("tool_fail").unwrap().unbind());
+        assert!(tool_req("demo", json!({"x": 1}))
+            .unwrap_err()
+            .to_string()
+            .contains("Python tool callable failed"));
 
         let llm_resp =
             wrap_py_llm_sanitize_response_fn(module.getattr("llm_resp_fail").unwrap().unbind());

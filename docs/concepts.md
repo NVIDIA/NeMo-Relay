@@ -127,20 +127,39 @@ For scopes specifically, `Start` is emitted after the new scope is on the
 stack, and `End` is emitted after the scope has been removed. Subscribers that
 call `get_handle()` therefore observe the post-mutation active scope.
 
+### Callback Contracts
+
+Nexus has two callback contracts:
+
+| Surface | Contract | Notes |
+|---------|----------|-------|
+| Sanitize guardrails | Infallible | Return the sanitized value; handle failures inside the callback |
+| Conditional execution guardrails | Fallible | Normal return still means allow/reject; raising/throwing fails the operation |
+| Request intercepts | Fallible | Return transformed input; raising/throwing fails the operation |
+| Execution intercepts | Fallible | `next(...)` chain remains fallible |
+| Stream collector | Fallible | Failure aborts the stream |
+| Stream finalizer | Infallible | Return aggregated response; handle failures inside the callback |
+| Subscribers | Infallible | Return `None`; handle failures inside the callback |
+
+This split is the contract itself, not an opt-in variant. Across bindings,
+conditional guardrails and request/execution intercepts are the fallible
+surfaces, while sanitize guardrails, stream finalizers, and subscribers remain
+infallible.
+
 ## Guardrails
 
 Guardrails run inside the middleware pipeline and can **sanitize** or **gate** requests and responses. They are priority-ordered (ascending — lower numbers run first).
 
 ### Types
 
-| Guardrail | Callback Signature | Purpose |
-|-----------|--------------------|---------|
-| **Sanitize Request** (Tool) | `(name, args) -> args` | Clean/redact tool arguments |
-| **Sanitize Response** (Tool) | `(name, result) -> result` | Clean/redact tool results |
-| **Conditional Execution** (Tool) | `(name, args) -> None \| reason` | Allow or block tool calls |
-| **Sanitize Request** (LLM) | `(request) -> request` | Clean/redact LLM request |
-| **Sanitize Response** (LLM) | `(response) -> response` | Clean/redact LLM response |
-| **Conditional Execution** (LLM) | `(request) -> None \| reason` | Allow or block LLM calls |
+| Guardrail | Callback Signature | Contract | Purpose |
+|-----------|--------------------|----------|---------|
+| **Sanitize Request** (Tool) | `(name, args) -> args` | Infallible | Clean/redact tool arguments |
+| **Sanitize Response** (Tool) | `(name, result) -> result` | Infallible | Clean/redact tool results |
+| **Conditional Execution** (Tool) | `(name, args) -> None \| reason` | Fallible | Allow or block tool calls |
+| **Sanitize Request** (LLM) | `(request) -> request` | Infallible | Clean/redact LLM request |
+| **Sanitize Response** (LLM) | `(response) -> response` | Infallible | Clean/redact LLM response |
+| **Conditional Execution** (LLM) | `(request) -> None \| reason` | Fallible | Allow or block LLM calls |
 
 Conditional guardrails return `None` to allow execution or a string reason to reject. On rejection, a `Mark` event is emitted and `GuardrailRejected` is raised.
 
@@ -150,13 +169,13 @@ Intercepts transform requests, responses, or replace execution functions entirel
 
 ### Types
 
-| Intercept | Callback Signature | Purpose |
-|-----------|--------------------|---------|
-| **Request** (Tool) | `(tool_name, args) -> args` | Transform tool arguments |
-| **Execution** (Tool) | `(tool_name, args, next) -> result` | Middleware chain — call `next` or short-circuit |
-| **Request** (LLM) | `(llm_name, request) -> request` | Transform LLM request |
-| **Execution** (LLM) | `(llm_name, request, next) -> result` | Middleware chain |
-| **Stream Execution** (LLM) | `(llm_name, request, next) -> stream` | Middleware chain for streaming |
+| Intercept | Callback Signature | Contract | Purpose |
+|-----------|--------------------|----------|---------|
+| **Request** (Tool) | `(tool_name, args) -> args` | Fallible | Transform tool arguments |
+| **Execution** (Tool) | `(tool_name, args, next) -> result` | Fallible | Middleware chain — call `next` or short-circuit |
+| **Request** (LLM) | `(llm_name, request) -> request` | Fallible | Transform LLM request |
+| **Execution** (LLM) | `(llm_name, request, next) -> result` | Fallible | Middleware chain |
+| **Stream Execution** (LLM) | `(llm_name, request, next) -> stream` | Fallible | Middleware chain for streaming |
 
 Request intercepts support `break_chain` — when `true`, no lower-priority intercepts run after.
 
@@ -198,6 +217,9 @@ nat_nexus.subscribers.register("logger", my_subscriber)
 # ... run operations ...
 nat_nexus.subscribers.deregister("logger")
 ```
+
+Subscribers are infallible callbacks. They still run on the request path, but
+they do not have an error return channel.
 
 ## Scope-Local Middleware
 

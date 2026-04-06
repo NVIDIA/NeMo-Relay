@@ -22,7 +22,8 @@ use wasm_bindgen_futures::JsFuture;
 
 use nvidia_nat_nexus_core::types::LLMRequest;
 use nvidia_nat_nexus_core::{
-    LlmExecutionNextFn, LlmStreamExecutionNextFn, NexusError, Result, ToolExecutionNextFn,
+    LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionNextFn,
+    NexusError, Result, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
 };
 
 use crate::convert::record_callback_error;
@@ -71,36 +72,39 @@ pub fn wrap_js_tool_fn(func: Function) -> Box<dyn Fn(&str, Json) -> Json + Send 
     })
 }
 
-/// Wrap a JS function `(name, args) => string | null` for tool conditional.
-pub fn wrap_js_tool_conditional_fn(
-    func: Function,
-) -> Box<dyn Fn(&str, &Json) -> Option<String> + Send + Sync> {
+/// Wrap a JS function `(name, args) => string | null` for tool conditional guardrails.
+pub fn wrap_js_tool_conditional_fn(func: Function) -> ToolConditionalFn {
     let func = SendWrapper::new(func);
     Box::new(move |name: &str, args: &Json| {
         let js_name = JsValue::from_str(name);
         let js_args = json_to_js(args);
-        match func.call2(&JsValue::NULL, &js_name, &js_args) {
-            Ok(result) => {
-                if result.is_null() || result.is_undefined() {
-                    None
-                } else {
-                    result.as_string()
-                }
-            }
-            // TODO: This closure returns Option<String> (not Result), so we cannot propagate
-            // errors through the type system. Log the error so failures are not silent.
-            Err(e) => {
-                record_callback_error(format!(
-                    "nat_nexus: JS tool conditional callback threw: {}",
-                    js_error_message(&e)
-                ));
-                eprintln!(
-                    "nat_nexus: JS tool conditional callback threw: {}",
-                    js_error_message(&e)
-                );
-                None
-            }
+        let result = func
+            .call2(&JsValue::NULL, &js_name, &js_args)
+            .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+
+        if result.is_null() || result.is_undefined() {
+            Ok(None)
+        } else {
+            result.as_string().map(Some).ok_or_else(|| {
+                NexusError::Internal(
+                    "JS tool conditional callback returned unexpected type (expected string or null)"
+                        .to_string(),
+                )
+            })
         }
+    })
+}
+
+/// Wrap a JS function `(name, args) => result` for fallible tool request intercepts.
+pub fn wrap_js_tool_request_intercept_fn(func: Function) -> ToolInterceptFn {
+    let func = SendWrapper::new(func);
+    Box::new(move |name: &str, args: Json| {
+        let js_name = JsValue::from_str(name);
+        let js_args = json_to_js(&args);
+        let result = func
+            .call2(&JsValue::NULL, &js_name, &js_args)
+            .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+        js_to_json(&result).map_err(|e| NexusError::Internal(js_error_message(&e)))
     })
 }
 
@@ -132,46 +136,19 @@ pub fn wrap_js_tool_exec_fn(
     })
 }
 
-/// Wrap a JS function `(request) => request` for LLM request intercept.
-///
-/// Takes an `LLMRequest`, passes it to JS as a JSON object, and
-/// deserializes the result back into an `LLMRequest`.
-pub fn wrap_js_llm_request_intercept_fn(
-    func: Function,
-) -> Box<dyn Fn(&str, LLMRequest) -> LLMRequest + Send + Sync> {
+/// Wrap a JS function `(request) => request` for LLM request intercepts.
+pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn {
     let func = SendWrapper::new(func);
     Box::new(move |_name: &str, request: LLMRequest| {
         let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
         let js_req = json_to_js(&req_json);
-        match func.call1(&JsValue::NULL, &js_req) {
-            // TODO: This closure returns LLMRequest (not Result), so we cannot propagate
-            // errors through the type system. Log errors so failures are not silent.
-            Ok(result) => {
-                let result_json = js_to_json(&result).unwrap_or_else(|e| {
-                    record_callback_error(format!(
-                        "nat_nexus: JS LLM request intercept result conversion failed: {}",
-                        js_error_message(&e)
-                    ));
-                    eprintln!(
-                        "nat_nexus: JS LLM request intercept result conversion failed: {}",
-                        js_error_message(&e)
-                    );
-                    Json::Null
-                });
-                serde_json::from_value(result_json).unwrap_or(request)
-            }
-            Err(e) => {
-                record_callback_error(format!(
-                    "nat_nexus: JS LLM request intercept callback threw: {}",
-                    js_error_message(&e)
-                ));
-                eprintln!(
-                    "nat_nexus: JS LLM request intercept callback threw: {}",
-                    js_error_message(&e)
-                );
-                request
-            }
-        }
+        let result = func
+            .call1(&JsValue::NULL, &js_req)
+            .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+        let result_json =
+            js_to_json(&result).map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+        serde_json::from_value(result_json)
+            .map_err(|e| NexusError::Internal(format!("failed to deserialize LLMRequest: {e}")))
     })
 }
 
@@ -215,35 +192,25 @@ pub fn wrap_js_llm_sanitize_request_fn(
     })
 }
 
-/// Wrap a JS function for LLM conditional: `(request) => string | null`.
-pub fn wrap_js_llm_conditional_fn(
-    func: Function,
-) -> Box<dyn Fn(&LLMRequest) -> Option<String> + Send + Sync> {
+/// Wrap a JS function for LLM conditional guardrails: `(request) => string | null`.
+pub fn wrap_js_llm_conditional_fn(func: Function) -> LlmConditionalFn {
     let func = SendWrapper::new(func);
     Box::new(move |request: &LLMRequest| {
         let req_json = serde_json::to_value(request).unwrap_or(Json::Null);
         let js_req = json_to_js(&req_json);
-        match func.call1(&JsValue::NULL, &js_req) {
-            Ok(result) => {
-                if result.is_null() || result.is_undefined() {
-                    None
-                } else {
-                    result.as_string()
-                }
-            }
-            // TODO: This closure returns Option<String> (not Result), so we cannot propagate
-            // errors through the type system. Log the error so failures are not silent.
-            Err(e) => {
-                record_callback_error(format!(
-                    "nat_nexus: JS LLM conditional callback threw: {}",
-                    js_error_message(&e)
-                ));
-                eprintln!(
-                    "nat_nexus: JS LLM conditional callback threw: {}",
-                    js_error_message(&e)
-                );
-                None
-            }
+        let result = func
+            .call1(&JsValue::NULL, &js_req)
+            .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+
+        if result.is_null() || result.is_undefined() {
+            Ok(None)
+        } else {
+            result.as_string().map(Some).ok_or_else(|| {
+                NexusError::Internal(
+                    "JS LLM conditional callback returned unexpected type (expected string or null)"
+                        .to_string(),
+                )
+            })
         }
     })
 }

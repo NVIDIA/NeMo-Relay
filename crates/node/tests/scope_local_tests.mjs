@@ -707,22 +707,24 @@ describe('Scope-local LLM intercepts', () => {
     }
   });
 
-  it('scope-local llm request intercept falls back to original request on malformed return', async () => {
+  it('scope-local llm request intercept rejects malformed return values', async () => {
     const scope = pushScope('sl_llm_req_bad_scope', ScopeType.Agent, null, null);
     scopeRegisterLlmRequestIntercept(scope.uuid, 'sl_llm_req_bad', 10, false, () => null);
 
     try {
-      const result = await llmCallExecute(
-        'sl_llm_req_bad_call',
-        makeNative(),
-        (request) => ({ model: request.content.model }),
-        null,
-        null,
-        null,
-        null,
-        null,
+      await assert.rejects(
+        () => llmCallExecute(
+          'sl_llm_req_bad_call',
+          makeNative(),
+          (request) => ({ model: request.content.model }),
+          null,
+          null,
+          null,
+          null,
+          null,
+        ),
+        /failed to deserialize llmrequest/i,
       );
-      assert.deepEqual(result, { model: 'scope-local-model' });
     } finally {
       scopeDeregisterLlmRequestIntercept(scope.uuid, 'sl_llm_req_bad');
       popScope(scope);
