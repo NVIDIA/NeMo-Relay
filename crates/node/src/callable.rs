@@ -22,12 +22,13 @@ use nvidia_nat_nexus_core::{
     LlmExecutionNextFn, LlmStreamExecutionNextFn, NexusError, Result, ToolExecutionNextFn,
 };
 
+use crate::convert::record_callback_error;
 use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
 use crate::types::JsEvent;
 
 fn recv_json_or_null(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) -> Json {
     rx.recv().unwrap_or_else(|e| {
-        eprintln!("{error_prefix}: {e}");
+        record_callback_error(format!("{error_prefix}: {e}"));
         Json::Null
     })
 }
@@ -38,7 +39,7 @@ fn recv_json_or_value(
     fallback: Json,
 ) -> Json {
     rx.recv().unwrap_or_else(|e| {
-        eprintln!("{error_prefix}: {e}");
+        record_callback_error(format!("{error_prefix}: {e}"));
         fallback
     })
 }
@@ -48,7 +49,7 @@ fn recv_option_string_or_none(
     error_prefix: &str,
 ) -> Option<String> {
     rx.recv().unwrap_or_else(|e| {
-        eprintln!("{error_prefix}: {e}");
+        record_callback_error(format!("{error_prefix}: {e}"));
         None
     })
 }
@@ -59,7 +60,12 @@ fn recv_llm_request_or_value(
     fallback: LLMRequest,
 ) -> LLMRequest {
     let result = recv_json_or_null(rx, error_prefix);
-    serde_json::from_value(result).unwrap_or(fallback)
+    serde_json::from_value(result).unwrap_or_else(|e| {
+        record_callback_error(format!(
+            "{error_prefix}: failed to deserialize LLMRequest: {e}"
+        ));
+        fallback
+    })
 }
 
 /// Wrap a JS function `(name: string, args: object) => object` for tool sanitize/intercept.
@@ -71,7 +77,7 @@ pub fn wrap_js_tool_fn(
         let func = func.clone();
         let name = name.to_string();
         let (tx, rx) = std::sync::mpsc::channel();
-        func.call_with_return_value(
+        let status = func.call_with_return_value(
             (name, args),
             ThreadsafeFunctionCallMode::Blocking,
             move |val: Json| {
@@ -79,6 +85,12 @@ pub fn wrap_js_tool_fn(
                 Ok(())
             },
         );
+        if status != napi::Status::Ok {
+            record_callback_error(format!(
+                "nat_nexus: failed to queue JS tool callback: {status:?}"
+            ));
+            return Json::Null;
+        }
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
         recv_json_or_null(rx, "nat_nexus: JS tool callback failed")
@@ -95,7 +107,7 @@ pub fn wrap_js_tool_conditional_fn(
         let name = name.to_string();
         let args = args.clone();
         let (tx, rx) = std::sync::mpsc::channel();
-        func.call_with_return_value(
+        let status = func.call_with_return_value(
             (name, args),
             ThreadsafeFunctionCallMode::Blocking,
             move |val: Json| {
@@ -108,6 +120,12 @@ pub fn wrap_js_tool_conditional_fn(
                 Ok(())
             },
         );
+        if status != napi::Status::Ok {
+            record_callback_error(format!(
+                "nat_nexus: failed to queue JS tool conditional callback: {status:?}"
+            ));
+            return None;
+        }
         // TODO: This closure returns Option<String> (not Result), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
         recv_option_string_or_none(rx, "nat_nexus: JS tool conditional callback failed")
@@ -123,7 +141,7 @@ pub fn wrap_js_tool_exec_fn(
         let func = func.clone();
         Box::pin(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            func.call_with_return_value(
+            let status = func.call_with_return_value(
                 args,
                 ThreadsafeFunctionCallMode::Blocking,
                 move |val: Json| {
@@ -131,6 +149,11 @@ pub fn wrap_js_tool_exec_fn(
                     Ok(())
                 },
             );
+            if status != napi::Status::Ok {
+                return Err(NexusError::Internal(format!(
+                    "failed to queue JS tool execution callback: {status:?}",
+                )));
+            }
             rx.await.map_err(|e| NexusError::Internal(e.to_string()))
         })
     })
@@ -149,7 +172,7 @@ pub fn wrap_js_llm_request_intercept_fn(
         let func = func.clone();
         let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
         let (tx, rx) = std::sync::mpsc::channel();
-        func.call_with_return_value(
+        let status = func.call_with_return_value(
             req_json,
             ThreadsafeFunctionCallMode::Blocking,
             move |val: Json| {
@@ -157,6 +180,12 @@ pub fn wrap_js_llm_request_intercept_fn(
                 Ok(())
             },
         );
+        if status != napi::Status::Ok {
+            record_callback_error(format!(
+                "nat_nexus: failed to queue JS LLM request intercept callback: {status:?}"
+            ));
+            return request;
+        }
         // TODO: This closure returns LLMRequest (not Result), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
         recv_llm_request_or_value(
@@ -177,7 +206,7 @@ pub fn wrap_js_llm_sanitize_request_fn(
         let func = func.clone();
         let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
         let (tx, rx) = std::sync::mpsc::channel();
-        func.call_with_return_value(
+        let status = func.call_with_return_value(
             req_json,
             ThreadsafeFunctionCallMode::Blocking,
             move |val: Json| {
@@ -185,6 +214,12 @@ pub fn wrap_js_llm_sanitize_request_fn(
                 Ok(())
             },
         );
+        if status != napi::Status::Ok {
+            record_callback_error(format!(
+                "nat_nexus: failed to queue JS LLM sanitize request callback: {status:?}"
+            ));
+            return request;
+        }
         // TODO: This closure returns LLMRequest (not Result), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
         recv_llm_request_or_value(
@@ -203,7 +238,7 @@ pub fn wrap_js_llm_response_fn(
     Box::new(move |response: Json| {
         let func = func.clone();
         let (tx, rx) = std::sync::mpsc::channel();
-        func.call_with_return_value(
+        let status = func.call_with_return_value(
             response.clone(),
             ThreadsafeFunctionCallMode::Blocking,
             move |val: Json| {
@@ -211,6 +246,12 @@ pub fn wrap_js_llm_response_fn(
                 Ok(())
             },
         );
+        if status != napi::Status::Ok {
+            record_callback_error(format!(
+                "nat_nexus: failed to queue JS LLM response callback: {status:?}"
+            ));
+            return response;
+        }
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error and fall back to original response.
         recv_json_or_value(rx, "nat_nexus: JS LLM response callback failed", response)
@@ -226,7 +267,7 @@ pub fn wrap_js_llm_conditional_fn(
         let func = func.clone();
         let req_json = serde_json::to_value(request).unwrap_or(Json::Null);
         let (tx, rx) = std::sync::mpsc::channel();
-        func.call_with_return_value(
+        let status = func.call_with_return_value(
             req_json,
             ThreadsafeFunctionCallMode::Blocking,
             move |val: Json| {
@@ -239,6 +280,12 @@ pub fn wrap_js_llm_conditional_fn(
                 Ok(())
             },
         );
+        if status != napi::Status::Ok {
+            record_callback_error(format!(
+                "nat_nexus: failed to queue JS LLM conditional callback: {status:?}"
+            ));
+            return None;
+        }
         // TODO: This closure returns Option<String> (not Result), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
         recv_option_string_or_none(rx, "nat_nexus: JS LLM conditional callback failed")
@@ -258,7 +305,7 @@ pub fn wrap_js_llm_exec_fn(
         let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
         Box::pin(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            func.call_with_return_value(
+            let status = func.call_with_return_value(
                 req_json,
                 ThreadsafeFunctionCallMode::Blocking,
                 move |val: Json| {
@@ -266,6 +313,11 @@ pub fn wrap_js_llm_exec_fn(
                     Ok(())
                 },
             );
+            if status != napi::Status::Ok {
+                return Err(NexusError::Internal(format!(
+                    "failed to queue JS LLM execution callback: {status:?}",
+                )));
+            }
             rx.await.map_err(|e| NexusError::Internal(e.to_string()))
         })
     })
@@ -282,8 +334,14 @@ pub fn wrap_js_collector_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Box<dyn FnMut(Json) -> Result<()> + Send> {
     Box::new(move |chunk: Json| {
-        func.call(chunk, ThreadsafeFunctionCallMode::Blocking);
-        Ok(())
+        let status = func.call(chunk, ThreadsafeFunctionCallMode::Blocking);
+        if status == napi::Status::Ok {
+            Ok(())
+        } else {
+            let message = format!("nat_nexus: failed to queue JS collector callback: {status:?}");
+            record_callback_error(message.clone());
+            Err(NexusError::Internal(message))
+        }
     })
 }
 
@@ -297,7 +355,7 @@ pub fn wrap_js_finalizer_fn(
 ) -> Box<dyn FnOnce() -> Json + Send> {
     Box::new(move || {
         let (tx, rx) = std::sync::mpsc::channel();
-        func.call_with_return_value(
+        let status = func.call_with_return_value(
             (),
             ThreadsafeFunctionCallMode::Blocking,
             move |val: Json| {
@@ -305,6 +363,12 @@ pub fn wrap_js_finalizer_fn(
                 Ok(())
             },
         );
+        if status != napi::Status::Ok {
+            record_callback_error(format!(
+                "nat_nexus: failed to queue JS finalizer callback: {status:?}"
+            ));
+            return Json::Null;
+        }
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
         recv_json_or_null(rx, "nat_nexus: JS finalizer callback failed")
@@ -318,7 +382,12 @@ pub fn wrap_js_event_subscriber(
     let func = Arc::new(func);
     Arc::new(move |event: &nvidia_nat_nexus_core::Event| {
         let event_json = serde_json::to_value(JsEvent::from(event)).unwrap_or(Json::Null);
-        func.call(event_json, ThreadsafeFunctionCallMode::NonBlocking);
+        let status = func.call(event_json, ThreadsafeFunctionCallMode::NonBlocking);
+        if status != napi::Status::Ok {
+            record_callback_error(format!(
+                "nat_nexus: failed to queue JS event subscriber callback: {status:?}"
+            ));
+        }
     })
 }
 
