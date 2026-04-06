@@ -24,7 +24,10 @@ use nvidia_nat_nexus_core as core;
 use nvidia_nat_nexus_core::types as core_types;
 
 use crate::callable;
-use crate::convert::{opt_json, to_napi_err};
+use crate::convert::{
+    clear_last_callback_error as clear_recorded_callback_error,
+    get_last_callback_error as get_recorded_callback_error, opt_json, to_napi_err,
+};
 use crate::stream::LlmStream;
 use crate::types::*;
 
@@ -191,6 +194,21 @@ pub fn set_thread_scope_stack(stack: &JsScopeStack) {
 #[napi]
 pub fn scope_stack_active() -> bool {
     nvidia_nat_nexus_core::scope_stack_active()
+}
+
+/// Returns the most recent callback error that could not be surfaced through a direct exception.
+///
+/// This is primarily used for sanitize/intercept/finalizer callback paths whose
+/// core callback signatures cannot return `Result`.
+#[napi]
+pub fn get_last_callback_error() -> Option<String> {
+    get_recorded_callback_error()
+}
+
+/// Clears the most recent callback error recorded by the Node binding.
+#[napi]
+pub fn clear_last_callback_error() {
+    clear_recorded_callback_error();
 }
 
 // ---------------------------------------------------------------------------

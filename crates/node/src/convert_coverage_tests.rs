@@ -19,3 +19,18 @@ fn test_opt_json_filters_null_only() {
         Some(json!({"ok": true}))
     );
 }
+
+#[test]
+fn test_callback_error_store_round_trip() {
+    clear_last_callback_error();
+    assert_eq!(get_last_callback_error(), None);
+
+    record_callback_error("node callback failed");
+    assert_eq!(
+        get_last_callback_error(),
+        Some("node callback failed".to_string())
+    );
+
+    clear_last_callback_error();
+    assert_eq!(get_last_callback_error(), None);
+}

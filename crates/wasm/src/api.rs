@@ -89,6 +89,18 @@ pub fn nat_nexus_pop_scope(handle: &WasmScopeHandle) -> Result<(), JsValue> {
     nvidia_nat_nexus_core::nat_nexus_pop_scope(&handle.inner.uuid).map_err(to_js_err)
 }
 
+/// Returns the most recent callback error that could not be surfaced through a direct exception.
+#[wasm_bindgen(js_name = "getLastCallbackError")]
+pub fn nat_nexus_get_last_callback_error() -> Option<String> {
+    get_last_callback_error()
+}
+
+/// Clears the most recent callback error recorded by the WASM binding.
+#[wasm_bindgen(js_name = "clearLastCallbackError")]
+pub fn nat_nexus_clear_last_callback_error() {
+    clear_last_callback_error();
+}
+
 /// Pushes a scope, invokes the callback, then pops the scope automatically.
 ///
 /// Creates a child scope with the given `name` and `scope_type`, calls the

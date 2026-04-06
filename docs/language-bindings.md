@@ -233,6 +233,11 @@ scopeRegisterSubscriber(
 popScope(handle);  // both registrations automatically removed
 ```
 
+For callback shapes that cannot throw directly through the core API
+(for example sanitize/intercept/finalizer callbacks), the Node binding also
+records the most recent binding-side callback failure. Read it with
+`getLastCallbackError()` and clear it with `clearLastCallbackError()`.
+
 ### Typed Wrappers
 
 Node.js provides `typed.js` with `typedToolExecute`, `typedLlmExecute`, and `typedLlmStreamExecute`:
@@ -468,6 +473,11 @@ registerToolConditionalExecutionGuardrail(
 async function searchFunc(args) {
     return { results: [`result for: ${args.q}`] };
 }
+
+For callback shapes that cannot throw directly through the core API
+(for example sanitize/intercept/finalizer callbacks), the WASM binding also
+records the most recent binding-side callback failure. Read it with
+`getLastCallbackError()` and clear it with `clearLastCallbackError()`.
 
 // 4. Execute a tool through the full middleware pipeline
 const result = await toolCallExecute(
