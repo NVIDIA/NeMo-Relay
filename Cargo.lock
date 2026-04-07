@@ -986,6 +986,7 @@ version = "0.1.0"
 dependencies = [
  "js-sys",
  "nvidia-nat-nexus-core",
+ "nvidia-nat-nexus-openinference",
  "nvidia-nat-nexus-otel",
  "send_wrapper",
  "serde",
@@ -1059,6 +1060,7 @@ dependencies = [
  "cbindgen",
  "libc",
  "nvidia-nat-nexus-core",
+ "nvidia-nat-nexus-openinference",
  "nvidia-nat-nexus-otel",
  "serde_json",
  "tokio",
@@ -1074,12 +1076,38 @@ dependencies = [
  "napi-build",
  "napi-derive",
  "nvidia-nat-nexus-core",
+ "nvidia-nat-nexus-openinference",
  "nvidia-nat-nexus-otel",
  "serde",
  "serde_json",
  "tokio",
  "tokio-stream",
  "uuid",
+]
+
+[[package]]
+name = "nvidia-nat-nexus-openinference"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "getrandom 0.3.4",
+ "js-sys",
+ "nvidia-nat-nexus-core",
+ "openinference-semantic-conventions",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -1127,6 +1155,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "nvidia-nat-nexus-core",
+ "nvidia-nat-nexus-openinference",
  "nvidia-nat-nexus-otel",
  "nvidia-nat-nexus-proxy",
  "pyo3",
@@ -1158,6 +1187,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
+name = "openinference-semantic-conventions"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eea63d12c54e611c8b28e031ac1d6d8778c7f399dc1f661da9260a543676a07d"
+dependencies = [
+ "opentelemetry",
+]
+
+[[package]]
 name = "opentelemetry"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1168,6 +1206,7 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

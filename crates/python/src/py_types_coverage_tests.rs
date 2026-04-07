@@ -26,6 +26,8 @@ fn test_register_exposes_all_type_bindings() {
         assert!(module.getattr("LLMRequest").is_ok());
         assert!(module.getattr("Event").is_ok());
         assert!(module.getattr("AtifExporter").is_ok());
+        assert!(module.getattr("OpenInferenceConfig").is_ok());
+        assert!(module.getattr("OpenInferenceSubscriber").is_ok());
         assert!(module.getattr("OpenTelemetryConfig").is_ok());
         assert!(module.getattr("OpenTelemetrySubscriber").is_ok());
     });
@@ -350,6 +352,59 @@ fn test_open_telemetry_config_rejects_invalid_inputs() {
     Python::initialize();
     Python::attach(|py| {
         let mut config = PyOpenTelemetryConfig::new();
+        let bad_headers = PyList::empty(py);
+        assert!(config.set_headers(&bad_headers.into_any()).is_err());
+
+        let bad_attrs = json_to_py(py, &json!({"env": 1})).unwrap();
+        assert!(config.set_resource_attributes(bad_attrs.bind(py)).is_err());
+
+        config.transport = "invalid".into();
+        let err = config.to_rust_config().unwrap_err();
+        assert!(err.to_string().contains("transport must be"));
+    });
+}
+
+#[test]
+fn test_open_inference_config_and_subscriber_cover_lifecycle() {
+    Python::initialize();
+    Python::attach(|py| {
+        let mut config = PyOpenInferenceConfig::new();
+        config.endpoint = Some("http://localhost:4318/v1/traces".into());
+        config.service_name = "py-agent".into();
+        config.service_namespace = Some("agents".into());
+        config.service_version = Some("1.0.0".into());
+        config.instrumentation_scope = "py-scope".into();
+        config.timeout_millis = 1250;
+        config.set_header("authorization".into(), "Bearer token".into());
+        config.set_resource_attribute("deployment.environment".into(), "test".into());
+
+        assert!(config.__repr__().contains("OpenInferenceConfig"));
+        assert_eq!(
+            py_to_json(config.headers(py).unwrap().bind(py)).unwrap(),
+            json!({"authorization": "Bearer token"})
+        );
+        assert_eq!(
+            py_to_json(config.resource_attributes(py).unwrap().bind(py)).unwrap(),
+            json!({"deployment.environment": "test"})
+        );
+
+        let config = pyo3::Py::new(py, config).unwrap();
+        let subscriber = PyOpenInferenceSubscriber::new(config.bind(py).borrow()).unwrap();
+        let subscriber_name = format!("py_openinference_{}", Uuid::new_v4().simple());
+        subscriber.register(subscriber_name.clone()).unwrap();
+        assert!(subscriber.deregister(subscriber_name.clone()).unwrap());
+        assert!(!subscriber.deregister(subscriber_name).unwrap());
+        subscriber.force_flush().unwrap();
+        subscriber.shutdown().unwrap();
+        assert_eq!(subscriber.__repr__(), "<OpenInferenceSubscriber>");
+    });
+}
+
+#[test]
+fn test_open_inference_config_rejects_invalid_inputs() {
+    Python::initialize();
+    Python::attach(|py| {
+        let mut config = PyOpenInferenceConfig::new();
         let bad_headers = PyList::empty(py);
         assert!(config.set_headers(&bad_headers.into_any()).is_err());
 

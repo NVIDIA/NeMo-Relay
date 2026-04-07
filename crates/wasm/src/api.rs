@@ -68,6 +68,35 @@ impl Default for WasmOpenTelemetryConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WasmOpenInferenceConfig {
+    transport: Option<String>,
+    endpoint: Option<String>,
+    headers: Option<HashMap<String, String>>,
+    resource_attributes: Option<HashMap<String, String>>,
+    service_name: Option<String>,
+    service_namespace: Option<String>,
+    service_version: Option<String>,
+    instrumentation_scope: Option<String>,
+    timeout_millis: Option<u32>,
+}
+
+impl Default for WasmOpenInferenceConfig {
+    fn default() -> Self {
+        Self {
+            transport: Some("http_binary".to_string()),
+            endpoint: None,
+            headers: Some(HashMap::new()),
+            resource_attributes: Some(HashMap::new()),
+            service_name: Some("nat-nexus".to_string()),
+            service_namespace: None,
+            service_version: None,
+            instrumentation_scope: Some("nvidia-nat-nexus-openinference".to_string()),
+            timeout_millis: Some(3_000),
+        }
+    }
+}
+
 fn build_otel_config(
     config: Option<WasmOpenTelemetryConfig>,
 ) -> Result<nvidia_nat_nexus_otel::OpenTelemetryConfig, JsValue> {
@@ -111,6 +140,55 @@ fn build_otel_config(
         otel_config = otel_config.with_resource_attribute(key, value);
     }
     Ok(otel_config)
+}
+
+fn build_openinference_config(
+    config: Option<WasmOpenInferenceConfig>,
+) -> Result<nvidia_nat_nexus_openinference::OpenInferenceConfig, JsValue> {
+    let config = config.unwrap_or_default();
+    let transport = config
+        .transport
+        .unwrap_or_else(|| "http_binary".to_string());
+    let service_name = config
+        .service_name
+        .unwrap_or_else(|| "nat-nexus".to_string());
+    let instrumentation_scope = config
+        .instrumentation_scope
+        .unwrap_or_else(|| "nvidia-nat-nexus-openinference".to_string());
+    let timeout_millis = config.timeout_millis.unwrap_or(3_000);
+
+    let transport = match transport.as_str() {
+        "http_binary" => nvidia_nat_nexus_openinference::OtlpTransport::HttpBinary,
+        "grpc" => nvidia_nat_nexus_openinference::OtlpTransport::Grpc,
+        other => {
+            return Err(JsValue::from_str(&format!(
+                "transport must be 'http_binary' or 'grpc', got {other:?}",
+            )));
+        }
+    };
+
+    let mut openinference_config = nvidia_nat_nexus_openinference::OpenInferenceConfig::new()
+        .with_transport(transport)
+        .with_service_name(service_name)
+        .with_instrumentation_scope(instrumentation_scope)
+        .with_timeout(std::time::Duration::from_millis(timeout_millis.into()));
+
+    if let Some(endpoint) = config.endpoint {
+        openinference_config = openinference_config.with_endpoint(endpoint);
+    }
+    if let Some(namespace) = config.service_namespace {
+        openinference_config = openinference_config.with_service_namespace(namespace);
+    }
+    if let Some(version) = config.service_version {
+        openinference_config = openinference_config.with_service_version(version);
+    }
+    for (key, value) in config.headers.unwrap_or_default() {
+        openinference_config = openinference_config.with_header(key, value);
+    }
+    for (key, value) in config.resource_attributes.unwrap_or_default() {
+        openinference_config = openinference_config.with_resource_attribute(key, value);
+    }
+    Ok(openinference_config)
 }
 
 // ---------------------------------------------------------------------------
@@ -1685,6 +1763,66 @@ impl WasmOpenTelemetrySubscriber {
     }
 
     /// Shut down the underlying tracer provider.
+    pub fn shutdown(&self) -> Result<(), JsValue> {
+        self.inner
+            .shutdown()
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+}
+
+/// Returns a default OpenInference config object that can be mutated in JS
+/// before constructing `OpenInferenceSubscriber`.
+#[wasm_bindgen(js_name = "defaultOpenInferenceConfig")]
+pub fn default_open_inference_config() -> Result<JsValue, JsValue> {
+    serde_wasm_bindgen::to_value(&WasmOpenInferenceConfig::default())
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// OpenInference-backed event subscriber.
+#[wasm_bindgen(js_name = OpenInferenceSubscriber)]
+pub struct WasmOpenInferenceSubscriber {
+    inner: nvidia_nat_nexus_openinference::OpenInferenceSubscriber,
+}
+
+#[wasm_bindgen(js_class = OpenInferenceSubscriber)]
+impl WasmOpenInferenceSubscriber {
+    /// Creates a new OpenInference subscriber from a config object.
+    #[wasm_bindgen(constructor)]
+    pub fn new(config: Option<JsValue>) -> Result<WasmOpenInferenceSubscriber, JsValue> {
+        let config = match config {
+            Some(value) if !value.is_undefined() && !value.is_null() => Some(
+                serde_wasm_bindgen::from_value(value)
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?,
+            ),
+            _ => None,
+        };
+
+        let inner = nvidia_nat_nexus_openinference::OpenInferenceSubscriber::new(
+            build_openinference_config(config)?,
+        )
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    pub fn register(&self, name: &str) -> Result<(), JsValue> {
+        self.inner
+            .register(name)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    pub fn deregister(&self, name: &str) -> Result<bool, JsValue> {
+        self.inner
+            .deregister(name)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    #[wasm_bindgen(js_name = "forceFlush")]
+    pub fn force_flush(&self) -> Result<(), JsValue> {
+        self.inner
+            .force_flush()
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     pub fn shutdown(&self) -> Result<(), JsValue> {
         self.inner
             .shutdown()

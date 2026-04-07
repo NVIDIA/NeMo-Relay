@@ -76,6 +76,10 @@ Jaeger, Tempo, or Honeycomb. For config fields, event mapping, lifecycle
 guidance, and binding-specific examples, see
 [Observability with OpenTelemetry](observability-with-opentelemetry.md).
 
+If you need Phoenix or another OpenInference-oriented backend instead, use
+`nvidia-nat-nexus-openinference` and
+[Observability with OpenInference](observability-with-openinference.md).
+
 ## Register Scope-Local Middleware
 
 ```python
@@ -228,3 +232,4 @@ Checklist:
 - [Proxy API Reference](proxy-api-reference.md)
 - [Context Isolation](context-isolation.md)
 - [Observability with OpenTelemetry](observability-with-opentelemetry.md)
+- [Observability with OpenInference](observability-with-openinference.md)

@@ -101,6 +101,8 @@ asyncio.run(main())
 - Use `nat_nexus.AtifExporter(...)` when you want to export trajectories
 - Use `nat_nexus.OpenTelemetryConfig()` plus `nat_nexus.OpenTelemetrySubscriber(...)`
   when you want OTLP/OpenTelemetry traces
+- Use `nat_nexus.OpenInferenceConfig()` plus `nat_nexus.OpenInferenceSubscriber(...)`
+  when you want OTLP export with OpenInference semantics
 
 ## Common Errors
 
@@ -117,3 +119,4 @@ asyncio.run(main())
 - [Typed Wrappers](typed-wrappers.md)
 - [ATIF Export](atif-export.md)
 - [Observability with OpenTelemetry](observability-with-opentelemetry.md)
+- [Observability with OpenInference](observability-with-openinference.md)
