@@ -3,6 +3,8 @@
 
 """Tests for NeMo Agent Toolkit Nexus proxy types and set_latency_sensitivity API."""
 
+from typing import cast
+
 from nat_nexus import LLMRequest, ScopeType, intercepts, llm, scope
 from nat_nexus.proxy import (
     AgentHints,
@@ -12,6 +14,7 @@ from nat_nexus.proxy import (
     PredictionMetrics,
     RedisBackend,
     SensitivityConfig,
+    StorageBackendProtocol,
     set_latency_sensitivity,
 )
 
@@ -414,7 +417,7 @@ class TestStorageBackendProtocol:
         from nat_nexus.proxy import NexusProxy
 
         with pytest.raises(TypeError, match="backend must be"):
-            NexusProxy("bad-backend", "not-a-backend")  # type: ignore[arg-type]
+            NexusProxy("bad-backend", cast(StorageBackendProtocol, "not-a-backend"))
 
     async def test_custom_backend_llm_call(self):
         """LLM call through proxy with custom backend works end-to-end."""

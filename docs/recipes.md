@@ -46,6 +46,36 @@ exporter.deregister("atif")
 
 Read [ATIF Export](atif-export.md) when you need the schema mapping details.
 
+## Export Traces to OpenTelemetry
+
+```rust
+use nvidia_nat_nexus_otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let subscriber = OpenTelemetrySubscriber::new(
+        OpenTelemetryConfig::http_binary("demo-agent")
+            .with_endpoint("http://localhost:4318/v1/traces")
+            .with_service_version("0.1.0"),
+    )?;
+
+    subscriber.register("otel")?;
+
+    // ... run Nexus-instrumented work here ...
+
+    subscriber.deregister("otel")?;
+    subscriber.force_flush()?;
+    subscriber.shutdown()?;
+    Ok(())
+}
+```
+
+Use this when you want Nexus scopes, tool calls, LLM calls, and mark events to
+show up in an OTLP-compatible backend such as the OpenTelemetry Collector,
+Jaeger, Tempo, or Honeycomb. For config fields, event mapping, lifecycle
+guidance, and binding-specific examples, see
+[Observability with OpenTelemetry](observability-with-opentelemetry.md).
+
 ## Register Scope-Local Middleware
 
 ```python
@@ -197,3 +227,4 @@ Checklist:
 - [Typed API Reference](typed-api-reference.md)
 - [Proxy API Reference](proxy-api-reference.md)
 - [Context Isolation](context-isolation.md)
+- [Observability with OpenTelemetry](observability-with-opentelemetry.md)

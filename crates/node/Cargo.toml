@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 nvidia-nat-nexus-core = { path = "../core" }
+nvidia-nat-nexus-otel = { path = "../otel" }
 napi = { version = "2", features = ["napi6", "async", "serde-json", "tokio_rt"] }
 napi-derive = "2"
 serde = { version = "1", features = ["derive"] }

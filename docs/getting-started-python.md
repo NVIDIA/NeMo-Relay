@@ -99,6 +99,8 @@ asyncio.run(main())
 
 - Use `nat_nexus.subscribers.register(...)` for console logging
 - Use `nat_nexus.AtifExporter(...)` when you want to export trajectories
+- Use `nat_nexus.OpenTelemetryConfig()` plus `nat_nexus.OpenTelemetrySubscriber(...)`
+  when you want OTLP/OpenTelemetry traces
 
 ## Common Errors
 
@@ -114,3 +116,4 @@ asyncio.run(main())
 - [API Reference](api-reference.md)
 - [Typed Wrappers](typed-wrappers.md)
 - [ATIF Export](atif-export.md)
+- [Observability with OpenTelemetry](observability-with-opentelemetry.md)

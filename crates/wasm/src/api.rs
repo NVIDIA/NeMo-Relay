@@ -23,9 +23,11 @@
 //! All functions use `JsValue` for JSON payloads and return `Result<T, JsValue>`
 //! where errors are thrown as JavaScript exceptions.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use js_sys::Function;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -36,6 +38,80 @@ use crate::callable;
 use crate::convert::*;
 use crate::stream::WasmLlmStream;
 use crate::types::*;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WasmOpenTelemetryConfig {
+    transport: Option<String>,
+    endpoint: Option<String>,
+    headers: Option<HashMap<String, String>>,
+    resource_attributes: Option<HashMap<String, String>>,
+    service_name: Option<String>,
+    service_namespace: Option<String>,
+    service_version: Option<String>,
+    instrumentation_scope: Option<String>,
+    timeout_millis: Option<u32>,
+}
+
+impl Default for WasmOpenTelemetryConfig {
+    fn default() -> Self {
+        Self {
+            transport: Some("http_binary".to_string()),
+            endpoint: None,
+            headers: Some(HashMap::new()),
+            resource_attributes: Some(HashMap::new()),
+            service_name: Some("nat-nexus".to_string()),
+            service_namespace: None,
+            service_version: None,
+            instrumentation_scope: Some("nvidia-nat-nexus-otel".to_string()),
+            timeout_millis: Some(3_000),
+        }
+    }
+}
+
+fn build_otel_config(
+    config: Option<WasmOpenTelemetryConfig>,
+) -> Result<nvidia_nat_nexus_otel::OpenTelemetryConfig, JsValue> {
+    let config = config.unwrap_or_default();
+    let transport = config
+        .transport
+        .unwrap_or_else(|| "http_binary".to_string());
+    let service_name = config
+        .service_name
+        .unwrap_or_else(|| "nat-nexus".to_string());
+    let instrumentation_scope = config
+        .instrumentation_scope
+        .unwrap_or_else(|| "nvidia-nat-nexus-otel".to_string());
+    let timeout_millis = config.timeout_millis.unwrap_or(3_000);
+
+    let mut otel_config = match transport.as_str() {
+        "http_binary" => nvidia_nat_nexus_otel::OpenTelemetryConfig::http_binary(service_name),
+        "grpc" => nvidia_nat_nexus_otel::OpenTelemetryConfig::grpc(service_name),
+        other => {
+            return Err(JsValue::from_str(&format!(
+                "transport must be 'http_binary' or 'grpc', got {other:?}",
+            )));
+        }
+    }
+    .with_instrumentation_scope(instrumentation_scope)
+    .with_timeout(std::time::Duration::from_millis(timeout_millis.into()));
+
+    if let Some(endpoint) = config.endpoint {
+        otel_config = otel_config.with_endpoint(endpoint);
+    }
+    if let Some(namespace) = config.service_namespace {
+        otel_config = otel_config.with_service_namespace(namespace);
+    }
+    if let Some(version) = config.service_version {
+        otel_config = otel_config.with_service_version(version);
+    }
+    for (key, value) in config.headers.unwrap_or_default() {
+        otel_config = otel_config.with_header(key, value);
+    }
+    for (key, value) in config.resource_attributes.unwrap_or_default() {
+        otel_config = otel_config.with_resource_attribute(key, value);
+    }
+    Ok(otel_config)
+}
 
 // ---------------------------------------------------------------------------
 // Scope / handle operations
@@ -1547,5 +1623,71 @@ impl WasmAtifExporter {
     /// Clears all collected events.
     pub fn clear(&self) {
         self.inner.clear();
+    }
+}
+
+/// Returns a default OpenTelemetry config object that can be mutated in JS
+/// before constructing `OpenTelemetrySubscriber`.
+#[wasm_bindgen(js_name = "defaultOpenTelemetryConfig")]
+pub fn default_open_telemetry_config() -> Result<JsValue, JsValue> {
+    serde_wasm_bindgen::to_value(&WasmOpenTelemetryConfig::default())
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// OpenTelemetry-backed event subscriber.
+#[wasm_bindgen(js_name = OpenTelemetrySubscriber)]
+pub struct WasmOpenTelemetrySubscriber {
+    inner: nvidia_nat_nexus_otel::OpenTelemetrySubscriber,
+}
+
+#[wasm_bindgen(js_class = OpenTelemetrySubscriber)]
+impl WasmOpenTelemetrySubscriber {
+    /// Creates a new OpenTelemetry subscriber from a config object.
+    ///
+    /// Expected object shape:
+    /// `{ transport, endpoint, headers, resource_attributes, service_name,
+    /// service_namespace, service_version, instrumentation_scope, timeout_millis }`
+    #[wasm_bindgen(constructor)]
+    pub fn new(config: Option<JsValue>) -> Result<WasmOpenTelemetrySubscriber, JsValue> {
+        let config = match config {
+            Some(value) if !value.is_undefined() && !value.is_null() => Some(
+                serde_wasm_bindgen::from_value(value)
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?,
+            ),
+            _ => None,
+        };
+
+        let inner = nvidia_nat_nexus_otel::OpenTelemetrySubscriber::new(build_otel_config(config)?)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Registers this subscriber globally with the given name.
+    pub fn register(&self, name: &str) -> Result<(), JsValue> {
+        self.inner
+            .register(name)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Deregisters a subscriber by name.
+    pub fn deregister(&self, name: &str) -> Result<bool, JsValue> {
+        self.inner
+            .deregister(name)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Force a flush of finished spans through the exporter.
+    #[wasm_bindgen(js_name = "forceFlush")]
+    pub fn force_flush(&self) -> Result<(), JsValue> {
+        self.inner
+            .force_flush()
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Shut down the underlying tracer provider.
+    pub fn shutdown(&self) -> Result<(), JsValue> {
+        self.inner
+            .shutdown()
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }

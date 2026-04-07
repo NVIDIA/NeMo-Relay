@@ -3,8 +3,11 @@
 
 """Tests for NeMo Agent Toolkit Nexus Python type bindings."""
 
+import http.server
 import json
+import threading
 from typing import Any, cast
+from uuid import uuid4
 
 import pytest
 from nat_nexus import (
@@ -12,6 +15,8 @@ from nat_nexus import (
     EventType,
     LLMAttributes,
     LLMRequest,
+    OpenTelemetryConfig,
+    OpenTelemetrySubscriber,
     ScopeAttributes,
     ScopeType,
     ToolAttributes,
@@ -20,6 +25,56 @@ from nat_nexus import (
     subscribers,
     tools,
 )
+
+
+class _OtelCollectorHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        length = int(self.headers.get("content-length", "0"))
+        body = self.rfile.read(length)
+        server = cast("_OtelCollectorServer", self.server)
+        server.requests.append(
+            {
+                "path": self.path,
+                "headers": dict(self.headers.items()),
+                "body": body,
+            }
+        )
+        server.request_event.set()
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: ARG002
+        return
+
+
+class _OtelCollector:
+    server: "_OtelCollectorServer"
+
+    def __enter__(self) -> "_OtelCollector":
+        self.server = _OtelCollectorServer(("127.0.0.1", 0), _OtelCollectorHandler)
+        self.server.requests = []
+        self.server.request_event = threading.Event()
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=1)
+
+    @property
+    def endpoint(self) -> str:
+        return f"http://127.0.0.1:{self.server.server_port}/v1/traces"
+
+    def wait_for_request(self, timeout: float = 5.0) -> dict[str, Any]:
+        assert self.server.request_event.wait(timeout), "timed out waiting for OTLP request"
+        return self.server.requests[0]
+
+
+class _OtelCollectorServer(http.server.ThreadingHTTPServer):
+    requests: list[dict[str, Any]]
+    request_event: threading.Event
 
 
 class TestScopeType:
@@ -356,3 +411,92 @@ class TestAtifExporterType:
             exporter.export("not-a-uuid")
         with pytest.raises(ValueError, match="Invalid UUID"):
             exporter.export_json("not-a-uuid")
+
+
+class TestOpenTelemetryTypes:
+    def test_config_defaults_mutation_and_repr(self):
+        config = OpenTelemetryConfig()
+
+        assert config.transport == "http_binary"
+        assert config.endpoint is None
+        assert config.service_name == "nat-nexus"
+        assert config.instrumentation_scope == "nvidia-nat-nexus-otel"
+        assert config.timeout_millis == 3000
+        assert config.headers == {}
+        assert config.resource_attributes == {}
+
+        config.endpoint = "http://localhost:4318/v1/traces"
+        config.service_name = "py-agent"
+        config.service_namespace = "agents"
+        config.service_version = "1.0.0"
+        config.instrumentation_scope = "py-tests"
+        config.timeout_millis = 1250
+        config.set_header("authorization", "Bearer token")
+        config.set_resource_attribute("deployment.environment", "test")
+
+        assert config.headers == {"authorization": "Bearer token"}
+        assert config.resource_attributes == {"deployment.environment": "test"}
+        assert "OpenTelemetryConfig" in repr(config)
+
+    def test_config_rejects_invalid_map_values(self):
+        config = OpenTelemetryConfig()
+
+        with pytest.raises(ValueError, match="dict\\[str, str\\]"):
+            config.headers = cast(Any, [])
+
+        with pytest.raises(ValueError, match="dict\\[str, str\\]"):
+            config.resource_attributes = {"env": cast(Any, 1)}
+
+    def test_subscriber_lifecycle_and_invalid_transport(self):
+        config = OpenTelemetryConfig()
+        config.endpoint = "http://localhost:4318/v1/traces"
+        config.service_name = "py-agent"
+
+        subscriber = OpenTelemetrySubscriber(config)
+        assert "<OpenTelemetrySubscriber>" in repr(subscriber)
+
+        subscriber_name = f"py_otel_subscriber_{uuid4().hex}"
+        subscriber.register(subscriber_name)
+        try:
+            assert subscriber.deregister(subscriber_name) is True
+            assert subscriber.deregister(subscriber_name) is False
+            subscriber.force_flush()
+            subscriber.shutdown()
+        finally:
+            subscribers.deregister(subscriber_name)
+
+        bad = OpenTelemetryConfig()
+        bad.transport = "invalid"
+        with pytest.raises(ValueError, match="transport must be"):
+            OpenTelemetrySubscriber(bad)
+
+    def test_subscriber_exports_scope_and_mark_events_end_to_end(self):
+        with _OtelCollector() as collector:
+            config = OpenTelemetryConfig()
+            config.endpoint = collector.endpoint
+            config.service_name = "py-agent"
+
+            subscriber = OpenTelemetrySubscriber(config)
+            subscriber_name = f"py_otel_e2e_{uuid4().hex}"
+            subscriber.register(subscriber_name)
+
+            try:
+                handle = scope.push("otel_scope", ScopeType.Agent, data={"scope": True})
+                try:
+                    scope.event(
+                        "otel_mark",
+                        handle=handle,
+                        data={"step": 1},
+                        metadata={"source": "python"},
+                    )
+                finally:
+                    scope.pop(handle)
+
+                subscriber.force_flush()
+                request = collector.wait_for_request()
+                assert request["path"] == "/v1/traces"
+                assert request["headers"]["content-type"] == "application/x-protobuf"
+                assert request["body"]
+            finally:
+                subscriber.deregister(subscriber_name)
+                subscriber.shutdown()

@@ -204,6 +204,14 @@ extern int32_t nat_nexus_atif_exporter_export(const void*, const char*, char**);
 extern int32_t nat_nexus_atif_exporter_clear(const void*);
 extern void nat_nexus_atif_exporter_free(void*);
 
+// OpenTelemetry subscriber
+extern int32_t nat_nexus_otel_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
+extern int32_t nat_nexus_otel_subscriber_register(const void*, const char*);
+extern int32_t nat_nexus_otel_subscriber_deregister(const char*);
+extern int32_t nat_nexus_otel_subscriber_force_flush(const void*);
+extern int32_t nat_nexus_otel_subscriber_shutdown(const void*);
+extern void nat_nexus_otel_subscriber_free(void*);
+
 // Go trampoline forward declarations (defined via //export in callbacks.go)
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
 extern char* goToolConditionalTrampoline(void*, const char*, const char*);
@@ -223,6 +231,7 @@ import (
 	"encoding/json"
 	"errors"
 	"runtime"
+	"time"
 	"unsafe"
 )
 
@@ -1252,6 +1261,170 @@ func (e *AtifExporter) Close() {
 	if e.ptr != nil {
 		C.nat_nexus_atif_exporter_free(e.ptr)
 		e.ptr = nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OpenTelemetry subscriber
+// ---------------------------------------------------------------------------
+
+// OpenTelemetryTransport configures which OTLP transport to use.
+type OpenTelemetryTransport string
+
+const (
+	// OpenTelemetryTransportHTTPBinary uses OTLP/HTTP protobuf export.
+	OpenTelemetryTransportHTTPBinary OpenTelemetryTransport = "http_binary"
+	// OpenTelemetryTransportGrpc uses OTLP/gRPC export.
+	OpenTelemetryTransportGrpc OpenTelemetryTransport = "grpc"
+)
+
+// OpenTelemetryConfig configures the OpenTelemetry subscriber.
+//
+// Create it with [NewOpenTelemetryConfig], then mutate fields as needed before
+// passing it to [NewOpenTelemetrySubscriber].
+type OpenTelemetryConfig struct {
+	Transport            OpenTelemetryTransport
+	Endpoint             string
+	Headers              map[string]string
+	ResourceAttributes   map[string]string
+	ServiceName          string
+	ServiceNamespace     string
+	ServiceVersion       string
+	InstrumentationScope string
+	Timeout              time.Duration
+}
+
+// NewOpenTelemetryConfig returns a config initialized with sensible defaults.
+func NewOpenTelemetryConfig() OpenTelemetryConfig {
+	return OpenTelemetryConfig{
+		Transport:            OpenTelemetryTransportHTTPBinary,
+		Headers:              map[string]string{},
+		ResourceAttributes:   map[string]string{},
+		ServiceName:          "nat-nexus",
+		InstrumentationScope: "nvidia-nat-nexus-otel",
+		Timeout:              3 * time.Second,
+	}
+}
+
+// OpenTelemetrySubscriber exports Nexus lifecycle events to an OpenTelemetry server.
+type OpenTelemetrySubscriber struct {
+	ptr unsafe.Pointer
+}
+
+// NewOpenTelemetrySubscriber creates a new OpenTelemetry subscriber from config.
+func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubscriber, error) {
+	if config.Transport == "" {
+		config.Transport = OpenTelemetryTransportHTTPBinary
+	}
+	if config.ServiceName == "" {
+		config.ServiceName = "nat-nexus"
+	}
+	if config.InstrumentationScope == "" {
+		config.InstrumentationScope = "nvidia-nat-nexus-otel"
+	}
+	if config.Timeout == 0 {
+		config.Timeout = 3 * time.Second
+	}
+	if config.Headers == nil {
+		config.Headers = map[string]string{}
+	}
+	if config.ResourceAttributes == nil {
+		config.ResourceAttributes = map[string]string{}
+	}
+
+	cTransport := C.CString(string(config.Transport))
+	defer C.free(unsafe.Pointer(cTransport))
+
+	var cEndpoint *C.char
+	if config.Endpoint != "" {
+		cEndpoint = C.CString(config.Endpoint)
+		defer C.free(unsafe.Pointer(cEndpoint))
+	}
+
+	headersJSON, err := json.Marshal(config.Headers)
+	if err != nil {
+		return nil, err
+	}
+	cHeadersJSON := C.CString(string(headersJSON))
+	defer C.free(unsafe.Pointer(cHeadersJSON))
+
+	resourceAttrsJSON, err := json.Marshal(config.ResourceAttributes)
+	if err != nil {
+		return nil, err
+	}
+	cResourceAttrsJSON := C.CString(string(resourceAttrsJSON))
+	defer C.free(unsafe.Pointer(cResourceAttrsJSON))
+
+	cServiceName := C.CString(config.ServiceName)
+	defer C.free(unsafe.Pointer(cServiceName))
+
+	var cServiceNamespace *C.char
+	if config.ServiceNamespace != "" {
+		cServiceNamespace = C.CString(config.ServiceNamespace)
+		defer C.free(unsafe.Pointer(cServiceNamespace))
+	}
+
+	var cServiceVersion *C.char
+	if config.ServiceVersion != "" {
+		cServiceVersion = C.CString(config.ServiceVersion)
+		defer C.free(unsafe.Pointer(cServiceVersion))
+	}
+
+	cInstrumentationScope := C.CString(config.InstrumentationScope)
+	defer C.free(unsafe.Pointer(cInstrumentationScope))
+
+	var ptr unsafe.Pointer
+	status := C.nat_nexus_otel_subscriber_create(
+		cTransport,
+		cEndpoint,
+		cHeadersJSON,
+		cResourceAttrsJSON,
+		cServiceName,
+		cServiceNamespace,
+		cServiceVersion,
+		cInstrumentationScope,
+		C.uint64_t(config.Timeout/time.Millisecond),
+		&ptr,
+	)
+	if err := checkStatus(status); err != nil {
+		return nil, err
+	}
+	return &OpenTelemetrySubscriber{ptr: ptr}, nil
+}
+
+// Register registers the subscriber globally with the given name.
+func (s *OpenTelemetrySubscriber) Register(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	status := C.nat_nexus_otel_subscriber_register(s.ptr, cName)
+	return checkStatus(status)
+}
+
+// Deregister removes the subscriber by name.
+func (s *OpenTelemetrySubscriber) Deregister(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	status := C.nat_nexus_otel_subscriber_deregister(cName)
+	return checkStatus(status)
+}
+
+// ForceFlush flushes finished spans through the underlying exporter.
+func (s *OpenTelemetrySubscriber) ForceFlush() error {
+	status := C.nat_nexus_otel_subscriber_force_flush(s.ptr)
+	return checkStatus(status)
+}
+
+// Shutdown shuts down the underlying tracer provider.
+func (s *OpenTelemetrySubscriber) Shutdown() error {
+	status := C.nat_nexus_otel_subscriber_shutdown(s.ptr)
+	return checkStatus(status)
+}
+
+// Close frees the subscriber handle.
+func (s *OpenTelemetrySubscriber) Close() {
+	if s.ptr != nil {
+		C.nat_nexus_otel_subscriber_free(s.ptr)
+		s.ptr = nil
 	}
 }
 

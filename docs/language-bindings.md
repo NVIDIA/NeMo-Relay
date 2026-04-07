@@ -55,6 +55,74 @@ Direct Rust users of `nvidia-nat-nexus-core` should note that
 `EventSubscriberFn` is an `Arc<dyn Fn(&Event) + Send + Sync>`. Register
 subscribers with `Arc::new(...)`, not `Box::new(...)`.
 
+If you want OTLP export without adding exporter logic to your own callback,
+use the separate `nvidia-nat-nexus-otel` crate. It turns Nexus lifecycle
+events into OpenTelemetry spans and exposes a normal `EventSubscriberFn`.
+
+## OpenTelemetry
+
+Every binding exposes an OpenTelemetry subscriber backed by the same Rust OTLP
+exporter. The config shape follows each language's normal style:
+
+- Rust: `OpenTelemetryConfig::{http_binary, grpc}(...)` builder-style config.
+- Python: mutable `OpenTelemetryConfig()` object passed to `OpenTelemetrySubscriber(config)`.
+- Node.js: plain `OpenTelemetryConfig` object passed to `new OpenTelemetrySubscriber(config)`.
+- Go: `NewOpenTelemetryConfig()` returns a mutable config struct for `NewOpenTelemetrySubscriber(config)`.
+- WASM: `defaultOpenTelemetryConfig()` returns a mutable JS object for `new OpenTelemetrySubscriber(config)`.
+
+Use [Observability with OpenTelemetry](observability-with-opentelemetry.md) as
+the canonical guide for event mapping, lifecycle, transport constraints, and
+full per-language setup examples.
+
+Minimal examples:
+
+```python
+import nat_nexus
+
+config = nat_nexus.OpenTelemetryConfig()
+config.endpoint = "http://localhost:4318/v1/traces"
+config.service_name = "demo-agent"
+
+subscriber = nat_nexus.OpenTelemetrySubscriber(config)
+subscriber.register("otel")
+```
+
+```javascript
+import { OpenTelemetrySubscriber } from "./index.js";
+
+const config = {
+  endpoint: "http://localhost:4318/v1/traces",
+  serviceName: "demo-agent",
+};
+
+const subscriber = new OpenTelemetrySubscriber(config);
+subscriber.register("otel");
+```
+
+```go
+config := nat_nexus.NewOpenTelemetryConfig()
+config.Endpoint = "http://localhost:4318/v1/traces"
+config.ServiceName = "demo-agent"
+
+subscriber, err := nat_nexus.NewOpenTelemetrySubscriber(config)
+```
+
+```javascript
+import init, {
+  defaultOpenTelemetryConfig,
+  OpenTelemetrySubscriber,
+} from "./pkg/nvidia_nat_nexus_wasm.js";
+
+await init();
+
+const config = defaultOpenTelemetryConfig();
+config.endpoint = "http://localhost:4318/v1/traces";
+config.service_name = "demo-agent";
+
+const subscriber = new OpenTelemetrySubscriber(config);
+subscriber.register("otel");
+```
+
 ## Callback Contracts
 
 Nexus intentionally distinguishes fallible callback surfaces from infallible

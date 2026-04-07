@@ -8,6 +8,7 @@
 //! the error message.
 
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use libc::c_char;
 use nvidia_nat_nexus_core as core;
@@ -1748,6 +1749,253 @@ pub unsafe extern "C" fn nat_nexus_atif_exporter_clear(
 }
 
 // ---------------------------------------------------------------------------
+// OpenTelemetry subscriber
+// ---------------------------------------------------------------------------
+
+fn parse_string_map_json(
+    json_ptr: *const c_char,
+    field_name: &str,
+) -> Result<std::collections::HashMap<String, String>, NatNexusStatus> {
+    if json_ptr.is_null() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let json_string = c_str_to_string(json_ptr)?;
+    let value: serde_json::Value = serde_json::from_str(&json_string).map_err(|e| {
+        set_last_error(&format!("invalid {field_name} JSON: {e}"));
+        NatNexusStatus::InvalidJson
+    })?;
+
+    let serde_json::Value::Object(map) = value else {
+        set_last_error(&format!(
+            "{field_name} must be a JSON object of string values"
+        ));
+        return Err(NatNexusStatus::InvalidArg);
+    };
+
+    let mut out = std::collections::HashMap::with_capacity(map.len());
+    for (key, value) in map {
+        let serde_json::Value::String(value) = value else {
+            set_last_error(&format!(
+                "{field_name} must be a JSON object of string values"
+            ));
+            return Err(NatNexusStatus::InvalidArg);
+        };
+        out.insert(key, value);
+    }
+    Ok(out)
+}
+
+/// Creates a new OpenTelemetry subscriber.
+///
+/// Nullable strings use crate defaults when omitted. `headers_json` and
+/// `resource_attributes_json` must be JSON objects of string values when
+/// provided.
+///
+/// # Safety
+/// Any non-null C strings must be valid and `out` must be non-null.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_otel_subscriber_create(
+    transport: *const c_char,
+    endpoint: *const c_char,
+    headers_json: *const c_char,
+    resource_attributes_json: *const c_char,
+    service_name: *const c_char,
+    service_namespace: *const c_char,
+    service_version: *const c_char,
+    instrumentation_scope: *const c_char,
+    timeout_millis: u64,
+    out: *mut *mut FfiOpenTelemetrySubscriber,
+) -> NatNexusStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NatNexusStatus::NullPointer;
+    }
+
+    let transport = if transport.is_null() {
+        "http_binary".to_string()
+    } else {
+        match c_str_to_string(transport) {
+            Ok(value) => value,
+            Err(status) => return status,
+        }
+    };
+
+    let service_name = if service_name.is_null() {
+        "nat-nexus".to_string()
+    } else {
+        match c_str_to_string(service_name) {
+            Ok(value) => value,
+            Err(status) => return status,
+        }
+    };
+
+    let mut config = match transport.as_str() {
+        "http_binary" => nvidia_nat_nexus_otel::OpenTelemetryConfig::http_binary(service_name),
+        "grpc" => nvidia_nat_nexus_otel::OpenTelemetryConfig::grpc(service_name),
+        other => {
+            set_last_error(&format!(
+                "transport must be 'http_binary' or 'grpc', got {other:?}"
+            ));
+            return NatNexusStatus::InvalidArg;
+        }
+    };
+
+    if !endpoint.is_null() {
+        let endpoint = match c_str_to_string(endpoint) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        config = config.with_endpoint(endpoint);
+    }
+    if !service_namespace.is_null() {
+        let namespace = match c_str_to_string(service_namespace) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        config = config.with_service_namespace(namespace);
+    }
+    if !service_version.is_null() {
+        let version = match c_str_to_string(service_version) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        config = config.with_service_version(version);
+    }
+    if !instrumentation_scope.is_null() {
+        let scope = match c_str_to_string(instrumentation_scope) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        config = config.with_instrumentation_scope(scope);
+    }
+    if timeout_millis != 0 {
+        config = config.with_timeout(Duration::from_millis(timeout_millis));
+    }
+
+    for (key, value) in match parse_string_map_json(headers_json, "headers") {
+        Ok(map) => map,
+        Err(status) => return status,
+    } {
+        config = config.with_header(key, value);
+    }
+    for (key, value) in match parse_string_map_json(resource_attributes_json, "resource_attributes")
+    {
+        Ok(map) => map,
+        Err(status) => return status,
+    } {
+        config = config.with_resource_attribute(key, value);
+    }
+
+    let _runtime_guard = tokio_runtime().enter();
+    match nvidia_nat_nexus_otel::OpenTelemetrySubscriber::new(config) {
+        Ok(subscriber) => {
+            unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetrySubscriber(subscriber))) };
+            NatNexusStatus::Ok
+        }
+        Err(e) => {
+            set_last_error(&e.to_string());
+            NatNexusStatus::Internal
+        }
+    }
+}
+
+/// Registers the OpenTelemetry subscriber as an event subscriber.
+///
+/// # Safety
+/// `subscriber` and `name` must be valid, non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_otel_subscriber_register(
+    subscriber: *const FfiOpenTelemetrySubscriber,
+    name: *const c_char,
+) -> NatNexusStatus {
+    clear_last_error();
+    if subscriber.is_null() {
+        set_last_error("subscriber pointer is null");
+        return NatNexusStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+
+    match unsafe { &*subscriber }.0.register(&name) {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(e) => {
+            set_last_error(&e.to_string());
+            NatNexusStatus::Internal
+        }
+    }
+}
+
+/// Deregisters the OpenTelemetry subscriber by name.
+///
+/// # Safety
+/// `name` must be a valid C string.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_otel_subscriber_deregister(
+    name: *const c_char,
+) -> NatNexusStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+
+    match core::nat_nexus_deregister_subscriber(&name) {
+        Ok(_) => NatNexusStatus::Ok,
+        Err(e) => status_from_error(&e),
+    }
+}
+
+/// Forces a flush of finished spans through the exporter.
+///
+/// # Safety
+/// `subscriber` must be a valid, non-null pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_otel_subscriber_force_flush(
+    subscriber: *const FfiOpenTelemetrySubscriber,
+) -> NatNexusStatus {
+    clear_last_error();
+    if subscriber.is_null() {
+        set_last_error("subscriber pointer is null");
+        return NatNexusStatus::NullPointer;
+    }
+
+    match unsafe { &*subscriber }.0.force_flush() {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(e) => {
+            set_last_error(&e.to_string());
+            NatNexusStatus::Internal
+        }
+    }
+}
+
+/// Shuts down the underlying tracer provider.
+///
+/// # Safety
+/// `subscriber` must be a valid, non-null pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_otel_subscriber_shutdown(
+    subscriber: *const FfiOpenTelemetrySubscriber,
+) -> NatNexusStatus {
+    clear_last_error();
+    if subscriber.is_null() {
+        set_last_error("subscriber pointer is null");
+        return NatNexusStatus::NullPointer;
+    }
+
+    match unsafe { &*subscriber }.0.shutdown() {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(e) => {
+            set_last_error(&e.to_string());
+            NatNexusStatus::Internal
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Scope-local tool guardrail registrations
 // ---------------------------------------------------------------------------
 
@@ -2705,14 +2953,14 @@ mod tests {
         nat_nexus_event_type, nat_nexus_event_uuid, nat_nexus_llm_handle_attributes,
         nat_nexus_llm_handle_free, nat_nexus_llm_handle_name, nat_nexus_llm_handle_parent_uuid,
         nat_nexus_llm_handle_uuid, nat_nexus_llm_request_content, nat_nexus_llm_request_free,
-        nat_nexus_llm_request_headers, nat_nexus_llm_request_new,
+        nat_nexus_llm_request_headers, nat_nexus_llm_request_new, nat_nexus_otel_subscriber_free,
         nat_nexus_scope_handle_attributes, nat_nexus_scope_handle_data,
         nat_nexus_scope_handle_free, nat_nexus_scope_handle_metadata, nat_nexus_scope_handle_name,
         nat_nexus_scope_handle_parent_uuid, nat_nexus_scope_handle_scope_type,
         nat_nexus_scope_handle_uuid, nat_nexus_scope_stack_free, nat_nexus_tool_handle_attributes,
         nat_nexus_tool_handle_free, nat_nexus_tool_handle_name, nat_nexus_tool_handle_parent_uuid,
         nat_nexus_tool_handle_uuid, FfiAtifExporter, FfiEvent, FfiLLMHandle, FfiLLMRequest,
-        FfiScopeStack, FfiToolHandle, NatNexusEventType,
+        FfiOpenTelemetrySubscriber, FfiScopeStack, FfiToolHandle, NatNexusEventType,
     };
 
     static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -3954,6 +4202,123 @@ mod tests {
             assert_eq!(nat_nexus_pop_scope(scope), NatNexusStatus::Ok);
             nat_nexus_scope_handle_free(scope);
             nat_nexus_scope_stack_free(stack);
+        }
+    }
+
+    #[test]
+    fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        reset_globals();
+
+        unsafe {
+            let mut subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
+            let endpoint = cstring("http://localhost:4318/v1/traces");
+            let headers = cstring(r#"{"authorization":"Bearer token"}"#);
+            let resource_attributes = cstring(r#"{"deployment.environment":"test"}"#);
+            let service_name = cstring("ffi-agent");
+            let service_namespace = cstring("agents");
+            let service_version = cstring("1.0.0");
+            let instrumentation_scope = cstring("ffi-tests");
+            let invalid_transport = cstring("invalid");
+            let invalid_headers = cstring(r#"{"authorization":1}"#);
+
+            assert_eq!(
+                nat_nexus_otel_subscriber_create(
+                    ptr::null(),
+                    endpoint.as_ptr(),
+                    headers.as_ptr(),
+                    resource_attributes.as_ptr(),
+                    service_name.as_ptr(),
+                    service_namespace.as_ptr(),
+                    service_version.as_ptr(),
+                    instrumentation_scope.as_ptr(),
+                    1250,
+                    ptr::null_mut(),
+                ),
+                NatNexusStatus::NullPointer
+            );
+            assert_eq!(
+                nat_nexus_otel_subscriber_create(
+                    invalid_transport.as_ptr(),
+                    endpoint.as_ptr(),
+                    headers.as_ptr(),
+                    resource_attributes.as_ptr(),
+                    service_name.as_ptr(),
+                    service_namespace.as_ptr(),
+                    service_version.as_ptr(),
+                    instrumentation_scope.as_ptr(),
+                    1250,
+                    &mut subscriber,
+                ),
+                NatNexusStatus::InvalidArg
+            );
+            assert_eq!(
+                nat_nexus_otel_subscriber_create(
+                    ptr::null(),
+                    endpoint.as_ptr(),
+                    invalid_headers.as_ptr(),
+                    resource_attributes.as_ptr(),
+                    service_name.as_ptr(),
+                    service_namespace.as_ptr(),
+                    service_version.as_ptr(),
+                    instrumentation_scope.as_ptr(),
+                    1250,
+                    &mut subscriber,
+                ),
+                NatNexusStatus::InvalidArg
+            );
+            assert_eq!(
+                nat_nexus_otel_subscriber_create(
+                    ptr::null(),
+                    endpoint.as_ptr(),
+                    headers.as_ptr(),
+                    resource_attributes.as_ptr(),
+                    service_name.as_ptr(),
+                    service_namespace.as_ptr(),
+                    service_version.as_ptr(),
+                    instrumentation_scope.as_ptr(),
+                    1250,
+                    &mut subscriber,
+                ),
+                NatNexusStatus::Ok
+            );
+            assert!(!subscriber.is_null());
+
+            let name = cstring(&unique_name("ffi_otel"));
+            assert_eq!(
+                nat_nexus_otel_subscriber_register(ptr::null(), name.as_ptr()),
+                NatNexusStatus::NullPointer
+            );
+            assert_eq!(
+                nat_nexus_otel_subscriber_force_flush(ptr::null()),
+                NatNexusStatus::NullPointer
+            );
+            assert_eq!(
+                nat_nexus_otel_subscriber_shutdown(ptr::null()),
+                NatNexusStatus::NullPointer
+            );
+
+            assert_eq!(
+                nat_nexus_otel_subscriber_register(subscriber, name.as_ptr()),
+                NatNexusStatus::Ok
+            );
+            assert_eq!(
+                nat_nexus_otel_subscriber_deregister(name.as_ptr()),
+                NatNexusStatus::Ok
+            );
+            assert_eq!(
+                nat_nexus_otel_subscriber_deregister(name.as_ptr()),
+                NatNexusStatus::Ok
+            );
+            assert_eq!(
+                nat_nexus_otel_subscriber_force_flush(subscriber),
+                NatNexusStatus::Ok
+            );
+            assert_eq!(
+                nat_nexus_otel_subscriber_shutdown(subscriber),
+                NatNexusStatus::Ok
+            );
+            nat_nexus_otel_subscriber_free(subscriber);
         }
     }
 

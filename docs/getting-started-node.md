@@ -131,6 +131,7 @@ registerSubscriber("logger", (event) => {
 ## Next Docs
 
 - [Language Bindings](language-bindings.md#nodejs)
+- [Observability with OpenTelemetry](observability-with-opentelemetry.md)
 - [Middleware Pipeline](middleware-pipeline.md)
 - [Typed Wrappers](typed-wrappers.md)
 - [Testing](testing.md)

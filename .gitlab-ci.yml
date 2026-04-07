@@ -25,6 +25,7 @@ variables:
   NEXUS_CI_NVM_VERSION: "0.40.4"
   NEXUS_CI_UV_VERSION: "0.9.28"
   NEXUS_CI_WASM_VERSION: "0.2.20"
+  NEXUS_CI_RUST_ONLY_EXCLUDES: "--exclude nvidia-nat-nexus-node --exclude nvidia-nat-nexus-python --exclude nat-nexus-wasm"
   NEXUS_CI_WORKSPACE_TMP: "${CI_PROJECT_DIR}/.tmp"
   UV_CACHE_DIR: .uv-cache
   UV_INSTALL_DIR: /usr/local/bin
@@ -145,7 +146,7 @@ build:
     - *install_uv_and_python
     - echo "Building Nexus"
     - cargo build --release --workspace
-    - cargo test --no-run --release --workspace
+    - cargo test --no-run --release --workspace ${NEXUS_CI_RUST_ONLY_EXCLUDES}
     - echo "Building Python Extension"
     - *setup_venv
     - echo "Building NodeJS package"
@@ -299,7 +300,7 @@ test:rust:
     - mkdir -p target/coverage
     - eval "$(cargo llvm-cov show-env --sh)"
     - cargo llvm-cov clean --workspace
-    - cargo nextest run --workspace --exclude nvidia-nat-nexus-node --exclude nvidia-nat-nexus-python --exclude nat-nexus-wasm --release --profile ci
+    - cargo nextest run --workspace ${NEXUS_CI_RUST_ONLY_EXCLUDES} --release --profile ci
     - cargo llvm-cov report --release --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/src/(coverage_tests|.*_tests)\.rs$)' --cobertura --output-path target/coverage/rust-workspace.xml
 
 test:wasm:

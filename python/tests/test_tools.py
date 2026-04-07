@@ -3,6 +3,8 @@
 
 """Tests for NeMo Agent Toolkit Nexus tool lifecycle, guardrails, and intercepts."""
 
+from typing import cast
+
 import pytest
 from nat_nexus import (
     EventType,
@@ -351,7 +353,11 @@ class TestToolInterceptsAsync:
 
 class TestToolGuardrailsEdgeCases:
     def test_conditional_execution_invalid_return_type_raises(self):
-        guardrails.register_tool_conditional_execution("py_cond_bad_type", 1, lambda name, args: 123)
+        guardrails.register_tool_conditional_execution(
+            "py_cond_bad_type",
+            1,
+            cast(guardrails.ToolConditionalExecutionGuardrail, lambda name, args: 123),
+        )
         try:
             with pytest.raises(RuntimeError, match="expected str or None"):
                 tools.conditional_execution("bad_type_tool", {})

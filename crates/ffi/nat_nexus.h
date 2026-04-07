@@ -149,6 +149,11 @@ typedef struct FfiLLMHandle FfiLLMHandle;
 typedef struct FfiLLMRequest FfiLLMRequest;
 
 /**
+ * Opaque OpenTelemetry subscriber handle.
+ */
+typedef struct FfiOpenTelemetrySubscriber FfiOpenTelemetrySubscriber;
+
+/**
  * Opaque handle representing an active execution scope.
  */
 typedef struct FfiScopeHandle FfiScopeHandle;
@@ -927,6 +932,60 @@ NatNexusStatus nat_nexus_atif_exporter_export(const struct FfiAtifExporter *expo
 NatNexusStatus nat_nexus_atif_exporter_clear(const struct FfiAtifExporter *exporter);
 
 /**
+ * Creates a new OpenTelemetry subscriber.
+ *
+ * Nullable strings use crate defaults when omitted. `headers_json` and
+ * `resource_attributes_json` must be JSON objects of string values when
+ * provided.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NatNexusStatus nat_nexus_otel_subscriber_create(const char *transport,
+                                                const char *endpoint,
+                                                const char *headers_json,
+                                                const char *resource_attributes_json,
+                                                const char *service_name,
+                                                const char *service_namespace,
+                                                const char *service_version,
+                                                const char *instrumentation_scope,
+                                                uint64_t timeout_millis,
+                                                struct FfiOpenTelemetrySubscriber **out);
+
+/**
+ * Registers the OpenTelemetry subscriber as an event subscriber.
+ *
+ * # Safety
+ * `subscriber` and `name` must be valid, non-null pointers.
+ */
+NatNexusStatus nat_nexus_otel_subscriber_register(const struct FfiOpenTelemetrySubscriber *subscriber,
+                                                  const char *name);
+
+/**
+ * Deregisters the OpenTelemetry subscriber by name.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NatNexusStatus nat_nexus_otel_subscriber_deregister(const char *name);
+
+/**
+ * Forces a flush of finished spans through the exporter.
+ *
+ * # Safety
+ * `subscriber` must be a valid, non-null pointer.
+ */
+NatNexusStatus nat_nexus_otel_subscriber_force_flush(const struct FfiOpenTelemetrySubscriber *subscriber);
+
+/**
+ * Shuts down the underlying tracer provider.
+ *
+ * # Safety
+ * `subscriber` must be a valid, non-null pointer.
+ */
+NatNexusStatus nat_nexus_otel_subscriber_shutdown(const struct FfiOpenTelemetrySubscriber *subscriber);
+
+/**
  * Register a scope-local tool conditional execution guardrail.
  *
  * # Parameters
@@ -1358,6 +1417,15 @@ void nat_nexus_scope_stack_free(struct FfiScopeStack *ptr);
  * `ptr` must be a valid pointer returned by `nat_nexus_atif_exporter_create`, or null.
  */
 void nat_nexus_atif_exporter_free(struct FfiAtifExporter *ptr);
+
+/**
+ * Free an OpenTelemetry subscriber handle previously returned by
+ * `nat_nexus_otel_subscriber_create`.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `nat_nexus_otel_subscriber_create`, or null.
+ */
+void nat_nexus_otel_subscriber_free(struct FfiOpenTelemetrySubscriber *ptr);
 
 /**
  * Return the UUID of a scope handle as a C string. Caller must free the result

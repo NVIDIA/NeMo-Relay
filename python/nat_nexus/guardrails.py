@@ -51,6 +51,7 @@ Example::
 
 from typing import Any, Callable, Optional
 
+from nat_nexus._native import LLMRequest
 from nat_nexus._native import (
     nat_nexus_deregister_llm_conditional_execution_guardrail as _native_deregister_llm_conditional_execution,
 )
@@ -92,8 +93,14 @@ from nat_nexus._native import (
 # Tool guardrails
 # ---------------------------------------------------------------------------
 
+ToolSanitizeGuardrail = Callable[[str, Any], Any]
+ToolConditionalExecutionGuardrail = Callable[[str, Any], Optional[str]]
+LlmSanitizeRequestGuardrail = Callable[[LLMRequest], LLMRequest]
+LlmSanitizeResponseGuardrail = Callable[[dict], dict]
+LlmConditionalExecutionGuardrail = Callable[[LLMRequest], Optional[str]]
 
-def register_tool_sanitize_request(name: str, priority: int, guardrail: Callable[[str, Any], Any]) -> None:
+
+def register_tool_sanitize_request(name: str, priority: int, guardrail: ToolSanitizeGuardrail) -> None:
     """Register a tool sanitize-request guardrail.
 
     The guardrail callback receives the tool name and arguments and returns
@@ -123,7 +130,7 @@ def deregister_tool_sanitize_request(name: str) -> bool:
     return _native_deregister_tool_sanitize_request(name)
 
 
-def register_tool_sanitize_response(name: str, priority: int, guardrail: Callable[[str, Any], Any]) -> None:
+def register_tool_sanitize_response(name: str, priority: int, guardrail: ToolSanitizeGuardrail) -> None:
     """Register a tool sanitize-response guardrail.
 
     The guardrail callback receives the tool name and result and returns
@@ -153,9 +160,7 @@ def deregister_tool_sanitize_response(name: str) -> bool:
     return _native_deregister_tool_sanitize_response(name)
 
 
-def register_tool_conditional_execution(
-    name: str, priority: int, guardrail: Callable[[str, Any], Optional[str]]
-) -> None:
+def register_tool_conditional_execution(name: str, priority: int, guardrail: ToolConditionalExecutionGuardrail) -> None:
     """Register a tool conditional-execution guardrail.
 
     The guardrail callback receives the tool name and arguments and returns
@@ -190,7 +195,7 @@ def deregister_tool_conditional_execution(name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def register_llm_sanitize_request(name: str, priority: int, guardrail: Callable[[Any], Any]) -> None:
+def register_llm_sanitize_request(name: str, priority: int, guardrail: LlmSanitizeRequestGuardrail) -> None:
     """Register an LLM sanitize-request guardrail.
 
     The guardrail callback receives the LLM request and returns a sanitized
@@ -220,7 +225,7 @@ def deregister_llm_sanitize_request(name: str) -> bool:
     return _native_deregister_llm_sanitize_request(name)
 
 
-def register_llm_sanitize_response(name: str, priority: int, guardrail: Callable[[dict], dict]) -> None:
+def register_llm_sanitize_response(name: str, priority: int, guardrail: LlmSanitizeResponseGuardrail) -> None:
     """Register an LLM sanitize-response guardrail.
 
     The guardrail callback receives the LLM response dict and returns a
@@ -250,7 +255,7 @@ def deregister_llm_sanitize_response(name: str) -> bool:
     return _native_deregister_llm_sanitize_response(name)
 
 
-def register_llm_conditional_execution(name: str, priority: int, guardrail: Callable[[Any], Optional[str]]) -> None:
+def register_llm_conditional_execution(name: str, priority: int, guardrail: LlmConditionalExecutionGuardrail) -> None:
     """Register an LLM conditional-execution guardrail.
 
     The guardrail callback receives the LLM request and returns ``None``

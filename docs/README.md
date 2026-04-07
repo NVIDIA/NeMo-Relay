@@ -17,37 +17,41 @@ Choose the path that matches what you are trying to do:
 
 1. [Getting Started: Python](getting-started-python.md)
 2. [Language Bindings](language-bindings.md#python)
-3. [Core Concepts](concepts.md)
-4. [API Reference](api-reference.md)
-5. [ATIF Export](atif-export.md)
-6. [Testing](testing.md)
+3. [Observability with OpenTelemetry](observability-with-opentelemetry.md)
+4. [Core Concepts](concepts.md)
+5. [API Reference](api-reference.md)
+6. [ATIF Export](atif-export.md)
+7. [Testing](testing.md)
 
 ### Using Nexus from Node.js
 
 1. [Getting Started: Node.js](getting-started-node.md)
 2. [Language Bindings](language-bindings.md#nodejs)
-3. [Core Concepts](concepts.md)
-4. [Middleware Pipeline](middleware-pipeline.md)
-5. [Typed Wrappers](typed-wrappers.md)
-6. [Testing](testing.md)
+3. [Observability with OpenTelemetry](observability-with-opentelemetry.md)
+4. [Core Concepts](concepts.md)
+5. [Middleware Pipeline](middleware-pipeline.md)
+6. [Typed Wrappers](typed-wrappers.md)
+7. [Testing](testing.md)
 
 ### Using Nexus from Go
 
 1. [Getting Started: Go](getting-started-go.md)
 2. [Language Bindings](language-bindings.md#go)
-3. [Core Concepts](concepts.md)
-4. [Context Isolation](context-isolation.md)
-5. [API Reference](api-reference.md)
-6. [Testing](testing.md)
+3. [Observability with OpenTelemetry](observability-with-opentelemetry.md)
+4. [Core Concepts](concepts.md)
+5. [Context Isolation](context-isolation.md)
+6. [API Reference](api-reference.md)
+7. [Testing](testing.md)
 
 ### Using Nexus from WebAssembly
 
 1. [Getting Started: WebAssembly](getting-started-wasm.md)
 2. [Language Bindings](language-bindings.md#webassembly)
-3. [Core Concepts](concepts.md)
-4. [Middleware Pipeline](middleware-pipeline.md)
-5. [Context Isolation](context-isolation.md)
-6. [Testing](testing.md)
+3. [Observability with OpenTelemetry](observability-with-opentelemetry.md)
+4. [Core Concepts](concepts.md)
+5. [Middleware Pipeline](middleware-pipeline.md)
+6. [Context Isolation](context-isolation.md)
+7. [Testing](testing.md)
 
 ### Using NexusProxy
 
@@ -76,6 +80,7 @@ Choose the path that matches what you are trying to do:
 | [Typed API Reference](typed-api-reference.md) | Function signatures and codec reference for `nat_nexus.typed` |
 | [Context Isolation](context-isolation.md) | Multi-tenant and concurrent scope stack management |
 | [ATIF Export](atif-export.md) | Agent Trajectory Interchange Format export |
+| [Observability with OpenTelemetry](observability-with-opentelemetry.md) | OTLP subscriber setup, event mapping, and per-language examples |
 | [Language Bindings](language-bindings.md) | Per-language usage guides and naming conventions |
 | [Getting Started: Python](getting-started-python.md) | Minimal install-to-first-tool-call path for Python |
 | [Getting Started: Node.js](getting-started-node.md) | Minimal install-to-first-tool-call path for Node.js |
