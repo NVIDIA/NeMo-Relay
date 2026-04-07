@@ -4,6 +4,7 @@
 use super::*;
 use serde_json::json;
 use std::sync::{Arc, Mutex, OnceLock};
+use uuid::Uuid;
 
 static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -246,4 +247,73 @@ fn test_error_wrappers_for_invalid_inputs() {
 
     let scope_err = scope_deregister_subscriber("not-a-uuid".into(), "sub".into()).unwrap_err();
     assert!(scope_err.to_string().contains("invalid UUID"));
+}
+
+#[test]
+fn test_parse_string_map_accepts_objects_and_rejects_invalid_shapes() {
+    let parsed = parse_string_map(
+        Some(json!({"authorization": "Bearer token", "env": "test"})),
+        "headers",
+    )
+    .unwrap();
+    assert_eq!(
+        parsed.get("authorization"),
+        Some(&"Bearer token".to_string())
+    );
+    assert_eq!(parsed.get("env"), Some(&"test".to_string()));
+
+    let err = parse_string_map(Some(json!(["bad"])), "headers").unwrap_err();
+    assert!(err.to_string().contains("headers must be an object"));
+
+    let err = parse_string_map(Some(json!({"env": 1})), "headers").unwrap_err();
+    assert!(err.to_string().contains("headers must be an object"));
+}
+
+#[test]
+fn test_open_telemetry_subscriber_rejects_invalid_config() {
+    let err = build_otel_config(Some(OpenTelemetryConfig {
+        transport: Some("invalid".into()),
+        ..Default::default()
+    }))
+    .unwrap_err();
+    assert!(err.to_string().contains("transport must be"));
+
+    let err = build_otel_config(Some(OpenTelemetryConfig {
+        headers: Some(json!({"authorization": 1})),
+        ..Default::default()
+    }))
+    .unwrap_err();
+    assert!(err.to_string().contains("headers must be an object"));
+
+    let err = build_otel_config(Some(OpenTelemetryConfig {
+        resource_attributes: Some(json!({"env": 1})),
+        ..Default::default()
+    }))
+    .unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("resourceAttributes must be an object"));
+}
+
+#[test]
+fn test_open_telemetry_subscriber_lifecycle_methods_work() {
+    let subscriber = JsOpenTelemetrySubscriber::new(Some(OpenTelemetryConfig {
+        endpoint: Some("http://localhost:4318/v1/traces".into()),
+        service_name: Some("node-agent".into()),
+        service_namespace: Some("agents".into()),
+        service_version: Some("1.0.0".into()),
+        instrumentation_scope: Some("node-tests".into()),
+        timeout_millis: Some(1250),
+        headers: Some(json!({"authorization": "Bearer token"})),
+        resource_attributes: Some(json!({"deployment.environment": "test"})),
+        ..Default::default()
+    }))
+    .unwrap();
+
+    let name = format!("node_otel_{}", Uuid::new_v4().simple());
+    subscriber.register(name.clone()).unwrap();
+    assert!(subscriber.deregister(name.clone()).unwrap());
+    assert!(!subscriber.deregister(name).unwrap());
+    subscriber.force_flush().unwrap();
+    subscriber.shutdown().unwrap();
 }

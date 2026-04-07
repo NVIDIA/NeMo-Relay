@@ -109,6 +109,7 @@ response, err := nat_nexus.LlmCallExecute(
 ## Next Docs
 
 - [Language Bindings](language-bindings.md#go)
+- [Observability with OpenTelemetry](observability-with-opentelemetry.md)
 - [Context Isolation](context-isolation.md)
 - [API Reference](api-reference.md)
 - [Testing](testing.md)

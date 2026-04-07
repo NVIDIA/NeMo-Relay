@@ -39,6 +39,7 @@ from __future__ import annotations
 import base64
 import dataclasses
 import importlib
+import inspect
 import json
 import pickle
 import typing
@@ -147,11 +148,11 @@ class PydanticCodec(Codec[T]):
 
     def to_json(self, value: T) -> Json:
         """Serialize a Pydantic model to a JSON-serializable dict via ``model_dump()``."""
-        return value.model_dump()  # type: ignore[union-attr]
+        return typing.cast(Any, value).model_dump()
 
     def from_json(self, data: Json) -> T:
         """Deserialize a dict into a Pydantic model via ``model_validate()``."""
-        return self._cls.model_validate(data)  # type: ignore[attr-defined]
+        return typing.cast(Any, self._cls).model_validate(data)
 
 
 class DataclassCodec(Codec[T]):
@@ -169,7 +170,7 @@ class DataclassCodec(Codec[T]):
 
     def to_json(self, value: T) -> Json:
         """Serialize a dataclass instance to a dict via ``dataclasses.asdict()``."""
-        return dataclasses.asdict(value)  # type: ignore[arg-type]
+        return dataclasses.asdict(typing.cast(Any, value))
 
     def from_json(self, data: Json) -> T:
         """Deserialize a dict into a dataclass instance via ``cls(**data)``."""
@@ -351,8 +352,8 @@ async def tool_execute(
     async def _json_func(json_args_inner: Json) -> Json:
         typed_args = args_codec.from_json(json_args_inner)
         result: TResult | Awaitable[TResult] = func(typed_args)
-        if isinstance(result, Awaitable):
-            result = await result  # type: ignore[assignment]
+        if inspect.isawaitable(result):
+            return result_codec.to_json(await typing.cast(Awaitable[TResult], result))
         return result_codec.to_json(typing.cast(TResult, result))
 
     json_result = await tools.execute(
@@ -431,8 +432,8 @@ async def llm_execute(
 
     async def _json_func(request_inner: LLMRequest) -> Json:
         result: TResponse | Awaitable[TResponse] = func(request_inner)
-        if isinstance(result, Awaitable):
-            result = await result  # type: ignore[assignment]
+        if inspect.isawaitable(result):
+            return response_codec.to_json(await typing.cast(Awaitable[TResponse], result))
         return response_codec.to_json(typing.cast(TResponse, result))
 
     json_result = await llm.execute(

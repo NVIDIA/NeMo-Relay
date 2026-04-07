@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
+import { startCollector } from '../../../scripts/otel_test_utils.mjs';
 
 const require = createRequire(import.meta.url);
 // These tests intentionally exercise only the public generated package API.
@@ -126,6 +127,68 @@ test('scope stack and lifecycle wrappers work from the generated Node package', 
   root.free();
   scope.free();
   stack.free();
+});
+
+test('WASM package exposes OpenTelemetry config defaults and subscriber lifecycle', () => {
+  const config = wasm.defaultOpenTelemetryConfig();
+  assert.equal(config.transport, 'http_binary');
+  assert.equal(config.endpoint, undefined);
+  assert.equal(config.service_name, 'nat-nexus');
+  assert.equal(config.instrumentation_scope, 'nvidia-nat-nexus-otel');
+  assert.equal(config.timeout_millis, 3000);
+  assert.equal(config.headers instanceof Map, true);
+  assert.equal(config.headers.size, 0);
+  assert.equal(config.resource_attributes instanceof Map, true);
+  assert.equal(config.resource_attributes.size, 0);
+
+  config.endpoint = 'http://localhost:4318/v1/traces';
+  config.service_name = 'wasm-agent';
+  config.service_namespace = 'agents';
+  config.service_version = '1.0.0';
+  config.instrumentation_scope = 'wasm-tests';
+  config.timeout_millis = 1250;
+  config.headers = { authorization: 'Bearer token' };
+  config.resource_attributes = { 'deployment.environment': 'test' };
+
+  assert.throws(
+    () => new wasm.OpenTelemetrySubscriber({ transport: 'grpc' }),
+    /not supported on this target/i,
+  );
+  assert.throws(
+    () => new wasm.OpenTelemetrySubscriber({ transport: 'invalid' }),
+    /transport must be/i,
+  );
+  assert.throws(
+    () => new wasm.OpenTelemetrySubscriber({ headers: { authorization: 1 } }),
+    /invalid type/i,
+  );
+});
+
+test('WASM package exports scope push/pop and mark events end to end', async () => {
+  const collector = await startCollector();
+  const config = wasm.defaultOpenTelemetryConfig();
+  config.endpoint = collector.endpoint;
+  config.service_name = 'wasm-agent';
+
+  const subscriber = new wasm.OpenTelemetrySubscriber(config);
+  const name = unique('wasm_otel');
+  subscriber.register(name);
+
+  try {
+    const scope = wasm.pushScope('otel_scope', 0, null, 0, { scope: true }, null);
+    wasm.event('otel_mark', scope, { step: 1 }, { source: 'wasm' });
+    wasm.popScope(wasm.getHandle());
+
+    subscriber.forceFlush();
+    const request = await collector.nextRequest();
+    assert.equal(request.url, '/v1/traces');
+    assert.equal(request.headers['content-type'], 'application/x-protobuf');
+    assert.ok(request.body.length > 0);
+  } finally {
+    subscriber.deregister(name);
+    subscriber.shutdown();
+    await collector.close();
+  }
 });
 
 test('WASM JS wrappers cover nullable inputs, getters, and throw paths', async () => {

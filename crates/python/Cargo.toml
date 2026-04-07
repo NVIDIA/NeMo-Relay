@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 nvidia-nat-nexus-core = { path = "../core" }
+nvidia-nat-nexus-otel = { path = "../otel" }
 nvidia-nat-nexus-proxy = { path = "../proxy", features = ["redis-backend"] }
 pyo3 = { version = "0.28.2", features = ["abi3", "abi3-py311", "macros"] }
 pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }

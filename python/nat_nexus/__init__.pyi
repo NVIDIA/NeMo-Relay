@@ -378,6 +378,50 @@ class AtifExporter:
         """Clear all collected events."""
         ...
 
+class OpenTelemetryConfig:
+    """Mutable configuration for ``OpenTelemetrySubscriber``."""
+
+    transport: str
+    endpoint: Optional[str]
+    service_name: str
+    service_namespace: Optional[str]
+    service_version: Optional[str]
+    instrumentation_scope: str
+    timeout_millis: int
+
+    def __init__(self) -> None: ...
+    @property
+    def headers(self) -> dict[str, str]:
+        """Additional OTLP exporter headers/metadata."""
+        ...
+    @headers.setter
+    def headers(self, value: dict[str, str]) -> None: ...
+    @property
+    def resource_attributes(self) -> dict[str, str]:
+        """Additional OpenTelemetry resource attributes."""
+        ...
+    @resource_attributes.setter
+    def resource_attributes(self, value: dict[str, str]) -> None: ...
+    def set_header(self, key: str, value: str) -> None: ...
+    def set_resource_attribute(self, key: str, value: str) -> None: ...
+
+class OpenTelemetrySubscriber:
+    """OpenTelemetry-backed Nexus event subscriber."""
+
+    def __init__(self, config: OpenTelemetryConfig) -> None: ...
+    def register(self, name: str) -> None:
+        """Register this subscriber globally with the given name."""
+        ...
+    def deregister(self, name: str) -> bool:
+        """Deregister the subscriber. Returns ``True`` if found."""
+        ...
+    def force_flush(self) -> None:
+        """Force a flush of finished spans through the exporter."""
+        ...
+    def shutdown(self) -> None:
+        """Shut down the underlying tracer provider."""
+        ...
+
 class ScopeStack:
     """An isolated scope stack for per-request/per-task isolation.
 

@@ -59,7 +59,8 @@ Types (available at top level):
     ScopeAttributes, ToolAttributes, LLMAttributes,
     ScopeType, EventType,
     ScopeHandle, ToolHandle, LLMHandle,
-    LLMRequest, Event, AtifExporter
+    LLMRequest, Event, AtifExporter,
+    OpenTelemetryConfig, OpenTelemetrySubscriber
 """
 
 import contextvars
@@ -73,6 +74,8 @@ from nat_nexus._native import (
     LLMAttributes,
     LLMHandle,
     LLMRequest,
+    OpenTelemetryConfig,
+    OpenTelemetrySubscriber,
     # Types (always at top level)
     ScopeAttributes,
     ScopeHandle,
@@ -204,4 +207,6 @@ __all__ = [
     "LLMRequest",
     "Event",
     "AtifExporter",
+    "OpenTelemetryConfig",
+    "OpenTelemetrySubscriber",
 ]

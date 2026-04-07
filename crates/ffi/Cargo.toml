@@ -12,6 +12,7 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 nvidia-nat-nexus-core = { path = "../core" }
+nvidia-nat-nexus-otel = { path = "../otel" }
 libc = "0.2"
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }

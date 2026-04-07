@@ -86,12 +86,24 @@ from nat_nexus._native import (
 Json = Any
 """Type alias for JSON-serializable Python objects (dicts, lists, strings, numbers, etc.)."""
 
+ToolRequestIntercept = Callable[[str, Json], Json]
+ToolExecutionIntercept = Callable[[str, Json, Callable[[Json], Awaitable[Json]]], Json | Awaitable[Json]]
+LlmRequestIntercept = Callable[[str, LLMRequest], LLMRequest]
+LlmExecutionIntercept = Callable[
+    [str, LLMRequest, Callable[[LLMRequest], Awaitable[Json]]],
+    Json | Awaitable[Json],
+]
+LlmStreamExecutionIntercept = Callable[
+    [LLMRequest, Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]]],
+    AsyncIterator[Json] | Awaitable[AsyncIterator[Json]],
+]
+
 # ---------------------------------------------------------------------------
 # Tool intercepts
 # ---------------------------------------------------------------------------
 
 
-def register_tool_request(name: str, priority: int, break_chain: bool, fn: Callable[[str, Json], Json]) -> None:
+def register_tool_request(name: str, priority: int, break_chain: bool, fn: ToolRequestIntercept) -> None:
     """Register a tool request intercept.
 
     The intercept callback receives the tool name and arguments and returns
@@ -122,9 +134,7 @@ def deregister_tool_request(name: str) -> bool:
     return _native_deregister_tool_request(name)
 
 
-def register_tool_execution(
-    name: str, priority: int, fn: Callable[[str, Json, Callable[[Json], Awaitable[Json]]], Awaitable[Json]]
-) -> None:
+def register_tool_execution(name: str, priority: int, fn: ToolExecutionIntercept) -> None:
     """Register a tool execution intercept (middleware chain pattern).
 
     The intercept receives the tool name, arguments, and a ``next`` function.
@@ -160,9 +170,7 @@ def deregister_tool_execution(name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def register_llm_request(
-    name: str, priority: int, break_chain: bool, fn: Callable[[str, LLMRequest], LLMRequest]
-) -> None:
+def register_llm_request(name: str, priority: int, break_chain: bool, fn: LlmRequestIntercept) -> None:
     """Register an LLM request intercept.
 
     The intercept callback receives the intercept name and ``LLMRequest`` and
@@ -194,9 +202,7 @@ def deregister_llm_request(name: str) -> bool:
     return _native_deregister_llm_request(name)
 
 
-def register_llm_execution(
-    name: str, priority: int, fn: Callable[[str, LLMRequest, Callable[[LLMRequest], Awaitable[Json]]], Awaitable[Json]]
-) -> None:
+def register_llm_execution(name: str, priority: int, fn: LlmExecutionIntercept) -> None:
     """Register an LLM execution intercept (middleware chain pattern).
 
     The intercept receives the intercept name, ``LLMRequest``, and a ``next``
@@ -231,7 +237,7 @@ def deregister_llm_execution(name: str) -> bool:
 def register_llm_stream_execution(
     name: str,
     priority: int,
-    fn: Callable[[LLMRequest, Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]]], Awaitable[AsyncIterator[Json]]],
+    fn: LlmStreamExecutionIntercept,
 ) -> None:
     """Register an LLM stream-execution intercept (middleware chain pattern).
 
@@ -266,6 +272,12 @@ def deregister_llm_stream_execution(name: str) -> bool:
 
 
 __all__ = [
+    "Json",
+    "ToolRequestIntercept",
+    "ToolExecutionIntercept",
+    "LlmRequestIntercept",
+    "LlmExecutionIntercept",
+    "LlmStreamExecutionIntercept",
     "register_tool_request",
     "deregister_tool_request",
     "register_tool_execution",

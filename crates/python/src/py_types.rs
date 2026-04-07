@@ -7,12 +7,35 @@
 //! properties via `#[getter]`. Doc comments on `#[pyclass]` and `#[pymethods]`
 //! become Python `help()` output.
 
+use std::collections::HashMap;
+use std::time::Duration;
+
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use nvidia_nat_nexus_core::types as core_types;
 
 use crate::convert::{json_to_py, opt_json_to_py, py_to_json};
+
+fn py_string_map(obj: &Bound<'_, PyAny>, field_name: &str) -> PyResult<HashMap<String, String>> {
+    let json = py_to_json(obj)?;
+    let serde_json::Value::Object(map) = json else {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "{field_name} must be a dict[str, str]"
+        )));
+    };
+
+    let mut out = HashMap::with_capacity(map.len());
+    for (key, value) in map {
+        let serde_json::Value::String(value) = value else {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "{field_name} must be a dict[str, str]"
+            )));
+        };
+        out.insert(key, value);
+    }
+    Ok(out)
+}
 
 // ---------------------------------------------------------------------------
 // LlmStream (async iterator)
@@ -867,6 +890,185 @@ impl PyAtifExporter {
 }
 
 // ---------------------------------------------------------------------------
+// OpenTelemetry subscriber
+// ---------------------------------------------------------------------------
+
+/// Mutable configuration object for the OpenTelemetry subscriber.
+///
+/// Create the config, update fields as needed, then pass it to
+/// ``OpenTelemetrySubscriber(config)``.
+///
+/// Example::
+///
+///     config = OpenTelemetryConfig()
+///     config.endpoint = "http://localhost:4318/v1/traces"
+///     config.service_name = "demo-agent"
+///     config.headers = {"authorization": "Bearer token"}
+#[pyclass(name = "OpenTelemetryConfig")]
+pub struct PyOpenTelemetryConfig {
+    #[pyo3(get, set)]
+    transport: String,
+    #[pyo3(get, set)]
+    endpoint: Option<String>,
+    #[pyo3(get, set)]
+    service_name: String,
+    #[pyo3(get, set)]
+    service_namespace: Option<String>,
+    #[pyo3(get, set)]
+    service_version: Option<String>,
+    #[pyo3(get, set)]
+    instrumentation_scope: String,
+    #[pyo3(get, set)]
+    timeout_millis: u64,
+    headers: HashMap<String, String>,
+    resource_attributes: HashMap<String, String>,
+}
+
+impl PyOpenTelemetryConfig {
+    fn to_rust_config(&self) -> PyResult<nvidia_nat_nexus_otel::OpenTelemetryConfig> {
+        let mut config = match self.transport.as_str() {
+            "http_binary" => {
+                nvidia_nat_nexus_otel::OpenTelemetryConfig::http_binary(self.service_name.clone())
+            }
+            "grpc" => nvidia_nat_nexus_otel::OpenTelemetryConfig::grpc(self.service_name.clone()),
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "transport must be 'http_binary' or 'grpc', got {other:?}"
+                )));
+            }
+        }
+        .with_instrumentation_scope(self.instrumentation_scope.clone())
+        .with_timeout(Duration::from_millis(self.timeout_millis));
+
+        if let Some(endpoint) = &self.endpoint {
+            config = config.with_endpoint(endpoint.clone());
+        }
+        if let Some(namespace) = &self.service_namespace {
+            config = config.with_service_namespace(namespace.clone());
+        }
+        if let Some(version) = &self.service_version {
+            config = config.with_service_version(version.clone());
+        }
+        for (key, value) in &self.headers {
+            config = config.with_header(key.clone(), value.clone());
+        }
+        for (key, value) in &self.resource_attributes {
+            config = config.with_resource_attribute(key.clone(), value.clone());
+        }
+        Ok(config)
+    }
+}
+
+#[pymethods]
+impl PyOpenTelemetryConfig {
+    #[new]
+    fn new() -> Self {
+        Self {
+            transport: "http_binary".to_string(),
+            endpoint: None,
+            service_name: "nat-nexus".to_string(),
+            service_namespace: None,
+            service_version: None,
+            instrumentation_scope: "nvidia-nat-nexus-otel".to_string(),
+            timeout_millis: 3_000,
+            headers: HashMap::new(),
+            resource_attributes: HashMap::new(),
+        }
+    }
+
+    #[getter]
+    fn headers(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(py, &serde_json::to_value(&self.headers).unwrap_or_default())
+    }
+
+    #[setter]
+    fn set_headers(&mut self, headers: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.headers = py_string_map(headers, "headers")?;
+        Ok(())
+    }
+
+    #[getter]
+    fn resource_attributes(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.resource_attributes).unwrap_or_default(),
+        )
+    }
+
+    #[setter]
+    fn set_resource_attributes(&mut self, resource_attributes: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.resource_attributes = py_string_map(resource_attributes, "resource_attributes")?;
+        Ok(())
+    }
+
+    fn set_header(&mut self, key: String, value: String) {
+        self.headers.insert(key, value);
+    }
+
+    fn set_resource_attribute(&mut self, key: String, value: String) {
+        self.resource_attributes.insert(key, value);
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<OpenTelemetryConfig transport={:?} endpoint={:?}>",
+            self.transport, self.endpoint
+        )
+    }
+}
+
+/// OpenTelemetry-backed event subscriber.
+///
+/// Construct it from an ``OpenTelemetryConfig``, register it with a subscriber
+/// name, then call ``force_flush()`` or ``shutdown()`` when appropriate.
+#[pyclass(name = "OpenTelemetrySubscriber")]
+pub struct PyOpenTelemetrySubscriber {
+    inner: nvidia_nat_nexus_otel::OpenTelemetrySubscriber,
+}
+
+#[pymethods]
+impl PyOpenTelemetrySubscriber {
+    #[new]
+    fn new(config: PyRef<'_, PyOpenTelemetryConfig>) -> PyResult<Self> {
+        let inner = nvidia_nat_nexus_otel::OpenTelemetrySubscriber::new(config.to_rust_config()?)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Register this subscriber globally with the given name.
+    fn register(&self, name: String) -> PyResult<()> {
+        self.inner
+            .register(&name)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Deregister a subscriber by name. Returns ``True`` if found.
+    fn deregister(&self, name: String) -> PyResult<bool> {
+        self.inner
+            .deregister(&name)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Force a flush of finished spans through the exporter.
+    fn force_flush(&self) -> PyResult<()> {
+        self.inner
+            .force_flush()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Shut down the underlying tracer provider.
+    fn shutdown(&self) -> PyResult<()> {
+        self.inner
+            .shutdown()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn __repr__(&self) -> String {
+        "<OpenTelemetrySubscriber>".to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -884,6 +1086,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLLMRequest>()?;
     m.add_class::<PyEvent>()?;
     m.add_class::<PyAtifExporter>()?;
+    m.add_class::<PyOpenTelemetryConfig>()?;
+    m.add_class::<PyOpenTelemetrySubscriber>()?;
     Ok(())
 }
 

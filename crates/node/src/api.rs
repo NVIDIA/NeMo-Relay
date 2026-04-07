@@ -31,6 +31,76 @@ use crate::convert::{
 use crate::stream::LlmStream;
 use crate::types::*;
 
+fn parse_string_map(
+    value: Option<Json>,
+    field_name: &str,
+) -> napi::Result<HashMap<String, String>> {
+    let Some(value) = value else {
+        return Ok(HashMap::new());
+    };
+    let Json::Object(map) = value else {
+        return Err(napi::Error::from_reason(format!(
+            "{field_name} must be an object of string values",
+        )));
+    };
+    let mut out = HashMap::with_capacity(map.len());
+    for (key, value) in map {
+        let Json::String(value) = value else {
+            return Err(napi::Error::from_reason(format!(
+                "{field_name} must be an object of string values",
+            )));
+        };
+        out.insert(key, value);
+    }
+    Ok(out)
+}
+
+fn build_otel_config(
+    options: Option<OpenTelemetryConfig>,
+) -> napi::Result<nvidia_nat_nexus_otel::OpenTelemetryConfig> {
+    let options = options.unwrap_or_default();
+    let transport = options
+        .transport
+        .unwrap_or_else(|| "http_binary".to_string());
+    let service_name = options
+        .service_name
+        .unwrap_or_else(|| "nat-nexus".to_string());
+    let instrumentation_scope = options
+        .instrumentation_scope
+        .unwrap_or_else(|| "nvidia-nat-nexus-otel".to_string());
+    let timeout_millis = options.timeout_millis.unwrap_or(3_000);
+
+    let mut config = match transport.as_str() {
+        "http_binary" => nvidia_nat_nexus_otel::OpenTelemetryConfig::http_binary(service_name),
+        "grpc" => nvidia_nat_nexus_otel::OpenTelemetryConfig::grpc(service_name),
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "transport must be 'http_binary' or 'grpc', got {other:?}",
+            )));
+        }
+    }
+    .with_instrumentation_scope(instrumentation_scope)
+    .with_timeout(std::time::Duration::from_millis(timeout_millis.into()));
+
+    if let Some(endpoint) = options.endpoint {
+        config = config.with_endpoint(endpoint);
+    }
+    if let Some(namespace) = options.service_namespace {
+        config = config.with_service_namespace(namespace);
+    }
+    if let Some(version) = options.service_version {
+        config = config.with_service_version(version);
+    }
+    for (key, value) in parse_string_map(options.headers, "headers")? {
+        config = config.with_header(key, value);
+    }
+    for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
+        config = config.with_resource_attribute(key, value);
+    }
+
+    Ok(config)
+}
+
 // ---------------------------------------------------------------------------
 // Stream channel registry — enables JS async generators to push chunks to Rust
 // ---------------------------------------------------------------------------
@@ -1866,5 +1936,78 @@ impl JsAtifExporter {
     #[napi]
     pub fn clear(&self) {
         self.inner.clear();
+    }
+}
+
+/// Mutable configuration object for `OpenTelemetrySubscriber`.
+#[napi(object)]
+#[derive(Default)]
+pub struct OpenTelemetryConfig {
+    /// `"http_binary"` (default) or `"grpc"`.
+    pub transport: Option<String>,
+    /// OTLP endpoint, such as `http://localhost:4318/v1/traces`.
+    pub endpoint: Option<String>,
+    /// Extra exporter headers/metadata as string key/value pairs.
+    pub headers: Option<Json>,
+    /// Extra OpenTelemetry resource attributes as string key/value pairs.
+    pub resource_attributes: Option<Json>,
+    /// `service.name` resource attribute. Defaults to `"nat-nexus"`.
+    pub service_name: Option<String>,
+    /// Optional `service.namespace` resource attribute.
+    pub service_namespace: Option<String>,
+    /// Optional `service.version` resource attribute.
+    pub service_version: Option<String>,
+    /// Instrumentation scope name. Defaults to `"nvidia-nat-nexus-otel"`.
+    pub instrumentation_scope: Option<String>,
+    /// Export timeout in milliseconds. Defaults to `3000`.
+    pub timeout_millis: Option<u32>,
+}
+
+/// OpenTelemetry-backed event subscriber.
+#[napi(js_name = "OpenTelemetrySubscriber")]
+pub struct JsOpenTelemetrySubscriber {
+    inner: nvidia_nat_nexus_otel::OpenTelemetrySubscriber,
+}
+
+#[napi]
+impl JsOpenTelemetrySubscriber {
+    /// Create a new OpenTelemetry subscriber from a config object.
+    #[napi(constructor)]
+    pub fn new(config: Option<OpenTelemetryConfig>) -> napi::Result<Self> {
+        let inner = nvidia_nat_nexus_otel::OpenTelemetrySubscriber::new(build_otel_config(config)?)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Register this subscriber globally with the given name.
+    #[napi]
+    pub fn register(&self, name: String) -> napi::Result<()> {
+        self.inner
+            .register(&name)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Deregister a subscriber by name.
+    #[napi]
+    pub fn deregister(&self, name: String) -> napi::Result<bool> {
+        self.inner
+            .deregister(&name)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Force a flush of finished spans through the exporter.
+    #[napi]
+    pub fn force_flush(&self) -> napi::Result<()> {
+        self.inner
+            .force_flush()
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Shut down the underlying tracer provider.
+    #[napi]
+    pub fn shutdown(&self) -> napi::Result<()> {
+        self.inner
+            .shutdown()
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }

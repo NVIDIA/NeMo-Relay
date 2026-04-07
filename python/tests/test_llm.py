@@ -3,6 +3,8 @@
 
 """Tests for NeMo Agent Toolkit Nexus LLM lifecycle, guardrails, intercepts, and streaming."""
 
+from typing import cast
+
 import pytest
 from nat_nexus import (
     EventType,
@@ -195,7 +197,11 @@ class TestLLMGuardrails:
     def test_sanitize_response_invalid_return_falls_back_to_original_output(self):
         events = []
         subscribers.register("py_llm_sanitize_resp_bad_sub", lambda event: events.append(event))
-        guardrails.register_llm_sanitize_response("py_llm_sanitize_resp_bad", 1, lambda response: object())
+        guardrails.register_llm_sanitize_response(
+            "py_llm_sanitize_resp_bad",
+            1,
+            cast(guardrails.LlmSanitizeResponseGuardrail, lambda response: object()),
+        )
         try:
             handle = llm.call("llm_sanitize_resp_bad", make_request())
             llm.call_end(handle, {"ok": True})
@@ -214,7 +220,11 @@ class TestLLMGuardrails:
         assert not guardrails.deregister_llm_conditional_execution("nope")
 
     def test_conditional_execution_invalid_return_type_raises(self):
-        guardrails.register_llm_conditional_execution("py_llm_cond_bad_type", 1, lambda request: 123)
+        guardrails.register_llm_conditional_execution(
+            "py_llm_cond_bad_type",
+            1,
+            cast(guardrails.LlmConditionalExecutionGuardrail, lambda request: 123),
+        )
         try:
             with pytest.raises(RuntimeError, match="expected str or None"):
                 llm.conditional_execution(make_request())
@@ -509,7 +519,11 @@ class TestLLMStreaming:
             await anext(stream)
 
     async def test_stream_execution_intercept_rejects_invalid_iterator(self):
-        intercepts.register_llm_stream_execution("py_llm_stream_bad_iter", 1, lambda request, next: object())
+        intercepts.register_llm_stream_execution(
+            "py_llm_stream_bad_iter",
+            1,
+            cast(intercepts.LlmStreamExecutionIntercept, lambda request, next: object()),
+        )
         try:
             stream = await llm.stream_execute(
                 "stream_intercept_invalid_iter_llm",

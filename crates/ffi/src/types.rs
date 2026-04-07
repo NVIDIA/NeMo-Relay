@@ -36,6 +36,8 @@ pub struct FfiEvent(pub core_types::Event);
 pub struct FfiScopeStack(pub nvidia_nat_nexus_core::ScopeStackHandle);
 /// Opaque ATIF exporter handle.
 pub struct FfiAtifExporter(pub nvidia_nat_nexus_core::atif::AtifExporter);
+/// Opaque OpenTelemetry subscriber handle.
+pub struct FfiOpenTelemetrySubscriber(pub nvidia_nat_nexus_otel::OpenTelemetrySubscriber);
 
 // ---------------------------------------------------------------------------
 // Enums exposed to C
@@ -203,6 +205,18 @@ pub unsafe extern "C" fn nat_nexus_scope_stack_free(ptr: *mut FfiScopeStack) {
 /// `ptr` must be a valid pointer returned by `nat_nexus_atif_exporter_create`, or null.
 #[no_mangle]
 pub unsafe extern "C" fn nat_nexus_atif_exporter_free(ptr: *mut FfiAtifExporter) {
+    if !ptr.is_null() {
+        drop(unsafe { Box::from_raw(ptr) });
+    }
+}
+
+/// Free an OpenTelemetry subscriber handle previously returned by
+/// `nat_nexus_otel_subscriber_create`.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `nat_nexus_otel_subscriber_create`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_otel_subscriber_free(ptr: *mut FfiOpenTelemetrySubscriber) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }

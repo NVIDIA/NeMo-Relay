@@ -121,6 +121,7 @@ main().catch((error) => {
 ## Next Docs
 
 - [Language Bindings](language-bindings.md#webassembly)
+- [Observability with OpenTelemetry](observability-with-opentelemetry.md)
 - [Middleware Pipeline](middleware-pipeline.md)
 - [Context Isolation](context-isolation.md)
 - [Testing](testing.md)
