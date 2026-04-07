@@ -5,6 +5,7 @@ package nat_nexus
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -122,6 +123,21 @@ func TestNewLLMRequestRoundTrip(t *testing.T) {
 	}
 	if content["model"] != "test-model" {
 		t.Fatalf("expected model=test-model, got %v", content)
+	}
+}
+
+func TestWrapperHelpersCoverNilAndErrorPaths(t *testing.T) {
+	if got := goString(nil); got != "" {
+		t.Fatalf("expected empty string for nil goString, got %q", got)
+	}
+	if got := goStringOpt(nil); got != "" {
+		t.Fatalf("expected empty string for nil goStringOpt, got %q", got)
+	}
+	if got := goJSONOpt(nil); got != nil {
+		t.Fatalf("expected nil json for nil goJSONOpt, got %v", got)
+	}
+	if err := lastError(); err == nil || !strings.Contains(err.Error(), "unknown nat_nexus error") {
+		t.Fatalf("expected unknown nat_nexus error fallback, got %v", err)
 	}
 }
 

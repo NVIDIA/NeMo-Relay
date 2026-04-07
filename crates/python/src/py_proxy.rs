@@ -789,3 +789,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_latency_sensitivity, m)?)?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "py_proxy_coverage_tests.rs"]
+mod coverage_tests;

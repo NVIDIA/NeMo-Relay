@@ -10,9 +10,10 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use pyo3::prelude::*;
+use pyo3_async_runtimes::TaskLocals;
 
 use nvidia_nat_nexus_proxy::error::{ProxyError, Result};
 use nvidia_nat_nexus_proxy::storage::StorageBackendDyn;
@@ -21,6 +22,8 @@ use nvidia_nat_nexus_proxy::trie::AccumulatorState;
 use nvidia_nat_nexus_proxy::types::{ExecutionPlan, RunRecord};
 
 use crate::convert::{json_to_py, py_to_json};
+
+type PyAsyncResult = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
 
 /// Wraps a Python object implementing `StorageBackendProtocol` and bridges
 /// it to the Rust `StorageBackendDyn` trait. Each method acquires the GIL,
@@ -31,6 +34,9 @@ pub struct PyStorageBackend {
     /// Arc-wrapped so we can cheaply clone into each async block without
     /// needing the GIL for `Py::clone_ref`.
     inner: Arc<Py<PyAny>>,
+    /// Lazily captured from the first Python async call that runs inside an
+    /// event loop so later background tasks can still await Python coroutines.
+    task_locals: Arc<Mutex<Option<TaskLocals>>>,
 }
 
 // `Arc<Py<PyAny>>` is Send + Sync. Py<PyAny> is Send. All access goes
@@ -43,6 +49,44 @@ impl PyStorageBackend {
     pub fn new(obj: Py<PyAny>) -> Self {
         Self {
             inner: Arc::new(obj),
+            task_locals: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn get_or_capture_task_locals(
+        task_locals: &Mutex<Option<TaskLocals>>,
+        py: Python<'_>,
+    ) -> Result<Option<TaskLocals>> {
+        let mut guard = task_locals
+            .lock()
+            .map_err(|e| ProxyError::Internal(format!("task locals lock poisoned: {e}")))?;
+
+        if let Some(locals) = guard.as_ref() {
+            return Ok(Some(locals.clone()));
+        }
+
+        match pyo3_async_runtimes::tokio::get_current_locals(py) {
+            Ok(locals) => {
+                *guard = Some(locals.clone());
+                Ok(Some(locals))
+            }
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn into_python_future(
+        task_locals: &Mutex<Option<TaskLocals>>,
+        py: Python<'_>,
+        coro: Bound<'_, PyAny>,
+    ) -> Result<PyAsyncResult> {
+        if let Some(locals) = Self::get_or_capture_task_locals(task_locals, py)? {
+            let fut = pyo3_async_runtimes::into_future_with_locals(&locals, coro)
+                .map_err(|e| ProxyError::Internal(format!("into_future_with_locals: {e}")))?;
+            Ok(Box::pin(fut))
+        } else {
+            let fut = pyo3_async_runtimes::tokio::into_future(coro)
+                .map_err(|e| ProxyError::Internal(format!("into_future: {e}")))?;
+            Ok(Box::pin(fut))
         }
     }
 }
@@ -53,6 +97,7 @@ impl StorageBackendDyn for PyStorageBackend {
         record: &'a RunRecord,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let inner = self.inner.clone();
+        let task_locals = self.task_locals.clone();
         let record_json = serde_json::to_value(record)
             .map_err(|e| ProxyError::Internal(format!("serialize RunRecord: {e}")));
         Box::pin(async move {
@@ -63,8 +108,7 @@ impl StorageBackendDyn for PyStorageBackend {
                 let coro = inner
                     .call_method1(py, "store_run", (dict,))
                     .map_err(|e| ProxyError::Internal(format!("call store_run: {e}")))?;
-                pyo3_async_runtimes::tokio::into_future(coro.into_bound(py))
-                    .map_err(|e| ProxyError::Internal(format!("into_future: {e}")))
+                Self::into_python_future(task_locals.as_ref(), py, coro.into_bound(py))
             })?;
             fut.await
                 .map_err(|e| ProxyError::Internal(format!("Python store_run: {e}")))?;
@@ -77,14 +121,14 @@ impl StorageBackendDyn for PyStorageBackend {
         agent_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<ExecutionPlan>>> + Send + 'a>> {
         let inner = self.inner.clone();
+        let task_locals = self.task_locals.clone();
         let agent_id = agent_id.to_string();
         Box::pin(async move {
             let fut = Python::attach(|py| -> std::result::Result<_, ProxyError> {
                 let coro = inner
                     .call_method1(py, "load_plan", (agent_id.as_str(),))
                     .map_err(|e| ProxyError::Internal(format!("call load_plan: {e}")))?;
-                pyo3_async_runtimes::tokio::into_future(coro.into_bound(py))
-                    .map_err(|e| ProxyError::Internal(format!("into_future: {e}")))
+                Self::into_python_future(task_locals.as_ref(), py, coro.into_bound(py))
             })?;
             let result = fut
                 .await
@@ -108,14 +152,14 @@ impl StorageBackendDyn for PyStorageBackend {
         agent_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<RunRecord>>> + Send + 'a>> {
         let inner = self.inner.clone();
+        let task_locals = self.task_locals.clone();
         let agent_id = agent_id.to_string();
         Box::pin(async move {
             let fut = Python::attach(|py| -> std::result::Result<_, ProxyError> {
                 let coro = inner
                     .call_method1(py, "list_runs", (agent_id.as_str(),))
                     .map_err(|e| ProxyError::Internal(format!("call list_runs: {e}")))?;
-                pyo3_async_runtimes::tokio::into_future(coro.into_bound(py))
-                    .map_err(|e| ProxyError::Internal(format!("into_future: {e}")))
+                Self::into_python_future(task_locals.as_ref(), py, coro.into_bound(py))
             })?;
             let result = fut
                 .await
@@ -138,6 +182,7 @@ impl StorageBackendDyn for PyStorageBackend {
         envelope: &'a TrieEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let inner = self.inner.clone();
+        let task_locals = self.task_locals.clone();
         let agent_id = agent_id.to_string();
         let envelope_json = serde_json::to_value(envelope)
             .map_err(|e| ProxyError::Internal(format!("serialize TrieEnvelope: {e}")));
@@ -149,8 +194,7 @@ impl StorageBackendDyn for PyStorageBackend {
                 let coro = inner
                     .call_method1(py, "store_trie", (agent_id.as_str(), dict))
                     .map_err(|e| ProxyError::Internal(format!("call store_trie: {e}")))?;
-                pyo3_async_runtimes::tokio::into_future(coro.into_bound(py))
-                    .map_err(|e| ProxyError::Internal(format!("into_future: {e}")))
+                Self::into_python_future(task_locals.as_ref(), py, coro.into_bound(py))
             })?;
             fut.await
                 .map_err(|e| ProxyError::Internal(format!("Python store_trie: {e}")))?;
@@ -163,14 +207,14 @@ impl StorageBackendDyn for PyStorageBackend {
         agent_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<TrieEnvelope>>> + Send + 'a>> {
         let inner = self.inner.clone();
+        let task_locals = self.task_locals.clone();
         let agent_id = agent_id.to_string();
         Box::pin(async move {
             let fut = Python::attach(|py| -> std::result::Result<_, ProxyError> {
                 let coro = inner
                     .call_method1(py, "load_trie", (agent_id.as_str(),))
                     .map_err(|e| ProxyError::Internal(format!("call load_trie: {e}")))?;
-                pyo3_async_runtimes::tokio::into_future(coro.into_bound(py))
-                    .map_err(|e| ProxyError::Internal(format!("into_future: {e}")))
+                Self::into_python_future(task_locals.as_ref(), py, coro.into_bound(py))
             })?;
             let result = fut
                 .await
@@ -195,6 +239,7 @@ impl StorageBackendDyn for PyStorageBackend {
         state: &'a AccumulatorState,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let inner = self.inner.clone();
+        let task_locals = self.task_locals.clone();
         let agent_id = agent_id.to_string();
         let state_json = serde_json::to_value(state)
             .map_err(|e| ProxyError::Internal(format!("serialize AccumulatorState: {e}")));
@@ -206,8 +251,7 @@ impl StorageBackendDyn for PyStorageBackend {
                 let coro = inner
                     .call_method1(py, "store_accumulators", (agent_id.as_str(), dict))
                     .map_err(|e| ProxyError::Internal(format!("call store_accumulators: {e}")))?;
-                pyo3_async_runtimes::tokio::into_future(coro.into_bound(py))
-                    .map_err(|e| ProxyError::Internal(format!("into_future: {e}")))
+                Self::into_python_future(task_locals.as_ref(), py, coro.into_bound(py))
             })?;
             fut.await
                 .map_err(|e| ProxyError::Internal(format!("Python store_accumulators: {e}")))?;
@@ -220,14 +264,14 @@ impl StorageBackendDyn for PyStorageBackend {
         agent_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<AccumulatorState>>> + Send + 'a>> {
         let inner = self.inner.clone();
+        let task_locals = self.task_locals.clone();
         let agent_id = agent_id.to_string();
         Box::pin(async move {
             let fut = Python::attach(|py| -> std::result::Result<_, ProxyError> {
                 let coro = inner
                     .call_method1(py, "load_accumulators", (agent_id.as_str(),))
                     .map_err(|e| ProxyError::Internal(format!("call load_accumulators: {e}")))?;
-                pyo3_async_runtimes::tokio::into_future(coro.into_bound(py))
-                    .map_err(|e| ProxyError::Internal(format!("into_future: {e}")))
+                Self::into_python_future(task_locals.as_ref(), py, coro.into_bound(py))
             })?;
             let result = fut
                 .await
@@ -247,3 +291,7 @@ impl StorageBackendDyn for PyStorageBackend {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "py_storage_coverage_tests.rs"]
+mod coverage_tests;
