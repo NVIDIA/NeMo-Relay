@@ -258,6 +258,51 @@ func TestLlmStreamExecutionInterceptRegisterDeregister(t *testing.T) {
 	DeregisterLlmStreamExecutionIntercept("go_llm_sexec")
 }
 
+func TestLlmStreamExecutionInterceptCanCallNext(t *testing.T) {
+	request := makeRequest()
+
+	err := RegisterLlmStreamExecutionIntercept("go_llm_stream_exec_next", 1,
+		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			nextResult, err := next(nativeJSON)
+			if err != nil {
+				return nil, err
+			}
+			return json.RawMessage(`{"intercepted":true,"next":` + string(nextResult) + `}`), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("RegisterLlmStreamExecutionIntercept failed: %v", err)
+	}
+	defer DeregisterLlmStreamExecutionIntercept("go_llm_stream_exec_next")
+
+	stream, err := LlmStreamCallExecute("stream_exec_next_llm", request,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"streamed":true}`), nil
+		},
+		nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("LlmStreamCallExecute failed: %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("stream.Next() failed: %v", err)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(chunk, &payload); err != nil {
+		t.Fatalf("unmarshal chunk: %v", err)
+	}
+	if payload["intercepted"] != true {
+		t.Fatalf("expected intercepted=true, got %v", payload)
+	}
+	nextPayload, ok := payload["next"].(map[string]interface{})
+	if !ok || nextPayload["streamed"] != true {
+		t.Fatalf("expected next.streamed=true, got %v", payload["next"])
+	}
+}
+
 func TestLlmRequestInterceptModifies(t *testing.T) {
 	RegisterLlmRequestIntercept("go_llm_req_mod", 1, false,
 		func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {

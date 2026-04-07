@@ -229,6 +229,39 @@ describe('index.js loader', () => {
     }), /package missing/);
   });
 
+  it('covers remaining linux loader error branches', () => {
+    const armMuslLocalFailure = new Error('arm musl local missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'linux',
+      arch: 'arm',
+      processReport: { header: { glibcVersionRuntime: null } },
+      existingFiles: ['nat-nexus.linux-arm-musleabihf.node'],
+      providedModules: { './nat-nexus.linux-arm-musleabihf.node': armMuslLocalFailure },
+    }), /arm musl local missing/);
+
+    const riscvMuslFailure = new Error('riscv musl package missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'linux',
+      arch: 'riscv64',
+      processReport: { header: { glibcVersionRuntime: null } },
+      providedModules: { '@nvidia/nat-nexus-node-linux-riscv64-musl': riscvMuslFailure },
+    }), /riscv musl package missing/);
+
+    const riscvGnuFailure = new Error('riscv gnu package missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'linux',
+      arch: 'riscv64',
+      providedModules: { '@nvidia/nat-nexus-node-linux-riscv64-gnu': riscvGnuFailure },
+    }), /riscv gnu package missing/);
+
+    const s390xFailure = new Error('s390x package missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'linux',
+      arch: 's390x',
+      providedModules: { '@nvidia/nat-nexus-node-linux-s390x-gnu': s390xFailure },
+    }), /s390x package missing/);
+  });
+
   it('throws a generic error when resolution returns no binding and no load error', () => {
     assert.throws(() => loadIndexForTest({
       platform: 'freebsd',

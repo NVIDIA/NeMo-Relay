@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use libc::c_char;
 use serde_json::Value as Json;
-use tokio_stream::Stream;
+use tokio_stream::{Stream, StreamExt};
 
 use nvidia_nat_nexus_core::types::LLMRequest;
 use nvidia_nat_nexus_core::{
@@ -406,23 +406,54 @@ pub fn wrap_llm_stream_exec_intercept_fn(
 > {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(
-        move |_name: &str, request: LLMRequest, _next: LlmStreamExecutionNextFn| {
+        move |_name: &str, request: LLMRequest, next: LlmStreamExecutionNextFn| {
             let ud = ud.clone();
             Box::pin(async move {
-                // For stream intercepts from C, we ignore next and just call the C callback
-                // with a no-op next (the C API doesn't support chaining streams easily)
+                let next_box = Box::new(next);
+                let next_ctx = Box::into_raw(next_box) as *mut libc::c_void;
 
-                unsafe extern "C" fn noop_llm_next(
-                    _native_json: *const c_char,
-                    _next_ctx: *mut libc::c_void,
+                unsafe extern "C" fn llm_stream_next_trampoline(
+                    native_json: *const c_char,
+                    next_ctx: *mut libc::c_void,
                 ) -> *mut c_char {
-                    std::ptr::null_mut()
+                    let next_arc = unsafe { &*(next_ctx as *const LlmStreamExecutionNextFn) };
+                    let next = next_arc.clone();
+                    let request = if native_json.is_null() {
+                        LLMRequest {
+                            headers: serde_json::Map::new(),
+                            content: Json::Null,
+                        }
+                    } else {
+                        let s = unsafe { CStr::from_ptr(native_json) }.to_string_lossy();
+                        serde_json::from_str::<LLMRequest>(&s).unwrap_or(LLMRequest {
+                            headers: serde_json::Map::new(),
+                            content: Json::Null,
+                        })
+                    };
+                    let handle = tokio::runtime::Handle::current();
+                    let result = tokio::task::block_in_place(|| {
+                        handle.block_on(async move {
+                            let mut stream = next(request).await?;
+                            match stream.next().await {
+                                Some(item) => item,
+                                None => Ok(Json::Null),
+                            }
+                        })
+                    });
+                    match result {
+                        Ok(json) => json_to_c_string(&json),
+                        Err(e) => {
+                            set_last_error(&e.to_string());
+                            std::ptr::null_mut()
+                        }
+                    }
                 }
 
                 let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
                 let c_request = json_to_c_string(&request_json);
                 let result_ptr =
-                    unsafe { cb(ud.ptr, c_request, noop_llm_next, std::ptr::null_mut()) };
+                    unsafe { cb(ud.ptr, c_request, llm_stream_next_trampoline, next_ctx) };
+                unsafe { drop(Box::from_raw(next_ctx as *mut LlmStreamExecutionNextFn)) };
                 unsafe { nat_nexus_string_free_internal(c_request) };
                 let result = json_result_from_ptr(
                     result_ptr,
@@ -1047,6 +1078,27 @@ mod tests {
             .unwrap();
         let first = runtime.block_on(async { intercepted_stream.next().await.unwrap().unwrap() });
         assert_eq!(first["intercepted"], json!(true));
+
+        let stream_intercept_with_next =
+            wrap_llm_stream_exec_intercept_fn(llm_exec_intercept_cb, std::ptr::null_mut(), None);
+        let next_stream: LlmStreamExecutionNextFn = Arc::new(|request| {
+            Box::pin(async move {
+                Ok(Box::pin(tokio_stream::iter(vec![Ok(json!({
+                    "model": request.content["model"].clone()
+                }))]))
+                    as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
+            })
+        });
+        let mut intercepted_stream = runtime
+            .block_on(stream_intercept_with_next(
+                "llm",
+                make_request(),
+                next_stream,
+            ))
+            .unwrap();
+        let first = runtime.block_on(async { intercepted_stream.next().await.unwrap().unwrap() });
+        assert_eq!(first["intercepted"], json!(true));
+        assert_eq!(first["model"], json!("test-model"));
 
         COLLECTED_COUNT.store(0, Ordering::SeqCst);
         let mut collector = wrap_collector_fn(collector_cb);

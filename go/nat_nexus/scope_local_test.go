@@ -5,6 +5,7 @@ package nat_nexus
 
 import (
 	"encoding/json"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -861,6 +862,401 @@ func TestScopeLocalLlmConditionalGuardrail(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "guardrail rejected") {
 			t.Fatalf("expected 'guardrail rejected', got: %v", err)
+		}
+	})
+}
+
+func TestScopeLocalExplicitDeregisterToolWrappers(t *testing.T) {
+	stack, err := NewScopeStack()
+	if err != nil {
+		t.Fatalf("NewScopeStack failed: %v", err)
+	}
+	defer stack.Close()
+
+	stack.Run(func() {
+		handle, err := PushScope("tool_deregister_scope", ScopeTypeAgent)
+		if err != nil {
+			t.Fatalf("PushScope failed: %v", err)
+		}
+		defer PopScope(handle)
+
+		scopeUUID := handle.UUID()
+
+		sanitizeResponseCalls := 0
+		err = ScopeRegisterToolSanitizeResponseGuardrail(scopeUUID, "tool_scope_san_resp", 1,
+			func(name string, result json.RawMessage) json.RawMessage {
+				sanitizeResponseCalls++
+				return result
+			},
+		)
+		if err != nil {
+			t.Fatalf("ScopeRegisterToolSanitizeResponseGuardrail failed: %v", err)
+		}
+		if _, err := ToolCallExecute("tool_scope_san_resp_call", json.RawMessage(`{"value":1}`),
+			func(args json.RawMessage) (json.RawMessage, error) { return args, nil },
+		); err != nil {
+			t.Fatalf("ToolCallExecute with sanitize response failed: %v", err)
+		}
+		if sanitizeResponseCalls != 1 {
+			t.Fatalf("expected sanitize response callback once, got %d", sanitizeResponseCalls)
+		}
+		if err := ScopeDeregisterToolSanitizeResponseGuardrail(scopeUUID, "tool_scope_san_resp"); err != nil {
+			t.Fatalf("ScopeDeregisterToolSanitizeResponseGuardrail failed: %v", err)
+		}
+		if _, err := ToolCallExecute("tool_scope_san_resp_after", json.RawMessage(`{"value":2}`),
+			func(args json.RawMessage) (json.RawMessage, error) { return args, nil },
+		); err != nil {
+			t.Fatalf("ToolCallExecute after sanitize response deregister failed: %v", err)
+		}
+		if sanitizeResponseCalls != 1 {
+			t.Fatalf("sanitize response callback still fired after deregister: %d", sanitizeResponseCalls)
+		}
+
+		conditionalCalls := 0
+		err = ScopeRegisterToolConditionalExecutionGuardrail(scopeUUID, "tool_scope_cond", 1,
+			func(name string, args json.RawMessage) *string {
+				conditionalCalls++
+				return nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("ScopeRegisterToolConditionalExecutionGuardrail failed: %v", err)
+		}
+		if _, err := ToolCallExecute("tool_scope_cond_call", json.RawMessage(`{"value":3}`),
+			func(args json.RawMessage) (json.RawMessage, error) { return args, nil },
+		); err != nil {
+			t.Fatalf("ToolCallExecute with conditional guardrail failed: %v", err)
+		}
+		if conditionalCalls != 1 {
+			t.Fatalf("expected conditional callback once, got %d", conditionalCalls)
+		}
+		if err := ScopeDeregisterToolConditionalExecutionGuardrail(scopeUUID, "tool_scope_cond"); err != nil {
+			t.Fatalf("ScopeDeregisterToolConditionalExecutionGuardrail failed: %v", err)
+		}
+		if _, err := ToolCallExecute("tool_scope_cond_after", json.RawMessage(`{"value":4}`),
+			func(args json.RawMessage) (json.RawMessage, error) { return args, nil },
+		); err != nil {
+			t.Fatalf("ToolCallExecute after conditional deregister failed: %v", err)
+		}
+		if conditionalCalls != 1 {
+			t.Fatalf("conditional callback still fired after deregister: %d", conditionalCalls)
+		}
+
+		requestInterceptCalls := 0
+		err = ScopeRegisterToolRequestIntercept(scopeUUID, "tool_scope_req_int", 1, false,
+			func(name string, args json.RawMessage) json.RawMessage {
+				requestInterceptCalls++
+				return args
+			},
+		)
+		if err != nil {
+			t.Fatalf("ScopeRegisterToolRequestIntercept failed: %v", err)
+		}
+		if _, err := ToolCallExecute("tool_scope_req_int_call", json.RawMessage(`{"value":5}`),
+			func(args json.RawMessage) (json.RawMessage, error) { return args, nil },
+		); err != nil {
+			t.Fatalf("ToolCallExecute with request intercept failed: %v", err)
+		}
+		if requestInterceptCalls != 1 {
+			t.Fatalf("expected request intercept once, got %d", requestInterceptCalls)
+		}
+		if err := ScopeDeregisterToolRequestIntercept(scopeUUID, "tool_scope_req_int"); err != nil {
+			t.Fatalf("ScopeDeregisterToolRequestIntercept failed: %v", err)
+		}
+		if _, err := ToolCallExecute("tool_scope_req_int_after", json.RawMessage(`{"value":6}`),
+			func(args json.RawMessage) (json.RawMessage, error) { return args, nil },
+		); err != nil {
+			t.Fatalf("ToolCallExecute after request intercept deregister failed: %v", err)
+		}
+		if requestInterceptCalls != 1 {
+			t.Fatalf("request intercept still fired after deregister: %d", requestInterceptCalls)
+		}
+
+		executionInterceptCalls := 0
+		err = ScopeRegisterToolExecutionIntercept(scopeUUID, "tool_scope_exec_int", 1,
+			func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+				executionInterceptCalls++
+				return next(args)
+			},
+		)
+		if err != nil {
+			t.Fatalf("ScopeRegisterToolExecutionIntercept failed: %v", err)
+		}
+		if _, err := ToolCallExecute("tool_scope_exec_int_call", json.RawMessage(`{"value":7}`),
+			func(args json.RawMessage) (json.RawMessage, error) { return args, nil },
+		); err != nil {
+			t.Fatalf("ToolCallExecute with execution intercept failed: %v", err)
+		}
+		if executionInterceptCalls != 1 {
+			t.Fatalf("expected execution intercept once, got %d", executionInterceptCalls)
+		}
+		if err := ScopeDeregisterToolExecutionIntercept(scopeUUID, "tool_scope_exec_int"); err != nil {
+			t.Fatalf("ScopeDeregisterToolExecutionIntercept failed: %v", err)
+		}
+		if _, err := ToolCallExecute("tool_scope_exec_int_after", json.RawMessage(`{"value":8}`),
+			func(args json.RawMessage) (json.RawMessage, error) { return args, nil },
+		); err != nil {
+			t.Fatalf("ToolCallExecute after execution intercept deregister failed: %v", err)
+		}
+		if executionInterceptCalls != 1 {
+			t.Fatalf("execution intercept still fired after deregister: %d", executionInterceptCalls)
+		}
+	})
+}
+
+func TestScopeLocalExplicitDeregisterLlmWrappers(t *testing.T) {
+	stack, err := NewScopeStack()
+	if err != nil {
+		t.Fatalf("NewScopeStack failed: %v", err)
+	}
+	defer stack.Close()
+
+	stack.Run(func() {
+		handle, err := PushScope("llm_deregister_scope", ScopeTypeAgent)
+		if err != nil {
+			t.Fatalf("PushScope failed: %v", err)
+		}
+		defer PopScope(handle)
+
+		scopeUUID := handle.UUID()
+		request := makeRequest()
+
+		sanitizeRequestCalls := 0
+		err = ScopeRegisterLlmSanitizeRequestGuardrail(scopeUUID, "llm_scope_san_req", 1,
+			func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
+				sanitizeRequestCalls++
+				return headers, content
+			},
+		)
+		if err != nil {
+			t.Fatalf("ScopeRegisterLlmSanitizeRequestGuardrail failed: %v", err)
+		}
+		if _, err := LlmCallExecute("llm_scope_san_req_call", request,
+			func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"ok":true}`), nil
+			},
+		); err != nil {
+			t.Fatalf("LlmCallExecute with sanitize request failed: %v", err)
+		}
+		if sanitizeRequestCalls != 1 {
+			t.Fatalf("expected sanitize request callback once, got %d", sanitizeRequestCalls)
+		}
+		if err := ScopeDeregisterLlmSanitizeRequestGuardrail(scopeUUID, "llm_scope_san_req"); err != nil {
+			t.Fatalf("ScopeDeregisterLlmSanitizeRequestGuardrail failed: %v", err)
+		}
+		if _, err := LlmCallExecute("llm_scope_san_req_after", request,
+			func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"ok":true}`), nil
+			},
+		); err != nil {
+			t.Fatalf("LlmCallExecute after sanitize request deregister failed: %v", err)
+		}
+		if sanitizeRequestCalls != 1 {
+			t.Fatalf("sanitize request callback still fired after deregister: %d", sanitizeRequestCalls)
+		}
+
+		sanitizeResponseCalls := 0
+		err = ScopeRegisterLlmSanitizeResponseGuardrail(scopeUUID, "llm_scope_san_resp", 1,
+			func(responseJSON json.RawMessage) json.RawMessage {
+				sanitizeResponseCalls++
+				return responseJSON
+			},
+		)
+		if err != nil {
+			t.Fatalf("ScopeRegisterLlmSanitizeResponseGuardrail failed: %v", err)
+		}
+		if _, err := LlmCallExecute("llm_scope_san_resp_call", request,
+			func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"ok":true}`), nil
+			},
+		); err != nil {
+			t.Fatalf("LlmCallExecute with sanitize response failed: %v", err)
+		}
+		if sanitizeResponseCalls != 1 {
+			t.Fatalf("expected sanitize response callback once, got %d", sanitizeResponseCalls)
+		}
+		if err := ScopeDeregisterLlmSanitizeResponseGuardrail(scopeUUID, "llm_scope_san_resp"); err != nil {
+			t.Fatalf("ScopeDeregisterLlmSanitizeResponseGuardrail failed: %v", err)
+		}
+		if _, err := LlmCallExecute("llm_scope_san_resp_after", request,
+			func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"ok":true}`), nil
+			},
+		); err != nil {
+			t.Fatalf("LlmCallExecute after sanitize response deregister failed: %v", err)
+		}
+		if sanitizeResponseCalls != 1 {
+			t.Fatalf("sanitize response callback still fired after deregister: %d", sanitizeResponseCalls)
+		}
+
+		conditionalCalls := 0
+		err = ScopeRegisterLlmConditionalExecutionGuardrail(scopeUUID, "llm_scope_cond", 1,
+			func(headers, content json.RawMessage) *string {
+				conditionalCalls++
+				return nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("ScopeRegisterLlmConditionalExecutionGuardrail failed: %v", err)
+		}
+		if _, err := LlmCallExecute("llm_scope_cond_call", request,
+			func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"ok":true}`), nil
+			},
+		); err != nil {
+			t.Fatalf("LlmCallExecute with conditional guardrail failed: %v", err)
+		}
+		if conditionalCalls != 1 {
+			t.Fatalf("expected conditional callback once, got %d", conditionalCalls)
+		}
+		if err := ScopeDeregisterLlmConditionalExecutionGuardrail(scopeUUID, "llm_scope_cond"); err != nil {
+			t.Fatalf("ScopeDeregisterLlmConditionalExecutionGuardrail failed: %v", err)
+		}
+		if _, err := LlmCallExecute("llm_scope_cond_after", request,
+			func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"ok":true}`), nil
+			},
+		); err != nil {
+			t.Fatalf("LlmCallExecute after conditional deregister failed: %v", err)
+		}
+		if conditionalCalls != 1 {
+			t.Fatalf("conditional callback still fired after deregister: %d", conditionalCalls)
+		}
+
+		requestInterceptCalls := 0
+		err = ScopeRegisterLlmRequestIntercept(scopeUUID, "llm_scope_req_int", 1, false,
+			func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
+				requestInterceptCalls++
+				return headers, content
+			},
+		)
+		if err != nil {
+			t.Fatalf("ScopeRegisterLlmRequestIntercept failed: %v", err)
+		}
+		if _, err := LlmCallExecute("llm_scope_req_int_call", request,
+			func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"ok":true}`), nil
+			},
+		); err != nil {
+			t.Fatalf("LlmCallExecute with request intercept failed: %v", err)
+		}
+		if requestInterceptCalls != 1 {
+			t.Fatalf("expected request intercept once, got %d", requestInterceptCalls)
+		}
+		if err := ScopeDeregisterLlmRequestIntercept(scopeUUID, "llm_scope_req_int"); err != nil {
+			t.Fatalf("ScopeDeregisterLlmRequestIntercept failed: %v", err)
+		}
+		if _, err := LlmCallExecute("llm_scope_req_int_after", request,
+			func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"ok":true}`), nil
+			},
+		); err != nil {
+			t.Fatalf("LlmCallExecute after request intercept deregister failed: %v", err)
+		}
+		if requestInterceptCalls != 1 {
+			t.Fatalf("request intercept still fired after deregister: %d", requestInterceptCalls)
+		}
+
+		executionInterceptCalls := 0
+		err = ScopeRegisterLlmExecutionIntercept(scopeUUID, "llm_scope_exec_int", 1,
+			func(requestJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+				executionInterceptCalls++
+				return next(requestJSON)
+			},
+		)
+		if err != nil {
+			t.Fatalf("ScopeRegisterLlmExecutionIntercept failed: %v", err)
+		}
+		if _, err := LlmCallExecute("llm_scope_exec_int_call", request,
+			func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"ok":true}`), nil
+			},
+		); err != nil {
+			t.Fatalf("LlmCallExecute with execution intercept failed: %v", err)
+		}
+		if executionInterceptCalls != 1 {
+			t.Fatalf("expected execution intercept once, got %d", executionInterceptCalls)
+		}
+		if err := ScopeDeregisterLlmExecutionIntercept(scopeUUID, "llm_scope_exec_int"); err != nil {
+			t.Fatalf("ScopeDeregisterLlmExecutionIntercept failed: %v", err)
+		}
+		if _, err := LlmCallExecute("llm_scope_exec_int_after", request,
+			func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"ok":true}`), nil
+			},
+		); err != nil {
+			t.Fatalf("LlmCallExecute after execution intercept deregister failed: %v", err)
+		}
+		if executionInterceptCalls != 1 {
+			t.Fatalf("execution intercept still fired after deregister: %d", executionInterceptCalls)
+		}
+
+		err = ScopeRegisterLlmStreamExecutionIntercept(scopeUUID, "llm_scope_stream_int", 1,
+			func(requestJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+				nextResult, err := next(requestJSON)
+				if err != nil {
+					return nil, err
+				}
+				return json.RawMessage(`{"scope_intercepted":true,"next":` + string(nextResult) + `}`), nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("ScopeRegisterLlmStreamExecutionIntercept failed: %v", err)
+		}
+		stream, err := LlmStreamCallExecute("llm_scope_stream_int_call", request,
+			func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"streamed":true}`), nil
+			},
+			nil, nil,
+		)
+		if err != nil {
+			t.Fatalf("LlmStreamCallExecute with stream intercept failed: %v", err)
+		}
+		chunk, err := stream.Next()
+		if err != nil {
+			t.Fatalf("stream.Next() failed: %v", err)
+		}
+		var payload map[string]interface{}
+		if err := json.Unmarshal(chunk, &payload); err != nil {
+			t.Fatalf("unmarshal stream chunk: %v", err)
+		}
+		if payload["scope_intercepted"] != true {
+			t.Fatalf("expected scope_intercepted=true, got %v", payload)
+		}
+		nextPayload, ok := payload["next"].(map[string]interface{})
+		if !ok || nextPayload["streamed"] != true {
+			t.Fatalf("expected next.streamed=true, got %v", payload["next"])
+		}
+		if _, err := stream.Next(); err != io.EOF {
+			t.Fatalf("expected EOF after single wrapped chunk, got %v", err)
+		}
+		stream.Close()
+		if err := ScopeDeregisterLlmStreamExecutionIntercept(scopeUUID, "llm_scope_stream_int"); err != nil {
+			t.Fatalf("ScopeDeregisterLlmStreamExecutionIntercept failed: %v", err)
+		}
+
+		subscriberCalls := 0
+		err = ScopeRegisterSubscriber(scopeUUID, "llm_scope_sub", func(event *Event) {
+			subscriberCalls++
+		})
+		if err != nil {
+			t.Fatalf("ScopeRegisterSubscriber failed: %v", err)
+		}
+		if err := EmitEvent("llm_scope_sub_event_before"); err != nil {
+			t.Fatalf("EmitEvent before subscriber deregister failed: %v", err)
+		}
+		if subscriberCalls == 0 {
+			t.Fatal("expected scope-local subscriber to receive an event")
+		}
+		if err := ScopeDeregisterSubscriber(scopeUUID, "llm_scope_sub"); err != nil {
+			t.Fatalf("ScopeDeregisterSubscriber failed: %v", err)
+		}
+		callsAfterDeregister := subscriberCalls
+		if err := EmitEvent("llm_scope_sub_event_after"); err != nil {
+			t.Fatalf("EmitEvent after subscriber deregister failed: %v", err)
+		}
+		if subscriberCalls != callsAfterDeregister {
+			t.Fatalf("scope-local subscriber still fired after deregister: %d -> %d", callsAfterDeregister, subscriberCalls)
 		}
 	})
 }
