@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Build pull request
+
+on:
+  push:
+    branches:
+      - 'pull-request/**'
+      - 'main'
+      - 'release/**'
+
+# This allows a subsequently queued workflow run to interrupt previous runs
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  cancel-in-progress: true
+
+permissions:
+  actions: none
+  checks: none
+  contents: read
+  deployments: none
+  discussions: none
+  id-token: write
+  issues: none
+  packages: read
+  pages: none
+  pull-requests: read
+  repository-projects: none
+  security-events: none
+  statuses: none
+
+jobs:
+
+  pr-builder:
+    needs:
+      - prepare
+      - ci_pipe
+    secrets: inherit
+    uses: rapidsai/shared-workflows/.github/workflows/pr-builder.yaml@4866bb5437e913caf5bf775f57c91abd144ed391 # main
+
+  prepare:
+    # Executes the get-pr-info action to determine if the PR has the skip-ci label, if the action fails we assume the
+    # PR does not have the label
+    name: Prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get PR Info
+        id: get-pr-info
+        uses: nv-gha-runners/get-pr-info@090577647b8ddc4e06e809e264f7881650ecdccf # main
+        if: ${{ startsWith(github.ref_name, 'pull-request/') }}
+    outputs:
+      is_pr: ${{ startsWith(github.ref_name, 'pull-request/') }}
+      is_main_branch: ${{ github.ref_name == 'main' }}
+      has_skip_ci_label: ${{ steps.get-pr-info.outcome == 'success' && contains(fromJSON(steps.get-pr-info.outputs.pr-info).labels.*.name, 'skip-ci') || false }}
+      pr_info: ${{ steps.get-pr-info.outcome == 'success' && steps.get-pr-info.outputs.pr-info || '' }}
+      base_sha: ${{ steps.get-pr-info.outcome == 'success' && fromJSON(steps.get-pr-info.outputs.pr-info).base.sha || '' }}
+
+
+  ci_pipe:
+    name: CI Pipeline
+    needs: [prepare]
+    uses: ./.github/workflows/ci_pipe.yml
+    if: ${{ ! fromJSON(needs.prepare.outputs.has_skip_ci_label) }}
+    with:
+      # Info about the PR. Empty for non PR branches. Useful for extracting PR number, title, etc.
+      pr_info: ${{ needs.prepare.outputs.pr_info }}
+      base_sha: ${{ needs.prepare.outputs.base_sha }}
