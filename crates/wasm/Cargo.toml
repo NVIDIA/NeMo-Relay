@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 nvidia-nat-nexus-core = { path = "../core" }
+nvidia-nat-nexus-openinference = { path = "../openinference" }
 nvidia-nat-nexus-otel = { path = "../otel" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

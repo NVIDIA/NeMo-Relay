@@ -1068,6 +1068,174 @@ impl PyOpenTelemetrySubscriber {
     }
 }
 
+/// Mutable config object for ``OpenInferenceSubscriber``.
+///
+/// Example::
+///
+///     config = OpenInferenceConfig()
+///     config.endpoint = "http://localhost:4318/v1/traces"
+///     config.service_name = "demo-agent"
+///     config.headers = {"authorization": "Bearer token"}
+#[pyclass(name = "OpenInferenceConfig")]
+pub struct PyOpenInferenceConfig {
+    #[pyo3(get, set)]
+    transport: String,
+    #[pyo3(get, set)]
+    endpoint: Option<String>,
+    #[pyo3(get, set)]
+    service_name: String,
+    #[pyo3(get, set)]
+    service_namespace: Option<String>,
+    #[pyo3(get, set)]
+    service_version: Option<String>,
+    #[pyo3(get, set)]
+    instrumentation_scope: String,
+    #[pyo3(get, set)]
+    timeout_millis: u64,
+    headers: HashMap<String, String>,
+    resource_attributes: HashMap<String, String>,
+}
+
+impl PyOpenInferenceConfig {
+    fn to_rust_config(&self) -> PyResult<nvidia_nat_nexus_openinference::OpenInferenceConfig> {
+        let transport = match self.transport.as_str() {
+            "http_binary" => nvidia_nat_nexus_openinference::OtlpTransport::HttpBinary,
+            "grpc" => nvidia_nat_nexus_openinference::OtlpTransport::Grpc,
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "transport must be 'http_binary' or 'grpc', got {other:?}"
+                )));
+            }
+        };
+
+        let mut config = nvidia_nat_nexus_openinference::OpenInferenceConfig::new()
+            .with_transport(transport)
+            .with_service_name(self.service_name.clone())
+            .with_instrumentation_scope(self.instrumentation_scope.clone())
+            .with_timeout(Duration::from_millis(self.timeout_millis));
+
+        if let Some(endpoint) = &self.endpoint {
+            config = config.with_endpoint(endpoint.clone());
+        }
+        if let Some(namespace) = &self.service_namespace {
+            config = config.with_service_namespace(namespace.clone());
+        }
+        if let Some(version) = &self.service_version {
+            config = config.with_service_version(version.clone());
+        }
+        for (key, value) in &self.headers {
+            config = config.with_header(key.clone(), value.clone());
+        }
+        for (key, value) in &self.resource_attributes {
+            config = config.with_resource_attribute(key.clone(), value.clone());
+        }
+        Ok(config)
+    }
+}
+
+#[pymethods]
+impl PyOpenInferenceConfig {
+    #[new]
+    fn new() -> Self {
+        Self {
+            transport: "http_binary".to_string(),
+            endpoint: None,
+            service_name: "nat-nexus".to_string(),
+            service_namespace: None,
+            service_version: None,
+            instrumentation_scope: "nvidia-nat-nexus-openinference".to_string(),
+            timeout_millis: 3_000,
+            headers: HashMap::new(),
+            resource_attributes: HashMap::new(),
+        }
+    }
+
+    #[getter]
+    fn headers(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(py, &serde_json::to_value(&self.headers).unwrap_or_default())
+    }
+
+    #[setter]
+    fn set_headers(&mut self, headers: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.headers = py_string_map(headers, "headers")?;
+        Ok(())
+    }
+
+    #[getter]
+    fn resource_attributes(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.resource_attributes).unwrap_or_default(),
+        )
+    }
+
+    #[setter]
+    fn set_resource_attributes(&mut self, resource_attributes: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.resource_attributes = py_string_map(resource_attributes, "resource_attributes")?;
+        Ok(())
+    }
+
+    fn set_header(&mut self, key: String, value: String) {
+        self.headers.insert(key, value);
+    }
+
+    fn set_resource_attribute(&mut self, key: String, value: String) {
+        self.resource_attributes.insert(key, value);
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<OpenInferenceConfig transport={:?} endpoint={:?}>",
+            self.transport, self.endpoint
+        )
+    }
+}
+
+/// OpenInference-backed event subscriber.
+#[pyclass(name = "OpenInferenceSubscriber")]
+pub struct PyOpenInferenceSubscriber {
+    inner: nvidia_nat_nexus_openinference::OpenInferenceSubscriber,
+}
+
+#[pymethods]
+impl PyOpenInferenceSubscriber {
+    #[new]
+    fn new(config: PyRef<'_, PyOpenInferenceConfig>) -> PyResult<Self> {
+        let inner =
+            nvidia_nat_nexus_openinference::OpenInferenceSubscriber::new(config.to_rust_config()?)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    fn register(&self, name: String) -> PyResult<()> {
+        self.inner
+            .register(&name)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn deregister(&self, name: String) -> PyResult<bool> {
+        self.inner
+            .deregister(&name)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn force_flush(&self) -> PyResult<()> {
+        self.inner
+            .force_flush()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn shutdown(&self) -> PyResult<()> {
+        self.inner
+            .shutdown()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn __repr__(&self) -> String {
+        "<OpenInferenceSubscriber>".to_string()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
@@ -1088,6 +1256,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAtifExporter>()?;
     m.add_class::<PyOpenTelemetryConfig>()?;
     m.add_class::<PyOpenTelemetrySubscriber>()?;
+    m.add_class::<PyOpenInferenceConfig>()?;
+    m.add_class::<PyOpenInferenceSubscriber>()?;
     Ok(())
 }
 

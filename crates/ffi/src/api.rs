@@ -1995,6 +1995,216 @@ pub unsafe extern "C" fn nat_nexus_otel_subscriber_shutdown(
     }
 }
 
+/// Creates a new OpenInference subscriber.
+///
+/// Nullable strings use crate defaults when omitted. `headers_json` and
+/// `resource_attributes_json` must be JSON objects of string values when
+/// provided.
+///
+/// # Safety
+/// Any non-null C strings must be valid and `out` must be non-null.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_openinference_subscriber_create(
+    transport: *const c_char,
+    endpoint: *const c_char,
+    headers_json: *const c_char,
+    resource_attributes_json: *const c_char,
+    service_name: *const c_char,
+    service_namespace: *const c_char,
+    service_version: *const c_char,
+    instrumentation_scope: *const c_char,
+    timeout_millis: u64,
+    out: *mut *mut FfiOpenInferenceSubscriber,
+) -> NatNexusStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NatNexusStatus::NullPointer;
+    }
+
+    let transport = if transport.is_null() {
+        "http_binary".to_string()
+    } else {
+        match c_str_to_string(transport) {
+            Ok(value) => value,
+            Err(status) => return status,
+        }
+    };
+
+    let mut config = nvidia_nat_nexus_openinference::OpenInferenceConfig::new();
+    config = match transport.as_str() {
+        "http_binary" => {
+            config.with_transport(nvidia_nat_nexus_openinference::OtlpTransport::HttpBinary)
+        }
+        "grpc" => config.with_transport(nvidia_nat_nexus_openinference::OtlpTransport::Grpc),
+        other => {
+            set_last_error(&format!(
+                "transport must be 'http_binary' or 'grpc', got {other:?}"
+            ));
+            return NatNexusStatus::InvalidArg;
+        }
+    };
+
+    if !service_name.is_null() {
+        let value = match c_str_to_string(service_name) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        config = config.with_service_name(value);
+    }
+    if !endpoint.is_null() {
+        let endpoint = match c_str_to_string(endpoint) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        config = config.with_endpoint(endpoint);
+    }
+    if !service_namespace.is_null() {
+        let namespace = match c_str_to_string(service_namespace) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        config = config.with_service_namespace(namespace);
+    }
+    if !service_version.is_null() {
+        let version = match c_str_to_string(service_version) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        config = config.with_service_version(version);
+    }
+    if !instrumentation_scope.is_null() {
+        let scope = match c_str_to_string(instrumentation_scope) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        config = config.with_instrumentation_scope(scope);
+    }
+    if timeout_millis != 0 {
+        config = config.with_timeout(Duration::from_millis(timeout_millis));
+    }
+
+    for (key, value) in match parse_string_map_json(headers_json, "headers") {
+        Ok(map) => map,
+        Err(status) => return status,
+    } {
+        config = config.with_header(key, value);
+    }
+    for (key, value) in match parse_string_map_json(resource_attributes_json, "resource_attributes")
+    {
+        Ok(map) => map,
+        Err(status) => return status,
+    } {
+        config = config.with_resource_attribute(key, value);
+    }
+
+    let _runtime_guard = tokio_runtime().enter();
+    match nvidia_nat_nexus_openinference::OpenInferenceSubscriber::new(config) {
+        Ok(subscriber) => {
+            unsafe { *out = Box::into_raw(Box::new(FfiOpenInferenceSubscriber(subscriber))) };
+            NatNexusStatus::Ok
+        }
+        Err(e) => {
+            set_last_error(&e.to_string());
+            NatNexusStatus::Internal
+        }
+    }
+}
+
+/// Registers the OpenInference subscriber as an event subscriber.
+///
+/// # Safety
+/// `subscriber` and `name` must be valid, non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_openinference_subscriber_register(
+    subscriber: *const FfiOpenInferenceSubscriber,
+    name: *const c_char,
+) -> NatNexusStatus {
+    clear_last_error();
+    if subscriber.is_null() {
+        set_last_error("subscriber pointer is null");
+        return NatNexusStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+
+    match unsafe { &*subscriber }.0.register(&name) {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(e) => {
+            set_last_error(&e.to_string());
+            NatNexusStatus::Internal
+        }
+    }
+}
+
+/// Deregisters the OpenInference subscriber by name.
+///
+/// # Safety
+/// `name` must be a valid C string.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_openinference_subscriber_deregister(
+    name: *const c_char,
+) -> NatNexusStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+
+    match core::nat_nexus_deregister_subscriber(&name) {
+        Ok(_) => NatNexusStatus::Ok,
+        Err(e) => status_from_error(&e),
+    }
+}
+
+/// Forces a flush of finished spans through the exporter.
+///
+/// # Safety
+/// `subscriber` must be a valid, non-null pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_openinference_subscriber_force_flush(
+    subscriber: *const FfiOpenInferenceSubscriber,
+) -> NatNexusStatus {
+    clear_last_error();
+    if subscriber.is_null() {
+        set_last_error("subscriber pointer is null");
+        return NatNexusStatus::NullPointer;
+    }
+
+    match unsafe { &*subscriber }.0.force_flush() {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(e) => {
+            set_last_error(&e.to_string());
+            NatNexusStatus::Internal
+        }
+    }
+}
+
+/// Shuts down the underlying tracer provider.
+///
+/// # Safety
+/// `subscriber` must be a valid, non-null pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_openinference_subscriber_shutdown(
+    subscriber: *const FfiOpenInferenceSubscriber,
+) -> NatNexusStatus {
+    clear_last_error();
+    if subscriber.is_null() {
+        set_last_error("subscriber pointer is null");
+        return NatNexusStatus::NullPointer;
+    }
+
+    match unsafe { &*subscriber }.0.shutdown() {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(e) => {
+            set_last_error(&e.to_string());
+            NatNexusStatus::Internal
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Scope-local tool guardrail registrations
 // ---------------------------------------------------------------------------
@@ -4319,6 +4529,123 @@ mod tests {
                 NatNexusStatus::Ok
             );
             nat_nexus_otel_subscriber_free(subscriber);
+        }
+    }
+
+    #[test]
+    fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
+        let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        reset_globals();
+
+        unsafe {
+            let mut subscriber: *mut FfiOpenInferenceSubscriber = ptr::null_mut();
+            let endpoint = cstring("http://localhost:4318/v1/traces");
+            let headers = cstring(r#"{"authorization":"Bearer token"}"#);
+            let resource_attributes = cstring(r#"{"deployment.environment":"test"}"#);
+            let service_name = cstring("ffi-agent");
+            let service_namespace = cstring("agents");
+            let service_version = cstring("1.0.0");
+            let instrumentation_scope = cstring("ffi-tests");
+            let invalid_transport = cstring("invalid");
+            let invalid_headers = cstring(r#"{"authorization":1}"#);
+
+            assert_eq!(
+                nat_nexus_openinference_subscriber_create(
+                    ptr::null(),
+                    endpoint.as_ptr(),
+                    headers.as_ptr(),
+                    resource_attributes.as_ptr(),
+                    service_name.as_ptr(),
+                    service_namespace.as_ptr(),
+                    service_version.as_ptr(),
+                    instrumentation_scope.as_ptr(),
+                    1250,
+                    ptr::null_mut(),
+                ),
+                NatNexusStatus::NullPointer
+            );
+            assert_eq!(
+                nat_nexus_openinference_subscriber_create(
+                    invalid_transport.as_ptr(),
+                    endpoint.as_ptr(),
+                    headers.as_ptr(),
+                    resource_attributes.as_ptr(),
+                    service_name.as_ptr(),
+                    service_namespace.as_ptr(),
+                    service_version.as_ptr(),
+                    instrumentation_scope.as_ptr(),
+                    1250,
+                    &mut subscriber,
+                ),
+                NatNexusStatus::InvalidArg
+            );
+            assert_eq!(
+                nat_nexus_openinference_subscriber_create(
+                    ptr::null(),
+                    endpoint.as_ptr(),
+                    invalid_headers.as_ptr(),
+                    resource_attributes.as_ptr(),
+                    service_name.as_ptr(),
+                    service_namespace.as_ptr(),
+                    service_version.as_ptr(),
+                    instrumentation_scope.as_ptr(),
+                    1250,
+                    &mut subscriber,
+                ),
+                NatNexusStatus::InvalidArg
+            );
+            assert_eq!(
+                nat_nexus_openinference_subscriber_create(
+                    ptr::null(),
+                    endpoint.as_ptr(),
+                    headers.as_ptr(),
+                    resource_attributes.as_ptr(),
+                    service_name.as_ptr(),
+                    service_namespace.as_ptr(),
+                    service_version.as_ptr(),
+                    instrumentation_scope.as_ptr(),
+                    1250,
+                    &mut subscriber,
+                ),
+                NatNexusStatus::Ok
+            );
+            assert!(!subscriber.is_null());
+
+            let name = cstring(&unique_name("ffi_openinference"));
+            assert_eq!(
+                nat_nexus_openinference_subscriber_register(ptr::null(), name.as_ptr()),
+                NatNexusStatus::NullPointer
+            );
+            assert_eq!(
+                nat_nexus_openinference_subscriber_force_flush(ptr::null()),
+                NatNexusStatus::NullPointer
+            );
+            assert_eq!(
+                nat_nexus_openinference_subscriber_shutdown(ptr::null()),
+                NatNexusStatus::NullPointer
+            );
+
+            assert_eq!(
+                nat_nexus_openinference_subscriber_register(subscriber, name.as_ptr()),
+                NatNexusStatus::Ok
+            );
+            assert_eq!(
+                nat_nexus_openinference_subscriber_deregister(name.as_ptr()),
+                NatNexusStatus::Ok
+            );
+            assert_eq!(
+                nat_nexus_openinference_subscriber_deregister(name.as_ptr()),
+                NatNexusStatus::Ok
+            );
+            assert_eq!(
+                nat_nexus_openinference_subscriber_force_flush(subscriber),
+                NatNexusStatus::Ok
+            );
+            assert_eq!(
+                nat_nexus_openinference_subscriber_shutdown(subscriber),
+                NatNexusStatus::Ok
+            );
+            nat_nexus_openinference_subscriber_free(subscriber);
         }
     }
 

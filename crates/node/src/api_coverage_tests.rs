@@ -317,3 +317,52 @@ fn test_open_telemetry_subscriber_lifecycle_methods_work() {
     subscriber.force_flush().unwrap();
     subscriber.shutdown().unwrap();
 }
+
+#[test]
+fn test_open_inference_subscriber_rejects_invalid_config() {
+    let err = build_openinference_config(Some(OpenInferenceConfig {
+        transport: Some("invalid".into()),
+        ..Default::default()
+    }))
+    .unwrap_err();
+    assert!(err.to_string().contains("transport must be"));
+
+    let err = build_openinference_config(Some(OpenInferenceConfig {
+        headers: Some(json!({"authorization": 1})),
+        ..Default::default()
+    }))
+    .unwrap_err();
+    assert!(err.to_string().contains("headers must be an object"));
+
+    let err = build_openinference_config(Some(OpenInferenceConfig {
+        resource_attributes: Some(json!({"env": 1})),
+        ..Default::default()
+    }))
+    .unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("resourceAttributes must be an object"));
+}
+
+#[test]
+fn test_open_inference_subscriber_lifecycle_methods_work() {
+    let subscriber = JsOpenInferenceSubscriber::new(Some(OpenInferenceConfig {
+        endpoint: Some("http://localhost:4318/v1/traces".into()),
+        service_name: Some("node-agent".into()),
+        service_namespace: Some("agents".into()),
+        service_version: Some("1.0.0".into()),
+        instrumentation_scope: Some("node-tests".into()),
+        timeout_millis: Some(1250),
+        headers: Some(json!({"authorization": "Bearer token"})),
+        resource_attributes: Some(json!({"deployment.environment": "test"})),
+        ..Default::default()
+    }))
+    .unwrap();
+
+    let name = format!("node_openinference_{}", Uuid::new_v4().simple());
+    subscriber.register(name.clone()).unwrap();
+    assert!(subscriber.deregister(name.clone()).unwrap());
+    assert!(!subscriber.deregister(name).unwrap());
+    subscriber.force_flush().unwrap();
+    subscriber.shutdown().unwrap();
+}

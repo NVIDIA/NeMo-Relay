@@ -17,12 +17,14 @@ Nexus is a multi-language agent runtime framework that gives AI agent developers
 
 Write your agent logic once and instrument it with Nexus middleware and events that work consistently across all supported languages.
 
-All bindings also expose an OTLP-backed OpenTelemetry subscriber. Direct Rust
-users can depend on the separate workspace crate `nvidia-nat-nexus-otel`,
-while Python, Node.js, Go, and WASM expose binding-native config objects on top
-of the same exporter implementation. See
+All bindings also expose OTLP-backed observability subscribers. Direct Rust
+users can depend on the separate workspace crates
+`nvidia-nat-nexus-otel` and `nvidia-nat-nexus-openinference`, while Python,
+Node.js, Go, and WASM expose binding-native config objects on top of those
+implementations. See
 [Observability with OpenTelemetry](docs/observability-with-opentelemetry.md)
-for the canonical setup guide.
+and [Observability with OpenInference](docs/observability-with-openinference.md)
+for the canonical setup guides.
 
 ## Getting Started
 
@@ -64,6 +66,7 @@ Comprehensive documentation lives in the [docs/](docs/) directory. The canonical
 | [Context Isolation](docs/context-isolation.md) | Multi-tenant and concurrent scope stack management |
 | [ATIF Export](docs/atif-export.md) | Agent Trajectory Interchange Format export |
 | [Observability with OpenTelemetry](docs/observability-with-opentelemetry.md) | OTLP subscriber setup, event mapping, and per-language examples |
+| [Observability with OpenInference](docs/observability-with-openinference.md) | OpenInference semantic mapping, Phoenix-oriented OTLP setup, and per-language examples |
 | [Language Bindings](docs/language-bindings.md) | Per-language usage guides and naming conventions |
 | [Recipes](docs/recipes.md) | Task-oriented patterns for logging, ATIF, proxy setup, and context propagation |
 | [Proxy Layer](docs/proxy-layer.md) | NexusProxy configuration, DynamoIntercept, declarative and builder APIs |
@@ -77,6 +80,7 @@ Comprehensive documentation lives in the [docs/](docs/) directory. The canonical
 crates/
   core/       # Core runtime library (nvidia-nat-nexus-core)
   otel/       # OpenTelemetry OTLP subscriber crate (nvidia-nat-nexus-otel)
+  openinference/ # OpenInference OTLP subscriber crate (nvidia-nat-nexus-openinference)
   python/     # PyO3 Python bindings (_native C extension)
   ffi/        # C FFI layer (used by Go, generates header via cbindgen)
   node/       # NAPI Node.js bindings
@@ -107,6 +111,7 @@ examples/     # Runnable example scripts
 cargo build --workspace
 cargo build -p nvidia-nat-nexus-core          # Core only
 cargo build -p nvidia-nat-nexus-otel          # OpenTelemetry OTLP subscriber
+cargo build -p nvidia-nat-nexus-openinference # OpenInference OTLP subscriber
 ```
 
 ### Python

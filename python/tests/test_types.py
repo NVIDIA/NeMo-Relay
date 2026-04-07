@@ -15,6 +15,8 @@ from nat_nexus import (
     EventType,
     LLMAttributes,
     LLMRequest,
+    OpenInferenceConfig,
+    OpenInferenceSubscriber,
     OpenTelemetryConfig,
     OpenTelemetrySubscriber,
     ScopeAttributes,
@@ -497,6 +499,99 @@ class TestOpenTelemetryTypes:
                 assert request["path"] == "/v1/traces"
                 assert request["headers"]["content-type"] == "application/x-protobuf"
                 assert request["body"]
+            finally:
+                subscriber.deregister(subscriber_name)
+                subscriber.shutdown()
+
+
+class TestOpenInferenceTypes:
+    def test_config_defaults_mutation_and_repr(self):
+        config = OpenInferenceConfig()
+
+        assert config.transport == "http_binary"
+        assert config.endpoint is None
+        assert config.service_name == "nat-nexus"
+        assert config.instrumentation_scope == "nvidia-nat-nexus-openinference"
+        assert config.timeout_millis == 3000
+        assert config.headers == {}
+        assert config.resource_attributes == {}
+
+        config.endpoint = "http://localhost:4318/v1/traces"
+        config.service_name = "py-agent"
+        config.service_namespace = "agents"
+        config.service_version = "1.0.0"
+        config.instrumentation_scope = "py-tests"
+        config.timeout_millis = 1250
+        config.set_header("authorization", "Bearer token")
+        config.set_resource_attribute("deployment.environment", "test")
+
+        assert config.headers == {"authorization": "Bearer token"}
+        assert config.resource_attributes == {"deployment.environment": "test"}
+        assert "OpenInferenceConfig" in repr(config)
+
+    def test_config_rejects_invalid_map_values(self):
+        config = OpenInferenceConfig()
+
+        with pytest.raises(ValueError, match="dict\\[str, str\\]"):
+            config.headers = cast(Any, [])
+
+        with pytest.raises(ValueError, match="dict\\[str, str\\]"):
+            config.resource_attributes = {"env": cast(Any, 1)}
+
+    def test_subscriber_lifecycle_and_invalid_transport(self):
+        config = OpenInferenceConfig()
+        config.endpoint = "http://localhost:4318/v1/traces"
+        config.service_name = "py-agent"
+
+        subscriber = OpenInferenceSubscriber(config)
+        assert "<OpenInferenceSubscriber>" in repr(subscriber)
+
+        subscriber_name = f"py_openinference_subscriber_{uuid4().hex}"
+        subscriber.register(subscriber_name)
+        try:
+            assert subscriber.deregister(subscriber_name) is True
+            assert subscriber.deregister(subscriber_name) is False
+            subscriber.force_flush()
+            subscriber.shutdown()
+        finally:
+            subscribers.deregister(subscriber_name)
+
+        bad = OpenInferenceConfig()
+        bad.transport = "invalid"
+        with pytest.raises(ValueError, match="transport must be"):
+            OpenInferenceSubscriber(bad)
+
+    def test_subscriber_exports_scope_and_mark_events_end_to_end(self):
+        with _OtelCollector() as collector:
+            config = OpenInferenceConfig()
+            config.endpoint = collector.endpoint
+            config.service_name = "py-agent"
+
+            subscriber = OpenInferenceSubscriber(config)
+            subscriber_name = f"py_openinference_e2e_{uuid4().hex}"
+            subscriber.register(subscriber_name)
+
+            try:
+                handle = scope.push("openinference_scope", ScopeType.Agent, data={"scope": True})
+                try:
+                    scope.event(
+                        "openinference_mark",
+                        handle=handle,
+                        data={"step": 1},
+                        metadata={"source": "python"},
+                    )
+                finally:
+                    scope.pop(handle)
+
+                subscriber.force_flush()
+                request = collector.wait_for_request()
+                assert request["path"] == "/v1/traces"
+                assert request["headers"]["content-type"] == "application/x-protobuf"
+                assert request["body"]
+                assert b"openinference.span.kind" in request["body"]
+                assert b"AGENT" in request["body"]
+                assert b"metadata" in request["body"]
+                assert b"openinference_mark" in request["body"]
             finally:
                 subscriber.deregister(subscriber_name)
                 subscriber.shutdown()

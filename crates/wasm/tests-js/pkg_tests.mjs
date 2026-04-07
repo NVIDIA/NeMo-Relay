@@ -15,6 +15,10 @@ function unique(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
+function assertBodyContains(body, text) {
+  assert.equal(body.includes(Buffer.from(text, 'utf8')), true, `expected OTLP payload to contain ${text}`);
+}
+
 function resetScopeStack() {
   const stack = wasm.createScopeStack();
   wasm.setThreadScopeStack(stack);
@@ -184,6 +188,72 @@ test('WASM package exports scope push/pop and mark events end to end', async () 
     assert.equal(request.url, '/v1/traces');
     assert.equal(request.headers['content-type'], 'application/x-protobuf');
     assert.ok(request.body.length > 0);
+  } finally {
+    subscriber.deregister(name);
+    subscriber.shutdown();
+    await collector.close();
+  }
+});
+
+test('WASM package exposes OpenInference config defaults and subscriber lifecycle', () => {
+  const config = wasm.defaultOpenInferenceConfig();
+  assert.equal(config.transport, 'http_binary');
+  assert.equal(config.endpoint, undefined);
+  assert.equal(config.service_name, 'nat-nexus');
+  assert.equal(config.instrumentation_scope, 'nvidia-nat-nexus-openinference');
+  assert.equal(config.timeout_millis, 3000);
+  assert.equal(config.headers instanceof Map, true);
+  assert.equal(config.headers.size, 0);
+  assert.equal(config.resource_attributes instanceof Map, true);
+  assert.equal(config.resource_attributes.size, 0);
+
+  config.endpoint = 'http://localhost:4318/v1/traces';
+  config.service_name = 'wasm-agent';
+  config.service_namespace = 'agents';
+  config.service_version = '1.0.0';
+  config.instrumentation_scope = 'wasm-tests';
+  config.timeout_millis = 1250;
+  config.headers = { authorization: 'Bearer token' };
+  config.resource_attributes = { 'deployment.environment': 'test' };
+
+  assert.throws(
+    () => new wasm.OpenInferenceSubscriber({ transport: 'grpc' }),
+    /not supported on this target/i,
+  );
+  assert.throws(
+    () => new wasm.OpenInferenceSubscriber({ transport: 'invalid' }),
+    /transport must be/i,
+  );
+  assert.throws(
+    () => new wasm.OpenInferenceSubscriber({ headers: { authorization: 1 } }),
+    /invalid type/i,
+  );
+});
+
+test('WASM package exports OpenInference scope push/pop and mark events end to end', async () => {
+  const collector = await startCollector();
+  const config = wasm.defaultOpenInferenceConfig();
+  config.endpoint = collector.endpoint;
+  config.service_name = 'wasm-agent';
+
+  const subscriber = new wasm.OpenInferenceSubscriber(config);
+  const name = unique('wasm_openinference');
+  subscriber.register(name);
+
+  try {
+    const scope = wasm.pushScope('openinference_scope', 0, null, 0, { scope: true }, null);
+    wasm.event('openinference_mark', scope, { step: 1 }, { source: 'wasm' });
+    wasm.popScope(wasm.getHandle());
+
+    subscriber.forceFlush();
+    const request = await collector.nextRequest();
+    assert.equal(request.url, '/v1/traces');
+    assert.equal(request.headers['content-type'], 'application/x-protobuf');
+    assert.ok(request.body.length > 0);
+    assertBodyContains(request.body, 'openinference.span.kind');
+    assertBodyContains(request.body, 'AGENT');
+    assertBodyContains(request.body, 'metadata');
+    assertBodyContains(request.body, 'openinference_mark');
   } finally {
     subscriber.deregister(name);
     subscriber.shutdown();

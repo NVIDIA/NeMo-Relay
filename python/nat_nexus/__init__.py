@@ -74,6 +74,8 @@ from nat_nexus._native import (
     LLMAttributes,
     LLMHandle,
     LLMRequest,
+    OpenInferenceConfig,
+    OpenInferenceSubscriber,
     OpenTelemetryConfig,
     OpenTelemetrySubscriber,
     # Types (always at top level)
@@ -207,6 +209,8 @@ __all__ = [
     "LLMRequest",
     "Event",
     "AtifExporter",
+    "OpenInferenceConfig",
+    "OpenInferenceSubscriber",
     "OpenTelemetryConfig",
     "OpenTelemetrySubscriber",
 ]

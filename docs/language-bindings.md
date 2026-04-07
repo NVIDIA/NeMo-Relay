@@ -58,6 +58,8 @@ subscribers with `Arc::new(...)`, not `Box::new(...)`.
 If you want OTLP export without adding exporter logic to your own callback,
 use the separate `nvidia-nat-nexus-otel` crate. It turns Nexus lifecycle
 events into OpenTelemetry spans and exposes a normal `EventSubscriberFn`.
+If you want OTLP export with OpenInference semantic conventions, use the
+separate `nvidia-nat-nexus-openinference` crate instead.
 
 ## OpenTelemetry
 
@@ -97,6 +99,71 @@ const config = {
 
 const subscriber = new OpenTelemetrySubscriber(config);
 subscriber.register("otel");
+```
+
+## OpenInference
+
+Every binding also exposes an OpenInference subscriber backed by the same OTLP
+transport layer, but annotated with OpenInference semantic conventions for
+backends such as Phoenix.
+
+- Rust: `OpenInferenceConfig::new()` plus chained setters.
+- Python: mutable `OpenInferenceConfig()` object passed to `OpenInferenceSubscriber(config)`.
+- Node.js: plain `OpenInferenceConfig` object passed to `new OpenInferenceSubscriber(config)`.
+- Go: `NewOpenInferenceConfig()` returns a mutable config struct for `NewOpenInferenceSubscriber(config)`.
+- WASM: `defaultOpenInferenceConfig()` returns a mutable JS object for `new OpenInferenceSubscriber(config)`.
+
+Use [Observability with OpenInference](observability-with-openinference.md) as
+the canonical guide for semantic mapping, lifecycle, transport constraints, and
+per-language setup examples.
+
+Minimal examples:
+
+```python
+import nat_nexus
+
+config = nat_nexus.OpenInferenceConfig()
+config.endpoint = "http://localhost:4318/v1/traces"
+config.service_name = "demo-agent"
+
+subscriber = nat_nexus.OpenInferenceSubscriber(config)
+subscriber.register("openinference")
+```
+
+```javascript
+import { OpenInferenceSubscriber } from "./index.js";
+
+const config = {
+  endpoint: "http://localhost:4318/v1/traces",
+  serviceName: "demo-agent",
+};
+
+const subscriber = new OpenInferenceSubscriber(config);
+subscriber.register("openinference");
+```
+
+```go
+config := nat_nexus.NewOpenInferenceConfig()
+config.Endpoint = "http://localhost:4318/v1/traces"
+config.ServiceName = "demo-agent"
+
+subscriber, err := nat_nexus.NewOpenInferenceSubscriber(config)
+```
+
+```javascript
+import init, {
+  defaultOpenInferenceConfig,
+  OpenInferenceSubscriber,
+} from "./pkg/nvidia_nat_nexus_wasm.js";
+
+await init();
+
+const config = defaultOpenInferenceConfig();
+config.endpoint = "http://localhost:4318/v1/traces";
+config.service_name = "demo-agent";
+
+const subscriber = new OpenInferenceSubscriber(config);
+subscriber.register("openinference");
 ```
 
 ```go
