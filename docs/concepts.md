@@ -99,8 +99,8 @@ Every lifecycle operation emits events to registered subscribers. Events carry:
 | `parent_uuid` | Parent scope/handle UUID |
 | `timestamp` | ISO 8601 UTC timestamp |
 | `name` | Name of the entity |
-| `event_type` | `Start`, `End`, or `Mark` |
-| `scope_type` | Type of the entity |
+| `kind` | Variant discriminator such as `ToolStart` or `LLMEnd` |
+| `scope_type` | Scope category, present only on scope lifecycle events |
 | `attributes` | Handle attributes |
 | `data` | Application data snapshot |
 | `metadata` | Tracing metadata snapshot |
@@ -108,7 +108,6 @@ Every lifecycle operation emits events to registered subscribers. Events carry:
 | `output` | Post-guardrail response (End events) |
 | `model_name` | LLM model name (LLM events) |
 | `tool_call_id` | External correlation ID (tool events) |
-| `root_uuid` | Root scope UUID for concurrent isolation |
 
 Subscriber callbacks run synchronously on the calling thread, but Nexus snapshots
 the subscriber list and releases its runtime locks before invoking them. This
@@ -211,7 +210,7 @@ Event subscribers observe all lifecycle events. They are registered by name and 
 
 ```python
 def my_subscriber(event):
-    print(f"{event.event_type}: {event.name} [{event.uuid}]")
+    print(f"{event.kind}: {event.name} [{event.uuid}]")
 
 nat_nexus.subscribers.register("logger", my_subscriber)
 # ... run operations ...

@@ -11,16 +11,31 @@ take effect within their owning scope and do not leak to other scopes.
 
 import pytest
 from nat_nexus import (
-    Event,
-    EventType,
+    LLMEndEvent,
     LLMRequest,
+    LLMStartEvent,
+    MarkEvent,
+    ScopeEndEvent,
+    ScopeStartEvent,
     ScopeType,
+    ToolEndEvent,
+    ToolStartEvent,
     guardrails,
     llm,
     scope,
     scope_local,
     subscribers,
     tools,
+)
+
+EVENT_VARIANTS = (
+    ScopeStartEvent,
+    ScopeEndEvent,
+    ToolStartEvent,
+    ToolEndEvent,
+    LLMStartEvent,
+    LLMEndEvent,
+    MarkEvent,
 )
 
 # ---------------------------------------------------------------------------
@@ -51,7 +66,7 @@ class TestScopeLocalGuardrail:
         assert "sanitized" not in result
 
         # The sanitizer's effect is visible in the event's input field.
-        start_events = [e for e in events if e.event_type == EventType.Start and e.name == "sanitized_tool"]
+        start_events = [e for e in events if isinstance(e, ToolStartEvent) and e.name == "sanitized_tool"]
         assert len(start_events) >= 1
         assert start_events[0].input["sanitized"] is True
 
@@ -77,7 +92,7 @@ class TestScopeLocalGuardrail:
         assert "response_sanitized" not in result
 
         # The sanitizer's effect is visible in the event's output field.
-        end_events = [e for e in events if e.event_type == EventType.End and e.name == "resp_tool"]
+        end_events = [e for e in events if isinstance(e, ToolEndEvent) and e.name == "resp_tool"]
         assert len(end_events) >= 1
         assert end_events[0].output["response_sanitized"] is True
 
@@ -106,7 +121,7 @@ class TestScopeLocalAutoCleanup:
             await tools.execute("tool_inside", {"x": 1}, my_tool)
 
         # Verify the sanitizer ran inside the scope (visible in event input).
-        start_inside = [e for e in events_inside if e.event_type == EventType.Start and e.name == "tool_inside"]
+        start_inside = [e for e in events_inside if isinstance(e, ToolStartEvent) and e.name == "tool_inside"]
         assert len(start_inside) >= 1
         assert start_inside[0].input["sanitized"] is True
 
@@ -117,7 +132,7 @@ class TestScopeLocalAutoCleanup:
         await tools.execute("tool_outside", {"x": 2}, my_tool)
         subscribers.deregister("sl_cleanup_outer_sub")
 
-        start_outside = [e for e in events_outside if e.event_type == EventType.Start and e.name == "tool_outside"]
+        start_outside = [e for e in events_outside if isinstance(e, ToolStartEvent) and e.name == "tool_outside"]
         assert len(start_outside) >= 1
         assert "sanitized" not in start_outside[0].input
 
@@ -248,7 +263,7 @@ class TestScopeLocalSubscriber:
         # Should have received at least tool start and end events
         assert len(events) >= 2
         for e in events:
-            assert isinstance(e, Event)
+            assert isinstance(e, EVENT_VARIANTS)
             assert e.uuid is not None
 
     async def test_subscriber_receives_mark_events(self):
@@ -259,7 +274,7 @@ class TestScopeLocalSubscriber:
             scope_local.register_subscriber(handle, "sl_mark_sub", lambda e: events.append(e))
             scope.event("test_mark", data={"info": "hello"})
 
-        mark_events = [e for e in events if e.event_type == EventType.Mark]
+        mark_events = [e for e in events if isinstance(e, MarkEvent)]
         assert len(mark_events) >= 1
 
     def test_subscriber_deregister_within_scope(self):
@@ -516,7 +531,7 @@ class TestScopeLocalDeregistration:
             await tools.execute("dereg_tool_1", {"a": 1}, my_tool)
 
             # Verify the sanitizer ran (visible in event input).
-            start_before = [e for e in events if e.event_type == EventType.Start and e.name == "dereg_tool_1"]
+            start_before = [e for e in events if isinstance(e, ToolStartEvent) and e.name == "dereg_tool_1"]
             assert len(start_before) >= 1
             assert start_before[0].input["sanitized"] is True
 
@@ -528,7 +543,7 @@ class TestScopeLocalDeregistration:
             await tools.execute("dereg_tool_2", {"a": 2}, my_tool)
 
         # After deregistration, the sanitizer should no longer appear in events.
-        start_after = [e for e in events if e.event_type == EventType.Start and e.name == "dereg_tool_2"]
+        start_after = [e for e in events if isinstance(e, ToolStartEvent) and e.name == "dereg_tool_2"]
         assert len(start_after) >= 1
         assert "sanitized" not in start_after[0].input
 
@@ -602,7 +617,7 @@ class TestScopeLocalLlmBehavior:
 
         assert result == {"model": "scope-local"}
         start = next(
-            event for event in events if event.name == "sl_llm_sanitize_call" and event.event_type == EventType.Start
+            event for event in events if event.name == "sl_llm_sanitize_call" and isinstance(event, LLMStartEvent)
         )
         assert start.input == {
             "headers": {"X-Scope-Local": "yes"},

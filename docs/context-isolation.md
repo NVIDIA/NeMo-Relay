@@ -160,7 +160,7 @@ graph TD
     end
 ```
 
-Each agent gets its own scope stack with a unique root UUID. **Global** middleware registrations are shared across all agents. Use `root_uuid` on events to filter per-agent in subscribers or ATIF export.
+Each agent gets its own scope stack with a unique root scope. **Global** middleware registrations are shared across all agents. For per-agent behavior, use scope-local registrations or infer ancestry from the event stream.
 
 ### Scope-Local Middleware for Per-Agent Isolation
 
@@ -261,17 +261,14 @@ wg.Wait()
 
 ## ATIF Export with Scope-Based Filtering
 
-When exporting trajectories, pass `root_uuid` to isolate a single agent's events (or any scope UUID to export a sub-tree):
+`AtifExporter` now always exports the full set of events it has collected:
 
 ```python
 exporter = AtifExporter()
 # ... agents run concurrently ...
 
-# Export only Agent A's trajectory
-trajectory_a = exporter.export(root_uuid=agent_a_root_uuid)
-
-# Export everything
-trajectory_all = exporter.export(root_uuid=None)
+# Export the currently collected trajectory
+trajectory = exporter.export()
 ```
 
 See [ATIF Export](atif-export.md) for details.

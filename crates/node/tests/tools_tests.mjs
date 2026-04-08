@@ -68,7 +68,7 @@ describe('Tool lifecycle', () => {
     }
   });
 
-  it('tool call event exposes toolCallId, rootUuid, and payload fields', async () => {
+  it('tool call event exposes toolCallId and payload fields', async () => {
     const events = [];
     const scope = pushScope('tool_event_parent', ScopeType.Agent, null, null);
     registerSubscriber('node_tool_field_sub', (e) => events.push(e));
@@ -91,13 +91,11 @@ describe('Tool lifecycle', () => {
         await new Promise((r) => setTimeout(r, 10));
       }
 
-      const start = events.find((e) => e.name === 'field_tool' && e.event_type === 0);
-      const end = events.find((e) => e.name === 'field_tool' && e.event_type === 1);
+      const start = events.find((e) => e.name === 'field_tool' && e.kind === 'ToolStart');
+      const end = events.find((e) => e.name === 'field_tool' && e.kind === 'ToolEnd');
       assert.equal(start.tool_call_id, 'tool-call-123');
-      assert.ok(start.root_uuid);
-      assert.equal(end.root_uuid, start.root_uuid);
-      assert.deepEqual(JSON.parse(start.input), { x: 1 });
-      assert.deepEqual(JSON.parse(end.output), { result: 42 });
+      assert.deepEqual(start.input, { x: 1 });
+      assert.deepEqual(end.output, { result: 42 });
     } finally {
       deregisterSubscriber('node_tool_field_sub');
       popScope(scope);
@@ -161,11 +159,11 @@ describe('Tool guardrails', () => {
       const result = await toolCallExecute('san_req_evt_tool', { x: 1 }, (args) => args, null, null, null, null);
       assert.deepEqual(result, { x: 1 });
       const deadline = Date.now() + 2000;
-      while (!events.find((e) => e.name === 'san_req_evt_tool' && e.event_type === 0) && Date.now() < deadline) {
+      while (!events.find((e) => e.name === 'san_req_evt_tool' && e.kind === 'ToolStart') && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 10));
       }
-      const start = events.find((e) => e.name === 'san_req_evt_tool' && e.event_type === 0);
-      assert.deepEqual(JSON.parse(start.input), { x: 1, sanitized: true });
+      const start = events.find((e) => e.name === 'san_req_evt_tool' && e.kind === 'ToolStart');
+      assert.deepEqual(start.input, { x: 1, sanitized: true });
     } finally {
       deregisterToolSanitizeRequestGuardrail('node_tool_san_req_evt_guard');
       deregisterSubscriber('node_tool_san_req_evt');
@@ -185,11 +183,11 @@ describe('Tool guardrails', () => {
       const result = await toolCallExecute('san_resp_evt_tool', { x: 1 }, () => ({ ok: true }), null, null, null, null);
       assert.deepEqual(result, { ok: true });
       const deadline = Date.now() + 2000;
-      while (!events.find((e) => e.name === 'san_resp_evt_tool' && e.event_type === 1) && Date.now() < deadline) {
+      while (!events.find((e) => e.name === 'san_resp_evt_tool' && e.kind === 'ToolEnd') && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 10));
       }
-      const end = events.find((e) => e.name === 'san_resp_evt_tool' && e.event_type === 1);
-      assert.deepEqual(JSON.parse(end.output), { ok: true, checked: true });
+      const end = events.find((e) => e.name === 'san_resp_evt_tool' && e.kind === 'ToolEnd');
+      assert.deepEqual(end.output, { ok: true, checked: true });
     } finally {
       deregisterToolSanitizeResponseGuardrail('node_tool_san_resp_evt_guard');
       deregisterSubscriber('node_tool_san_resp_evt');

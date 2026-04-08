@@ -188,9 +188,9 @@ type CollectorFunc func(chunkJSON json.RawMessage)
 type FinalizerFunc func() string
 
 // EventSubscriberFunc is a callback invoked for each lifecycle event emitted
-// by the runtime. The Event pointer is only valid for the duration of the
-// callback; callers must not retain it.
-type EventSubscriberFunc func(event *Event)
+// by the runtime. The concrete value is one of the event variant types that
+// implement [Event] and is only valid for the duration of the callback.
+type EventSubscriberFunc func(event Event)
 
 // ---------------------------------------------------------------------------
 // CGo trampoline functions (//export)
@@ -233,7 +233,7 @@ func goToolExecTrampoline(userData unsafe.Pointer, argsJSON *C.char) *C.char {
 //export goEventSubscriberTrampoline
 func goEventSubscriberTrampoline(userData unsafe.Pointer, event *C.FfiEvent) {
 	fn := lookupClosure(userData).(EventSubscriberFunc)
-	goEvent := &Event{ptr: event}
+	goEvent := newEvent(event)
 	fn(goEvent)
 }
 

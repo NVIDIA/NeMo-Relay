@@ -443,11 +443,11 @@ index 000000000..be0e9ccb2
 +    }
 +  }
 +
-+  export function exportTrajectory(sessionId: string, rootUuid?: string): string | null {
++  export function exportTrajectory(sessionId: string): string | null {
 +    const exporter = exporters.get(sessionId);
 +    if (!exporter) return null;
 +    try {
-+      return exporter.exportJson(rootUuid ?? null);
++      return exporter.exportJson();
 +    } catch (e) {
 +      log.error("exportTrajectory failed", { error: String(e) });
 +      return null;

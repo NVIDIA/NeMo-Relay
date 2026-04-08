@@ -24,16 +24,16 @@ func TestScopeLocalToolSanitizeRequestGuardrail(t *testing.T) {
 
 	stack.Run(func() {
 		type capturedEvent struct {
-			eventType EventType
-			input     json.RawMessage
+			kind  string
+			input json.RawMessage
 		}
 		var events []capturedEvent
 		var mu sync.Mutex
-		err := RegisterSubscriber("scope_san_req_sub", func(e *Event) {
+		err := RegisterSubscriber("scope_san_req_sub", func(e Event) {
 			mu.Lock()
 			events = append(events, capturedEvent{
-				eventType: e.Type(),
-				input:     append(json.RawMessage(nil), e.Input()...),
+				kind:  e.Kind(),
+				input: append(json.RawMessage(nil), e.Input()...),
 			})
 			mu.Unlock()
 		})
@@ -76,7 +76,7 @@ func TestScopeLocalToolSanitizeRequestGuardrail(t *testing.T) {
 		defer mu.Unlock()
 		var found bool
 		for _, ev := range events {
-			if ev.eventType == EventTypeStart && ev.input != nil {
+			if ev.kind == "ToolStart" && ev.input != nil {
 				var m map[string]interface{}
 				json.Unmarshal(ev.input, &m)
 				if m["scope_sanitized"] == true {
@@ -100,16 +100,16 @@ func TestScopeLocalToolSanitizeResponseGuardrail(t *testing.T) {
 
 	stack.Run(func() {
 		type capturedEvent struct {
-			eventType EventType
-			output    json.RawMessage
+			kind   string
+			output json.RawMessage
 		}
 		var events []capturedEvent
 		var mu sync.Mutex
-		err := RegisterSubscriber("scope_san_resp_sub", func(e *Event) {
+		err := RegisterSubscriber("scope_san_resp_sub", func(e Event) {
 			mu.Lock()
 			events = append(events, capturedEvent{
-				eventType: e.Type(),
-				output:    append(json.RawMessage(nil), e.Output()...),
+				kind:   e.Kind(),
+				output: append(json.RawMessage(nil), e.Output()...),
 			})
 			mu.Unlock()
 		})
@@ -150,7 +150,7 @@ func TestScopeLocalToolSanitizeResponseGuardrail(t *testing.T) {
 		defer mu.Unlock()
 		var found bool
 		for _, ev := range events {
-			if ev.eventType == EventTypeEnd && ev.output != nil {
+			if ev.kind == "ToolEnd" && ev.output != nil {
 				var m map[string]interface{}
 				json.Unmarshal(ev.output, &m)
 				if m["response_sanitized"] == true {
@@ -298,7 +298,7 @@ func TestScopeLocalSubscriberCleanupOnPop(t *testing.T) {
 		}
 		var eventCount int
 		var mu sync.Mutex
-		err = ScopeRegisterSubscriber(handle.UUID(), "cleanup_sub", func(event *Event) { mu.Lock(); eventCount++; mu.Unlock() })
+		err = ScopeRegisterSubscriber(handle.UUID(), "cleanup_sub", func(event Event) { mu.Lock(); eventCount++; mu.Unlock() })
 		if err != nil {
 			t.Fatalf("ScopeRegisterSubscriber failed: %v", err)
 		}
@@ -640,7 +640,7 @@ func TestScopeLocalSubscriberReceivesEvents(t *testing.T) {
 		handle, _ := PushScope("sub_scope", ScopeTypeAgent)
 		var eventNames []string
 		var mu sync.Mutex
-		err := ScopeRegisterSubscriber(handle.UUID(), "scope_sub", func(event *Event) { mu.Lock(); eventNames = append(eventNames, event.Name()); mu.Unlock() })
+		err := ScopeRegisterSubscriber(handle.UUID(), "scope_sub", func(event Event) { mu.Lock(); eventNames = append(eventNames, event.Name()); mu.Unlock() })
 		if err != nil {
 			t.Fatalf("ScopeRegisterSubscriber failed: %v", err)
 		}
@@ -804,8 +804,8 @@ func TestScopeLocalLlmSanitizeRequestGuardrailAffectsEvent(t *testing.T) {
 	stack.Run(func() {
 		var capturedInput json.RawMessage
 		var mu sync.Mutex
-		RegisterSubscriber("scope_llm_san_sub", func(event *Event) {
-			if event.Type() == EventTypeStart {
+		RegisterSubscriber("scope_llm_san_sub", func(event Event) {
+			if event.Kind() == "LLMStart" {
 				mu.Lock()
 				capturedInput = append(json.RawMessage(nil), event.Input()...)
 				mu.Unlock()
@@ -1236,7 +1236,7 @@ func TestScopeLocalExplicitDeregisterLlmWrappers(t *testing.T) {
 		}
 
 		subscriberCalls := 0
-		err = ScopeRegisterSubscriber(scopeUUID, "llm_scope_sub", func(event *Event) {
+		err = ScopeRegisterSubscriber(scopeUUID, "llm_scope_sub", func(event Event) {
 			subscriberCalls++
 		})
 		if err != nil {

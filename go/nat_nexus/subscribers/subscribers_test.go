@@ -15,8 +15,8 @@ func TestSubscriberShorthands(t *testing.T) {
 	var seenStart bool
 	var mu sync.Mutex
 
-	if err := subscriberspkg.Register("subs_global", func(event *nat_nexus.Event) {
-		if event.Type() == nat_nexus.EventTypeStart {
+	if err := subscriberspkg.Register("subs_global", func(event nat_nexus.Event) {
+		if event.Kind() == "ScopeStart" {
 			mu.Lock()
 			seenStart = true
 			mu.Unlock()
@@ -59,8 +59,8 @@ func TestScopeSubscriberShorthands(t *testing.T) {
 
 		var markCount int
 		var mu sync.Mutex
-		if err := subscriberspkg.ScopeRegister(handle.UUID(), "subs_local", func(event *nat_nexus.Event) {
-			if event.Type() == nat_nexus.EventTypeMark {
+		if err := subscriberspkg.ScopeRegister(handle.UUID(), "subs_local", func(event nat_nexus.Event) {
+			if event.Kind() == "Mark" {
 				mu.Lock()
 				markCount++
 				mu.Unlock()

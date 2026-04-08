@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Utc};
 use nvidia_nat_nexus_core::{
     nat_nexus_deregister_subscriber, nat_nexus_register_subscriber, Event, EventSubscriberFn,
-    EventType, HandleAttributes, NexusError, ScopeType, ToolAttributes,
+    HandleAttributes, NexusError, ScopeType, ToolAttributes,
 };
 use opentelemetry::trace::{
     Span as _, SpanContext, SpanKind, TraceContextExt, Tracer, TracerProvider as _,
@@ -482,10 +482,12 @@ impl OtelEventProcessor {
     }
 
     fn process(&mut self, event: &Event) {
-        match event.event_type {
-            EventType::Start => self.process_start(event),
-            EventType::End => self.process_end(event),
-            EventType::Mark => self.process_mark(event),
+        match event {
+            Event::ScopeStart(_) | Event::ToolStart(_) | Event::LLMStart(_) => {
+                self.process_start(event)
+            }
+            Event::ScopeEnd(_) | Event::ToolEnd(_) | Event::LLMEnd(_) => self.process_end(event),
+            Event::Mark(_) => self.process_mark(event),
         }
     }
 
@@ -506,27 +508,27 @@ impl OtelEventProcessor {
             .tracer
             .span_builder(span_name(event))
             .with_kind(span_kind(event))
-            .with_start_time(to_system_time(event.timestamp))
+            .with_start_time(to_system_time(*event.timestamp()))
             .start_with_context(&self.tracer, &self.parent_context(event));
         span.set_attributes(start_attributes(event));
         let span_context = local_parent_span_context(span.span_context());
         self.active_spans
-            .insert(event.uuid, ActiveSpan { span, span_context });
+            .insert(event.uuid(), ActiveSpan { span, span_context });
     }
 
     fn process_end(&mut self, event: &Event) {
-        let Some(mut active_span) = self.active_spans.remove(&event.uuid) else {
+        let Some(mut active_span) = self.active_spans.remove(&event.uuid()) else {
             return;
         };
         active_span.span.set_attributes(end_attributes(event));
         active_span
             .span
-            .end_with_timestamp(to_system_time(event.timestamp));
+            .end_with_timestamp(to_system_time(*event.timestamp()));
     }
 
     fn process_mark(&mut self, event: &Event) {
-        let mark_name = event.name.clone().unwrap_or_else(|| "mark".to_string());
-        let timestamp = to_system_time(event.timestamp);
+        let mark_name = event.name().to_string();
+        let timestamp = to_system_time(*event.timestamp());
         let attributes = mark_attributes(event);
 
         if let Some(parent_span) = self.find_parent_span_mut(event) {
@@ -557,19 +559,9 @@ impl OtelEventProcessor {
     }
 
     fn parent_span_uuid(&self, event: &Event) -> Option<Uuid> {
-        if let Some(parent_uuid) = event.parent_uuid {
-            if self.active_spans.contains_key(&parent_uuid) {
-                return Some(parent_uuid);
-            }
-        }
-
-        if let Some(root_uuid) = event.root_uuid {
-            if root_uuid != event.uuid && self.active_spans.contains_key(&root_uuid) {
-                return Some(root_uuid);
-            }
-        }
-
-        None
+        event
+            .parent_uuid()
+            .filter(|uuid| self.active_spans.contains_key(uuid))
     }
 
     fn find_parent_span(&self, event: &Event) -> Option<&ActiveSpan> {
@@ -584,11 +576,11 @@ impl OtelEventProcessor {
 }
 
 fn span_kind(event: &Event) -> SpanKind {
-    match event.scope_type {
+    match semantic_scope_type(event) {
         Some(ScopeType::Llm) => SpanKind::Client,
         Some(ScopeType::Tool)
             if matches!(
-                event.attributes,
+                event.attributes(),
                 Some(HandleAttributes::Tool(attributes)) if attributes.contains(ToolAttributes::LOCAL)
             ) =>
         {
@@ -602,10 +594,17 @@ fn span_kind(event: &Event) -> SpanKind {
 }
 
 fn span_name(event: &Event) -> String {
-    event
-        .name
-        .clone()
-        .unwrap_or_else(|| scope_type_name(event.scope_type).to_string())
+    event.name().to_string()
+}
+
+fn semantic_scope_type(event: &Event) -> Option<ScopeType> {
+    match event {
+        Event::ScopeStart(inner) => Some(inner.scope_type),
+        Event::ScopeEnd(inner) => Some(inner.scope_type),
+        Event::ToolStart(_) | Event::ToolEnd(_) => Some(ScopeType::Tool),
+        Event::LLMStart(_) | Event::LLMEnd(_) => Some(ScopeType::Llm),
+        Event::Mark(_) => None,
+    }
 }
 
 fn scope_type_name(scope_type: Option<ScopeType>) -> &'static str {
@@ -626,59 +625,38 @@ fn scope_type_name(scope_type: Option<ScopeType>) -> &'static str {
 
 fn start_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = common_attributes(event);
+    let handle_attributes = event.attributes();
     push_serialized(
         &mut attributes,
         "nexus.handle_attributes_json",
-        event.attributes.as_ref(),
+        handle_attributes.as_ref(),
     );
-    push_serialized(
-        &mut attributes,
-        "nexus.start.data_json",
-        event.data.as_ref(),
-    );
+    push_serialized(&mut attributes, "nexus.start.data_json", event.data());
     push_serialized(
         &mut attributes,
         "nexus.start.metadata_json",
-        event.metadata.as_ref(),
+        event.metadata(),
     );
-    push_serialized(
-        &mut attributes,
-        "nexus.start.input_json",
-        event.input.as_ref(),
-    );
+    push_serialized(&mut attributes, "nexus.start.input_json", event.input());
     attributes
 }
 
 fn end_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = Vec::new();
-    push_serialized(&mut attributes, "nexus.end.data_json", event.data.as_ref());
-    push_serialized(
-        &mut attributes,
-        "nexus.end.metadata_json",
-        event.metadata.as_ref(),
-    );
-    push_serialized(
-        &mut attributes,
-        "nexus.end.output_json",
-        event.output.as_ref(),
-    );
+    push_serialized(&mut attributes, "nexus.end.data_json", event.data());
+    push_serialized(&mut attributes, "nexus.end.metadata_json", event.metadata());
+    push_serialized(&mut attributes, "nexus.end.output_json", event.output());
     attributes
 }
 
 fn mark_attributes(event: &Event) -> Vec<KeyValue> {
+    let handle_attributes = event.attributes();
     let mut attributes = vec![
-        KeyValue::new("nexus.mark.uuid", event.uuid.to_string()),
+        KeyValue::new("nexus.mark.uuid", event.uuid().to_string()),
         KeyValue::new(
             "nexus.mark.parent_uuid",
             event
-                .parent_uuid
-                .map(|uuid| uuid.to_string())
-                .unwrap_or_default(),
-        ),
-        KeyValue::new(
-            "nexus.mark.root_uuid",
-            event
-                .root_uuid
+                .parent_uuid()
                 .map(|uuid| uuid.to_string())
                 .unwrap_or_default(),
         ),
@@ -686,42 +664,41 @@ fn mark_attributes(event: &Event) -> Vec<KeyValue> {
     push_serialized(
         &mut attributes,
         "nexus.mark.attributes_json",
-        event.attributes.as_ref(),
+        handle_attributes.as_ref(),
     );
-    push_serialized(&mut attributes, "nexus.mark.data_json", event.data.as_ref());
+    push_serialized(&mut attributes, "nexus.mark.data_json", event.data());
     push_serialized(
         &mut attributes,
         "nexus.mark.metadata_json",
-        event.metadata.as_ref(),
+        event.metadata(),
     );
     attributes
 }
 
 fn common_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = vec![
-        KeyValue::new("nexus.uuid", event.uuid.to_string()),
+        KeyValue::new("nexus.uuid", event.uuid().to_string()),
         KeyValue::new(
             "nexus.parent_uuid",
             event
-                .parent_uuid
+                .parent_uuid()
                 .map(|uuid| uuid.to_string())
                 .unwrap_or_default(),
         ),
         KeyValue::new(
-            "nexus.root_uuid",
-            event
-                .root_uuid
-                .map(|uuid| uuid.to_string())
-                .unwrap_or_default(),
+            "nexus.scope_type",
+            scope_type_name(semantic_scope_type(event)),
         ),
-        KeyValue::new("nexus.scope_type", scope_type_name(event.scope_type)),
     ];
 
-    if let Some(model_name) = &event.model_name {
-        attributes.push(KeyValue::new("nexus.model_name", model_name.clone()));
+    if let Some(model_name) = event.model_name() {
+        attributes.push(KeyValue::new("nexus.model_name", model_name.to_string()));
     }
-    if let Some(tool_call_id) = &event.tool_call_id {
-        attributes.push(KeyValue::new("nexus.tool_call_id", tool_call_id.clone()));
+    if let Some(tool_call_id) = event.tool_call_id() {
+        attributes.push(KeyValue::new(
+            "nexus.tool_call_id",
+            tool_call_id.to_string(),
+        ));
     }
 
     attributes
@@ -764,7 +741,7 @@ fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nvidia_nat_nexus_core::{EventType, Json, ScopeType};
+    use nvidia_nat_nexus_core::{Json, ScopeType};
     use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
     use serde_json::json;
     use std::collections::HashMap;
@@ -812,18 +789,41 @@ mod tests {
     fn make_start_event(
         uuid: Uuid,
         parent_uuid: Option<Uuid>,
-        root_uuid: Option<Uuid>,
         name: &str,
         scope_type: ScopeType,
         input: Option<Json>,
     ) -> Event {
-        Event::builder(uuid, EventType::Start)
-            .parent_uuid(parent_uuid)
-            .root_uuid(root_uuid)
-            .name(name)
-            .scope_type(scope_type)
-            .input(input)
-            .build()
+        match scope_type {
+            ScopeType::Tool => Event::tool_start(
+                parent_uuid,
+                uuid,
+                name,
+                None,
+                None,
+                nvidia_nat_nexus_core::ToolAttributes::empty(),
+                input,
+                None,
+            ),
+            ScopeType::Llm => Event::llm_start(
+                parent_uuid,
+                uuid,
+                name,
+                None,
+                None,
+                nvidia_nat_nexus_core::LLMAttributes::empty(),
+                input,
+                None,
+            ),
+            _ => Event::scope_start(
+                parent_uuid,
+                uuid,
+                name,
+                None,
+                None,
+                nvidia_nat_nexus_core::ScopeAttributes::empty(),
+                scope_type,
+            ),
+        }
     }
 
     #[test]
@@ -1073,28 +1073,31 @@ mod tests {
         let start = make_start_event(
             root_uuid,
             None,
-            Some(root_uuid),
             "search",
             ScopeType::Tool,
             Some(json!({"query": "hello"})),
         );
         processor.process(&start);
 
-        let mark = Event::builder(Uuid::new_v4(), EventType::Mark)
-            .parent_uuid(Some(root_uuid))
-            .root_uuid(Some(root_uuid))
-            .name("checkpoint")
-            .data(Some(json!({"step": 1})))
-            .build();
+        let mark = Event::mark(
+            Some(root_uuid),
+            Uuid::new_v4(),
+            "checkpoint",
+            Some(json!({"step": 1})),
+            None,
+        );
         processor.process(&mark);
 
-        let end = Event::builder(root_uuid, EventType::End)
-            .parent_uuid(None)
-            .root_uuid(Some(root_uuid))
-            .name("search")
-            .scope_type(ScopeType::Tool)
-            .output(Some(json!({"result": "ok"})))
-            .build();
+        let end = Event::tool_end(
+            None,
+            root_uuid,
+            "search",
+            None,
+            None,
+            nvidia_nat_nexus_core::ToolAttributes::empty(),
+            Some(json!({"result": "ok"})),
+            None,
+        );
         processor.process(&end);
 
         processor.force_flush().unwrap();
@@ -1129,7 +1132,6 @@ mod tests {
         processor.process(&make_start_event(
             root_uuid,
             None,
-            Some(root_uuid),
             "agent",
             ScopeType::Agent,
             None,
@@ -1137,26 +1139,29 @@ mod tests {
         processor.process(&make_start_event(
             child_uuid,
             Some(root_uuid),
-            Some(root_uuid),
             "model-call",
             ScopeType::Llm,
             None,
         ));
-        processor.process(
-            &Event::builder(child_uuid, EventType::End)
-                .parent_uuid(Some(root_uuid))
-                .root_uuid(Some(root_uuid))
-                .name("model-call")
-                .scope_type(ScopeType::Llm)
-                .build(),
-        );
-        processor.process(
-            &Event::builder(root_uuid, EventType::End)
-                .root_uuid(Some(root_uuid))
-                .name("agent")
-                .scope_type(ScopeType::Agent)
-                .build(),
-        );
+        processor.process(&Event::llm_end(
+            Some(root_uuid),
+            child_uuid,
+            "model-call",
+            None,
+            None,
+            nvidia_nat_nexus_core::LLMAttributes::empty(),
+            None,
+            None,
+        ));
+        processor.process(&Event::scope_end(
+            None,
+            root_uuid,
+            "agent",
+            None,
+            None,
+            nvidia_nat_nexus_core::ScopeAttributes::empty(),
+            ScopeType::Agent,
+        ));
 
         processor.force_flush().unwrap();
 
@@ -1183,10 +1188,13 @@ mod tests {
     fn orphan_marks_become_zero_duration_spans() {
         let (provider, exporter) = make_provider();
         let mut processor = OtelEventProcessor::new(provider.clone(), "test-scope".to_string());
-        let mark = Event::builder(Uuid::new_v4(), EventType::Mark)
-            .name("detached")
-            .data(Some(json!({"kind": "standalone"})))
-            .build();
+        let mark = Event::mark(
+            None,
+            Uuid::new_v4(),
+            "detached",
+            Some(json!({"kind": "standalone"})),
+            None,
+        );
 
         processor.process(&mark);
         processor.force_flush().unwrap();
@@ -1202,6 +1210,54 @@ mod tests {
             attributes.get("nexus.mark.orphan"),
             Some(&"true".to_string())
         );
+    }
+
+    #[test]
+    fn semantic_scope_type_and_span_kind_follow_event_variants() {
+        let scope_event = Event::scope_start(
+            None,
+            Uuid::new_v4(),
+            "guardrail",
+            None,
+            None,
+            nvidia_nat_nexus_core::ScopeAttributes::empty(),
+            ScopeType::Guardrail,
+        );
+        assert_eq!(
+            semantic_scope_type(&scope_event),
+            Some(ScopeType::Guardrail)
+        );
+        assert_eq!(span_kind(&scope_event), SpanKind::Internal);
+
+        let local_tool = Event::tool_start(
+            None,
+            Uuid::new_v4(),
+            "search",
+            None,
+            None,
+            nvidia_nat_nexus_core::ToolAttributes::LOCAL,
+            Some(json!({"query": "hello"})),
+            None,
+        );
+        assert_eq!(semantic_scope_type(&local_tool), Some(ScopeType::Tool));
+        assert_eq!(span_kind(&local_tool), SpanKind::Internal);
+
+        let llm_event = Event::llm_end(
+            None,
+            Uuid::new_v4(),
+            "model-call",
+            None,
+            None,
+            nvidia_nat_nexus_core::LLMAttributes::empty(),
+            Some(json!({"result": "hello"})),
+            None,
+        );
+        assert_eq!(semantic_scope_type(&llm_event), Some(ScopeType::Llm));
+        assert_eq!(span_kind(&llm_event), SpanKind::Client);
+
+        let mark = Event::mark(None, Uuid::new_v4(), "checkpoint", None, None);
+        assert_eq!(semantic_scope_type(&mark), None);
+        assert_eq!(span_kind(&mark), SpanKind::Internal);
     }
 
     #[test]

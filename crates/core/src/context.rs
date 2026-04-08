@@ -643,22 +643,15 @@ impl NatNexusContextState {
     // Handle creation / destruction
     // -----------------------------------------------------------------------
 
-    /// Builds a standalone marker event (EventType::Mark).
+    /// Builds a standalone marker event.
     pub fn create_event(
         &self,
         name: &str,
         parent_uuid: Option<Uuid>,
         data: Option<Json>,
         metadata: Option<Json>,
-        root_uuid: Option<Uuid>,
     ) -> Event {
-        Event::builder(Uuid::new_v4(), EventType::Mark)
-            .parent_uuid(parent_uuid)
-            .name(name)
-            .data(data)
-            .metadata(metadata)
-            .root_uuid(root_uuid)
-            .build()
+        Event::mark(parent_uuid, Uuid::new_v4(), name, data, metadata)
     }
 
     /// Creates a new scope handle.
@@ -682,36 +675,35 @@ impl NatNexusContextState {
     }
 
     /// Builds a Start event for the given scope handle.
-    pub fn build_scope_start_event(&self, handle: &ScopeHandle, root_uuid: Option<Uuid>) -> Event {
-        Event::builder(handle.uuid, EventType::Start)
-            .parent_uuid(handle.parent_uuid)
-            .name(handle.name.clone())
-            .data(handle.data.clone())
-            .metadata(handle.metadata.clone())
-            .attributes(HandleAttributes::Scope(handle.attributes))
-            .scope_type(handle.scope_type)
-            .root_uuid(root_uuid)
-            .build()
+    pub fn build_scope_start_event(&self, handle: &ScopeHandle) -> Event {
+        Event::scope_start(
+            handle.parent_uuid,
+            handle.uuid,
+            handle.name.clone(),
+            handle.data.clone(),
+            handle.metadata.clone(),
+            handle.attributes,
+            handle.scope_type,
+        )
     }
 
     /// Builds an End event for the given scope handle.
-    pub fn end_scope_handle(&self, scope: &ScopeHandle, root_uuid: Option<Uuid>) -> Event {
-        Event::builder(scope.uuid, EventType::End)
-            .parent_uuid(scope.parent_uuid)
-            .name(scope.name.clone())
-            .data(scope.data.clone())
-            .metadata(scope.metadata.clone())
-            .attributes(HandleAttributes::Scope(scope.attributes))
-            .scope_type(scope.scope_type)
-            .root_uuid(root_uuid)
-            .build()
+    pub fn end_scope_handle(&self, scope: &ScopeHandle) -> Event {
+        Event::scope_end(
+            scope.parent_uuid,
+            scope.uuid,
+            scope.name.clone(),
+            scope.data.clone(),
+            scope.metadata.clone(),
+            scope.attributes,
+            scope.scope_type,
+        )
     }
 
     /// Creates a new tool handle.
     ///
     /// The `input` field on the Start event is populated with the sanitized args.
     /// The `tool_call_id` is propagated from the handle to the event.
-    /// The `root_uuid` is set from the current scope stack.
     #[allow(clippy::too_many_arguments)]
     pub fn create_tool_handle(
         &self,
@@ -728,23 +720,17 @@ impl NatNexusContextState {
     }
 
     /// Builds a Start event for the given tool handle.
-    pub fn build_tool_start_event(
-        &self,
-        handle: &ToolHandle,
-        input: Option<Json>,
-        root_uuid: Option<Uuid>,
-    ) -> Event {
-        Event::builder(handle.uuid, EventType::Start)
-            .parent_uuid(handle.parent_uuid)
-            .name(handle.name.clone())
-            .data(handle.data.clone())
-            .metadata(handle.metadata.clone())
-            .attributes(HandleAttributes::Tool(handle.attributes))
-            .scope_type(ScopeType::Tool)
-            .input(input)
-            .tool_call_id(handle.tool_call_id.clone())
-            .root_uuid(root_uuid)
-            .build()
+    pub fn build_tool_start_event(&self, handle: &ToolHandle, input: Option<Json>) -> Event {
+        Event::tool_start(
+            handle.parent_uuid,
+            handle.uuid,
+            handle.name.clone(),
+            handle.data.clone(),
+            handle.metadata.clone(),
+            handle.attributes,
+            input,
+            handle.tool_call_id.clone(),
+        )
     }
 
     /// Builds an End event for the given tool handle, merging any additional data/metadata.
@@ -756,26 +742,23 @@ impl NatNexusContextState {
         data: Option<Json>,
         metadata: Option<Json>,
         output: Option<Json>,
-        root_uuid: Option<Uuid>,
     ) -> Event {
-        Event::builder(handle.uuid, EventType::End)
-            .parent_uuid(handle.parent_uuid)
-            .name(handle.name.clone())
-            .data(merge_json(handle.data.clone(), data))
-            .metadata(merge_json(handle.metadata.clone(), metadata))
-            .attributes(HandleAttributes::Tool(handle.attributes))
-            .scope_type(ScopeType::Tool)
-            .output(output)
-            .tool_call_id(handle.tool_call_id.clone())
-            .root_uuid(root_uuid)
-            .build()
+        Event::tool_end(
+            handle.parent_uuid,
+            handle.uuid,
+            handle.name.clone(),
+            merge_json(handle.data.clone(), data),
+            merge_json(handle.metadata.clone(), metadata),
+            handle.attributes,
+            output,
+            handle.tool_call_id.clone(),
+        )
     }
 
     /// Creates a new LLM handle.
     ///
     /// The `input` field on the Start event is populated with the sanitized request.
     /// The `model_name` is propagated from the handle to the event.
-    /// The `root_uuid` is set from the current scope stack.
     #[allow(clippy::too_many_arguments)]
     pub fn create_llm_handle(
         &self,
@@ -792,23 +775,17 @@ impl NatNexusContextState {
     }
 
     /// Builds a Start event for the given LLM handle.
-    pub fn build_llm_start_event(
-        &self,
-        handle: &LLMHandle,
-        input: Option<Json>,
-        root_uuid: Option<Uuid>,
-    ) -> Event {
-        Event::builder(handle.uuid, EventType::Start)
-            .parent_uuid(handle.parent_uuid)
-            .name(handle.name.clone())
-            .data(handle.data.clone())
-            .metadata(handle.metadata.clone())
-            .attributes(HandleAttributes::Llm(handle.attributes))
-            .scope_type(ScopeType::Llm)
-            .input(input)
-            .model_name(handle.model_name.clone())
-            .root_uuid(root_uuid)
-            .build()
+    pub fn build_llm_start_event(&self, handle: &LLMHandle, input: Option<Json>) -> Event {
+        Event::llm_start(
+            handle.parent_uuid,
+            handle.uuid,
+            handle.name.clone(),
+            handle.data.clone(),
+            handle.metadata.clone(),
+            handle.attributes,
+            input,
+            handle.model_name.clone(),
+        )
     }
 
     /// Builds an End event for the given LLM handle, merging any additional data/metadata.
@@ -820,19 +797,17 @@ impl NatNexusContextState {
         data: Option<Json>,
         metadata: Option<Json>,
         output: Option<Json>,
-        root_uuid: Option<Uuid>,
     ) -> Event {
-        Event::builder(handle.uuid, EventType::End)
-            .parent_uuid(handle.parent_uuid)
-            .name(handle.name.clone())
-            .data(merge_json(handle.data.clone(), data))
-            .metadata(merge_json(handle.metadata.clone(), metadata))
-            .attributes(HandleAttributes::Llm(handle.attributes))
-            .scope_type(ScopeType::Llm)
-            .output(output)
-            .model_name(handle.model_name.clone())
-            .root_uuid(root_uuid)
-            .build()
+        Event::llm_end(
+            handle.parent_uuid,
+            handle.uuid,
+            handle.name.clone(),
+            merge_json(handle.data.clone(), data),
+            merge_json(handle.metadata.clone(), metadata),
+            handle.attributes,
+            output,
+            handle.model_name.clone(),
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -1153,7 +1128,7 @@ mod tests {
         assert_eq!(top.name, "test");
 
         let removed = task_scope_remove(&handle.uuid).unwrap();
-        let _ = ctx.end_scope_handle(&removed, None);
+        let _ = ctx.end_scope_handle(&removed);
 
         // After pop, root scope is on top again
         assert_eq!(task_scope_top().name, "root");
@@ -1182,12 +1157,12 @@ mod tests {
             None,
             None,
         );
-        let start = ctx.build_scope_start_event(&handle, None);
+        let start = ctx.build_scope_start_event(&handle);
         let subscribers = ctx.collect_event_subscribers(&[]);
         NatNexusContextState::emit_event(&start, &subscribers);
         assert_eq!(count.load(Ordering::SeqCst), 1);
 
-        let end = ctx.end_scope_handle(&handle, None);
+        let end = ctx.end_scope_handle(&handle);
         NatNexusContextState::emit_event(&end, &subscribers);
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
@@ -1402,16 +1377,7 @@ mod tests {
             }),
         );
 
-        let event = Event::new(
-            None,
-            Uuid::new_v4(),
-            None,
-            None,
-            None,
-            None,
-            EventType::Mark,
-            None,
-        );
+        let event = Event::mark(None, Uuid::new_v4(), "", None, None);
         let subscribers = ctx.collect_event_subscribers(&[]);
         NatNexusContextState::emit_event(&event, &subscribers);
 
@@ -1422,16 +1388,7 @@ mod tests {
     #[test]
     fn test_emit_event_no_subscribers() {
         // Should not panic with no subscribers
-        let event = Event::new(
-            None,
-            Uuid::new_v4(),
-            None,
-            None,
-            None,
-            None,
-            EventType::Mark,
-            None,
-        );
+        let event = Event::mark(None, Uuid::new_v4(), "", None, None);
         NatNexusContextState::emit_event(&event, &[]);
     }
 
@@ -1457,15 +1414,14 @@ mod tests {
             Some(Uuid::new_v4()),
             Some(serde_json::json!({"x": 1})),
             None,
-            None,
         );
         let subscribers = ctx.collect_event_subscribers(&[]);
         NatNexusContextState::emit_event(&event, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
-        assert_eq!(captured[0].event_type, EventType::Mark);
-        assert_eq!(captured[0].name, Some("my_mark".into()));
+        assert_eq!(captured[0].kind(), "Mark");
+        assert_eq!(captured[0].name(), "my_mark");
     }
 
     // -- Handle creation/destruction event tests --
@@ -1492,17 +1448,17 @@ mod tests {
             None,
             None,
         );
-        let event = ctx.build_scope_start_event(&handle, None);
+        let event = ctx.build_scope_start_event(&handle);
         let subscribers = ctx.collect_event_subscribers(&[]);
         NatNexusContextState::emit_event(&event, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
-        assert_eq!(captured[0].event_type, EventType::Start);
-        assert_eq!(captured[0].uuid, handle.uuid);
-        assert_eq!(captured[0].scope_type, Some(ScopeType::Retriever));
+        assert_eq!(captured[0].kind(), "ScopeStart");
+        assert_eq!(captured[0].uuid(), handle.uuid);
+        assert_eq!(captured[0].scope_type(), Some(ScopeType::Retriever));
         assert_eq!(
-            captured[0].attributes,
+            captured[0].attributes(),
             Some(HandleAttributes::Scope(ScopeAttributes::PARALLEL))
         );
     }
@@ -1530,16 +1486,16 @@ mod tests {
             None,
         );
         let subscribers = ctx.collect_event_subscribers(&[]);
-        let start = ctx.build_scope_start_event(&handle, None);
+        let start = ctx.build_scope_start_event(&handle);
         NatNexusContextState::emit_event(&start, &subscribers);
-        let end = ctx.end_scope_handle(&handle, None);
+        let end = ctx.end_scope_handle(&handle);
         NatNexusContextState::emit_event(&end, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
-        assert_eq!(captured[0].event_type, EventType::Start);
-        assert_eq!(captured[1].event_type, EventType::End);
-        assert_eq!(captured[1].uuid, handle.uuid);
+        assert_eq!(captured[0].kind(), "ScopeStart");
+        assert_eq!(captured[1].kind(), "ScopeEnd");
+        assert_eq!(captured[1].uuid(), handle.uuid);
     }
 
     #[test]
@@ -1565,18 +1521,18 @@ mod tests {
             None,
         );
         let subscribers = ctx.collect_event_subscribers(&[]);
-        let event = ctx.build_tool_start_event(&handle, None, None);
+        let event = ctx.build_tool_start_event(&handle, None);
         NatNexusContextState::emit_event(&event, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
-        assert_eq!(captured[0].event_type, EventType::Start);
-        assert_eq!(captured[0].scope_type, Some(ScopeType::Tool));
+        assert_eq!(captured[0].kind(), "ToolStart");
+        assert!(captured[0].scope_type().is_none());
         assert_eq!(
-            captured[0].attributes,
+            captured[0].attributes(),
             Some(HandleAttributes::Tool(ToolAttributes::LOCAL))
         );
-        assert_eq!(captured[0].name, Some("my_tool".into()));
+        assert_eq!(captured[0].name(), "my_tool");
     }
 
     #[test]
@@ -1602,16 +1558,16 @@ mod tests {
             None,
         );
         let subscribers = ctx.collect_event_subscribers(&[]);
-        let start = ctx.build_tool_start_event(&handle, None, None);
+        let start = ctx.build_tool_start_event(&handle, None);
         NatNexusContextState::emit_event(&start, &subscribers);
-        let end = ctx.end_tool_handle(&handle, Some(serde_json::json!({"b": 2})), None, None, None);
+        let end = ctx.end_tool_handle(&handle, Some(serde_json::json!({"b": 2})), None, None);
         NatNexusContextState::emit_event(&end, &subscribers);
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];
-        assert_eq!(end_event.event_type, EventType::End);
+        assert_eq!(end_event.kind(), "ToolEnd");
         // Data should be merged: {"a": 1, "b": 2}
-        let data = end_event.data.as_ref().unwrap();
+        let data = end_event.data().unwrap();
         assert_eq!(data["a"], 1);
         assert_eq!(data["b"], 2);
     }
@@ -1632,14 +1588,14 @@ mod tests {
 
         let handle = ctx.create_llm_handle("llm", None, LLMAttributes::STREAMING, None, None, None);
         let subscribers = ctx.collect_event_subscribers(&[]);
-        let event = ctx.build_llm_start_event(&handle, None, None);
+        let event = ctx.build_llm_start_event(&handle, None);
         NatNexusContextState::emit_event(&event, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
-        assert_eq!(captured[0].scope_type, Some(ScopeType::Llm));
+        assert!(captured[0].scope_type().is_none());
         assert_eq!(
-            captured[0].attributes,
+            captured[0].attributes(),
             Some(HandleAttributes::Llm(LLMAttributes::STREAMING))
         );
     }
@@ -1667,20 +1623,14 @@ mod tests {
             None,
         );
         let subscribers = ctx.collect_event_subscribers(&[]);
-        let start = ctx.build_llm_start_event(&handle, None, None);
+        let start = ctx.build_llm_start_event(&handle, None);
         NatNexusContextState::emit_event(&start, &subscribers);
-        let end = ctx.end_llm_handle(
-            &handle,
-            None,
-            Some(serde_json::json!({"m2": false})),
-            None,
-            None,
-        );
+        let end = ctx.end_llm_handle(&handle, None, Some(serde_json::json!({"m2": false})), None);
         NatNexusContextState::emit_event(&end, &subscribers);
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];
-        let meta = end_event.metadata.as_ref().unwrap();
+        let meta = end_event.metadata().unwrap();
         assert_eq!(meta["m1"], true);
         assert_eq!(meta["m2"], false);
     }

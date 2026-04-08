@@ -9,8 +9,9 @@ LLM start/end, marks) for observability, logging, or tracing.
 Functions:
     register(name, callback)
         Register a subscriber. ``callback`` signature:
-        ``(event: Event) -> None``. Raises ``RuntimeError`` if a subscriber
-        with this name already exists.
+        ``(event: ScopeStartEvent | ScopeEndEvent | ToolStartEvent |``
+        `` ToolEndEvent | LLMStartEvent | LLMEndEvent | MarkEvent) -> None``.
+        Raises ``RuntimeError`` if a subscriber with this name already exists.
 
     deregister(name)
         Remove a subscriber. Returns ``True`` if found and removed.
@@ -20,7 +21,7 @@ Example::
     import nat_nexus
 
     def log_events(event):
-        print(f"[{event.event_type}] {event.name} ({event.uuid})")
+        print(f"[{event.kind}] {event.name} ({event.uuid})")
 
     nat_nexus.subscribers.register("logger", log_events)
 """

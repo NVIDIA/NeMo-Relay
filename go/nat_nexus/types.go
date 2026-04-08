@@ -55,7 +55,8 @@ extern void nat_nexus_llm_request_free(FfiLLMRequest* ptr);
 // Event accessors
 extern char* nat_nexus_event_uuid(const FfiEvent* ptr);
 extern char* nat_nexus_event_name(const FfiEvent* ptr);
-extern int32_t nat_nexus_event_type(const FfiEvent* ptr);
+extern char* nat_nexus_event_kind(const FfiEvent* ptr);
+extern uint32_t nat_nexus_event_attributes(const FfiEvent* ptr);
 extern char* nat_nexus_event_data(const FfiEvent* ptr);
 extern char* nat_nexus_event_metadata(const FfiEvent* ptr);
 extern char* nat_nexus_event_timestamp(const FfiEvent* ptr);
@@ -63,7 +64,6 @@ extern char* nat_nexus_event_input(const void* ptr);
 extern char* nat_nexus_event_output(const void* ptr);
 extern char* nat_nexus_event_model_name(const void* ptr);
 extern char* nat_nexus_event_tool_call_id(const void* ptr);
-extern char* nat_nexus_event_root_uuid(const void* ptr);
 extern char* nat_nexus_event_parent_uuid(const void* ptr);
 extern char* nat_nexus_event_scope_type(const void* ptr);
 extern void nat_nexus_event_free(FfiEvent* ptr);
@@ -126,26 +126,6 @@ const (
 	// ScopeTypeUnknown represents an unrecognized or invalid scope type.
 	// This should not be used directly; it serves as a sentinel value.
 	ScopeTypeUnknown ScopeType = 10
-)
-
-// EventType represents the kind of lifecycle event emitted by the runtime.
-// It mirrors the core Rust EventType enum. Events are delivered to registered
-// subscribers via [RegisterSubscriber].
-type EventType int32
-
-const (
-	// EventTypeStart indicates the beginning of a scope, tool call, or LLM
-	// call. Start events are emitted by [PushScope], [ToolCall], and
-	// [LlmCall].
-	EventTypeStart EventType = 0
-	// EventTypeEnd indicates the completion of a scope, tool call, or LLM
-	// call. End events are emitted by [PopScope], [ToolCallEnd], and
-	// [LlmCallEnd].
-	EventTypeEnd EventType = 1
-	// EventTypeMark indicates an instantaneous point-in-time event. Mark
-	// events are emitted by [EmitEvent] and represent checkpoints or
-	// milestones within a scope.
-	EventTypeMark EventType = 2
 )
 
 // Scope attribute bitflags modify scope behavior. They are passed to
@@ -361,67 +341,87 @@ func (r *LLMRequest) Content() json.RawMessage {
 	return goJSONOpt(C.nat_nexus_llm_request_content(r.ptr))
 }
 
-// Event wraps an opaque C pointer to a lifecycle event emitted by the runtime.
-// Events are read-only and are passed to registered [EventSubscriberFunc]
-// callbacks. The pointer is only valid for the duration of the subscriber call;
-// callers must not retain it beyond the callback's return. To persist event
-// data, copy the fields (UUID, Name, Type, Data, Metadata, Timestamp) into
-// your own struct.
-type Event struct {
+// Event is the common interface implemented by all lifecycle event variants.
+// Subscriber callbacks receive one of:
+// [ScopeStartEvent], [ScopeEndEvent], [ToolStartEvent], [ToolEndEvent],
+// [LLMStartEvent], [LLMEndEvent], or [MarkEvent].
+//
+// The underlying C pointer is only valid for the duration of the subscriber
+// call; callers must copy any data they want to retain.
+type Event interface {
+	Kind() string
+	UUID() string
+	Name() string
+	ParentUUID() string
+	ScopeType() string
+	Attributes() uint32
+	Data() json.RawMessage
+	Metadata() json.RawMessage
+	Timestamp() string
+	Input() json.RawMessage
+	Output() json.RawMessage
+	ModelName() string
+	ToolCallID() string
+}
+
+type eventBase struct {
 	ptr *C.FfiEvent
 }
 
-// UUID returns the unique identifier for this event.
-func (e *Event) UUID() string { return goString(C.nat_nexus_event_uuid(e.ptr)) }
-
-// Name returns the name associated with this event, or an empty string if none.
-func (e *Event) Name() string { return goStringOpt(C.nat_nexus_event_name(e.ptr)) }
-
-// Type returns the EventType (Start, End, or Mark) of this event.
-func (e *Event) Type() EventType { return EventType(C.nat_nexus_event_type(e.ptr)) }
-
-// Data returns the optional data JSON payload of this event.
-func (e *Event) Data() json.RawMessage { return goJSONOpt(C.nat_nexus_event_data(e.ptr)) }
-
-// Metadata returns the optional metadata JSON payload of this event.
-func (e *Event) Metadata() json.RawMessage { return goJSONOpt(C.nat_nexus_event_metadata(e.ptr)) }
-
-// Timestamp returns the ISO 8601 timestamp string of when this event occurred.
-func (e *Event) Timestamp() string { return goString(C.nat_nexus_event_timestamp(e.ptr)) }
-
-// Input returns the optional input JSON payload of this event, or nil if not set.
-func (e *Event) Input() json.RawMessage {
+func (e eventBase) UUID() string { return goString(C.nat_nexus_event_uuid(e.ptr)) }
+func (e eventBase) Name() string { return goStringOpt(C.nat_nexus_event_name(e.ptr)) }
+func (e eventBase) Kind() string { return goStringOpt(C.nat_nexus_event_kind(e.ptr)) }
+func (e eventBase) ScopeType() string {
+	return goStringOpt((*C.char)(C.nat_nexus_event_scope_type(unsafe.Pointer(e.ptr))))
+}
+func (e eventBase) Attributes() uint32 {
+	return uint32(C.nat_nexus_event_attributes(e.ptr))
+}
+func (e eventBase) Data() json.RawMessage     { return goJSONOpt(C.nat_nexus_event_data(e.ptr)) }
+func (e eventBase) Metadata() json.RawMessage { return goJSONOpt(C.nat_nexus_event_metadata(e.ptr)) }
+func (e eventBase) Timestamp() string         { return goString(C.nat_nexus_event_timestamp(e.ptr)) }
+func (e eventBase) Input() json.RawMessage {
 	return goJSONOpt((*C.char)(C.nat_nexus_event_input(unsafe.Pointer(e.ptr))))
 }
-
-// Output returns the optional output JSON payload of this event, or nil if not set.
-func (e *Event) Output() json.RawMessage {
+func (e eventBase) Output() json.RawMessage {
 	return goJSONOpt((*C.char)(C.nat_nexus_event_output(unsafe.Pointer(e.ptr))))
 }
-
-// ModelName returns the model name associated with this event, or an empty string if not set.
-func (e *Event) ModelName() string {
+func (e eventBase) ModelName() string {
 	return goStringOpt((*C.char)(C.nat_nexus_event_model_name(unsafe.Pointer(e.ptr))))
 }
-
-// ToolCallID returns the tool call ID associated with this event, or an empty string if not set.
-func (e *Event) ToolCallID() string {
+func (e eventBase) ToolCallID() string {
 	return goStringOpt((*C.char)(C.nat_nexus_event_tool_call_id(unsafe.Pointer(e.ptr))))
 }
-
-// RootUUID returns the root scope UUID associated with this event, or an empty string if not set.
-func (e *Event) RootUUID() string {
-	return goStringOpt((*C.char)(C.nat_nexus_event_root_uuid(unsafe.Pointer(e.ptr))))
-}
-
-// ParentUUID returns the parent scope UUID associated with this event, or an empty string if not set.
-func (e *Event) ParentUUID() string {
+func (e eventBase) ParentUUID() string {
 	return goStringOpt((*C.char)(C.nat_nexus_event_parent_uuid(unsafe.Pointer(e.ptr))))
 }
 
-// ScopeType returns the scope type string associated with this event, or an empty string if not set.
-func (e *Event) ScopeType() string {
-	return goStringOpt((*C.char)(C.nat_nexus_event_scope_type(unsafe.Pointer(e.ptr))))
+type ScopeStartEvent struct{ eventBase }
+type ScopeEndEvent struct{ eventBase }
+type ToolStartEvent struct{ eventBase }
+type ToolEndEvent struct{ eventBase }
+type LLMStartEvent struct{ eventBase }
+type LLMEndEvent struct{ eventBase }
+type MarkEvent struct{ eventBase }
+
+func newEvent(ptr *C.FfiEvent) Event {
+	base := eventBase{ptr: ptr}
+	switch base.Kind() {
+	case "ScopeStart":
+		return &ScopeStartEvent{eventBase: base}
+	case "ScopeEnd":
+		return &ScopeEndEvent{eventBase: base}
+	case "ToolStart":
+		return &ToolStartEvent{eventBase: base}
+	case "ToolEnd":
+		return &ToolEndEvent{eventBase: base}
+	case "LLMStart":
+		return &LLMStartEvent{eventBase: base}
+	case "LLMEnd":
+		return &LLMEndEvent{eventBase: base}
+	default:
+		return &MarkEvent{eventBase: base}
+	}
 }
 
 // ---------------------------------------------------------------------------

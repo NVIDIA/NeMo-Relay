@@ -17,12 +17,13 @@
 // Sub-packages scope, tools, llm, guardrails, intercepts, and subscribers
 // re-export the most common functions under shorter names for convenience.
 //
-// Build prerequisites: the nat-nexus-ffi shared library must be built first
-// (cargo build --release -p nat-nexus-ffi) and discoverable via CGO_LDFLAGS.
+// Build prerequisites: the nat-nexus-ffi library must be built first
+// (cargo build --release -p nvidia-nat-nexus-ffi). The package searches the
+// repo-local Cargo target directories automatically.
 package nat_nexus
 
 /*
-#cgo LDFLAGS: -lnvidia_nat_nexus_ffi
+#cgo LDFLAGS: -L${SRCDIR}/../../target/release -L${SRCDIR}/../../target/debug -lnvidia_nat_nexus_ffi
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -200,7 +201,7 @@ extern void nat_nexus_scope_stack_free(FfiScopeStack* ptr);
 extern int32_t nat_nexus_atif_exporter_create(const char*, const char*, const char*, const char*, void**);
 extern int32_t nat_nexus_atif_exporter_register(const void*, const char*);
 extern int32_t nat_nexus_atif_exporter_deregister(const char*);
-extern int32_t nat_nexus_atif_exporter_export(const void*, const char*, char**);
+extern int32_t nat_nexus_atif_exporter_export(const void*, char**);
 extern int32_t nat_nexus_atif_exporter_clear(const void*);
 extern void nat_nexus_atif_exporter_free(void*);
 
@@ -1242,16 +1243,9 @@ func (e *AtifExporter) Deregister(name string) error {
 }
 
 // ExportJSON exports collected events as an ATIF trajectory JSON string.
-// rootUUID filters to a specific root scope. Pass empty string for no filter.
-func (e *AtifExporter) ExportJSON(rootUUID string) (json.RawMessage, error) {
-	var cRootUUID *C.char
-	if rootUUID != "" {
-		cRootUUID = C.CString(rootUUID)
-		defer C.free(unsafe.Pointer(cRootUUID))
-	}
-
+func (e *AtifExporter) ExportJSON() (json.RawMessage, error) {
 	var cOut *C.char
-	status := C.nat_nexus_atif_exporter_export(e.ptr, cRootUUID, &cOut)
+	status := C.nat_nexus_atif_exporter_export(e.ptr, &cOut)
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}

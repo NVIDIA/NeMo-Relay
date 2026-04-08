@@ -17,18 +17,19 @@ use std::sync::{Arc, RwLock};
 
 use uuid::Uuid;
 
-use nvidia_nat_nexus_core::{Event, EventType, ScopeType};
+use nvidia_nat_nexus_core::{Event, ScopeType};
 
 use crate::learner::Learner;
 use crate::storage::StorageBackendDyn;
 use crate::subscriber::{event_to_call_record, is_run_boundary};
 use crate::types::{HotCache, RunRecord};
 
-/// Tracks in-flight agent runs. Events are grouped by `root_uuid`.
+/// Tracks in-flight agent runs. Event ancestry is used to infer each event's run root.
 /// When the Agent scope End event arrives, the run is finalized and returned.
 pub(crate) struct RunAccumulator {
     agent_id: String,
     open_runs: HashMap<Uuid, RunRecord>,
+    event_roots: HashMap<Uuid, Uuid>,
 }
 
 impl RunAccumulator {
@@ -37,6 +38,7 @@ impl RunAccumulator {
         Self {
             agent_id,
             open_runs: HashMap::new(),
+            event_roots: HashMap::new(),
         }
     }
 
@@ -49,30 +51,35 @@ impl RunAccumulator {
     /// Processes a single event and returns a completed [`RunRecord`] if a run
     /// has just ended.
     ///
-    /// - Agent Start events create a new open run keyed by `root_uuid`.
+    /// - Agent Start events create a new open run keyed by their own UUID.
     /// - Agent End events finalize and return the run.
+    /// - Nested scope Start/End events inherit and clear root ownership.
     /// - LLM/Tool Start events create [`CallRecord`] entries in the open run.
     /// - LLM/Tool End events set `ended_at` on the matching call record.
     /// - All other events are ignored.
     pub(crate) fn process_event(&mut self, event: &Event) -> Option<RunRecord> {
         if is_run_boundary(event) {
-            let root_uuid = event.root_uuid.unwrap_or(event.uuid);
-
-            if event.event_type == EventType::Start {
+            if matches!(event, Event::ScopeStart(_)) {
+                let root_uuid = event.uuid();
+                self.event_roots.insert(root_uuid, root_uuid);
                 let run = RunRecord {
                     id: Uuid::new_v4(),
                     agent_id: self.agent_id.clone(),
                     calls: vec![],
-                    started_at: event.timestamp,
+                    started_at: *event.timestamp(),
                     ended_at: None,
                 };
                 self.open_runs.insert(root_uuid, run);
                 return None;
             }
 
-            if event.event_type == EventType::End {
+            if matches!(event, Event::ScopeEnd(_)) {
+                let root_uuid = self
+                    .event_roots
+                    .remove(&event.uuid())
+                    .unwrap_or_else(|| event.uuid());
                 if let Some(mut run) = self.open_runs.remove(&root_uuid) {
-                    run.ended_at = Some(event.timestamp);
+                    run.ended_at = Some(*event.timestamp());
                     return Some(run);
                 }
                 // Orphaned end event -- no matching start
@@ -80,36 +87,57 @@ impl RunAccumulator {
             }
         }
 
-        // LLM/Tool events: accumulate into the open run
-        let root_uuid = event.root_uuid?;
-
-        if event.event_type == EventType::Start {
-            if let Some(record) = event_to_call_record(event) {
+        match event {
+            Event::ScopeStart(inner) => {
+                if inner.scope_type != ScopeType::Agent {
+                    let root_uuid = self.infer_root_uuid(event)?;
+                    self.event_roots.insert(event.uuid(), root_uuid);
+                }
+                None
+            }
+            Event::ScopeEnd(inner) => {
+                if inner.scope_type != ScopeType::Agent {
+                    self.event_roots.remove(&event.uuid());
+                }
+                None
+            }
+            Event::ToolStart(_) | Event::LLMStart(_) => {
+                let root_uuid = self.infer_root_uuid(event)?;
+                self.event_roots.insert(event.uuid(), root_uuid);
+                if let Some(record) = event_to_call_record(event) {
+                    if let Some(run) = self.open_runs.get_mut(&root_uuid) {
+                        run.calls.push(record);
+                    }
+                }
+                None
+            }
+            Event::ToolEnd(_) | Event::LLMEnd(_) => {
+                let root_uuid = self.infer_root_uuid(event)?;
                 if let Some(run) = self.open_runs.get_mut(&root_uuid) {
-                    run.calls.push(record);
+                    let event_name = event.name();
+                    // Find the last matching call record (same name, not yet ended)
+                    if let Some(call) = run
+                        .calls
+                        .iter_mut()
+                        .rev()
+                        .find(|c| c.name == event_name && c.ended_at.is_none())
+                    {
+                        call.ended_at = Some(*event.timestamp());
+                    }
                 }
+                self.event_roots.remove(&event.uuid());
+                None
             }
-        } else if event.event_type == EventType::End
-            && matches!(
-                event.scope_type,
-                Some(ScopeType::Llm) | Some(ScopeType::Tool)
-            )
-        {
-            if let Some(run) = self.open_runs.get_mut(&root_uuid) {
-                let event_name = event.name.as_deref().unwrap_or("");
-                // Find the last matching call record (same name, not yet ended)
-                if let Some(call) = run
-                    .calls
-                    .iter_mut()
-                    .rev()
-                    .find(|c| c.name == event_name && c.ended_at.is_none())
-                {
-                    call.ended_at = Some(event.timestamp);
-                }
-            }
+            Event::Mark(_) => None,
         }
+    }
 
-        None
+    fn infer_root_uuid(&self, event: &Event) -> Option<Uuid> {
+        self.event_roots.get(&event.uuid()).copied().or_else(|| {
+            event
+                .parent_uuid()
+                .and_then(|parent_uuid| self.event_roots.get(&parent_uuid).copied())
+        })
     }
 }
 
@@ -167,76 +195,114 @@ mod tests {
     use super::*;
     use crate::storage::{InMemoryBackend, StorageBackend, StorageBackendDyn};
     use crate::types::{ExecutionPlan, HotCache, MetadataEnvelope, ParallelGroup};
-    use chrono::Utc;
-    use nvidia_nat_nexus_core::{Event, EventType, ScopeType};
+    use nvidia_nat_nexus_core::{Event, ScopeType};
     use serde_json::json;
     use std::time::Duration;
     use uuid::Uuid;
 
-    /// Helper to construct a minimal test [`Event`] with `root_uuid` parameter.
+    #[derive(Clone, Copy)]
+    enum EventType {
+        Start,
+        End,
+    }
+
+    /// Helper to construct a minimal test [`Event`] with caller-controlled ancestry.
     fn make_event(
         event_type: EventType,
         scope_type: Option<ScopeType>,
         name: Option<&str>,
-        root_uuid: Option<Uuid>,
+        uuid: Uuid,
+        parent_uuid: Option<Uuid>,
     ) -> Event {
-        Event {
-            parent_uuid: None,
-            uuid: Uuid::new_v4(),
-            timestamp: Utc::now(),
-            name: name.map(|s| s.to_string()),
-            data: None,
-            metadata: None,
-            attributes: None,
-            event_type,
-            scope_type,
-            input: None,
-            output: None,
-            model_name: None,
-            tool_call_id: None,
-            root_uuid,
+        let event_name = name.unwrap_or("event");
+        match (event_type, scope_type) {
+            (EventType::Start, Some(ScopeType::Tool)) => Event::tool_start(
+                parent_uuid,
+                uuid,
+                event_name,
+                None,
+                None,
+                nvidia_nat_nexus_core::ToolAttributes::empty(),
+                None,
+                None,
+            ),
+            (EventType::End, Some(ScopeType::Tool)) => Event::tool_end(
+                parent_uuid,
+                uuid,
+                event_name,
+                None,
+                None,
+                nvidia_nat_nexus_core::ToolAttributes::empty(),
+                None,
+                None,
+            ),
+            (EventType::Start, Some(ScopeType::Llm)) => Event::llm_start(
+                parent_uuid,
+                uuid,
+                event_name,
+                None,
+                None,
+                nvidia_nat_nexus_core::LLMAttributes::empty(),
+                None,
+                None,
+            ),
+            (EventType::End, Some(ScopeType::Llm)) => Event::llm_end(
+                parent_uuid,
+                uuid,
+                event_name,
+                None,
+                None,
+                nvidia_nat_nexus_core::LLMAttributes::empty(),
+                None,
+                None,
+            ),
+            (EventType::Start, Some(scope_type)) => Event::scope_start(
+                parent_uuid,
+                uuid,
+                event_name,
+                None,
+                None,
+                nvidia_nat_nexus_core::ScopeAttributes::empty(),
+                scope_type,
+            ),
+            (EventType::End, Some(scope_type)) => Event::scope_end(
+                parent_uuid,
+                uuid,
+                event_name,
+                None,
+                None,
+                nvidia_nat_nexus_core::ScopeAttributes::empty(),
+                scope_type,
+            ),
+            (_, None) => Event::mark(parent_uuid, uuid, event_name, None, None),
         }
     }
 
-    /// Helper: make an Agent Start event whose own uuid acts as root_uuid.
+    /// Helper: make an Agent Start event whose own uuid acts as the inferred root.
     fn make_agent_start() -> Event {
         let uuid = Uuid::new_v4();
-        Event {
-            parent_uuid: None,
+        Event::scope_start(
+            None,
             uuid,
-            timestamp: Utc::now(),
-            name: Some("my-agent".to_string()),
-            data: None,
-            metadata: None,
-            attributes: None,
-            event_type: EventType::Start,
-            scope_type: Some(ScopeType::Agent),
-            input: None,
-            output: None,
-            model_name: None,
-            tool_call_id: None,
-            root_uuid: None, // root scope's own uuid IS the root_uuid
-        }
+            "my-agent",
+            None,
+            None,
+            nvidia_nat_nexus_core::ScopeAttributes::empty(),
+            ScopeType::Agent,
+        )
     }
 
-    /// Helper: make an Agent End event for a given root_uuid.
+    /// Helper: make an Agent End event for a given root event UUID.
     fn make_agent_end(root_uuid: Uuid) -> Event {
-        Event {
-            parent_uuid: None,
-            uuid: Uuid::new_v4(),
-            timestamp: Utc::now(),
-            name: Some("my-agent".to_string()),
-            data: None,
-            metadata: None,
-            attributes: None,
-            event_type: EventType::End,
-            scope_type: Some(ScopeType::Agent),
-            input: None,
-            output: None,
-            model_name: None,
-            tool_call_id: None,
-            root_uuid: Some(root_uuid),
-        }
+        Event::scope_end(
+            None,
+            root_uuid,
+            "my-agent",
+            None,
+            None,
+            nvidia_nat_nexus_core::ScopeAttributes::empty(),
+            ScopeType::Agent,
+        )
     }
 
     fn make_test_plan(agent_id: &str) -> ExecutionPlan {
@@ -279,7 +345,7 @@ mod tests {
         let mut acc = RunAccumulator::new("agent-1".to_string());
 
         let start = make_agent_start();
-        let root_uuid = start.uuid; // root scope uuid is root_uuid
+        let root_uuid = start.uuid();
         acc.process_event(&start);
 
         let end = make_agent_end(root_uuid);
@@ -297,14 +363,16 @@ mod tests {
         let mut acc = RunAccumulator::new("agent-1".to_string());
 
         let start = make_agent_start();
-        let root_uuid = start.uuid;
+        let root_uuid = start.uuid();
         acc.process_event(&start);
 
         // Tool Start + Tool End
+        let tool_uuid = Uuid::new_v4();
         let tool_start = make_event(
             EventType::Start,
             Some(ScopeType::Tool),
             Some("search"),
+            tool_uuid,
             Some(root_uuid),
         );
         acc.process_event(&tool_start);
@@ -313,15 +381,18 @@ mod tests {
             EventType::End,
             Some(ScopeType::Tool),
             Some("search"),
+            tool_uuid,
             Some(root_uuid),
         );
         acc.process_event(&tool_end);
 
         // LLM Start + LLM End
+        let llm_uuid = Uuid::new_v4();
         let llm_start = make_event(
             EventType::Start,
             Some(ScopeType::Llm),
             Some("gpt-4"),
+            llm_uuid,
             Some(root_uuid),
         );
         acc.process_event(&llm_start);
@@ -330,6 +401,7 @@ mod tests {
             EventType::End,
             Some(ScopeType::Llm),
             Some("gpt-4"),
+            llm_uuid,
             Some(root_uuid),
         );
         acc.process_event(&llm_end);
@@ -348,6 +420,114 @@ mod tests {
             run.calls[1].ended_at.is_some(),
             "llm call should have ended_at"
         );
+    }
+
+    #[test]
+    fn test_accumulator_tracks_calls_nested_under_non_agent_scope() {
+        let mut acc = RunAccumulator::new("agent-1".to_string());
+
+        let agent_start = make_agent_start();
+        let root_uuid = agent_start.uuid();
+        acc.process_event(&agent_start);
+
+        let function_uuid = Uuid::new_v4();
+        let function_start = make_event(
+            EventType::Start,
+            Some(ScopeType::Function),
+            Some("helper"),
+            function_uuid,
+            Some(root_uuid),
+        );
+        acc.process_event(&function_start);
+
+        let tool_uuid = Uuid::new_v4();
+        let tool_start = make_event(
+            EventType::Start,
+            Some(ScopeType::Tool),
+            Some("search"),
+            tool_uuid,
+            Some(function_uuid),
+        );
+        acc.process_event(&tool_start);
+
+        let tool_end = make_event(
+            EventType::End,
+            Some(ScopeType::Tool),
+            Some("search"),
+            tool_uuid,
+            Some(function_uuid),
+        );
+        acc.process_event(&tool_end);
+
+        let function_end = make_event(
+            EventType::End,
+            Some(ScopeType::Function),
+            Some("helper"),
+            function_uuid,
+            Some(root_uuid),
+        );
+        acc.process_event(&function_end);
+
+        let run = acc
+            .process_event(&make_agent_end(root_uuid))
+            .expect("agent end should return completed run");
+        assert_eq!(run.calls.len(), 1, "nested tool call should be tracked");
+        assert_eq!(run.calls[0].name, "search");
+        assert!(run.calls[0].ended_at.is_some());
+    }
+
+    #[test]
+    fn test_accumulator_tracks_llm_calls_nested_under_non_agent_scope() {
+        let mut acc = RunAccumulator::new("agent-1".to_string());
+
+        let agent_start = make_agent_start();
+        let root_uuid = agent_start.uuid();
+        acc.process_event(&agent_start);
+
+        let function_uuid = Uuid::new_v4();
+        let function_start = make_event(
+            EventType::Start,
+            Some(ScopeType::Function),
+            Some("helper"),
+            function_uuid,
+            Some(root_uuid),
+        );
+        acc.process_event(&function_start);
+
+        let llm_uuid = Uuid::new_v4();
+        let llm_start = make_event(
+            EventType::Start,
+            Some(ScopeType::Llm),
+            Some("gpt-4"),
+            llm_uuid,
+            Some(function_uuid),
+        );
+        acc.process_event(&llm_start);
+
+        let llm_end = make_event(
+            EventType::End,
+            Some(ScopeType::Llm),
+            Some("gpt-4"),
+            llm_uuid,
+            Some(function_uuid),
+        );
+        acc.process_event(&llm_end);
+
+        let function_end = make_event(
+            EventType::End,
+            Some(ScopeType::Function),
+            Some("helper"),
+            function_uuid,
+            Some(root_uuid),
+        );
+        acc.process_event(&function_end);
+
+        let run = acc
+            .process_event(&make_agent_end(root_uuid))
+            .expect("agent end should return completed run");
+        assert_eq!(run.calls.len(), 1, "nested llm call should be tracked");
+        assert_eq!(run.calls[0].name, "gpt-4");
+        assert!(run.calls[0].ended_at.is_some());
     }
 
     #[test]
@@ -417,7 +597,7 @@ mod tests {
 
         // Send Agent Start
         let start = make_agent_start();
-        let root_uuid = start.uuid;
+        let root_uuid = start.uuid();
         tx.send(start).expect("send should succeed");
 
         // Send Agent End
@@ -464,7 +644,7 @@ mod tests {
 
         // Send Agent Start + End to trigger a store + cache refresh
         let start = make_agent_start();
-        let root_uuid = start.uuid;
+        let root_uuid = start.uuid();
         tx.send(start).expect("send should succeed");
         tx.send(make_agent_end(root_uuid))
             .expect("send should succeed");

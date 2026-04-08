@@ -15,8 +15,8 @@ func TestScopeShorthands(t *testing.T) {
 	var sawMark bool
 	var mu sync.Mutex
 
-	if err := nat_nexus.RegisterSubscriber("scope_shortcuts_sub", func(event *nat_nexus.Event) {
-		if event.Type() == nat_nexus.EventTypeMark && event.Name() == "scope-mark" {
+	if err := nat_nexus.RegisterSubscriber("scope_shortcuts_sub", func(event nat_nexus.Event) {
+		if event.Kind() == "Mark" && event.Name() == "scope-mark" {
 			mu.Lock()
 			sawMark = true
 			mu.Unlock()

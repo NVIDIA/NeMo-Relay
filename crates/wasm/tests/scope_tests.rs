@@ -425,11 +425,8 @@ fn test_subscriber_event_properties() {
     let timestamp = js_sys::Reflect::get(&event, &"timestamp".into()).unwrap();
     assert!(timestamp.is_string(), "Event should have timestamp string");
 
-    let event_type = js_sys::Reflect::get(&event, &"event_type".into()).unwrap();
-    assert!(
-        event_type.as_f64().is_some(),
-        "Event should have event_type number"
-    );
+    let kind = js_sys::Reflect::get(&event, &"kind".into()).unwrap();
+    assert!(kind.is_string(), "Event should have kind string");
 
     deregister_subscriber("wasm_prop_collector").unwrap();
     js_sys::eval("delete globalThis.__wasm_evt_props").unwrap();
@@ -448,13 +445,13 @@ fn test_event_mark() {
     let arr = js_sys::Array::from(&events);
     let found = (0..arr.length()).any(|i| {
         let e = arr.get(i);
-        let et = js_sys::Reflect::get(&e, &"event_type".into())
+        js_sys::Reflect::get(&e, &"kind".into())
             .unwrap()
-            .as_f64()
-            .unwrap_or(-1.0);
-        et == 2.0 // Mark = 2
+            .as_string()
+            .as_deref()
+            == Some("Mark")
     });
-    assert!(found, "Expected a Mark event (event_type=2)");
+    assert!(found, "Expected a Mark event");
 
     deregister_subscriber("wasm_mark_collector").unwrap();
     js_sys::eval("delete globalThis.__wasm_mark_events").unwrap();

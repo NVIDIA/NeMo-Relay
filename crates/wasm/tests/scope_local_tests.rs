@@ -138,11 +138,9 @@ async fn test_scope_local_sanitize_request_guardrail_modifies_args() {
     let mut found = false;
     for i in 0..events.length() {
         let evt = events.get(i);
-        let et = js_sys::Reflect::get(&evt, &"event_type".into()).unwrap();
-        let st = js_sys::Reflect::get(&evt, &"scope_type".into()).unwrap();
-        if et.as_f64() == Some(0.0) && st.as_f64() == Some(2.0) {
-            let input_str = js_sys::Reflect::get(&evt, &"input".into()).unwrap();
-            let input = js_sys::JSON::parse(&input_str.as_string().unwrap()).unwrap();
+        let kind = js_sys::Reflect::get(&evt, &"kind".into()).unwrap();
+        if kind.as_string().as_deref() == Some("ToolStart") {
+            let input = js_sys::Reflect::get(&evt, &"input".into()).unwrap();
             let scope_sanitized = js_sys::Reflect::get(&input, &"scope_sanitized".into()).unwrap();
             assert!(scope_sanitized.as_bool().unwrap());
             found = true;
@@ -202,11 +200,9 @@ async fn test_scope_local_sanitize_response_guardrail_modifies_result() {
     let mut found = false;
     for i in 0..events.length() {
         let evt = events.get(i);
-        let et = js_sys::Reflect::get(&evt, &"event_type".into()).unwrap();
-        let st = js_sys::Reflect::get(&evt, &"scope_type".into()).unwrap();
-        if et.as_f64() == Some(1.0) && st.as_f64() == Some(2.0) {
-            let output_str = js_sys::Reflect::get(&evt, &"output".into()).unwrap();
-            let output = js_sys::JSON::parse(&output_str.as_string().unwrap()).unwrap();
+        let kind = js_sys::Reflect::get(&evt, &"kind".into()).unwrap();
+        if kind.as_string().as_deref() == Some("ToolEnd") {
+            let output = js_sys::Reflect::get(&evt, &"output".into()).unwrap();
             let post_checked = js_sys::Reflect::get(&output, &"post_checked".into()).unwrap();
             assert!(post_checked.as_bool().unwrap());
             found = true;
@@ -512,11 +508,9 @@ async fn test_global_and_scope_local_guardrails_both_run() {
     let mut found = false;
     for i in 0..events.length() {
         let evt = events.get(i);
-        let et = js_sys::Reflect::get(&evt, &"event_type".into()).unwrap();
-        let st = js_sys::Reflect::get(&evt, &"scope_type".into()).unwrap();
-        if et.as_f64() == Some(0.0) && st.as_f64() == Some(2.0) {
-            let input_str = js_sys::Reflect::get(&evt, &"input".into()).unwrap();
-            let input = js_sys::JSON::parse(&input_str.as_string().unwrap()).unwrap();
+        let kind = js_sys::Reflect::get(&evt, &"kind".into()).unwrap();
+        if kind.as_string().as_deref() == Some("ToolStart") {
+            let input = js_sys::Reflect::get(&evt, &"input".into()).unwrap();
             let global_ran = js_sys::Reflect::get(&input, &"global_ran".into()).unwrap();
             assert!(global_ran.as_bool().unwrap());
             let scope_ran = js_sys::Reflect::get(&input, &"scope_ran".into()).unwrap();

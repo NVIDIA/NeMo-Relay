@@ -28,12 +28,6 @@ func TestScopeTypeConstants(t *testing.T) {
 	}
 }
 
-func TestEventTypeConstants(t *testing.T) {
-	if EventTypeStart != 0 || EventTypeEnd != 1 || EventTypeMark != 2 {
-		t.Fatal("unexpected EventType values")
-	}
-}
-
 func TestScopeAttributeConstants(t *testing.T) {
 	if ScopeAttrParallel != 0b01 || ScopeAttrRelocatable != 0b10 {
 		t.Fatal("unexpected ScopeAttr values")

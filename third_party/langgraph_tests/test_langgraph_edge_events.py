@@ -22,7 +22,7 @@ from langgraph._nat_nexus import (  # type: ignore[import-untyped]
     push_graph_scope,
     push_node_scope,
 )
-from nat_nexus import EventType, create_scope_stack, set_thread_scope_stack
+from nat_nexus import create_scope_stack, set_thread_scope_stack
 
 
 class TestEdgeWriteEvents:
@@ -49,7 +49,7 @@ class TestEdgeWriteEvents:
         emit_edge_write(source_node="node_a", channels=["out"], write_count=1)
         pop_graph_scope(graph_handle)
 
-        mark_events = [e for e in events if e.name == "Edge Write" and e.event_type == EventType.Mark]
+        mark_events = [e for e in events if e.name == "Edge Write" and e.kind == "Mark"]
         assert len(mark_events) == 1, f"Expected 1 'Edge Write' Mark event, got {len(mark_events)}"
         ev = mark_events[0]
         assert ev.data["source_node"] == "node_a"
@@ -65,7 +65,7 @@ class TestEdgeWriteEvents:
         emit_edge_write(source_node=source_node, channels=["state"], write_count=1)
         pop_graph_scope(graph_handle)
 
-        mark_events = [e for e in events if e.name == "Edge Write" and e.event_type == EventType.Mark]
+        mark_events = [e for e in events if e.name == "Edge Write" and e.kind == "Mark"]
         assert len(mark_events) == 1
         assert mark_events[0].data["source_node"] == "mynode", (
             f"Expected 'mynode', got '{mark_events[0].data['source_node']}'"
@@ -80,7 +80,7 @@ class TestEdgeWriteEvents:
         emit_edge_write(source_node=source_node, channels=["output"], write_count=1)
         pop_graph_scope(graph_handle)
 
-        mark_events = [e for e in events if e.name == "Edge Write" and e.event_type == EventType.Mark]
+        mark_events = [e for e in events if e.name == "Edge Write" and e.kind == "Mark"]
         assert len(mark_events) == 1
         assert mark_events[0].data["source_node"] == "child", (
             f"Expected 'child', got '{mark_events[0].data['source_node']}'"
@@ -92,9 +92,7 @@ class TestEdgeWriteEvents:
 
         def worker() -> None:
             emit_edge_write(source_node="n", channels=["c"], write_count=1)
-            results["event_count"] = len(
-                [e for e in events if e.name == "Edge Write" and e.event_type == EventType.Mark]
-            )
+            results["event_count"] = len([e for e in events if e.name == "Edge Write" and e.kind == "Mark"])
             results["available"] = available()
 
         t = threading.Thread(target=worker)
@@ -111,7 +109,7 @@ class TestEdgeWriteEvents:
 
         emit_edge_write(source_node="writer_node", channels=["result"], write_count=1)
 
-        mark_events = [e for e in events if e.name == "Edge Write" and e.event_type == EventType.Mark]
+        mark_events = [e for e in events if e.name == "Edge Write" and e.kind == "Mark"]
         assert len(mark_events) == 1, f"Expected 1 'Edge Write' Mark event, got {len(mark_events)}"
         ev = mark_events[0]
         assert ev.parent_uuid == node_handle.uuid, (

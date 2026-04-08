@@ -7,10 +7,11 @@ from typing import cast
 
 import pytest
 from nat_nexus import (
-    EventType,
     ScopeType,
     ToolAttributes,
+    ToolEndEvent,
     ToolHandle,
+    ToolStartEvent,
     guardrails,
     intercepts,
     scope,
@@ -119,7 +120,9 @@ class TestToolsAsync:
 
         subscribers.deregister("py_tool_exec_failure_sub")
 
-        assert [e.event_type for e in events] == [EventType.Start, EventType.End]
+        assert [e.kind for e in events] == ["ToolStart", "ToolEnd"]
+        assert isinstance(events[0], ToolStartEvent)
+        assert isinstance(events[1], ToolEndEvent)
         assert events[0].uuid == events[1].uuid
         assert events[1].output is None
 
@@ -139,7 +142,7 @@ class TestToolGuardrails:
         subscribers.deregister("py_san_req_sub")
         guardrails.deregister_tool_sanitize_request("py_san_req")
 
-        start_events = [e for e in events if e.event_type == EventType.Start]
+        start_events = [e for e in events if isinstance(e, ToolStartEvent)]
         assert len(start_events) >= 1
 
     def test_sanitize_response_guardrail(self):
@@ -189,7 +192,7 @@ class TestToolGuardrails:
             subscribers.deregister("py_tool_sanitize_req_sub")
 
         start = next(
-            event for event in events if event.name == "tool_sanitize_req_fail" and event.event_type == EventType.Start
+            event for event in events if event.name == "tool_sanitize_req_fail" and isinstance(event, ToolStartEvent)
         )
         assert start.input == {"value": 1}
 
@@ -205,7 +208,7 @@ class TestToolGuardrails:
             subscribers.deregister("py_tool_sanitize_resp_sub")
 
         end = next(
-            event for event in events if event.name == "tool_sanitize_resp_bad" and event.event_type == EventType.End
+            event for event in events if event.name == "tool_sanitize_resp_bad" and isinstance(event, ToolEndEvent)
         )
         assert end.output == {"ok": True}
 

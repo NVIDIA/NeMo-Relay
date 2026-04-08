@@ -83,7 +83,7 @@ func TestRegisterDeregisterReregisterToolSanitizeRequestGuardrail(t *testing.T) 
 
 func TestRegisterDeregisterReregisterSubscriber(t *testing.T) {
 	name := "go_reregister_sub"
-	fn := func(event *Event) {}
+	fn := func(event Event) {}
 
 	err := RegisterSubscriber(name, fn)
 	if err != nil {

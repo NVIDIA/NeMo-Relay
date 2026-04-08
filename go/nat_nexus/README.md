@@ -9,7 +9,7 @@ Go CGo bindings for the Nexus core runtime.
 
 ## Overview
 
-This package wraps the Nexus C FFI layer via CGo, providing a Go-idiomatic API with functional options patterns, native error types, and subpackages organized by domain. It requires the FFI shared library to be built before use.
+This package wraps the Nexus C FFI layer via CGo, providing a Go-idiomatic API with functional options patterns, native error types, and subpackages organized by domain. It requires the FFI library to be built before use.
 
 ## What It Provides
 
@@ -37,17 +37,20 @@ This package wraps the Nexus C FFI layer via CGo, providing a Go-idiomatic API w
 
 ## Prerequisites
 
-The FFI shared library must be built before running or testing the Go bindings:
+The FFI library must be built before running or testing the Go bindings:
 
 ```bash
 cargo build --release -p nvidia-nat-nexus-ffi
 ```
 
+The package searches `target/release` and `target/debug` automatically, so no
+extra `CGO_LDFLAGS` setup is needed when running from this repo.
+
 ## Build and Test
 
 ```bash
 cd go/nat_nexus
-CGO_LDFLAGS="-L../../target/release" go test -race -v ./...
+go test -race -v ./...
 ```
 
 ## Documentation

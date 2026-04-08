@@ -101,7 +101,7 @@ func TestAlreadyExistsErrorOnDuplicateToolExecutionIntercept(t *testing.T) {
 
 func TestAlreadyExistsErrorOnDuplicateSubscriber(t *testing.T) {
 	name := "go_err_dup_sub"
-	fn := func(event *Event) {}
+	fn := func(event Event) {}
 
 	err := RegisterSubscriber(name, fn)
 	if err != nil {
@@ -268,8 +268,8 @@ func TestSanitizeGuardrailAffectsEventInput(t *testing.T) {
 	var capturedInput json.RawMessage
 	var mu sync.Mutex
 
-	RegisterSubscriber("go_err_san_evt_sub", func(event *Event) {
-		if event.Type() == EventTypeStart {
+	RegisterSubscriber("go_err_san_evt_sub", func(event Event) {
+		if event.Kind() == "ToolStart" {
 			mu.Lock()
 			capturedInput = append(json.RawMessage(nil), event.Input()...)
 			mu.Unlock()

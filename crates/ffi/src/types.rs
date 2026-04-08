@@ -109,28 +109,6 @@ impl From<core_types::ScopeType> for NatNexusScopeType {
     }
 }
 
-/// The type of lifecycle event emitted by the runtime.
-#[repr(i32)]
-#[derive(Debug, Clone, Copy)]
-pub enum NatNexusEventType {
-    /// A scope or operation has started.
-    Start = 0,
-    /// A scope or operation has ended.
-    End = 1,
-    /// A point-in-time marker event.
-    Mark = 2,
-}
-
-impl From<core_types::EventType> for NatNexusEventType {
-    fn from(v: core_types::EventType) -> Self {
-        match v {
-            core_types::EventType::Start => NatNexusEventType::Start,
-            core_types::EventType::End => NatNexusEventType::End,
-            core_types::EventType::Mark => NatNexusEventType::Mark,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Free functions for opaque handles
 // ---------------------------------------------------------------------------
@@ -529,7 +507,7 @@ pub unsafe extern "C" fn nat_nexus_event_uuid(ptr: *const FfiEvent) -> *mut c_ch
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
-    str_to_c_string(&unsafe { &*ptr }.0.uuid.to_string())
+    str_to_c_string(&unsafe { &*ptr }.0.uuid().to_string())
 }
 
 /// Return the name of an event as a C string, or null if unnamed.
@@ -542,22 +520,37 @@ pub unsafe extern "C" fn nat_nexus_event_name(ptr: *const FfiEvent) -> *mut c_ch
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
-    match &unsafe { &*ptr }.0.name {
-        Some(n) => str_to_c_string(n),
-        None => std::ptr::null_mut(),
-    }
+    str_to_c_string(unsafe { &*ptr }.0.name())
 }
 
-/// Return the event type. Returns `Mark` if `ptr` is null.
+/// Return the event discriminator as a C string.
+/// Caller must free the result with `nat_nexus_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_type(ptr: *const FfiEvent) -> NatNexusEventType {
+pub unsafe extern "C" fn nat_nexus_event_kind(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
-        return NatNexusEventType::Mark;
+        return std::ptr::null_mut();
     }
-    unsafe { &*ptr }.0.event_type.into()
+    str_to_c_string(unsafe { &*ptr }.0.kind())
+}
+
+/// Return the raw attribute bitfield for an event, or 0 if it has none.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiEvent` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_event_attributes(ptr: *const FfiEvent) -> u32 {
+    if ptr.is_null() {
+        return 0;
+    }
+    match unsafe { &*ptr }.0.attributes() {
+        Some(core_types::HandleAttributes::Scope(attributes)) => attributes.bits(),
+        Some(core_types::HandleAttributes::Tool(attributes)) => attributes.bits(),
+        Some(core_types::HandleAttributes::Llm(attributes)) => attributes.bits(),
+        None => 0,
+    }
 }
 
 /// Return the event data as a JSON C string, or null if no data is set.
@@ -570,7 +563,7 @@ pub unsafe extern "C" fn nat_nexus_event_data(ptr: *const FfiEvent) -> *mut c_ch
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
-    match &unsafe { &*ptr }.0.data {
+    match unsafe { &*ptr }.0.data() {
         Some(d) => json_to_c_string(d),
         None => std::ptr::null_mut(),
     }
@@ -586,7 +579,7 @@ pub unsafe extern "C" fn nat_nexus_event_metadata(ptr: *const FfiEvent) -> *mut 
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
-    match &unsafe { &*ptr }.0.metadata {
+    match unsafe { &*ptr }.0.metadata() {
         Some(m) => json_to_c_string(m),
         None => std::ptr::null_mut(),
     }
@@ -601,7 +594,7 @@ pub unsafe extern "C" fn nat_nexus_event_timestamp(ptr: *const FfiEvent) -> *mut
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
-    str_to_c_string(&unsafe { &*ptr }.0.timestamp.to_rfc3339())
+    str_to_c_string(&unsafe { &*ptr }.0.timestamp().to_rfc3339())
 }
 
 /// Return the event input as a JSON C string, or null if no input is set.
@@ -614,7 +607,7 @@ pub unsafe extern "C" fn nat_nexus_event_input(ptr: *const FfiEvent) -> *mut c_c
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
-    match &unsafe { &*ptr }.0.input {
+    match unsafe { &*ptr }.0.input() {
         Some(d) => json_to_c_string(d),
         None => std::ptr::null_mut(),
     }
@@ -630,7 +623,7 @@ pub unsafe extern "C" fn nat_nexus_event_output(ptr: *const FfiEvent) -> *mut c_
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
-    match &unsafe { &*ptr }.0.output {
+    match unsafe { &*ptr }.0.output() {
         Some(d) => json_to_c_string(d),
         None => std::ptr::null_mut(),
     }
@@ -646,7 +639,7 @@ pub unsafe extern "C" fn nat_nexus_event_model_name(ptr: *const FfiEvent) -> *mu
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
-    match &unsafe { &*ptr }.0.model_name {
+    match unsafe { &*ptr }.0.model_name() {
         Some(s) => str_to_c_string(s),
         None => std::ptr::null_mut(),
     }
@@ -662,24 +655,8 @@ pub unsafe extern "C" fn nat_nexus_event_tool_call_id(ptr: *const FfiEvent) -> *
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
-    match &unsafe { &*ptr }.0.tool_call_id {
+    match unsafe { &*ptr }.0.tool_call_id() {
         Some(s) => str_to_c_string(s),
-        None => std::ptr::null_mut(),
-    }
-}
-
-/// Return the event root UUID as a C string, or null if no root UUID is set.
-/// Caller must free the result with `nat_nexus_string_free`.
-///
-/// # Safety
-/// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_root_uuid(ptr: *const FfiEvent) -> *mut c_char {
-    if ptr.is_null() {
-        return std::ptr::null_mut();
-    }
-    match &unsafe { &*ptr }.0.root_uuid {
-        Some(u) => str_to_c_string(&u.to_string()),
         None => std::ptr::null_mut(),
     }
 }
@@ -694,7 +671,7 @@ pub unsafe extern "C" fn nat_nexus_event_parent_uuid(ptr: *const FfiEvent) -> *m
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
-    match &unsafe { &*ptr }.0.parent_uuid {
+    match unsafe { &*ptr }.0.parent_uuid() {
         Some(u) => str_to_c_string(&u.to_string()),
         None => std::ptr::null_mut(),
     }
@@ -710,7 +687,7 @@ pub unsafe extern "C" fn nat_nexus_event_scope_type(ptr: *const FfiEvent) -> *mu
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
-    match &unsafe { &*ptr }.0.scope_type {
+    match unsafe { &*ptr }.0.scope_type() {
         Some(st) => str_to_c_string(&format!("{:?}", st)),
         None => std::ptr::null_mut(),
     }
@@ -789,26 +766,21 @@ mod tests {
         );
         unsafe { nat_nexus_llm_request_free(request_ptr) };
 
-        let mut event = core_types::Event::new(
-            Some(Uuid::new_v4()),
+        let parent_uuid = Uuid::new_v4();
+        let scope_event = core_types::Event::scope_start(
+            Some(parent_uuid),
             Uuid::new_v4(),
-            Some("ffi-event".into()),
+            "ffi-event",
             Some(json!({"data": 1})),
             Some(json!({"meta": 2})),
-            None,
-            core_types::EventType::Start,
-            Some(core_types::ScopeType::Guardrail),
+            core_types::ScopeAttributes::empty(),
+            core_types::ScopeType::Guardrail,
         );
-        event.input = Some(json!({"input": true}));
-        event.output = Some(json!({"output": true}));
-        event.model_name = Some("model".into());
-        event.tool_call_id = Some("tool-call-id".into());
-        event.root_uuid = Some(Uuid::new_v4());
-        let ffi_event = FfiEvent(event.clone());
+        let ffi_event = FfiEvent(scope_event.clone());
 
         assert_eq!(
-            unsafe { nat_nexus_event_type(&ffi_event) } as i32,
-            NatNexusEventType::Start as i32
+            take_string(unsafe { nat_nexus_event_kind(&ffi_event) }),
+            Some("ScopeStart".into())
         );
         assert_eq!(
             take_string(unsafe { nat_nexus_event_name(&ffi_event) }),
@@ -823,37 +795,90 @@ mod tests {
             Some(r#"{"meta":2}"#.into())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_input(&ffi_event) }),
-            Some(r#"{"input":true}"#.into())
-        );
-        assert_eq!(
-            take_string(unsafe { nat_nexus_event_output(&ffi_event) }),
-            Some(r#"{"output":true}"#.into())
-        );
-        assert_eq!(
-            take_string(unsafe { nat_nexus_event_model_name(&ffi_event) }),
-            Some("model".into())
-        );
-        assert_eq!(
-            take_string(unsafe { nat_nexus_event_tool_call_id(&ffi_event) }),
-            Some("tool-call-id".into())
-        );
-        assert_eq!(
             take_string(unsafe { nat_nexus_event_scope_type(&ffi_event) }),
             Some("Guardrail".into())
         );
         assert_eq!(
             take_string(unsafe { nat_nexus_event_parent_uuid(&ffi_event) }),
-            event.parent_uuid.map(|uuid| uuid.to_string())
-        );
-        assert_eq!(
-            take_string(unsafe { nat_nexus_event_root_uuid(&ffi_event) }),
-            event.root_uuid.map(|uuid| uuid.to_string())
+            scope_event.parent_uuid().map(|uuid| uuid.to_string())
         );
         assert!(
             take_string(unsafe { nat_nexus_event_timestamp(&ffi_event) })
                 .unwrap()
                 .contains('T')
+        );
+
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_input(&ffi_event) }),
+            None
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_output(&ffi_event) }),
+            None
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_model_name(&ffi_event) }),
+            None
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_tool_call_id(&ffi_event) }),
+            None
+        );
+
+        let llm_event = core_types::Event::llm_start(
+            Some(parent_uuid),
+            Uuid::new_v4(),
+            "ffi-llm",
+            None,
+            None,
+            core_types::LLMAttributes::empty(),
+            Some(json!({"input": true})),
+            Some("model".into()),
+        );
+        let ffi_llm_event = FfiEvent(llm_event);
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_input(&ffi_llm_event) }),
+            Some(r#"{"input":true}"#.into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_model_name(&ffi_llm_event) }),
+            Some("model".into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_scope_type(&ffi_llm_event) }),
+            None
+        );
+
+        let tool_event = core_types::Event::tool_end(
+            Some(parent_uuid),
+            Uuid::new_v4(),
+            "ffi-tool",
+            None,
+            None,
+            core_types::ToolAttributes::empty(),
+            Some(json!({"output": true})),
+            Some("tool-call-id".into()),
+        );
+        let ffi_tool_event = FfiEvent(tool_event);
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_output(&ffi_tool_event) }),
+            Some(r#"{"output":true}"#.into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_tool_call_id(&ffi_tool_event) }),
+            Some("tool-call-id".into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_scope_type(&ffi_tool_event) }),
+            None
+        );
+
+        let mark_event =
+            core_types::Event::mark(Some(parent_uuid), Uuid::new_v4(), "ffi-mark", None, None);
+        let ffi_mark_event = FfiEvent(mark_event);
+        assert_eq!(
+            take_string(unsafe { nat_nexus_event_scope_type(&ffi_mark_event) }),
+            None
         );
     }
 }

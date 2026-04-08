@@ -867,10 +867,51 @@ pub fn wrap_py_llm_sanitize_response_fn(
 pub fn wrap_py_event_subscriber(py_fn: Py<PyAny>) -> nvidia_nat_nexus_core::EventSubscriberFn {
     Arc::new(move |event: &nvidia_nat_nexus_core::Event| {
         Python::attach(|py| {
-            let py_event = crate::py_types::PyEvent {
-                inner: event.clone(),
+            let result = match event {
+                nvidia_nat_nexus_core::Event::ScopeStart(inner) => py_fn.call1(
+                    py,
+                    (crate::py_types::PyScopeStartEvent {
+                        inner: inner.clone(),
+                    },),
+                ),
+                nvidia_nat_nexus_core::Event::ScopeEnd(inner) => py_fn.call1(
+                    py,
+                    (crate::py_types::PyScopeEndEvent {
+                        inner: inner.clone(),
+                    },),
+                ),
+                nvidia_nat_nexus_core::Event::ToolStart(inner) => py_fn.call1(
+                    py,
+                    (crate::py_types::PyToolStartEvent {
+                        inner: inner.clone(),
+                    },),
+                ),
+                nvidia_nat_nexus_core::Event::ToolEnd(inner) => py_fn.call1(
+                    py,
+                    (crate::py_types::PyToolEndEvent {
+                        inner: inner.clone(),
+                    },),
+                ),
+                nvidia_nat_nexus_core::Event::LLMStart(inner) => py_fn.call1(
+                    py,
+                    (crate::py_types::PyLLMStartEvent {
+                        inner: inner.clone(),
+                    },),
+                ),
+                nvidia_nat_nexus_core::Event::LLMEnd(inner) => py_fn.call1(
+                    py,
+                    (crate::py_types::PyLLMEndEvent {
+                        inner: inner.clone(),
+                    },),
+                ),
+                nvidia_nat_nexus_core::Event::Mark(inner) => py_fn.call1(
+                    py,
+                    (crate::py_types::PyMarkEvent {
+                        inner: inner.clone(),
+                    },),
+                ),
             };
-            if let Err(e) = py_fn.call1(py, (py_event,)) {
+            if let Err(e) = result {
                 eprintln!("Event subscriber error: {e}");
             }
         })

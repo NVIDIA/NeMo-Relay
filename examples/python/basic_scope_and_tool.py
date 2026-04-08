@@ -19,7 +19,7 @@ import nat_nexus
 async def main() -> None:
     nat_nexus.subscribers.register(
         "example_logger",
-        lambda event: print(f"[{event.event_type}] {event.name}"),
+        lambda event: print(f"[{event.kind}] {event.name}"),
     )
 
     async def search_tool(args: dict) -> dict:

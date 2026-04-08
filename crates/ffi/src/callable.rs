@@ -733,7 +733,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use nvidia_nat_nexus_core::types::{Event, EventType, LLMAttributes, LLMHandle, ScopeType};
+    use nvidia_nat_nexus_core::types::{Event, LLMAttributes, LLMHandle};
     use serde_json::json;
     use tokio_stream::StreamExt;
     use uuid::Uuid;
@@ -925,7 +925,7 @@ mod tests {
 
     unsafe extern "C" fn subscriber_cb(user_data: *mut libc::c_void, event: *const FfiEvent) {
         let counter = unsafe { &*(user_data as *const Arc<AtomicUsize>) };
-        if unsafe { (&*event).0.name.as_deref() } == Some("ffi-event") {
+        if unsafe { (&*event).0.name() } == "ffi-event" {
             counter.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -1110,20 +1110,16 @@ mod tests {
 
         let (user_data, seen) = user_data_counter();
         let subscriber = wrap_event_subscriber(subscriber_cb, user_data, Some(free_arc_counter));
-        let mut event = Event::new(
+        let event = Event::llm_start(
             None,
             Uuid::new_v4(),
+            "ffi-event",
             None,
             None,
+            LLMAttributes::empty(),
             None,
-            None,
-            EventType::Mark,
-            None,
+            Some("test-model".into()),
         );
-        event.name = Some("ffi-event".into());
-        event.scope_type = Some(ScopeType::Llm);
-        event.model_name = Some("test-model".into());
-        event.root_uuid = Some(Uuid::new_v4());
         subscriber(&event);
         assert_eq!(seen.load(Ordering::SeqCst), 1);
         drop(subscriber);

@@ -11,7 +11,7 @@
 //!
 //! - `py_types` — Python-facing type wrappers (`ScopeHandle`, `ToolHandle`, `Event`,
 //!   `AtifExporter`, etc.). `Event` exposes typed lifecycle fields (`input`, `output`,
-//!   `model_name`, `tool_call_id`, `root_uuid`). `AtifExporter` collects events and
+//!   `model_name`, `tool_call_id`). `AtifExporter` collects events and
 //!   exports ATIF v1.6 trajectories.
 //! - `py_api` — Python-facing API functions (`nat_nexus_push_scope`, etc.). Tool calls
 //!   accept `tool_call_id` and LLM calls accept `model_name` for ATIF correlation.

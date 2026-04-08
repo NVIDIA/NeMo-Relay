@@ -178,7 +178,7 @@ func TestEmitEventWithParent(t *testing.T) {
 func TestSubscriberRegistration(t *testing.T) {
 	count := 0
 	var mu sync.Mutex
-	err := RegisterSubscriber("go_test_sub", func(event *Event) {
+	err := RegisterSubscriber("go_test_sub", func(event Event) {
 		mu.Lock()
 		count++
 		mu.Unlock()
@@ -205,8 +205,8 @@ func TestSubscriberRegistration(t *testing.T) {
 }
 
 func TestDuplicateSubscriberFails(t *testing.T) {
-	RegisterSubscriber("go_dup_sub", func(event *Event) {})
-	err := RegisterSubscriber("go_dup_sub", func(event *Event) {})
+	RegisterSubscriber("go_dup_sub", func(event Event) {})
+	err := RegisterSubscriber("go_dup_sub", func(event Event) {})
 	if err == nil {
 		t.Fatal("expected error for duplicate subscriber")
 	}
@@ -217,22 +217,22 @@ func TestSubscriberEventProperties(t *testing.T) {
 	var events []struct {
 		uuid      string
 		name      string
-		eventType EventType
+		kind      string
 		timestamp string
 	}
 	var mu sync.Mutex
 
-	RegisterSubscriber("go_evt_props", func(event *Event) {
+	RegisterSubscriber("go_evt_props", func(event Event) {
 		mu.Lock()
 		events = append(events, struct {
 			uuid      string
 			name      string
-			eventType EventType
+			kind      string
 			timestamp string
 		}{
 			uuid:      event.UUID(),
 			name:      event.Name(),
-			eventType: event.Type(),
+			kind:      event.Kind(),
 			timestamp: event.Timestamp(),
 		})
 		mu.Unlock()
@@ -247,8 +247,8 @@ func TestSubscriberEventProperties(t *testing.T) {
 	if len(events) < 2 {
 		t.Fatalf("expected at least 2 events, got %d", len(events))
 	}
-	if events[0].eventType != EventTypeStart {
-		t.Fatalf("expected Start event, got %d", events[0].eventType)
+	if events[0].kind != "ScopeStart" {
+		t.Fatalf("expected ScopeStart event, got %s", events[0].kind)
 	}
 	if events[0].uuid == "" {
 		t.Fatal("event UUID is empty")
@@ -262,8 +262,8 @@ func TestMarkEvent(t *testing.T) {
 	var markSeen bool
 	var mu sync.Mutex
 
-	RegisterSubscriber("go_mark_sub", func(event *Event) {
-		if event.Type() == EventTypeMark {
+	RegisterSubscriber("go_mark_sub", func(event Event) {
+		if event.Kind() == "Mark" {
 			mu.Lock()
 			markSeen = true
 			mu.Unlock()
@@ -278,6 +278,81 @@ func TestMarkEvent(t *testing.T) {
 		t.Fatal("mark event was not received")
 	}
 	mu.Unlock()
+}
+
+func TestEventScopeTypeOnlyOnScopeEvents(t *testing.T) {
+	var seenScope, seenTool, seenLLM, seenMark bool
+	var mu sync.Mutex
+
+	RegisterSubscriber("go_scope_type_contract", func(event Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case event.Kind() == "ScopeStart" && event.Name() == "scope_type_child":
+			seenScope = true
+			if event.ScopeType() != "Function" {
+				t.Fatalf("expected scope event ScopeType Function, got %q", event.ScopeType())
+			}
+		case event.Kind() == "ToolStart" && event.Name() == "scope_type_tool":
+			seenTool = true
+			if event.ScopeType() != "" {
+				t.Fatalf("expected tool event ScopeType to be empty, got %q", event.ScopeType())
+			}
+		case event.Kind() == "LLMStart" && event.Name() == "scope_type_llm":
+			seenLLM = true
+			if event.ScopeType() != "" {
+				t.Fatalf("expected llm event ScopeType to be empty, got %q", event.ScopeType())
+			}
+		case event.Kind() == "Mark" && event.Name() == "scope_type_mark":
+			seenMark = true
+			if event.ScopeType() != "" {
+				t.Fatalf("expected mark event ScopeType to be empty, got %q", event.ScopeType())
+			}
+		}
+	})
+	defer DeregisterSubscriber("go_scope_type_contract")
+
+	parent, err := PushScope("scope_type_parent", ScopeTypeAgent)
+	if err != nil {
+		t.Fatalf("PushScope parent failed: %v", err)
+	}
+	child, err := PushScope("scope_type_child", ScopeTypeFunction)
+	if err != nil {
+		t.Fatalf("PushScope child failed: %v", err)
+	}
+
+	toolHandle, err := ToolCall("scope_type_tool", json.RawMessage(`{"x":1}`))
+	if err != nil {
+		t.Fatalf("ToolCall failed: %v", err)
+	}
+	if err := ToolCallEnd(toolHandle, json.RawMessage(`{"y":2}`)); err != nil {
+		t.Fatalf("ToolCallEnd failed: %v", err)
+	}
+
+	llmHandle, err := LlmCall("scope_type_llm", makeRequest())
+	if err != nil {
+		t.Fatalf("LlmCall failed: %v", err)
+	}
+	if err := LlmCallEnd(llmHandle, json.RawMessage(`{"done":true}`)); err != nil {
+		t.Fatalf("LlmCallEnd failed: %v", err)
+	}
+
+	if err := EmitEvent("scope_type_mark"); err != nil {
+		t.Fatalf("EmitEvent failed: %v", err)
+	}
+
+	if err := PopScope(child); err != nil {
+		t.Fatalf("PopScope child failed: %v", err)
+	}
+	if err := PopScope(parent); err != nil {
+		t.Fatalf("PopScope parent failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !seenScope || !seenTool || !seenLLM || !seenMark {
+		t.Fatalf("missing expected events: scope=%v tool=%v llm=%v mark=%v", seenScope, seenTool, seenLLM, seenMark)
+	}
 }
 
 // ============================================================================
@@ -376,8 +451,8 @@ func TestScopeEventWithDataAndMetadata(t *testing.T) {
 	var capturedData, capturedMeta json.RawMessage
 	var mu sync.Mutex
 
-	RegisterSubscriber("go_evt_data_meta_sub", func(event *Event) {
-		if event.Type() == EventTypeMark {
+	RegisterSubscriber("go_evt_data_meta_sub", func(event Event) {
+		if event.Kind() == "Mark" {
 			mu.Lock()
 			capturedData = append(json.RawMessage(nil), event.Data()...)
 			capturedMeta = append(json.RawMessage(nil), event.Metadata()...)
@@ -452,24 +527,22 @@ func TestSubscriberReceivesAllEventFields(t *testing.T) {
 	type eventData struct {
 		uuid       string
 		name       string
-		eventType  EventType
+		kind       string
 		timestamp  string
 		parentUUID string
-		rootUUID   string
 		scopeType  string
 	}
 	var events []eventData
 	var mu sync.Mutex
 
-	RegisterSubscriber("go_full_evt_sub", func(event *Event) {
+	RegisterSubscriber("go_full_evt_sub", func(event Event) {
 		mu.Lock()
 		events = append(events, eventData{
 			uuid:       event.UUID(),
 			name:       event.Name(),
-			eventType:  event.Type(),
+			kind:       event.Kind(),
 			timestamp:  event.Timestamp(),
 			parentUUID: event.ParentUUID(),
-			rootUUID:   event.RootUUID(),
 			scopeType:  event.ScopeType(),
 		})
 		mu.Unlock()
@@ -487,8 +560,8 @@ func TestSubscriberReceivesAllEventFields(t *testing.T) {
 	}
 
 	start := events[0]
-	if start.eventType != EventTypeStart {
-		t.Fatalf("expected Start event, got %d", start.eventType)
+	if start.kind != "ScopeStart" {
+		t.Fatalf("expected ScopeStart event, got %s", start.kind)
 	}
 	if start.uuid == "" {
 		t.Fatal("event UUID is empty")

@@ -164,15 +164,12 @@ func TestAtifExporterLifecycleAndFiltering(t *testing.T) {
 	}
 	defer stack2.Close()
 
-	var root1 string
-	var root2 string
-
 	stack1.Run(func() {
 		handle, err := GetHandle()
 		if err != nil {
 			t.Fatalf("GetHandle stack1 failed: %v", err)
 		}
-		root1 = handle.UUID()
+		_ = handle.UUID()
 
 		_, err = LlmCallExecute("atif_llm_1", map[string]interface{}{
 			"headers": map[string]interface{}{},
@@ -193,7 +190,7 @@ func TestAtifExporterLifecycleAndFiltering(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetHandle stack2 failed: %v", err)
 		}
-		root2 = handle.UUID()
+		_ = handle.UUID()
 
 		_, err = LlmCallExecute("atif_llm_2", map[string]interface{}{
 			"headers": map[string]interface{}{},
@@ -209,7 +206,7 @@ func TestAtifExporterLifecycleAndFiltering(t *testing.T) {
 		}
 	})
 
-	allJSON, err := exporter.ExportJSON("")
+	allJSON, err := exporter.ExportJSON()
 	if err != nil {
 		t.Fatalf("ExportJSON all failed: %v", err)
 	}
@@ -234,32 +231,12 @@ func TestAtifExporterLifecycleAndFiltering(t *testing.T) {
 		t.Fatal("expected aggregated final metrics")
 	}
 
-	filteredJSON, err := exporter.ExportJSON(root1)
-	if err != nil {
-		t.Fatalf("ExportJSON filtered failed: %v", err)
-	}
-
-	var filtered struct {
-		Steps []struct {
-			Message json.RawMessage `json:"message"`
-		} `json:"steps"`
-	}
-	if err := json.Unmarshal(filteredJSON, &filtered); err != nil {
-		t.Fatalf("unmarshal filtered trajectory: %v", err)
-	}
-	if len(filtered.Steps) != 2 {
-		t.Fatalf("expected two filtered steps, got %d", len(filtered.Steps))
-	}
-	if string(filtered.Steps[1].Message) != `"response one"` {
-		t.Fatalf("expected filtered response one, got %s", filtered.Steps[1].Message)
-	}
-
 	if err := exporter.Deregister("go_atif_exporter"); err != nil {
 		t.Fatalf("Deregister failed: %v", err)
 	}
 
 	exporter.Clear()
-	emptyJSON, err := exporter.ExportJSON("")
+	emptyJSON, err := exporter.ExportJSON()
 	if err != nil {
 		t.Fatalf("ExportJSON after clear failed: %v", err)
 	}
@@ -288,7 +265,7 @@ func TestAtifExporterLifecycleAndFiltering(t *testing.T) {
 		}
 	})
 
-	afterDeregisterJSON, err := exporter.ExportJSON(root2)
+	afterDeregisterJSON, err := exporter.ExportJSON()
 	if err != nil {
 		t.Fatalf("ExportJSON after deregister failed: %v", err)
 	}

@@ -91,12 +91,12 @@ func TestLlmEvents(t *testing.T) {
 	var startSeen, endSeen bool
 	var mu sync.Mutex
 
-	RegisterSubscriber("go_llm_evt", func(event *Event) {
+	RegisterSubscriber("go_llm_evt", func(event Event) {
 		mu.Lock()
-		if event.Type() == EventTypeStart {
+		if event.Kind() == "LLMStart" {
 			startSeen = true
 		}
-		if event.Type() == EventTypeEnd {
+		if event.Kind() == "LLMEnd" {
 			endSeen = true
 		}
 		mu.Unlock()
@@ -431,8 +431,8 @@ func TestLlmSanitizeRequestGuardrailModifiesEventInput(t *testing.T) {
 	var capturedInput json.RawMessage
 	var mu sync.Mutex
 
-	RegisterSubscriber("go_llm_san_evt_sub", func(event *Event) {
-		if event.Type() == EventTypeStart {
+	RegisterSubscriber("go_llm_san_evt_sub", func(event Event) {
+		if event.Kind() == "LLMStart" {
 			mu.Lock()
 			capturedInput = append(json.RawMessage(nil), event.Input()...)
 			mu.Unlock()
@@ -578,8 +578,8 @@ func TestLlmCallWithModelName(t *testing.T) {
 	var capturedModelName string
 	var mu sync.Mutex
 
-	RegisterSubscriber("go_llm_model_sub", func(event *Event) {
-		if event.Type() == EventTypeStart {
+	RegisterSubscriber("go_llm_model_sub", func(event Event) {
+		if event.Kind() == "LLMStart" {
 			mu.Lock()
 			capturedModelName = event.ModelName()
 			mu.Unlock()
@@ -605,12 +605,12 @@ func TestLlmEventInputOutput(t *testing.T) {
 	var capturedInput, capturedOutput json.RawMessage
 	var mu sync.Mutex
 
-	RegisterSubscriber("go_llm_io_sub", func(event *Event) {
+	RegisterSubscriber("go_llm_io_sub", func(event Event) {
 		mu.Lock()
-		if event.Type() == EventTypeStart {
+		if event.Kind() == "LLMStart" {
 			capturedInput = append(json.RawMessage(nil), event.Input()...)
 		}
-		if event.Type() == EventTypeEnd {
+		if event.Kind() == "LLMEnd" {
 			capturedOutput = append(json.RawMessage(nil), event.Output()...)
 		}
 		mu.Unlock()

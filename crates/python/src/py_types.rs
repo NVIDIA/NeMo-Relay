@@ -361,42 +361,6 @@ impl From<core_types::ScopeType> for PyScopeType {
 }
 
 // ---------------------------------------------------------------------------
-// EventType enum
-// ---------------------------------------------------------------------------
-
-/// The type of a lifecycle event.
-///
-/// Variants: Start (scope/handle created), End (scope/handle destroyed),
-/// Mark (standalone marker event).
-#[pyclass(name = "EventType", eq, eq_int, from_py_object)]
-#[derive(Clone, PartialEq)]
-pub enum PyEventType {
-    Start = 0,
-    End = 1,
-    Mark = 2,
-}
-
-impl From<PyEventType> for core_types::EventType {
-    fn from(py: PyEventType) -> Self {
-        match py {
-            PyEventType::Start => core_types::EventType::Start,
-            PyEventType::End => core_types::EventType::End,
-            PyEventType::Mark => core_types::EventType::Mark,
-        }
-    }
-}
-
-impl From<core_types::EventType> for PyEventType {
-    fn from(et: core_types::EventType) -> Self {
-        match et {
-            core_types::EventType::Start => PyEventType::Start,
-            core_types::EventType::End => PyEventType::End,
-            core_types::EventType::Mark => PyEventType::Mark,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // ScopeHandle
 // ---------------------------------------------------------------------------
 
@@ -664,68 +628,307 @@ impl PyLLMRequest {
 // Event
 // ---------------------------------------------------------------------------
 
-/// A lifecycle event emitted to registered subscribers.
-///
-/// Properties:
-///     parent_uuid (str | None): Parent scope/handle UUID.
-///     uuid (str): UUID of the entity that produced this event.
-///     timestamp (str): ISO 8601 UTC timestamp.
-///     name (str | None): Name of the source entity.
-///     data (Any | None): Application-specific data snapshot.
-///     metadata (Any | None): Metadata snapshot.
-///     event_type (EventType): Start, End, or Mark.
-///     scope_type (ScopeType | None): Scope type of the source entity.
-#[pyclass(name = "Event", skip_from_py_object)]
+#[pyclass(name = "ScopeStartEvent", skip_from_py_object)]
 #[derive(Clone)]
-pub struct PyEvent {
-    pub inner: core_types::Event,
+pub struct PyScopeStartEvent {
+    pub inner: core_types::ScopeStartEvent,
 }
 
 #[pymethods]
-impl PyEvent {
+impl PyScopeStartEvent {
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "ScopeStart"
+    }
     #[getter]
     fn parent_uuid(&self) -> Option<String> {
         self.inner.parent_uuid.map(|u| u.to_string())
     }
-
     #[getter]
     fn uuid(&self) -> String {
         self.inner.uuid.to_string()
     }
-
     #[getter]
     fn timestamp(&self) -> String {
         self.inner.timestamp.to_rfc3339()
     }
-
     #[getter]
-    fn name(&self) -> Option<String> {
+    fn name(&self) -> String {
         self.inner.name.clone()
     }
-
     #[getter]
     fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         opt_json_to_py(py, &self.inner.data)
     }
-
     #[getter]
     fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         opt_json_to_py(py, &self.inner.metadata)
     }
-
     #[getter]
-    fn event_type(&self) -> PyEventType {
-        self.inner.event_type.into()
+    fn attributes(&self) -> PyScopeAttributes {
+        PyScopeAttributes {
+            inner: self.inner.attributes,
+        }
     }
 
     #[getter]
-    fn scope_type(&self) -> Option<PyScopeType> {
-        self.inner.scope_type.map(|st| st.into())
+    fn scope_type(&self) -> PyScopeType {
+        self.inner.scope_type.into()
+    }
+}
+
+#[pyclass(name = "ScopeEndEvent", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyScopeEndEvent {
+    pub inner: core_types::ScopeEndEvent,
+}
+
+#[pymethods]
+impl PyScopeEndEvent {
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "ScopeEnd"
+    }
+    #[getter]
+    fn parent_uuid(&self) -> Option<String> {
+        self.inner.parent_uuid.map(|u| u.to_string())
+    }
+    #[getter]
+    fn uuid(&self) -> String {
+        self.inner.uuid.to_string()
+    }
+    #[getter]
+    fn timestamp(&self) -> String {
+        self.inner.timestamp.to_rfc3339()
+    }
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+    #[getter]
+    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.data)
+    }
+    #[getter]
+    fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.metadata)
+    }
+    #[getter]
+    fn attributes(&self) -> PyScopeAttributes {
+        PyScopeAttributes {
+            inner: self.inner.attributes,
+        }
+    }
+
+    #[getter]
+    fn scope_type(&self) -> PyScopeType {
+        self.inner.scope_type.into()
+    }
+}
+
+#[pyclass(name = "ToolStartEvent", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyToolStartEvent {
+    pub inner: core_types::ToolStartEvent,
+}
+
+#[pymethods]
+impl PyToolStartEvent {
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "ToolStart"
+    }
+    #[getter]
+    fn parent_uuid(&self) -> Option<String> {
+        self.inner.parent_uuid.map(|u| u.to_string())
+    }
+    #[getter]
+    fn uuid(&self) -> String {
+        self.inner.uuid.to_string()
+    }
+    #[getter]
+    fn timestamp(&self) -> String {
+        self.inner.timestamp.to_rfc3339()
+    }
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+    #[getter]
+    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.data)
+    }
+    #[getter]
+    fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.metadata)
+    }
+    #[getter]
+    fn attributes(&self) -> PyToolAttributes {
+        PyToolAttributes {
+            inner: self.inner.attributes,
+        }
     }
 
     #[getter]
     fn input(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         opt_json_to_py(py, &self.inner.input)
+    }
+
+    #[getter]
+    fn tool_call_id(&self) -> Option<String> {
+        self.inner.tool_call_id.clone()
+    }
+}
+
+#[pyclass(name = "ToolEndEvent", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyToolEndEvent {
+    pub inner: core_types::ToolEndEvent,
+}
+
+#[pymethods]
+impl PyToolEndEvent {
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "ToolEnd"
+    }
+    #[getter]
+    fn parent_uuid(&self) -> Option<String> {
+        self.inner.parent_uuid.map(|u| u.to_string())
+    }
+    #[getter]
+    fn uuid(&self) -> String {
+        self.inner.uuid.to_string()
+    }
+    #[getter]
+    fn timestamp(&self) -> String {
+        self.inner.timestamp.to_rfc3339()
+    }
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+    #[getter]
+    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.data)
+    }
+    #[getter]
+    fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.metadata)
+    }
+    #[getter]
+    fn attributes(&self) -> PyToolAttributes {
+        PyToolAttributes {
+            inner: self.inner.attributes,
+        }
+    }
+
+    #[getter]
+    fn output(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.output)
+    }
+
+    #[getter]
+    fn tool_call_id(&self) -> Option<String> {
+        self.inner.tool_call_id.clone()
+    }
+}
+
+#[pyclass(name = "LLMStartEvent", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyLLMStartEvent {
+    pub inner: core_types::LLMStartEvent,
+}
+
+#[pymethods]
+impl PyLLMStartEvent {
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "LLMStart"
+    }
+    #[getter]
+    fn parent_uuid(&self) -> Option<String> {
+        self.inner.parent_uuid.map(|u| u.to_string())
+    }
+    #[getter]
+    fn uuid(&self) -> String {
+        self.inner.uuid.to_string()
+    }
+    #[getter]
+    fn timestamp(&self) -> String {
+        self.inner.timestamp.to_rfc3339()
+    }
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+    #[getter]
+    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.data)
+    }
+    #[getter]
+    fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.metadata)
+    }
+    #[getter]
+    fn attributes(&self) -> PyLLMAttributes {
+        PyLLMAttributes {
+            inner: self.inner.attributes,
+        }
+    }
+
+    #[getter]
+    fn input(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.input)
+    }
+
+    #[getter]
+    fn model_name(&self) -> Option<String> {
+        self.inner.model_name.clone()
+    }
+}
+
+#[pyclass(name = "LLMEndEvent", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyLLMEndEvent {
+    pub inner: core_types::LLMEndEvent,
+}
+
+#[pymethods]
+impl PyLLMEndEvent {
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "LLMEnd"
+    }
+    #[getter]
+    fn parent_uuid(&self) -> Option<String> {
+        self.inner.parent_uuid.map(|u| u.to_string())
+    }
+    #[getter]
+    fn uuid(&self) -> String {
+        self.inner.uuid.to_string()
+    }
+    #[getter]
+    fn timestamp(&self) -> String {
+        self.inner.timestamp.to_rfc3339()
+    }
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+    #[getter]
+    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.data)
+    }
+    #[getter]
+    fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.metadata)
+    }
+    #[getter]
+    fn attributes(&self) -> PyLLMAttributes {
+        PyLLMAttributes {
+            inner: self.inner.attributes,
+        }
     }
 
     #[getter]
@@ -737,28 +940,43 @@ impl PyEvent {
     fn model_name(&self) -> Option<String> {
         self.inner.model_name.clone()
     }
-
-    #[getter]
-    fn tool_call_id(&self) -> Option<String> {
-        self.inner.tool_call_id.clone()
-    }
-
-    #[getter]
-    fn root_uuid(&self) -> Option<String> {
-        self.inner.root_uuid.map(|u| u.to_string())
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "Event(name={:?}, event_type={:?}, uuid='{}')",
-            self.inner.name, self.inner.event_type, self.inner.uuid
-        )
-    }
 }
 
-impl From<core_types::Event> for PyEvent {
-    fn from(e: core_types::Event) -> Self {
-        Self { inner: e }
+#[pyclass(name = "MarkEvent", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyMarkEvent {
+    pub inner: core_types::MarkEvent,
+}
+
+#[pymethods]
+impl PyMarkEvent {
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "Mark"
+    }
+    #[getter]
+    fn parent_uuid(&self) -> Option<String> {
+        self.inner.parent_uuid.map(|u| u.to_string())
+    }
+    #[getter]
+    fn uuid(&self) -> String {
+        self.inner.uuid.to_string()
+    }
+    #[getter]
+    fn timestamp(&self) -> String {
+        self.inner.timestamp.to_rfc3339()
+    }
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+    #[getter]
+    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.data)
+    }
+    #[getter]
+    fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.metadata)
     }
 }
 
@@ -838,20 +1056,10 @@ impl PyAtifExporter {
 
     /// Export the collected events as an ATIF trajectory dict.
     ///
-    /// Args:
-    ///     root_uuid: If provided, only events matching this root UUID are included.
-    ///
     /// Returns:
     ///     A dict representing the ATIF trajectory.
-    #[pyo3(signature = (root_uuid=None))]
-    fn export(&self, py: Python<'_>, root_uuid: Option<String>) -> PyResult<Py<PyAny>> {
-        let uuid = match root_uuid {
-            Some(s) => Some(uuid::Uuid::parse_str(&s).map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("Invalid UUID: {e}"))
-            })?),
-            None => None,
-        };
-        let trajectory = self.inner.export(uuid);
+    fn export(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let trajectory = self.inner.export();
         let value = serde_json::to_value(&trajectory).map_err(|e| {
             pyo3::exceptions::PyRuntimeError::new_err(format!("Serialization error: {e}"))
         })?;
@@ -860,20 +1068,10 @@ impl PyAtifExporter {
 
     /// Export the collected events as a JSON string.
     ///
-    /// Args:
-    ///     root_uuid: If provided, only events matching this root UUID are included.
-    ///
     /// Returns:
     ///     A JSON string representing the ATIF trajectory.
-    #[pyo3(signature = (root_uuid=None))]
-    fn export_json(&self, root_uuid: Option<String>) -> PyResult<String> {
-        let uuid = match root_uuid {
-            Some(s) => Some(uuid::Uuid::parse_str(&s).map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("Invalid UUID: {e}"))
-            })?),
-            None => None,
-        };
-        let trajectory = self.inner.export(uuid);
+    fn export_json(&self) -> PyResult<String> {
+        let trajectory = self.inner.export();
         serde_json::to_string(&trajectory).map_err(|e| {
             pyo3::exceptions::PyRuntimeError::new_err(format!("Serialization error: {e}"))
         })
@@ -1247,12 +1445,17 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyToolAttributes>()?;
     m.add_class::<PyLLMAttributes>()?;
     m.add_class::<PyScopeType>()?;
-    m.add_class::<PyEventType>()?;
     m.add_class::<PyScopeHandle>()?;
     m.add_class::<PyToolHandle>()?;
     m.add_class::<PyLLMHandle>()?;
     m.add_class::<PyLLMRequest>()?;
-    m.add_class::<PyEvent>()?;
+    m.add_class::<PyScopeStartEvent>()?;
+    m.add_class::<PyScopeEndEvent>()?;
+    m.add_class::<PyToolStartEvent>()?;
+    m.add_class::<PyToolEndEvent>()?;
+    m.add_class::<PyLLMStartEvent>()?;
+    m.add_class::<PyLLMEndEvent>()?;
+    m.add_class::<PyMarkEvent>()?;
     m.add_class::<PyAtifExporter>()?;
     m.add_class::<PyOpenTelemetryConfig>()?;
     m.add_class::<PyOpenTelemetrySubscriber>()?;

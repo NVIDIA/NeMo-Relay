@@ -25,13 +25,9 @@
 //! | Mark (with data)| `system` step           | Custom event data preserved          |
 //! | Scope Start/End | *(skipped)*             | Structural events, not trajectory    |
 //!
-//! # Concurrent Agent Isolation
-//!
-//! When exporting, pass a `scope_uuid` to [`AtifExporter::export`] to filter
-//! events to a specific agent's root scope and its descendants. This enables
-//! concurrent agents to produce independent trajectory files.
+//! The exporter serializes the full collected event stream into a single ATIF
+//! trajectory.
 
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
@@ -40,7 +36,7 @@ use uuid::Uuid;
 
 use crate::context::EventSubscriberFn;
 use crate::json::Json;
-use crate::types::{Event, EventType, ScopeType};
+use crate::types::Event;
 
 /// The ATIF schema version string embedded in all exported trajectories.
 ///
@@ -312,55 +308,10 @@ impl AtifExporter {
     }
 
     /// Exports collected events as an [`AtifTrajectory`].
-    ///
-    /// When `scope_uuid` is provided, only events belonging to that scope or
-    /// any of its descendants are included. This allows filtering by any scope
-    /// in the hierarchy — not just the auto-created root scope. When `None`,
-    /// all events are exported.
-    pub fn export(&self, scope_uuid: Option<Uuid>) -> AtifTrajectory {
+    pub fn export(&self) -> AtifTrajectory {
         let state = self.state.lock().unwrap();
-        let filtered_events: Vec<&Event> = if let Some(target) = scope_uuid {
-            // Build a set of UUIDs that are the target or descendants of it.
-            // An event belongs to the target scope if:
-            //   - Its parent_uuid is the target, OR
-            //   - Its parent_uuid is already a known descendant
-            // Also match events whose root_uuid equals the target (backwards compat).
-            let mut included: HashSet<Uuid> = HashSet::new();
-            included.insert(target);
-
-            // First pass: discover descendant scope UUIDs by walking Start events
-            // in timestamp order. A Start event with parent_uuid in the included
-            // set means its uuid is also a descendant.
-            let mut sorted: Vec<&Event> = state.events.iter().collect();
-            sorted.sort_by_key(|e| e.timestamp);
-            for event in &sorted {
-                if event.event_type == EventType::Start {
-                    if let Some(parent) = event.parent_uuid {
-                        if included.contains(&parent) {
-                            included.insert(event.uuid);
-                        }
-                    }
-                }
-            }
-
-            // Second pass: include events whose parent_uuid or uuid is in the
-            // descendant set, OR whose root_uuid matches the target.
-            state
-                .events
-                .iter()
-                .filter(|e| {
-                    e.root_uuid == Some(target)
-                        || included.contains(&e.uuid)
-                        || e.parent_uuid
-                            .map(|p| included.contains(&p))
-                            .unwrap_or(false)
-                })
-                .collect()
-        } else {
-            state.events.iter().collect()
-        };
-
-        let steps = events_to_steps(&filtered_events);
+        let collected_events: Vec<&Event> = state.events.iter().collect();
+        let steps = events_to_steps(&collected_events);
         let final_metrics = compute_final_metrics(&steps);
 
         AtifTrajectory {
@@ -651,10 +602,10 @@ fn build_ancestry(
     name_map: &std::collections::HashMap<Uuid, String>,
 ) -> AtifAncestry {
     AtifAncestry {
-        function_id: event.uuid.to_string(),
-        function_name: event.name.clone().unwrap_or_default(),
-        parent_id: event.parent_uuid.map(|u| u.to_string()),
-        parent_name: event.parent_uuid.and_then(|u| name_map.get(&u)).cloned(),
+        function_id: event.uuid().to_string(),
+        function_name: event.name().to_string(),
+        parent_id: event.parent_uuid().map(|u| u.to_string()),
+        parent_name: event.parent_uuid().and_then(|u| name_map.get(&u)).cloned(),
     }
 }
 
@@ -701,7 +652,7 @@ fn build_invocation_info(
 /// 6. Scope Start/End → skipped.
 fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
     let mut sorted: Vec<&Event> = events.to_vec();
-    sorted.sort_by_key(|e| e.timestamp);
+    sorted.sort_by_key(|e| *e.timestamp());
 
     // Pre-pass: build uuid → name and uuid → start_timestamp maps so that
     // build_ancestry can resolve parent_name and build_invocation_info can
@@ -710,11 +661,9 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
     let mut start_ts_map: std::collections::HashMap<Uuid, DateTime<Utc>> =
         std::collections::HashMap::new();
     for event in &sorted {
-        if event.event_type == EventType::Start {
-            if let Some(ref name) = event.name {
-                name_map.insert(event.uuid, name.clone());
-            }
-            start_ts_map.insert(event.uuid, event.timestamp);
+        if is_start_event(event) {
+            name_map.insert(event.uuid(), event.name().to_string());
+            start_ts_map.insert(event.uuid(), *event.timestamp());
         }
     }
 
@@ -807,168 +756,153 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
     };
 
     for event in &sorted {
-        match event.event_type {
-            EventType::Start => {
-                match event.scope_type {
-                    Some(ScopeType::Llm) => {
-                        flush_observations(
-                            &mut steps,
-                            &mut pending_observations,
-                            &mut pending_obs_timestamp,
-                        );
-                        // Finalize the previous agent step now that all its
-                        // Tool End events have been seen.
-                        // Sort ancestry/invocations to match tool_calls declaration order.
-                        finalize_agent_extra(
-                            &mut steps,
-                            &mut current_agent_step_idx,
-                            &mut current_agent_ancestry,
-                            &mut current_agent_invocation,
-                            &mut pending_tool_ancestry,
-                            &mut pending_tool_invocations,
-                            &last_tool_call_order,
-                        );
-                        if let Some(input) = &event.input {
-                            let content = unwrap_llm_request(input);
-                            current_reasoning_effort = extract_reasoning_effort(&content);
-                            let ancestry = build_ancestry(event, &name_map);
-                            let extra = AtifStepExtra {
-                                ancestry,
-                                invocation: None, // user step: end time unknown
-                                tool_ancestry: Vec::new(),
-                                tool_invocations: None,
-                            };
-                            steps.push(AtifStep {
-                                step_id: 0,
-                                source: "user".to_string(),
-                                message: extract_user_messages(&content),
-                                timestamp: Some(event.timestamp.to_rfc3339()),
-                                model_name: event.model_name.clone(),
-                                reasoning_effort: None,
-                                reasoning_content: None,
-                                tool_calls: None,
-                                observation: None,
-                                metrics: None,
-                                is_copied_context: None,
-                                extra: serde_json::to_value(&extra).ok(),
-                            });
-                        }
-                    }
-                    Some(ScopeType::Tool) => {
-                        // Tool start: SKIP — tool_calls come from LLM End promotion
-                    }
-                    _ => {
-                        // Scope events: skip
-                    }
-                }
-            }
-            EventType::End => {
-                match event.scope_type {
-                    Some(ScopeType::Llm) => {
-                        flush_observations(
-                            &mut steps,
-                            &mut pending_observations,
-                            &mut pending_obs_timestamp,
-                        );
-                        if let Some(output) = &event.output {
-                            let tool_calls = extract_tool_calls(output);
-                            last_tool_call_map.clear();
-                            last_tool_call_order.clear();
-                            if let Some(ref tcs) = tool_calls {
-                                for tc in tcs {
-                                    if !tc.function_name.is_empty() {
-                                        last_tool_call_map.insert(
-                                            tc.function_name.clone(),
-                                            tc.tool_call_id.clone(),
-                                        );
-                                    }
-                                    last_tool_call_order.push(tc.tool_call_id.clone());
-                                }
-                            }
-                            let reasoning_effort = current_reasoning_effort.take();
-                            let reasoning_content = extract_reasoning_content(output);
-                            let start_ts = start_ts_map.get(&event.uuid).copied();
-                            // Save ancestry and invocation for deferred write —
-                            // tool_ancestry is not yet known at this point.
-                            current_agent_ancestry = Some(build_ancestry(event, &name_map));
-                            current_agent_invocation = Some(build_invocation_info(
-                                start_ts,
-                                event.timestamp,
-                                Some(event.uuid.to_string()),
-                                "nexus",
-                            ));
-                            steps.push(AtifStep {
-                                step_id: 0,
-                                source: "agent".to_string(),
-                                message: extract_llm_response_message(output),
-                                timestamp: Some(event.timestamp.to_rfc3339()),
-                                model_name: event.model_name.clone(),
-                                reasoning_effort,
-                                reasoning_content,
-                                tool_calls,
-                                observation: None,
-                                metrics: extract_metrics(output),
-                                is_copied_context: None,
-                                extra: None,
-                            });
-                            current_agent_step_idx = Some(steps.len() - 1);
-                            pending_tool_ancestry.clear();
-                            pending_tool_invocations.clear();
-                        }
-                    }
-                    Some(ScopeType::Tool) => {
-                        // Tool end -> buffer as observation result for merging,
-                        // and append ancestry/invocation to the current agent step.
-                        if let Some(output) = &event.output {
-                            // Correlate: prefer event's own tool_call_id, then
-                            // look up by function_name in the last LLM End's promoted calls.
-                            let source_call_id = event.tool_call_id.clone().or_else(|| {
-                                event
-                                    .name
-                                    .as_ref()
-                                    .and_then(|n| last_tool_call_map.get(n).cloned())
-                            });
-                            if pending_obs_timestamp.is_none() {
-                                pending_obs_timestamp = Some(event.timestamp.to_rfc3339());
-                            }
-                            pending_observations.push(AtifObservationResult {
-                                source_call_id: source_call_id.clone(),
-                                content: output.clone(),
-                            });
-                        }
-                        // Accumulate tool ancestry/invocation for the current
-                        // agent step. Written to step.extra when finalized.
-                        if current_agent_step_idx.is_some() {
-                            let start_ts = start_ts_map.get(&event.uuid).copied();
-                            pending_tool_ancestry.push(build_ancestry(event, &name_map));
-                            pending_tool_invocations.push(build_invocation_info(
-                                start_ts,
-                                event.timestamp,
-                                event
-                                    .tool_call_id
-                                    .clone()
-                                    .or_else(|| Some(event.uuid.to_string())),
-                                "nexus",
-                            ));
-                        }
-                    }
-                    _ => {
-                        // Scope end: skip
-                    }
-                }
-            }
-            EventType::Mark => {
+        match event {
+            Event::LLMStart(llm_start) => {
                 flush_observations(
                     &mut steps,
                     &mut pending_observations,
                     &mut pending_obs_timestamp,
                 );
-                if let Some(data) = &event.data {
+                // Finalize the previous agent step now that all its
+                // Tool End events have been seen.
+                // Sort ancestry/invocations to match tool_calls declaration order.
+                finalize_agent_extra(
+                    &mut steps,
+                    &mut current_agent_step_idx,
+                    &mut current_agent_ancestry,
+                    &mut current_agent_invocation,
+                    &mut pending_tool_ancestry,
+                    &mut pending_tool_invocations,
+                    &last_tool_call_order,
+                );
+                if let Some(input) = &llm_start.input {
+                    let content = unwrap_llm_request(input);
+                    current_reasoning_effort = extract_reasoning_effort(&content);
+                    let ancestry = build_ancestry(event, &name_map);
+                    let extra = AtifStepExtra {
+                        ancestry,
+                        invocation: None, // user step: end time unknown
+                        tool_ancestry: Vec::new(),
+                        tool_invocations: None,
+                    };
+                    steps.push(AtifStep {
+                        step_id: 0,
+                        source: "user".to_string(),
+                        message: extract_user_messages(&content),
+                        timestamp: Some(llm_start.timestamp.to_rfc3339()),
+                        model_name: llm_start.model_name.clone(),
+                        reasoning_effort: None,
+                        reasoning_content: None,
+                        tool_calls: None,
+                        observation: None,
+                        metrics: None,
+                        is_copied_context: None,
+                        extra: serde_json::to_value(&extra).ok(),
+                    });
+                }
+            }
+            Event::ToolStart(_) | Event::ScopeStart(_) => {
+                // Tool and scope start events do not become ATIF steps.
+            }
+            Event::LLMEnd(llm_end) => {
+                flush_observations(
+                    &mut steps,
+                    &mut pending_observations,
+                    &mut pending_obs_timestamp,
+                );
+                if let Some(output) = &llm_end.output {
+                    let tool_calls = extract_tool_calls(output);
+                    last_tool_call_map.clear();
+                    last_tool_call_order.clear();
+                    if let Some(ref tcs) = tool_calls {
+                        for tc in tcs {
+                            if !tc.function_name.is_empty() {
+                                last_tool_call_map
+                                    .insert(tc.function_name.clone(), tc.tool_call_id.clone());
+                            }
+                            last_tool_call_order.push(tc.tool_call_id.clone());
+                        }
+                    }
+                    let reasoning_effort = current_reasoning_effort.take();
+                    let reasoning_content = extract_reasoning_content(output);
+                    let start_ts = start_ts_map.get(&llm_end.uuid).cloned();
+                    // Save ancestry and invocation for deferred write —
+                    // tool_ancestry is not yet known at this point.
+                    current_agent_ancestry = Some(build_ancestry(event, &name_map));
+                    current_agent_invocation = Some(build_invocation_info(
+                        start_ts,
+                        llm_end.timestamp,
+                        Some(llm_end.uuid.to_string()),
+                        "nexus",
+                    ));
+                    steps.push(AtifStep {
+                        step_id: 0,
+                        source: "agent".to_string(),
+                        message: extract_llm_response_message(output),
+                        timestamp: Some(llm_end.timestamp.to_rfc3339()),
+                        model_name: llm_end.model_name.clone(),
+                        reasoning_effort,
+                        reasoning_content,
+                        tool_calls,
+                        observation: None,
+                        metrics: extract_metrics(output),
+                        is_copied_context: None,
+                        extra: None,
+                    });
+                    current_agent_step_idx = Some(steps.len() - 1);
+                    pending_tool_ancestry.clear();
+                    pending_tool_invocations.clear();
+                }
+            }
+            Event::ToolEnd(tool_end) => {
+                // Tool end -> buffer as observation result for merging,
+                // and append ancestry/invocation to the current agent step.
+                if let Some(output) = &tool_end.output {
+                    // Correlate: prefer event's own tool_call_id, then
+                    // look up by function_name in the last LLM End's promoted calls.
+                    let source_call_id = tool_end
+                        .tool_call_id
+                        .clone()
+                        .or_else(|| last_tool_call_map.get(tool_end.name.as_str()).cloned());
+                    if pending_obs_timestamp.is_none() {
+                        pending_obs_timestamp = Some(tool_end.timestamp.to_rfc3339());
+                    }
+                    pending_observations.push(AtifObservationResult {
+                        source_call_id: source_call_id.clone(),
+                        content: output.clone(),
+                    });
+                }
+                // Accumulate tool ancestry/invocation for the current
+                // agent step. Written to step.extra when finalized.
+                if current_agent_step_idx.is_some() {
+                    let start_ts = start_ts_map.get(&tool_end.uuid).cloned();
+                    pending_tool_ancestry.push(build_ancestry(event, &name_map));
+                    pending_tool_invocations.push(build_invocation_info(
+                        start_ts,
+                        tool_end.timestamp,
+                        tool_end
+                            .tool_call_id
+                            .clone()
+                            .or_else(|| Some(tool_end.uuid.to_string())),
+                        "nexus",
+                    ));
+                }
+            }
+            Event::ScopeEnd(_) => {
+                // Scope end events do not become ATIF steps.
+            }
+            Event::Mark(mark) => {
+                flush_observations(
+                    &mut steps,
+                    &mut pending_observations,
+                    &mut pending_obs_timestamp,
+                );
+                if let Some(data) = &mark.data {
                     steps.push(AtifStep {
                         step_id: 0,
                         source: "system".to_string(),
                         message: data.clone(),
-                        timestamp: Some(event.timestamp.to_rfc3339()),
+                        timestamp: Some(mark.timestamp.to_rfc3339()),
                         model_name: None,
                         reasoning_effort: None,
                         reasoning_content: None,
@@ -1009,6 +943,13 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
     steps
 }
 
+fn is_start_event(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::ScopeStart(_) | Event::ToolStart(_) | Event::LLMStart(_)
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1018,6 +959,188 @@ mod tests {
     use super::*;
     use crate::types::*;
     use serde_json::json;
+
+    #[derive(Debug, Clone, Copy)]
+    enum EventType {
+        Start,
+        End,
+        Mark,
+    }
+
+    struct TestEventBuilder {
+        uuid: Uuid,
+        event_type: EventType,
+        parent_uuid: Option<Uuid>,
+        name: String,
+        data: Option<serde_json::Value>,
+        metadata: Option<serde_json::Value>,
+        attributes: Option<HandleAttributes>,
+        scope_type: Option<ScopeType>,
+        input: Option<serde_json::Value>,
+        output: Option<serde_json::Value>,
+        model_name: Option<String>,
+        tool_call_id: Option<String>,
+    }
+
+    impl TestEventBuilder {
+        fn name(mut self, name: impl Into<String>) -> Self {
+            self.name = name.into();
+            self
+        }
+
+        fn parent_uuid(mut self, parent_uuid: Option<Uuid>) -> Self {
+            self.parent_uuid = parent_uuid;
+            self
+        }
+
+        fn data(mut self, data: Option<serde_json::Value>) -> Self {
+            self.data = data;
+            self
+        }
+
+        fn scope_type(mut self, scope_type: ScopeType) -> Self {
+            self.scope_type = Some(scope_type);
+            self
+        }
+
+        fn input(mut self, input: Option<serde_json::Value>) -> Self {
+            self.input = input;
+            self
+        }
+
+        fn output(mut self, output: Option<serde_json::Value>) -> Self {
+            self.output = output;
+            self
+        }
+
+        fn model_name(mut self, model_name: Option<String>) -> Self {
+            self.model_name = model_name;
+            self
+        }
+
+        fn tool_call_id(mut self, tool_call_id: Option<String>) -> Self {
+            self.tool_call_id = tool_call_id;
+            self
+        }
+
+        fn build(self) -> Event {
+            match (self.event_type, self.scope_type) {
+                (EventType::Mark, _) => Event::mark(
+                    self.parent_uuid,
+                    self.uuid,
+                    self.name,
+                    self.data,
+                    self.metadata,
+                ),
+                (EventType::Start, Some(ScopeType::Tool)) => Event::tool_start(
+                    self.parent_uuid,
+                    self.uuid,
+                    self.name,
+                    self.data,
+                    self.metadata,
+                    match self.attributes {
+                        Some(HandleAttributes::Tool(attributes)) => attributes,
+                        _ => ToolAttributes::empty(),
+                    },
+                    self.input,
+                    self.tool_call_id,
+                ),
+                (EventType::End, Some(ScopeType::Tool)) => Event::tool_end(
+                    self.parent_uuid,
+                    self.uuid,
+                    self.name,
+                    self.data,
+                    self.metadata,
+                    match self.attributes {
+                        Some(HandleAttributes::Tool(attributes)) => attributes,
+                        _ => ToolAttributes::empty(),
+                    },
+                    self.output,
+                    self.tool_call_id,
+                ),
+                (EventType::Start, Some(ScopeType::Llm)) => Event::llm_start(
+                    self.parent_uuid,
+                    self.uuid,
+                    self.name,
+                    self.data,
+                    self.metadata,
+                    match self.attributes {
+                        Some(HandleAttributes::Llm(attributes)) => attributes,
+                        _ => LLMAttributes::empty(),
+                    },
+                    self.input,
+                    self.model_name,
+                ),
+                (EventType::End, Some(ScopeType::Llm)) => Event::llm_end(
+                    self.parent_uuid,
+                    self.uuid,
+                    self.name,
+                    self.data,
+                    self.metadata,
+                    match self.attributes {
+                        Some(HandleAttributes::Llm(attributes)) => attributes,
+                        _ => LLMAttributes::empty(),
+                    },
+                    self.output,
+                    self.model_name,
+                ),
+                (EventType::Start, Some(scope_type)) => Event::scope_start(
+                    self.parent_uuid,
+                    self.uuid,
+                    self.name,
+                    self.data,
+                    self.metadata,
+                    match self.attributes {
+                        Some(HandleAttributes::Scope(attributes)) => attributes,
+                        _ => ScopeAttributes::empty(),
+                    },
+                    scope_type,
+                ),
+                (EventType::End, Some(scope_type)) => Event::scope_end(
+                    self.parent_uuid,
+                    self.uuid,
+                    self.name,
+                    self.data,
+                    self.metadata,
+                    match self.attributes {
+                        Some(HandleAttributes::Scope(attributes)) => attributes,
+                        _ => ScopeAttributes::empty(),
+                    },
+                    scope_type,
+                ),
+                (event_type, None) => panic!("missing scope_type for {event_type:?} event"),
+            }
+        }
+    }
+
+    fn event_builder(uuid: Uuid, event_type: EventType) -> TestEventBuilder {
+        TestEventBuilder {
+            uuid,
+            event_type,
+            parent_uuid: None,
+            name: String::new(),
+            data: None,
+            metadata: None,
+            attributes: None,
+            scope_type: None,
+            input: None,
+            output: None,
+            model_name: None,
+            tool_call_id: None,
+        }
+    }
+
+    fn set_event_timestamp(event: &mut Event, timestamp: chrono::DateTime<chrono::Utc>) {
+        match event {
+            Event::ScopeStart(inner) => inner.timestamp = timestamp,
+            Event::ScopeEnd(inner) => inner.timestamp = timestamp,
+            Event::ToolStart(inner) => inner.timestamp = timestamp,
+            Event::ToolEnd(inner) => inner.timestamp = timestamp,
+            Event::LLMStart(inner) => inner.timestamp = timestamp,
+            Event::LLMEnd(inner) => inner.timestamp = timestamp,
+            Event::Mark(inner) => inner.timestamp = timestamp,
+        }
+    }
 
     fn make_agent_info() -> AtifAgentInfo {
         AtifAgentInfo {
@@ -1032,7 +1155,7 @@ mod tests {
     #[test]
     fn test_exporter_empty() {
         let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
 
         assert_eq!(trajectory.schema_version, ATIF_SCHEMA_VERSION);
         assert_eq!(trajectory.session_id, "session-1");
@@ -1055,7 +1178,7 @@ mod tests {
         let tool_uuid = Uuid::new_v4();
 
         // Simulate tool start (should be SKIPPED — tool_calls come from LLM End)
-        let start = Event::builder(tool_uuid, EventType::Start)
+        let start = event_builder(tool_uuid, EventType::Start)
             .name("web_search")
             .scope_type(ScopeType::Tool)
             .input(Some(json!({"query": "test"})))
@@ -1063,7 +1186,7 @@ mod tests {
             .build();
 
         // Simulate tool end
-        let end = Event::builder(tool_uuid, EventType::End)
+        let end = event_builder(tool_uuid, EventType::End)
             .name("web_search")
             .scope_type(ScopeType::Tool)
             .output(Some(json!({"results": ["result1"]})))
@@ -1076,7 +1199,7 @@ mod tests {
             state.events.push(end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         // Tool Start is skipped, only the observation step remains
         assert_eq!(trajectory.steps.len(), 1);
 
@@ -1095,7 +1218,7 @@ mod tests {
         let llm_uuid = Uuid::new_v4();
 
         // Input wrapped in LLMRequest envelope — should be unwrapped.
-        let start = Event::builder(llm_uuid, EventType::Start)
+        let start = event_builder(llm_uuid, EventType::Start)
             .name("gpt-4")
             .scope_type(ScopeType::Llm)
             .input(Some(json!({
@@ -1106,7 +1229,7 @@ mod tests {
             .build();
 
         // Output with content, token_usage, and tool_calls.
-        let end = Event::builder(llm_uuid, EventType::End)
+        let end = event_builder(llm_uuid, EventType::End)
             .name("gpt-4")
             .scope_type(ScopeType::Llm)
             .output(Some(json!({
@@ -1128,7 +1251,7 @@ mod tests {
             state.events.push(end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         assert_eq!(trajectory.steps.len(), 2);
 
         // First step: user (LLM start — unwrapped LLMRequest, then messages extracted)
@@ -1165,7 +1288,7 @@ mod tests {
         let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
         let llm_uuid = Uuid::new_v4();
 
-        let start = Event::builder(llm_uuid, EventType::Start)
+        let start = event_builder(llm_uuid, EventType::Start)
             .name("gpt-4")
             .scope_type(ScopeType::Llm)
             .input(Some(
@@ -1174,7 +1297,7 @@ mod tests {
             .model_name(Some("gpt-4".to_string()))
             .build();
 
-        let end = Event::builder(llm_uuid, EventType::End)
+        let end = event_builder(llm_uuid, EventType::End)
             .name("gpt-4")
             .scope_type(ScopeType::Llm)
             .output(Some(json!("simple string response")))
@@ -1187,7 +1310,7 @@ mod tests {
             state.events.push(end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         assert_eq!(trajectory.steps.len(), 2);
 
         // Input without headers key — messages array is still extracted
@@ -1209,7 +1332,7 @@ mod tests {
         let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
         let llm_uuid = Uuid::new_v4();
 
-        let end = Event::builder(llm_uuid, EventType::End)
+        let end = event_builder(llm_uuid, EventType::End)
             .name("gpt-4")
             .scope_type(ScopeType::Llm)
             .output(Some(json!({
@@ -1233,7 +1356,7 @@ mod tests {
             state.events.push(end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         assert_eq!(trajectory.steps.len(), 1);
         let step = &trajectory.steps[0];
 
@@ -1259,29 +1382,29 @@ mod tests {
         let tool_uuid = Uuid::new_v4();
 
         // Scope start (should be skipped)
-        let scope_start = Event::builder(scope_uuid, EventType::Start)
+        let scope_start = event_builder(scope_uuid, EventType::Start)
             .name("agent")
             .scope_type(ScopeType::Agent)
             .build();
 
         // LLM start/end
-        let llm_start = Event::builder(llm_uuid, EventType::Start)
+        let llm_start = event_builder(llm_uuid, EventType::Start)
             .scope_type(ScopeType::Llm)
             .input(Some(json!({"prompt": "What is 2+2?"})))
             .build();
-        let llm_end = Event::builder(llm_uuid, EventType::End)
+        let llm_end = event_builder(llm_uuid, EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!({"answer": "4"})))
             .build();
 
         // Tool start/end
-        let tool_start = Event::builder(tool_uuid, EventType::Start)
+        let tool_start = event_builder(tool_uuid, EventType::Start)
             .name("calculator")
             .scope_type(ScopeType::Tool)
             .input(Some(json!({"expr": "2+2"})))
             .tool_call_id(Some("call_1".to_string()))
             .build();
-        let tool_end = Event::builder(tool_uuid, EventType::End)
+        let tool_end = event_builder(tool_uuid, EventType::End)
             .name("calculator")
             .scope_type(ScopeType::Tool)
             .output(Some(json!(4)))
@@ -1289,7 +1412,7 @@ mod tests {
             .build();
 
         // Scope end (should be skipped)
-        let scope_end = Event::builder(scope_uuid, EventType::End)
+        let scope_end = event_builder(scope_uuid, EventType::End)
             .name("agent")
             .scope_type(ScopeType::Agent)
             .build();
@@ -1304,7 +1427,7 @@ mod tests {
             state.events.push(scope_end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         // Scope events and Tool Start are skipped: user, agent, system(obs)
         assert_eq!(trajectory.steps.len(), 3);
 
@@ -1325,14 +1448,14 @@ mod tests {
         let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
         let tool_uuid = Uuid::new_v4();
 
-        let start = Event::builder(tool_uuid, EventType::Start)
+        let start = event_builder(tool_uuid, EventType::Start)
             .name("my_tool")
             .scope_type(ScopeType::Tool)
             .input(Some(json!({"x": 1})))
             .tool_call_id(Some("call_abc".to_string()))
             .build();
 
-        let end = Event::builder(tool_uuid, EventType::End)
+        let end = event_builder(tool_uuid, EventType::End)
             .name("my_tool")
             .scope_type(ScopeType::Tool)
             .output(Some(json!({"y": 2})))
@@ -1345,7 +1468,7 @@ mod tests {
             state.events.push(end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         // Only observation step (Tool Start is skipped)
         assert_eq!(trajectory.steps.len(), 1);
         let obs_result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
@@ -1417,33 +1540,33 @@ mod tests {
     }
 
     #[test]
-    fn test_exporter_root_uuid_filtering() {
+    fn test_exporter_scope_filtering() {
         let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
         let root1 = Uuid::new_v4();
         let root2 = Uuid::new_v4();
 
-        // Events from agent 1
-        let e1 = Event::builder(Uuid::new_v4(), EventType::Start)
+        // Events under scope 1
+        let e1 = event_builder(Uuid::new_v4(), EventType::Start)
             .scope_type(ScopeType::Llm)
             .input(Some(json!("agent1 input")))
-            .root_uuid(Some(root1))
+            .parent_uuid(Some(root1))
             .build();
-        let e2 = Event::builder(e1.uuid, EventType::End)
+        let e2 = event_builder(e1.uuid(), EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!("agent1 output")))
-            .root_uuid(Some(root1))
+            .parent_uuid(Some(root1))
             .build();
 
-        // Events from agent 2
-        let e3 = Event::builder(Uuid::new_v4(), EventType::Start)
+        // Events under scope 2
+        let e3 = event_builder(Uuid::new_v4(), EventType::Start)
             .scope_type(ScopeType::Llm)
             .input(Some(json!("agent2 input")))
-            .root_uuid(Some(root2))
+            .parent_uuid(Some(root2))
             .build();
-        let e4 = Event::builder(e3.uuid, EventType::End)
+        let e4 = event_builder(e3.uuid(), EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!("agent2 output")))
-            .root_uuid(Some(root2))
+            .parent_uuid(Some(root2))
             .build();
 
         {
@@ -1454,115 +1577,8 @@ mod tests {
             state.events.push(e4);
         }
 
-        // Export with root1 filter
-        let traj1 = exporter.export(Some(root1));
-        assert_eq!(traj1.steps.len(), 2);
-        assert_eq!(traj1.steps[0].message, json!("agent1 input"));
-        assert_eq!(traj1.steps[1].message, json!("agent1 output"));
-
-        // Export with root2 filter
-        let traj2 = exporter.export(Some(root2));
-        assert_eq!(traj2.steps.len(), 2);
-        assert_eq!(traj2.steps[0].message, json!("agent2 input"));
-        assert_eq!(traj2.steps[1].message, json!("agent2 output"));
-
-        // Export without filter
-        let traj_all = exporter.export(None);
+        let traj_all = exporter.export();
         assert_eq!(traj_all.steps.len(), 4);
-    }
-
-    #[test]
-    fn test_exporter_hierarchy_filtering() {
-        // Filtering by an agent scope UUID should include events from that scope
-        // and all its descendants (LLM calls, tool calls parented under it).
-        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
-
-        let root_uuid = Uuid::new_v4(); // auto-created root scope
-        let agent_uuid = Uuid::new_v4(); // user-pushed agent scope
-
-        // Agent scope Start (parent = root)
-        let agent_start = Event::builder(agent_uuid, EventType::Start)
-            .name("my-agent")
-            .scope_type(ScopeType::Agent)
-            .parent_uuid(Some(root_uuid))
-            .root_uuid(Some(root_uuid))
-            .build();
-
-        // LLM call under agent (parent = agent)
-        let llm_uuid = Uuid::new_v4();
-        let llm_start = Event::builder(llm_uuid, EventType::Start)
-            .scope_type(ScopeType::Llm)
-            .input(Some(
-                json!({"messages": [{"role": "user", "content": "hi"}]}),
-            ))
-            .parent_uuid(Some(agent_uuid))
-            .root_uuid(Some(root_uuid))
-            .build();
-        let llm_end = Event::builder(llm_uuid, EventType::End)
-            .scope_type(ScopeType::Llm)
-            .output(Some(json!({"content": "hello!", "role": "assistant"})))
-            .parent_uuid(Some(agent_uuid))
-            .root_uuid(Some(root_uuid))
-            .build();
-
-        // Tool call under LLM (parent = llm)
-        let tool_uuid = Uuid::new_v4();
-        let tool_start = Event::builder(tool_uuid, EventType::Start)
-            .name("search")
-            .scope_type(ScopeType::Tool)
-            .input(Some(json!({"q": "test"})))
-            .parent_uuid(Some(llm_uuid))
-            .root_uuid(Some(root_uuid))
-            .build();
-        let tool_end = Event::builder(tool_uuid, EventType::End)
-            .name("search")
-            .scope_type(ScopeType::Tool)
-            .output(Some(json!("result")))
-            .tool_call_id(Some("c1".to_string()))
-            .parent_uuid(Some(llm_uuid))
-            .root_uuid(Some(root_uuid))
-            .build();
-
-        // Unrelated event from a different agent (parent = different root)
-        let other_uuid = Uuid::new_v4();
-        let other_root = Uuid::new_v4();
-        let unrelated = Event::builder(other_uuid, EventType::Start)
-            .scope_type(ScopeType::Llm)
-            .input(Some(json!("other agent")))
-            .parent_uuid(Some(other_root))
-            .root_uuid(Some(other_root))
-            .build();
-
-        {
-            let mut state = exporter.state.lock().unwrap();
-            state.events.extend([
-                agent_start,
-                llm_start,
-                llm_end,
-                tool_start,
-                tool_end,
-                unrelated,
-            ]);
-        }
-
-        // Filter by agent_uuid — should get LLM + tool events (descendants),
-        // plus the agent Start itself
-        let traj = exporter.export(Some(agent_uuid));
-        // agent Start is scope (skipped), LLM start → user, LLM end → agent,
-        // tool start → skipped, tool end → observation
-        assert_eq!(traj.steps.len(), 3);
-        assert_eq!(traj.steps[0].source, "user");
-        assert_eq!(traj.steps[1].source, "agent");
-        assert_eq!(traj.steps[2].source, "system");
-
-        // Filter by root_uuid — should get everything except the unrelated event
-        let traj_root = exporter.export(Some(root_uuid));
-        // Same 3 steps + agent Start/End scope events (skipped) = still 3
-        assert_eq!(traj_root.steps.len(), 3);
-
-        // No filter — should get all events including unrelated
-        let traj_all = exporter.export(None);
-        assert_eq!(traj_all.steps.len(), 4); // +1 user step from unrelated LLM start
     }
 
     #[test]
@@ -1572,15 +1588,15 @@ mod tests {
         {
             let mut state = exporter.state.lock().unwrap();
             state.events.push(
-                Event::builder(Uuid::new_v4(), EventType::Mark)
+                event_builder(Uuid::new_v4(), EventType::Mark)
                     .data(Some(json!("test")))
                     .build(),
             );
         }
 
-        assert_eq!(exporter.export(None).steps.len(), 1);
+        assert_eq!(exporter.export().steps.len(), 1);
         exporter.clear();
-        assert!(exporter.export(None).steps.is_empty());
+        assert!(exporter.export().steps.is_empty());
     }
 
     #[test]
@@ -1592,7 +1608,7 @@ mod tests {
         let tool2_uuid = Uuid::new_v4();
 
         // LLM end with two promoted tool_calls
-        let llm_end = Event::builder(llm_uuid, EventType::End)
+        let llm_end = event_builder(llm_uuid, EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!({
                 "content": null,
@@ -1605,25 +1621,25 @@ mod tests {
             .build();
 
         // Two tool start events (skipped)
-        let tool1_start = Event::builder(tool1_uuid, EventType::Start)
+        let tool1_start = event_builder(tool1_uuid, EventType::Start)
             .name("get_weather")
             .scope_type(ScopeType::Tool)
             .input(Some(json!({"city": "SF"})))
             .build();
-        let tool2_start = Event::builder(tool2_uuid, EventType::Start)
+        let tool2_start = event_builder(tool2_uuid, EventType::Start)
             .name("get_population")
             .scope_type(ScopeType::Tool)
             .input(Some(json!({"city": "SF"})))
             .build();
 
         // Two tool end events (should merge)
-        let tool1_end = Event::builder(tool1_uuid, EventType::End)
+        let tool1_end = event_builder(tool1_uuid, EventType::End)
             .name("get_weather")
             .scope_type(ScopeType::Tool)
             .output(Some(json!("62°F, foggy")))
             .tool_call_id(Some("call_1".to_string()))
             .build();
-        let tool2_end = Event::builder(tool2_uuid, EventType::End)
+        let tool2_end = event_builder(tool2_uuid, EventType::End)
             .name("get_population")
             .scope_type(ScopeType::Tool)
             .output(Some(json!("873,965")))
@@ -1639,7 +1655,7 @@ mod tests {
             state.events.push(tool2_end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         // agent step + single merged observation step
         assert_eq!(trajectory.steps.len(), 2);
 
@@ -1671,7 +1687,7 @@ mod tests {
         let llm_uuid = Uuid::new_v4();
         let tool_uuid = Uuid::new_v4();
 
-        let llm_end = Event::builder(llm_uuid, EventType::End)
+        let llm_end = event_builder(llm_uuid, EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!({
                 "content": null,
@@ -1683,7 +1699,7 @@ mod tests {
             .build();
 
         // Tool end without tool_call_id, but with function name
-        let tool_end = Event::builder(tool_uuid, EventType::End)
+        let tool_end = event_builder(tool_uuid, EventType::End)
             .name("search")
             .scope_type(ScopeType::Tool)
             .output(Some(json!({"results": []})))
@@ -1695,7 +1711,7 @@ mod tests {
             state.events.push(tool_end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         assert_eq!(trajectory.steps.len(), 2);
 
         let obs = trajectory.steps[1].observation.as_ref().unwrap();
@@ -1709,7 +1725,7 @@ mod tests {
         let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
         let llm_uuid = Uuid::new_v4();
 
-        let start = Event::builder(llm_uuid, EventType::Start)
+        let start = event_builder(llm_uuid, EventType::Start)
             .scope_type(ScopeType::Llm)
             .input(Some(json!({
                 "content": {
@@ -1723,7 +1739,7 @@ mod tests {
             })))
             .build();
 
-        let end = Event::builder(llm_uuid, EventType::End)
+        let end = event_builder(llm_uuid, EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!("response")))
             .build();
@@ -1734,7 +1750,7 @@ mod tests {
             state.events.push(end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         // User step should contain just the messages array
         assert_eq!(
             trajectory.steps[0].message,
@@ -1753,7 +1769,7 @@ mod tests {
         let t2_uuid = Uuid::new_v4();
 
         // First LLM start
-        let llm1_start = Event::builder(llm1_uuid, EventType::Start)
+        let llm1_start = event_builder(llm1_uuid, EventType::Start)
             .scope_type(ScopeType::Llm)
             .input(Some(json!({
                 "messages": [{"role": "user", "content": "What is the weather and population of SF?"}],
@@ -1764,7 +1780,7 @@ mod tests {
             .build();
 
         // First LLM end with tool_calls
-        let llm1_end = Event::builder(llm1_uuid, EventType::End)
+        let llm1_end = event_builder(llm1_uuid, EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!({
                 "content": null,
@@ -1779,25 +1795,25 @@ mod tests {
             .build();
 
         // Tool starts (skipped)
-        let t1_start = Event::builder(t1_uuid, EventType::Start)
+        let t1_start = event_builder(t1_uuid, EventType::Start)
             .name("get_weather")
             .scope_type(ScopeType::Tool)
             .input(Some(json!({"city": "SF"})))
             .build();
-        let t2_start = Event::builder(t2_uuid, EventType::Start)
+        let t2_start = event_builder(t2_uuid, EventType::Start)
             .name("get_population")
             .scope_type(ScopeType::Tool)
             .input(Some(json!({"city": "SF"})))
             .build();
 
         // Tool ends (merged)
-        let t1_end = Event::builder(t1_uuid, EventType::End)
+        let t1_end = event_builder(t1_uuid, EventType::End)
             .name("get_weather")
             .scope_type(ScopeType::Tool)
             .output(Some(json!("62°F, foggy")))
             .tool_call_id(Some("c1".to_string()))
             .build();
-        let t2_end = Event::builder(t2_uuid, EventType::End)
+        let t2_end = event_builder(t2_uuid, EventType::End)
             .name("get_population")
             .scope_type(ScopeType::Tool)
             .output(Some(json!("873,965")))
@@ -1805,7 +1821,7 @@ mod tests {
             .build();
 
         // Second LLM start (with tool results in messages)
-        let llm2_start = Event::builder(llm2_uuid, EventType::Start)
+        let llm2_start = event_builder(llm2_uuid, EventType::Start)
             .scope_type(ScopeType::Llm)
             .input(Some(json!({
                 "messages": [
@@ -1820,7 +1836,7 @@ mod tests {
             .build();
 
         // Second LLM end (final answer)
-        let llm2_end = Event::builder(llm2_uuid, EventType::End)
+        let llm2_end = event_builder(llm2_uuid, EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!({
                 "content": "The weather in SF is 62°F and foggy. Population is 873,965.",
@@ -1837,7 +1853,7 @@ mod tests {
             ]);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         // Expected: user, agent+tool_calls, merged_obs, user, agent
         assert_eq!(trajectory.steps.len(), 5);
 
@@ -1879,7 +1895,7 @@ mod tests {
         let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
         let llm_uuid = Uuid::new_v4();
 
-        let end = Event::builder(llm_uuid, EventType::End)
+        let end = event_builder(llm_uuid, EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!({
                 "content": "The answer is 42.",
@@ -1894,7 +1910,7 @@ mod tests {
             state.events.push(end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         let agent_step = &trajectory.steps[0];
         assert_eq!(agent_step.source, "agent");
         assert_eq!(
@@ -1916,7 +1932,7 @@ mod tests {
         let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
         let llm_uuid = Uuid::new_v4();
 
-        let start = Event::builder(llm_uuid, EventType::Start)
+        let start = event_builder(llm_uuid, EventType::Start)
             .scope_type(ScopeType::Llm)
             .input(Some(json!({
                 "messages": [{"role": "user", "content": "solve this"}],
@@ -1924,7 +1940,7 @@ mod tests {
             })))
             .build();
 
-        let end = Event::builder(llm_uuid, EventType::End)
+        let end = event_builder(llm_uuid, EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!({
                 "content": "Done.",
@@ -1938,7 +1954,7 @@ mod tests {
             state.events.push(end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         // steps: user (LLM Start), agent (LLM End)
         let agent_step = &trajectory.steps[1];
         assert_eq!(agent_step.source, "agent");
@@ -1954,7 +1970,7 @@ mod tests {
         let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
         let llm_uuid = Uuid::new_v4();
 
-        let end = Event::builder(llm_uuid, EventType::End)
+        let end = event_builder(llm_uuid, EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!({
                 "content": "ok",
@@ -1973,7 +1989,7 @@ mod tests {
             state.events.push(end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         let metrics = trajectory.steps[0].metrics.as_ref().unwrap();
         assert_eq!(metrics.prompt_tokens, Some(20));
         assert_eq!(metrics.completion_tokens, Some(10));
@@ -1994,7 +2010,7 @@ mod tests {
         let agent_uuid = Uuid::new_v4();
         let llm_uuid = Uuid::new_v4();
 
-        let llm_start = Event::builder(llm_uuid, EventType::Start)
+        let llm_start = event_builder(llm_uuid, EventType::Start)
             .name("gpt-4")
             .scope_type(ScopeType::Llm)
             .parent_uuid(Some(agent_uuid))
@@ -2003,7 +2019,7 @@ mod tests {
             ))
             .build();
 
-        let llm_end = Event::builder(llm_uuid, EventType::End)
+        let llm_end = event_builder(llm_uuid, EventType::End)
             .name("gpt-4")
             .scope_type(ScopeType::Llm)
             .parent_uuid(Some(agent_uuid))
@@ -2016,7 +2032,7 @@ mod tests {
             state.events.push(llm_end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         let agent_step = &trajectory.steps[1];
         assert_eq!(agent_step.source, "agent");
 
@@ -2033,13 +2049,13 @@ mod tests {
         let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
         let llm_uuid = Uuid::new_v4();
 
-        let llm_start = Event::builder(llm_uuid, EventType::Start)
+        let llm_start = event_builder(llm_uuid, EventType::Start)
             .name("gpt-4")
             .scope_type(ScopeType::Llm)
             .input(Some(json!({"messages": []})))
             .build();
 
-        let llm_end = Event::builder(llm_uuid, EventType::End)
+        let llm_end = event_builder(llm_uuid, EventType::End)
             .name("gpt-4")
             .scope_type(ScopeType::Llm)
             .output(Some(json!({"content": "done", "role": "assistant"})))
@@ -2051,7 +2067,7 @@ mod tests {
             state.events.push(llm_end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         let agent_step = &trajectory.steps[1];
         let extra: AtifStepExtra =
             serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
@@ -2072,7 +2088,7 @@ mod tests {
         let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
         let llm_uuid = Uuid::new_v4();
 
-        let llm_start = Event::builder(llm_uuid, EventType::Start)
+        let llm_start = event_builder(llm_uuid, EventType::Start)
             .name("gpt-4")
             .scope_type(ScopeType::Llm)
             .input(Some(
@@ -2080,7 +2096,7 @@ mod tests {
             ))
             .build();
 
-        let llm_end = Event::builder(llm_uuid, EventType::End)
+        let llm_end = event_builder(llm_uuid, EventType::End)
             .name("gpt-4")
             .scope_type(ScopeType::Llm)
             .output(Some(json!({"content": "hi back", "role": "assistant"})))
@@ -2092,7 +2108,7 @@ mod tests {
             state.events.push(llm_end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         let user_step = &trajectory.steps[0];
         assert_eq!(user_step.source, "user");
 
@@ -2110,7 +2126,7 @@ mod tests {
         let tool1_uuid = Uuid::new_v4();
         let tool2_uuid = Uuid::new_v4();
 
-        let llm_end = Event::builder(llm_uuid, EventType::End)
+        let llm_end = event_builder(llm_uuid, EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!({
                 "content": null,
@@ -2122,14 +2138,14 @@ mod tests {
             })))
             .build();
 
-        let tool1_end = Event::builder(tool1_uuid, EventType::End)
+        let tool1_end = event_builder(tool1_uuid, EventType::End)
             .name("search")
             .scope_type(ScopeType::Tool)
             .output(Some(json!("result1")))
             .tool_call_id(Some("c1".to_string()))
             .build();
 
-        let tool2_end = Event::builder(tool2_uuid, EventType::End)
+        let tool2_end = event_builder(tool2_uuid, EventType::End)
             .name("lookup")
             .scope_type(ScopeType::Tool)
             .output(Some(json!("result2")))
@@ -2143,7 +2159,7 @@ mod tests {
             state.events.push(tool2_end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         let agent_step = &trajectory.steps[0];
         let extra: AtifStepExtra =
             serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
@@ -2169,7 +2185,7 @@ mod tests {
         let tool1_uuid = Uuid::new_v4();
         let tool2_uuid = Uuid::new_v4();
 
-        let llm_end = Event::builder(llm_uuid, EventType::End)
+        let llm_end = event_builder(llm_uuid, EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!({
                 "content": null,
@@ -2182,22 +2198,26 @@ mod tests {
             .build();
 
         // c2 (lookup) completes before c1 (search) — out of declaration order.
-        let mut tool2_end = Event::builder(tool2_uuid, EventType::End)
+        let mut tool2_end = event_builder(tool2_uuid, EventType::End)
             .name("lookup")
             .scope_type(ScopeType::Tool)
             .output(Some(json!("result2")))
             .tool_call_id(Some("c2".to_string()))
             .build();
-        tool2_end.timestamp = chrono::Utc::now();
+        let tool2_end_ts = chrono::Utc::now();
+        set_event_timestamp(&mut tool2_end, tool2_end_ts);
 
-        let mut tool1_end = Event::builder(tool1_uuid, EventType::End)
+        let mut tool1_end = event_builder(tool1_uuid, EventType::End)
             .name("search")
             .scope_type(ScopeType::Tool)
             .output(Some(json!("result1")))
             .tool_call_id(Some("c1".to_string()))
             .build();
         // Ensure tool1_end sorts after tool2_end by timestamp.
-        tool1_end.timestamp = tool2_end.timestamp + chrono::Duration::milliseconds(10);
+        set_event_timestamp(
+            &mut tool1_end,
+            tool2_end_ts + chrono::Duration::milliseconds(10),
+        );
 
         {
             let mut state = exporter.state.lock().unwrap();
@@ -2206,7 +2226,7 @@ mod tests {
             state.events.push(tool1_end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         let agent_step = &trajectory.steps[0];
         let extra: AtifStepExtra =
             serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
@@ -2232,7 +2252,7 @@ mod tests {
         let tool2_uuid = Uuid::new_v4();
 
         // Turn 1: LLM call + one tool
-        let llm1_end = Event::builder(llm1_uuid, EventType::End)
+        let llm1_end = event_builder(llm1_uuid, EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!({
                 "content": null, "role": "assistant",
@@ -2241,7 +2261,7 @@ mod tests {
                 ]
             })))
             .build();
-        let tool1_end = Event::builder(tool1_uuid, EventType::End)
+        let tool1_end = event_builder(tool1_uuid, EventType::End)
             .name("search")
             .scope_type(ScopeType::Tool)
             .output(Some(json!("result1")))
@@ -2249,11 +2269,11 @@ mod tests {
             .build();
 
         // Turn 2: new LLM call + one different tool
-        let llm2_start = Event::builder(llm2_uuid, EventType::Start)
+        let llm2_start = event_builder(llm2_uuid, EventType::Start)
             .scope_type(ScopeType::Llm)
             .input(Some(json!({"messages": []})))
             .build();
-        let llm2_end = Event::builder(llm2_uuid, EventType::End)
+        let llm2_end = event_builder(llm2_uuid, EventType::End)
             .scope_type(ScopeType::Llm)
             .output(Some(json!({
                 "content": null, "role": "assistant",
@@ -2262,7 +2282,7 @@ mod tests {
                 ]
             })))
             .build();
-        let tool2_end = Event::builder(tool2_uuid, EventType::End)
+        let tool2_end = event_builder(tool2_uuid, EventType::End)
             .name("lookup")
             .scope_type(ScopeType::Tool)
             .output(Some(json!("result2")))
@@ -2278,7 +2298,7 @@ mod tests {
             state.events.push(tool2_end);
         }
 
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         // steps: agent(turn1), system(obs1), user(turn2), agent(turn2), system(obs2)
         let agent1 = trajectory
             .steps

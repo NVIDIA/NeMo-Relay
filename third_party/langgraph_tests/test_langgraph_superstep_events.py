@@ -21,7 +21,7 @@ from langgraph._nat_nexus import (  # type: ignore[import-untyped]
     pop_graph_scope,
     push_graph_scope,
 )
-from nat_nexus import EventType, create_scope_stack, set_thread_scope_stack
+from nat_nexus import create_scope_stack, set_thread_scope_stack
 
 
 class TestSuperstepEvents:
@@ -48,7 +48,7 @@ class TestSuperstepEvents:
         emit_superstep_start(step=0, task_count=2)
         pop_graph_scope(graph_handle)
 
-        mark_events = [e for e in events if e.name == "Superstep Start" and e.event_type == EventType.Mark]
+        mark_events = [e for e in events if e.name == "Superstep Start" and e.kind == "Mark"]
         assert len(mark_events) == 1, f"Expected 1 'Superstep Start' Mark event, got {len(mark_events)}"
         ev = mark_events[0]
         assert ev.data["step"] == 0
@@ -60,7 +60,7 @@ class TestSuperstepEvents:
         emit_superstep_end(step=0, task_count=2)
         pop_graph_scope(graph_handle)
 
-        mark_events = [e for e in events if e.name == "Superstep End" and e.event_type == EventType.Mark]
+        mark_events = [e for e in events if e.name == "Superstep End" and e.kind == "Mark"]
         assert len(mark_events) == 1, f"Expected 1 'Superstep End' Mark event, got {len(mark_events)}"
         ev = mark_events[0]
         assert ev.data["step"] == 0
@@ -73,12 +73,8 @@ class TestSuperstepEvents:
         def worker() -> None:
             emit_superstep_start(step=1, task_count=3)
             emit_superstep_end(step=1, task_count=3)
-            results["start_count"] = len(
-                [e for e in events if e.name == "Superstep Start" and e.event_type == EventType.Mark]
-            )
-            results["end_count"] = len(
-                [e for e in events if e.name == "Superstep End" and e.event_type == EventType.Mark]
-            )
+            results["start_count"] = len([e for e in events if e.name == "Superstep Start" and e.kind == "Mark"])
+            results["end_count"] = len([e for e in events if e.name == "Superstep End" and e.kind == "Mark"])
             results["available"] = available()
 
         t = threading.Thread(target=worker)
@@ -96,9 +92,7 @@ class TestSuperstepEvents:
         emit_superstep_end(step=0, task_count=1)
         pop_graph_scope(graph_handle)
 
-        mark_events = [
-            e for e in events if e.event_type == EventType.Mark and e.name in {"Superstep Start", "Superstep End"}
-        ]
+        mark_events = [e for e in events if e.kind == "Mark" and e.name in {"Superstep Start", "Superstep End"}]
         assert len(mark_events) == 2, (
             f"Expected 2 superstep Mark events, got {len(mark_events)}: {[e.name for e in mark_events]}"
         )
@@ -117,8 +111,8 @@ class TestSuperstepEvents:
             emit_superstep_end(step=step, task_count=2)
         pop_graph_scope(graph_handle)
 
-        start_events = [e for e in events if e.name == "Superstep Start" and e.event_type == EventType.Mark]
-        end_events = [e for e in events if e.name == "Superstep End" and e.event_type == EventType.Mark]
+        start_events = [e for e in events if e.name == "Superstep Start" and e.kind == "Mark"]
+        end_events = [e for e in events if e.name == "Superstep End" and e.kind == "Mark"]
         assert len(start_events) == 3, f"Expected 3 'Superstep Start' events, got {len(start_events)}"
         assert len(end_events) == 3, f"Expected 3 'Superstep End' events, got {len(end_events)}"
 

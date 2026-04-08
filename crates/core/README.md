@@ -15,8 +15,8 @@ This crate provides the foundational runtime that all language bindings build up
 
 - **Scope management** -- Hierarchical scope stack with UUID handles, scope-local middleware registration, and automatic cleanup on scope pop.
 - **Middleware pipeline** -- Priority-sorted registries for guardrails (sanitize/gate), request intercepts (transform with optional `break_chain`), and execution intercepts (middleware chain pattern with `next`).
-- **Event system** -- Observer-pattern subscriber model with typed `Event` fields (`input`, `output`, `model_name`, `tool_call_id`, `root_uuid`) populated by the runtime.
-- **ATIF export** -- `AtifExporter` subscriber that collects events and exports ATIF v1.6 trajectories, with `root_uuid` filtering for concurrent agent isolation.
+- **Event system** -- Observer-pattern subscriber model with typed `Event` fields (`input`, `output`, `model_name`, `tool_call_id`) populated by the runtime.
+- **ATIF export** -- `AtifExporter` subscriber that collects events and exports ATIF v1.6 trajectories.
 - **Stream wrapping** -- `LlmStreamWrapper` for buffering/parsing SSE events, feeding chunks to a collector, and calling a finalizer on stream end.
 - **Async runtime** -- Built on Tokio with `task_local` context propagation for async scopes and thread-local for sync scopes.
 

@@ -16,7 +16,7 @@ import nat_nexus
 
 nat_nexus.subscribers.register(
     "logger",
-    lambda event: print(f"[{event.event_type}] {event.name} root={event.root_uuid}"),
+    lambda event: print(f"[{event.kind}] {event.name} parent={event.parent_uuid}"),
 )
 ```
 

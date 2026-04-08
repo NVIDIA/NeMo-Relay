@@ -1970,15 +1970,10 @@ impl JsAtifExporter {
 
     /// Export the collected trajectory as a JSON string.
     ///
-    /// If `rootUuid` is provided, only the subtree rooted at that scope is exported.
     /// Returns a JSON-serialized `AtifTrajectory`.
     #[napi]
-    pub fn export_json(&self, root_uuid: Option<String>) -> napi::Result<String> {
-        let root = root_uuid
-            .map(|s| uuid::Uuid::parse_str(&s))
-            .transpose()
-            .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-        let trajectory = self.inner.export(root);
+    pub fn export_json(&self) -> napi::Result<String> {
+        let trajectory = self.inner.export();
         serde_json::to_string(&trajectory).map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 

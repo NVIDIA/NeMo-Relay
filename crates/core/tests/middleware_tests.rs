@@ -975,9 +975,9 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
     let captured = events.lock().unwrap();
     let start_event = captured
         .iter()
-        .find(|e| e.event_type == EventType::Start)
+        .find(|e| matches!(e, Event::ToolStart(_)))
         .unwrap();
-    let input = start_event.input.as_ref().unwrap();
+    let input = start_event.input().unwrap();
     assert_eq!(input["global"], true);
     assert_eq!(input["local"], true);
 
@@ -1249,9 +1249,9 @@ fn test_sanitize_guardrails_pipe_data() {
     let captured = events.lock().unwrap();
     let start = captured
         .iter()
-        .find(|e| e.event_type == EventType::Start)
+        .find(|e| matches!(e, Event::ToolStart(_)))
         .unwrap();
-    let input = start.input.as_ref().unwrap();
+    let input = start.input().unwrap();
     assert_eq!(input["field_a"], true, "First guardrail should add field_a");
     assert_eq!(
         input["field_b"], true,
@@ -1311,9 +1311,9 @@ fn test_response_sanitize_guardrails_pipe() {
     let captured = events.lock().unwrap();
     let end = captured
         .iter()
-        .find(|e| e.event_type == EventType::End)
+        .find(|e| matches!(e, Event::ToolEnd(_)))
         .unwrap();
-    let output = end.output.as_ref().unwrap();
+    let output = end.output().unwrap();
     assert_eq!(output["sanitized"], true);
     assert_eq!(output["raw"], true);
 

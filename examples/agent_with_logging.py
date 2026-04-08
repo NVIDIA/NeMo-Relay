@@ -64,15 +64,16 @@ def get_population(city: str) -> str:
 def log_event(event: nat_nexus.Event) -> None:
     """Log every NeMo Agent Toolkit Nexus lifecycle event to stdout."""
     parts = [
-        f"[{event.event_type}]",
+        f"[{event.kind}]",
         f"name={event.name}",
         f"uuid={event.uuid[:8]}...",
-        f"root_uuid={event.root_uuid[:8]}...",
-        f"parent_uuid={event.parent_uuid[:8]}...",
+        f"parent_uuid={event.parent_uuid[:8]}..." if event.parent_uuid else "parent_uuid=None",
     ]
-    if event.scope_type is not None:
+    scope_type = getattr(event, "scope_type", None)
+    if scope_type is not None:
         parts.append(f"scope_type={event.scope_type}")
-    if event.model_name is not None:
+    model_name = getattr(event, "model_name", None)
+    if model_name is not None:
         parts.append(f"model={event.model_name}")
     if event.input is not None:
         preview = json.dumps(event.input, default=str)
@@ -110,9 +111,7 @@ async def amain() -> None:
     exporter.register("atif-exporter")
 
     # Push a top-level agent scope.
-    with nat_nexus.scope.scope("example-agent", nat_nexus.ScopeType.Agent) as agent_scope:
-        agent_root_uuid = agent_scope.uuid
-
+    with nat_nexus.scope.scope("example-agent", nat_nexus.ScopeType.Agent):
         # Create the LLM and agent.
         llm = ChatNVIDIA(model="nvidia/nemotron-3-nano-30b-a3b")
         agent = create_agent(llm, tools=[get_weather, get_population])
@@ -127,8 +126,8 @@ async def amain() -> None:
         print("\n--- Final response ---\n")
         print(result["messages"][-1].content)
 
-    # Export ATIF trajectory filtered to this agent's root scope.
-    trajectory = exporter.export(agent_root_uuid)
+    # Export the collected ATIF trajectory.
+    trajectory = exporter.export()
     trajectory_path = "trajectory.json"
     with open(trajectory_path, "w") as f:
         json.dump(trajectory, f, indent=2, default=str)

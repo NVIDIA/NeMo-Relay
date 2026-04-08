@@ -29,7 +29,7 @@ from langgraph._nat_nexus import (  # type: ignore[import-untyped]
     pop_graph_scope,
     push_graph_scope,
 )
-from nat_nexus import EventType, create_scope_stack, set_thread_scope_stack
+from nat_nexus import create_scope_stack, set_thread_scope_stack
 
 
 class TestCheckpointEvents:
@@ -60,7 +60,7 @@ class TestCheckpointEvents:
         emit_checkpoint_save(source="loop", step=3, thread_id="thread-1", checkpoint_id="ckpt-abc")
         pop_graph_scope(graph_handle)
 
-        mark_events = [e for e in events if e.name == "Checkpoint Save" and e.event_type == EventType.Mark]
+        mark_events = [e for e in events if e.name == "Checkpoint Save" and e.kind == "Mark"]
         assert len(mark_events) == 1, f"Expected 1 'Checkpoint Save' Mark event, got {len(mark_events)}"
         ev = mark_events[0]
         assert ev.data["source"] == "loop"
@@ -76,7 +76,7 @@ class TestCheckpointEvents:
         emit_checkpoint_save(source="exit", step=2, thread_id="t1", checkpoint_id="ckpt-3")
         pop_graph_scope(graph_handle)
 
-        mark_events = [e for e in events if e.name == "Checkpoint Save" and e.event_type == EventType.Mark]
+        mark_events = [e for e in events if e.name == "Checkpoint Save" and e.kind == "Mark"]
         assert len(mark_events) == 3, f"Expected 3 'Checkpoint Save' Mark events, got {len(mark_events)}"
         sources = [e.data["source"] for e in mark_events]
         assert sources == ["input", "loop", "exit"], f"Expected sources ['input', 'loop', 'exit'], got {sources}"
@@ -87,9 +87,7 @@ class TestCheckpointEvents:
 
         def worker() -> None:
             emit_checkpoint_save(source="loop", step=1, thread_id="t1", checkpoint_id="c1")
-            results["event_count"] = len(
-                [e for e in events if e.name == "Checkpoint Save" and e.event_type == EventType.Mark]
-            )
+            results["event_count"] = len([e for e in events if e.name == "Checkpoint Save" and e.kind == "Mark"])
             results["available"] = available()
 
         t = threading.Thread(target=worker)
@@ -105,7 +103,7 @@ class TestCheckpointEvents:
         emit_checkpoint_restore(checkpoint_id="ckpt-xyz", thread_id="thread-2", step=5)
         pop_graph_scope(graph_handle)
 
-        mark_events = [e for e in events if e.name == "Checkpoint Restore" and e.event_type == EventType.Mark]
+        mark_events = [e for e in events if e.name == "Checkpoint Restore" and e.kind == "Mark"]
         assert len(mark_events) == 1, f"Expected 1 'Checkpoint Restore' Mark event, got {len(mark_events)}"
         ev = mark_events[0]
         assert ev.data["checkpoint_id"] == "ckpt-xyz"
@@ -118,9 +116,7 @@ class TestCheckpointEvents:
 
         def worker() -> None:
             emit_checkpoint_restore(checkpoint_id="ckpt-000", thread_id="t0", step=0)
-            results["event_count"] = len(
-                [e for e in events if e.name == "Checkpoint Restore" and e.event_type == EventType.Mark]
-            )
+            results["event_count"] = len([e for e in events if e.name == "Checkpoint Restore" and e.kind == "Mark"])
             results["available"] = available()
 
         t = threading.Thread(target=worker)
@@ -161,7 +157,7 @@ class TestInterruptEvents:
         emit_graph_interrupt(trigger="before", interrupts=[])
         pop_graph_scope(graph_handle)
 
-        mark_events = [e for e in events if e.name == "Graph Interrupt" and e.event_type == EventType.Mark]
+        mark_events = [e for e in events if e.name == "Graph Interrupt" and e.kind == "Mark"]
         assert len(mark_events) == 1, f"Expected 1 'Graph Interrupt' Mark event, got {len(mark_events)}"
         ev = mark_events[0]
         assert ev.data["trigger"] == "before"
@@ -178,7 +174,7 @@ class TestInterruptEvents:
         )
         pop_graph_scope(graph_handle)
 
-        mark_events = [e for e in events if e.name == "Graph Interrupt" and e.event_type == EventType.Mark]
+        mark_events = [e for e in events if e.name == "Graph Interrupt" and e.kind == "Mark"]
         assert len(mark_events) == 1, f"Expected 1 'Graph Interrupt' Mark event, got {len(mark_events)}"
         ev = mark_events[0]
         assert ev.data["trigger"] == "after"
@@ -192,7 +188,7 @@ class TestInterruptEvents:
         graph_handle = push_graph_scope("survive_graph")
         emit_graph_interrupt(trigger="before", interrupts=[])
 
-        mark_events = [e for e in events if e.name == "Graph Interrupt" and e.event_type == EventType.Mark]
+        mark_events = [e for e in events if e.name == "Graph Interrupt" and e.kind == "Mark"]
         assert len(mark_events) == 1, f"Expected 1 'Graph Interrupt' Mark event, got {len(mark_events)}"
         ev = mark_events[0]
         assert ev.parent_uuid == graph_handle.uuid, (
@@ -212,7 +208,7 @@ class TestInterruptEvents:
         emit_graph_resume(resume_values={"answer": 42})
         pop_graph_scope(graph_handle)
 
-        mark_events = [e for e in events if e.name == "Graph Resume" and e.event_type == EventType.Mark]
+        mark_events = [e for e in events if e.name == "Graph Resume" and e.kind == "Mark"]
         assert len(mark_events) == 1, f"Expected 1 'Graph Resume' Mark event, got {len(mark_events)}"
         ev = mark_events[0]
         assert "resume_values" in ev.data, "Event data should contain 'resume_values' key"
@@ -227,9 +223,7 @@ class TestInterruptEvents:
         emit_graph_resume(resume_values={"cmd": "continue"})
         pop_graph_scope(graph_handle)
 
-        mark_events = [
-            e for e in events if e.event_type == EventType.Mark and e.name in {"Checkpoint Restore", "Graph Resume"}
-        ]
+        mark_events = [e for e in events if e.kind == "Mark" and e.name in {"Checkpoint Restore", "Graph Resume"}]
         assert len(mark_events) == 2, (
             f"Expected 2 Mark events (restore + resume), got {len(mark_events)}: {[e.name for e in mark_events]}"
         )

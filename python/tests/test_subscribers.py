@@ -5,14 +5,29 @@
 
 import pytest
 from nat_nexus import (
-    Event,
-    EventType,
+    LLMEndEvent,
     LLMRequest,
+    LLMStartEvent,
+    MarkEvent,
+    ScopeEndEvent,
+    ScopeStartEvent,
     ScopeType,
+    ToolEndEvent,
+    ToolStartEvent,
     llm,
     scope,
     subscribers,
     tools,
+)
+
+EVENT_VARIANTS = (
+    ScopeStartEvent,
+    ScopeEndEvent,
+    ToolStartEvent,
+    ToolEndEvent,
+    LLMStartEvent,
+    LLMEndEvent,
+    MarkEvent,
 )
 
 
@@ -38,9 +53,9 @@ class TestSubscribers:
 
         assert len(events) >= 2
         for e in events:
-            assert isinstance(e, Event)
+            assert isinstance(e, EVENT_VARIANTS)
             assert e.uuid is not None
-            assert e.event_type is not None
+            assert e.kind is not None
 
     def test_duplicate_subscriber_raises(self):
         subscribers.register("py_dup_sub", lambda e: None)
@@ -61,8 +76,8 @@ class TestSubscriberEventDetails:
         subscribers.deregister("py_detail_sub")
 
         assert len(events) >= 2
-        assert events[0].event_type == EventType.Start
-        assert events[1].event_type == EventType.End
+        assert isinstance(events[0], ScopeStartEvent)
+        assert isinstance(events[1], ScopeEndEvent)
 
     def test_tool_events(self):
         events = []
@@ -71,8 +86,8 @@ class TestSubscriberEventDetails:
         tools.call_end(handle, {"y": 2})
         subscribers.deregister("py_tool_evt")
 
-        start_events = [e for e in events if e.event_type == EventType.Start]
-        end_events = [e for e in events if e.event_type == EventType.End]
+        start_events = [e for e in events if isinstance(e, ToolStartEvent)]
+        end_events = [e for e in events if isinstance(e, ToolEndEvent)]
         assert len(start_events) >= 1
         assert len(end_events) >= 1
 
@@ -84,8 +99,8 @@ class TestSubscriberEventDetails:
         llm.call_end(handle, {"done": True})
         subscribers.deregister("py_llm_evt")
 
-        start_events = [e for e in events if e.event_type == EventType.Start]
-        end_events = [e for e in events if e.event_type == EventType.End]
+        start_events = [e for e in events if isinstance(e, LLMStartEvent)]
+        end_events = [e for e in events if isinstance(e, LLMEndEvent)]
         assert len(start_events) >= 1
         assert len(end_events) >= 1
 
@@ -95,7 +110,7 @@ class TestSubscriberEventDetails:
         scope.event("test_mark", data={"info": "test"})
         subscribers.deregister("py_mark_evt")
 
-        mark_events = [e for e in events if e.event_type == EventType.Mark]
+        mark_events = [e for e in events if isinstance(e, MarkEvent)]
         assert len(mark_events) >= 1
 
 
@@ -134,8 +149,9 @@ class TestHandleProperties:
 
         assert len(events) >= 1
         e = events[0]
+        assert isinstance(e, MarkEvent)
         assert isinstance(e.uuid, str)
         assert e.name == "prop_mark"
-        assert e.event_type == EventType.Mark
+        assert e.kind == "Mark"
         assert e.timestamp is not None
         assert isinstance(e.timestamp, str)

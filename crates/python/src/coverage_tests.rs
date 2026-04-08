@@ -20,7 +20,7 @@ use crate::py_callable::{
     wrap_py_llm_stream_exec_intercept_fn, wrap_py_tool_conditional_fn, wrap_py_tool_exec_fn,
     wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn, wrap_py_tool_request_intercept_fn,
 };
-use nvidia_nat_nexus_core::types::{Event, EventType, LLMRequest, ScopeType};
+use nvidia_nat_nexus_core::types::{Event, LLMRequest, ToolAttributes};
 use nvidia_nat_nexus_core::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
 
 fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
@@ -317,15 +317,15 @@ def event_fail(event):
         assert_eq!(finalizer(), Json::Null);
 
         let subscriber = wrap_py_event_subscriber(module.getattr("event_fail").unwrap().unbind());
-        let event = Event::new(
+        let event = Event::tool_start(
             Some(Uuid::new_v4()),
             Uuid::new_v4(),
-            Some("evt".into()),
+            "evt",
             None,
             None,
+            ToolAttributes::empty(),
             None,
-            EventType::Start,
-            Some(ScopeType::Tool),
+            None,
         );
         subscriber(&event);
     });

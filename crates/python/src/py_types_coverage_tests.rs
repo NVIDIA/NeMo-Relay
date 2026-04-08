@@ -19,12 +19,17 @@ fn test_register_exposes_all_type_bindings() {
         assert!(module.getattr("ToolAttributes").is_ok());
         assert!(module.getattr("LLMAttributes").is_ok());
         assert!(module.getattr("ScopeType").is_ok());
-        assert!(module.getattr("EventType").is_ok());
         assert!(module.getattr("ScopeHandle").is_ok());
         assert!(module.getattr("ToolHandle").is_ok());
         assert!(module.getattr("LLMHandle").is_ok());
         assert!(module.getattr("LLMRequest").is_ok());
-        assert!(module.getattr("Event").is_ok());
+        assert!(module.getattr("ScopeStartEvent").is_ok());
+        assert!(module.getattr("ScopeEndEvent").is_ok());
+        assert!(module.getattr("ToolStartEvent").is_ok());
+        assert!(module.getattr("ToolEndEvent").is_ok());
+        assert!(module.getattr("LLMStartEvent").is_ok());
+        assert!(module.getattr("LLMEndEvent").is_ok());
+        assert!(module.getattr("MarkEvent").is_ok());
         assert!(module.getattr("AtifExporter").is_ok());
         assert!(module.getattr("OpenInferenceConfig").is_ok());
         assert!(module.getattr("OpenInferenceSubscriber").is_ok());
@@ -76,18 +81,6 @@ fn test_bitflags_handles_and_event_wrappers_expose_expected_fields() {
     for (py_variant, core_variant) in scope_variants {
         let py_round_trip = PyScopeType::from(core_variant);
         let core_round_trip: core_types::ScopeType = py_variant.clone().into();
-        assert!(py_variant == py_round_trip);
-        assert!(core_round_trip == core_variant);
-    }
-
-    let event_variants = [
-        (PyEventType::Start, core_types::EventType::Start),
-        (PyEventType::End, core_types::EventType::End),
-        (PyEventType::Mark, core_types::EventType::Mark),
-    ];
-    for (py_variant, core_variant) in event_variants {
-        let py_round_trip = PyEventType::from(core_variant);
-        let core_round_trip: core_types::EventType = py_variant.clone().into();
         assert!(py_variant == py_round_trip);
         assert!(core_round_trip == core_variant);
     }
@@ -171,26 +164,18 @@ fn test_bitflags_handles_and_event_wrappers_expose_expected_fields() {
         );
         assert_eq!(request.__repr__(), "LLMRequest(...)");
 
-        let mut inner_event = core_types::Event::new(
+        let event = match core_types::Event::mark(
             Some(parent_uuid),
             Uuid::new_v4(),
-            Some("event".into()),
+            "event",
             Some(json!({"event": true})),
             Some(json!({"meta": "event"})),
-            None,
-            core_types::EventType::Mark,
-            Some(core_types::ScopeType::Guardrail),
-        );
-        inner_event.input = Some(json!({"input": true}));
-        inner_event.output = Some(json!({"output": true}));
-        inner_event.model_name = Some("model".into());
-        inner_event.tool_call_id = Some("tool-1".into());
-        inner_event.root_uuid = Some(Uuid::new_v4());
-
-        let event = PyEvent::from(inner_event.clone());
+        ) {
+            core_types::Event::Mark(inner) => PyMarkEvent { inner },
+            _ => unreachable!(),
+        };
+        assert_eq!(event.kind(), "Mark");
         assert_eq!(event.parent_uuid(), Some(parent_uuid.to_string()));
-        assert!(event.event_type() == PyEventType::Mark);
-        assert!(event.scope_type() == Some(PyScopeType::Guardrail));
         assert_eq!(
             py_to_json(event.data(py).unwrap().bind(py)).unwrap(),
             json!({"event": true})
@@ -199,22 +184,49 @@ fn test_bitflags_handles_and_event_wrappers_expose_expected_fields() {
             py_to_json(event.metadata(py).unwrap().bind(py)).unwrap(),
             json!({"meta": "event"})
         );
+        assert!(event.timestamp().contains('T'));
+
+        let tool_event = match core_types::Event::tool_start(
+            Some(parent_uuid),
+            Uuid::new_v4(),
+            "tool-event",
+            Some(json!({"event": true})),
+            Some(json!({"meta": "event"})),
+            core_types::ToolAttributes::LOCAL,
+            Some(json!({"input": true})),
+            Some("tool-1".into()),
+        ) {
+            core_types::Event::ToolStart(inner) => PyToolStartEvent { inner },
+            _ => unreachable!(),
+        };
+        assert_eq!(tool_event.kind(), "ToolStart");
         assert_eq!(
-            py_to_json(event.input(py).unwrap().bind(py)).unwrap(),
+            py_to_json(tool_event.input(py).unwrap().bind(py)).unwrap(),
             json!({"input": true})
         );
+        assert_eq!(tool_event.tool_call_id(), Some("tool-1".into()));
+        assert_eq!(tool_event.attributes().value(), PyToolAttributes::LOCAL);
+
+        let llm_event = match core_types::Event::llm_end(
+            Some(parent_uuid),
+            Uuid::new_v4(),
+            "llm-event",
+            Some(json!({"event": true})),
+            Some(json!({"meta": "event"})),
+            core_types::LLMAttributes::STATELESS,
+            Some(json!({"output": true})),
+            Some("model".into()),
+        ) {
+            core_types::Event::LLMEnd(inner) => PyLLMEndEvent { inner },
+            _ => unreachable!(),
+        };
+        assert_eq!(llm_event.kind(), "LLMEnd");
         assert_eq!(
-            py_to_json(event.output(py).unwrap().bind(py)).unwrap(),
+            py_to_json(llm_event.output(py).unwrap().bind(py)).unwrap(),
             json!({"output": true})
         );
-        assert_eq!(event.model_name(), Some("model".into()));
-        assert_eq!(event.tool_call_id(), Some("tool-1".into()));
-        assert_eq!(
-            event.root_uuid(),
-            inner_event.root_uuid.map(|uuid| uuid.to_string())
-        );
-        assert!(event.timestamp().contains('T'));
-        assert!(event.__repr__().contains("Event("));
+        assert_eq!(llm_event.model_name(), Some("model".into()));
+        assert_eq!(llm_event.attributes().value(), PyLLMAttributes::STATELESS);
     });
 }
 
@@ -271,16 +283,9 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
         )
         .unwrap();
 
-        let exported = py_to_json(
-            exporter
-                .export(py, Some(scope.uuid.to_string()))
-                .unwrap()
-                .bind(py),
-        )
-        .unwrap();
+        let exported = py_to_json(exporter.export(py).unwrap().bind(py)).unwrap();
         let exported_json: serde_json::Value =
-            serde_json::from_str(&exporter.export_json(Some(scope.uuid.to_string())).unwrap())
-                .unwrap();
+            serde_json::from_str(&exporter.export_json().unwrap()).unwrap();
         assert_eq!(exported["session_id"], json!("session-types-rust"));
         assert_eq!(exported["agent"]["name"], json!("py-agent"));
         assert_eq!(
@@ -292,17 +297,8 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
         assert!(!exported["steps"].as_array().unwrap().is_empty());
 
         exporter.clear();
-        let cleared = py_to_json(
-            exporter
-                .export(py, Some(scope.uuid.to_string()))
-                .unwrap()
-                .bind(py),
-        )
-        .unwrap();
+        let cleared = py_to_json(exporter.export(py).unwrap().bind(py)).unwrap();
         assert_eq!(cleared["steps"], json!([]));
-
-        let invalid_export = exporter.export_json(Some("not-a-uuid".into())).unwrap_err();
-        assert!(invalid_export.to_string().contains("Invalid UUID"));
 
         nvidia_nat_nexus_core::nat_nexus_pop_scope(&scope.uuid).unwrap();
         assert!(exporter.deregister(subscriber_name.clone()).unwrap());
