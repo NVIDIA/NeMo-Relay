@@ -1789,6 +1789,7 @@ async fn test_llm_conditional_guardrail_rejects() {
         None,
         None,
         None,
+        None,
     )
     .await;
 
@@ -1815,9 +1816,9 @@ async fn test_llm_request_intercept_transforms() {
         "llm_req_i",
         1,
         false,
-        Box::new(|_name: &str, mut req: LLMRequest| {
+        Box::new(|_name: &str, mut req: LLMRequest, annotated| {
             req.headers.insert("x-intercepted".into(), json!(true));
-            Ok(req)
+            Ok((req, annotated))
         }),
     )
     .unwrap();
@@ -1876,6 +1877,7 @@ async fn test_llm_execution_intercept_chain() {
         func,
         None,
         LLMAttributes::empty(),
+        None,
         None,
         None,
         None,

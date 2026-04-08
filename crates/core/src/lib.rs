@@ -52,6 +52,7 @@
 
 pub mod api;
 pub mod atif;
+pub mod codec;
 pub mod context;
 pub mod error;
 pub mod json;
@@ -60,6 +61,7 @@ pub mod stream;
 pub mod types;
 
 pub use api::*;
+pub use codec::*;
 pub use context::{
     create_scope_stack, current_scope_stack, global_context, merge_execution_intercept_callables,
     merge_guardrail_entries, merge_intercept_entries, propagate_scope_to_thread,

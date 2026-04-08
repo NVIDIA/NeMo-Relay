@@ -259,7 +259,7 @@ describe('LLM guardrails', () => {
 
 describe('LLM intercepts', () => {
   it('request intercept', () => {
-    registerLlmRequestIntercept('node_llm_req_int', 10, false, (native) => { native.intercepted = true; return native; });
+    registerLlmRequestIntercept('node_llm_req_int', 10, false, ({ name, request, annotated }) => { request.intercepted = true; return { request, annotated }; });
     deregisterLlmRequestIntercept('node_llm_req_int');
   });
 
@@ -274,18 +274,18 @@ describe('LLM intercepts', () => {
   });
 
   it('request intercept with break_chain', () => {
-    registerLlmRequestIntercept('node_llm_break', 10, true, (native) => native);
+    registerLlmRequestIntercept('node_llm_break', 10, true, ({ name, request, annotated }) => ({ request, annotated }));
     deregisterLlmRequestIntercept('node_llm_break');
   });
 
   it('duplicate intercept fails', () => {
-    registerLlmRequestIntercept('node_llm_dup_int', 10, false, (n) => n);
-    assert.throws(() => registerLlmRequestIntercept('node_llm_dup_int', 20, false, (n) => n));
+    registerLlmRequestIntercept('node_llm_dup_int', 10, false, ({ request, annotated }) => ({ request, annotated }));
+    assert.throws(() => registerLlmRequestIntercept('node_llm_dup_int', 20, false, ({ request, annotated }) => ({ request, annotated })));
     deregisterLlmRequestIntercept('node_llm_dup_int');
   });
 
   it('request intercept modifies request', async () => {
-    registerLlmRequestIntercept('node_llm_req_mod', 10, false, (native) => { native.content.intercepted = true; return native; });
+    registerLlmRequestIntercept('node_llm_req_mod', 10, false, ({ request, annotated }) => { request.content.intercepted = true; return { request, annotated }; });
     const native = makeNative();
     const result = await llmCallExecute('mod_llm', native, (n) => ({ saw_intercepted: n.content.intercepted || false }), null, null, null, null, null);
     assert.equal(result.saw_intercepted, true);
@@ -297,7 +297,7 @@ describe('LLM intercepts', () => {
     try {
       await assert.rejects(
         () => llmCallExecute('bad_req_llm', makeNative(), (n) => ({ model: n.content.model }), null, null, null, null, null),
-        /failed to deserialize llmrequest/i,
+        /expected object with 'request' and 'annotated' fields/i,
       );
     } finally {
       deregisterLlmRequestIntercept('node_llm_req_bad');
@@ -445,9 +445,9 @@ describe('LLM intercepts', () => {
   });
 
   it('standalone request intercepts helper applies intercept chain', async () => {
-    registerLlmRequestIntercept('node_llm_req_helper', 10, false, (native) => {
-      native.content.helper = true;
-      return native;
+    registerLlmRequestIntercept('node_llm_req_helper', 10, false, ({ request, annotated }) => {
+      request.content.helper = true;
+      return { request, annotated };
     });
 
     const result = await llmRequestIntercepts('helper_llm', makeNative());

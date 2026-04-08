@@ -26,11 +26,13 @@
 //! [`global_context`].
 
 use std::pin::Pin;
+use std::sync::Arc;
 
 use serde_json::json;
 use tokio_stream::Stream;
 use uuid::Uuid;
 
+use crate::codec::LlmCodec;
 use crate::context::*;
 use crate::error::{NexusError, Result};
 use crate::json::Json;
@@ -358,6 +360,57 @@ pub fn nat_nexus_deregister_subscriber(name: &str) -> Result<bool> {
         .write()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
     Ok(state.event_subscribers.remove(name).is_some())
+}
+
+// ---------------------------------------------------------------------------
+// Request intercept pipeline with Codec decode/encode
+// ---------------------------------------------------------------------------
+
+/// Runs the full request intercept pipeline with optional Codec decode/encode.
+///
+/// 1. If Codec provided: decode LLMRequest -> AnnotatedLLMRequest
+/// 2. Run intercept chain (single unified registry, priority-sorted)
+/// 3. If Codec provided and annotated was produced: encode back to LLMRequest,
+///    preserving headers from the post-intercept request
+///
+/// Used by both [`nat_nexus_llm_call_execute`] and [`nat_nexus_llm_stream_call_execute`].
+fn run_request_intercepts_with_codec(
+    name: &str,
+    request: LLMRequest,
+    codec: Option<Arc<dyn LlmCodec>>,
+) -> Result<LLMRequest> {
+    let ss = current_scope_stack();
+    let ss_guard = ss.read().expect("scope stack lock poisoned");
+    let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_request_intercepts);
+
+    let ctx = global_context();
+    let state = ctx
+        .read()
+        .map_err(|e| NexusError::Internal(e.to_string()))?;
+
+    // Clone original for encode step (merge-not-replace needs pre-intercept content)
+    let original = request.clone();
+
+    // Decode: if Codec provided, translate opaque request to structured form
+    let annotated = match &codec {
+        Some(c) => Some(c.decode(&request)?),
+        None => None,
+    };
+
+    // Run unified intercept chain
+    let (intercepted_request, intercepted_annotated) =
+        state.llm_request_intercepts_chain(name, request, annotated, &sl)?;
+
+    // Encode: merge structured changes back into opaque request
+    match (codec, intercepted_annotated) {
+        (Some(c), Some(ann)) => {
+            let mut encoded = c.encode(&ann, &original)?;
+            // Preserve header modifications from intercepts
+            encoded.headers = intercepted_request.headers;
+            Ok(encoded)
+        }
+        _ => Ok(intercepted_request),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -979,6 +1032,7 @@ pub async fn nat_nexus_llm_call_execute(
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
+    codec: Option<Arc<dyn LlmCodec>>,
 ) -> Result<Json> {
     // Conditional guardrails — check on unmodified request
     {
@@ -1003,17 +1057,8 @@ pub async fn nat_nexus_llm_call_execute(
         }
     }
 
-    // Request intercepts
-    let intercepted_request = {
-        let ss = current_scope_stack();
-        let ss_guard = ss.read().expect("scope stack lock poisoned");
-        let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_request_intercepts);
-        let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.llm_request_intercepts_chain(name, request, &sl)?
-    };
+    // Request intercepts with optional Codec decode/encode
+    let intercepted_request = run_request_intercepts_with_codec(name, request, codec)?;
 
     // LLM call start (sanitize guardrails happen inside nat_nexus_llm_call)
     let handle = nat_nexus_llm_call(
@@ -1084,6 +1129,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
+    codec: Option<Arc<dyn LlmCodec>>,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<Json>> + Send>>> {
     // Conditional guardrails — check on unmodified request
     {
@@ -1108,17 +1154,8 @@ pub async fn nat_nexus_llm_stream_call_execute(
         }
     }
 
-    // Request intercepts
-    let intercepted_request = {
-        let ss = current_scope_stack();
-        let ss_guard = ss.read().expect("scope stack lock poisoned");
-        let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_request_intercepts);
-        let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
-        state.llm_request_intercepts_chain(name, request, &sl)?
-    };
+    // Request intercepts with optional Codec decode/encode
+    let intercepted_request = run_request_intercepts_with_codec(name, request, codec)?;
 
     // LLM call start (sanitize guardrails happen inside nat_nexus_llm_call)
     let handle = nat_nexus_llm_call(
@@ -1208,7 +1245,8 @@ pub fn nat_nexus_llm_request_intercepts(name: &str, request: LLMRequest) -> Resu
     let state = ctx
         .read()
         .map_err(|e| NexusError::Internal(e.to_string()))?;
-    state.llm_request_intercepts_chain(name, request, &sl)
+    let (req, _ann) = state.llm_request_intercepts_chain(name, request, None, &sl)?;
+    Ok(req)
 }
 
 /// Runs the registered LLM conditional execution guardrail chain.
@@ -2023,6 +2061,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2058,6 +2097,7 @@ mod tests {
             func,
             None,
             LLMAttributes::empty(),
+            None,
             None,
             None,
             None,
@@ -2116,6 +2156,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await;
 
@@ -2147,9 +2188,9 @@ mod tests {
             "llm_req_intercept",
             1,
             false,
-            Box::new(|_name: &str, mut req: LLMRequest| {
+            Box::new(|_name: &str, mut req: LLMRequest, annotated| {
                 req.headers.insert("intercepted".into(), json!(true));
-                Ok(req)
+                Ok((req, annotated))
             }),
         )
         .unwrap();
@@ -2174,6 +2215,7 @@ mod tests {
             func,
             None,
             LLMAttributes::empty(),
+            None,
             None,
             None,
             None,
@@ -2215,6 +2257,7 @@ mod tests {
             func,
             None,
             LLMAttributes::empty(),
+            None,
             None,
             None,
             None,
@@ -2340,13 +2383,18 @@ mod tests {
     fn test_llm_request_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_llm_request_intercept("i1", 1, false, Box::new(|_name: &str, r| Ok(r)))
-            .unwrap();
+        nat_nexus_register_llm_request_intercept(
+            "i1",
+            1,
+            false,
+            Box::new(|_name: &str, r, a| Ok((r, a))),
+        )
+        .unwrap();
         assert!(nat_nexus_register_llm_request_intercept(
             "i1",
             1,
             false,
-            Box::new(|_name: &str, r| Ok(r))
+            Box::new(|_name: &str, r, a| Ok((r, a)))
         )
         .is_err());
         assert!(nat_nexus_deregister_llm_request_intercept("i1").unwrap());
@@ -2496,6 +2544,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2541,6 +2590,7 @@ mod tests {
             Box::new(|| json!({"unused": true})),
             None,
             LLMAttributes::empty(),
+            None,
             None,
             None,
             None,
@@ -2615,6 +2665,7 @@ mod tests {
             finalizer,
             None,
             LLMAttributes::STREAMING,
+            None,
             None,
             None,
             None,
@@ -2805,13 +2856,13 @@ mod tests {
             "add_field",
             10,
             false,
-            Box::new(|_name: &str, mut request: LLMRequest| {
+            Box::new(|_name: &str, mut request: LLMRequest, annotated| {
                 request
                     .content
                     .as_object_mut()
                     .unwrap()
                     .insert("intercepted".into(), json!(true));
-                Ok(request)
+                Ok((request, annotated))
             }),
         )
         .unwrap();
@@ -2872,7 +2923,7 @@ mod tests {
             "broken",
             1,
             false,
-            Box::new(|_name, _request| {
+            Box::new(|_name, _request, _annotated| {
                 Err(NexusError::Internal("llm request intercept failed".into()))
             }),
         )

@@ -71,9 +71,10 @@ func DeregisterToolExecution(name string) error {
 // --- LLM Request ---
 
 // RegisterLlmRequest registers an intercept that transforms the LLM request
-// (headers and content). When breakChain is true, no lower-priority intercepts
-// run after this one. This is a shorthand for [nat_nexus.RegisterLlmRequestIntercept].
-func RegisterLlmRequest(name string, priority int32, breakChain bool, fn nat_nexus.LLMRequestFunc) error {
+// (headers, content, and optionally annotated JSON). When breakChain is true,
+// no lower-priority intercepts run after this one. This is a shorthand for
+// [nat_nexus.RegisterLlmRequestIntercept].
+func RegisterLlmRequest(name string, priority int32, breakChain bool, fn nat_nexus.LLMRequestInterceptFunc) error {
 	return nat_nexus.RegisterLlmRequestIntercept(name, priority, breakChain, fn)
 }
 
@@ -148,9 +149,9 @@ func ScopeDeregisterToolExecution(scopeUUID string, name string) error {
 // --- Scope-local LLM Request ---
 
 // ScopeRegisterLlmRequest registers a scope-local intercept that transforms the
-// LLM request. This is a shorthand for
-// [nat_nexus.ScopeRegisterLlmRequestIntercept].
-func ScopeRegisterLlmRequest(scopeUUID string, name string, priority int32, breakChain bool, fn nat_nexus.LLMRequestFunc) error {
+// LLM request using the unified annotated-aware signature. This is a shorthand
+// for [nat_nexus.ScopeRegisterLlmRequestIntercept].
+func ScopeRegisterLlmRequest(scopeUUID string, name string, priority int32, breakChain bool, fn nat_nexus.LLMRequestInterceptFunc) error {
 	return nat_nexus.ScopeRegisterLlmRequestIntercept(scopeUUID, name, priority, breakChain, fn)
 }
 

@@ -48,6 +48,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Generic, TypeVar, ov
 
 from nat_nexus import llm, tools
 from nat_nexus._native import LLMRequest, LlmStream, ScopeHandle
+from nat_nexus.codecs import LlmCodec
 
 Json = Any
 
@@ -380,6 +381,7 @@ async def llm_execute(
     data: Json | None = None,
     metadata: Json | None = None,
     model_name: str | None = None,
+    codec: LlmCodec | None = None,
 ) -> TResponse: ...
 
 
@@ -395,6 +397,7 @@ async def llm_execute(
     data: Json | None = None,
     metadata: Json | None = None,
     model_name: str | None = None,
+    codec: LlmCodec | None = None,
 ) -> TResponse: ...
 
 
@@ -409,6 +412,7 @@ async def llm_execute(
     data: Json | None = None,
     metadata: Json | None = None,
     model_name: str | None = None,
+    codec: LlmCodec | None = None,
 ) -> TResponse:
     """Execute an LLM call with explicit codec-based response deserialization.
 
@@ -425,6 +429,9 @@ async def llm_execute(
         data: Optional application data.
         metadata: Optional metadata.
         model_name: Optional model name for ATIF trajectory export.
+        codec: Optional ``LlmCodec`` instance to decode the request into an
+            ``AnnotatedLLMRequest`` for annotated intercepts. If ``None``,
+            no codec decoding is performed.
 
     Returns:
         The typed LLM response (deserialized from JSON via *response_codec*).
@@ -445,6 +452,7 @@ async def llm_execute(
         data=data,
         metadata=metadata,
         model_name=model_name,
+        codec=codec,
     )
     return response_codec.from_json(json_result)
 
@@ -463,6 +471,7 @@ async def llm_stream_execute(
     data: Json | None = None,
     metadata: Json | None = None,
     model_name: str | None = None,
+    codec: LlmCodec | None = None,
 ) -> LlmStream:
     """Execute a streaming LLM call with codec-based conversion.
 
@@ -494,6 +503,9 @@ async def llm_stream_execute(
         data: Optional application data.
         metadata: Optional metadata.
         model_name: Optional model name for ATIF trajectory export.
+        codec: Optional ``LlmCodec`` instance to decode the request into an
+            ``AnnotatedLLMRequest`` for annotated intercepts. If ``None``,
+            no codec decoding is performed.
 
     Returns:
         An ``LlmStream`` async iterator of JSON chunks.
@@ -520,6 +532,7 @@ async def llm_stream_execute(
         data=data,
         metadata=metadata,
         model_name=model_name,
+        codec=codec,
     )
 
 

@@ -556,6 +556,8 @@ pub fn nat_nexus_llm_call_end(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 /// - `model_name` - Optional model name string.
+/// - `codec_decode` - Optional JS decode function for annotated-aware request intercepts.
+/// - `codec_encode` - Optional JS encode function for annotated-aware request intercepts.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmCallExecute")]
 pub async fn nat_nexus_llm_call_execute(
@@ -567,6 +569,8 @@ pub async fn nat_nexus_llm_call_execute(
     data: JsValue,
     metadata: JsValue,
     model_name: Option<String>,
+    codec_decode: Option<Function>,
+    codec_encode: Option<Function>,
 ) -> Result<JsValue, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
@@ -578,6 +582,10 @@ pub async fn nat_nexus_llm_call_execute(
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
     let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn =
         Arc::new(move |request| exec_fn(request));
+    let codec = match (codec_decode, codec_encode) {
+        (Some(d), Some(e)) => Some(callable::wrap_js_codec(d, e)),
+        _ => None,
+    };
 
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
     let data_json = opt_js_to_json(&data)?;
@@ -593,6 +601,7 @@ pub async fn nat_nexus_llm_call_execute(
                 data_json,
                 metadata_json,
                 model_name,
+                codec,
             )
             .await
         })
@@ -620,6 +629,8 @@ pub async fn nat_nexus_llm_call_execute(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 /// - `model_name` - Optional model name string.
+/// - `codec_decode` - Optional JS decode function for annotated-aware request intercepts.
+/// - `codec_encode` - Optional JS encode function for annotated-aware request intercepts.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmStreamCallExecute")]
 pub async fn nat_nexus_llm_stream_call_execute(
@@ -633,6 +644,8 @@ pub async fn nat_nexus_llm_stream_call_execute(
     data: JsValue,
     metadata: JsValue,
     model_name: Option<String>,
+    codec_decode: Option<Function>,
+    codec_encode: Option<Function>,
 ) -> Result<WasmLlmStream, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
@@ -672,6 +685,10 @@ pub async fn nat_nexus_llm_stream_call_execute(
         })
     });
 
+    let codec = match (codec_decode, codec_encode) {
+        (Some(d), Some(e)) => Some(callable::wrap_js_codec(d, e)),
+        _ => None,
+    };
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
     let data_json = opt_js_to_json(&data)?;
     let metadata_json = opt_js_to_json(&metadata)?;
@@ -688,6 +705,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
                 data_json,
                 metadata_json,
                 model_name,
+                codec,
             )
             .await
         })

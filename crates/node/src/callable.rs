@@ -17,6 +17,7 @@ use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFun
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
+use nvidia_nat_nexus_core::codec::{AnnotatedLLMRequest, LlmCodec};
 use nvidia_nat_nexus_core::types::LLMRequest;
 use nvidia_nat_nexus_core::{
     LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionNextFn,
@@ -198,30 +199,75 @@ pub fn wrap_js_tool_exec_fn(
     })
 }
 
-/// Wrap a JS function `(request: object) => request` for LLM request intercepts.
+/// Wrap a JS function for unified LLM request intercepts (3-arg signature).
+///
+/// The JS callback receives a single JSON object
+/// `{ name: string, request: LLMRequest, annotated: AnnotatedLLMRequest | null }`
+/// and must return `{ request: LLMRequest, annotated: AnnotatedLLMRequest | null }`.
 pub fn wrap_js_llm_request_intercept_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> LlmRequestInterceptFn {
     let func = Arc::new(func);
-    Box::new(move |_name: &str, request: LLMRequest| {
-        let func = func.clone();
-        let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
-        let (tx, rx) = std::sync::mpsc::channel();
-        let status = func.call_with_return_value(
-            req_json,
-            ThreadsafeFunctionCallMode::Blocking,
-            move |val: Json| {
-                let _ = tx.send(val);
-                Ok(())
-            },
-        );
-        if status != napi::Status::Ok {
-            return Err(NexusError::Internal(format!(
-                "failed to queue JS LLM request intercept callback: {status:?}",
-            )));
-        }
-        recv_llm_request_result(rx, "JS LLM request intercept callback failed")
-    })
+    Box::new(
+        move |name: &str,
+              request: LLMRequest,
+              annotated: Option<AnnotatedLLMRequest>|
+              -> Result<(LLMRequest, Option<AnnotatedLLMRequest>)> {
+            let func = func.clone();
+            let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+            let annotated_json = annotated
+                .as_ref()
+                .map(|a| serde_json::to_value(a).unwrap_or(Json::Null))
+                .unwrap_or(Json::Null);
+            let arg = serde_json::json!({
+                "name": name,
+                "request": req_json,
+                "annotated": annotated_json,
+            });
+            let (tx, rx) = std::sync::mpsc::channel();
+            let status = func.call_with_return_value(
+                arg,
+                ThreadsafeFunctionCallMode::Blocking,
+                move |val: Json| {
+                    let _ = tx.send(val);
+                    Ok(())
+                },
+            );
+            if status != napi::Status::Ok {
+                return Err(NexusError::Internal(format!(
+                    "failed to queue JS LLM request intercept callback: {status:?}",
+                )));
+            }
+            let result = recv_json_result(rx, "JS LLM request intercept callback failed")?;
+
+            // Validate expected shape: { "request": {...}, "annotated": ... }
+            let obj = result.as_object().ok_or_else(|| {
+                NexusError::Internal(
+                    "JS LLM request intercept: expected object with 'request' and 'annotated' fields".to_string(),
+                )
+            })?;
+
+            let new_request: LLMRequest = serde_json::from_value(
+                obj.get("request").cloned().unwrap_or(Json::Null),
+            )
+            .map_err(|e| {
+                NexusError::Internal(format!(
+                    "JS LLM request intercept: failed to deserialize request: {e}"
+                ))
+            })?;
+
+            let new_annotated: Option<AnnotatedLLMRequest> = match obj.get("annotated") {
+                Some(Json::Null) | None => None,
+                Some(val) => Some(serde_json::from_value(val.clone()).map_err(|e| {
+                    NexusError::Internal(format!(
+                        "JS LLM request intercept: failed to deserialize annotated: {e}"
+                    ))
+                })?),
+            };
+
+            Ok((new_request, new_annotated))
+        },
+    )
 }
 
 /// Wrap a JS function for LLM sanitize request: `(request: JsLLMRequest) => JsLLMRequest`.
@@ -408,6 +454,76 @@ pub fn wrap_js_event_subscriber(
                 "nat_nexus: failed to queue JS event subscriber callback: {status:?}"
             ));
         }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Codec wrappers
+// ---------------------------------------------------------------------------
+
+/// A NAPI-RS wrapper that implements the core [`LlmCodec`] trait by delegating
+/// `decode` and `encode` to JavaScript functions via `ThreadsafeFunction`.
+struct NapiCodec {
+    decode: Arc<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
+    encode: Arc<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
+}
+
+impl LlmCodec for NapiCodec {
+    fn decode(&self, request: &LLMRequest) -> Result<AnnotatedLLMRequest> {
+        let req_json = serde_json::to_value(request).unwrap_or(Json::Null);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let status = self.decode.call_with_return_value(
+            req_json,
+            ThreadsafeFunctionCallMode::Blocking,
+            move |val: Json| {
+                let _ = tx.send(val);
+                Ok(())
+            },
+        );
+        if status != napi::Status::Ok {
+            return Err(NexusError::Internal(format!(
+                "failed to queue JS codec decode callback: {status:?}",
+            )));
+        }
+        let result = recv_json_result(rx, "JS codec decode callback failed")?;
+        serde_json::from_value(result).map_err(|e| {
+            NexusError::Internal(format!(
+                "JS codec decode callback: failed to deserialize AnnotatedLLMRequest: {e}"
+            ))
+        })
+    }
+
+    fn encode(&self, annotated: &AnnotatedLLMRequest, original: &LLMRequest) -> Result<LLMRequest> {
+        let annotated_json = serde_json::to_value(annotated).unwrap_or(Json::Null);
+        let original_json = serde_json::to_value(original).unwrap_or(Json::Null);
+        let arg = serde_json::json!({"annotated": annotated_json, "original": original_json});
+        let (tx, rx) = std::sync::mpsc::channel();
+        let status = self.encode.call_with_return_value(
+            arg,
+            ThreadsafeFunctionCallMode::Blocking,
+            move |val: Json| {
+                let _ = tx.send(val);
+                Ok(())
+            },
+        );
+        if status != napi::Status::Ok {
+            return Err(NexusError::Internal(format!(
+                "failed to queue JS codec encode callback: {status:?}",
+            )));
+        }
+        recv_llm_request_result(rx, "JS codec encode callback failed")
+    }
+}
+
+/// Wrap two JS functions (decode, encode) into an `Arc<dyn LlmCodec>` suitable
+/// for registration with the core codec registry.
+pub fn wrap_js_codec(
+    decode: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    encode: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+) -> Arc<dyn LlmCodec> {
+    Arc::new(NapiCodec {
+        decode: Arc::new(decode),
+        encode: Arc::new(encode),
     })
 }
 

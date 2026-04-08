@@ -13,6 +13,7 @@ use std::time::Duration;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use nvidia_nat_nexus_core::codec;
 use nvidia_nat_nexus_core::types as core_types;
 
 use crate::convert::{json_to_py, opt_json_to_py, py_to_json};
@@ -1435,6 +1436,237 @@ impl PyOpenInferenceSubscriber {
 }
 
 // ---------------------------------------------------------------------------
+// AnnotatedLLMRequest
+// ---------------------------------------------------------------------------
+
+/// A structured view of an LLM request produced by a Codec.
+///
+/// Provides typed access to conversation messages, model name, generation
+/// parameters, tool definitions, tool choice, and extensible extra fields.
+///
+/// Properties:
+///     messages (list): Parsed conversation messages (list of dicts with a ``role`` key).
+///     model (str | None): Model identifier (e.g., ``"gpt-4"``).
+///     params (dict | None): Normalized generation parameters.
+///     tools (list | None): Tool definitions (function schemas).
+///     tool_choice (Any | None): Tool choice control.
+///     extra (dict): Provider-specific extra fields.
+///
+/// Helper methods:
+///     system_prompt() -> str | None: Text of the first system message.
+///     last_user_message() -> str | None: Text of the last user message.
+///     has_tool_calls() -> bool: Whether any assistant message has tool calls.
+#[pyclass(name = "AnnotatedLLMRequest", from_py_object)]
+#[derive(Clone)]
+pub struct PyAnnotatedLLMRequest {
+    pub inner: codec::AnnotatedLLMRequest,
+}
+
+#[pymethods]
+impl PyAnnotatedLLMRequest {
+    /// Create a new AnnotatedLLMRequest.
+    ///
+    /// Args:
+    ///     messages: A list of message dicts, each with a ``role`` key.
+    ///     model: Optional model identifier.
+    ///     params: Optional generation parameters dict.
+    ///     tools: Optional list of tool definition dicts.
+    ///     tool_choice: Optional tool choice control.
+    ///     extra: Optional dict of provider-specific extra fields.
+    #[new]
+    #[pyo3(signature = (messages, *, model=None, params=None, tools=None, tool_choice=None, extra=None))]
+    fn new(
+        messages: &Bound<'_, PyAny>,
+        model: Option<String>,
+        params: Option<&Bound<'_, PyAny>>,
+        tools: Option<&Bound<'_, PyAny>>,
+        tool_choice: Option<&Bound<'_, PyAny>>,
+        extra: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let msgs: Vec<codec::Message> = pythonize::depythonize(messages).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "invalid messages: each dict must include a 'role' key (user/system/assistant/tool): {e}"
+            ))
+        })?;
+        let gen_params: Option<codec::GenerationParams> = match params {
+            Some(p) if !p.is_none() => Some(pythonize::depythonize(p).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid params: {e}"))
+            })?),
+            _ => None,
+        };
+        let tool_defs: Option<Vec<codec::ToolDefinition>> = match tools {
+            Some(t) if !t.is_none() => Some(pythonize::depythonize(t).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid tools: {e}"))
+            })?),
+            _ => None,
+        };
+        let tc: Option<codec::ToolChoice> = match tool_choice {
+            Some(tc_val) if !tc_val.is_none() => {
+                Some(pythonize::depythonize(tc_val).map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!("invalid tool_choice: {e}"))
+                })?)
+            }
+            _ => None,
+        };
+        let extra_map: serde_json::Map<String, serde_json::Value> = match extra {
+            Some(e) if !e.is_none() => pythonize::depythonize(e).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid extra: {e}"))
+            })?,
+            _ => serde_json::Map::new(),
+        };
+        Ok(Self {
+            inner: codec::AnnotatedLLMRequest {
+                messages: msgs,
+                model,
+                params: gen_params,
+                tools: tool_defs,
+                tool_choice: tc,
+                extra: extra_map,
+            },
+        })
+    }
+
+    #[getter]
+    fn messages(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let value = serde_json::to_value(&self.inner.messages).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("serialization error: {e}"))
+        })?;
+        json_to_py(py, &value)
+    }
+
+    #[setter]
+    fn set_messages(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.messages = pythonize::depythonize(value).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "invalid messages: each dict must include a 'role' key (user/system/assistant/tool): {e}"
+            ))
+        })?;
+        Ok(())
+    }
+
+    #[getter]
+    fn model(&self) -> Option<String> {
+        self.inner.model.clone()
+    }
+
+    #[setter]
+    fn set_model(&mut self, value: Option<String>) {
+        self.inner.model = value;
+    }
+
+    #[getter]
+    fn params(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.inner.params {
+            Some(p) => {
+                let value = serde_json::to_value(p).map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("serialization error: {e}"))
+                })?;
+                json_to_py(py, &value)
+            }
+            None => Ok(py.None()),
+        }
+    }
+
+    #[setter]
+    fn set_params(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        if value.is_none() {
+            self.inner.params = None;
+        } else {
+            self.inner.params = Some(pythonize::depythonize(value).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid params: {e}"))
+            })?);
+        }
+        Ok(())
+    }
+
+    #[getter]
+    fn tools(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.inner.tools {
+            Some(t) => {
+                let value = serde_json::to_value(t).map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("serialization error: {e}"))
+                })?;
+                json_to_py(py, &value)
+            }
+            None => Ok(py.None()),
+        }
+    }
+
+    #[setter]
+    fn set_tools(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        if value.is_none() {
+            self.inner.tools = None;
+        } else {
+            self.inner.tools = Some(pythonize::depythonize(value).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid tools: {e}"))
+            })?);
+        }
+        Ok(())
+    }
+
+    #[getter]
+    fn tool_choice(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.inner.tool_choice {
+            Some(tc) => {
+                let value = serde_json::to_value(tc).map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("serialization error: {e}"))
+                })?;
+                json_to_py(py, &value)
+            }
+            None => Ok(py.None()),
+        }
+    }
+
+    #[setter]
+    fn set_tool_choice(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        if value.is_none() {
+            self.inner.tool_choice = None;
+        } else {
+            self.inner.tool_choice = Some(pythonize::depythonize(value).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid tool_choice: {e}"))
+            })?);
+        }
+        Ok(())
+    }
+
+    #[getter]
+    fn extra(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let value = serde_json::Value::Object(self.inner.extra.clone());
+        json_to_py(py, &value)
+    }
+
+    #[setter]
+    fn set_extra(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.extra = pythonize::depythonize(value)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid extra: {e}")))?;
+        Ok(())
+    }
+
+    /// Extract the text content of the first system message, if any.
+    fn system_prompt(&self) -> Option<String> {
+        self.inner.system_prompt().map(|s| s.to_string())
+    }
+
+    /// Get the text content of the last user message, if any.
+    fn last_user_message(&self) -> Option<String> {
+        self.inner.last_user_message().map(|s| s.to_string())
+    }
+
+    /// Check if any assistant message contains tool calls.
+    fn has_tool_calls(&self) -> bool {
+        self.inner.has_tool_calls()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<AnnotatedLLMRequest messages={} model={:?}>",
+            self.inner.messages.len(),
+            self.inner.model
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -1449,6 +1681,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyToolHandle>()?;
     m.add_class::<PyLLMHandle>()?;
     m.add_class::<PyLLMRequest>()?;
+    m.add_class::<PyAnnotatedLLMRequest>()?;
     m.add_class::<PyScopeStartEvent>()?;
     m.add_class::<PyScopeEndEvent>()?;
     m.add_class::<PyToolStartEvent>()?;

@@ -77,12 +77,16 @@ extern int32_t nat_nexus_llm_call_end(const FfiLLMHandle* handle, const char* re
 
 // LLM call execute
 typedef char* (*NatNexusLlmExecFn)(void* user_data, const char* native_json);
+typedef char* (*NatNexusCodecDecodeFn)(void* user_data, const FfiLLMRequest* request);
+typedef char* (*NatNexusCodecEncodeFn)(void* user_data, const char* annotated_json, const FfiLLMRequest* original_request);
 extern int32_t nat_nexus_llm_call_execute(
 	const char* name, const char* native_json,
 	NatNexusLlmExecFn func_cb, void* func_user_data, NatNexusFreeFn func_free,
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
 	const char* model_name,
+	NatNexusCodecDecodeFn codec_decode, NatNexusCodecEncodeFn codec_encode,
+	void* codec_user_data, NatNexusFreeFn codec_free_fn,
 	char** out);
 
 // LLM stream execute
@@ -93,6 +97,8 @@ extern int32_t nat_nexus_llm_stream_call_execute(
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
 	const char* model_name,
+	NatNexusCodecDecodeFn codec_decode, NatNexusCodecEncodeFn codec_encode,
+	void* codec_user_data, NatNexusFreeFn codec_free_fn,
 	FfiStream** out);
 
 extern void nat_nexus_set_last_error_message(const char* msg);
@@ -131,7 +137,8 @@ extern int32_t nat_nexus_register_llm_conditional_execution_guardrail(const char
 extern int32_t nat_nexus_deregister_llm_conditional_execution_guardrail(const char* name);
 
 // LLM intercepts
-extern int32_t nat_nexus_register_llm_request_intercept(const char* name, int32_t priority, _Bool break_chain, NatNexusLlmRequestCb cb, void* user_data, NatNexusFreeFn free_fn);
+typedef int32_t (*NatNexusLlmRequestInterceptCb)(void* user_data, const char* name, const FfiLLMRequest* request, const char* annotated_json, FfiLLMRequest** out_request, char** out_annotated_json);
+extern int32_t nat_nexus_register_llm_request_intercept(const char* name, int32_t priority, _Bool break_chain, NatNexusLlmRequestInterceptCb cb, void* user_data, NatNexusFreeFn free_fn);
 extern int32_t nat_nexus_deregister_llm_request_intercept(const char* name);
 typedef char* (*NatNexusLlmExecNextFn)(const char* native_json, void* next_ctx);
 typedef char* (*NatNexusLlmExecInterceptCb)(void* user_data, const char* native_json, NatNexusLlmExecNextFn next_fn, void* next_ctx);
@@ -169,7 +176,7 @@ extern int32_t nat_nexus_scope_register_llm_conditional_execution_guardrail(cons
 extern int32_t nat_nexus_scope_deregister_llm_conditional_execution_guardrail(const char* scope_uuid, const char* name);
 
 // Scope-local LLM intercepts
-extern int32_t nat_nexus_scope_register_llm_request_intercept(const char* scope_uuid, const char* name, int32_t priority, _Bool break_chain, NatNexusLlmRequestCb cb, void* user_data, NatNexusFreeFn free_fn);
+extern int32_t nat_nexus_scope_register_llm_request_intercept(const char* scope_uuid, const char* name, int32_t priority, _Bool break_chain, NatNexusLlmRequestInterceptCb cb, void* user_data, NatNexusFreeFn free_fn);
 extern int32_t nat_nexus_scope_deregister_llm_request_intercept(const char* scope_uuid, const char* name);
 extern int32_t nat_nexus_scope_register_llm_execution_intercept(const char* scope_uuid, const char* name, int32_t priority, NatNexusLlmExecInterceptCb exec_cb, void* exec_user_data, NatNexusFreeFn exec_free);
 extern int32_t nat_nexus_scope_deregister_llm_execution_intercept(const char* scope_uuid, const char* name);
@@ -233,6 +240,12 @@ extern char* goLlmConditionalTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmExecTrampoline(void*, const char*);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NatNexusToolExecNextFn, void*);
 extern char* goLlmExecInterceptTrampoline(void*, const char*, NatNexusLlmExecNextFn, void*);
+
+// Codec trampolines (used at execute time, not registration)
+extern char* goCodecDecodeTrampoline(void*, const FfiLLMRequest*);
+extern char* goCodecEncodeTrampoline(void*, const char*, const FfiLLMRequest*);
+extern int32_t goLlmRequestInterceptTrampoline(
+    void*, const char*, const FfiLLMRequest*, const char*, FfiLLMRequest**, char**);
 */
 import "C"
 
@@ -600,11 +613,15 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 // ---------------------------------------------------------------------------
 
 type llmCallOptions struct {
-	parent     *C.FfiScopeHandle
-	attributes uint32
-	data       *C.char
-	metadata   *C.char
-	modelName  *C.char
+	parent        *C.FfiScopeHandle
+	attributes    uint32
+	data          *C.char
+	metadata      *C.char
+	modelName     *C.char
+	codecDecode   C.NatNexusCodecDecodeFn
+	codecEncode   C.NatNexusCodecEncodeFn
+	codecUserData unsafe.Pointer
+	codecFreeFn   C.NatNexusFreeFn
 }
 
 // LLMCallOption is a functional option that configures optional parameters for
@@ -659,6 +676,18 @@ func WithLLMModelName(name string) LLMCallOption {
 	}
 }
 
+// WithLLMCodec sets the Codec to use for this LLM call. The codec's decode
+// and encode callbacks are passed directly to the FFI execute functions.
+func WithLLMCodec(codec CodecFunc) LLMCallOption {
+	return func(o *llmCallOptions) {
+		id := registerClosure(&codec)
+		o.codecDecode = C.NatNexusCodecDecodeFn(C.goCodecDecodeTrampoline)
+		o.codecEncode = C.NatNexusCodecEncodeFn(C.goCodecEncodeTrampoline)
+		o.codecUserData = id
+		o.codecFreeFn = C.NatNexusFreeFn(C.goFreeTrampoline)
+	}
+}
+
 func freeLLMOpts(o *llmCallOptions) {
 	if o.data != nil {
 		C.free(unsafe.Pointer(o.data))
@@ -669,6 +698,7 @@ func freeLLMOpts(o *llmCallOptions) {
 	if o.modelName != nil {
 		C.free(unsafe.Pointer(o.modelName))
 	}
+	// Codec closure cleanup is handled by the FFI free_fn callback.
 }
 
 // LlmCall starts an LLM call lifecycle and returns an [LLMHandle]. This emits a
@@ -758,6 +788,8 @@ func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts 
 		o.parent, C.uint32_t(o.attributes),
 		o.data, o.metadata,
 		o.modelName,
+		o.codecDecode, o.codecEncode,
+		o.codecUserData, o.codecFreeFn,
 		&out,
 	)
 	if err := checkStatus(status); err != nil {
@@ -822,6 +854,8 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 		o.parent, C.uint32_t(o.attributes),
 		o.data, o.metadata,
 		o.modelName,
+		o.codecDecode, o.codecEncode,
+		o.codecUserData, o.codecFreeFn,
 		&out,
 	)
 	if err := checkStatus(status); err != nil {
@@ -1041,16 +1075,18 @@ func DeregisterLlmConditionalExecutionGuardrail(name string) error {
 }
 
 // RegisterLlmRequestIntercept registers an intercept that transforms the LLM
-// request (headers and content) before the call is made. Intercepts run in
-// priority order (lower values first). When breakChain is true, no
-// lower-priority intercepts in the chain are invoked after this one.
-func RegisterLlmRequestIntercept(name string, priority int32, breakChain bool, fn LLMRequestFunc) error {
+// request (headers, content, and optionally the annotated request) before the
+// call is made. Intercepts run in priority order (lower values first). When
+// breakChain is true, no lower-priority intercepts in the chain are invoked
+// after this one. The callback receives the intercept name, headers, content,
+// and annotated JSON (nil if no Codec resolved).
+func RegisterLlmRequestIntercept(name string, priority int32, breakChain bool, fn LLMRequestInterceptFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nat_nexus_register_llm_request_intercept(
 		cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NatNexusLlmRequestCb(C.goLlmRequestTrampoline),
+		C.NatNexusLlmRequestInterceptCb(C.goLlmRequestInterceptTrampoline),
 		id,
 		C.NatNexusFreeFn(C.goFreeTrampoline),
 	))
@@ -1813,8 +1849,8 @@ func ScopeDeregisterLlmConditionalExecutionGuardrail(scopeUUID string, name stri
 }
 
 // ScopeRegisterLlmRequestIntercept registers a scope-local intercept that
-// transforms the LLM request.
-func ScopeRegisterLlmRequestIntercept(scopeUUID string, name string, priority int32, breakChain bool, fn LLMRequestFunc) error {
+// transforms the LLM request using the unified annotated-aware signature.
+func ScopeRegisterLlmRequestIntercept(scopeUUID string, name string, priority int32, breakChain bool, fn LLMRequestInterceptFunc) error {
 	id := registerClosure(fn)
 	cScopeUUID := C.CString(scopeUUID)
 	defer C.free(unsafe.Pointer(cScopeUUID))
@@ -1822,7 +1858,7 @@ func ScopeRegisterLlmRequestIntercept(scopeUUID string, name string, priority in
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nat_nexus_scope_register_llm_request_intercept(
 		cScopeUUID, cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NatNexusLlmRequestCb(C.goLlmRequestTrampoline),
+		C.NatNexusLlmRequestInterceptCb(C.goLlmRequestInterceptTrampoline),
 		id,
 		C.NatNexusFreeFn(C.goFreeTrampoline),
 	))

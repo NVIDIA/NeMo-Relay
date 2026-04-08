@@ -719,6 +719,8 @@ pub fn llm_call_execute(
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
+    codec_decode: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
+    codec_encode: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 ) -> Result<JsObject> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent = handle
@@ -729,6 +731,10 @@ pub fn llm_call_execute(
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
     let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn =
         std::sync::Arc::new(move |req| exec_fn(req));
+    let codec = match (codec_decode, codec_encode) {
+        (Some(d), Some(e)) => Some(callable::wrap_js_codec(d, e)),
+        _ => None,
+    };
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
 
     env.execute_tokio_future(
@@ -744,6 +750,7 @@ pub fn llm_call_execute(
                         opt_json(data),
                         opt_json(metadata),
                         model_name,
+                        codec,
                     )
                     .await
                     .map_err(to_napi_err)
@@ -770,6 +777,8 @@ pub fn llm_call_execute_async(
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
+    codec_decode: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
+    codec_encode: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 ) -> Result<JsObject> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent = handle
@@ -791,6 +800,11 @@ pub fn llm_call_execute_async(
         Box::pin(async move { pa_fn.call(req_json).await })
     });
 
+    let codec = match (codec_decode, codec_encode) {
+        (Some(d), Some(e)) => Some(callable::wrap_js_codec(d, e)),
+        _ => None,
+    };
+
     env.execute_tokio_future(
         async move {
             nvidia_nat_nexus_core::TASK_SCOPE_STACK
@@ -804,6 +818,7 @@ pub fn llm_call_execute_async(
                         opt_json(data),
                         opt_json(metadata),
                         model_name,
+                        codec,
                     )
                     .await
                     .map_err(to_napi_err)
@@ -843,6 +858,8 @@ pub fn llm_stream_call_execute(
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
+    codec_decode: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
+    codec_encode: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 ) -> Result<JsObject> {
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent = handle
@@ -898,6 +915,10 @@ pub fn llm_stream_call_execute(
             })
         });
 
+    let codec = match (codec_decode, codec_encode) {
+        (Some(d), Some(e)) => Some(callable::wrap_js_codec(d, e)),
+        _ => None,
+    };
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
 
     env.execute_tokio_future(
@@ -915,6 +936,7 @@ pub fn llm_stream_call_execute(
                         opt_json(data),
                         opt_json(metadata),
                         model_name,
+                        codec,
                     )
                     .await
                     .map_err(to_napi_err)?;

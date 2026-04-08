@@ -47,12 +47,12 @@ func TestStandaloneMiddlewareHelpers(t *testing.T) {
 	}
 
 	if err := RegisterLlmRequestIntercept("go_standalone_llm_req", 1, false,
-		func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
+		func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
 			var payload map[string]interface{}
 			_ = json.Unmarshal(content, &payload)
 			payload["intercepted"] = true
 			out, _ := json.Marshal(payload)
-			return headers, out
+			return headers, out, annotated, nil
 		},
 	); err != nil {
 		t.Fatalf("RegisterLlmRequestIntercept failed: %v", err)

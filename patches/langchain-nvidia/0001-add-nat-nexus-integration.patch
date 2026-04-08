@@ -1,9 +1,9 @@
 diff --git a/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nat_nexus.py b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nat_nexus.py
 new file mode 100644
-index 0000000..1867dd5
+index 0000000..e08e1bc
 --- /dev/null
 +++ b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nat_nexus.py
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,205 @@
 +"""Thin bridge module for optional Nexus integration.
 +
 +When nat_nexus is installed and a scope stack has been initialized by the
@@ -32,6 +32,72 @@ index 0000000..1867dd5
 +    _HAS_NAT_NEXUS = True
 +except ImportError:
 +    _HAS_NAT_NEXUS = False
++
++# --- LLM Codec instance (passed directly to execute calls) ---
++_nim_codec = None
++
++if _HAS_NAT_NEXUS:
++    try:
++        from nat_nexus import AnnotatedLLMRequest
++        from nat_nexus.codecs import LlmCodec
++
++        class _OpenAIBaseCodec(LlmCodec):
++            """Base codec for OpenAI Chat Completions format."""
++
++            _PARAM_KEYS = {"temperature", "max_tokens", "max_completion_tokens", "top_p", "stop"}
++            _MODELED_KEYS = {"messages", "model", "tools", "tool_choice"} | _PARAM_KEYS
++
++            def decode(self, request):
++                c = request.content
++                messages = c.get("messages", [])
++                model = c.get("model")
++                params = {}
++                for k in self._PARAM_KEYS:
++                    if k in c and c[k] is not None:
++                        key = "max_tokens" if k == "max_completion_tokens" else k
++                        params[key] = c[k]
++                extra = {k: v for k, v in c.items() if k not in self._MODELED_KEYS}
++                return AnnotatedLLMRequest(
++                    messages,
++                    model=model,
++                    params=params or None,
++                    tools=c.get("tools"),
++                    tool_choice=c.get("tool_choice"),
++                    extra=extra or None,
++                )
++
++            def encode(self, annotated, original):
++                content = dict(original.content)
++                content["messages"] = annotated.messages
++                if annotated.model is not None:
++                    content["model"] = annotated.model
++                if annotated.params:
++                    for k, v in annotated.params.items():
++                        if k == "max_tokens" and "max_completion_tokens" in original.content:
++                            content["max_completion_tokens"] = v
++                        else:
++                            content[k] = v
++                if annotated.tools is not None:
++                    content["tools"] = annotated.tools
++                if annotated.tool_choice is not None:
++                    content["tool_choice"] = annotated.tool_choice
++                if annotated.extra:
++                    for k, v in annotated.extra.items():
++                        content[k] = v
++                return LLMRequest(original.headers, content)
++
++        class NIMCodec(_OpenAIBaseCodec):
++            """Codec for NVIDIA NIM payloads (OpenAI-compatible superset).
++
++            NIM-specific fields (guided_json, guided_choice, guided_regex,
++            nvext, stream_options) are not modeled and round-trip via extra.
++            """
++
++            pass
++
++        _nim_codec = NIMCodec()
++    except ImportError:
++        pass  # nat_nexus version without codec support
 +
 +
 +def available() -> bool:
@@ -67,9 +133,9 @@ index 0000000..1867dd5
 +    try:
 +        asyncio.get_running_loop()
 +    except RuntimeError:
-+        # No loop running – we can just use asyncio.run.
++        # No loop running -- we can just use asyncio.run.
 +        return asyncio.run(coro)
-+    # Loop already running – offload to a worker thread so we don't block.
++    # Loop already running -- offload to a worker thread so we don't block.
 +    # Propagate contextvars and scope stack to the worker thread.
 +    ctx = contextvars.copy_context()
 +    if _HAS_NAT_NEXUS:
@@ -113,6 +179,7 @@ index 0000000..1867dd5
 +        func,
 +        codec,
 +        model_name=model_name,
++        codec=_nim_codec,
 +    )
 +
 +
@@ -140,6 +207,7 @@ index 0000000..1867dd5
 +        codec,
 +        codec,
 +        model_name=model_name,
++        codec=_nim_codec,
 +    )
 diff --git a/libs/ai-endpoints/langchain_nvidia_ai_endpoints/chat_models.py b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/chat_models.py
 index 07df9ab..48441a4 100644

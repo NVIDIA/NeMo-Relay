@@ -565,6 +565,10 @@ pub unsafe extern "C" fn nat_nexus_llm_call_execute(
     data_json: *const c_char,
     metadata_json: *const c_char,
     model_name: *const c_char,
+    codec_decode: NatNexusCodecDecodeFn,
+    codec_encode: NatNexusCodecEncodeFn,
+    codec_user_data: *mut libc::c_void,
+    codec_free_fn: NatNexusFreeFn,
     out: *mut *mut c_char,
 ) -> NatNexusStatus {
     clear_last_error();
@@ -609,6 +613,15 @@ pub unsafe extern "C" fn nat_nexus_llm_call_execute(
             Err(status) => return status,
         }
     };
+    let codec = match (codec_decode, codec_encode) {
+        (Some(decode_cb), Some(encode_cb)) => Some(wrap_codec_fn(
+            decode_cb,
+            encode_cb,
+            codec_user_data,
+            codec_free_fn,
+        )),
+        _ => None,
+    };
 
     let exec_fn = wrap_llm_exec_fn(func, func_user_data, func_free);
     let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn =
@@ -627,6 +640,7 @@ pub unsafe extern "C" fn nat_nexus_llm_call_execute(
                 data,
                 metadata,
                 model_name_opt,
+                codec,
             )
             .await
         },
@@ -693,6 +707,10 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
     data_json: *const c_char,
     metadata_json: *const c_char,
     model_name: *const c_char,
+    codec_decode: NatNexusCodecDecodeFn,
+    codec_encode: NatNexusCodecEncodeFn,
+    codec_user_data: *mut libc::c_void,
+    codec_free_fn: NatNexusFreeFn,
     out: *mut *mut FfiStream,
 ) -> NatNexusStatus {
     clear_last_error();
@@ -737,6 +755,15 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
             Err(status) => return status,
         }
     };
+    let codec = match (codec_decode, codec_encode) {
+        (Some(decode_cb), Some(encode_cb)) => Some(wrap_codec_fn(
+            decode_cb,
+            encode_cb,
+            codec_user_data,
+            codec_free_fn,
+        )),
+        _ => None,
+    };
 
     let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
     let default_fn: nvidia_nat_nexus_core::LlmStreamExecutionNextFn =
@@ -769,6 +796,7 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
                 data,
                 metadata,
                 model_name_opt,
+                codec,
             )
             .await
         },
@@ -1310,7 +1338,7 @@ pub unsafe extern "C" fn nat_nexus_register_llm_request_intercept(
     name: *const c_char,
     priority: i32,
     break_chain: bool,
-    cb: NatNexusLlmRequestCb,
+    cb: NatNexusLlmRequestInterceptCb,
     user_data: *mut libc::c_void,
     free_fn: NatNexusFreeFn,
 ) -> NatNexusStatus {
@@ -2745,7 +2773,7 @@ pub unsafe extern "C" fn nat_nexus_scope_register_llm_request_intercept(
     name: *const c_char,
     priority: i32,
     break_chain: bool,
-    cb: NatNexusLlmRequestCb,
+    cb: NatNexusLlmRequestInterceptCb,
     user_data: *mut libc::c_void,
     free_fn: NatNexusFreeFn,
 ) -> NatNexusStatus {
@@ -3328,6 +3356,38 @@ mod tests {
         unsafe { nat_nexus_llm_request_new(headers_c.as_ptr(), content_c.as_ptr()) }
     }
 
+    /// Intercept-specific callback with the unified annotated-aware signature.
+    /// Modifies the request content (sets `intercepted: true`) and passes through
+    /// any annotated JSON unchanged.
+    unsafe extern "C" fn llm_request_intercept_cb(
+        _user_data: *mut libc::c_void,
+        _name: *const c_char,
+        request: *const FfiLLMRequest,
+        annotated_json: *const c_char,
+        out_request: *mut *mut FfiLLMRequest,
+        out_annotated_json: *mut *mut c_char,
+    ) -> NatNexusStatus {
+        let headers = unsafe { take_string(nat_nexus_llm_request_headers(request)) }
+            .unwrap_or_else(|| "{}".to_string());
+        let content = unsafe { take_string(nat_nexus_llm_request_content(request)) }
+            .unwrap_or_else(|| "null".to_string());
+        let mut content_json: Json = serde_json::from_str(&content).unwrap();
+        content_json["intercepted"] = json!(true);
+        let headers_c = CString::new(headers).unwrap();
+        let content_c = CString::new(content_json.to_string()).unwrap();
+        unsafe { *out_request = nat_nexus_llm_request_new(headers_c.as_ptr(), content_c.as_ptr()) };
+        // Pass through annotated JSON if present
+        if annotated_json.is_null() {
+            unsafe { *out_annotated_json = ptr::null_mut() };
+        } else {
+            let s = unsafe { CStr::from_ptr(annotated_json) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { *out_annotated_json = CString::new(s).unwrap().into_raw() };
+        }
+        NatNexusStatus::Ok
+    }
+
     unsafe extern "C" fn llm_allow_cb(
         _user_data: *mut libc::c_void,
         _request: *const FfiLLMRequest,
@@ -3856,6 +3916,10 @@ mod tests {
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
+                    None,
+                    None,
+                    ptr::null_mut(),
+                    None,
                     ptr::null_mut(),
                 ),
                 NatNexusStatus::NullPointer
@@ -3872,6 +3936,10 @@ mod tests {
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
+                    None,
+                    None,
+                    ptr::null_mut(),
+                    None,
                     &mut out_json,
                 ),
                 NatNexusStatus::InvalidJson
@@ -3891,6 +3959,10 @@ mod tests {
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
+                    None,
+                    None,
+                    ptr::null_mut(),
+                    None,
                     ptr::null_mut(),
                 ),
                 NatNexusStatus::NullPointer
@@ -3909,6 +3981,10 @@ mod tests {
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
+                    None,
+                    None,
+                    ptr::null_mut(),
+                    None,
                     &mut stream,
                 ),
                 NatNexusStatus::InvalidJson
@@ -4244,7 +4320,7 @@ mod tests {
                     scope_llm_req.as_ptr(),
                     1,
                     false,
-                    llm_request_cb,
+                    llm_request_intercept_cb,
                     ptr::null_mut(),
                     None,
                 ),
@@ -4848,7 +4924,7 @@ mod tests {
                 ptr::null(),
                 1,
                 false,
-                llm_request_cb,
+                llm_request_intercept_cb,
                 ptr::null_mut(),
                 None,
             ));
@@ -4989,7 +5065,7 @@ mod tests {
                 ptr::null(),
                 1,
                 false,
-                llm_request_cb,
+                llm_request_intercept_cb,
                 ptr::null_mut(),
                 None,
             ));
@@ -5187,7 +5263,7 @@ mod tests {
                     llm_req.as_ptr(),
                     1,
                     false,
-                    llm_request_cb,
+                    llm_request_intercept_cb,
                     ptr::null_mut(),
                     None,
                 ),
@@ -5197,7 +5273,7 @@ mod tests {
                 llm_req.as_ptr(),
                 1,
                 false,
-                llm_request_cb,
+                llm_request_intercept_cb,
                 ptr::null_mut(),
                 None,
             ));
@@ -5324,7 +5400,7 @@ mod tests {
                     scope_llm_req.as_ptr(),
                     1,
                     false,
-                    llm_request_cb,
+                    llm_request_intercept_cb,
                     ptr::null_mut(),
                     None,
                 ),
@@ -5335,7 +5411,7 @@ mod tests {
                 scope_llm_req.as_ptr(),
                 1,
                 false,
-                llm_request_cb,
+                llm_request_intercept_cb,
                 ptr::null_mut(),
                 None,
             ));
@@ -5504,7 +5580,7 @@ mod tests {
                     intercept_name_c.as_ptr(),
                     1,
                     false,
-                    llm_request_cb,
+                    llm_request_intercept_cb,
                     ptr::null_mut(),
                     None,
                 ),
@@ -5644,6 +5720,10 @@ mod tests {
                     ptr::null(),
                     ptr::null(),
                     model_name.as_ptr(),
+                    None,
+                    None,
+                    ptr::null_mut(),
+                    None,
                     &mut execute_out,
                 ),
                 NatNexusStatus::Ok
@@ -5674,6 +5754,10 @@ mod tests {
                     ptr::null(),
                     ptr::null(),
                     model_name.as_ptr(),
+                    None,
+                    None,
+                    ptr::null_mut(),
+                    None,
                     &mut stream,
                 ),
                 NatNexusStatus::Ok

@@ -26,6 +26,7 @@ use std::sync::{Arc, RwLock};
 use tokio_stream::Stream;
 use uuid::Uuid;
 
+use crate::codec::AnnotatedLLMRequest;
 use crate::error::{NexusError, Result};
 use crate::json::{merge_json, Json};
 use crate::registry::SortedRegistry;
@@ -59,8 +60,16 @@ pub type LlmSanitizeRequestFn = Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sy
 pub type LlmSanitizeResponseFn = Box<dyn Fn(Json) -> Json + Send + Sync>;
 /// LLM conditional execution guardrail: `(request) -> Option<rejection_reason>`.
 pub type LlmConditionalFn = Box<dyn Fn(&LLMRequest) -> Result<Option<String>> + Send + Sync>;
-/// LLM request intercept: `(name, request) -> transformed_request`.
-pub type LlmRequestInterceptFn = Box<dyn Fn(&str, LLMRequest) -> Result<LLMRequest> + Send + Sync>;
+/// LLM request intercept: `(name, request, annotated) -> (transformed_request, transformed_annotated)`.
+pub type LlmRequestInterceptFn = Box<
+    dyn Fn(
+            &str,
+            LLMRequest,
+            Option<AnnotatedLLMRequest>,
+        ) -> Result<(LLMRequest, Option<AnnotatedLLMRequest>)>
+        + Send
+        + Sync,
+>;
 /// LLM execution "next" function (reusable — supports retries):
 /// `(request) -> Future<Result<Json>>`.
 pub type LlmExecutionNextFn =
@@ -257,6 +266,15 @@ impl ScopeStack {
             .filter_map(|h| self.scope_registries.get(&h.uuid))
             .flat_map(|r| r.event_subscribers.values().cloned())
             .collect()
+    }
+
+    /// Returns a reference to the scope-local registries for the given
+    /// scope UUID, or `None` if no registries have been created for it.
+    ///
+    /// Unlike [`local_registries_mut`](ScopeStack::local_registries_mut),
+    /// this method never creates a new entry — it is a pure read.
+    pub fn scope_registries_get(&self, uuid: &Uuid) -> Option<&ScopeLocalRegistries> {
+        self.scope_registries.get(uuid)
     }
 }
 
@@ -1009,23 +1027,28 @@ impl NatNexusContextState {
         Ok(None)
     }
 
-    /// Runs the LLM request intercept chain on `LLMRequest`, piping through each intercept (with optional break).
+    /// Runs the LLM request intercept chain on `LLMRequest` and optional `AnnotatedLLMRequest`,
+    /// piping through each intercept (with optional break).
     /// Merges global + scope-local entries by priority.
     pub fn llm_request_intercepts_chain(
         &self,
         name: &str,
         request: LLMRequest,
+        annotated: Option<AnnotatedLLMRequest>,
         scope_locals: &[&SortedRegistry<Intercept<LlmRequestInterceptFn>>],
-    ) -> Result<LLMRequest> {
+    ) -> Result<(LLMRequest, Option<AnnotatedLLMRequest>)> {
         let entries = merge_intercept_entries(&self.llm_request_intercepts, scope_locals);
-        let mut v = request;
+        let mut req = request;
+        let mut ann = annotated;
         for entry in entries {
-            v = (entry.callable)(name, v)?;
+            let (new_req, new_ann) = (entry.callable)(name, req, ann)?;
+            req = new_req;
+            ann = new_ann;
             if entry.break_chain {
                 break;
             }
         }
-        Ok(v)
+        Ok((req, ann))
     }
 
     /// Build a middleware chain of all matching LLM execution intercepts.
@@ -2105,10 +2128,10 @@ mod tests {
                 Intercept {
                     priority: 1,
                     break_chain: false,
-                    callable: Box::new(|_name: &str, mut req: LLMRequest| {
+                    callable: Box::new(|_name: &str, mut req: LLMRequest, annotated| {
                         req.headers
                             .insert("intercepted".into(), serde_json::json!(true));
-                        Ok(req)
+                        Ok((req, annotated))
                     }),
                 },
             )
@@ -2118,8 +2141,8 @@ mod tests {
             headers: serde_json::Map::new(),
             content: serde_json::json!({"messages": []}),
         };
-        let result = ctx
-            .llm_request_intercepts_chain("test_llm", request, &[])
+        let (result, _ann) = ctx
+            .llm_request_intercepts_chain("test_llm", request, None, &[])
             .unwrap();
         assert_eq!(result.headers["intercepted"], true);
         assert_eq!(result.content["messages"], serde_json::json!([]));
@@ -2134,10 +2157,10 @@ mod tests {
                 Intercept {
                     priority: 1,
                     break_chain: true,
-                    callable: Box::new(|_name: &str, mut req: LLMRequest| {
+                    callable: Box::new(|_name: &str, mut req: LLMRequest, annotated| {
                         req.headers
                             .insert("from_i1".into(), serde_json::json!(true));
-                        Ok(req)
+                        Ok((req, annotated))
                     }),
                 },
             )
@@ -2148,10 +2171,10 @@ mod tests {
                 Intercept {
                     priority: 2,
                     break_chain: false,
-                    callable: Box::new(|_name: &str, mut req: LLMRequest| {
+                    callable: Box::new(|_name: &str, mut req: LLMRequest, annotated| {
                         req.headers
                             .insert("from_i2".into(), serde_json::json!(true));
-                        Ok(req)
+                        Ok((req, annotated))
                     }),
                 },
             )
@@ -2161,8 +2184,8 @@ mod tests {
             headers: serde_json::Map::new(),
             content: serde_json::json!({}),
         };
-        let result = ctx
-            .llm_request_intercepts_chain("test_llm", request, &[])
+        let (result, _ann) = ctx
+            .llm_request_intercepts_chain("test_llm", request, None, &[])
             .unwrap();
         assert_eq!(result.headers["from_i1"], true);
         assert!(result.headers.get("from_i2").is_none());

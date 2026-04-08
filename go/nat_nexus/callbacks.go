@@ -59,6 +59,12 @@ extern char* nat_nexus_llm_request_headers(const FfiLLMRequest* ptr);
 extern char* nat_nexus_llm_request_content(const FfiLLMRequest* ptr);
 extern void nat_nexus_string_free(char* ptr);
 extern void nat_nexus_set_last_error_message(const char* msg);
+
+// Codec callback typedefs (kept for trampoline use at execute time)
+typedef char* (*NatNexusCodecDecodeCb)(void* user_data, const FfiLLMRequest* request);
+typedef char* (*NatNexusCodecEncodeCb)(void* user_data, const char* annotated_json, const FfiLLMRequest* original_request);
+typedef NatNexusCodecDecodeCb NatNexusCodecDecodeFn;
+typedef NatNexusCodecEncodeCb NatNexusCodecEncodeFn;
 */
 import "C"
 
@@ -191,6 +197,26 @@ type FinalizerFunc func() string
 // by the runtime. The concrete value is one of the event variant types that
 // implement [Event] and is only valid for the duration of the callback.
 type EventSubscriberFunc func(event Event)
+
+// CodecFunc is a bidirectional codec with decode and encode methods.
+// Decode receives the full LLM request (headers + content) as JSON and returns
+// the AnnotatedLLMRequest as JSON. Encode receives the annotated request JSON
+// and the original request JSON, and returns the merged content JSON.
+type CodecFunc struct {
+	Decode func(headersJSON, contentJSON json.RawMessage) (json.RawMessage, error)
+	Encode func(annotatedJSON json.RawMessage, originalHeadersJSON, originalContentJSON json.RawMessage) (json.RawMessage, error)
+}
+
+// LLMRequestInterceptFunc is a callback for LLM request intercepts with
+// the unified annotated-aware signature. It receives the intercept name,
+// request headers/content, and optionally the annotated request JSON (nil if
+// no Codec resolved). Returns the (possibly modified) headers, content, and
+// annotated JSON.
+type LLMRequestInterceptFunc func(
+	name string,
+	headers, content json.RawMessage,
+	annotatedJSON json.RawMessage,
+) (newHeaders, newContent, newAnnotatedJSON json.RawMessage, err error)
 
 // ---------------------------------------------------------------------------
 // CGo trampoline functions (//export)
@@ -350,4 +376,73 @@ func goLlmExecInterceptTrampoline(userData unsafe.Pointer, nativeJSON *C.char, n
 		return nil
 	}
 	return C.CString(string(result))
+}
+
+//export goCodecDecodeTrampoline
+func goCodecDecodeTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) *C.char {
+	codec := lookupClosure(userData).(*CodecFunc)
+	cHeaders := C.nat_nexus_llm_request_headers(request)
+	cContent := C.nat_nexus_llm_request_content(request)
+	goHeaders := json.RawMessage(C.GoString(cHeaders))
+	goContent := json.RawMessage(C.GoString(cContent))
+	C.nat_nexus_string_free(cHeaders)
+	C.nat_nexus_string_free(cContent)
+	result, err := codec.Decode(goHeaders, goContent)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	return C.CString(string(result))
+}
+
+//export goCodecEncodeTrampoline
+func goCodecEncodeTrampoline(userData unsafe.Pointer, annotatedJSON *C.char, originalRequest *C.FfiLLMRequest) *C.char {
+	codec := lookupClosure(userData).(*CodecFunc)
+	goAnnotated := json.RawMessage(C.GoString(annotatedJSON))
+	cOrigHeaders := C.nat_nexus_llm_request_headers(originalRequest)
+	cOrigContent := C.nat_nexus_llm_request_content(originalRequest)
+	goOrigHeaders := json.RawMessage(C.GoString(cOrigHeaders))
+	goOrigContent := json.RawMessage(C.GoString(cOrigContent))
+	C.nat_nexus_string_free(cOrigHeaders)
+	C.nat_nexus_string_free(cOrigContent)
+	result, err := codec.Encode(goAnnotated, goOrigHeaders, goOrigContent)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	return C.CString(string(result))
+}
+
+//export goLlmRequestInterceptTrampoline
+func goLlmRequestInterceptTrampoline(
+	userData unsafe.Pointer, name *C.char, request *C.FfiLLMRequest,
+	annotatedJSON *C.char, outRequest **C.FfiLLMRequest, outAnnotatedJSON **C.char,
+) C.int32_t {
+	fn := lookupClosure(userData).(LLMRequestInterceptFunc)
+	goName := C.GoString(name)
+	cHeaders := C.nat_nexus_llm_request_headers(request)
+	cContent := C.nat_nexus_llm_request_content(request)
+	goHeaders := json.RawMessage(C.GoString(cHeaders))
+	goContent := json.RawMessage(C.GoString(cContent))
+	C.nat_nexus_string_free(cHeaders)
+	C.nat_nexus_string_free(cContent)
+	var goAnnotated json.RawMessage
+	if annotatedJSON != nil {
+		goAnnotated = json.RawMessage(C.GoString(annotatedJSON))
+	}
+	newHeaders, newContent, newAnnotated, err := fn(goName, goHeaders, goContent, goAnnotated)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return 5 // NatNexusStatus::Internal
+	}
+	// Create output FfiLLMRequest
+	cNewHeaders := C.CString(string(newHeaders))
+	cNewContent := C.CString(string(newContent))
+	defer C.free(unsafe.Pointer(cNewHeaders))
+	defer C.free(unsafe.Pointer(cNewContent))
+	*outRequest = C.nat_nexus_llm_request_new(cNewHeaders, cNewContent)
+	if newAnnotated != nil {
+		*outAnnotatedJSON = C.CString(string(newAnnotated))
+	}
+	return 0 // NatNexusStatus::Ok
 }

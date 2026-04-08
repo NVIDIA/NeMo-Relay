@@ -263,9 +263,9 @@ class TestHintInjection:
         proxy = NexusProxy("v2-hints-test", backend, sensitivity_config=config, dynamo_intercept=True)
         captured_headers = {}
 
-        def capture_intercept(name, request):
+        def capture_intercept(name, request, annotated):
             captured_headers["headers"] = request.headers
-            return request
+            return request, annotated
 
         try:
             await proxy.register()
@@ -295,9 +295,9 @@ class TestHintInjection:
         proxy = NexusProxy("v2-ls-test", backend, dynamo_intercept=True)
         captured = {}
 
-        def capture_intercept(name, request):
+        def capture_intercept(name, request, annotated):
             captured["headers"] = request.headers
-            return request
+            return request, annotated
 
         try:
             await proxy.register()

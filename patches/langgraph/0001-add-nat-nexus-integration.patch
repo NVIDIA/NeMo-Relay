@@ -1,9 +1,9 @@
 diff --git a/libs/langgraph/langgraph/_nat_nexus.py b/libs/langgraph/langgraph/_nat_nexus.py
 new file mode 100644
-index 00000000..d29f06b7
+index 00000000..d2ffef76
 --- /dev/null
 +++ b/libs/langgraph/langgraph/_nat_nexus.py
-@@ -0,0 +1,424 @@
+@@ -0,0 +1,438 @@
 +# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 +# SPDX-License-Identifier: Apache-2.0
 +
@@ -84,6 +84,7 @@ index 00000000..d29f06b7
 +
 +    graph_name: str
 +    metadata: dict
++    codec_name: str | None = None
 +
 +
 +# Stores the graph scope identity so run_with_retry can reconstruct it
@@ -131,6 +132,7 @@ index 00000000..d29f06b7
 +def push_graph_scope(
 +    graph_name: str,
 +    *,
++    codec_name: str | None = None,
 +    graph_topology: dict | None = None,
 +) -> Any:
 +    """Push a graph-level Nexus scope and set coordination ContextVars.
@@ -139,6 +141,10 @@ index 00000000..d29f06b7
 +
 +    Args:
 +        graph_name: Human-readable name for the graph scope.
++        codec_name: Optional registered Codec name to set as scope-default.
++            When provided, typed intercepts in this scope will use the
++            named Codec for decode/encode without explicit `codec_name`
++            on each LLM call.
 +        graph_topology: Optional graph topology dict (nodes, edges) stored
 +            as named metadata on the scope under ``"graph_topology"``.
 +
@@ -154,7 +160,7 @@ index 00000000..d29f06b7
 +    )
 +    _langgraph_nexus_active.set(True)
 +    _graph_scope_info.set(
-+        _GraphScopeInfo(graph_name=graph_name, metadata=metadata)
++        _GraphScopeInfo(graph_name=graph_name, metadata=metadata, codec_name=codec_name)
 +    )
 +    return handle
 +
@@ -233,12 +239,18 @@ index 00000000..d29f06b7
 +
 +def push_subgraph_scope(
 +    graph_name: str,
++    *,
++    codec_name: str | None = None,
 +) -> tuple[Any, contextvars.Token, contextvars.Token]:
 +    """Push a subgraph-level scope on the CURRENT scope stack.
 +
 +    Unlike ``push_graph_scope()`` which sets coordination ContextVars for
 +    a root graph, this pushes directly on the existing stack -- making
 +    it a child of whatever scope is currently active (the parent node).
++
++    Args:
++        graph_name: Human-readable name for the subgraph scope.
++        codec_name: Optional registered Codec name to set as scope-default.
 +
 +    Returns ``(handle, active_token, info_token)`` where the tokens are
 +    used by ``pop_subgraph_scope`` to restore parent ContextVar values.
@@ -249,6 +261,7 @@ index 00000000..d29f06b7
 +        _GraphScopeInfo(
 +            graph_name=graph_name,
 +            metadata={"langgraph.graph": True, "langgraph.subgraph": True},
++            codec_name=codec_name,
 +        )
 +    )
 +    handle = nat_nexus.scope.push(
@@ -428,14 +441,8 @@ index 00000000..d29f06b7
 +    Note: Superstep End does NOT fire when tick() returns False (out_of_steps or
 +    done paths). Only completed supersteps (tasks ran and wrote) get the End bracket.
 +    """
-+    if not available():
-+        return
-+    nat_nexus.scope.event(
-+        "Superstep End",
-+        data={"step": step, "task_count": task_count},
-+    )
 diff --git a/libs/langgraph/langgraph/pregel/_loop.py b/libs/langgraph/langgraph/pregel/_loop.py
-index 4f9c55d2..90929181 100644
+index 4f9c55d2..cabe5d3d 100644
 --- a/libs/langgraph/langgraph/pregel/_loop.py
 +++ b/libs/langgraph/langgraph/pregel/_loop.py
 @@ -524,6 +524,11 @@ class PregelLoop:
@@ -543,10 +550,10 @@ index 4f9c55d2..90929181 100644
              [(str(tid), k, v) for tid, k, v in saved.pending_writes]
              if saved.pending_writes is not None
 diff --git a/libs/langgraph/langgraph/pregel/_retry.py b/libs/langgraph/langgraph/pregel/_retry.py
-index 3c60f478..b9ca9601 100644
+index 3c60f478..c92bccd7 100644
 --- a/libs/langgraph/langgraph/pregel/_retry.py
 +++ b/libs/langgraph/langgraph/pregel/_retry.py
-@@ -76,83 +76,96 @@ def run_with_retry(
+@@ -76,83 +76,97 @@ def run_with_retry(
                  )
              },
          )
@@ -715,7 +722,7 @@ index 3c60f478..b9ca9601 100644
 
 
  async def arun_with_retry(
-@@ -185,90 +198,103 @@ async def arun_with_retry(
+@@ -185,90 +199,104 @@ async def arun_with_retry(
              if t is task:
                  # if the task is already cached, return
                  return
@@ -956,7 +963,7 @@ index 8b450825..01201606 100644
              config,
              writes,
 diff --git a/libs/langgraph/langgraph/pregel/main.py b/libs/langgraph/langgraph/pregel/main.py
-index 8de321b8..a4a9d9ee 100644
+index 8de321b8..64c0fd7f 100644
 --- a/libs/langgraph/langgraph/pregel/main.py
 +++ b/libs/langgraph/langgraph/pregel/main.py
 @@ -2570,6 +2570,36 @@ class Pregel(

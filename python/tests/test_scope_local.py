@@ -585,7 +585,9 @@ class TestScopeLocalLlmWrappers:
             scope_local.register_llm_conditional_execution(handle, "sl_llm_cond_cov", 1, lambda req: None)
             assert scope_local.deregister_llm_conditional_execution(handle, "sl_llm_cond_cov") is True
 
-            scope_local.register_llm_request(handle, "sl_llm_int_cov", 1, False, lambda name, req: req)
+            scope_local.register_llm_request(
+                handle, "sl_llm_int_cov", 1, False, lambda name, req, annotated: (req, annotated)
+            )
             assert scope_local.deregister_llm_request(handle, "sl_llm_int_cov") is True
 
             scope_local.register_llm_execution(
@@ -627,8 +629,8 @@ class TestScopeLocalLlmBehavior:
     async def test_scope_local_llm_request_intercept_modifies_request(self):
         request = LLMRequest({}, {"messages": [], "model": "scope-local"})
 
-        def intercept(name, req):
-            return LLMRequest(req.headers, {**req.content, "intercepted": True})
+        def intercept(name, req, annotated):
+            return LLMRequest(req.headers, {**req.content, "intercepted": True}), annotated
 
         with scope.scope("sl_llm_request_scope", ScopeType.Agent) as handle:
             scope_local.register_llm_request(handle, "sl_llm_request", 1, False, intercept)

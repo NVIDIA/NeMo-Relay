@@ -79,90 +79,97 @@ impl DynamoIntercept {
     /// transformed request.
     pub fn into_request_fn(self) -> LlmRequestInterceptFn {
         let this = Arc::new(self);
-        Box::new(move |_name: &str, mut request: LLMRequest| {
-            // LOCK ORDERING: scope_stack first, hot_cache second.
-            let scope_path = extract_scope_path();
-            let manual_ls = read_manual_latency_sensitivity();
-            let scope_depth = scope_path.len();
-            let call_index = this.call_counter.fetch_add(1, Ordering::Relaxed);
+        Box::new(
+            move |_name: &str,
+                  mut request: LLMRequest,
+                  annotated: Option<nvidia_nat_nexus_core::AnnotatedLLMRequest>| {
+                // LOCK ORDERING: scope_stack first, hot_cache second.
+                let scope_path = extract_scope_path();
+                let manual_ls = read_manual_latency_sensitivity();
+                let scope_depth = scope_path.len();
+                let call_index = this.call_counter.fetch_add(1, Ordering::Relaxed);
 
-            // Resolve agent ID: scope metadata → root scope name → proxy config
-            let effective_agent_id = resolve_agent_id().unwrap_or_else(|| this.agent_id.clone());
+                // Resolve agent ID: scope metadata → root scope name → proxy config
+                let effective_agent_id =
+                    resolve_agent_id().unwrap_or_else(|| this.agent_id.clone());
 
-            // Read hot cache
-            let final_hints = if let Ok(cache_guard) = this.hot_cache.read() {
-                // Build hints from trie or defaults
-                let hints = if let Some(ref trie) = cache_guard.trie {
-                    let lookup = PredictionTrieLookup::new(trie);
-                    let prediction = lookup.find(&scope_path, call_index);
-                    build_agent_hints(
-                        prediction,
-                        &cache_guard.agent_hints_default,
-                        &effective_agent_id,
-                        call_index,
-                        scope_depth,
-                    )
+                // Read hot cache
+                let final_hints = if let Ok(cache_guard) = this.hot_cache.read() {
+                    // Build hints from trie or defaults
+                    let hints = if let Some(ref trie) = cache_guard.trie {
+                        let lookup = PredictionTrieLookup::new(trie);
+                        let prediction = lookup.find(&scope_path, call_index);
+                        build_agent_hints(
+                            prediction,
+                            &cache_guard.agent_hints_default,
+                            &effective_agent_id,
+                            call_index,
+                            scope_depth,
+                        )
+                    } else {
+                        cache_guard.agent_hints_default.clone()
+                    };
+
+                    // Apply manual latency sensitivity override (max-merge)
+                    match (hints, manual_ls) {
+                        (Some(mut h), Some(manual)) => {
+                            let manual_f = manual as f64;
+                            if manual_f > h.latency_sensitivity {
+                                let scale = SensitivityConfig::default().sensitivity_scale;
+                                h.latency_sensitivity = manual_f;
+                                h.priority = (scale as i32 - manual_f.round() as i32).max(0);
+                            }
+                            Some(h)
+                        }
+                        (Some(h), None) => Some(h),
+                        (None, Some(manual)) => {
+                            let scale = SensitivityConfig::default().sensitivity_scale;
+                            Some(AgentHints {
+                                osl: 0,
+                                iat: 0,
+                                priority: (scale as i32 - manual as i32).max(0),
+                                latency_sensitivity: manual as f64,
+                                prefix_id: format!("{effective_agent_id}-d{scope_depth}"),
+                                total_requests: 0,
+                            })
+                        }
+                        (None, None) => None,
+                    }
                 } else {
-                    cache_guard.agent_hints_default.clone()
+                    None // Lock poisoned -- pass through
                 };
 
-                // Apply manual latency sensitivity override (max-merge)
-                match (hints, manual_ls) {
-                    (Some(mut h), Some(manual)) => {
-                        let manual_f = manual as f64;
-                        if manual_f > h.latency_sensitivity {
-                            let scale = SensitivityConfig::default().sensitivity_scale;
-                            h.latency_sensitivity = manual_f;
-                            h.priority = (scale as i32 - manual_f.round() as i32).max(0);
+                // Inject hints into request body at content.nvext.agent_hints
+                // (matches NAT's DynamoTransport injection point)
+                if let Some(hints) = final_hints {
+                    if let Ok(val) = serde_json::to_value(&hints) {
+                        // Ensure content is an object
+                        if let Some(body) = request.content.as_object_mut() {
+                            // Ensure nvext is an object
+                            if !body.contains_key("nvext") {
+                                body.insert(
+                                    "nvext".to_string(),
+                                    serde_json::Value::Object(serde_json::Map::new()),
+                                );
+                            }
+                            if let Some(nvext) =
+                                body.get_mut("nvext").and_then(|v| v.as_object_mut())
+                            {
+                                nvext.insert("agent_hints".to_string(), val);
+                            }
                         }
-                        Some(h)
-                    }
-                    (Some(h), None) => Some(h),
-                    (None, Some(manual)) => {
-                        let scale = SensitivityConfig::default().sensitivity_scale;
-                        Some(AgentHints {
-                            osl: 0,
-                            iat: 0,
-                            priority: (scale as i32 - manual as i32).max(0),
-                            latency_sensitivity: manual as f64,
-                            prefix_id: format!("{effective_agent_id}-d{scope_depth}"),
-                            total_requests: 0,
-                        })
-                    }
-                    (None, None) => None,
-                }
-            } else {
-                None // Lock poisoned -- pass through
-            };
-
-            // Inject hints into request body at content.nvext.agent_hints
-            // (matches NAT's DynamoTransport injection point)
-            if let Some(hints) = final_hints {
-                if let Ok(val) = serde_json::to_value(&hints) {
-                    // Ensure content is an object
-                    if let Some(body) = request.content.as_object_mut() {
-                        // Ensure nvext is an object
-                        if !body.contains_key("nvext") {
-                            body.insert(
-                                "nvext".to_string(),
-                                serde_json::Value::Object(serde_json::Map::new()),
-                            );
+                        // Also set the header for backward compat with proxy consumers
+                        if let Ok(header_val) = serde_json::to_value(&hints) {
+                            request
+                                .headers
+                                .insert(AGENT_HINTS_HEADER_KEY.to_string(), header_val);
                         }
-                        if let Some(nvext) = body.get_mut("nvext").and_then(|v| v.as_object_mut()) {
-                            nvext.insert("agent_hints".to_string(), val);
-                        }
-                    }
-                    // Also set the header for backward compat with proxy consumers
-                    if let Ok(header_val) = serde_json::to_value(&hints) {
-                        request
-                            .headers
-                            .insert(AGENT_HINTS_HEADER_KEY.to_string(), header_val);
                     }
                 }
-            }
 
-            Ok(request)
-        })
+                Ok((request, annotated))
+            },
+        )
     }
 }
 

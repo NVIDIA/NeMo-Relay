@@ -126,6 +126,7 @@ async fn test_llm_call_passes_through_after_register() {
         None,
         None,
         Some("gpt-4".into()),
+        None,
     )
     .await;
 
@@ -239,6 +240,7 @@ async fn test_telemetry_stored_after_run() {
         None,
         None,
         Some("gpt-4".into()),
+        None,
     )
     .await
     .unwrap();
@@ -376,6 +378,7 @@ async fn test_full_pipeline_end_to_end() {
         None,
         None,
         Some("gpt-4".into()),
+        None,
     )
     .await;
     assert!(llm_result.is_ok(), "LLM call should succeed");
@@ -472,6 +475,7 @@ async fn test_learner_pipeline_produces_agent_hints() {
                 None,
                 None,
                 Some("gpt-4".into()),
+                None,
             )
             .await
             .unwrap();
@@ -504,6 +508,7 @@ async fn test_learner_pipeline_produces_agent_hints() {
         None,
         None,
         Some("gpt-4".into()),
+        None,
     )
     .await
     .unwrap();
@@ -583,6 +588,7 @@ async fn test_full_e2e_learning_loop() {
                 None,
                 None,
                 Some("gpt-4".into()),
+                None,
             )
             .await
             .unwrap();
@@ -618,6 +624,7 @@ async fn test_full_e2e_learning_loop() {
                 None,
                 None,
                 Some("gpt-4".into()),
+                None,
             )
             .await
             .unwrap();
@@ -659,6 +666,7 @@ async fn test_full_e2e_learning_loop() {
         None,
         None,
         Some("gpt-4".into()),
+        None,
     )
     .await
     .unwrap();
@@ -732,6 +740,7 @@ async fn test_manual_latency_sensitivity_override() {
             None,
             None,
             Some("gpt-4".into()),
+            None,
         )
         .await
         .unwrap();
@@ -776,6 +785,7 @@ async fn test_manual_latency_sensitivity_override() {
         None,
         None,
         Some("gpt-4".into()),
+        None,
     )
     .await
     .unwrap();

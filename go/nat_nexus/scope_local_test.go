@@ -1125,9 +1125,9 @@ func TestScopeLocalExplicitDeregisterLlmWrappers(t *testing.T) {
 
 		requestInterceptCalls := 0
 		err = ScopeRegisterLlmRequestIntercept(scopeUUID, "llm_scope_req_int", 1, false,
-			func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
+			func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
 				requestInterceptCalls++
-				return headers, content
+				return headers, content, annotated, nil
 			},
 		)
 		if err != nil {
