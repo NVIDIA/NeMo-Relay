@@ -31,7 +31,7 @@ from langgraph._nat_nexus import (  # type: ignore[import-untyped]
     push_node_scope,
     push_subgraph_scope,
 )
-from nat_nexus import EventType, create_scope_stack, set_thread_scope_stack
+from nat_nexus import LLMStartEvent, ToolStartEvent, create_scope_stack, set_thread_scope_stack
 
 
 class TestLangGraphScope:
@@ -69,7 +69,7 @@ class TestLangGraphScope:
         graph_handle = push_graph_scope("my_graph")
         node_handle, _, _ = push_node_scope("my_node", "task-1")
 
-        node_events = [e for e in events if e.name == "my_node" and e.event_type == EventType.Start]
+        node_events = [e for e in events if e.name == "my_node" and e.kind == "ScopeStart"]
         assert len(node_events) == 1, f"Expected 1 node start event, got {len(node_events)}"
         node_start = node_events[0]
 
@@ -80,9 +80,7 @@ class TestLangGraphScope:
         assert node_start.metadata.get("langgraph.task_id") == "task-1"
 
         graph_starts = [
-            e
-            for e in events
-            if e.metadata and e.metadata.get("langgraph.graph") is True and e.event_type == EventType.Start
+            e for e in events if e.metadata and e.metadata.get("langgraph.graph") is True and e.kind == "ScopeStart"
         ]
         assert len(graph_starts) >= 1, "Expected at least 1 graph start event"
         assert graph_starts[0].metadata.get("langgraph.graph") is True
@@ -109,8 +107,8 @@ class TestLangGraphScope:
 
         pop_graph_scope(graph_handle)
 
-        node_a_starts = [e for e in events if e.name == "node_a" and e.event_type == EventType.Start]
-        node_b_starts = [e for e in events if e.name == "node_b" and e.event_type == EventType.Start]
+        node_a_starts = [e for e in events if e.name == "node_a" and e.kind == "ScopeStart"]
+        node_b_starts = [e for e in events if e.name == "node_b" and e.kind == "ScopeStart"]
         assert len(node_a_starts) == 1, "Expected 1 node_a start event"
         assert len(node_b_starts) == 1, "Expected 1 node_b start event"
 
@@ -122,14 +120,14 @@ class TestLangGraphScope:
             e
             for e in events
             if e.name == "seq_graph"
-            and e.event_type == EventType.Start
+            and e.kind == "ScopeStart"
             and e.metadata
             and e.metadata.get("langgraph.graph") is True
         ]
         # Only 1 graph start event (no per-branch reconstructions)
         assert len(graph_scope_events) == 1
 
-        all_starts = [e for e in events if e.event_type == EventType.Start]
+        all_starts = [e for e in events if e.kind in {"ScopeStart", "ToolStart", "LLMStart"}]
         node_a_idx = next(i for i, e in enumerate(all_starts) if e.name == "node_a")
         node_b_idx = next(i for i, e in enumerate(all_starts) if e.name == "node_b")
         assert node_a_idx < node_b_idx, "node_a should start before node_b"
@@ -165,10 +163,7 @@ class TestLangGraphScope:
             node_starts = [
                 e
                 for e in events
-                if e.name == name
-                and e.event_type == EventType.Start
-                and e.metadata
-                and e.metadata.get("langgraph.node") is True
+                if e.name == name and e.kind == "ScopeStart" and e.metadata and e.metadata.get("langgraph.node") is True
             ]
             if node_starts:
                 branch_results[name]["node_parent"] = node_starts[0].parent_uuid
@@ -230,7 +225,7 @@ class TestLangGraphScope:
 
         sync_types = [
             (
-                e.event_type,
+                e.kind,
                 bool(e.metadata and e.metadata.get("langgraph.graph")),
                 bool(e.metadata and e.metadata.get("langgraph.node")),
             )
@@ -238,7 +233,7 @@ class TestLangGraphScope:
         ]
         async_types = [
             (
-                e.event_type,
+                e.kind,
                 bool(e.metadata and e.metadata.get("langgraph.graph")),
                 bool(e.metadata and e.metadata.get("langgraph.node")),
             )
@@ -271,7 +266,7 @@ class TestLangGraphScope:
             e
             for e in events
             if e.name == "test-model"
-            and e.event_type == EventType.Start
+            and isinstance(e, LLMStartEvent)
             and not (e.metadata and e.metadata.get("langgraph.node"))
         ]
         assert len(llm_starts) >= 1, "Expected at least 1 LLM start event"
@@ -296,7 +291,7 @@ class TestLangGraphScope:
         pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)
 
-        tool_starts = [e for e in events if e.name == "search_tool" and e.event_type == EventType.Start]
+        tool_starts = [e for e in events if e.name == "search_tool" and isinstance(e, ToolStartEvent)]
         assert len(tool_starts) == 1, f"Expected 1 tool start event, got {len(tool_starts)}"
         tool_event = tool_starts[0]
 
@@ -323,9 +318,7 @@ class TestLangGraphScope:
         assert langgraph_nexus_active() is False
 
         graph_starts = [
-            e
-            for e in events
-            if e.metadata and e.metadata.get("langgraph.graph") is True and e.event_type == EventType.Start
+            e for e in events if e.metadata and e.metadata.get("langgraph.graph") is True and e.kind == "ScopeStart"
         ]
         # Only 1 graph start event (no per-branch reconstruction)
         assert len(graph_starts) == 1, f"Expected 1 graph start event, got {len(graph_starts)}"
@@ -334,7 +327,7 @@ class TestLangGraphScope:
             e
             for e in events
             if e.name == "single_node"
-            and e.event_type == EventType.Start
+            and e.kind == "ScopeStart"
             and e.metadata
             and e.metadata.get("langgraph.node") is True
         ]
@@ -354,17 +347,17 @@ class TestLangGraphScope:
         lifecycle = []
         for e in events:
             if e.metadata and e.metadata.get("langgraph.graph"):
-                lifecycle.append(("graph", e.event_type))
+                lifecycle.append(("graph", e.kind))
             elif e.metadata and e.metadata.get("langgraph.node"):
-                lifecycle.append(("node", e.event_type))
+                lifecycle.append(("node", e.kind))
 
         # With direct push (no branch reconstruction), ordering is:
         # graph-start, node-start, node-end, graph-end
         expected = [
-            ("graph", EventType.Start),
-            ("node", EventType.Start),
-            ("node", EventType.End),
-            ("graph", EventType.End),
+            ("graph", "ScopeStart"),
+            ("node", "ScopeStart"),
+            ("node", "ScopeEnd"),
+            ("graph", "ScopeEnd"),
         ]
         assert lifecycle == expected, f"Lifecycle event ordering mismatch.\nGot:      {lifecycle}\nExpected: {expected}"
 
@@ -434,13 +427,13 @@ class TestLangGraphSubgraph:
             e
             for e in events
             if e.name == "inner_graph"
-            and e.event_type == EventType.Start
+            and e.kind == "ScopeStart"
             and e.metadata
             and e.metadata.get("langgraph.subgraph") is True
         ]
         assert len(subgraph_starts) == 1, f"Expected 1 subgraph start event, got {len(subgraph_starts)}"
 
-        inner_node_starts = [e for e in events if e.name == "inner_node" and e.event_type == EventType.Start]
+        inner_node_starts = [e for e in events if e.name == "inner_node" and e.kind == "ScopeStart"]
         assert len(inner_node_starts) == 1, f"Expected 1 inner_node start event, got {len(inner_node_starts)}"
 
         assert inner_node_starts[0].parent_uuid == sub_handle.uuid, "inner_node parent should be the subgraph scope"
@@ -533,7 +526,7 @@ class TestLangGraphSubgraph:
         assert len(topo["edges"]) == 2, f"Expected 2 edges, got {len(topo['edges'])}"
         assert topo["edges"][0]["source"] == "__start__"
 
-        graph_starts = [e for e in events if e.name == "my_graph" and e.event_type == EventType.Start]
+        graph_starts = [e for e in events if e.name == "my_graph" and e.kind == "ScopeStart"]
         assert len(graph_starts) == 1
         assert graph_starts[0].metadata is not None
         assert "graph_topology" in graph_starts[0].metadata
@@ -596,8 +589,8 @@ class TestLangGraphSubgraph:
         assert "A" in results and "B" in results
 
         with lock:
-            starts_a = [e for e in all_events if e.name == "graph_A" and e.event_type == EventType.Start]
-            starts_b = [e for e in all_events if e.name == "graph_B" and e.event_type == EventType.Start]
+            starts_a = [e for e in all_events if e.name == "graph_A" and e.kind == "ScopeStart"]
+            starts_b = [e for e in all_events if e.name == "graph_B" and e.kind == "ScopeStart"]
 
         assert len(starts_a) >= 1, "Graph A should have at least one start event"
         assert len(starts_b) >= 1, "Graph B should have at least one start event"

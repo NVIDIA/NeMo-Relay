@@ -42,7 +42,7 @@
 //!   export, and clear trajectory data.
 //! - [`types`] -- C-compatible struct and enum definitions, plus event accessor
 //!   functions (`nat_nexus_event_input`, `_output`, `_model_name`, `_tool_call_id`,
-//!   `_root_uuid`, `_parent_uuid`, `_scope_type`) and the `FfiAtifExporter`
+//!   `_parent_uuid`, `_scope_type`) and the `FfiAtifExporter`
 //!   opaque handle.
 //! - [`error`] -- Status codes and thread-local error storage.
 //! - [`callable`] -- C function pointer typedefs and wrapper functions.

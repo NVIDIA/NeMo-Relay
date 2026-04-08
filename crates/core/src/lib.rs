@@ -32,10 +32,10 @@
 //!   all guardrail and intercept registries.
 //! - [`stream`] — [`LlmStreamWrapper`] — a stream adapter that applies per-chunk
 //!   intercepts and aggregates streaming LLM responses.
-//! - [`types`] — Core data types: attribute bitflags, enums ([`ScopeType`], [`EventType`]),
+//! - [`types`] — Core data types: attribute bitflags, enums ([`ScopeType`]),
 //!   handle structs ([`ScopeHandle`], [`ToolHandle`], [`LLMHandle`]), [`LLMRequest`],
 //!   [`Event`] (with typed lifecycle fields: `input`, `output`, `model_name`,
-//!   `tool_call_id`, `root_uuid`), [`EventBuilder`], and middleware container types.
+//!   `tool_call_id`) and middleware container types.
 //!
 //! ## Middleware Pipeline
 //!

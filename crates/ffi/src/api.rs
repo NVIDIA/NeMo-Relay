@@ -1684,17 +1684,14 @@ pub unsafe extern "C" fn nat_nexus_atif_exporter_deregister(name: *const c_char)
 ///
 /// # Parameters
 /// - `exporter`: The exporter handle.
-/// - `root_uuid`: Optional root UUID filter (nullable C string).
 /// - `out`: On success, receives a JSON string (caller must free with
 ///   `nat_nexus_string_free`).
 ///
 /// # Safety
-/// `exporter` and `out` must be valid, non-null pointers. `root_uuid` may be
-/// null.
+/// `exporter` and `out` must be valid, non-null pointers.
 #[no_mangle]
 pub unsafe extern "C" fn nat_nexus_atif_exporter_export(
     exporter: *const FfiAtifExporter,
-    root_uuid: *const c_char,
     out: *mut *mut c_char,
 ) -> NatNexusStatus {
     clear_last_error();
@@ -1706,16 +1703,7 @@ pub unsafe extern "C" fn nat_nexus_atif_exporter_export(
         set_last_error("out pointer is null");
         return NatNexusStatus::NullPointer;
     }
-    let root_uuid_opt = if root_uuid.is_null() {
-        None
-    } else {
-        match parse_scope_uuid(root_uuid) {
-            Ok(u) => Some(u),
-            Err(status) => return status,
-        }
-    };
-
-    let trajectory = unsafe { &*exporter }.0.export(root_uuid_opt);
+    let trajectory = unsafe { &*exporter }.0.export();
     match serde_json::to_string(&trajectory) {
         Ok(json_str) => {
             unsafe { *out = str_to_c_string(&json_str) };
@@ -3158,19 +3146,18 @@ mod tests {
     use crate::types::{
         nat_nexus_atif_exporter_free, nat_nexus_event_data, nat_nexus_event_input,
         nat_nexus_event_metadata, nat_nexus_event_model_name, nat_nexus_event_name,
-        nat_nexus_event_output, nat_nexus_event_parent_uuid, nat_nexus_event_root_uuid,
-        nat_nexus_event_scope_type, nat_nexus_event_timestamp, nat_nexus_event_tool_call_id,
-        nat_nexus_event_type, nat_nexus_event_uuid, nat_nexus_llm_handle_attributes,
-        nat_nexus_llm_handle_free, nat_nexus_llm_handle_name, nat_nexus_llm_handle_parent_uuid,
-        nat_nexus_llm_handle_uuid, nat_nexus_llm_request_content, nat_nexus_llm_request_free,
-        nat_nexus_llm_request_headers, nat_nexus_llm_request_new, nat_nexus_otel_subscriber_free,
-        nat_nexus_scope_handle_attributes, nat_nexus_scope_handle_data,
-        nat_nexus_scope_handle_free, nat_nexus_scope_handle_metadata, nat_nexus_scope_handle_name,
-        nat_nexus_scope_handle_parent_uuid, nat_nexus_scope_handle_scope_type,
-        nat_nexus_scope_handle_uuid, nat_nexus_scope_stack_free, nat_nexus_tool_handle_attributes,
-        nat_nexus_tool_handle_free, nat_nexus_tool_handle_name, nat_nexus_tool_handle_parent_uuid,
-        nat_nexus_tool_handle_uuid, FfiAtifExporter, FfiEvent, FfiLLMHandle, FfiLLMRequest,
-        FfiOpenTelemetrySubscriber, FfiScopeStack, FfiToolHandle, NatNexusEventType,
+        nat_nexus_event_output, nat_nexus_event_parent_uuid, nat_nexus_event_scope_type,
+        nat_nexus_event_timestamp, nat_nexus_event_tool_call_id, nat_nexus_event_uuid,
+        nat_nexus_llm_handle_attributes, nat_nexus_llm_handle_free, nat_nexus_llm_handle_name,
+        nat_nexus_llm_handle_parent_uuid, nat_nexus_llm_handle_uuid, nat_nexus_llm_request_content,
+        nat_nexus_llm_request_free, nat_nexus_llm_request_headers, nat_nexus_llm_request_new,
+        nat_nexus_otel_subscriber_free, nat_nexus_scope_handle_attributes,
+        nat_nexus_scope_handle_data, nat_nexus_scope_handle_free, nat_nexus_scope_handle_metadata,
+        nat_nexus_scope_handle_name, nat_nexus_scope_handle_parent_uuid,
+        nat_nexus_scope_handle_scope_type, nat_nexus_scope_handle_uuid, nat_nexus_scope_stack_free,
+        nat_nexus_tool_handle_attributes, nat_nexus_tool_handle_free, nat_nexus_tool_handle_name,
+        nat_nexus_tool_handle_parent_uuid, nat_nexus_tool_handle_uuid, FfiAtifExporter, FfiEvent,
+        FfiLLMHandle, FfiLLMRequest, FfiOpenTelemetrySubscriber, FfiScopeStack, FfiToolHandle,
     };
 
     static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -3254,7 +3241,7 @@ mod tests {
         let payload = json!({
             "uuid": unsafe { take_string(nat_nexus_event_uuid(event)) }.unwrap_or_default(),
             "name": unsafe { take_string(nat_nexus_event_name(event)) }.unwrap_or_default(),
-            "type": unsafe { nat_nexus_event_type(event) as i32 },
+            "kind": unsafe { take_string(crate::types::nat_nexus_event_kind(event)) }.unwrap_or_default(),
             "data": unsafe { take_string(nat_nexus_event_data(event)) }
                 .map(|s| serde_json::from_str::<Json>(&s).unwrap()),
             "metadata": unsafe { take_string(nat_nexus_event_metadata(event)) }
@@ -3266,7 +3253,6 @@ mod tests {
                 .map(|s| serde_json::from_str::<Json>(&s).unwrap()),
             "model_name": unsafe { take_string(nat_nexus_event_model_name(event)) },
             "tool_call_id": unsafe { take_string(nat_nexus_event_tool_call_id(event)) },
-            "root_uuid": unsafe { take_string(nat_nexus_event_root_uuid(event)) },
             "parent_uuid": unsafe { take_string(nat_nexus_event_parent_uuid(event)) },
             "scope_type": unsafe { take_string(nat_nexus_event_scope_type(event)) },
         });
@@ -3627,7 +3613,6 @@ mod tests {
             assert!(events
                 .iter()
                 .any(|event| event["tool_call_id"] == "call_ffi_123"));
-            assert!(events.iter().any(|event| event["root_uuid"].is_string()));
             assert!(events
                 .iter()
                 .any(|event| event["timestamp"].as_str().is_some_and(|s| !s.is_empty())));
@@ -3647,7 +3632,7 @@ mod tests {
             let events = lock_unpoisoned(event_log()).clone();
             assert!(events.iter().any(|event| {
                 event["name"] == "ffi_mark"
-                    && event["type"] == json!(NatNexusEventType::Mark as i32)
+                    && event["kind"] == json!("Mark")
                     && event["data"] == json!({"mark": true})
                     && event["metadata"] == json!({"origin": "ffi"})
             }));
@@ -4369,7 +4354,7 @@ mod tests {
             );
             let mut null_export = ptr::null_mut();
             assert_eq!(
-                nat_nexus_atif_exporter_export(ptr::null(), ptr::null(), &mut null_export),
+                nat_nexus_atif_exporter_export(ptr::null(), &mut null_export),
                 NatNexusStatus::NullPointer
             );
             let exporter_name = cstring(&unique_name("ffi_exporter_sub"));
@@ -4381,13 +4366,8 @@ mod tests {
                 nat_nexus_atif_exporter_register(exporter, exporter_name.as_ptr()),
                 NatNexusStatus::AlreadyExists
             );
-            let mut exported = ptr::null_mut();
             assert_eq!(
-                nat_nexus_atif_exporter_export(exporter, invalid_uuid.as_ptr(), &mut exported),
-                NatNexusStatus::InvalidArg
-            );
-            assert_eq!(
-                nat_nexus_atif_exporter_export(exporter, ptr::null(), ptr::null_mut()),
+                nat_nexus_atif_exporter_export(exporter, ptr::null_mut()),
                 NatNexusStatus::NullPointer
             );
             assert_eq!(
@@ -5515,7 +5495,6 @@ mod tests {
 
             let mut root = ptr::null_mut();
             assert_eq!(nat_nexus_get_handle(&mut root), NatNexusStatus::Ok);
-            let root_uuid = take_string(nat_nexus_scope_handle_uuid(root)).unwrap();
             nat_nexus_scope_handle_free(root);
 
             let intercept_name = unique_name("ffi_llm_intercept");
@@ -5710,9 +5689,8 @@ mod tests {
             assert_eq!(*lock_unpoisoned(finalizer_calls()), 1);
 
             let mut exported = ptr::null_mut();
-            let root_uuid_c = cstring(&root_uuid);
             assert_eq!(
-                nat_nexus_atif_exporter_export(exporter, root_uuid_c.as_ptr(), &mut exported),
+                nat_nexus_atif_exporter_export(exporter, &mut exported),
                 NatNexusStatus::Ok
             );
             let trajectory = returned_json(exported);
@@ -5722,7 +5700,7 @@ mod tests {
             assert_eq!(nat_nexus_atif_exporter_clear(exporter), NatNexusStatus::Ok);
             let mut cleared = ptr::null_mut();
             assert_eq!(
-                nat_nexus_atif_exporter_export(exporter, root_uuid_c.as_ptr(), &mut cleared),
+                nat_nexus_atif_exporter_export(exporter, &mut cleared),
                 NatNexusStatus::Ok
             );
             let cleared_json = returned_json(cleared);

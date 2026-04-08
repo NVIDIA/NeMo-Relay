@@ -33,15 +33,13 @@ describe('JsAtifExporter', () => {
       llmCallEnd(handle, { content: 'world' }, null, null);
 
       const exportedAll = JSON.parse(exporter.exportJson());
-      const exportedScoped = JSON.parse(exporter.exportJson(scope.uuid));
 
       assert.equal(exportedAll.session_id, 'session-node-types');
-      assert.equal(exportedScoped.session_id, 'session-node-types');
-      assert.equal(exportedScoped.agent.name, 'node-agent');
-      assert.ok(exportedScoped.steps.length > 0);
+      assert.equal(exportedAll.agent.name, 'node-agent');
+      assert.ok(exportedAll.steps.length > 0);
 
       exporter.clear();
-      const cleared = JSON.parse(exporter.exportJson(scope.uuid));
+      const cleared = JSON.parse(exporter.exportJson());
       assert.deepEqual(cleared.steps, []);
     } finally {
       popScope(scope);
@@ -50,8 +48,4 @@ describe('JsAtifExporter', () => {
     }
   });
 
-  it('rejects invalid root UUID strings', () => {
-    const exporter = new JsAtifExporter('session-node-invalid', 'node-agent', '1.0.0', null);
-    assert.throws(() => exporter.exportJson('not-a-uuid'), /invalid UUID/i);
-  });
 });

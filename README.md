@@ -34,7 +34,7 @@ Install the Python package and run your first instrumented agent call in a few l
 import nat_nexus
 
 # Subscribe to lifecycle events
-nat_nexus.subscribers.register("logger", lambda event: print(f"[{event.event_type}] {event.name}"))
+nat_nexus.subscribers.register("logger", lambda event: print(f"[{event.kind}] {event.name}"))
 
 # Execute a tool call inside an agent scope (inside an async function)
 with nat_nexus.scope.scope("my-agent", nat_nexus.ScopeType.Agent):
@@ -252,9 +252,9 @@ Key mechanisms:
 - **Intercept chains** -- priority-ordered middleware that can transform requests; supports `break_chain` for short-circuit. Execution intercepts wrap the callable in a middleware chain pattern.
 - **Guardrails** -- sanitize (modify) or gate (allow/reject) at request and response boundaries.
 - **Stream wrapping** -- `LlmStreamWrapper` buffers and parses SSE events, feeding chunks to the collector and calling the finalizer on stream end.
-- **Event subscribers** -- observer pattern with named subscribers for lifecycle events. Events carry typed lifecycle fields (`input`, `output`, `model_name`, `tool_call_id`, `root_uuid`) in addition to custom `data`/`metadata`.
+- **Event subscribers** -- observer pattern with named subscribers for lifecycle events. Events carry typed lifecycle fields (`input`, `output`, `model_name`, `tool_call_id`) in addition to custom `data`/`metadata`.
 - **Context propagation** -- `tokio::task_local` for async, thread-local for sync paths.
-- **ATIF trajectory export** -- `AtifExporter` registers as an event subscriber and exports [ATIF v1.6](https://github.com/nvidia/ATIF) trajectories from collected lifecycle events. LLM calls map to user/agent steps; tool calls map to tool_calls/observations. Filter by `root_uuid` to isolate concurrent agents. Available in all bindings.
+- **ATIF trajectory export** -- `AtifExporter` registers as an event subscriber and exports [ATIF v1.6](https://github.com/nvidia/ATIF) trajectories from collected lifecycle events. LLM calls map to user/agent steps; tool calls map to tool_calls/observations. Available in all bindings.
 
 ## Contributing
 

@@ -80,28 +80,6 @@ impl From<core_types::ScopeType> for ScopeType {
     }
 }
 
-/// The type of a lifecycle event emitted by the runtime.
-#[napi]
-#[allow(dead_code)]
-pub enum EventType {
-    /// A scope or operation has started.
-    Start,
-    /// A scope or operation has ended.
-    End,
-    /// A user-defined mark event within a scope.
-    Mark,
-}
-
-impl From<core_types::EventType> for EventType {
-    fn from(v: core_types::EventType) -> Self {
-        match v {
-            core_types::EventType::Start => EventType::Start,
-            core_types::EventType::End => EventType::End,
-            core_types::EventType::Mark => EventType::Mark,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Handle wrappers
 // ---------------------------------------------------------------------------
@@ -327,79 +305,159 @@ impl JsLLMRequest {
 // Event (read-only, for subscribers)
 // ---------------------------------------------------------------------------
 
-/// A read-only lifecycle event delivered to subscribers.
-///
-/// Represents a point-in-time occurrence in the agent runtime such as scope start/end
-/// or a custom mark event.
-#[napi(object)]
+/// A read-only lifecycle event delivered to subscribers as a discriminated union.
 #[derive(Serialize)]
-pub struct JsEvent {
-    /// The UUID of the parent scope, or `null` for root-level events.
-    pub parent_uuid: Option<String>,
-    /// The unique identifier for this event.
-    pub uuid: String,
-    /// ISO 8601 timestamp of when the event occurred.
-    pub timestamp: String,
-    /// The name associated with this event, if any.
-    pub name: Option<String>,
-    /// Optional user-defined data attached to the event.
-    pub data: Option<serde_json::Value>,
-    /// Optional metadata attached to the event.
-    pub metadata: Option<serde_json::Value>,
-    /// The event type as an integer: 0 = Start, 1 = End, 2 = Mark.
-    pub event_type: i32,
-    /// The scope type as an integer (0=Agent, 1=Function, ..., 10=Unknown), or `null` if absent.
-    pub scope_type: Option<i32>,
-    /// Post-guardrail input (tool args, LLM request) as a JSON string, or `null`.
-    pub input: Option<String>,
-    /// Post-guardrail output (tool result, LLM response) as a JSON string, or `null`.
-    pub output: Option<String>,
-    /// LLM model identifier, or `null`.
-    pub model_name: Option<String>,
-    /// External correlation ID for tool calls, or `null`.
-    pub tool_call_id: Option<String>,
-    /// UUID of the root scope for concurrent agent isolation, or `null`.
-    pub root_uuid: Option<String>,
+#[serde(tag = "kind")]
+pub enum JsEvent {
+    ScopeStart {
+        parent_uuid: Option<String>,
+        uuid: String,
+        timestamp: String,
+        name: String,
+        data: Option<serde_json::Value>,
+        metadata: Option<serde_json::Value>,
+        attributes: u32,
+        scope_type: i32,
+    },
+    ScopeEnd {
+        parent_uuid: Option<String>,
+        uuid: String,
+        timestamp: String,
+        name: String,
+        data: Option<serde_json::Value>,
+        metadata: Option<serde_json::Value>,
+        attributes: u32,
+        scope_type: i32,
+    },
+    ToolStart {
+        parent_uuid: Option<String>,
+        uuid: String,
+        timestamp: String,
+        name: String,
+        data: Option<serde_json::Value>,
+        metadata: Option<serde_json::Value>,
+        attributes: u32,
+        input: Option<serde_json::Value>,
+        tool_call_id: Option<String>,
+    },
+    ToolEnd {
+        parent_uuid: Option<String>,
+        uuid: String,
+        timestamp: String,
+        name: String,
+        data: Option<serde_json::Value>,
+        metadata: Option<serde_json::Value>,
+        attributes: u32,
+        output: Option<serde_json::Value>,
+        tool_call_id: Option<String>,
+    },
+    LLMStart {
+        parent_uuid: Option<String>,
+        uuid: String,
+        timestamp: String,
+        name: String,
+        data: Option<serde_json::Value>,
+        metadata: Option<serde_json::Value>,
+        attributes: u32,
+        input: Option<serde_json::Value>,
+        model_name: Option<String>,
+    },
+    LLMEnd {
+        parent_uuid: Option<String>,
+        uuid: String,
+        timestamp: String,
+        name: String,
+        data: Option<serde_json::Value>,
+        metadata: Option<serde_json::Value>,
+        attributes: u32,
+        output: Option<serde_json::Value>,
+        model_name: Option<String>,
+    },
+    Mark {
+        parent_uuid: Option<String>,
+        uuid: String,
+        timestamp: String,
+        name: String,
+        data: Option<serde_json::Value>,
+        metadata: Option<serde_json::Value>,
+    },
 }
 
 impl From<&core_types::Event> for JsEvent {
     fn from(e: &core_types::Event) -> Self {
-        Self {
-            parent_uuid: e.parent_uuid.map(|u| u.to_string()),
-            uuid: e.uuid.to_string(),
-            timestamp: e.timestamp.to_rfc3339(),
-            name: e.name.clone(),
-            data: e.data.clone(),
-            metadata: e.metadata.clone(),
-            event_type: match e.event_type {
-                core_types::EventType::Start => 0,
-                core_types::EventType::End => 1,
-                core_types::EventType::Mark => 2,
+        match e {
+            core_types::Event::ScopeStart(event) => Self::ScopeStart {
+                parent_uuid: event.parent_uuid.map(|u| u.to_string()),
+                uuid: event.uuid.to_string(),
+                timestamp: event.timestamp.to_rfc3339(),
+                name: event.name.clone(),
+                data: event.data.clone(),
+                metadata: event.metadata.clone(),
+                attributes: event.attributes.bits(),
+                scope_type: ScopeType::from(event.scope_type) as i32,
             },
-            scope_type: e.scope_type.map(|st| match st {
-                core_types::ScopeType::Agent => 0,
-                core_types::ScopeType::Function => 1,
-                core_types::ScopeType::Tool => 2,
-                core_types::ScopeType::Llm => 3,
-                core_types::ScopeType::Retriever => 4,
-                core_types::ScopeType::Embedder => 5,
-                core_types::ScopeType::Reranker => 6,
-                core_types::ScopeType::Guardrail => 7,
-                core_types::ScopeType::Evaluator => 8,
-                core_types::ScopeType::Custom => 9,
-                core_types::ScopeType::Unknown => 10,
-            }),
-            input: e
-                .input
-                .as_ref()
-                .map(|v| serde_json::to_string(v).unwrap_or_default()),
-            output: e
-                .output
-                .as_ref()
-                .map(|v| serde_json::to_string(v).unwrap_or_default()),
-            model_name: e.model_name.clone(),
-            tool_call_id: e.tool_call_id.clone(),
-            root_uuid: e.root_uuid.map(|u| u.to_string()),
+            core_types::Event::ScopeEnd(event) => Self::ScopeEnd {
+                parent_uuid: event.parent_uuid.map(|u| u.to_string()),
+                uuid: event.uuid.to_string(),
+                timestamp: event.timestamp.to_rfc3339(),
+                name: event.name.clone(),
+                data: event.data.clone(),
+                metadata: event.metadata.clone(),
+                attributes: event.attributes.bits(),
+                scope_type: ScopeType::from(event.scope_type) as i32,
+            },
+            core_types::Event::ToolStart(event) => Self::ToolStart {
+                parent_uuid: event.parent_uuid.map(|u| u.to_string()),
+                uuid: event.uuid.to_string(),
+                timestamp: event.timestamp.to_rfc3339(),
+                name: event.name.clone(),
+                data: event.data.clone(),
+                metadata: event.metadata.clone(),
+                attributes: event.attributes.bits(),
+                input: event.input.clone(),
+                tool_call_id: event.tool_call_id.clone(),
+            },
+            core_types::Event::ToolEnd(event) => Self::ToolEnd {
+                parent_uuid: event.parent_uuid.map(|u| u.to_string()),
+                uuid: event.uuid.to_string(),
+                timestamp: event.timestamp.to_rfc3339(),
+                name: event.name.clone(),
+                data: event.data.clone(),
+                metadata: event.metadata.clone(),
+                attributes: event.attributes.bits(),
+                output: event.output.clone(),
+                tool_call_id: event.tool_call_id.clone(),
+            },
+            core_types::Event::LLMStart(event) => Self::LLMStart {
+                parent_uuid: event.parent_uuid.map(|u| u.to_string()),
+                uuid: event.uuid.to_string(),
+                timestamp: event.timestamp.to_rfc3339(),
+                name: event.name.clone(),
+                data: event.data.clone(),
+                metadata: event.metadata.clone(),
+                attributes: event.attributes.bits(),
+                input: event.input.clone(),
+                model_name: event.model_name.clone(),
+            },
+            core_types::Event::LLMEnd(event) => Self::LLMEnd {
+                parent_uuid: event.parent_uuid.map(|u| u.to_string()),
+                uuid: event.uuid.to_string(),
+                timestamp: event.timestamp.to_rfc3339(),
+                name: event.name.clone(),
+                data: event.data.clone(),
+                metadata: event.metadata.clone(),
+                attributes: event.attributes.bits(),
+                output: event.output.clone(),
+                model_name: event.model_name.clone(),
+            },
+            core_types::Event::Mark(event) => Self::Mark {
+                parent_uuid: event.parent_uuid.map(|u| u.to_string()),
+                uuid: event.uuid.to_string(),
+                timestamp: event.timestamp.to_rfc3339(),
+                name: event.name.clone(),
+                data: event.data.clone(),
+                metadata: event.metadata.clone(),
+            },
         }
     }
 }

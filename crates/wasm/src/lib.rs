@@ -16,8 +16,7 @@
 //! - [`types`] -- WASM-friendly wrapper types (`WasmScopeHandle`,
 //!   `WasmToolHandle`, `WasmLLMHandle`, `WasmLLMRequest`, `WasmEvent`) and
 //!   integer constants for scope types and attribute flags. `WasmEvent` exposes
-//!   typed lifecycle fields (`input`, `output`, `model_name`, `tool_call_id`,
-//!   `root_uuid`).
+//!   typed lifecycle fields (`input`, `output`, `model_name`, `tool_call_id`).
 //! - [`stream`] -- `WasmLlmStream`, an async-iterator-like wrapper for
 //!   consuming streaming LLM responses from JavaScript.
 //!

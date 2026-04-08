@@ -7,10 +7,11 @@ from typing import cast
 
 import pytest
 from nat_nexus import (
-    EventType,
     LLMAttributes,
+    LLMEndEvent,
     LLMHandle,
     LLMRequest,
+    LLMStartEvent,
     ScopeType,
     guardrails,
     intercepts,
@@ -151,7 +152,7 @@ class TestLLMGuardrails:
             subscribers.deregister("py_llm_sanitize_req_sub")
 
         start = next(
-            event for event in events if event.name == "llm_sanitize_req_fail" and event.event_type == EventType.Start
+            event for event in events if event.name == "llm_sanitize_req_fail" and isinstance(event, LLMStartEvent)
         )
         request = make_request()
         assert start.input == {"headers": request.headers, "content": request.content}
@@ -169,7 +170,7 @@ class TestLLMGuardrails:
             subscribers.deregister("py_llm_sanitize_req_bad_sub")
 
         start = next(
-            event for event in events if event.name == "llm_sanitize_req_bad" and event.event_type == EventType.Start
+            event for event in events if event.name == "llm_sanitize_req_bad" and isinstance(event, LLMStartEvent)
         )
         request = make_request()
         assert start.input == {"headers": request.headers, "content": request.content}
@@ -190,7 +191,7 @@ class TestLLMGuardrails:
             subscribers.deregister("py_llm_sanitize_resp_sub")
 
         end = next(
-            event for event in events if event.name == "llm_sanitize_resp_fail" and event.event_type == EventType.End
+            event for event in events if event.name == "llm_sanitize_resp_fail" and isinstance(event, LLMEndEvent)
         )
         assert end.output == {"ok": True}
 
@@ -210,7 +211,7 @@ class TestLLMGuardrails:
             subscribers.deregister("py_llm_sanitize_resp_bad_sub")
 
         end = next(
-            event for event in events if event.name == "llm_sanitize_resp_bad" and event.event_type == EventType.End
+            event for event in events if event.name == "llm_sanitize_resp_bad" and isinstance(event, LLMEndEvent)
         )
         assert end.output == {"ok": True}
 
@@ -620,7 +621,7 @@ class TestLLMStreaming:
             subscribers.deregister("py_llm_finalizer_fail_sub")
 
         end = next(
-            event for event in events if event.name == "stream_finalizer_fail_llm" and event.event_type == EventType.End
+            event for event in events if event.name == "stream_finalizer_fail_llm" and isinstance(event, LLMEndEvent)
         )
         assert end.output is None
 
@@ -652,14 +653,14 @@ class TestLLMStreaming:
         end = next(
             event
             for event in events
-            if event.name == "stream_finalizer_callable_fail_llm" and event.event_type == EventType.End
+            if event.name == "stream_finalizer_callable_fail_llm" and isinstance(event, LLMEndEvent)
         )
         assert end.output is None
 
     async def test_subscriber_exception_does_not_break_streaming(self):
         seen = []
         subscribers.register("py_llm_bad_sub", lambda event: (_ for _ in ()).throw(RuntimeError("subscriber boom")))
-        subscribers.register("py_llm_good_sub", lambda event: seen.append(event.event_type))
+        subscribers.register("py_llm_good_sub", lambda event: seen.append(event.kind))
         try:
             handle = llm.call("llm_subscriber_error", make_request())
             llm.call_end(handle, {"ok": True})
@@ -667,7 +668,7 @@ class TestLLMStreaming:
             subscribers.deregister("py_llm_bad_sub")
             subscribers.deregister("py_llm_good_sub")
 
-        assert seen == [EventType.Start, EventType.End]
+        assert seen == ["LLMStart", "LLMEnd"]
 
 
 async def _single_chunk_stream():

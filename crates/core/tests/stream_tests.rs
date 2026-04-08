@@ -146,7 +146,9 @@ async fn test_stream_wrapper_emits_end_event() {
     nat_nexus_register_subscriber(
         "stream_end_test",
         Arc::new(move |e: &Event| {
-            ec.lock().unwrap().push((e.event_type, e.scope_type));
+            ec.lock()
+                .unwrap()
+                .push((e.kind().to_string(), e.scope_type()));
         }),
     )
     .unwrap();
@@ -179,9 +181,9 @@ async fn test_stream_wrapper_emits_end_event() {
     let captured = events.lock().unwrap();
     // Should have: START (from llm_call) + END (from stream wrapper exhaustion)
     assert!(captured.len() >= 2);
-    assert_eq!(captured[0].0, EventType::Start);
+    assert_eq!(captured[0].0, "LLMStart");
     // The last event should be END
-    assert_eq!(captured.last().unwrap().0, EventType::End);
+    assert_eq!(captured.last().unwrap().0, "LLMEnd");
 
     drop(captured);
     nat_nexus_deregister_subscriber("stream_end_test").unwrap();
@@ -368,9 +370,9 @@ async fn test_stream_wrapper_error_emits_end_event_on_first_error_poll() {
     let events = events.lock().unwrap();
     let end_event = events
         .iter()
-        .find(|event| event.event_type == EventType::End)
+        .find(|event| matches!(event, Event::LLMEnd(_)))
         .expect("expected END event on first error poll");
-    assert_eq!(end_event.output.as_ref(), Some(&json!({"partial": true})));
+    assert_eq!(end_event.output(), Some(&json!({"partial": true})));
 
     drop(events);
     nat_nexus_deregister_subscriber("stream_error_end_test").unwrap();
@@ -419,9 +421,9 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
     let captured = events.lock().unwrap();
     let end_event = captured
         .iter()
-        .find(|e| e.event_type == EventType::End)
+        .find(|e| matches!(e, Event::LLMEnd(_)))
         .unwrap();
-    let output = end_event.output.as_ref().unwrap();
+    let output = end_event.output().unwrap();
     // The default finalizer collects chunks into an array
     assert!(output.is_array());
     let arr = output.as_array().unwrap();

@@ -79,12 +79,12 @@ func TestToolEvents(t *testing.T) {
 	var startSeen, endSeen bool
 	var mu sync.Mutex
 
-	RegisterSubscriber("go_tool_evt", func(event *Event) {
+	RegisterSubscriber("go_tool_evt", func(event Event) {
 		mu.Lock()
-		if event.Type() == EventTypeStart {
+		if event.Kind() == "ToolStart" {
 			startSeen = true
 		}
-		if event.Type() == EventTypeEnd {
+		if event.Kind() == "ToolEnd" {
 			endSeen = true
 		}
 		mu.Unlock()
@@ -430,8 +430,8 @@ func TestToolSanitizeRequestGuardrailModifiesEventInput(t *testing.T) {
 	var capturedInput json.RawMessage
 	var mu sync.Mutex
 
-	RegisterSubscriber("go_redact_sub", func(event *Event) {
-		if event.Type() == EventTypeStart {
+	RegisterSubscriber("go_redact_sub", func(event Event) {
+		if event.Kind() == "ToolStart" {
 			mu.Lock()
 			capturedInput = append(json.RawMessage(nil), event.Input()...)
 			mu.Unlock()
@@ -670,8 +670,8 @@ func TestToolCallWithToolCallID(t *testing.T) {
 	var capturedToolCallID string
 	var mu sync.Mutex
 
-	RegisterSubscriber("go_tool_call_id_sub", func(event *Event) {
-		if event.Type() == EventTypeStart {
+	RegisterSubscriber("go_tool_call_id_sub", func(event Event) {
+		if event.Kind() == "ToolStart" {
 			mu.Lock()
 			capturedToolCallID = event.ToolCallID()
 			mu.Unlock()
@@ -696,12 +696,12 @@ func TestToolEventInputOutput(t *testing.T) {
 	var capturedInput, capturedOutput json.RawMessage
 	var mu sync.Mutex
 
-	RegisterSubscriber("go_tool_io_sub", func(event *Event) {
+	RegisterSubscriber("go_tool_io_sub", func(event Event) {
 		mu.Lock()
-		if event.Type() == EventTypeStart {
+		if event.Kind() == "ToolStart" {
 			capturedInput = append(json.RawMessage(nil), event.Input()...)
 		}
-		if event.Type() == EventTypeEnd {
+		if event.Kind() == "ToolEnd" {
 			capturedOutput = append(json.RawMessage(nil), event.Output()...)
 		}
 		mu.Unlock()

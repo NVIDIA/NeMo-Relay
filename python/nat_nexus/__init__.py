@@ -57,33 +57,39 @@ Submodules:
 
 Types (available at top level):
     ScopeAttributes, ToolAttributes, LLMAttributes,
-    ScopeType, EventType,
+    ScopeType,
     ScopeHandle, ToolHandle, LLMHandle,
     LLMRequest, Event, AtifExporter,
     OpenTelemetryConfig, OpenTelemetrySubscriber
 """
 
 import contextvars
+import typing
 
 from nat_nexus import guardrails, intercepts, llm, proxy, scope, scope_local, subscribers, tools, typed
 from nat_nexus._native import (
     # ATIF exporter
     AtifExporter,
-    Event,
-    EventType,
     LLMAttributes,
+    LLMEndEvent,
     LLMHandle,
     LLMRequest,
+    LLMStartEvent,
+    MarkEvent,
     OpenInferenceConfig,
     OpenInferenceSubscriber,
     OpenTelemetryConfig,
     OpenTelemetrySubscriber,
-    # Types (always at top level)
     ScopeAttributes,
+    # Types (always at top level)
+    ScopeEndEvent,
     ScopeHandle,
+    ScopeStartEvent,
     ScopeType,
     ToolAttributes,
+    ToolEndEvent,
     ToolHandle,
+    ToolStartEvent,
 )
 from nat_nexus._native import ScopeStack as _ScopeStack
 from nat_nexus._native import create_scope_stack as _create_scope_stack
@@ -177,6 +183,15 @@ def propagate_scope_to_thread() -> _ScopeStack:
 ScopeStack = _ScopeStack
 create_scope_stack = _create_scope_stack
 set_thread_scope_stack = _set_thread_scope_stack
+Event = typing.Union[
+    ScopeStartEvent,
+    ScopeEndEvent,
+    ToolStartEvent,
+    ToolEndEvent,
+    LLMStartEvent,
+    LLMEndEvent,
+    MarkEvent,
+]
 
 
 __all__ = [
@@ -202,7 +217,13 @@ __all__ = [
     "ToolAttributes",
     "LLMAttributes",
     "ScopeType",
-    "EventType",
+    "ScopeStartEvent",
+    "ScopeEndEvent",
+    "ToolStartEvent",
+    "ToolEndEvent",
+    "LLMStartEvent",
+    "LLMEndEvent",
+    "MarkEvent",
     "ScopeHandle",
     "ToolHandle",
     "LLMHandle",

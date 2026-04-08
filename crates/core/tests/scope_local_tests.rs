@@ -99,7 +99,7 @@ fn test_scope_local_guardrail_registration_and_execution() {
     {
         let captured = events.lock().unwrap();
         let start_event = &captured[0];
-        let input = start_event.input.as_ref().unwrap();
+        let input = start_event.input().unwrap();
         assert_eq!(input["scope_sanitized"], true);
         assert_eq!(input["input"], "data");
     }
@@ -575,13 +575,13 @@ fn test_scope_local_subscriber() {
     reset_global();
     let handle = setup_isolated_scope("sub_scope");
 
-    let events = Arc::new(Mutex::new(Vec::<EventType>::new()));
+    let events = Arc::new(Mutex::new(Vec::<String>::new()));
     let ec = events.clone();
     nat_nexus_scope_register_subscriber(
         &handle.uuid,
         "local_sub",
         Arc::new(move |e: &Event| {
-            ec.lock().unwrap().push(e.event_type);
+            ec.lock().unwrap().push(e.kind().to_string());
         }),
     )
     .unwrap();
@@ -603,8 +603,8 @@ fn test_scope_local_subscriber() {
     {
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
-        assert_eq!(captured[0], EventType::Start);
-        assert_eq!(captured[1], EventType::End);
+        assert_eq!(captured[0], "ScopeStart");
+        assert_eq!(captured[1], "ScopeEnd");
     }
 
     // Pop the scope that owns the subscriber.
@@ -616,7 +616,7 @@ fn test_scope_local_subscriber() {
         let captured = events.lock().unwrap();
         // 3 events: Start(child), End(child), End(handle)
         assert_eq!(captured.len(), 3);
-        assert_eq!(captured[2], EventType::End);
+        assert_eq!(captured[2], "ScopeEnd");
     }
 
     // After pop, push another scope — the subscriber should NOT fire

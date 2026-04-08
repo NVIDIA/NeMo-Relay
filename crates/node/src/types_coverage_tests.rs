@@ -93,63 +93,50 @@ fn test_handle_and_request_getters() {
 
 #[test]
 fn test_js_event_conversion_maps_all_fields() {
-    let mut event = core_types::Event::new(
-        Some(Uuid::new_v4()),
-        Uuid::new_v4(),
-        Some("node-event".into()),
+    let parent_uuid = Some(Uuid::new_v4());
+    let uuid = Uuid::new_v4();
+    let event = core_types::Event::llm_end(
+        parent_uuid,
+        uuid,
+        "node-event",
         Some(json!({"data": 1})),
         Some(json!({"meta": 2})),
-        None,
-        core_types::EventType::End,
-        Some(core_types::ScopeType::Llm),
+        core_types::LLMAttributes::STATELESS,
+        Some(json!({"output": true})),
+        Some("model".into()),
     );
-    event.input = Some(json!({"input": true}));
-    event.output = Some(json!({"output": true}));
-    event.model_name = Some("model".into());
-    event.tool_call_id = Some("tool-call-id".into());
-    event.root_uuid = Some(Uuid::new_v4());
 
     let js_event = JsEvent::from(&event);
-    assert_eq!(
-        js_event.parent_uuid,
-        event.parent_uuid.map(|uuid| uuid.to_string())
-    );
-    assert_eq!(js_event.uuid, event.uuid.to_string());
-    assert_eq!(js_event.name, Some("node-event".into()));
-    assert_eq!(js_event.data, Some(json!({"data": 1})));
-    assert_eq!(js_event.metadata, Some(json!({"meta": 2})));
-    assert_eq!(js_event.event_type, 1);
-    assert_eq!(js_event.scope_type, Some(3));
-    assert_eq!(js_event.input, Some(r#"{"input":true}"#.into()));
-    assert_eq!(js_event.output, Some(r#"{"output":true}"#.into()));
-    assert_eq!(js_event.model_name, Some("model".into()));
-    assert_eq!(js_event.tool_call_id, Some("tool-call-id".into()));
-    assert_eq!(
-        js_event.root_uuid,
-        event.root_uuid.map(|uuid| uuid.to_string())
-    );
-    assert!(!js_event.timestamp.is_empty());
+    match js_event {
+        JsEvent::LLMEnd {
+            parent_uuid: js_parent_uuid,
+            uuid: js_uuid,
+            timestamp,
+            name,
+            data,
+            metadata,
+            attributes,
+            output,
+            model_name,
+        } => {
+            assert_eq!(js_parent_uuid, parent_uuid.map(|value| value.to_string()));
+            assert_eq!(js_uuid, uuid.to_string());
+            assert_eq!(name, "node-event");
+            assert_eq!(data, Some(json!({"data": 1})));
+            assert_eq!(metadata, Some(json!({"meta": 2})));
+            assert_eq!(attributes, LLM_ATTR_STATELESS);
+            assert_eq!(output, Some(json!({"output": true})));
+            assert_eq!(model_name, Some("model".into()));
+            assert!(!timestamp.is_empty());
+        }
+        _ => panic!("expected LLMEnd event"),
+    }
 }
 
 #[test]
 fn test_event_and_scope_stack_conversions_cover_remaining_variants() {
     let stack = JsScopeStack::from(nvidia_nat_nexus_core::create_scope_stack());
     let _ = stack;
-
-    let event_types = [
-        core_types::EventType::Start,
-        core_types::EventType::End,
-        core_types::EventType::Mark,
-    ];
-    for event_type in event_types {
-        let converted = EventType::from(event_type);
-        match (event_type, converted) {
-            (core_types::EventType::Start, EventType::Start)
-            | (core_types::EventType::End, EventType::End)
-            | (core_types::EventType::Mark, EventType::Mark) => {}
-            _ => panic!("event type conversion mismatch"),
-        }
-    }
 
     let remaining_scope_types = [
         (core_types::ScopeType::Retriever, 4),
@@ -162,17 +149,68 @@ fn test_event_and_scope_stack_conversions_cover_remaining_variants() {
     ];
 
     for (scope_type, expected) in remaining_scope_types {
-        let event = core_types::Event::new(
+        let event = core_types::Event::scope_start(
             None,
             Uuid::new_v4(),
-            Some("variant-event".into()),
+            "variant-event",
             None,
             None,
-            None,
-            core_types::EventType::Start,
-            Some(scope_type),
+            core_types::ScopeAttributes::empty(),
+            scope_type,
         );
         let js_event = JsEvent::from(&event);
-        assert_eq!(js_event.scope_type, Some(expected));
+        match js_event {
+            JsEvent::ScopeStart { scope_type, .. } => assert_eq!(scope_type, expected),
+            _ => panic!("expected ScopeStart event"),
+        }
+    }
+}
+
+#[test]
+fn test_scope_type_is_only_present_on_scope_events() {
+    let scope_event = core_types::Event::scope_start(
+        None,
+        Uuid::new_v4(),
+        "scope-event",
+        None,
+        None,
+        core_types::ScopeAttributes::empty(),
+        core_types::ScopeType::Function,
+    );
+    match JsEvent::from(&scope_event) {
+        JsEvent::ScopeStart { scope_type, .. } => {
+            assert_eq!(scope_type, ScopeType::Function as i32)
+        }
+        _ => panic!("expected ScopeStart event"),
+    }
+
+    let tool_event = core_types::Event::tool_start(
+        None,
+        Uuid::new_v4(),
+        "tool-event",
+        None,
+        None,
+        core_types::ToolAttributes::empty(),
+        None,
+        None,
+    );
+    match JsEvent::from(&tool_event) {
+        JsEvent::ToolStart { .. } => {}
+        _ => panic!("expected ToolStart event"),
+    }
+
+    let llm_event = core_types::Event::llm_end(
+        None,
+        Uuid::new_v4(),
+        "llm-event",
+        None,
+        None,
+        core_types::LLMAttributes::empty(),
+        None,
+        None,
+    );
+    match JsEvent::from(&llm_event) {
+        JsEvent::LLMEnd { .. } => {}
+        _ => panic!("expected LLMEnd event"),
     }
 }

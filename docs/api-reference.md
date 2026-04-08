@@ -398,15 +398,14 @@ Additionally:
 | `parent_uuid` | `str \| None` | Parent scope UUID |
 | `timestamp` | `str` | ISO 8601 UTC |
 | `name` | `str \| None` | Entity name |
-| `event_type` | `EventType` | Start, End, or Mark |
-| `scope_type` | `ScopeType \| None` | Entity scope type |
+| `kind` | `str` | `ScopeStart`, `ScopeEnd`, `ToolStart`, `ToolEnd`, `LLMStart`, `LLMEnd`, or `Mark` |
+| `scope_type` | `ScopeType \| None` | Scope category, present only on `ScopeStart` and `ScopeEnd` |
 | `data` | `Any \| None` | Data snapshot |
 | `metadata` | `Any \| None` | Metadata snapshot |
 | `input` | `Any \| None` | Post-guardrail request (Start events) |
 | `output` | `Any \| None` | Post-guardrail response (End events) |
 | `model_name` | `str \| None` | LLM model name |
 | `tool_call_id` | `str \| None` | Tool correlation ID |
-| `root_uuid` | `str \| None` | Root scope UUID |
 
 Scope `Start` events are emitted after the scope has been pushed, and scope
 `End` events are emitted after the scope has been popped. Subscribers that call
@@ -518,7 +517,7 @@ from nat_nexus import AtifExporter
 
 exporter = AtifExporter()
 # ... run operations ...
-trajectory = exporter.export(root_uuid=None)  # dict (ATIF trajectory)
-trajectory_json = exporter.export_json(root_uuid=None)  # JSON string
+trajectory = exporter.export()  # dict (ATIF trajectory)
+trajectory_json = exporter.export_json()  # JSON string
 exporter.clear()
 ```

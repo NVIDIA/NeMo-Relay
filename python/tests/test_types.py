@@ -12,16 +12,21 @@ from uuid import uuid4
 import pytest
 from nat_nexus import (
     AtifExporter,
-    EventType,
     LLMAttributes,
+    LLMEndEvent,
     LLMRequest,
+    LLMStartEvent,
+    MarkEvent,
     OpenInferenceConfig,
     OpenInferenceSubscriber,
     OpenTelemetryConfig,
     OpenTelemetrySubscriber,
     ScopeAttributes,
+    ScopeStartEvent,
     ScopeType,
     ToolAttributes,
+    ToolEndEvent,
+    ToolStartEvent,
     llm,
     scope,
     subscribers,
@@ -98,12 +103,6 @@ class TestScopeType:
 
     def test_repr(self):
         assert "Agent" in repr(ScopeType.Agent)
-
-
-class TestEventType:
-    def test_all_variants(self):
-        variants = [EventType.Start, EventType.End, EventType.Mark]
-        assert len(variants) == 3
 
 
 class TestScopeAttributes:
@@ -303,7 +302,7 @@ class TestHandleTypes:
             scope.pop(parent)
 
 
-class TestEventTypes:
+class TestConcreteEvents:
     def test_event_properties_include_tool_and_llm_fields(self):
         events = []
         subscribers.register("py_event_types_sub", lambda event: events.append(event))
@@ -334,36 +333,60 @@ class TestEventTypes:
             scope.pop(parent)
             subscribers.deregister("py_event_types_sub")
 
-        tool_start = next(
-            event for event in events if event.name == "event_tool" and event.event_type == EventType.Start
-        )
-        tool_end = next(event for event in events if event.name == "event_tool" and event.event_type == EventType.End)
-        llm_start = next(event for event in events if event.name == "event_llm" and event.event_type == EventType.Start)
-        llm_end = next(event for event in events if event.name == "event_llm" and event.event_type == EventType.End)
-        mark = next(event for event in events if event.name == "event_mark")
-        root_uuid = tool_start.root_uuid
+        tool_start = next(event for event in events if event.name == "event_tool" and isinstance(event, ToolStartEvent))
+        tool_end = next(event for event in events if event.name == "event_tool" and isinstance(event, ToolEndEvent))
+        llm_start = next(event for event in events if event.name == "event_llm" and isinstance(event, LLMStartEvent))
+        llm_end = next(event for event in events if event.name == "event_llm" and isinstance(event, LLMEndEvent))
+        mark = next(event for event in events if event.name == "event_mark" and isinstance(event, MarkEvent))
 
         assert tool_start.input == {"x": 1}
         assert tool_start.tool_call_id == "tool-call-123"
-        assert root_uuid is not None
-        assert tool_end.root_uuid == root_uuid
+        assert tool_end.uuid == tool_start.uuid
         assert tool_end.output == {"y": 2}
         assert tool_end.metadata == {"tool_meta": True, "tool_end": True}
 
         assert llm_start.input == {"headers": request.headers, "content": request.content}
         assert llm_start.model_name == "event-model"
-        assert llm_start.root_uuid == root_uuid
-        assert llm_end.root_uuid == root_uuid
+        assert llm_end.uuid == llm_start.uuid
         assert llm_end.output == {"message": "hello"}
         assert llm_end.metadata == {"llm_meta": True, "llm_end": True}
 
-        assert mark.event_type == EventType.Mark
-        assert mark.scope_type is None
-        assert mark.root_uuid == root_uuid
+        assert mark.kind == "Mark"
+        assert mark.parent_uuid == parent.uuid
         assert mark.data == {"mark": True}
         assert mark.metadata == {"mark_meta": True}
-        assert "Event(" in repr(mark)
+        assert "MarkEvent" in repr(mark)
         assert "T" in mark.timestamp
+
+    def test_scope_type_is_only_present_on_scope_events(self):
+        events = []
+        subscribers.register("py_scope_type_contract_sub", lambda event: events.append(event))
+        parent = scope.push("scope_contract_root", ScopeType.Agent)
+
+        try:
+            child = scope.push("scope_contract_child", ScopeType.Function)
+            tool_handle = tools.call("scope_contract_tool", {"x": 1})
+            tools.call_end(tool_handle, {"y": 2})
+            llm_handle = llm.call("scope_contract_llm", LLMRequest({}, {"messages": [], "model": "m"}))
+            llm.call_end(llm_handle, {"done": True})
+            scope.pop(child)
+        finally:
+            scope.pop(parent)
+            subscribers.deregister("py_scope_type_contract_sub")
+
+        scope_start = next(
+            event for event in events if event.name == "scope_contract_child" and isinstance(event, ScopeStartEvent)
+        )
+        tool_start = next(
+            event for event in events if event.name == "scope_contract_tool" and isinstance(event, ToolStartEvent)
+        )
+        llm_start = next(
+            event for event in events if event.name == "scope_contract_llm" and isinstance(event, LLMStartEvent)
+        )
+
+        assert scope_start.scope_type == ScopeType.Function
+        assert not hasattr(tool_start, "scope_type")
+        assert not hasattr(llm_start, "scope_type")
 
 
 class TestAtifExporterType:
@@ -387,9 +410,9 @@ class TestAtifExporterType:
             llm.call_end(handle, {"content": "world"})
 
             exported_all = exporter.export()
-            exported = exporter.export(parent.uuid)
+            exported = exporter.export()
             exported_json_all = json.loads(exporter.export_json())
-            exported_json = json.loads(exporter.export_json(parent.uuid))
+            exported_json = json.loads(exporter.export_json())
 
             assert exported_all["session_id"] == "session-types"
             assert exported["session_id"] == "session-types"
@@ -401,18 +424,11 @@ class TestAtifExporterType:
             assert exported_json["session_id"] == "session-types"
 
             exporter.clear()
-            assert exporter.export(parent.uuid)["steps"] == []
+            assert exporter.export()["steps"] == []
         finally:
             scope.pop(parent)
             assert exporter.deregister("py_atif_exporter") is True
             assert exporter.deregister("py_atif_exporter") is False
-
-    def test_exporter_invalid_root_uuid_raises(self):
-        exporter = AtifExporter("session-types-invalid", "py-agent", "1.0.0")
-        with pytest.raises(ValueError, match="Invalid UUID"):
-            exporter.export("not-a-uuid")
-        with pytest.raises(ValueError, match="Invalid UUID"):
-            exporter.export_json("not-a-uuid")
 
 
 class TestOpenTelemetryTypes:

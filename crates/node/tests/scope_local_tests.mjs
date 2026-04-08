@@ -92,10 +92,10 @@ describe('Scope-local guardrail registration and execution', () => {
     );
     // Sanitize guardrails are observability-only; they modify event data, not execution results
     assert.equal(result.original, true);
-    await waitForEvents(events, (ev) => ev.some(e => e.event_type === 0));
+    await waitForEvents(events, (ev) => ev.some(e => e.kind === 'ToolStart'));
     deregisterSubscriber('sl_san_exec_sub');
-    const startEvents = events.filter(e => e.event_type === 0);
-    const input = startEvents.length > 0 && startEvents[0].input ? JSON.parse(startEvents[0].input) : null;
+    const startEvents = events.filter(e => e.kind === 'ToolStart');
+    const input = startEvents.length > 0 ? startEvents[0].input : null;
     assert.ok(input, 'Expected a Start event with input');
     assert.equal(input.scope_sanitized, true);
     scopeDeregisterToolSanitizeRequestGuardrail(scope.uuid, 'sl_san_exec_1');
@@ -116,10 +116,10 @@ describe('Scope-local guardrail registration and execution', () => {
     );
     // Sanitize guardrails are observability-only; they modify event data, not execution results
     assert.equal(result.value, 99);
-    await waitForEvents(events, (ev) => ev.some(e => e.event_type === 1));
+    await waitForEvents(events, (ev) => ev.some(e => e.kind === 'ToolEnd'));
     deregisterSubscriber('sl_resp_exec_sub');
-    const endEvents = events.filter(e => e.event_type === 1);
-    const output = endEvents.length > 0 && endEvents[0].output ? JSON.parse(endEvents[0].output) : null;
+    const endEvents = events.filter(e => e.kind === 'ToolEnd');
+    const output = endEvents.length > 0 ? endEvents[0].output : null;
     assert.ok(output, 'Expected an End event with output');
     assert.equal(output.post_checked, true);
     scopeDeregisterToolSanitizeResponseGuardrail(scope.uuid, 'sl_resp_exec_1');
@@ -193,9 +193,9 @@ describe('Scope-local guardrail registration and execution', () => {
         null,
       );
       assert.deepEqual(result, { model: 'scope-local-model' });
-      await waitForEvents(events, (ev) => ev.some((e) => e.name === 'sl_llm_req_guarded' && e.event_type === 0));
-      const start = events.find((e) => e.name === 'sl_llm_req_guarded' && e.event_type === 0);
-      assert.deepEqual(JSON.parse(start.input), {
+      await waitForEvents(events, (ev) => ev.some((e) => e.name === 'sl_llm_req_guarded' && e.kind === 'LLMStart'));
+      const start = events.find((e) => e.name === 'sl_llm_req_guarded' && e.kind === 'LLMStart');
+      assert.deepEqual(start.input, {
         headers: { 'X-Scope-Local': 'yes' },
         content: { messages: [], model: 'scope-local-model' },
       });
@@ -238,9 +238,9 @@ describe('Scope-local guardrail registration and execution', () => {
         null,
       );
       assert.deepEqual(result, { ok: true });
-      await waitForEvents(events, (ev) => ev.some((e) => e.name === 'sl_llm_resp_guarded' && e.event_type === 1));
-      const end = events.find((e) => e.name === 'sl_llm_resp_guarded' && e.event_type === 1);
-      assert.deepEqual(JSON.parse(end.output), { ok: true, scopeChecked: true });
+      await waitForEvents(events, (ev) => ev.some((e) => e.name === 'sl_llm_resp_guarded' && e.kind === 'LLMEnd'));
+      const end = events.find((e) => e.name === 'sl_llm_resp_guarded' && e.kind === 'LLMEnd');
+      assert.deepEqual(end.output, { ok: true, scopeChecked: true });
     } finally {
       scopeDeregisterLlmSanitizeResponseGuardrail(scope.uuid, 'sl_llm_san_resp_evt');
       deregisterSubscriber('sl_llm_san_resp_evt_sub');
@@ -512,10 +512,10 @@ describe('Priority merge of global and scope-local middleware', () => {
       null, null, null, null,
     );
     // Sanitize guardrails are observability-only; verify via tool Start event input
-    await waitForEvents(events, (ev) => ev.some(e => e.event_type === 0 && e.scope_type === 2));
+    await waitForEvents(events, (ev) => ev.some(e => e.kind === 'ToolStart'));
     deregisterSubscriber('sl_merge_sub');
-    const toolStartEvents = events.filter(e => e.event_type === 0 && e.scope_type === 2);
-    const input = toolStartEvents.length > 0 && toolStartEvents[0].input ? JSON.parse(toolStartEvents[0].input) : null;
+    const toolStartEvents = events.filter(e => e.kind === 'ToolStart');
+    const input = toolStartEvents.length > 0 ? toolStartEvents[0].input : null;
     assert.ok(input, 'Expected a tool Start event with input');
     assert.equal(input.global_ran, true);
     assert.equal(input.scope_ran, true);
@@ -923,9 +923,9 @@ describe('Scope-local subscriber receives events', () => {
     scopeRegisterSubscriber(scope.uuid, 'sl_mark_sub', (e) => events.push(e));
 
     event('sl_mark_event', null, { marker: 'scope_local' }, null);
-    await waitForEvents(events, (ev) => ev.some(e => e.event_type === 2));
+    await waitForEvents(events, (ev) => ev.some(e => e.kind === 'Mark'));
 
-    const markEvents = events.filter(e => e.event_type === 2); // Mark = 2
+    const markEvents = events.filter(e => e.kind === 'Mark');
     assert.ok(markEvents.length > 0, 'Scope-local subscriber should receive mark events');
 
     scopeDeregisterSubscriber(scope.uuid, 'sl_mark_sub');
@@ -944,7 +944,7 @@ describe('Scope-local subscriber receives events', () => {
     assert.ok(captured, 'Expected at least one event');
     assert.ok(typeof captured.uuid === 'string', 'Event should have uuid string');
     assert.ok(typeof captured.timestamp === 'string', 'Event should have timestamp string');
-    assert.ok(typeof captured.event_type === 'number', 'Event should have event_type number');
+    assert.ok(typeof captured.kind === 'string', 'Event should have kind string');
 
     scopeDeregisterSubscriber(scope.uuid, 'sl_props_sub');
     popScope(scope);
@@ -983,10 +983,10 @@ describe('Scope-local subscriber receives events', () => {
       );
       assert.deepEqual(result, { ok: true });
       await waitForEvents(events, (ev) => ev.filter((e) => e.name === 'sl_llm_subscribed_call').length >= 2);
-      const start = events.find((e) => e.name === 'sl_llm_subscribed_call' && e.event_type === 0);
-      const end = events.find((e) => e.name === 'sl_llm_subscribed_call' && e.event_type === 1);
+      const start = events.find((e) => e.name === 'sl_llm_subscribed_call' && e.kind === 'LLMStart');
+      const end = events.find((e) => e.name === 'sl_llm_subscribed_call' && e.kind === 'LLMEnd');
       assert.equal(start.model_name, 'scope-local-llm');
-      assert.equal(end.root_uuid, start.root_uuid);
+      assert.equal(end.uuid, start.uuid);
     } finally {
       scopeDeregisterSubscriber(scope.uuid, 'sl_llm_scope_sub');
       popScope(scope);

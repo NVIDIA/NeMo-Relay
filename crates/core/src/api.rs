@@ -609,7 +609,6 @@ pub fn nat_nexus_push_scope(
     let (handle, event, subscribers) = {
         let ss = current_scope_stack();
         let ss_guard = ss.read().expect("scope stack lock poisoned");
-        let root_uuid = Some(ss_guard.root_uuid());
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
         let ctx = global_context();
@@ -618,7 +617,7 @@ pub fn nat_nexus_push_scope(
             .map_err(|e| NexusError::Internal(e.to_string()))?;
         let handle =
             state.create_scope_handle(name, parent_uuid, scope_type, attributes, data, metadata);
-        let event = state.build_scope_start_event(&handle, root_uuid);
+        let event = state.build_scope_start_event(&handle);
         (handle, event, subscribers)
     };
     task_scope_push(handle.clone());
@@ -645,7 +644,6 @@ pub fn nat_nexus_pop_scope(handle_uuid: &Uuid) -> Result<()> {
             }
             return Err(NexusError::NotFound("scope handle not found".into()));
         }
-        let root_uuid = Some(ss_guard.root_uuid());
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
         let scope = top.clone();
@@ -653,7 +651,7 @@ pub fn nat_nexus_pop_scope(handle_uuid: &Uuid) -> Result<()> {
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        let event = state.end_scope_handle(&scope, root_uuid);
+        let event = state.end_scope_handle(&scope);
         (scope, event, subscribers)
     };
     let removed = task_scope_remove(handle_uuid)?;
@@ -676,14 +674,13 @@ pub fn nat_nexus_event(
     let (event, subscribers) = {
         let ss = current_scope_stack();
         let ss_guard = ss.read().expect("scope stack lock poisoned");
-        let root_uuid = Some(ss_guard.root_uuid());
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
         let ctx = global_context();
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        let event = state.create_event(name, parent_uuid, data, metadata, root_uuid);
+        let event = state.create_event(name, parent_uuid, data, metadata);
         (event, subscribers)
     };
     NatNexusContextState::emit_event(&event, &subscribers);
@@ -712,7 +709,6 @@ pub fn nat_nexus_tool_call(
     let (handle, event, subscribers) = {
         let ss = current_scope_stack();
         let ss_guard = ss.read().expect("scope stack lock poisoned");
-        let root_uuid = Some(ss_guard.root_uuid());
         let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_sanitize_request_guardrails);
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
@@ -724,7 +720,7 @@ pub fn nat_nexus_tool_call(
         let sanitized_args = state.tool_sanitize_request_chain(name, args, &sl);
         let handle =
             state.create_tool_handle(name, parent_uuid, attributes, data, metadata, tool_call_id);
-        let event = state.build_tool_start_event(&handle, Some(sanitized_args), root_uuid);
+        let event = state.build_tool_start_event(&handle, Some(sanitized_args));
         (handle, event, subscribers)
     };
     NatNexusContextState::emit_event(&event, &subscribers);
@@ -743,7 +739,6 @@ pub fn nat_nexus_tool_call_end(
     let (event, subscribers) = {
         let ss = current_scope_stack();
         let ss_guard = ss.read().expect("scope stack lock poisoned");
-        let root_uuid = Some(ss_guard.root_uuid());
         let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_sanitize_response_guardrails);
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
@@ -753,8 +748,7 @@ pub fn nat_nexus_tool_call_end(
             .map_err(|e| NexusError::Internal(e.to_string()))?;
 
         let sanitized_result = state.tool_sanitize_response_chain(&handle.name, result, &sl);
-        let event =
-            state.end_tool_handle(handle, data, metadata, Some(sanitized_result), root_uuid);
+        let event = state.end_tool_handle(handle, data, metadata, Some(sanitized_result));
         (event, subscribers)
     };
     NatNexusContextState::emit_event(&event, &subscribers);
@@ -769,14 +763,13 @@ fn emit_tool_end_without_output(
     let (event, subscribers) = {
         let ss = current_scope_stack();
         let ss_guard = ss.read().expect("scope stack lock poisoned");
-        let root_uuid = Some(ss_guard.root_uuid());
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
         let ctx = global_context();
         let state = ctx
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
-        let event = state.end_tool_handle(handle, data, metadata, None, root_uuid);
+        let event = state.end_tool_handle(handle, data, metadata, None);
         (event, subscribers)
     };
     NatNexusContextState::emit_event(&event, &subscribers);
@@ -896,7 +889,6 @@ pub fn nat_nexus_llm_call(
     let (handle, event, subscribers) = {
         let ss = current_scope_stack();
         let ss_guard = ss.read().expect("scope stack lock poisoned");
-        let root_uuid = Some(ss_guard.root_uuid());
         let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_request_guardrails);
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
@@ -909,7 +901,7 @@ pub fn nat_nexus_llm_call(
         let input = serde_json::to_value(&sanitized_request).unwrap_or(Json::Null);
         let handle =
             state.create_llm_handle(name, parent_uuid, attributes, data, metadata, model_name);
-        let event = state.build_llm_start_event(&handle, Some(input), root_uuid);
+        let event = state.build_llm_start_event(&handle, Some(input));
         (handle, event, subscribers)
     };
     NatNexusContextState::emit_event(&event, &subscribers);
@@ -928,7 +920,6 @@ pub fn nat_nexus_llm_call_end(
     let (event, subscribers) = {
         let ss = current_scope_stack();
         let ss_guard = ss.read().expect("scope stack lock poisoned");
-        let root_uuid = Some(ss_guard.root_uuid());
         let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
@@ -938,8 +929,7 @@ pub fn nat_nexus_llm_call_end(
             .map_err(|e| NexusError::Internal(e.to_string()))?;
 
         let sanitized_response = state.llm_sanitize_response_chain(response, &sl);
-        let event =
-            state.end_llm_handle(handle, data, metadata, Some(sanitized_response), root_uuid);
+        let event = state.end_llm_handle(handle, data, metadata, Some(sanitized_response));
         (event, subscribers)
     };
     NatNexusContextState::emit_event(&event, &subscribers);
@@ -954,7 +944,6 @@ fn emit_llm_end_without_output(
     let (event, subscribers) = {
         let ss = current_scope_stack();
         let ss_guard = ss.read().expect("scope stack lock poisoned");
-        let root_uuid = Some(ss_guard.root_uuid());
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
         let ctx = global_context();
@@ -962,7 +951,7 @@ fn emit_llm_end_without_output(
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
 
-        let event = state.end_llm_handle(handle, data, metadata, None, root_uuid);
+        let event = state.end_llm_handle(handle, data, metadata, None);
         (event, subscribers)
     };
     NatNexusContextState::emit_event(&event, &subscribers);
@@ -1336,17 +1325,17 @@ mod tests {
         nat_nexus_register_subscriber(
             "scope_visibility",
             Arc::new(move |event: &crate::types::Event| {
-                if event.scope_type != Some(ScopeType::Agent) {
+                if event.scope_type() != Some(ScopeType::Agent) {
                     return;
                 }
-                if event.name.as_deref() != Some("visible_scope") {
+                if event.name() != "visible_scope" {
                     return;
                 }
                 let active_uuid = nat_nexus_get_handle().unwrap().uuid;
                 captured
                     .lock()
                     .unwrap()
-                    .push((event.event_type, active_uuid));
+                    .push((event.kind().to_string(), active_uuid));
             }),
         )
         .unwrap();
@@ -1365,8 +1354,8 @@ mod tests {
 
         let observations = observations.lock().unwrap();
         assert_eq!(observations.len(), 2);
-        assert_eq!(observations[0], (EventType::Start, handle.uuid));
-        assert_eq!(observations[1], (EventType::End, parent_uuid));
+        assert_eq!(observations[0], ("ScopeStart".to_string(), handle.uuid));
+        assert_eq!(observations[1], ("ScopeEnd".to_string(), parent_uuid));
 
         drop(observations);
         nat_nexus_deregister_subscriber("scope_visibility").unwrap();
@@ -1485,7 +1474,7 @@ mod tests {
                 captured
                     .lock()
                     .unwrap()
-                    .push((event.name.clone(), event.event_type));
+                    .push((event.name().to_string(), event.kind().to_string()));
             }),
         )
         .unwrap();
@@ -1516,9 +1505,7 @@ mod tests {
         let events = events.lock().unwrap();
         let parent_end_count = events
             .iter()
-            .filter(|(name, event_type)| {
-                name.as_deref() == Some("parent") && *event_type == EventType::End
-            })
+            .filter(|(name, event_kind)| name == "parent" && *event_kind == "ScopeEnd")
             .count();
         assert_eq!(parent_end_count, 0);
 
@@ -1558,7 +1545,9 @@ mod tests {
         nat_nexus_register_subscriber(
             "evt_test",
             Arc::new(move |e: &crate::types::Event| {
-                ec.lock().unwrap().push((e.name.clone(), e.event_type));
+                ec.lock()
+                    .unwrap()
+                    .push((e.name().to_string(), e.kind().to_string()));
             }),
         )
         .unwrap();
@@ -1567,8 +1556,8 @@ mod tests {
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
-        assert_eq!(captured[0].0, Some("my_mark".into()));
-        assert_eq!(captured[0].1, crate::types::EventType::Mark);
+        assert_eq!(captured[0].0, "my_mark");
+        assert_eq!(captured[0].1, "Mark");
 
         drop(captured);
         nat_nexus_deregister_subscriber("evt_test").unwrap();
@@ -1586,7 +1575,7 @@ mod tests {
         nat_nexus_register_subscriber(
             "tool_test",
             Arc::new(move |e: &crate::types::Event| {
-                ec.lock().unwrap().push(e.event_type);
+                ec.lock().unwrap().push(e.kind().to_string());
             }),
         )
         .unwrap();
@@ -1607,8 +1596,8 @@ mod tests {
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
-        assert_eq!(captured[0], crate::types::EventType::Start);
-        assert_eq!(captured[1], crate::types::EventType::End);
+        assert_eq!(captured[0], "ToolStart");
+        assert_eq!(captured[1], "ToolEnd");
 
         drop(captured);
         nat_nexus_deregister_subscriber("tool_test").unwrap();
@@ -1656,7 +1645,7 @@ mod tests {
         // The start event input should contain sanitized args
         let captured = events.lock().unwrap();
         let start_event = &captured[0];
-        let input = start_event.input.as_ref().unwrap();
+        let input = start_event.input().unwrap();
         assert_eq!(input["sanitized"], true);
         assert_eq!(input["input"], "data");
 
@@ -1708,7 +1697,7 @@ mod tests {
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];
-        let output = end_event.output.as_ref().unwrap();
+        let output = end_event.output().unwrap();
         assert_eq!(output["cleaned"], true);
         assert_eq!(output["output"], "raw");
 
@@ -1776,10 +1765,10 @@ mod tests {
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
-        assert_eq!(captured[0].event_type, EventType::Start);
-        assert_eq!(captured[1].event_type, EventType::End);
-        assert_eq!(captured[0].uuid, captured[1].uuid);
-        assert!(captured[1].output.is_none());
+        assert_eq!(captured[0].kind(), "ToolStart");
+        assert_eq!(captured[1].kind(), "ToolEnd");
+        assert_eq!(captured[0].uuid(), captured[1].uuid());
+        assert!(captured[1].output().is_none());
 
         drop(captured);
         nat_nexus_deregister_subscriber("tool_exec_failure_sub").unwrap();
@@ -1868,8 +1857,8 @@ mod tests {
         // Verify standalone Mark event with rejection data (no Start/End pair)
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
-        assert_eq!(captured[0].event_type, crate::types::EventType::Mark);
-        let mark_data = captured[0].data.as_ref().unwrap();
+        assert_eq!(captured[0].kind(), "Mark");
+        let mark_data = captured[0].data().unwrap();
         assert_eq!(mark_data["rejected"], true);
         assert_eq!(mark_data["rejection_reason"], "forbidden tool");
 
@@ -1927,7 +1916,7 @@ mod tests {
         nat_nexus_register_subscriber(
             "llm_test",
             Arc::new(move |e: &crate::types::Event| {
-                ec.lock().unwrap().push(e.event_type);
+                ec.lock().unwrap().push(e.kind().to_string());
             }),
         )
         .unwrap();
@@ -1952,8 +1941,8 @@ mod tests {
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
-        assert_eq!(captured[0], crate::types::EventType::Start);
-        assert_eq!(captured[1], crate::types::EventType::End);
+        assert_eq!(captured[0], "LLMStart");
+        assert_eq!(captured[1], "LLMEnd");
 
         drop(captured);
         nat_nexus_deregister_subscriber("llm_test").unwrap();
@@ -2002,7 +1991,7 @@ mod tests {
         let captured = events.lock().unwrap();
         let start_event = &captured[0];
         // Sanitized request should be in input
-        let input = start_event.input.as_ref().unwrap();
+        let input = start_event.input().unwrap();
         assert_eq!(input["headers"]["X-Sanitized"], "true");
 
         drop(captured);
@@ -2080,10 +2069,10 @@ mod tests {
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
-        assert_eq!(captured[0].event_type, EventType::Start);
-        assert_eq!(captured[1].event_type, EventType::End);
-        assert_eq!(captured[0].uuid, captured[1].uuid);
-        assert!(captured[1].output.is_none());
+        assert_eq!(captured[0].kind(), "LLMStart");
+        assert_eq!(captured[1].kind(), "LLMEnd");
+        assert_eq!(captured[0].uuid(), captured[1].uuid());
+        assert!(captured[1].output().is_none());
 
         drop(captured);
         nat_nexus_deregister_subscriber("llm_exec_failure_sub").unwrap();
@@ -2139,8 +2128,8 @@ mod tests {
         // Verify standalone Mark event with rejection data (no Start/End pair)
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
-        assert_eq!(captured[0].event_type, crate::types::EventType::Mark);
-        let mark_data = captured[0].data.as_ref().unwrap();
+        assert_eq!(captured[0].kind(), "Mark");
+        let mark_data = captured[0].data().unwrap();
         assert_eq!(mark_data["rejected"], true);
         assert_eq!(mark_data["rejection_reason"], "blocked by policy");
 
@@ -2562,10 +2551,10 @@ mod tests {
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
-        assert_eq!(captured[0].event_type, EventType::Start);
-        assert_eq!(captured[1].event_type, EventType::End);
-        assert_eq!(captured[0].uuid, captured[1].uuid);
-        assert!(captured[1].output.is_none());
+        assert_eq!(captured[0].kind(), "LLMStart");
+        assert_eq!(captured[1].kind(), "LLMEnd");
+        assert_eq!(captured[0].uuid(), captured[1].uuid());
+        assert!(captured[1].output().is_none());
 
         drop(captured);
         nat_nexus_deregister_subscriber("llm_stream_exec_failure_sub").unwrap();
@@ -2641,8 +2630,8 @@ mod tests {
         // Verify standalone Mark event with rejection data (no Start/End pair)
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
-        assert_eq!(captured[0].event_type, crate::types::EventType::Mark);
-        let mark_data = captured[0].data.as_ref().unwrap();
+        assert_eq!(captured[0].kind(), "Mark");
+        let mark_data = captured[0].data().unwrap();
         assert_eq!(mark_data["rejected"], true);
         assert_eq!(mark_data["rejection_reason"], "stream blocked");
 

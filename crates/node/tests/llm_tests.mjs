@@ -154,11 +154,11 @@ describe('LLM guardrails', () => {
       );
       assert.deepEqual(result, { model: 'test-model' });
       const deadline = Date.now() + 2000;
-      while (!events.find((e) => e.name === 'san_req_evt_llm' && e.event_type === 0) && Date.now() < deadline) {
+      while (!events.find((e) => e.name === 'san_req_evt_llm' && e.kind === 'LLMStart') && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 10));
       }
-      const start = events.find((e) => e.name === 'san_req_evt_llm' && e.event_type === 0);
-      assert.deepEqual(JSON.parse(start.input), {
+      const start = events.find((e) => e.name === 'san_req_evt_llm' && e.kind === 'LLMStart');
+      assert.deepEqual(start.input, {
         headers: { 'X-Sanitized': 'yes' },
         content: { messages: [], model: 'test-model' },
       });
@@ -225,11 +225,11 @@ describe('LLM guardrails', () => {
       );
       assert.deepEqual(result, { ok: true });
       const deadline = Date.now() + 2000;
-      while (!events.find((e) => e.name === 'san_resp_evt_llm' && e.event_type === 1) && Date.now() < deadline) {
+      while (!events.find((e) => e.name === 'san_resp_evt_llm' && e.kind === 'LLMEnd') && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 10));
       }
-      const end = events.find((e) => e.name === 'san_resp_evt_llm' && e.event_type === 1);
-      assert.deepEqual(JSON.parse(end.output), { ok: true, sanitized: true });
+      const end = events.find((e) => e.name === 'san_resp_evt_llm' && e.kind === 'LLMEnd');
+      assert.deepEqual(end.output, { ok: true, sanitized: true });
     } finally {
       deregisterLlmSanitizeResponseGuardrail('node_llm_san_resp_evt_guard');
       deregisterSubscriber('node_llm_san_resp_evt');
@@ -475,7 +475,7 @@ describe('LLM intercepts', () => {
 });
 
 describe('LLM event fields', () => {
-  it('subscriber receives modelName and rootUuid fields', async () => {
+  it('subscriber receives modelName and payload fields', async () => {
     const events = [];
     const scope = pushScope('llm_event_parent', ScopeType.Agent, null, null);
     registerSubscriber('node_llm_field_sub', (e) => events.push(e));
@@ -498,13 +498,11 @@ describe('LLM event fields', () => {
         await new Promise((r) => setTimeout(r, 10));
       }
 
-      const start = events.find((e) => e.name === 'field_llm' && e.event_type === 0);
-      const end = events.find((e) => e.name === 'field_llm' && e.event_type === 1);
+      const start = events.find((e) => e.name === 'field_llm' && e.kind === 'LLMStart');
+      const end = events.find((e) => e.name === 'field_llm' && e.kind === 'LLMEnd');
       assert.equal(start.model_name, 'gpt-field-model');
-      assert.ok(start.root_uuid);
-      assert.equal(end.root_uuid, start.root_uuid);
-      assert.deepEqual(JSON.parse(start.input), { headers: {}, content: { messages: [], model: 'test-model' } });
-      assert.deepEqual(JSON.parse(end.output), { ok: true });
+      assert.deepEqual(start.input, { headers: {}, content: { messages: [], model: 'test-model' } });
+      assert.deepEqual(end.output, { ok: true });
     } finally {
       deregisterSubscriber('node_llm_field_sub');
       popScope(scope);

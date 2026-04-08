@@ -393,7 +393,7 @@ mod tests {
         // Arrange
         let exporter = AtifExporter::new("s".into(), make_agent_info());
         // Act
-        let trajectory = exporter.export(None);
+        let trajectory = exporter.export();
         // Assert
         assert!(trajectory.steps.is_empty());
     }

@@ -6,7 +6,7 @@
 //! This module defines the fundamental types used throughout the framework:
 //!
 //! - **Attribute bitflags** — [`ScopeAttributes`], [`ToolAttributes`], [`LLMAttributes`]
-//! - **Enums** — [`ScopeType`], [`EventType`]
+//! - **Enums** — [`ScopeType`]
 //! - **Handle types** — [`ScopeHandle`], [`ToolHandle`], [`LLMHandle`], [`HandleAttributes`]
 //! - **Request/response types** — [`LLMRequest`]
 //! - **Event types** — [`Event`]
@@ -89,20 +89,6 @@ pub enum ScopeType {
     Custom,
     /// An unknown or unspecified scope type.
     Unknown,
-}
-
-/// The type of a lifecycle event.
-///
-/// Serializes to/from lowercase strings (e.g., `"start"`, `"end"`, `"mark"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum EventType {
-    /// A scope or handle has been created / entered.
-    Start,
-    /// A scope or handle has been destroyed / exited.
-    End,
-    /// A standalone marker event (not tied to scope lifecycle).
-    Mark,
 }
 
 // ---------------------------------------------------------------------------
@@ -402,23 +388,6 @@ mod tests {
         }
     }
 
-    // -- EventType --
-
-    #[test]
-    fn test_event_type_serde() {
-        let variants = vec![
-            (EventType::Start, "\"start\""),
-            (EventType::End, "\"end\""),
-            (EventType::Mark, "\"mark\""),
-        ];
-        for (variant, expected_json) in variants {
-            let json = serde_json::to_string(&variant).unwrap();
-            assert_eq!(json, expected_json);
-            let deserialized: EventType = serde_json::from_str(&json).unwrap();
-            assert_eq!(variant, deserialized);
-        }
-    }
-
     // -- HandleAttributes --
 
     #[test]
@@ -617,175 +586,129 @@ mod tests {
     fn test_event_new() {
         let parent = Uuid::new_v4();
         let uuid = Uuid::new_v4();
-        let event = Event::new(
+        let event = Event::scope_start(
             Some(parent),
             uuid,
-            Some("test_event".into()),
+            "test_event",
             Some(json!({"key": "val"})),
             None,
-            Some(HandleAttributes::Scope(ScopeAttributes::empty())),
-            EventType::Start,
-            Some(ScopeType::Agent),
+            ScopeAttributes::empty(),
+            ScopeType::Agent,
         );
-        assert_eq!(event.parent_uuid, Some(parent));
-        assert_eq!(event.uuid, uuid);
-        assert_eq!(event.name, Some("test_event".into()));
-        assert_eq!(event.event_type, EventType::Start);
-        assert_eq!(event.scope_type, Some(ScopeType::Agent));
-        assert!(event.data.is_some());
-        assert!(event.metadata.is_none());
+        assert_eq!(event.parent_uuid(), Some(parent));
+        assert_eq!(event.uuid(), uuid);
+        assert_eq!(event.name(), "test_event");
+        assert_eq!(event.kind(), "ScopeStart");
+        assert_eq!(event.scope_type(), Some(ScopeType::Agent));
+        assert!(event.data().is_some());
+        assert!(event.metadata().is_none());
     }
 
     #[test]
     fn test_event_serde_roundtrip() {
-        let event = Event::new(
-            None,
-            Uuid::new_v4(),
-            Some("evt".into()),
-            None,
-            None,
-            None,
-            EventType::Mark,
-            None,
-        );
+        let event = Event::mark(None, Uuid::new_v4(), "evt", None, None);
         let json_str = serde_json::to_string(&event).unwrap();
         let deserialized: Event = serde_json::from_str(&json_str).unwrap();
-        assert_eq!(event.uuid, deserialized.uuid);
-        assert_eq!(event.event_type, deserialized.event_type);
+        assert_eq!(event.uuid(), deserialized.uuid());
+        assert_eq!(event.kind(), deserialized.kind());
     }
 
     #[test]
     fn test_event_timestamp_is_recent() {
         let before = chrono::Utc::now();
-        let event = Event::new(
-            None,
-            Uuid::new_v4(),
-            None,
-            None,
-            None,
-            None,
-            EventType::Mark,
-            None,
-        );
+        let event = Event::mark(None, Uuid::new_v4(), "", None, None);
         let after = chrono::Utc::now();
-        assert!(event.timestamp >= before);
-        assert!(event.timestamp <= after);
+        assert!(*event.timestamp() >= before);
+        assert!(*event.timestamp() <= after);
     }
 
     // -- Event new fields --
 
     #[test]
     fn test_event_new_fields_default_none() {
-        let event = Event::new(
-            None,
-            Uuid::new_v4(),
-            None,
-            None,
-            None,
-            None,
-            EventType::Mark,
-            None,
-        );
-        assert!(event.input.is_none());
-        assert!(event.output.is_none());
-        assert!(event.model_name.is_none());
-        assert!(event.tool_call_id.is_none());
-        assert!(event.root_uuid.is_none());
+        let event = Event::mark(None, Uuid::new_v4(), "", None, None);
+        assert!(event.input().is_none());
+        assert!(event.output().is_none());
+        assert!(event.model_name().is_none());
+        assert!(event.tool_call_id().is_none());
     }
 
     #[test]
     fn test_event_serde_roundtrip_with_new_fields() {
-        let root_uuid = Uuid::new_v4();
-        let mut event = Event::new(
+        let event = Event::tool_end(
             None,
             Uuid::new_v4(),
-            Some("test".into()),
+            "test",
             None,
             None,
-            None,
-            EventType::Start,
-            Some(ScopeType::Tool),
+            ToolAttributes::empty(),
+            Some(json!({"result": "world"})),
+            Some("call_abc".to_string()),
         );
-        event.input = Some(json!({"args": "hello"}));
-        event.output = Some(json!({"result": "world"}));
-        event.model_name = Some("gpt-4".to_string());
-        event.tool_call_id = Some("call_abc".to_string());
-        event.root_uuid = Some(root_uuid);
 
         let json_str = serde_json::to_string(&event).unwrap();
         let deserialized: Event = serde_json::from_str(&json_str).unwrap();
-        assert_eq!(deserialized.input, Some(json!({"args": "hello"})));
-        assert_eq!(deserialized.output, Some(json!({"result": "world"})));
-        assert_eq!(deserialized.model_name, Some("gpt-4".to_string()));
-        assert_eq!(deserialized.tool_call_id, Some("call_abc".to_string()));
-        assert_eq!(deserialized.root_uuid, Some(root_uuid));
+        assert_eq!(deserialized.output(), Some(&json!({"result": "world"})));
+        assert_eq!(deserialized.tool_call_id(), Some("call_abc"));
     }
 
-    // -- EventBuilder --
-
     #[test]
-    fn test_event_builder_defaults() {
+    fn test_mark_event_defaults() {
         let uuid = Uuid::new_v4();
-        let event = Event::builder(uuid, EventType::Mark).build();
-        assert_eq!(event.uuid, uuid);
-        assert_eq!(event.event_type, EventType::Mark);
-        assert!(event.parent_uuid.is_none());
-        assert!(event.name.is_none());
-        assert!(event.data.is_none());
-        assert!(event.metadata.is_none());
-        assert!(event.attributes.is_none());
-        assert!(event.scope_type.is_none());
-        assert!(event.input.is_none());
-        assert!(event.output.is_none());
-        assert!(event.model_name.is_none());
-        assert!(event.tool_call_id.is_none());
-        assert!(event.root_uuid.is_none());
+        let event = Event::mark(None, uuid, "", None, None);
+        assert_eq!(event.uuid(), uuid);
+        assert_eq!(event.kind(), "Mark");
+        assert!(event.parent_uuid().is_none());
+        assert_eq!(event.name(), "");
+        assert!(event.data().is_none());
+        assert!(event.metadata().is_none());
+        assert!(event.attributes().is_none());
+        assert!(event.scope_type().is_none());
+        assert!(event.input().is_none());
+        assert!(event.output().is_none());
+        assert!(event.model_name().is_none());
+        assert!(event.tool_call_id().is_none());
     }
 
     #[test]
-    fn test_event_builder_all_setters() {
+    fn test_tool_start_event_all_fields() {
         let uuid = Uuid::new_v4();
         let parent = Uuid::new_v4();
-        let root = Uuid::new_v4();
-        let event = Event::builder(uuid, EventType::Start)
-            .parent_uuid(Some(parent))
-            .name("my_tool")
-            .data(Some(json!({"custom": true})))
-            .metadata(Some(json!({"trace": "abc"})))
-            .attributes(HandleAttributes::Tool(ToolAttributes::LOCAL))
-            .scope_type(ScopeType::Tool)
-            .input(Some(json!({"args": [1, 2]})))
-            .output(Some(json!({"result": 3})))
-            .model_name(Some("gpt-4".to_string()))
-            .tool_call_id(Some("call_xyz".to_string()))
-            .root_uuid(Some(root))
-            .build();
+        let event = Event::tool_start(
+            Some(parent),
+            uuid,
+            "my_tool",
+            Some(json!({"custom": true})),
+            Some(json!({"trace": "abc"})),
+            ToolAttributes::LOCAL,
+            Some(json!({"args": [1, 2]})),
+            Some("call_xyz".to_string()),
+        );
 
-        assert_eq!(event.uuid, uuid);
-        assert_eq!(event.event_type, EventType::Start);
-        assert_eq!(event.parent_uuid, Some(parent));
-        assert_eq!(event.name, Some("my_tool".into()));
-        assert_eq!(event.data, Some(json!({"custom": true})));
-        assert_eq!(event.metadata, Some(json!({"trace": "abc"})));
+        assert_eq!(event.uuid(), uuid);
+        assert_eq!(event.kind(), "ToolStart");
+        assert_eq!(event.parent_uuid(), Some(parent));
+        assert_eq!(event.name(), "my_tool");
+        assert_eq!(event.data(), Some(&json!({"custom": true})));
+        assert_eq!(event.metadata(), Some(&json!({"trace": "abc"})));
         assert_eq!(
-            event.attributes,
+            event.attributes(),
             Some(HandleAttributes::Tool(ToolAttributes::LOCAL))
         );
-        assert_eq!(event.scope_type, Some(ScopeType::Tool));
-        assert_eq!(event.input, Some(json!({"args": [1, 2]})));
-        assert_eq!(event.output, Some(json!({"result": 3})));
-        assert_eq!(event.model_name, Some("gpt-4".to_string()));
-        assert_eq!(event.tool_call_id, Some("call_xyz".to_string()));
-        assert_eq!(event.root_uuid, Some(root));
+        assert!(event.scope_type().is_none());
+        assert_eq!(event.input(), Some(&json!({"args": [1, 2]})));
+        assert!(event.output().is_none());
+        assert!(event.model_name().is_none());
+        assert_eq!(event.tool_call_id(), Some("call_xyz"));
     }
 
     #[test]
-    fn test_event_builder_timestamp_is_recent() {
+    fn test_event_constructor_timestamp_is_recent() {
         let before = chrono::Utc::now();
-        let event = Event::builder(Uuid::new_v4(), EventType::End).build();
+        let event = Event::mark(None, Uuid::new_v4(), "", None, None);
         let after = chrono::Utc::now();
-        assert!(event.timestamp >= before);
-        assert!(event.timestamp <= after);
+        assert!(*event.timestamp() >= before);
+        assert!(*event.timestamp() <= after);
     }
 }
 
@@ -831,6 +754,99 @@ pub struct GuardrailEntry<F> {
 // Event
 // ---------------------------------------------------------------------------
 
+/// A scope start event emitted when a scope is pushed onto the scope stack.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScopeStartEvent {
+    pub parent_uuid: Option<Uuid>,
+    pub uuid: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub name: String,
+    pub data: Option<Json>,
+    pub metadata: Option<Json>,
+    pub attributes: ScopeAttributes,
+    pub scope_type: ScopeType,
+}
+
+/// A scope end event emitted when a scope is popped from the scope stack.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScopeEndEvent {
+    pub parent_uuid: Option<Uuid>,
+    pub uuid: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub name: String,
+    pub data: Option<Json>,
+    pub metadata: Option<Json>,
+    pub attributes: ScopeAttributes,
+    pub scope_type: ScopeType,
+}
+
+/// A tool start event emitted when a tool handle is created.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolStartEvent {
+    pub parent_uuid: Option<Uuid>,
+    pub uuid: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub name: String,
+    pub data: Option<Json>,
+    pub metadata: Option<Json>,
+    pub attributes: ToolAttributes,
+    pub input: Option<Json>,
+    pub tool_call_id: Option<String>,
+}
+
+/// A tool end event emitted when a tool handle is completed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolEndEvent {
+    pub parent_uuid: Option<Uuid>,
+    pub uuid: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub name: String,
+    pub data: Option<Json>,
+    pub metadata: Option<Json>,
+    pub attributes: ToolAttributes,
+    pub output: Option<Json>,
+    pub tool_call_id: Option<String>,
+}
+
+/// An LLM start event emitted when an LLM handle is created.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LLMStartEvent {
+    pub parent_uuid: Option<Uuid>,
+    pub uuid: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub name: String,
+    pub data: Option<Json>,
+    pub metadata: Option<Json>,
+    pub attributes: LLMAttributes,
+    pub input: Option<Json>,
+    pub model_name: Option<String>,
+}
+
+/// An LLM end event emitted when an LLM handle is completed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LLMEndEvent {
+    pub parent_uuid: Option<Uuid>,
+    pub uuid: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub name: String,
+    pub data: Option<Json>,
+    pub metadata: Option<Json>,
+    pub attributes: LLMAttributes,
+    pub output: Option<Json>,
+    pub model_name: Option<String>,
+}
+
+/// A standalone mark event emitted via [`nat_nexus_event`](crate::api::nat_nexus_event).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MarkEvent {
+    pub parent_uuid: Option<Uuid>,
+    pub uuid: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub name: String,
+    pub data: Option<Json>,
+    pub metadata: Option<Json>,
+}
+
 /// A lifecycle event emitted to all registered subscribers.
 ///
 /// Events are produced when scopes, tool handles, or LLM handles are created
@@ -838,198 +854,316 @@ pub struct GuardrailEntry<F> {
 /// [`nat_nexus_event`](crate::api::nat_nexus_event). Subscribers receive
 /// a reference to each event and can use them for logging, tracing, metrics,
 /// or other observability tasks.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Event {
-    /// UUID of the parent scope or handle, if any.
-    pub parent_uuid: Option<Uuid>,
-    /// UUID of the entity that produced this event.
-    pub uuid: Uuid,
-    /// UTC timestamp of when this event was created.
-    pub timestamp: DateTime<Utc>,
-    /// Human-readable name of the source entity.
-    pub name: Option<String>,
-    /// Optional application-specific data snapshot.
-    pub data: Option<Json>,
-    /// Optional metadata snapshot.
-    pub metadata: Option<Json>,
-    /// Attribute flags of the source handle, if applicable.
-    pub attributes: Option<HandleAttributes>,
-    /// Whether this is a start, end, or marker event.
-    pub event_type: EventType,
-    /// The scope type of the source entity, if applicable.
-    pub scope_type: Option<ScopeType>,
-    /// Post-guardrail input (tool args, LLM request).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input: Option<Json>,
-    /// Post-guardrail output (tool result, LLM response).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output: Option<Json>,
-    /// LLM model identifier.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_name: Option<String>,
-    /// External correlation ID for tool calls.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
-    /// Root scope UUID for concurrent agent isolation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub root_uuid: Option<Uuid>,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Event {
+    ScopeStart(ScopeStartEvent),
+    ScopeEnd(ScopeEndEvent),
+    ToolStart(ToolStartEvent),
+    ToolEnd(ToolEndEvent),
+    LLMStart(LLMStartEvent),
+    LLMEnd(LLMEndEvent),
+    Mark(MarkEvent),
 }
 
 impl Event {
-    /// Creates a new event with the current UTC timestamp.
+    fn now() -> DateTime<Utc> {
+        Utc::now()
+    }
+
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub fn scope_start(
         parent_uuid: Option<Uuid>,
         uuid: Uuid,
-        name: Option<String>,
+        name: impl Into<String>,
         data: Option<Json>,
         metadata: Option<Json>,
-        attributes: Option<HandleAttributes>,
-        event_type: EventType,
-        scope_type: Option<ScopeType>,
+        attributes: ScopeAttributes,
+        scope_type: ScopeType,
     ) -> Self {
-        Self {
+        Self::ScopeStart(ScopeStartEvent {
             parent_uuid,
             uuid,
-            timestamp: Utc::now(),
-            name,
+            timestamp: Self::now(),
+            name: name.into(),
             data,
             metadata,
             attributes,
-            event_type,
             scope_type,
-            input: None,
-            output: None,
-            model_name: None,
-            tool_call_id: None,
-            root_uuid: None,
-        }
+        })
     }
 
-    /// Returns a builder initialized with the required fields.
-    pub fn builder(uuid: Uuid, event_type: EventType) -> EventBuilder {
-        EventBuilder {
+    #[allow(clippy::too_many_arguments)]
+    pub fn scope_end(
+        parent_uuid: Option<Uuid>,
+        uuid: Uuid,
+        name: impl Into<String>,
+        data: Option<Json>,
+        metadata: Option<Json>,
+        attributes: ScopeAttributes,
+        scope_type: ScopeType,
+    ) -> Self {
+        Self::ScopeEnd(ScopeEndEvent {
+            parent_uuid,
             uuid,
-            event_type,
-            parent_uuid: None,
-            name: None,
-            data: None,
-            metadata: None,
-            attributes: None,
-            scope_type: None,
-            input: None,
-            output: None,
-            model_name: None,
-            tool_call_id: None,
-            root_uuid: None,
+            timestamp: Self::now(),
+            name: name.into(),
+            data,
+            metadata,
+            attributes,
+            scope_type,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn tool_start(
+        parent_uuid: Option<Uuid>,
+        uuid: Uuid,
+        name: impl Into<String>,
+        data: Option<Json>,
+        metadata: Option<Json>,
+        attributes: ToolAttributes,
+        input: Option<Json>,
+        tool_call_id: Option<String>,
+    ) -> Self {
+        Self::ToolStart(ToolStartEvent {
+            parent_uuid,
+            uuid,
+            timestamp: Self::now(),
+            name: name.into(),
+            data,
+            metadata,
+            attributes,
+            input,
+            tool_call_id,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn tool_end(
+        parent_uuid: Option<Uuid>,
+        uuid: Uuid,
+        name: impl Into<String>,
+        data: Option<Json>,
+        metadata: Option<Json>,
+        attributes: ToolAttributes,
+        output: Option<Json>,
+        tool_call_id: Option<String>,
+    ) -> Self {
+        Self::ToolEnd(ToolEndEvent {
+            parent_uuid,
+            uuid,
+            timestamp: Self::now(),
+            name: name.into(),
+            data,
+            metadata,
+            attributes,
+            output,
+            tool_call_id,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn llm_start(
+        parent_uuid: Option<Uuid>,
+        uuid: Uuid,
+        name: impl Into<String>,
+        data: Option<Json>,
+        metadata: Option<Json>,
+        attributes: LLMAttributes,
+        input: Option<Json>,
+        model_name: Option<String>,
+    ) -> Self {
+        Self::LLMStart(LLMStartEvent {
+            parent_uuid,
+            uuid,
+            timestamp: Self::now(),
+            name: name.into(),
+            data,
+            metadata,
+            attributes,
+            input,
+            model_name,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn llm_end(
+        parent_uuid: Option<Uuid>,
+        uuid: Uuid,
+        name: impl Into<String>,
+        data: Option<Json>,
+        metadata: Option<Json>,
+        attributes: LLMAttributes,
+        output: Option<Json>,
+        model_name: Option<String>,
+    ) -> Self {
+        Self::LLMEnd(LLMEndEvent {
+            parent_uuid,
+            uuid,
+            timestamp: Self::now(),
+            name: name.into(),
+            data,
+            metadata,
+            attributes,
+            output,
+            model_name,
+        })
+    }
+
+    pub fn mark(
+        parent_uuid: Option<Uuid>,
+        uuid: Uuid,
+        name: impl Into<String>,
+        data: Option<Json>,
+        metadata: Option<Json>,
+    ) -> Self {
+        Self::Mark(MarkEvent {
+            parent_uuid,
+            uuid,
+            timestamp: Self::now(),
+            name: name.into(),
+            data,
+            metadata,
+        })
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Event::ScopeStart(_) => "ScopeStart",
+            Event::ScopeEnd(_) => "ScopeEnd",
+            Event::ToolStart(_) => "ToolStart",
+            Event::ToolEnd(_) => "ToolEnd",
+            Event::LLMStart(_) => "LLMStart",
+            Event::LLMEnd(_) => "LLMEnd",
+            Event::Mark(_) => "Mark",
         }
     }
-}
 
-/// Builder for constructing [`Event`] instances.
-///
-/// Created via [`Event::builder`]. All fields except `uuid`, `event_type`,
-/// and `timestamp` (auto-set to `Utc::now()`) default to `None`.
-pub struct EventBuilder {
-    uuid: Uuid,
-    event_type: EventType,
-    parent_uuid: Option<Uuid>,
-    name: Option<String>,
-    data: Option<Json>,
-    metadata: Option<Json>,
-    attributes: Option<HandleAttributes>,
-    scope_type: Option<ScopeType>,
-    input: Option<Json>,
-    output: Option<Json>,
-    model_name: Option<String>,
-    tool_call_id: Option<String>,
-    root_uuid: Option<Uuid>,
-}
-
-impl EventBuilder {
-    /// Sets the parent UUID.
-    pub fn parent_uuid(mut self, parent_uuid: Option<Uuid>) -> Self {
-        self.parent_uuid = parent_uuid;
-        self
+    pub fn parent_uuid(&self) -> Option<Uuid> {
+        match self {
+            Event::ScopeStart(event) => event.parent_uuid,
+            Event::ScopeEnd(event) => event.parent_uuid,
+            Event::ToolStart(event) => event.parent_uuid,
+            Event::ToolEnd(event) => event.parent_uuid,
+            Event::LLMStart(event) => event.parent_uuid,
+            Event::LLMEnd(event) => event.parent_uuid,
+            Event::Mark(event) => event.parent_uuid,
+        }
     }
 
-    /// Sets the event name.
-    pub fn name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-        self
+    pub fn uuid(&self) -> Uuid {
+        match self {
+            Event::ScopeStart(event) => event.uuid,
+            Event::ScopeEnd(event) => event.uuid,
+            Event::ToolStart(event) => event.uuid,
+            Event::ToolEnd(event) => event.uuid,
+            Event::LLMStart(event) => event.uuid,
+            Event::LLMEnd(event) => event.uuid,
+            Event::Mark(event) => event.uuid,
+        }
     }
 
-    /// Sets the application-specific data.
-    pub fn data(mut self, data: Option<Json>) -> Self {
-        self.data = data;
-        self
+    pub fn timestamp(&self) -> &DateTime<Utc> {
+        match self {
+            Event::ScopeStart(event) => &event.timestamp,
+            Event::ScopeEnd(event) => &event.timestamp,
+            Event::ToolStart(event) => &event.timestamp,
+            Event::ToolEnd(event) => &event.timestamp,
+            Event::LLMStart(event) => &event.timestamp,
+            Event::LLMEnd(event) => &event.timestamp,
+            Event::Mark(event) => &event.timestamp,
+        }
     }
 
-    /// Sets the metadata.
-    pub fn metadata(mut self, metadata: Option<Json>) -> Self {
-        self.metadata = metadata;
-        self
+    pub fn name(&self) -> &str {
+        match self {
+            Event::ScopeStart(event) => &event.name,
+            Event::ScopeEnd(event) => &event.name,
+            Event::ToolStart(event) => &event.name,
+            Event::ToolEnd(event) => &event.name,
+            Event::LLMStart(event) => &event.name,
+            Event::LLMEnd(event) => &event.name,
+            Event::Mark(event) => &event.name,
+        }
     }
 
-    /// Sets the handle attributes.
-    pub fn attributes(mut self, attributes: HandleAttributes) -> Self {
-        self.attributes = Some(attributes);
-        self
+    pub fn data(&self) -> Option<&Json> {
+        match self {
+            Event::ScopeStart(event) => event.data.as_ref(),
+            Event::ScopeEnd(event) => event.data.as_ref(),
+            Event::ToolStart(event) => event.data.as_ref(),
+            Event::ToolEnd(event) => event.data.as_ref(),
+            Event::LLMStart(event) => event.data.as_ref(),
+            Event::LLMEnd(event) => event.data.as_ref(),
+            Event::Mark(event) => event.data.as_ref(),
+        }
     }
 
-    /// Sets the scope type.
-    pub fn scope_type(mut self, scope_type: ScopeType) -> Self {
-        self.scope_type = Some(scope_type);
-        self
+    pub fn metadata(&self) -> Option<&Json> {
+        match self {
+            Event::ScopeStart(event) => event.metadata.as_ref(),
+            Event::ScopeEnd(event) => event.metadata.as_ref(),
+            Event::ToolStart(event) => event.metadata.as_ref(),
+            Event::ToolEnd(event) => event.metadata.as_ref(),
+            Event::LLMStart(event) => event.metadata.as_ref(),
+            Event::LLMEnd(event) => event.metadata.as_ref(),
+            Event::Mark(event) => event.metadata.as_ref(),
+        }
     }
 
-    /// Sets the post-guardrail input.
-    pub fn input(mut self, input: Option<Json>) -> Self {
-        self.input = input;
-        self
+    pub fn attributes(&self) -> Option<HandleAttributes> {
+        match self {
+            Event::ScopeStart(event) => Some(HandleAttributes::Scope(event.attributes)),
+            Event::ScopeEnd(event) => Some(HandleAttributes::Scope(event.attributes)),
+            Event::ToolStart(event) => Some(HandleAttributes::Tool(event.attributes)),
+            Event::ToolEnd(event) => Some(HandleAttributes::Tool(event.attributes)),
+            Event::LLMStart(event) => Some(HandleAttributes::Llm(event.attributes)),
+            Event::LLMEnd(event) => Some(HandleAttributes::Llm(event.attributes)),
+            Event::Mark(_) => None,
+        }
     }
 
-    /// Sets the post-guardrail output.
-    pub fn output(mut self, output: Option<Json>) -> Self {
-        self.output = output;
-        self
+    pub fn scope_type(&self) -> Option<ScopeType> {
+        match self {
+            Event::ScopeStart(event) => Some(event.scope_type),
+            Event::ScopeEnd(event) => Some(event.scope_type),
+            Event::ToolStart(_)
+            | Event::ToolEnd(_)
+            | Event::LLMStart(_)
+            | Event::LLMEnd(_)
+            | Event::Mark(_) => None,
+        }
     }
 
-    /// Sets the LLM model name.
-    pub fn model_name(mut self, model_name: Option<String>) -> Self {
-        self.model_name = model_name;
-        self
+    pub fn input(&self) -> Option<&Json> {
+        match self {
+            Event::ToolStart(event) => event.input.as_ref(),
+            Event::LLMStart(event) => event.input.as_ref(),
+            _ => None,
+        }
     }
 
-    /// Sets the tool call ID.
-    pub fn tool_call_id(mut self, tool_call_id: Option<String>) -> Self {
-        self.tool_call_id = tool_call_id;
-        self
+    pub fn output(&self) -> Option<&Json> {
+        match self {
+            Event::ToolEnd(event) => event.output.as_ref(),
+            Event::LLMEnd(event) => event.output.as_ref(),
+            _ => None,
+        }
     }
 
-    /// Sets the root scope UUID.
-    pub fn root_uuid(mut self, root_uuid: Option<Uuid>) -> Self {
-        self.root_uuid = root_uuid;
-        self
+    pub fn model_name(&self) -> Option<&str> {
+        match self {
+            Event::LLMStart(event) => event.model_name.as_deref(),
+            Event::LLMEnd(event) => event.model_name.as_deref(),
+            _ => None,
+        }
     }
 
-    /// Builds the [`Event`] with the current UTC timestamp.
-    pub fn build(self) -> Event {
-        Event {
-            parent_uuid: self.parent_uuid,
-            uuid: self.uuid,
-            timestamp: Utc::now(),
-            name: self.name,
-            data: self.data,
-            metadata: self.metadata,
-            attributes: self.attributes,
-            event_type: self.event_type,
-            scope_type: self.scope_type,
-            input: self.input,
-            output: self.output,
-            model_name: self.model_name,
-            tool_call_id: self.tool_call_id,
-            root_uuid: self.root_uuid,
+    pub fn tool_call_id(&self) -> Option<&str> {
+        match self {
+            Event::ToolStart(event) => event.tool_call_id.as_deref(),
+            Event::ToolEnd(event) => event.tool_call_id.as_deref(),
+            _ => None,
         }
     }
 }

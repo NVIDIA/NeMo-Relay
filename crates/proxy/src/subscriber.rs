@@ -15,7 +15,7 @@
 //! - [`is_run_boundary`] — detects Agent scope start/end events that
 //!   delineate run boundaries.
 
-use nvidia_nat_nexus_core::{Event, EventSubscriberFn, EventType, ScopeType};
+use nvidia_nat_nexus_core::{Event, EventSubscriberFn, ScopeType};
 
 use crate::types::{CallKind, CallRecord};
 
@@ -50,24 +50,21 @@ pub(crate) fn create_subscriber(
 /// Maps a Nexus Start event to a partial [`CallRecord`] (with `ended_at = None`).
 ///
 /// Returns `None` for:
-/// - Events that are not [`EventType::Start`]
+/// - Events that are not start variants
 /// - Events whose [`ScopeType`] is not [`ScopeType::Llm`] or [`ScopeType::Tool`]
 ///
 /// Agent scope events are intentionally excluded — they represent run
 /// boundaries, not individual call records. Use [`is_run_boundary`] instead.
 pub(crate) fn event_to_call_record(event: &Event) -> Option<CallRecord> {
-    if event.event_type != EventType::Start {
-        return None;
-    }
-    let kind = match event.scope_type {
-        Some(ScopeType::Llm) => CallKind::Llm,
-        Some(ScopeType::Tool) => CallKind::Tool,
+    let kind = match event {
+        Event::LLMStart(_) => CallKind::Llm,
+        Event::ToolStart(_) => CallKind::Tool,
         _ => return None,
     };
     Some(CallRecord {
         kind,
-        name: event.name.clone().unwrap_or_default(),
-        started_at: event.timestamp,
+        name: event.name().to_string(),
+        started_at: *event.timestamp(),
         ended_at: None,
         metadata_snapshot: None,
         output_tokens: None,
@@ -76,20 +73,27 @@ pub(crate) fn event_to_call_record(event: &Event) -> Option<CallRecord> {
 
 /// Returns `true` if this event represents a root scope lifecycle boundary.
 ///
-/// A run starts with [`EventType::Start`] + [`ScopeType::Agent`] at the root.
-/// A run ends with [`EventType::End`] + [`ScopeType::Agent`] at the root.
+/// A run starts with an agent scope start event.
+/// A run ends with an agent scope end event.
 ///
 /// Non-agent events (Tool, LLM, Function, etc.) are never run boundaries.
 pub(crate) fn is_run_boundary(event: &Event) -> bool {
-    matches!(event.scope_type, Some(ScopeType::Agent))
-        && matches!(event.event_type, EventType::Start | EventType::End)
+    matches!(event, Event::ScopeStart(inner) if inner.scope_type == ScopeType::Agent)
+        || matches!(event, Event::ScopeEnd(inner) if inner.scope_type == ScopeType::Agent)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nvidia_nat_nexus_core::{Event, EventType, ScopeType};
+    use nvidia_nat_nexus_core::{Event, ScopeType};
     use uuid::Uuid;
+
+    #[derive(Clone, Copy)]
+    enum EventType {
+        Start,
+        End,
+        Mark,
+    }
 
     /// Helper to construct a minimal test [`Event`] with only the fields
     /// relevant to subscriber/mapping logic populated.
@@ -98,21 +102,69 @@ mod tests {
         scope_type: Option<ScopeType>,
         name: Option<&str>,
     ) -> Event {
-        Event {
-            parent_uuid: None,
-            uuid: Uuid::new_v4(),
-            timestamp: chrono::Utc::now(),
-            name: name.map(|s| s.to_string()),
-            data: None,
-            metadata: None,
-            attributes: None,
-            event_type,
-            scope_type,
-            input: None,
-            output: None,
-            model_name: None,
-            tool_call_id: None,
-            root_uuid: None,
+        let event_name = name.unwrap_or("");
+        match (event_type, scope_type) {
+            (EventType::Start, Some(ScopeType::Llm)) => Event::llm_start(
+                None,
+                Uuid::new_v4(),
+                event_name,
+                None,
+                None,
+                nvidia_nat_nexus_core::LLMAttributes::empty(),
+                None,
+                None,
+            ),
+            (EventType::Start, Some(ScopeType::Tool)) => Event::tool_start(
+                None,
+                Uuid::new_v4(),
+                event_name,
+                None,
+                None,
+                nvidia_nat_nexus_core::ToolAttributes::empty(),
+                None,
+                None,
+            ),
+            (EventType::Start, Some(scope_type)) => Event::scope_start(
+                None,
+                Uuid::new_v4(),
+                event_name,
+                None,
+                None,
+                nvidia_nat_nexus_core::ScopeAttributes::empty(),
+                scope_type,
+            ),
+            (EventType::End, Some(ScopeType::Llm)) => Event::llm_end(
+                None,
+                Uuid::new_v4(),
+                event_name,
+                None,
+                None,
+                nvidia_nat_nexus_core::LLMAttributes::empty(),
+                None,
+                None,
+            ),
+            (EventType::End, Some(ScopeType::Tool)) => Event::tool_end(
+                None,
+                Uuid::new_v4(),
+                event_name,
+                None,
+                None,
+                nvidia_nat_nexus_core::ToolAttributes::empty(),
+                None,
+                None,
+            ),
+            (EventType::End, Some(scope_type)) => Event::scope_end(
+                None,
+                Uuid::new_v4(),
+                event_name,
+                None,
+                None,
+                nvidia_nat_nexus_core::ScopeAttributes::empty(),
+                scope_type,
+            ),
+            (EventType::Mark, _) | (_, None) => {
+                Event::mark(None, Uuid::new_v4(), event_name, None, None)
+            }
         }
     }
 
@@ -129,8 +181,8 @@ mod tests {
         subscriber(&event);
 
         let received = rx.try_recv().expect("should receive event");
-        assert_eq!(received.uuid, event.uuid);
-        assert_eq!(received.name, Some("gpt-4".to_string()));
+        assert_eq!(received.uuid(), event.uuid());
+        assert_eq!(received.name(), "gpt-4");
     }
 
     #[test]

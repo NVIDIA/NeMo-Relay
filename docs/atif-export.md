@@ -13,7 +13,7 @@ The `AtifExporter`:
 1. Registers itself as an event subscriber
 2. Collects all lifecycle events into a thread-safe buffer
 3. Transforms events into ATIF steps on demand via `export()`
-4. Supports filtering by `root_uuid` for concurrent agent isolation
+4. Exports the full collected trajectory buffer as a single ATIF document
 
 ## Quick Start
 
@@ -211,52 +211,20 @@ Optional per-step and final aggregate metrics:
 }
 ```
 
-## Scope-Based Filtering
+## Export Semantics
 
-When exporting, pass a scope UUID to filter events to a specific scope and all its descendants. This works with any scope in the hierarchy — not just the root scope.
-
-In multi-agent scenarios, each agent's scope stack has a unique root UUID. Use `root_uuid` to isolate:
-
-```python
-# Two agents running concurrently
-stack_a = nat_nexus.create_scope_stack()
-stack_b = nat_nexus.create_scope_stack()
-
-# Get root UUIDs
-root_a = stack_a.root_uuid
-root_b = stack_b.root_uuid
-
-# Export only Agent A's trajectory
-trajectory_a = exporter.export(root_uuid=root_a)
-
-# Export only Agent B's trajectory
-trajectory_b = exporter.export(root_uuid=root_b)
-
-# Export everything
-trajectory_all = exporter.export(root_uuid=None)
-```
-
-You can also filter by a non-root scope to export a sub-tree of the execution:
-
-```python
-with nat_nexus.scope.scope("sub_agent", nat_nexus.ScopeType.Agent) as handle:
-    # ... sub-agent operations ...
-    pass
-
-# Export only the sub-agent's trajectory
-trajectory_sub = exporter.export(root_uuid=handle.uuid)
-```
-
-Without filtering, all events from all agents appear in a single trajectory.
+`AtifExporter` always exports the full set of events it has collected so far.
+If you need separate trajectories, register separate exporters or clear the
+exporter between runs.
 
 ## Language Bindings
 
 | Binding | Class | Key Methods |
 |---------|-------|-------------|
-| Python | `AtifExporter` | `register(name)`, `deregister(name)`, `export(root_uuid=None)`, `export_json(root_uuid=None)`, `clear()` |
+| Python | `AtifExporter` | `register(name)`, `deregister(name)`, `export()`, `export_json()`, `clear()` |
 | Node.js | `JsAtifExporter` | Same API surface |
 | WASM | `WasmAtifExporter` | Same API surface |
-| Go | `AtifExporter` | `Register(name)`, `Deregister(name)`, `Export(rootUUID)`, `Clear()` |
+| Go | `AtifExporter` | `Register(name)`, `Deregister(name)`, `ExportJSON()`, `Clear()` |
 | FFI | `nat_nexus_atif_exporter_*` | C functions: `_create`, `_register`, `_export`, `_clear`, `_free` |
 
 ## Design Notes

@@ -118,7 +118,6 @@ impl LlmStreamWrapper {
 
         let event_snapshot = {
             let ss_guard = self.scope_stack.read().expect("scope stack lock poisoned");
-            let root_uuid = Some(ss_guard.root_uuid());
             let sl =
                 ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
             let sl_subs = ss_guard.collect_scope_local_subscribers();
@@ -130,7 +129,6 @@ impl LlmStreamWrapper {
                     self.data.clone(),
                     self.metadata.clone(),
                     Some(sanitized),
-                    root_uuid,
                 );
                 Some((event, subscribers))
             } else {

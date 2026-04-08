@@ -24,10 +24,10 @@ func TestGuardrailShorthandsGlobal(t *testing.T) {
 	var llmEventOutput json.RawMessage
 	var mu sync.Mutex
 
-	if err := nat_nexus.RegisterSubscriber("guardrails_events", func(event *nat_nexus.Event) {
+	if err := nat_nexus.RegisterSubscriber("guardrails_events", func(event nat_nexus.Event) {
 		mu.Lock()
 		defer mu.Unlock()
-		if event.Type() != nat_nexus.EventTypeEnd {
+		if event.Kind() != "ToolEnd" && event.Kind() != "LLMEnd" {
 			return
 		}
 		switch event.Name() {

@@ -1689,12 +1689,8 @@ impl WasmAtifExporter {
     }
 
     /// Exports collected events as an ATIF trajectory JSON string.
-    pub fn export_json(&self, root_uuid: Option<String>) -> Result<String, JsValue> {
-        let root = root_uuid
-            .map(|s| uuid::Uuid::parse_str(&s))
-            .transpose()
-            .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-        let trajectory = self.inner.export(root);
+    pub fn export_json(&self) -> Result<String, JsValue> {
+        let trajectory = self.inner.export();
         serde_json::to_string(&trajectory).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
@@ -1827,5 +1823,98 @@ impl WasmOpenInferenceSubscriber {
         self.inner
             .shutdown()
             .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wasm_config_defaults_match_expected_values() {
+        let otel_config = WasmOpenTelemetryConfig::default();
+        assert_eq!(otel_config.transport.as_deref(), Some("http_binary"));
+        assert_eq!(otel_config.service_name.as_deref(), Some("nat-nexus"));
+        assert_eq!(
+            otel_config.instrumentation_scope.as_deref(),
+            Some("nvidia-nat-nexus-otel")
+        );
+        assert_eq!(otel_config.timeout_millis, Some(3_000));
+
+        let openinference_config = WasmOpenInferenceConfig::default();
+        assert_eq!(
+            openinference_config.transport.as_deref(),
+            Some("http_binary")
+        );
+        assert_eq!(
+            openinference_config.service_name.as_deref(),
+            Some("nat-nexus")
+        );
+        assert_eq!(
+            openinference_config.instrumentation_scope.as_deref(),
+            Some("nvidia-nat-nexus-openinference")
+        );
+        assert_eq!(openinference_config.timeout_millis, Some(3_000));
+    }
+
+    #[test]
+    fn config_builders_accept_explicit_overrides() {
+        assert!(build_otel_config(Some(WasmOpenTelemetryConfig {
+            transport: Some("grpc".to_string()),
+            endpoint: Some("http://localhost:4317".to_string()),
+            headers: Some(HashMap::from([(
+                "authorization".to_string(),
+                "Bearer token".to_string()
+            )])),
+            resource_attributes: Some(HashMap::from([(
+                "deployment.environment".to_string(),
+                "test".to_string(),
+            )])),
+            service_name: Some("demo-agent".to_string()),
+            service_namespace: Some("agents".to_string()),
+            service_version: Some("1.2.3".to_string()),
+            instrumentation_scope: Some("demo-scope".to_string()),
+            timeout_millis: Some(1_250),
+        }))
+        .is_ok());
+
+        assert!(build_openinference_config(Some(WasmOpenInferenceConfig {
+            transport: Some("grpc".to_string()),
+            endpoint: Some("http://localhost:4317".to_string()),
+            headers: Some(HashMap::from([(
+                "authorization".to_string(),
+                "Bearer token".to_string()
+            )])),
+            resource_attributes: Some(HashMap::from([(
+                "deployment.environment".to_string(),
+                "test".to_string(),
+            )])),
+            service_name: Some("demo-agent".to_string()),
+            service_namespace: Some("agents".to_string()),
+            service_version: Some("1.2.3".to_string()),
+            instrumentation_scope: Some("demo-scope".to_string()),
+            timeout_millis: Some(1_250),
+        }))
+        .is_ok());
+    }
+
+    #[test]
+    fn wasm_atif_exporter_exports_full_trajectory_without_root_parameter() {
+        let exporter = WasmAtifExporter::new(
+            "session-wasm".to_string(),
+            "test-agent".to_string(),
+            "1.0.0".to_string(),
+            Some("demo-model".to_string()),
+        );
+        let export: serde_json::Value =
+            serde_json::from_str(&exporter.export_json().unwrap()).unwrap();
+        assert_eq!(export["session_id"], "session-wasm");
+        assert_eq!(export["agent"]["name"], "test-agent");
+        assert!(export["steps"].as_array().unwrap().is_empty());
+
+        exporter.clear();
+        let cleared: serde_json::Value =
+            serde_json::from_str(&exporter.export_json().unwrap()).unwrap();
+        assert!(cleared["steps"].as_array().unwrap().is_empty());
     }
 }

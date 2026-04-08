@@ -332,8 +332,7 @@ test('WASM JS wrappers cover nullable inputs, getters, and throw paths', async (
   assert.deepEqual(await drainStream(stream), [[{ delta: 'solo' }]]);
 
   const exporter = new wasm.WasmAtifExporter('session-js', 'wasm-js', '1.0.0', null);
-  assert.equal(typeof JSON.parse(exporter.export_json(scope.uuid)).schema_version, 'string');
-  expectInvalidUuid(() => exporter.export_json('not-a-uuid'));
+  assert.equal(typeof JSON.parse(exporter.export_json()).schema_version, 'string');
 
   expectInvalidUuid(
     () => wasm.scopeRegisterToolRequestIntercept('not-a-uuid', unique('bad_scope'), 1, false, (name, args) => args),

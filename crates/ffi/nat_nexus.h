@@ -8,25 +8,6 @@
 #include <stddef.h>
 
 /**
- * The type of lifecycle event emitted by the runtime.
- */
-enum NatNexusEventType {
-  /**
-   * A scope or operation has started.
-   */
-  NAT_NEXUS_EVENT_TYPE_START = 0,
-  /**
-   * A scope or operation has ended.
-   */
-  NAT_NEXUS_EVENT_TYPE_END = 1,
-  /**
-   * A point-in-time marker event.
-   */
-  NAT_NEXUS_EVENT_TYPE_MARK = 2,
-};
-typedef int32_t NatNexusEventType;
-
-/**
  * The type of scope in the agent execution hierarchy.
  */
 enum NatNexusScopeType {
@@ -913,17 +894,13 @@ NatNexusStatus nat_nexus_atif_exporter_deregister(const char *name);
  *
  * # Parameters
  * - `exporter`: The exporter handle.
- * - `root_uuid`: Optional root UUID filter (nullable C string).
  * - `out`: On success, receives a JSON string (caller must free with
  *   `nat_nexus_string_free`).
  *
  * # Safety
- * `exporter` and `out` must be valid, non-null pointers. `root_uuid` may be
- * null.
+ * `exporter` and `out` must be valid, non-null pointers.
  */
-NatNexusStatus nat_nexus_atif_exporter_export(const struct FfiAtifExporter *exporter,
-                                              const char *root_uuid,
-                                              char **out);
+NatNexusStatus nat_nexus_atif_exporter_export(const struct FfiAtifExporter *exporter, char **out);
 
 /**
  * Clears all collected events from the exporter.
@@ -1671,12 +1648,21 @@ char *nat_nexus_event_uuid(const struct FfiEvent *ptr);
 char *nat_nexus_event_name(const struct FfiEvent *ptr);
 
 /**
- * Return the event type. Returns `Mark` if `ptr` is null.
+ * Return the event discriminator as a C string.
+ * Caller must free the result with `nat_nexus_string_free`.
  *
  * # Safety
  * `ptr` must be a valid `FfiEvent` pointer or null.
  */
-NatNexusEventType nat_nexus_event_type(const struct FfiEvent *ptr);
+char *nat_nexus_event_kind(const struct FfiEvent *ptr);
+
+/**
+ * Return the raw attribute bitfield for an event, or 0 if it has none.
+ *
+ * # Safety
+ * `ptr` must be a valid `FfiEvent` pointer or null.
+ */
+uint32_t nat_nexus_event_attributes(const struct FfiEvent *ptr);
 
 /**
  * Return the event data as a JSON C string, or null if no data is set.
@@ -1739,15 +1725,6 @@ char *nat_nexus_event_model_name(const struct FfiEvent *ptr);
  * `ptr` must be a valid `FfiEvent` pointer or null.
  */
 char *nat_nexus_event_tool_call_id(const struct FfiEvent *ptr);
-
-/**
- * Return the event root UUID as a C string, or null if no root UUID is set.
- * Caller must free the result with `nat_nexus_string_free`.
- *
- * # Safety
- * `ptr` must be a valid `FfiEvent` pointer or null.
- */
-char *nat_nexus_event_root_uuid(const struct FfiEvent *ptr);
 
 /**
  * Return the event parent UUID as a C string, or null if no parent UUID is set.

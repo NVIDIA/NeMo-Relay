@@ -237,7 +237,7 @@ describe('Subscribers', () => {
       assert.ok(captured, 'Expected an event');
       assert.ok(typeof captured.uuid === 'string');
       assert.ok(typeof captured.timestamp === 'string');
-      assert.ok(typeof captured.event_type === 'number');
+      assert.ok(typeof captured.kind === 'string');
     } finally {
       deregisterSubscriber('node_prop_collector');
     }
@@ -249,11 +249,11 @@ describe('Subscribers', () => {
     try {
       event('mark_event', null, { marker: 'test' }, null);
       const deadline = Date.now() + 2000;
-      while (!events.some(e => e.event_type === 2) && Date.now() < deadline) {
+      while (!events.some(e => e.kind === 'Mark') && Date.now() < deadline) {
         await new Promise(r => setTimeout(r, 10));
       }
-      const found = events.some(e => e.event_type === 2); // Mark = 2
-      assert.ok(found, 'Expected a Mark event (eventType=2)');
+      const found = events.some(e => e.kind === 'Mark');
+      assert.ok(found, 'Expected a Mark event');
     } finally {
       deregisterSubscriber('node_mark_collector');
     }

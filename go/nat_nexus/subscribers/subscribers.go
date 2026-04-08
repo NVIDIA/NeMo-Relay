@@ -4,17 +4,17 @@
 // Package subscribers provides shorthand access to Nexus event subscriber
 // registration.
 //
-// Subscribers receive lifecycle events (Start, End, Mark) emitted by the
-// runtime as scopes, tool calls, and LLM calls progress. Each subscriber is
-// identified by a unique name.
+// Subscribers receive discriminated lifecycle events emitted by the runtime as
+// scopes, tool calls, and LLM calls progress. Each subscriber is identified by
+// a unique name.
 //
 // Example usage:
 //
 //	import "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/subscribers"
 //
 //	// Register a subscriber that logs every event.
-//	err := subscribers.Register("logger", func(event *nat_nexus.Event) {
-//	    fmt.Printf("[%s] %s: %s\n", event.Timestamp(), event.Type(), event.Name())
+//	err := subscribers.Register("logger", func(event nat_nexus.Event) {
+//	    fmt.Printf("[%s] %s: %s\n", event.Timestamp(), event.Kind(), event.Name())
 //	})
 //
 //	// Later, remove it.
@@ -26,10 +26,10 @@ import (
 )
 
 // Register registers a named event subscriber that will be called for every
-// lifecycle event (Start, End, Mark) emitted by the runtime. The name must be
-// unique; registering a duplicate returns an AlreadyExists error. The callback
-// receives an [nat_nexus.Event] pointer that is only valid for the duration of
-// the call. This is a shorthand for [nat_nexus.RegisterSubscriber].
+// lifecycle event emitted by the runtime. The name must be unique;
+// registering a duplicate returns an AlreadyExists error. The callback
+// receives an [nat_nexus.Event] that is only valid for the duration of the
+// call. This is a shorthand for [nat_nexus.RegisterSubscriber].
 func Register(name string, fn nat_nexus.EventSubscriberFunc) error {
 	return nat_nexus.RegisterSubscriber(name, fn)
 }
