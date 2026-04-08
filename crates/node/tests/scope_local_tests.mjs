@@ -354,9 +354,9 @@ describe('Scope-local auto-cleanup on scope pop', () => {
 
   it('scope-local llm request intercept is cleaned up when scope is popped', async () => {
     const scope = pushScope('sl_cleanup_llm_int', ScopeType.Agent, null, null);
-    scopeRegisterLlmRequestIntercept(scope.uuid, 'sl_cleanup_llm_req_int', 10, false, (request) => {
+    scopeRegisterLlmRequestIntercept(scope.uuid, 'sl_cleanup_llm_req_int', 10, false, ({ request, annotated }) => {
       request.content.fromPoppedScope = true;
-      return request;
+      return { request, annotated };
     });
     popScope(scope);
 
@@ -587,17 +587,17 @@ describe('Priority merge of global and scope-local middleware', () => {
   it('global and scope-local llm request intercepts both run with priority ordering', async () => {
     const order = [];
 
-    lib.registerLlmRequestIntercept('sl_llm_merge_global_req', 5, false, (request) => {
+    lib.registerLlmRequestIntercept('sl_llm_merge_global_req', 5, false, ({ request, annotated }) => {
       order.push('global');
       request.content.globalIntercepted = true;
-      return request;
+      return { request, annotated };
     });
 
     const scope = pushScope('sl_llm_merge_req_scope', ScopeType.Agent, null, null);
-    scopeRegisterLlmRequestIntercept(scope.uuid, 'sl_llm_merge_local_req', 15, false, (request) => {
+    scopeRegisterLlmRequestIntercept(scope.uuid, 'sl_llm_merge_local_req', 15, false, ({ request, annotated }) => {
       order.push('scope');
       request.content.scopeIntercepted = true;
-      return request;
+      return { request, annotated };
     });
 
     try {
@@ -676,7 +676,7 @@ describe('Priority merge of global and scope-local middleware', () => {
 describe('Scope-local LLM intercepts', () => {
   it('register and deregister scope-local llm request intercept', () => {
     const scope = pushScope('sl_llm_req_int_scope', ScopeType.Agent, null, null);
-    scopeRegisterLlmRequestIntercept(scope.uuid, 'sl_llm_req_int', 10, false, (request) => request);
+    scopeRegisterLlmRequestIntercept(scope.uuid, 'sl_llm_req_int', 10, false, ({ request, annotated }) => ({ request, annotated }));
     const removed = scopeDeregisterLlmRequestIntercept(scope.uuid, 'sl_llm_req_int');
     assert.equal(removed, true);
     popScope(scope);
@@ -684,9 +684,9 @@ describe('Scope-local LLM intercepts', () => {
 
   it('scope-local llm request intercept modifies request', async () => {
     const scope = pushScope('sl_llm_req_mod_scope', ScopeType.Agent, null, null);
-    scopeRegisterLlmRequestIntercept(scope.uuid, 'sl_llm_req_mod', 10, false, (request) => {
+    scopeRegisterLlmRequestIntercept(scope.uuid, 'sl_llm_req_mod', 10, false, ({ request, annotated }) => {
       request.content.scopeIntercepted = true;
-      return request;
+      return { request, annotated };
     });
 
     try {
@@ -723,7 +723,7 @@ describe('Scope-local LLM intercepts', () => {
           null,
           null,
         ),
-        /failed to deserialize llmrequest/i,
+        /expected object with 'request' and 'annotated' fields/i,
       );
     } finally {
       scopeDeregisterLlmRequestIntercept(scope.uuid, 'sl_llm_req_bad');
@@ -1011,7 +1011,7 @@ describe('Scope-local subscriber receives events', () => {
       () => scopeDeregisterLlmSanitizeResponseGuardrail('not-a-uuid', 'bad_llm_resp'),
       () => scopeRegisterLlmConditionalExecutionGuardrail('not-a-uuid', 'bad_llm_cond', 10, () => null),
       () => scopeDeregisterLlmConditionalExecutionGuardrail('not-a-uuid', 'bad_llm_cond'),
-      () => scopeRegisterLlmRequestIntercept('not-a-uuid', 'bad_llm_int', 10, false, (request) => request),
+      () => scopeRegisterLlmRequestIntercept('not-a-uuid', 'bad_llm_int', 10, false, ({ request, annotated }) => ({ request, annotated })),
       () => scopeDeregisterLlmRequestIntercept('not-a-uuid', 'bad_llm_int'),
       () => scopeRegisterLlmExecutionIntercept('not-a-uuid', 'bad_llm_exec', 10, async (request, next) => next(request)),
       () => scopeDeregisterLlmExecutionIntercept('not-a-uuid', 'bad_llm_exec'),

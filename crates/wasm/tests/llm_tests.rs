@@ -157,6 +157,8 @@ async fn test_llm_execute_basic() {
         JsValue::NULL,
         JsValue::NULL,
         None,
+        None,
+        None,
     )
     .await
     .unwrap();
@@ -177,6 +179,8 @@ async fn test_llm_execute_promise() {
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
+        None,
         None,
     )
     .await
@@ -234,7 +238,10 @@ fn test_duplicate_llm_guardrail_fails() {
 
 #[wasm_bindgen_test]
 fn test_llm_request_intercept() {
-    let func = js_fn1("native", "native.content.intercepted = true; return native");
+    let func = js_sys::Function::new_with_args(
+        "name, native, annotated",
+        "native.content.intercepted = true; return {request: native, annotated: annotated}",
+    );
     register_llm_request_intercept("wasm_llm_req_int", 10, false, func).unwrap();
     deregister_llm_request_intercept("wasm_llm_req_int").unwrap();
 }
@@ -255,15 +262,24 @@ fn test_llm_stream_execution_intercept() {
 
 #[wasm_bindgen_test]
 fn test_llm_request_intercept_break_chain() {
-    let func = js_fn1("native", "return native");
+    let func = js_sys::Function::new_with_args(
+        "name, native, annotated",
+        "return {request: native, annotated: annotated}",
+    );
     register_llm_request_intercept("wasm_llm_break", 10, true, func).unwrap();
     deregister_llm_request_intercept("wasm_llm_break").unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_duplicate_llm_intercept_fails() {
-    let f1 = js_fn1("native", "return native");
-    let f2 = js_fn1("native", "return native");
+    let f1 = js_sys::Function::new_with_args(
+        "name, native, annotated",
+        "return {request: native, annotated: annotated}",
+    );
+    let f2 = js_sys::Function::new_with_args(
+        "name, native, annotated",
+        "return {request: native, annotated: annotated}",
+    );
     register_llm_request_intercept("wasm_llm_dup_int", 10, false, f1).unwrap();
     let result = register_llm_request_intercept("wasm_llm_dup_int", 20, false, f2);
     assert!(result.is_err());
@@ -272,7 +288,10 @@ fn test_duplicate_llm_intercept_fails() {
 
 #[wasm_bindgen_test]
 async fn test_llm_request_intercept_modifies_request() {
-    let intercept = js_fn1("native", "native.content.intercepted = true; return native");
+    let intercept = js_sys::Function::new_with_args(
+        "name, native, annotated",
+        "native.content.intercepted = true; return {request: native, annotated: annotated}",
+    );
     register_llm_request_intercept("wasm_llm_req_mod", 10, false, intercept).unwrap();
 
     let func = js_fn1(
@@ -288,6 +307,8 @@ async fn test_llm_request_intercept_modifies_request() {
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
+        None,
         None,
     )
     .await
@@ -314,6 +335,8 @@ async fn test_llm_execution_intercept_replaces_func() {
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
+        None,
         None,
     )
     .await

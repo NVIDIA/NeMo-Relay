@@ -24,6 +24,7 @@ use libc::c_char;
 use serde_json::Value as Json;
 use tokio_stream::{Stream, StreamExt};
 
+use nvidia_nat_nexus_core::codec::{AnnotatedLLMRequest, LlmCodec};
 use nvidia_nat_nexus_core::types::LLMRequest;
 use nvidia_nat_nexus_core::{
     LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionNextFn,
@@ -31,7 +32,7 @@ use nvidia_nat_nexus_core::{
 };
 
 use crate::convert::json_to_c_string;
-use crate::error::{clear_last_error, last_error_message, set_last_error};
+use crate::error::{clear_last_error, last_error_message, set_last_error, NatNexusStatus};
 use crate::types::{FfiEvent, FfiLLMRequest};
 
 // ---------------------------------------------------------------------------
@@ -124,6 +125,57 @@ pub type NatNexusLlmExecInterceptCb = unsafe extern "C" fn(
 /// the runtime. The `FfiEvent` pointer is only valid for the duration of the call.
 pub type NatNexusEventSubscriberCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, event: *const FfiEvent);
+
+/// Callback for Codec decode: translates an opaque `FfiLLMRequest` into
+/// an `AnnotatedLLMRequest` JSON string. Returns a heap-allocated C string
+/// on success, or null on error (after setting the last error message).
+pub type NatNexusCodecDecodeCb = unsafe extern "C" fn(
+    user_data: *mut libc::c_void,
+    request: *const FfiLLMRequest,
+) -> *mut c_char;
+
+/// Nullable version of [`NatNexusCodecDecodeCb`] for use as an optional
+/// parameter in FFI execute functions. Pass null to indicate no codec.
+pub type NatNexusCodecDecodeFn = Option<
+    unsafe extern "C" fn(
+        user_data: *mut libc::c_void,
+        request: *const FfiLLMRequest,
+    ) -> *mut c_char,
+>;
+
+/// Callback for Codec encode: merges structured changes back into opaque
+/// request content. Receives the annotated request as a JSON C string and
+/// the original `FfiLLMRequest`. Returns a heap-allocated JSON C string
+/// representing the new `LLMRequest` content on success, or null on error.
+pub type NatNexusCodecEncodeCb = unsafe extern "C" fn(
+    user_data: *mut libc::c_void,
+    annotated_json: *const c_char,
+    original_request: *const FfiLLMRequest,
+) -> *mut c_char;
+
+/// Nullable version of [`NatNexusCodecEncodeCb`] for use as an optional
+/// parameter in FFI execute functions. Pass null to indicate no codec.
+pub type NatNexusCodecEncodeFn = Option<
+    unsafe extern "C" fn(
+        user_data: *mut libc::c_void,
+        annotated_json: *const c_char,
+        original_request: *const FfiLLMRequest,
+    ) -> *mut c_char,
+>;
+
+/// C callback type for LLM request intercepts with unified annotated-aware
+/// signature. Receives the intercept name, the opaque `FfiLLMRequest`, and
+/// optionally the annotated request as a JSON C string (null if no Codec
+/// resolved). Writes transformed outputs to `out_request` and
+/// `out_annotated_json`. Returns `NatNexusStatus`.
+pub type NatNexusLlmRequestInterceptCb = unsafe extern "C" fn(
+    user_data: *mut libc::c_void,
+    name: *const c_char,
+    request: *const FfiLLMRequest,
+    annotated_json: *const c_char,
+    out_request: *mut *mut FfiLLMRequest,
+    out_annotated_json: *mut *mut c_char,
+) -> NatNexusStatus;
 
 /// Callback for collecting intercepted stream chunks. Invoked with each chunk
 /// (after stream execution intercepts have been applied) as a null-terminated
@@ -484,30 +536,83 @@ pub fn wrap_json_fn(
     })
 }
 
-/// Wrap a C LLM request intercept callback into a `Fn(LLMRequest) -> LLMRequest` closure.
-/// The `LLMRequest` is serialized to a JSON string for the C callback, and the
-/// returned JSON string is deserialized back to `LLMRequest`.
+/// Wrap a C LLM request intercept callback (annotated-aware) into a Rust
+/// `LlmRequestInterceptFn` closure. The callback receives the intercept name,
+/// the opaque `FfiLLMRequest`, and the annotated JSON (or null). It writes
+/// the transformed request and annotated JSON to output pointers.
 pub fn wrap_llm_request_intercept_fn(
-    cb: NatNexusLlmRequestCb,
+    cb: NatNexusLlmRequestInterceptCb,
     user_data: *mut libc::c_void,
     free_fn: NatNexusFreeFn,
 ) -> LlmRequestInterceptFn {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(move |_name: &str, request: LLMRequest| {
-        clear_last_error();
-        let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
-        let result_ptr = unsafe { cb(ud.ptr, ffi_req) };
-        // Free the input request
-        unsafe { drop(Box::from_raw(ffi_req)) };
-        if result_ptr.is_null() {
-            let message = last_error_message()
-                .unwrap_or_else(|| "LLM request intercept callback returned null".to_string());
-            Err(NexusError::Internal(message))
-        } else {
-            let result = unsafe { Box::from_raw(result_ptr) };
-            Ok(result.0)
-        }
-    })
+    Box::new(
+        move |name: &str, request: LLMRequest, annotated: Option<AnnotatedLLMRequest>| {
+            clear_last_error();
+            let c_name = CString::new(name).unwrap_or_default();
+            let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
+
+            // Serialize annotated to JSON C string if present, else null
+            let c_annotated = match &annotated {
+                Some(a) => {
+                    let s = serde_json::to_string(a).unwrap_or_else(|_| "null".to_string());
+                    CString::new(s).unwrap_or_default()
+                }
+                None => CString::default(),
+            };
+            let annotated_ptr = if annotated.is_some() {
+                c_annotated.as_ptr()
+            } else {
+                std::ptr::null()
+            };
+
+            // Initialize output pointers
+            let mut out_request: *mut FfiLLMRequest = std::ptr::null_mut();
+            let mut out_annotated: *mut c_char = std::ptr::null_mut();
+
+            let status = unsafe {
+                cb(
+                    ud.ptr,
+                    c_name.as_ptr(),
+                    ffi_req,
+                    annotated_ptr,
+                    &mut out_request,
+                    &mut out_annotated,
+                )
+            };
+
+            // Free the input request
+            unsafe { drop(Box::from_raw(ffi_req)) };
+
+            if status != NatNexusStatus::Ok {
+                let message = last_error_message()
+                    .unwrap_or_else(|| "request intercept callback failed".to_string());
+                return Err(NexusError::Internal(message));
+            }
+
+            // Read output request
+            let new_request = if out_request.is_null() {
+                return Err(NexusError::Internal(
+                    "request intercept returned null out_request".to_string(),
+                ));
+            } else {
+                let boxed = unsafe { Box::from_raw(out_request) };
+                boxed.0
+            };
+
+            // Read output annotated
+            let new_annotated = if out_annotated.is_null() {
+                None
+            } else {
+                let s = unsafe { CStr::from_ptr(out_annotated) }.to_string_lossy();
+                let parsed: Option<AnnotatedLLMRequest> = serde_json::from_str(&s).ok();
+                unsafe { nat_nexus_string_free_internal(out_annotated) };
+                parsed
+            };
+
+            Ok((new_request, new_annotated))
+        },
+    )
 }
 
 /// Wrap a C JSON callback into a `Fn(Json) -> Json` closure for LLM response
@@ -691,6 +796,89 @@ pub fn wrap_event_subscriber(
 }
 
 // ---------------------------------------------------------------------------
+// Codec wrapper: C callbacks -> Arc<dyn LlmCodec>
+// ---------------------------------------------------------------------------
+
+/// FFI-backed Codec that delegates `decode`/`encode` to C callback pointers.
+struct FfiCodec {
+    decode_cb: NatNexusCodecDecodeCb,
+    encode_cb: NatNexusCodecEncodeCb,
+    user_data: Arc<UserData>,
+}
+
+unsafe impl Send for FfiCodec {}
+unsafe impl Sync for FfiCodec {}
+
+impl LlmCodec for FfiCodec {
+    fn decode(&self, request: &LLMRequest) -> nvidia_nat_nexus_core::Result<AnnotatedLLMRequest> {
+        clear_last_error();
+        let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request.clone())));
+        let result_ptr = unsafe { (self.decode_cb)(self.user_data.ptr, ffi_req) };
+        // Free the input request
+        unsafe { drop(Box::from_raw(ffi_req)) };
+        if result_ptr.is_null() {
+            let message = last_error_message()
+                .unwrap_or_else(|| "codec decode callback returned null".to_string());
+            return Err(NexusError::Internal(message));
+        }
+        let result_str = unsafe { CStr::from_ptr(result_ptr) }.to_string_lossy();
+        let annotated: AnnotatedLLMRequest = serde_json::from_str(&result_str).map_err(|e| {
+            unsafe { nat_nexus_string_free_internal(result_ptr) };
+            NexusError::Internal(format!("codec decode: invalid JSON: {e}"))
+        })?;
+        unsafe { nat_nexus_string_free_internal(result_ptr) };
+        Ok(annotated)
+    }
+
+    fn encode(
+        &self,
+        annotated: &AnnotatedLLMRequest,
+        original: &LLMRequest,
+    ) -> nvidia_nat_nexus_core::Result<LLMRequest> {
+        clear_last_error();
+        let annotated_str = serde_json::to_string(annotated)
+            .map_err(|e| NexusError::Internal(format!("codec encode: serialize failed: {e}")))?;
+        let c_annotated = CString::new(annotated_str)
+            .map_err(|e| NexusError::Internal(format!("codec encode: CString failed: {e}")))?;
+        let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(original.clone())));
+        let result_ptr =
+            unsafe { (self.encode_cb)(self.user_data.ptr, c_annotated.as_ptr(), ffi_req) };
+        // Free the input request
+        unsafe { drop(Box::from_raw(ffi_req)) };
+        if result_ptr.is_null() {
+            let message = last_error_message()
+                .unwrap_or_else(|| "codec encode callback returned null".to_string());
+            return Err(NexusError::Internal(message));
+        }
+        let result_str = unsafe { CStr::from_ptr(result_ptr) }.to_string_lossy();
+        let content: serde_json::Value = serde_json::from_str(&result_str).map_err(|e| {
+            unsafe { nat_nexus_string_free_internal(result_ptr) };
+            NexusError::Internal(format!("codec encode: invalid result JSON: {e}"))
+        })?;
+        unsafe { nat_nexus_string_free_internal(result_ptr) };
+        Ok(LLMRequest {
+            headers: original.headers.clone(),
+            content,
+        })
+    }
+}
+
+/// Wrap a pair of C codec callbacks into an `Arc<dyn LlmCodec>`.
+pub fn wrap_codec_fn(
+    decode_cb: NatNexusCodecDecodeCb,
+    encode_cb: NatNexusCodecEncodeCb,
+    user_data: *mut libc::c_void,
+    free_fn: NatNexusFreeFn,
+) -> Arc<dyn LlmCodec> {
+    let ud = make_user_data(user_data, free_fn);
+    Arc::new(FfiCodec {
+        decode_cb,
+        encode_cb,
+        user_data: ud,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -823,13 +1011,28 @@ mod tests {
         CString::new(result.to_string()).unwrap().into_raw()
     }
 
-    unsafe extern "C" fn llm_request_cb(
+    /// Intercept-specific callback with the unified annotated-aware signature
+    /// for callable.rs unit tests.
+    unsafe extern "C" fn llm_request_intercept_cb(
         _user_data: *mut libc::c_void,
+        _name: *const c_char,
         request: *const FfiLLMRequest,
-    ) -> *mut FfiLLMRequest {
-        let mut request = unsafe { (&*request).0.clone() };
-        request.content["intercepted"] = json!(true);
-        Box::into_raw(Box::new(FfiLLMRequest(request)))
+        annotated_json: *const c_char,
+        out_request: *mut *mut FfiLLMRequest,
+        out_annotated_json: *mut *mut c_char,
+    ) -> NatNexusStatus {
+        let mut req = unsafe { (&*request).0.clone() };
+        req.content["intercepted"] = json!(true);
+        unsafe { *out_request = Box::into_raw(Box::new(FfiLLMRequest(req))) };
+        if annotated_json.is_null() {
+            unsafe { *out_annotated_json = std::ptr::null_mut() };
+        } else {
+            let s = unsafe { CStr::from_ptr(annotated_json) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { *out_annotated_json = CString::new(s).unwrap().into_raw() };
+        }
+        NatNexusStatus::Ok
     }
 
     unsafe extern "C" fn llm_request_null_cb(
@@ -998,8 +1201,8 @@ mod tests {
     #[test]
     fn test_wrap_llm_request_response_and_conditional_callbacks() {
         let request_intercept =
-            wrap_llm_request_intercept_fn(llm_request_cb, std::ptr::null_mut(), None);
-        let intercepted = request_intercept("llm", make_request()).unwrap();
+            wrap_llm_request_intercept_fn(llm_request_intercept_cb, std::ptr::null_mut(), None);
+        let (intercepted, _annotated) = request_intercept("llm", make_request(), None).unwrap();
         assert_eq!(intercepted.content["intercepted"], json!(true));
 
         let sanitize_request =

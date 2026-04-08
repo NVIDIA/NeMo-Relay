@@ -184,6 +184,20 @@ typedef void (*NatNexusFreeFn)(void *user_data);
 typedef char *(*NatNexusLlmExecCb)(void *user_data, const char *native_json);
 
 /**
+ * Nullable version of [`NatNexusCodecDecodeCb`] for use as an optional
+ * parameter in FFI execute functions. Pass null to indicate no codec.
+ */
+typedef char *(*NatNexusCodecDecodeFn)(void *user_data, const struct FfiLLMRequest *request);
+
+/**
+ * Nullable version of [`NatNexusCodecEncodeCb`] for use as an optional
+ * parameter in FFI execute functions. Pass null to indicate no codec.
+ */
+typedef char *(*NatNexusCodecEncodeFn)(void *user_data,
+                                       const char *annotated_json,
+                                       const struct FfiLLMRequest *original_request);
+
+/**
  * Callback for tool conditional execution guardrails.
  * Receives tool name and arguments as JSON.
  * Returns NULL to allow execution, or an error message string to reject.
@@ -225,6 +239,20 @@ typedef char *(*NatNexusJsonCb)(void *user_data, const char *json);
  * Returns NULL to allow execution, or an error message string to reject.
  */
 typedef char *(*NatNexusLlmConditionalCb)(void *user_data, const struct FfiLLMRequest *request);
+
+/**
+ * C callback type for LLM request intercepts with unified annotated-aware
+ * signature. Receives the intercept name, the opaque `FfiLLMRequest`, and
+ * optionally the annotated request as a JSON C string (null if no Codec
+ * resolved). Writes transformed outputs to `out_request` and
+ * `out_annotated_json`. Returns `NatNexusStatus`.
+ */
+typedef NatNexusStatus (*NatNexusLlmRequestInterceptCb)(void *user_data,
+                                                        const char *name,
+                                                        const struct FfiLLMRequest *request,
+                                                        const char *annotated_json,
+                                                        struct FfiLLMRequest **out_request,
+                                                        char **out_annotated_json);
 
 /**
  * Runtime-provided "next" callback for LLM execution middleware chain.
@@ -467,6 +495,10 @@ NatNexusStatus nat_nexus_llm_call_execute(const char *name,
                                           const char *data_json,
                                           const char *metadata_json,
                                           const char *model_name,
+                                          NatNexusCodecDecodeFn codec_decode,
+                                          NatNexusCodecEncodeFn codec_encode,
+                                          void *codec_user_data,
+                                          NatNexusFreeFn codec_free_fn,
                                           char **out);
 
 /**
@@ -509,6 +541,10 @@ NatNexusStatus nat_nexus_llm_stream_call_execute(const char *name,
                                                  const char *data_json,
                                                  const char *metadata_json,
                                                  const char *model_name,
+                                                 NatNexusCodecDecodeFn codec_decode,
+                                                 NatNexusCodecEncodeFn codec_encode,
+                                                 void *codec_user_data,
+                                                 NatNexusFreeFn codec_free_fn,
                                                  struct FfiStream **out);
 
 /**
@@ -706,7 +742,7 @@ NatNexusStatus nat_nexus_deregister_llm_conditional_execution_guardrail(const ch
 NatNexusStatus nat_nexus_register_llm_request_intercept(const char *name,
                                                         int32_t priority,
                                                         bool break_chain,
-                                                        NatNexusLlmRequestCb cb,
+                                                        NatNexusLlmRequestInterceptCb cb,
                                                         void *user_data,
                                                         NatNexusFreeFn free_fn);
 
@@ -1202,7 +1238,7 @@ NatNexusStatus nat_nexus_scope_register_llm_request_intercept(const char *scope_
                                                               const char *name,
                                                               int32_t priority,
                                                               bool break_chain,
-                                                              NatNexusLlmRequestCb cb,
+                                                              NatNexusLlmRequestInterceptCb cb,
                                                               void *user_data,
                                                               NatNexusFreeFn free_fn);
 

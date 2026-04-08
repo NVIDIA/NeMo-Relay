@@ -502,9 +502,12 @@ test('tool, llm, stream, and exporter flows work from the generated Node package
 
   const request = { headers: { trace: '1' }, content: { model: 'demo-model', messages: [] } };
   const llmInterceptName = unique('llm_req');
-  wasm.registerLlmRequestIntercept(llmInterceptName, 1, false, (nextRequest) => ({
-    ...nextRequest,
-    content: { ...nextRequest.content, intercepted: true },
+  wasm.registerLlmRequestIntercept(llmInterceptName, 1, false, (name, nextRequest, annotated) => ({
+    request: {
+      ...nextRequest,
+      content: { ...nextRequest.content, intercepted: true },
+    },
+    annotated: annotated,
   }));
   const interceptedRequest = wasm.llmRequestIntercepts('pkg_llm', request);
   assert.equal(interceptedRequest.content.model, 'demo-model');

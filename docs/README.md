@@ -80,6 +80,7 @@ Choose the path that matches what you are trying to do:
 | [Core Concepts](concepts.md) | Scopes, handles, events, and the middleware pipeline |
 | [API Reference](api-reference.md) | Core runtime function signatures shared across bindings |
 | [Middleware Pipeline](middleware-pipeline.md) | Detailed pipeline ordering for tool and LLM calls |
+| [LLM Codecs](llm-codecs.md) | Structured LLM request annotation, Codec authoring, and annotated intercepts |
 | [Typed Wrappers](typed-wrappers.md) | Codec-based typed APIs for Python and Node.js |
 | [Typed API Reference](typed-api-reference.md) | Function signatures and codec reference for `nat_nexus.typed` |
 | [Context Isolation](context-isolation.md) | Multi-tenant and concurrent scope stack management |

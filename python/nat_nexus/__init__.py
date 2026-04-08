@@ -66,8 +66,9 @@ Types (available at top level):
 import contextvars
 import typing
 
-from nat_nexus import guardrails, intercepts, llm, proxy, scope, scope_local, subscribers, tools, typed
+from nat_nexus import codecs, guardrails, intercepts, llm, proxy, scope, scope_local, subscribers, tools, typed
 from nat_nexus._native import (
+    AnnotatedLLMRequest,
     # ATIF exporter
     AtifExporter,
     LLMAttributes,
@@ -203,6 +204,7 @@ __all__ = [
     "intercepts",
     "subscribers",
     "scope_local",
+    "codecs",
     "typed",
     "proxy",
     # Scope stack isolation
@@ -229,6 +231,7 @@ __all__ = [
     "LLMHandle",
     "LLMRequest",
     "Event",
+    "AnnotatedLLMRequest",
     "AtifExporter",
     "OpenInferenceConfig",
     "OpenInferenceSubscriber",

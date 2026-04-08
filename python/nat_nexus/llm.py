@@ -15,7 +15,8 @@ Functions:
     call_end(handle, response, *, data=None, metadata=None)
         End a manual LLM call. Records the response and emits an ``End`` event.
 
-    execute(name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None)
+    execute(name, request, func, *, handle=None, attributes=None, data=None,
+            metadata=None, model_name=None, codec=None)
         Execute an LLM call through the full middleware pipeline:
 
         - conditional-execution guardrails (on ``LLMRequest``)
@@ -32,7 +33,7 @@ Functions:
         for ATIF trajectory export.
 
     stream_execute(name, request, func, collector, finalizer, *, handle=None,
-            attributes=None, data=None, metadata=None, model_name=None)
+            attributes=None, data=None, metadata=None, model_name=None, codec=None)
         Like ``execute``, conditional-execution guardrails run first on the
         ``LLMRequest``. The execution function returns an async iterator of Json chunks.
 
@@ -132,7 +133,18 @@ def call_end(handle, response, *, data=None, metadata=None):
     return _native_llm_call_end(handle, response, data=data, metadata=metadata)
 
 
-def execute(name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None):
+def execute(
+    name,
+    request,
+    func,
+    *,
+    handle=None,
+    attributes=None,
+    data=None,
+    metadata=None,
+    model_name=None,
+    codec=None,
+):
     """Execute an LLM call through the full middleware pipeline.
 
     Runs conditional-execution guardrails -> request intercepts ->
@@ -150,6 +162,9 @@ def execute(name, request, func, *, handle=None, attributes=None, data=None, met
         data: Optional JSON-serializable application data payload.
         metadata: Optional JSON-serializable metadata payload.
         model_name: Optional LLM model identifier propagated to events for ATIF export.
+        codec: Optional ``LlmCodec`` instance to decode the request into an
+            ``AnnotatedLLMRequest`` for annotated intercepts. If ``None``,
+            no codec decoding is performed.
 
     Returns:
         An awaitable that resolves to the execution response after intercepts.
@@ -159,7 +174,15 @@ def execute(name, request, func, *, handle=None, attributes=None, data=None, met
         GuardrailRejected: If a conditional-execution guardrail rejects the call.
     """
     return _native_llm_call_execute(
-        name, request, func, handle=handle, attributes=attributes, data=data, metadata=metadata, model_name=model_name
+        name,
+        request,
+        func,
+        handle=handle,
+        attributes=attributes,
+        data=data,
+        metadata=metadata,
+        model_name=model_name,
+        codec=codec,
     )
 
 
@@ -175,6 +198,7 @@ def stream_execute(
     data=None,
     metadata=None,
     model_name=None,
+    codec=None,
 ):
     """Execute a streaming LLM call through the full middleware pipeline.
 
@@ -196,6 +220,9 @@ def stream_execute(
         data: Optional JSON-serializable application data payload.
         metadata: Optional JSON-serializable metadata payload.
         model_name: Optional LLM model identifier propagated to events for ATIF export.
+        codec: Optional ``LlmCodec`` instance to decode the request into an
+            ``AnnotatedLLMRequest`` for annotated intercepts. If ``None``,
+            no codec decoding is performed.
 
     Returns:
         An awaitable ``LlmStream`` async iterator of Json chunks.
@@ -214,6 +241,7 @@ def stream_execute(
         data=data,
         metadata=metadata,
         model_name=model_name,
+        codec=codec,
     )
 
 

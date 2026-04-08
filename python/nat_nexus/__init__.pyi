@@ -10,9 +10,11 @@ all types exported from the native Rust extension and all API functions.
 import contextvars
 from typing import Any, AsyncIterator, Awaitable, Callable, Literal, Optional
 
+from nat_nexus import codecs as codecs
 from nat_nexus import proxy as proxy
 from nat_nexus import scope as scope
 from nat_nexus import typed as typed
+from nat_nexus.codecs import LlmCodec as LlmCodec
 
 Json = Any
 """Type alias for JSON-serializable Python objects (dicts, lists, strings, numbers, etc.)."""
@@ -269,6 +271,52 @@ class LLMRequest:
     def content(self) -> Json:
         """The request payload."""
         ...
+
+class AnnotatedLLMRequest:
+    """Structured view of an LLM request produced by a Codec.
+
+    Fields are accessed via properties. ``messages``, ``params``, ``tools``,
+    ``tool_choice``, and ``extra`` return Python dicts/lists (copies).
+    Modifications must go through the corresponding setter.
+    """
+
+    def __init__(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: Optional[str] = None,
+        params: Optional[dict[str, Any]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[str | dict[str, Any]] = None,
+        extra: Optional[dict[str, Any]] = None,
+    ) -> None: ...
+    @property
+    def messages(self) -> list[dict[str, Any]]: ...
+    @messages.setter
+    def messages(self, value: list[dict[str, Any]]) -> None: ...
+    @property
+    def model(self) -> Optional[str]: ...
+    @model.setter
+    def model(self, value: Optional[str]) -> None: ...
+    @property
+    def params(self) -> Optional[dict[str, Any]]: ...
+    @params.setter
+    def params(self, value: Optional[dict[str, Any]]) -> None: ...
+    @property
+    def tools(self) -> Optional[list[dict[str, Any]]]: ...
+    @tools.setter
+    def tools(self, value: Optional[list[dict[str, Any]]]) -> None: ...
+    @property
+    def tool_choice(self) -> Optional[str | dict[str, Any]]: ...
+    @tool_choice.setter
+    def tool_choice(self, value: Optional[str | dict[str, Any]]) -> None: ...
+    @property
+    def extra(self) -> dict[str, Any]: ...
+    @extra.setter
+    def extra(self, value: dict[str, Any]) -> None: ...
+    def system_prompt(self) -> Optional[str]: ...
+    def last_user_message(self) -> Optional[str]: ...
+    def has_tool_calls(self) -> bool: ...
 
 class ScopeStartEvent:
     @property
@@ -801,6 +849,7 @@ def nat_nexus_llm_call_execute(
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
     model_name: Optional[str] = None,
+    codec: Optional[LlmCodec] = None,
 ) -> Awaitable[Json]:
     """Execute an LLM call through the full middleware pipeline.
 
@@ -848,6 +897,7 @@ async def nat_nexus_llm_stream_call_execute(
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
     model_name: Optional[str] = None,
+    codec: Optional[LlmCodec] = None,
 ) -> LlmStream:
     """Execute a streaming LLM call through the full middleware pipeline.
 

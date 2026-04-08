@@ -290,10 +290,10 @@ def event_fail(event):
 
         let llm_req =
             wrap_py_llm_request_intercept_fn(module.getattr("llm_req_bad").unwrap().unbind());
-        assert!(llm_req("demo", request.clone())
+        assert!(llm_req("demo", request.clone(), None)
             .unwrap_err()
             .to_string()
-            .contains("expected LLMRequest"));
+            .contains("intercept callable failed"));
 
         let tool_req =
             wrap_py_tool_request_intercept_fn(module.getattr("tool_fail").unwrap().unbind());

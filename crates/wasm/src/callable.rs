@@ -20,6 +20,7 @@ use serde_json::Value as Json;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
+use nvidia_nat_nexus_core::codec::{AnnotatedLLMRequest, LlmCodec};
 use nvidia_nat_nexus_core::types::LLMRequest;
 use nvidia_nat_nexus_core::{
     LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionNextFn,
@@ -136,20 +137,68 @@ pub fn wrap_js_tool_exec_fn(
     })
 }
 
-/// Wrap a JS function `(request) => request` for LLM request intercepts.
+/// Wrap a JS function `(name, request, annotated) => { request, annotated }` for
+/// unified LLM request intercepts (3-arg signature).
 pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn {
     let func = SendWrapper::new(func);
-    Box::new(move |_name: &str, request: LLMRequest| {
-        let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
-        let js_req = json_to_js(&req_json);
-        let result = func
-            .call1(&JsValue::NULL, &js_req)
-            .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
-        let result_json =
-            js_to_json(&result).map_err(|e| NexusError::Internal(js_error_message(&e)))?;
-        serde_json::from_value(result_json)
-            .map_err(|e| NexusError::Internal(format!("failed to deserialize LLMRequest: {e}")))
-    })
+    Box::new(
+        move |name: &str,
+              request: LLMRequest,
+              annotated: Option<AnnotatedLLMRequest>|
+              -> nvidia_nat_nexus_core::Result<(LLMRequest, Option<AnnotatedLLMRequest>)> {
+            let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+            let js_name = JsValue::from_str(name);
+            let js_req = json_to_js(&req_json);
+            let js_annotated = match &annotated {
+                Some(a) => {
+                    let a_json = serde_json::to_value(a).unwrap_or(Json::Null);
+                    json_to_js(&a_json)
+                }
+                None => JsValue::NULL,
+            };
+            let result = func
+                .call3(&JsValue::NULL, &js_name, &js_req, &js_annotated)
+                .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+
+            // Extract "request" property from result
+            let js_new_req =
+                js_sys::Reflect::get(&result, &JsValue::from_str("request")).map_err(|e| {
+                    NexusError::Internal(format!(
+                        "failed to get 'request' from intercept result: {}",
+                        js_error_message(&e)
+                    ))
+                })?;
+            let new_req_json =
+                js_to_json(&js_new_req).map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+            let new_request: LLMRequest = serde_json::from_value(new_req_json).map_err(|e| {
+                NexusError::Internal(format!("failed to deserialize LLMRequest: {e}"))
+            })?;
+
+            // Extract "annotated" property from result
+            let js_new_annotated = js_sys::Reflect::get(&result, &JsValue::from_str("annotated"))
+                .map_err(|e| {
+                NexusError::Internal(format!(
+                    "failed to get 'annotated' from intercept result: {}",
+                    js_error_message(&e)
+                ))
+            })?;
+            let new_annotated = if js_new_annotated.is_null() || js_new_annotated.is_undefined() {
+                None
+            } else {
+                let ann_json = js_to_json(&js_new_annotated)
+                    .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+                Some(
+                    serde_json::from_value::<AnnotatedLLMRequest>(ann_json).map_err(|e| {
+                        NexusError::Internal(format!(
+                            "failed to deserialize AnnotatedLLMRequest: {e}"
+                        ))
+                    })?,
+                )
+            };
+
+            Ok((new_request, new_annotated))
+        },
+    )
 }
 
 /// Wrap a JS function for LLM sanitize request: `(request) => request`.
@@ -493,6 +542,71 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
             }))
         },
     )
+}
+
+// ---------------------------------------------------------------------------
+// Codec wrappers
+// ---------------------------------------------------------------------------
+
+/// WASM implementation of `LlmCodec` backed by two JS functions (decode + encode).
+///
+/// # Safety
+///
+/// `SendWrapper` is used because JS functions are not `Send`. This is safe in
+/// WASM because the runtime is single-threaded. The pattern matches all other
+/// JS-function wrappers in this file.
+struct WasmCodec {
+    decode_fn: SendWrapper<Function>,
+    encode_fn: SendWrapper<Function>,
+}
+
+// SAFETY: WASM is single-threaded; SendWrapper guarantees these are only accessed
+// from the thread that created them.
+unsafe impl Send for WasmCodec {}
+unsafe impl Sync for WasmCodec {}
+
+impl LlmCodec for WasmCodec {
+    fn decode(&self, request: &LLMRequest) -> nvidia_nat_nexus_core::Result<AnnotatedLLMRequest> {
+        let req_json = serde_json::to_value(request).unwrap_or(Json::Null);
+        let js_req = json_to_js(&req_json);
+        let result = self
+            .decode_fn
+            .call1(&JsValue::NULL, &js_req)
+            .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+        let result_json =
+            js_to_json(&result).map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+        serde_json::from_value(result_json).map_err(|e| {
+            NexusError::Internal(format!("failed to deserialize AnnotatedLLMRequest: {e}"))
+        })
+    }
+
+    fn encode(
+        &self,
+        annotated: &AnnotatedLLMRequest,
+        original: &LLMRequest,
+    ) -> nvidia_nat_nexus_core::Result<LLMRequest> {
+        let annotated_json = serde_json::to_value(annotated).unwrap_or(Json::Null);
+        let js_annotated = json_to_js(&annotated_json);
+        let original_json = serde_json::to_value(original).unwrap_or(Json::Null);
+        let js_original = json_to_js(&original_json);
+        let result = self
+            .encode_fn
+            .call2(&JsValue::NULL, &js_annotated, &js_original)
+            .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+        let result_json =
+            js_to_json(&result).map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+        serde_json::from_value(result_json)
+            .map_err(|e| NexusError::Internal(format!("failed to deserialize LLMRequest: {e}")))
+    }
+}
+
+/// Wrap two JS functions `(request) => annotated` and `(annotated, original) => request`
+/// into an `Arc<dyn LlmCodec>`.
+pub fn wrap_js_codec(decode_fn: Function, encode_fn: Function) -> Arc<dyn LlmCodec> {
+    Arc::new(WasmCodec {
+        decode_fn: SendWrapper::new(decode_fn),
+        encode_fn: SendWrapper::new(encode_fn),
+    })
 }
 
 /// Wrap a JS function for LLM sanitize response: `(response) => response`.

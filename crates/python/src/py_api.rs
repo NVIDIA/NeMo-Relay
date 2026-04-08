@@ -417,7 +417,7 @@ fn nat_nexus_llm_call_end(
 ///     intercepts. Sanitize guardrails do not rewrite the value returned to
 ///     the caller.
 #[pyfunction]
-#[pyo3(signature = (name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None))]
+#[pyo3(signature = (name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None, codec=None))]
 #[allow(clippy::too_many_arguments)]
 fn nat_nexus_llm_call_execute<'py>(
     py: Python<'py>,
@@ -429,6 +429,7 @@ fn nat_nexus_llm_call_execute<'py>(
     data: Option<&Bound<'py, PyAny>>,
     metadata: Option<&Bound<'py, PyAny>>,
     model_name: Option<String>,
+    codec: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let attrs = attributes
         .map(|a| a.inner)
@@ -438,6 +439,11 @@ fn nat_nexus_llm_call_execute<'py>(
     let exec_fn = py_callable::wrap_py_llm_exec_fn(func);
     let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn = Arc::new(move |req| exec_fn(req));
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
+    let codec_arc: Option<Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>> = codec.map(|c| {
+        Arc::new(py_callable::PyLlmCodecWrapper {
+            py_codec: c.clone().unbind(),
+        }) as Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>
+    });
 
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -452,6 +458,7 @@ fn nat_nexus_llm_call_execute<'py>(
                     data_json,
                     metadata_json,
                     model_name,
+                    codec_arc,
                 )
                 .await
                 .map_err(to_py_err)?;
@@ -485,7 +492,7 @@ fn nat_nexus_llm_call_execute<'py>(
 /// Returns:
 ///     An awaitable that resolves to an ``LlmStream`` async iterator of JSON chunks.
 #[pyfunction]
-#[pyo3(signature = (name, request, func, collector, finalizer, *, handle=None, attributes=None, data=None, metadata=None, model_name=None))]
+#[pyo3(signature = (name, request, func, collector, finalizer, *, handle=None, attributes=None, data=None, metadata=None, model_name=None, codec=None))]
 #[allow(clippy::too_many_arguments)]
 fn nat_nexus_llm_stream_call_execute<'py>(
     py: Python<'py>,
@@ -499,6 +506,7 @@ fn nat_nexus_llm_stream_call_execute<'py>(
     data: Option<&Bound<'py, PyAny>>,
     metadata: Option<&Bound<'py, PyAny>>,
     model_name: Option<String>,
+    codec: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let attrs = attributes
         .map(|a| a.inner)
@@ -511,6 +519,11 @@ fn nat_nexus_llm_stream_call_execute<'py>(
     let collector_fn = py_callable::wrap_py_collector_fn(collector);
     let finalizer_fn = py_callable::wrap_py_finalizer_fn(finalizer);
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
+    let codec_arc: Option<Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>> = codec.map(|c| {
+        Arc::new(py_callable::PyLlmCodecWrapper {
+            py_codec: c.clone().unbind(),
+        }) as Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>
+    });
 
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -527,6 +540,7 @@ fn nat_nexus_llm_stream_call_execute<'py>(
                     data_json,
                     metadata_json,
                     model_name,
+                    codec_arc,
                 )
                 .await
                 .map_err(to_py_err)?;
@@ -757,7 +771,8 @@ fn nat_nexus_deregister_llm_conditional_execution_guardrail(name: &str) -> PyRes
 
 /// Register an LLM request intercept.
 ///
-/// Callback: ``(request: LLMRequest) -> LLMRequest`` — transforms the LLM request.
+/// Callback: ``(name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None) -> (LLMRequest, AnnotatedLLMRequest | None)``
+/// — transforms the LLM request and optional annotated request.
 /// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
 #[pyfunction]
 fn nat_nexus_register_llm_request_intercept(

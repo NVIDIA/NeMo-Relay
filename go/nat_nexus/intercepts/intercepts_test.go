@@ -81,12 +81,12 @@ func TestInterceptShorthandsGlobal(t *testing.T) {
 	}
 
 	if err := intercepts.RegisterLlmRequest("intercepts_llm_req", 1, false,
-		func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
+		func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
 			var payload map[string]interface{}
 			_ = json.Unmarshal(content, &payload)
 			payload["intercepted"] = true
 			out, _ := json.Marshal(payload)
-			return headers, out
+			return headers, out, annotated, nil
 		},
 	); err != nil {
 		t.Fatalf("RegisterLlmRequest failed: %v", err)
@@ -194,7 +194,9 @@ func TestInterceptShorthandsScopeLocal(t *testing.T) {
 		}
 
 		if err := intercepts.ScopeRegisterLlmRequest(scopeUUID, "intercepts_scope_llm_req", 1, false,
-			func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) { return headers, content },
+			func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
+				return headers, content, annotated, nil
+			},
 		); err != nil {
 			t.Fatalf("ScopeRegisterLlmRequest failed: %v", err)
 		}

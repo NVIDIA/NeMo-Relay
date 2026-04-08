@@ -22,8 +22,9 @@ lower-priority intercepts run after this one.
 **LLM intercepts** — callback signatures:
 
     register_llm_request(name, priority, break_chain, fn)
-        ``fn(name: str, request: LLMRequest) -> LLMRequest`` — transform the
-        LLM request.
+        ``fn(name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None)
+        -> (LLMRequest, AnnotatedLLMRequest | None)`` — transform the LLM
+        request and optional annotated request.
 
     register_llm_execution(name, priority, fn)
         ``fn`` is ``async (name: str, request: LLMRequest, next) -> Json`` —
@@ -51,7 +52,7 @@ Example::
 
 from typing import Any, AsyncIterator, Awaitable, Callable
 
-from nat_nexus._native import LLMRequest
+from nat_nexus._native import AnnotatedLLMRequest, LLMRequest
 from nat_nexus._native import (
     nat_nexus_deregister_llm_execution_intercept as _native_deregister_llm_execution,
 )
@@ -88,7 +89,10 @@ Json = Any
 
 ToolRequestIntercept = Callable[[str, Json], Json]
 ToolExecutionIntercept = Callable[[str, Json, Callable[[Json], Awaitable[Json]]], Json | Awaitable[Json]]
-LlmRequestIntercept = Callable[[str, LLMRequest], LLMRequest]
+LlmRequestIntercept = Callable[
+    [str, LLMRequest, "AnnotatedLLMRequest | None"],
+    tuple[LLMRequest, "AnnotatedLLMRequest | None"],
+]
 LlmExecutionIntercept = Callable[
     [str, LLMRequest, Callable[[LLMRequest], Awaitable[Json]]],
     Json | Awaitable[Json],
@@ -173,15 +177,16 @@ def deregister_tool_execution(name: str) -> bool:
 def register_llm_request(name: str, priority: int, break_chain: bool, fn: LlmRequestIntercept) -> None:
     """Register an LLM request intercept.
 
-    The intercept callback receives the intercept name and ``LLMRequest`` and
-    returns a transformed ``LLMRequest`` that replaces the original in the
-    pipeline.
+    The intercept callback receives the intercept name, ``LLMRequest``, and an
+    optional ``AnnotatedLLMRequest`` (present when a Codec is active). It must
+    return a tuple of ``(LLMRequest, AnnotatedLLMRequest | None)``.
 
     Args:
         name: Unique intercept name.
         priority: Priority (ascending order; lower runs first).
         break_chain: If ``True``, no lower-priority intercepts run after this one.
-        fn: Callable ``(name: str, request: LLMRequest) -> LLMRequest``.
+        fn: Callable ``(name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None)
+            -> (LLMRequest, AnnotatedLLMRequest | None)``.
 
     Raises:
         RuntimeError: If an intercept with this name already exists.

@@ -224,8 +224,8 @@ func TestLlmConditionalBlocksExecution(t *testing.T) {
 
 func TestLlmRequestInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterLlmRequestIntercept("go_llm_req", 1, false,
-		func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
-			return headers, content
+		func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
+			return headers, content, annotated, nil
 		},
 	)
 	if err != nil {
@@ -305,12 +305,12 @@ func TestLlmStreamExecutionInterceptCanCallNext(t *testing.T) {
 
 func TestLlmRequestInterceptModifies(t *testing.T) {
 	RegisterLlmRequestIntercept("go_llm_req_mod", 1, false,
-		func(headers, content json.RawMessage) (json.RawMessage, json.RawMessage) {
+		func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
 			var m map[string]interface{}
 			json.Unmarshal(content, &m)
 			m["intercepted"] = true
 			out, _ := json.Marshal(m)
-			return headers, out
+			return headers, out, annotated, nil
 		},
 	)
 

@@ -28,6 +28,7 @@ use pyo3::prelude::*;
 use serde_json::Value as Json;
 use tokio_stream::Stream;
 
+use nvidia_nat_nexus_core::codec::{AnnotatedLLMRequest, LlmCodec};
 use nvidia_nat_nexus_core::types::LLMRequest;
 use nvidia_nat_nexus_core::{
     LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionNextFn,
@@ -35,7 +36,7 @@ use nvidia_nat_nexus_core::{
 };
 
 use crate::convert::{json_to_py, py_to_json};
-use crate::py_types::PyLLMRequest;
+use crate::py_types::{PyAnnotatedLLMRequest, PyLLMRequest};
 
 /// Wrap a Python callable `(str, Json) -> Json` for tool sanitize/intercept fns.
 pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
@@ -596,26 +597,78 @@ pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
     })
 }
 
-/// Wrap a Python callable `(LLMRequest) -> LLMRequest` for LLM request intercepts.
+/// Wrap a Python callable for unified LLM request intercepts.
+///
+/// The Python function receives ``(name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None)``
+/// and must return ``(LLMRequest, AnnotatedLLMRequest | None)``.
 pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestInterceptFn {
-    Box::new(move |name: &str, request: LLMRequest| {
-        Python::attach(|py| {
-            let py_req = PyLLMRequest {
-                inner: request.clone(),
-            };
-            let result = py_fn.call1(py, (name, py_req)).map_err(|e| {
-                NexusError::Internal(format!("LLM request intercept callable failed: {e}"))
-            })?;
-            result
-                .extract::<PyLLMRequest>(py)
-                .map(|r| r.inner)
-                .map_err(|e| {
+    Box::new(
+        move |name: &str,
+              request: LLMRequest,
+              annotated: Option<AnnotatedLLMRequest>|
+              -> nvidia_nat_nexus_core::Result<(LLMRequest, Option<AnnotatedLLMRequest>)> {
+            Python::attach(|py| {
+                let py_req = PyLLMRequest {
+                    inner: request.clone(),
+                };
+                let py_ann: Py<PyAny> = match annotated {
+                    Some(ann) => {
+                        let wrapper = PyAnnotatedLLMRequest { inner: ann };
+                        wrapper
+                            .into_pyobject(py)
+                            .map_err(|e| {
+                                NexusError::Internal(format!(
+                                    "Failed to convert AnnotatedLLMRequest to Python: {e}"
+                                ))
+                            })?
+                            .into_any()
+                            .unbind()
+                    }
+                    None => py.None(),
+                };
+                let result = py_fn.call1(py, (name, py_req, py_ann)).map_err(|e| {
+                    NexusError::Internal(format!("LLM request intercept callable failed: {e}"))
+                })?;
+
+                // Extract the tuple (LLMRequest, AnnotatedLLMRequest | None)
+                let tuple = result.bind(py);
+                let new_req: PyLLMRequest = tuple
+                    .get_item(0)
+                    .map_err(|e| {
+                        NexusError::Internal(format!(
+                            "LLM request intercept result[0] extraction failed: {e}"
+                        ))
+                    })?
+                    .extract()
+                    .map_err(|e| {
+                        NexusError::Internal(format!(
+                            "LLM request intercept result[0] is not LLMRequest: {e}"
+                        ))
+                    })?;
+                let ann_item = tuple.get_item(1).map_err(|e| {
                     NexusError::Internal(format!(
-                        "LLM request intercept returned unexpected type (expected LLMRequest): {e}"
+                        "LLM request intercept result[1] extraction failed: {e}"
                     ))
-                })
-        })
-    })
+                })?;
+                let new_ann = if ann_item.is_none() {
+                    None
+                } else {
+                    Some(
+                        ann_item
+                            .extract::<PyAnnotatedLLMRequest>()
+                            .map_err(|e| {
+                                NexusError::Internal(format!(
+                                    "LLM request intercept result[1] is not AnnotatedLLMRequest: {e}"
+                                ))
+                            })?
+                            .inner,
+                    )
+                };
+
+                Ok((new_req.inner, new_ann))
+            })
+        },
+    )
 }
 
 /// Wrap a Python callable `(LLMRequest) -> dict` for LLM execution.
@@ -916,4 +969,72 @@ pub fn wrap_py_event_subscriber(py_fn: Py<PyAny>) -> nvidia_nat_nexus_core::Even
             }
         })
     })
+}
+
+// ---------------------------------------------------------------------------
+// LLM Codec wrapper
+// ---------------------------------------------------------------------------
+
+/// Wraps a Python object with ``decode``/``encode`` methods into the Rust
+/// [`LlmCodec`] trait so it can be stored in the global codec registry.
+///
+/// The Python codec object must implement:
+/// - ``decode(request: LLMRequest) -> AnnotatedLLMRequest``
+/// - ``encode(annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest``
+pub(crate) struct PyLlmCodecWrapper {
+    pub py_codec: Py<PyAny>,
+}
+
+// SAFETY: The Py<PyAny> handle is GIL-independent (ref-counted via Python's
+// allocator). All access goes through `Python::attach` which acquires the GIL.
+unsafe impl Send for PyLlmCodecWrapper {}
+unsafe impl Sync for PyLlmCodecWrapper {}
+
+impl LlmCodec for PyLlmCodecWrapper {
+    fn decode(&self, request: &LLMRequest) -> nvidia_nat_nexus_core::Result<AnnotatedLLMRequest> {
+        Python::attach(|py| {
+            let py_req = PyLLMRequest {
+                inner: request.clone(),
+            };
+            let result = self
+                .py_codec
+                .call_method1(py, "decode", (py_req,))
+                .map_err(|e| NexusError::Internal(format!("Codec decode() failed: {e}")))?;
+            result
+                .extract::<PyAnnotatedLLMRequest>(py)
+                .map(|r| r.inner)
+                .map_err(|e| {
+                    NexusError::Internal(format!(
+                        "Codec decode() returned unexpected type (expected AnnotatedLLMRequest): {e}"
+                    ))
+                })
+        })
+    }
+
+    fn encode(
+        &self,
+        annotated: &AnnotatedLLMRequest,
+        original: &LLMRequest,
+    ) -> nvidia_nat_nexus_core::Result<LLMRequest> {
+        Python::attach(|py| {
+            let py_ann = PyAnnotatedLLMRequest {
+                inner: annotated.clone(),
+            };
+            let py_orig = PyLLMRequest {
+                inner: original.clone(),
+            };
+            let result = self
+                .py_codec
+                .call_method1(py, "encode", (py_ann, py_orig))
+                .map_err(|e| NexusError::Internal(format!("Codec encode() failed: {e}")))?;
+            result
+                .extract::<PyLLMRequest>(py)
+                .map(|r| r.inner)
+                .map_err(|e| {
+                    NexusError::Internal(format!(
+                        "Codec encode() returned unexpected type (expected LLMRequest): {e}"
+                    ))
+                })
+        })
+    }
 }
