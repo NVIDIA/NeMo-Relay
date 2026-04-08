@@ -135,3 +135,58 @@ export declare function typedLlmStreamExecute<TChunk, TResponse>(
   responseCodec: Codec<TResponse>,
   options?: TypedLlmStreamExecuteOptions,
 ): Promise<WasmLlmStream>;
+
+export type UnsupportedBehavior = 'ignore' | 'warn' | 'error';
+
+export interface OptimizerConfigPolicy {
+  unknown_component?: UnsupportedBehavior;
+  unknown_field?: UnsupportedBehavior;
+  unsupported_value?: UnsupportedBehavior;
+}
+
+export interface OptimizerBackendSpec {
+  kind: string;
+  config?: Record<string, any>;
+}
+
+export interface OptimizerStateConfig {
+  backend: OptimizerBackendSpec;
+}
+
+export interface OptimizerComponentSpec {
+  kind: string;
+  enabled?: boolean;
+  config?: Record<string, any>;
+}
+
+export interface OptimizerConfig {
+  version?: number;
+  agent_id?: string;
+  state?: OptimizerStateConfig;
+  components?: OptimizerComponentSpec[];
+  policy?: OptimizerConfigPolicy;
+}
+
+export interface TelemetryComponentConfig {
+  subscriber_name?: string;
+  learners?: string[];
+}
+
+export interface DynamoHintsComponentConfig {
+  priority?: number;
+  break_chain?: boolean;
+  inject_header?: boolean;
+  inject_body_path?: string;
+}
+
+export interface ToolParallelismComponentConfig {
+  priority?: number;
+  mode?: 'observe_only' | 'inject_hints' | 'schedule' | string;
+}
+
+export declare function defaultOptimizerConfig(): OptimizerConfig;
+export declare function optimizerInMemoryBackend(): OptimizerBackendSpec;
+export declare function optimizerRedisBackend(url: string, keyPrefix?: string): OptimizerBackendSpec;
+export declare function telemetryComponent(config?: TelemetryComponentConfig): OptimizerComponentSpec;
+export declare function dynamoHintsComponent(config?: DynamoHintsComponentConfig): OptimizerComponentSpec;
+export declare function toolParallelismComponent(config?: ToolParallelismComponentConfig): OptimizerComponentSpec;

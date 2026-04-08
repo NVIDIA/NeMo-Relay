@@ -140,6 +140,25 @@ typedef struct FfiOpenInferenceSubscriber FfiOpenInferenceSubscriber;
 typedef struct FfiOpenTelemetrySubscriber FfiOpenTelemetrySubscriber;
 
 /**
+ * Opaque optimizer hosted plugin context.
+ *
+ * This wrapper contains a borrowed raw pointer to an
+ * `nvidia_nat_nexus_optimizer::HostedRegistrationContext`, not an owned heap allocation.
+ * It is only valid for the duration of the hosted plugin registration callback that receives
+ * it. C callers must not store the pointer, use it after the callback returns, or attempt to
+ * free or drop it.
+ *
+ * There is intentionally no `nat_nexus_optimizer_plugin_context_free` function because this FFI
+ * wrapper does not own the underlying registration context.
+ */
+typedef struct FfiOptimizerPluginContext FfiOptimizerPluginContext;
+
+/**
+ * Opaque optimizer runtime handle.
+ */
+typedef struct FfiOptimizerRuntime FfiOptimizerRuntime;
+
+/**
  * Opaque handle representing an active execution scope.
  */
 typedef struct FfiScopeHandle FfiScopeHandle;
@@ -164,18 +183,89 @@ typedef struct Option_NatNexusCollectorCb Option_NatNexusCollectorCb;
 
 typedef struct Option_NatNexusFinalizerCb Option_NatNexusFinalizerCb;
 
+typedef struct Option_NatNexusOptimizerPluginValidateCb Option_NatNexusOptimizerPluginValidateCb;
+
 /**
- * Callback for tool execution (default callable). Receives arguments as JSON,
- * returns result as JSON. The returned string must be allocated with `malloc`
- * or equivalent.
+ * Callback for optimizer hosted plugin registration.
+ * Receives an instance ID, plugin config JSON, and a plugin context pointer that is
+ * only valid for the duration of the call.
  */
-typedef char *(*NatNexusToolExecCb)(void *user_data, const char *args_json);
+typedef NatNexusStatus (*NatNexusOptimizerPluginRegisterCb)(void *user_data,
+                                                            const char *instance_id,
+                                                            const char *plugin_config_json,
+                                                            struct FfiOptimizerPluginContext *ctx);
 
 /**
  * Optional destructor for user data passed to callbacks.
  * Called when the runtime no longer needs the associated callback.
  */
 typedef void (*NatNexusFreeFn)(void *user_data);
+
+/**
+ * Callback for event subscribers. Invoked on each lifecycle event emitted by
+ * the runtime. The `FfiEvent` pointer is only valid for the duration of the call.
+ */
+typedef void (*NatNexusEventSubscriberCb)(void *user_data, const struct FfiEvent *event);
+
+/**
+ * C callback type for LLM request intercepts with unified annotated-aware
+ * signature. Receives the intercept name, the opaque `FfiLLMRequest`, and
+ * optionally the annotated request as a JSON C string (null if no Codec
+ * resolved). Writes transformed outputs to `out_request` and
+ * `out_annotated_json`. Returns `NatNexusStatus`.
+ */
+typedef NatNexusStatus (*NatNexusLlmRequestInterceptCb)(void *user_data,
+                                                        const char *name,
+                                                        const struct FfiLLMRequest *request,
+                                                        const char *annotated_json,
+                                                        struct FfiLLMRequest **out_request,
+                                                        char **out_annotated_json);
+
+/**
+ * Callback for tool request/response sanitization guardrails and intercepts.
+ * Receives tool name and arguments as JSON, returns sanitized arguments as JSON.
+ * The returned string must be allocated with `malloc` or equivalent.
+ */
+typedef char *(*NatNexusToolSanitizeCb)(void *user_data, const char *name, const char *args_json);
+
+/**
+ * Runtime-provided "next" callback for LLM execution middleware chain.
+ * Takes a native JSON C string, returns a response JSON C string.
+ */
+typedef char *(*NatNexusLlmExecNextFn)(const char *native_json, void *next_ctx);
+
+/**
+ * Callback for LLM execution intercepts with middleware chain support.
+ * Receives native JSON C string plus a `next` callback and its context.
+ */
+typedef char *(*NatNexusLlmExecInterceptCb)(void *user_data,
+                                            const char *native_json,
+                                            NatNexusLlmExecNextFn next_fn,
+                                            void *next_ctx);
+
+/**
+ * Runtime-provided "next" callback for tool execution middleware chain.
+ * Call this from an intercept to invoke the next layer (or original function).
+ * `next_ctx` is an opaque pointer managed by the runtime.
+ */
+typedef char *(*NatNexusToolExecNextFn)(const char *args_json, void *next_ctx);
+
+/**
+ * Callback for tool execution intercepts. Receives arguments as JSON plus
+ * a `next` callback and its context. Call `next_fn(args, next_ctx)` to invoke
+ * the next layer in the middleware chain, or return directly to short-circuit.
+ */
+typedef char *(*NatNexusToolExecInterceptCb)(void *user_data,
+                                             const char *args_json,
+                                             NatNexusToolExecNextFn next_fn,
+                                             void *next_ctx);
+
+/**
+ * Callback for tool execution (default callable). Receives arguments as JSON,
+ * returns result as JSON. The returned string must be allocated with `malloc`
+ * or equivalent.
+ */
+typedef char *(*NatNexusToolExecCb)(void *user_data, const char *args_json);
 
 /**
  * Callback for LLM execution (default callable). Receives a native JSON C string,
@@ -205,23 +295,6 @@ typedef char *(*NatNexusCodecEncodeFn)(void *user_data,
 typedef char *(*NatNexusToolConditionalCb)(void *user_data, const char *name, const char *args_json);
 
 /**
- * Runtime-provided "next" callback for tool execution middleware chain.
- * Call this from an intercept to invoke the next layer (or original function).
- * `next_ctx` is an opaque pointer managed by the runtime.
- */
-typedef char *(*NatNexusToolExecNextFn)(const char *args_json, void *next_ctx);
-
-/**
- * Callback for tool execution intercepts. Receives arguments as JSON plus
- * a `next` callback and its context. Call `next_fn(args, next_ctx)` to invoke
- * the next layer in the middleware chain, or return directly to short-circuit.
- */
-typedef char *(*NatNexusToolExecInterceptCb)(void *user_data,
-                                             const char *args_json,
-                                             NatNexusToolExecNextFn next_fn,
-                                             void *next_ctx);
-
-/**
  * Callback for LLM request sanitization. Receives an `FfiLLMRequest` and returns
  * a new (possibly modified) `FfiLLMRequest`. Return null to use defaults.
  */
@@ -241,39 +314,160 @@ typedef char *(*NatNexusJsonCb)(void *user_data, const char *json);
 typedef char *(*NatNexusLlmConditionalCb)(void *user_data, const struct FfiLLMRequest *request);
 
 /**
- * C callback type for LLM request intercepts with unified annotated-aware
- * signature. Receives the intercept name, the opaque `FfiLLMRequest`, and
- * optionally the annotated request as a JSON C string (null if no Codec
- * resolved). Writes transformed outputs to `out_request` and
- * `out_annotated_json`. Returns `NatNexusStatus`.
+ * Validate an optimizer config document and return the diagnostics report as JSON.
+ *
+ * # Safety
+ * `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
  */
-typedef NatNexusStatus (*NatNexusLlmRequestInterceptCb)(void *user_data,
-                                                        const char *name,
-                                                        const struct FfiLLMRequest *request,
-                                                        const char *annotated_json,
-                                                        struct FfiLLMRequest **out_request,
-                                                        char **out_annotated_json);
+NatNexusStatus nat_nexus_validate_optimizer_config(const char *config_json, char **out_json);
 
 /**
- * Runtime-provided "next" callback for LLM execution middleware chain.
- * Takes a native JSON C string, returns a response JSON C string.
+ * Create an optimizer runtime from a JSON config document.
+ *
+ * # Safety
+ * `config_json` must be a valid C string and `out` must be a valid, non-null pointer.
  */
-typedef char *(*NatNexusLlmExecNextFn)(const char *native_json, void *next_ctx);
+NatNexusStatus nat_nexus_optimizer_runtime_create(const char *config_json,
+                                                  struct FfiOptimizerRuntime **out);
 
 /**
- * Callback for LLM execution intercepts with middleware chain support.
- * Receives native JSON C string plus a `next` callback and its context.
+ * Register a previously created optimizer runtime.
+ *
+ * # Safety
+ * `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer.
  */
-typedef char *(*NatNexusLlmExecInterceptCb)(void *user_data,
-                                            const char *native_json,
-                                            NatNexusLlmExecNextFn next_fn,
-                                            void *next_ctx);
+NatNexusStatus nat_nexus_optimizer_runtime_register(struct FfiOptimizerRuntime *runtime);
 
 /**
- * Callback for event subscribers. Invoked on each lifecycle event emitted by
- * the runtime. The `FfiEvent` pointer is only valid for the duration of the call.
+ * Deregister an optimizer runtime.
+ *
+ * # Safety
+ * `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer.
  */
-typedef void (*NatNexusEventSubscriberCb)(void *user_data, const struct FfiEvent *event);
+NatNexusStatus nat_nexus_optimizer_runtime_deregister(struct FfiOptimizerRuntime *runtime);
+
+/**
+ * Shut down an optimizer runtime and free its background work.
+ *
+ * # Safety
+ * `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer.
+ */
+NatNexusStatus nat_nexus_optimizer_runtime_shutdown(struct FfiOptimizerRuntime *runtime);
+
+/**
+ * Return the runtime creation diagnostics report as JSON.
+ *
+ * # Safety
+ * `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer and `out_json`
+ * must be a valid, non-null pointer.
+ */
+NatNexusStatus nat_nexus_optimizer_runtime_report_json(const struct FfiOptimizerRuntime *runtime,
+                                                       char **out_json);
+
+/**
+ * Register a hosted optimizer plugin handler backed by foreign callbacks.
+ *
+ * # Safety
+ * `plugin_kind` must be a valid C string and `register_cb` must be a valid function pointer.
+ */
+NatNexusStatus nat_nexus_optimizer_register_plugin(const char *plugin_kind,
+                                                   struct Option_NatNexusOptimizerPluginValidateCb validate_cb,
+                                                   NatNexusOptimizerPluginRegisterCb register_cb,
+                                                   void *user_data,
+                                                   NatNexusFreeFn free_fn);
+
+/**
+ * Deregister a hosted optimizer plugin handler by kind.
+ *
+ * # Safety
+ * `plugin_kind` must be a valid C string.
+ */
+NatNexusStatus nat_nexus_optimizer_deregister_plugin(const char *plugin_kind);
+
+/**
+ * Register an event subscriber into the optimizer hosted plugin context.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+ * of the hosted plugin registration lifetime.
+ */
+NatNexusStatus nat_nexus_optimizer_plugin_context_register_subscriber(struct FfiOptimizerPluginContext *ctx,
+                                                                      const char *name,
+                                                                      NatNexusEventSubscriberCb cb,
+                                                                      void *user_data,
+                                                                      NatNexusFreeFn free_fn);
+
+/**
+ * Register an LLM request intercept into the optimizer hosted plugin context.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+ * of the hosted plugin registration lifetime.
+ */
+NatNexusStatus nat_nexus_optimizer_plugin_context_register_llm_request_intercept(struct FfiOptimizerPluginContext *ctx,
+                                                                                 const char *name,
+                                                                                 int32_t priority,
+                                                                                 bool break_chain,
+                                                                                 NatNexusLlmRequestInterceptCb cb,
+                                                                                 void *user_data,
+                                                                                 NatNexusFreeFn free_fn);
+
+/**
+ * Register a tool execution intercept into the optimizer hosted plugin context.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+ * of the hosted plugin registration lifetime.
+ */
+NatNexusStatus nat_nexus_optimizer_plugin_context_register_tool_request_intercept(struct FfiOptimizerPluginContext *ctx,
+                                                                                  const char *name,
+                                                                                  int32_t priority,
+                                                                                  bool break_chain,
+                                                                                  NatNexusToolSanitizeCb cb,
+                                                                                  void *user_data,
+                                                                                  NatNexusFreeFn free_fn);
+
+/**
+ * Register an LLM execution intercept into the optimizer hosted plugin context.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+ * of the hosted plugin registration lifetime.
+ */
+NatNexusStatus nat_nexus_optimizer_plugin_context_register_llm_execution_intercept(struct FfiOptimizerPluginContext *ctx,
+                                                                                   const char *name,
+                                                                                   int32_t priority,
+                                                                                   NatNexusLlmExecInterceptCb cb,
+                                                                                   void *user_data,
+                                                                                   NatNexusFreeFn free_fn);
+
+/**
+ * Register an LLM stream execution intercept into the optimizer hosted plugin context.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+ * of the hosted plugin registration lifetime.
+ */
+NatNexusStatus nat_nexus_optimizer_plugin_context_register_llm_stream_execution_intercept(struct FfiOptimizerPluginContext *ctx,
+                                                                                          const char *name,
+                                                                                          int32_t priority,
+                                                                                          NatNexusLlmExecInterceptCb cb,
+                                                                                          void *user_data,
+                                                                                          NatNexusFreeFn free_fn);
+
+/**
+ * Register a tool execution intercept into the optimizer hosted plugin context.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+ * of the hosted plugin registration lifetime.
+ */
+NatNexusStatus nat_nexus_optimizer_plugin_context_register_tool_execution_intercept(struct FfiOptimizerPluginContext *ctx,
+                                                                                    const char *name,
+                                                                                    int32_t priority,
+                                                                                    NatNexusToolExecInterceptCb cb,
+                                                                                    void *user_data,
+                                                                                    NatNexusFreeFn free_fn);
 
 /**
  * Retrieve the current scope handle from the thread-local scope stack.
@@ -1508,6 +1702,14 @@ void nat_nexus_otel_subscriber_free(struct FfiOpenTelemetrySubscriber *ptr);
  * `nat_nexus_openinference_subscriber_create`, or null.
  */
 void nat_nexus_openinference_subscriber_free(struct FfiOpenInferenceSubscriber *ptr);
+
+/**
+ * Free an optimizer runtime handle previously returned by `nat_nexus_optimizer_runtime_create`.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `nat_nexus_optimizer_runtime_create`, or null.
+ */
+void nat_nexus_optimizer_runtime_free(struct FfiOptimizerRuntime *ptr);
 
 /**
  * Return the UUID of a scope handle as a C string. Caller must free the result

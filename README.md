@@ -49,7 +49,8 @@ For complete quick-start examples in all supported languages, see the [Language 
 - **Node.js users** -- start with [Getting Started: Node.js](docs/getting-started-node.md), then read [Language Bindings](docs/language-bindings.md).
 - **Go users** -- start with [Getting Started: Go](docs/getting-started-go.md), then read [Language Bindings](docs/language-bindings.md).
 - **WASM users** -- start with [Getting Started: WebAssembly](docs/getting-started-wasm.md), then read [Language Bindings](docs/language-bindings.md).
-- **Proxy users** -- start with [Proxy Layer](docs/proxy-layer.md) and [Online Learning Engine](docs/online-learning-engine.md).
+- **Optimizer users** -- start with [Optimizer Layer](docs/optimizer-layer.md) and [Online Learning Engine](docs/online-learning-engine.md).
+- **Optimizer plugin authors** -- start with [Optimizer Layer](docs/optimizer-layer.md), [Optimizer API Reference](docs/optimizer-api-reference.md), and [Language Bindings](docs/language-bindings.md).
 - **Contributors** -- start with the canonical [Documentation Index](docs/README.md) and [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
 ## Documentation
@@ -68,8 +69,8 @@ Comprehensive documentation lives in the [docs/](docs/) directory. The canonical
 | [Observability with OpenTelemetry](docs/observability-with-opentelemetry.md) | OTLP subscriber setup, event mapping, and per-language examples |
 | [Observability with OpenInference](docs/observability-with-openinference.md) | OpenInference semantic mapping, Phoenix-oriented OTLP setup, and per-language examples |
 | [Language Bindings](docs/language-bindings.md) | Per-language usage guides and naming conventions |
-| [Recipes](docs/recipes.md) | Task-oriented patterns for logging, ATIF, proxy setup, and context propagation |
-| [Proxy Layer](docs/proxy-layer.md) | NexusProxy configuration, DynamoIntercept, declarative and builder APIs |
+| [Recipes](docs/recipes.md) | Task-oriented patterns for logging, ATIF, optimizer setup, and context propagation |
+| [Optimizer Layer](docs/optimizer-layer.md) | Dynamic optimizer config, built-in components, hosted plugins, and runtime lifecycle |
 | [Online Learning Engine](docs/online-learning-engine.md) | Prediction trie, sensitivity scoring, Redis persistence, and learner pipeline |
 | [Integration Best Practices](docs/integration-best-practices.md) | Patterns for integrating Nexus into existing agent frameworks |
 | [Testing](docs/testing.md) | Testing strategy and how to run tests across all languages |
@@ -85,7 +86,7 @@ crates/
   ffi/        # C FFI layer (used by Go, generates header via cbindgen)
   node/       # NAPI Node.js bindings
   wasm/       # wasm-bindgen WebAssembly bindings
-  proxy/      # Proxy layer with online learning and scheduling hints
+  optimizer/      # Optimizer layer with online learning and scheduling hints
 python/       # Python wrapper module (nat_nexus/)
 go/           # Go CGo bindings
 docs/         # Comprehensive documentation
@@ -146,14 +147,14 @@ wasm-pack build crates/wasm --scope nvidia
 Use [docs/testing.md](docs/testing.md) for the full matrix. Common entry points:
 
 ```bash
-cargo test --workspace                                # Core + proxy + Rust bindings
+cargo test --workspace                                # Core + optimizer + Rust bindings
 uv run pytest                                         # Python
 cd go/nat_nexus && \
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" \
 go test -race -v ./...
 cd crates/node && npm install && npm test             # Node.js
 wasm-pack test --node crates/wasm                     # WASM
-cargo test -p nvidia-nat-nexus-proxy --features redis-backend redis_tests  # Proxy + Redis
+cargo test -p nvidia-nat-nexus-optimizer --features redis-backend redis_tests  # Optimizer + Redis
 ```
 
 ## Dev Tooling

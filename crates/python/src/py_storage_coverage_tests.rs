@@ -9,10 +9,10 @@ use pyo3::types::PyModule;
 use serde_json::json;
 use uuid::Uuid;
 
-use nvidia_nat_nexus_proxy::storage::StorageBackendDyn;
-use nvidia_nat_nexus_proxy::trie::data_models::PredictionTrieNode;
-use nvidia_nat_nexus_proxy::trie::{AccumulatorState, NodeAccumulators, RunningStats};
-use nvidia_nat_nexus_proxy::types::{
+use nvidia_nat_nexus_optimizer::storage::StorageBackendDyn;
+use nvidia_nat_nexus_optimizer::trie::data_models::PredictionTrieNode;
+use nvidia_nat_nexus_optimizer::trie::{AccumulatorState, NodeAccumulators, RunningStats};
+use nvidia_nat_nexus_optimizer::types::{
     CallKind, CallRecord, ExecutionPlan, MetadataEnvelope, ParallelGroup, ParallelHint, RunRecord,
 };
 

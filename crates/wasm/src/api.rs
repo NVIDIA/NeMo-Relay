@@ -23,8 +23,9 @@
 //! All functions use `JsValue` for JSON payloads and return `Result<T, JsValue>`
 //! where errors are thrown as JavaScript exceptions.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use js_sys::Function;
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,11 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use nvidia_nat_nexus_core::types as core_types;
+use nvidia_nat_nexus_optimizer::{
+    deregister_hosted_plugin_handler, register_hosted_plugin_handler, ComponentRegistration,
+    ConfigDiagnostic, ConfigReport, DiagnosticLevel, HostedPluginHandler, OptimizerConfig,
+    OptimizerError, OptimizerRuntime as NativeOptimizerRuntime,
+};
 
 use crate::callable;
 use crate::convert::*;
@@ -1792,6 +1798,443 @@ pub fn default_open_inference_config() -> Result<JsValue, JsValue> {
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// Validate an optimizer config document and return a structured diagnostics report.
+#[wasm_bindgen(js_name = "validateOptimizerConfig")]
+pub fn validate_optimizer_config(config: JsValue) -> Result<JsValue, JsValue> {
+    let config: OptimizerConfig = serde_wasm_bindgen::from_value(config)?;
+    serde_wasm_bindgen::to_value(&NativeOptimizerRuntime::validate_config(&config))
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+#[derive(Clone)]
+#[wasm_bindgen(js_name = "OptimizerPluginContext")]
+pub struct WasmOptimizerPluginContext {
+    registrations: Arc<Mutex<Vec<ComponentRegistration>>>,
+}
+
+impl WasmOptimizerPluginContext {
+    fn drain_registrations(&self) -> Result<Vec<ComponentRegistration>, JsValue> {
+        let mut guard = self.registrations.lock().map_err(|e| {
+            JsValue::from_str(&format!("optimizer plugin context lock poisoned: {e}"))
+        })?;
+        Ok(std::mem::take(&mut *guard))
+    }
+
+    fn push_registration(&self, registration: ComponentRegistration) -> Result<(), JsValue> {
+        self.registrations
+            .lock()
+            .map_err(|e| JsValue::from_str(&format!("failed to acquire registrations lock: {e}")))?
+            .push(registration);
+        Ok(())
+    }
+}
+
+#[wasm_bindgen(js_class = OptimizerPluginContext)]
+impl WasmOptimizerPluginContext {
+    #[wasm_bindgen(js_name = registerSubscriber)]
+    pub fn register_subscriber(&self, name: &str, callback: Function) -> Result<(), JsValue> {
+        nvidia_nat_nexus_core::nat_nexus_register_subscriber(
+            name,
+            crate::callable::wrap_js_event_subscriber(callback),
+        )
+        .map_err(to_js_err)?;
+
+        let name_owned = name.to_string();
+        self.push_registration(ComponentRegistration::new(
+            "external_component",
+            name_owned.clone(),
+            Box::new(move || {
+                nvidia_nat_nexus_core::nat_nexus_deregister_subscriber(&name_owned)
+                    .map(|_| ())
+                    .map_err(|e| {
+                        OptimizerError::RegistrationFailed(format!(
+                            "subscriber deregistration failed: {e}"
+                        ))
+                    })
+            }),
+        ))
+    }
+
+    #[wasm_bindgen(js_name = registerLlmRequestIntercept)]
+    pub fn register_llm_request_intercept(
+        &self,
+        name: &str,
+        priority: i32,
+        break_chain: bool,
+        callback: Function,
+    ) -> Result<(), JsValue> {
+        nvidia_nat_nexus_core::nat_nexus_register_llm_request_intercept(
+            name,
+            priority,
+            break_chain,
+            crate::callable::wrap_js_llm_request_intercept_fn(callback),
+        )
+        .map_err(to_js_err)?;
+
+        let name_owned = name.to_string();
+        self.push_registration(ComponentRegistration::new(
+            "external_component",
+            name_owned.clone(),
+            Box::new(move || {
+                nvidia_nat_nexus_core::nat_nexus_deregister_llm_request_intercept(&name_owned)
+                    .map(|_| ())
+                    .map_err(|e| {
+                        OptimizerError::RegistrationFailed(format!(
+                            "llm request intercept deregistration failed: {e}"
+                        ))
+                    })
+            }),
+        ))
+    }
+
+    #[wasm_bindgen(js_name = registerLlmExecutionIntercept)]
+    pub fn register_llm_execution_intercept(
+        &self,
+        name: &str,
+        priority: i32,
+        callback: Function,
+    ) -> Result<(), JsValue> {
+        nvidia_nat_nexus_core::nat_nexus_register_llm_execution_intercept(
+            name,
+            priority,
+            crate::callable::wrap_js_llm_exec_intercept_fn(callback),
+        )
+        .map_err(to_js_err)?;
+
+        let name_owned = name.to_string();
+        self.push_registration(ComponentRegistration::new(
+            "external_component",
+            name_owned.clone(),
+            Box::new(move || {
+                nvidia_nat_nexus_core::nat_nexus_deregister_llm_execution_intercept(&name_owned)
+                    .map(|_| ())
+                    .map_err(|e| {
+                        OptimizerError::RegistrationFailed(format!(
+                            "llm execution intercept deregistration failed: {e}"
+                        ))
+                    })
+            }),
+        ))
+    }
+
+    #[wasm_bindgen(js_name = registerLlmStreamExecutionIntercept)]
+    pub fn register_llm_stream_execution_intercept(
+        &self,
+        name: &str,
+        priority: i32,
+        callback: Function,
+    ) -> Result<(), JsValue> {
+        nvidia_nat_nexus_core::nat_nexus_register_llm_stream_execution_intercept(
+            name,
+            priority,
+            crate::callable::wrap_js_llm_stream_exec_intercept_fn(callback),
+        )
+        .map_err(to_js_err)?;
+
+        let name_owned = name.to_string();
+        self.push_registration(ComponentRegistration::new(
+            "external_component",
+            name_owned.clone(),
+            Box::new(move || {
+                nvidia_nat_nexus_core::nat_nexus_deregister_llm_stream_execution_intercept(
+                    &name_owned,
+                )
+                .map(|_| ())
+                .map_err(|e| {
+                    OptimizerError::RegistrationFailed(format!(
+                        "llm stream execution intercept deregistration failed: {e}"
+                    ))
+                })
+            }),
+        ))
+    }
+
+    #[wasm_bindgen(js_name = registerToolRequestIntercept)]
+    pub fn register_tool_request_intercept(
+        &self,
+        name: &str,
+        priority: i32,
+        break_chain: bool,
+        callback: Function,
+    ) -> Result<(), JsValue> {
+        nvidia_nat_nexus_core::nat_nexus_register_tool_request_intercept(
+            name,
+            priority,
+            break_chain,
+            crate::callable::wrap_js_tool_request_intercept_fn(callback),
+        )
+        .map_err(to_js_err)?;
+
+        let name_owned = name.to_string();
+        self.push_registration(ComponentRegistration::new(
+            "external_component",
+            name_owned.clone(),
+            Box::new(move || {
+                nvidia_nat_nexus_core::nat_nexus_deregister_tool_request_intercept(&name_owned)
+                    .map(|_| ())
+                    .map_err(|e| {
+                        OptimizerError::RegistrationFailed(format!(
+                            "tool request intercept deregistration failed: {e}"
+                        ))
+                    })
+            }),
+        ))
+    }
+
+    #[wasm_bindgen(js_name = registerToolExecutionIntercept)]
+    pub fn register_tool_execution_intercept(
+        &self,
+        name: &str,
+        priority: i32,
+        callback: Function,
+    ) -> Result<(), JsValue> {
+        nvidia_nat_nexus_core::nat_nexus_register_tool_execution_intercept(
+            name,
+            priority,
+            crate::callable::wrap_js_tool_exec_intercept_fn(callback),
+        )
+        .map_err(to_js_err)?;
+
+        let name_owned = name.to_string();
+        self.push_registration(ComponentRegistration::new(
+            "external_component",
+            name_owned.clone(),
+            Box::new(move || {
+                nvidia_nat_nexus_core::nat_nexus_deregister_tool_execution_intercept(&name_owned)
+                    .map(|_| ())
+                    .map_err(|e| {
+                        OptimizerError::RegistrationFailed(format!(
+                            "tool execution intercept deregistration failed: {e}"
+                        ))
+                    })
+            }),
+        ))
+    }
+}
+
+struct WasmHostedPluginHandler {
+    plugin_kind: String,
+    validate: Option<send_wrapper::SendWrapper<Function>>,
+    register: send_wrapper::SendWrapper<Function>,
+}
+
+// SAFETY: The `validate` and `register` functions are wrapped in `SendWrapper`,
+// which enforces access from the thread that created them. Cross-thread access
+// will panic rather than allow undefined behavior.
+unsafe impl Send for WasmHostedPluginHandler {}
+// SAFETY: The same `SendWrapper` invariant applies for shared references; the
+// wrapped callbacks are only invoked on their originating thread.
+unsafe impl Sync for WasmHostedPluginHandler {}
+
+impl HostedPluginHandler for WasmHostedPluginHandler {
+    fn plugin_kind(&self) -> &str {
+        &self.plugin_kind
+    }
+
+    fn validate(
+        &self,
+        instance_id: &str,
+        plugin_config: &serde_json::Map<String, serde_json::Value>,
+    ) -> Vec<ConfigDiagnostic> {
+        let Some(validate) = &self.validate else {
+            return vec![];
+        };
+        let plugin_config_js = json_to_js(&serde_json::Value::Object(plugin_config.clone()));
+        match validate.call2(
+            &JsValue::NULL,
+            &JsValue::from_str(instance_id),
+            &plugin_config_js,
+        ) {
+            Ok(value) => serde_wasm_bindgen::from_value::<Vec<ConfigDiagnostic>>(value)
+                .unwrap_or_else(|e| {
+                    vec![ConfigDiagnostic {
+                        level: nvidia_nat_nexus_optimizer::DiagnosticLevel::Error,
+                        code: "optimizer.plugin_validate_failed".into(),
+                        component: Some("external_component".into()),
+                        field: None,
+                        message: format!(
+                            "WASM optimizer plugin validate returned invalid diagnostics: {e}"
+                        ),
+                    }]
+                }),
+            Err(err) => vec![ConfigDiagnostic {
+                level: nvidia_nat_nexus_optimizer::DiagnosticLevel::Error,
+                code: "optimizer.plugin_validate_failed".into(),
+                component: Some("external_component".into()),
+                field: None,
+                message: err
+                    .as_string()
+                    .unwrap_or_else(|| "WASM optimizer plugin validate failed".to_string()),
+            }],
+        }
+    }
+
+    fn register(
+        &self,
+        instance_id: &str,
+        plugin_config: &serde_json::Map<String, serde_json::Value>,
+        ctx: &mut nvidia_nat_nexus_optimizer::HostedRegistrationContext,
+    ) -> nvidia_nat_nexus_optimizer::Result<()> {
+        let plugin_context = WasmOptimizerPluginContext {
+            registrations: Arc::new(Mutex::new(vec![])),
+        };
+        let plugin_context_js = JsValue::from(plugin_context.clone());
+        let plugin_config_js = json_to_js(&serde_json::Value::Object(plugin_config.clone()));
+        self.register
+            .call3(
+                &JsValue::NULL,
+                &JsValue::from_str(instance_id),
+                &plugin_config_js,
+                &plugin_context_js,
+            )
+            .map_err(|err| {
+                OptimizerError::RegistrationFailed(
+                    err.as_string()
+                        .unwrap_or_else(|| "WASM optimizer plugin register failed".to_string()),
+                )
+            })?;
+
+        ctx.extend_registrations(plugin_context.drain_registrations().map_err(|err| {
+            OptimizerError::RegistrationFailed(
+                err.as_string()
+                    .unwrap_or_else(|| "failed to drain WASM plugin registrations".to_string()),
+            )
+        })?);
+        Ok(())
+    }
+}
+
+#[wasm_bindgen(js_name = "registerOptimizerPlugin")]
+pub fn register_optimizer_plugin(
+    plugin_kind: String,
+    validate: Option<Function>,
+    register: Function,
+) -> Result<(), JsValue> {
+    register_hosted_plugin_handler(Arc::new(WasmHostedPluginHandler {
+        plugin_kind,
+        validate: validate.map(send_wrapper::SendWrapper::new),
+        register: send_wrapper::SendWrapper::new(register),
+    }))
+    .map_err(to_js_err)
+}
+
+#[wasm_bindgen(js_name = "deregisterOptimizerPlugin")]
+pub fn deregister_optimizer_plugin(plugin_kind: String) -> bool {
+    deregister_hosted_plugin_handler(&plugin_kind)
+}
+
+/// Dynamic optimizer runtime selected by config.
+#[wasm_bindgen(js_name = "OptimizerRuntime")]
+pub struct WasmOptimizerRuntime {
+    inner: RefCell<Option<WasmOptimizerRuntimeState>>,
+}
+
+enum WasmOptimizerRuntimeState {
+    Pending {
+        config: OptimizerConfig,
+        report: ConfigReport,
+    },
+    Ready(NativeOptimizerRuntime),
+}
+
+#[wasm_bindgen]
+impl WasmOptimizerRuntime {
+    #[wasm_bindgen(constructor)]
+    pub fn new(config: JsValue) -> Result<WasmOptimizerRuntime, JsValue> {
+        let config: OptimizerConfig = serde_wasm_bindgen::from_value(config)?;
+        let report = validate_optimizer_config_or_js_err(&config)?;
+        Ok(WasmOptimizerRuntime {
+            inner: RefCell::new(Some(WasmOptimizerRuntimeState::Pending { config, report })),
+        })
+    }
+
+    #[wasm_bindgen]
+    pub async fn register(&self) -> Result<(), JsValue> {
+        let state = self
+            .inner
+            .borrow_mut()
+            .take()
+            .ok_or_else(|| JsValue::from_str("optimizer runtime already shut down"))?;
+
+        let (result, next_state) = match state {
+            WasmOptimizerRuntimeState::Pending { config, report } => {
+                match NativeOptimizerRuntime::new(config.clone()).await {
+                    Ok(mut runtime) => {
+                        let result = runtime.register().await.map_err(to_js_err);
+                        (result, Some(WasmOptimizerRuntimeState::Ready(runtime)))
+                    }
+                    Err(err) => (
+                        Err(to_js_err(err)),
+                        Some(WasmOptimizerRuntimeState::Pending { config, report }),
+                    ),
+                }
+            }
+            WasmOptimizerRuntimeState::Ready(mut runtime) => {
+                let result = runtime.register().await.map_err(to_js_err);
+                (result, Some(WasmOptimizerRuntimeState::Ready(runtime)))
+            }
+        };
+
+        *self.inner.borrow_mut() = next_state;
+        result
+    }
+
+    #[wasm_bindgen]
+    pub fn deregister(&self) -> Result<(), JsValue> {
+        let mut guard = self.inner.borrow_mut();
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| JsValue::from_str("optimizer runtime already shut down"))?;
+        match state {
+            WasmOptimizerRuntimeState::Pending { .. } => Ok(()),
+            WasmOptimizerRuntimeState::Ready(runtime) => runtime.deregister().map_err(to_js_err),
+        }
+    }
+
+    #[wasm_bindgen]
+    pub async fn shutdown(&self) -> Result<(), JsValue> {
+        let state = self
+            .inner
+            .borrow_mut()
+            .take()
+            .ok_or_else(|| JsValue::from_str("optimizer runtime already shut down"))?;
+        match state {
+            WasmOptimizerRuntimeState::Pending { .. } => Ok(()),
+            WasmOptimizerRuntimeState::Ready(runtime) => {
+                runtime.shutdown().await.map_err(to_js_err)
+            }
+        }
+    }
+
+    #[wasm_bindgen]
+    pub fn report(&self) -> Result<JsValue, JsValue> {
+        let guard = self.inner.borrow();
+        let state = guard
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("optimizer runtime already shut down"))?;
+        let report = match state {
+            WasmOptimizerRuntimeState::Pending { report, .. } => report,
+            WasmOptimizerRuntimeState::Ready(runtime) => runtime.report(),
+        };
+        serde_wasm_bindgen::to_value(report).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+}
+
+fn validate_optimizer_config_or_js_err(config: &OptimizerConfig) -> Result<ConfigReport, JsValue> {
+    let report = NativeOptimizerRuntime::validate_config(config);
+    if report.has_errors() {
+        let joined = report
+            .diagnostics
+            .iter()
+            .filter(|diag| diag.level == DiagnosticLevel::Error)
+            .map(|diag| diag.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(JsValue::from_str(&joined));
+    }
+    Ok(report)
+}
+
 /// OpenInference-backed event subscriber.
 #[wasm_bindgen(js_name = OpenInferenceSubscriber)]
 pub struct WasmOpenInferenceSubscriber {
@@ -1847,6 +2290,15 @@ impl WasmOpenInferenceSubscriber {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    use crate::convert::{clear_last_callback_error, record_callback_error};
+
+    static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn test_mutex() -> &'static Mutex<()> {
+        TEST_MUTEX.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn wasm_config_defaults_match_expected_values() {
@@ -1916,7 +2368,6 @@ mod tests {
         .is_ok());
     }
 
-    #[test]
     fn wasm_atif_exporter_exports_full_trajectory_without_root_parameter() {
         let exporter = WasmAtifExporter::new(
             "session-wasm".to_string(),
@@ -1934,5 +2385,80 @@ mod tests {
         let cleared: serde_json::Value =
             serde_json::from_str(&exporter.export_json().unwrap()).unwrap();
         assert!(cleared["steps"].as_array().unwrap().is_empty());
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn optimizer_config_validation_and_runtime_report_round_trip() {
+        let config = serde_wasm_bindgen::to_value(&serde_json::json!({
+            "version": 1,
+            "state": {
+                "backend": {
+                    "kind": "in_memory",
+                    "config": {}
+                }
+            },
+            "components": [
+                {
+                    "kind": "telemetry",
+                    "enabled": true,
+                    "config": {
+                        "learners": ["latency_sensitivity"]
+                    }
+                },
+                {
+                    "kind": "dynamo_hints",
+                    "enabled": true,
+                    "config": {}
+                },
+                {
+                    "kind": "tool_parallelism",
+                    "enabled": true,
+                    "config": {}
+                }
+            ]
+        }))
+        .unwrap();
+
+        let report = validate_optimizer_config(config.clone()).unwrap();
+        let report_json: serde_json::Value = serde_wasm_bindgen::from_value(report).unwrap();
+        assert_eq!(report_json["diagnostics"], serde_json::json!([]));
+
+        let runtime = WasmOptimizerRuntime::new(config).unwrap();
+        let report_json: serde_json::Value =
+            serde_wasm_bindgen::from_value(runtime.report().unwrap()).unwrap();
+        assert_eq!(report_json["diagnostics"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn callback_error_wrapper_accessors_round_trip() {
+        clear_last_callback_error();
+        assert_eq!(nat_nexus_get_last_callback_error(), None);
+
+        record_callback_error("wasm wrapper callback failed");
+        assert_eq!(
+            nat_nexus_get_last_callback_error(),
+            Some("wasm wrapper callback failed".to_string())
+        );
+
+        nat_nexus_clear_last_callback_error();
+        assert_eq!(nat_nexus_get_last_callback_error(), None);
+    }
+
+    #[test]
+    fn optimizer_plugin_context_helpers_work_natively() {
+        let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+        let context = WasmOptimizerPluginContext {
+            registrations: Arc::new(Mutex::new(Vec::new())),
+        };
+        context
+            .push_registration(ComponentRegistration::new(
+                "external_component",
+                "plugin.reg".to_string(),
+                Box::new(|| Ok(())),
+            ))
+            .unwrap();
+        let drained = context.drain_registrations().unwrap();
+        assert_eq!(drained.len(), 1);
     }
 }

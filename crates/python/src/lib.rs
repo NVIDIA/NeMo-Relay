@@ -17,8 +17,8 @@
 //!   accept `tool_call_id` and LLM calls accept `model_name` for ATIF correlation.
 //! - `py_callable` — Bridges between Python callables and Rust callback types
 //! - `py_context` — Notes on scope propagation between sync/async contexts
-//! - `py_proxy` — Python-facing proxy types (`NexusProxy`, `InMemoryBackend`,
-//!   `MetadataEnvelope`, `ParallelHint`)
+//! - `py_optimizer` — Python-facing optimizer config/runtime helpers (`OptimizerRuntime`,
+//!   `validate_optimizer_config`, `set_latency_sensitivity`)
 //! - `convert` — JSON ↔ Python conversion utilities
 
 use pyo3::prelude::*;
@@ -27,7 +27,7 @@ mod convert;
 mod py_api;
 mod py_callable;
 mod py_context;
-mod py_proxy;
+mod py_optimizer;
 mod py_storage;
 mod py_types;
 
@@ -36,7 +36,7 @@ mod py_types;
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     py_types::register(m)?;
     py_api::register(m)?;
-    py_proxy::register(m)?;
+    py_optimizer::register(m)?;
     Ok(())
 }
 

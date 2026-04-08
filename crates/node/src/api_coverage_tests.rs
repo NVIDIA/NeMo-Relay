@@ -270,6 +270,77 @@ fn test_parse_string_map_accepts_objects_and_rejects_invalid_shapes() {
 }
 
 #[test]
+fn test_optimizer_runtime_validate_and_lifecycle_wrappers() {
+    let report = validate_optimizer_config(json!({
+        "version": 1,
+        "components": [{
+            "kind": "future_component",
+            "enabled": true,
+            "config": {}
+        }]
+    }))
+    .unwrap();
+    assert!(report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diag| diag["code"] == "optimizer.unknown_component"));
+
+    let err = match JsOptimizerRuntime::new(json!({
+        "version": 1,
+        "policy": { "unknown_component": "error" },
+        "components": [{
+            "kind": "future_component",
+            "enabled": true,
+            "config": {}
+        }]
+    })) {
+        Ok(_) => panic!("expected strict unknown component config to fail"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("unsupported"));
+
+    let runtime = JsOptimizerRuntime::new(json!({
+        "version": 1,
+        "state": {
+            "backend": {
+                "kind": "in_memory",
+                "config": {}
+            }
+        },
+        "components": [
+            {
+                "kind": "telemetry",
+                "enabled": true,
+                "config": {
+                    "learners": ["latency_sensitivity"]
+                }
+            },
+            {
+                "kind": "dynamo_hints",
+                "enabled": true,
+                "config": {}
+            },
+            {
+                "kind": "tool_parallelism",
+                "enabled": true,
+                "config": {}
+            }
+        ]
+    }))
+    .unwrap();
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let report = runtime.report().await.unwrap();
+        assert_eq!(report["diagnostics"], json!([]));
+        runtime.register().await.unwrap();
+        runtime.deregister().await.unwrap();
+        runtime.shutdown().await.unwrap();
+    });
+}
+
+#[test]
 fn test_open_telemetry_subscriber_rejects_invalid_config() {
     let err = build_otel_config(Some(OpenTelemetryConfig {
         transport: Some("invalid".into()),

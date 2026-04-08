@@ -53,7 +53,7 @@ Submodules:
     intercepts  - Intercept registration for tools and LLMs.
     subscribers - Event subscriber registration.
     scope_local - Scope-local guardrail, intercept, and subscriber registration.
-    proxy       - Proxy types, backends, and declarative proxy API.
+    optimizer   - Optimizer config helpers, diagnostics, and runtime lifecycle API.
 
 Types (available at top level):
     ScopeAttributes, ToolAttributes, LLMAttributes,
@@ -66,7 +66,7 @@ Types (available at top level):
 import contextvars
 import typing
 
-from nat_nexus import codecs, guardrails, intercepts, llm, proxy, scope, scope_local, subscribers, tools, typed
+from nat_nexus import codecs, guardrails, intercepts, llm, optimizer, scope, scope_local, subscribers, tools, typed
 from nat_nexus._native import (
     AnnotatedLLMRequest,
     # ATIF exporter
@@ -206,7 +206,7 @@ __all__ = [
     "scope_local",
     "codecs",
     "typed",
-    "proxy",
+    "optimizer",
     # Scope stack isolation
     "ScopeStack",
     "create_scope_stack",

@@ -245,10 +245,91 @@ python/nat_nexus/
   intercepts.py     # Intercept registration
   subscribers.py    # Event subscriber registration
   scope_local.py    # Scope-local middleware registration
+  optimizer.py      # Config-driven optimizer runtime helpers
   typed.py          # Codec-based typed wrappers
 ```
 
 The Python package wraps a PyO3 native extension (`_native`) built with the stable ABI (abi3), producing a single `.so` compatible with Python 3.11+.
+
+### Optimizer Runtime
+
+Python exposes typed optimizer helpers in `nat_nexus.optimizer`:
+
+```python
+from nat_nexus.optimizer import (
+    BackendSpec,
+    OptimizerConfig,
+    OptimizerRuntime,
+    StateConfig,
+    TelemetryComponent,
+)
+
+runtime = OptimizerRuntime(
+    OptimizerConfig(
+        state=StateConfig(backend=BackendSpec.in_memory()),
+        components=[TelemetryComponent(learners=["latency_sensitivity"])],
+    )
+)
+
+report = runtime.report()
+await runtime.register()
+runtime.deregister()
+await runtime.shutdown()
+```
+
+### Optimizer Hosted Plugins
+
+Python can register hosted optimizer plugins that the Rust optimizer runtime
+calls during validation and registration.
+
+```python
+from nat_nexus import LLMRequest
+from nat_nexus.optimizer import (
+    ExternalComponent,
+    OptimizerConfig,
+    OptimizerRuntime,
+    register_optimizer_plugin,
+)
+
+class HeaderPlugin:
+    def validate(self, instance_id, plugin_config):
+        return []
+
+    def register(self, instance_id, plugin_config, context):
+        def intercept(_name, request, annotated):
+            headers = dict(request.headers)
+            headers["x-plugin"] = instance_id
+            return LLMRequest(headers, request.content), annotated
+
+        context.register_llm_request_intercept(
+            f"{instance_id}.header",
+            25,
+            False,
+            intercept,
+        )
+
+register_optimizer_plugin("example.header_plugin", HeaderPlugin())
+
+runtime = OptimizerRuntime(
+    OptimizerConfig(
+        components=[
+            ExternalComponent(
+                plugin_kind="example.header_plugin",
+                instance_id="plugin-1",
+            )
+        ]
+    )
+)
+```
+
+`context` exposes:
+
+- `register_subscriber(...)`
+- `register_llm_request_intercept(...)`
+- `register_llm_execution_intercept(...)`
+- `register_llm_stream_execution_intercept(...)`
+- `register_tool_request_intercept(...)`
+- `register_tool_execution_intercept(...)`
 
 ### Usage
 
@@ -439,6 +520,79 @@ const result = await typedToolExecute(
 
 Node.js uses a push-based stream bridge for LLM streaming. JavaScript drives async iteration and pushes chunks back to the native layer via `pushStreamChunk()` / `endStream()`.
 
+### Optimizer Runtime
+
+Node exposes optimizer helpers through `typed.js` and validation through the
+generated addon:
+
+```javascript
+import { validateOptimizerConfig } from "./index.js";
+import {
+  OptimizerRuntime,
+  defaultOptimizerConfig,
+  optimizerInMemoryBackend,
+  telemetryComponent,
+} from "./typed.js";
+
+const config = defaultOptimizerConfig();
+config.state = { backend: optimizerInMemoryBackend() };
+config.components = [telemetryComponent({ learners: ["latency_sensitivity"] })];
+
+const validation = validateOptimizerConfig(config);
+const runtime = new OptimizerRuntime(config);
+const report = await runtime.report();
+await runtime.register();
+await runtime.deregister();
+await runtime.shutdown();
+```
+
+### Optimizer Hosted Plugins
+
+Node exposes hosted optimizer plugins through `registerOptimizerPlugin(...)`
+and the `externalComponent(...)` helper in `typed.js`:
+
+```javascript
+import {
+  OptimizerRuntime,
+  defaultOptimizerConfig,
+  externalComponent,
+  registerOptimizerPlugin,
+} from "./typed.js";
+
+registerOptimizerPlugin("example.header_plugin", {
+  validate(instanceId, pluginConfig) {
+    return [];
+  },
+  register(instanceId, pluginConfig, context) {
+    context.registerLlmRequestIntercept(
+      `${instanceId}.header`,
+      25,
+      false,
+      (name, request, annotated) => [
+        {
+          headers: { ...request.headers, "x-plugin": instanceId },
+          content: request.content,
+        },
+        annotated,
+      ],
+    );
+  },
+});
+
+const config = defaultOptimizerConfig();
+config.components = [externalComponent("example.header_plugin", "plugin-1", {})];
+const runtime = new OptimizerRuntime(config);
+```
+
+Node hosted plugin contexts expose:
+
+- `registerSubscriber(...)`
+- `registerLlmRequestIntercept(...)`
+- `registerLlmExecutionIntercept(...)`
+- `registerLlmStreamExecutionIntercept(...)`
+- `registerToolRequestIntercept(...)`
+- `registerToolExecutionIntercept(...)`
+
 ## Go
 
 ### Setup
@@ -460,6 +614,7 @@ go/nat_nexus/
   types.go          # Type definitions (ScopeHandle, ToolHandle, etc.)
   stream.go         # LLM stream handling
   callbacks.go      # Go trampolines for Rust callbacks
+  optimizer.go      # Optimizer config/runtime wrapper
   scope/            # Convenience package
   tools/            # Convenience package
   llm/              # Convenience package
@@ -555,6 +710,84 @@ func goToolSanitizeTrampoline(userData unsafe.Pointer, name *C.char, args *C.cha
 ```
 
 Memory management requires explicit `Free()` calls on handles and scope stacks.
+
+### Optimizer Runtime
+
+Go exposes typed optimizer config builders and a synchronous runtime wrapper:
+
+```go
+config := nat_nexus.NewOptimizerConfig()
+config.State = &nat_nexus.OptimizerStateConfig{
+    Backend: nat_nexus.NewInMemoryOptimizerBackend(),
+}
+config.Components = []nat_nexus.OptimizerComponentSpec{
+    nat_nexus.TelemetryComponent(nat_nexus.TelemetryComponentConfig{
+        Learners: []string{"latency_sensitivity"},
+    }),
+}
+
+report, err := nat_nexus.ValidateOptimizerConfig(config)
+runtime, err := nat_nexus.NewOptimizerRuntime(config)
+if err != nil {
+    panic(err)
+}
+defer runtime.Close()
+
+_ = report
+_ = runtime.Register()
+_ = runtime.Deregister()
+_ = runtime.Shutdown()
+```
+
+### Optimizer Hosted Plugins
+
+The Go binding exposes hosted plugin registration plus a temporary registration
+context for adding subscribers and intercepts:
+
+```go
+pluginKind := "example.header_plugin"
+err := nat_nexus.RegisterOptimizerPlugin(pluginKind, nat_nexus.OptimizerPluginHandlerFuncs{
+    ValidateFunc: func(instanceID string, pluginConfig map[string]any) ([]nat_nexus.OptimizerConfigDiagnostic, error) {
+        return nil, nil
+    },
+    RegisterFunc: func(instanceID string, pluginConfig map[string]any, ctx *nat_nexus.OptimizerPluginContext) error {
+        return ctx.RegisterLlmRequestIntercept(
+            instanceID+".header",
+            25,
+            false,
+            func(name string, request map[string]any, annotated map[string]any) (map[string]any, map[string]any, error) {
+                headers, _ := request["headers"].(map[string]any)
+                if headers == nil {
+                    headers = map[string]any{}
+                }
+                headers["x-plugin"] = instanceID
+                request["headers"] = headers
+                return request, annotated, nil
+            },
+        )
+    },
+})
+if err != nil {
+    panic(err)
+}
+
+config := nat_nexus.NewOptimizerConfig()
+config.Components = []nat_nexus.OptimizerComponentSpec{
+    nat_nexus.ExternalComponent(nat_nexus.ExternalComponentConfig{
+        PluginKind: pluginKind,
+        InstanceID: "plugin-1",
+    }),
+}
+```
+
+`OptimizerPluginContext` exposes:
+
+- `RegisterSubscriber(...)`
+- `RegisterLlmRequestIntercept(...)`
+- `RegisterLlmExecutionIntercept(...)`
+- `RegisterLlmStreamExecutionIntercept(...)`
+- `RegisterToolRequestIntercept(...)`
+- `RegisterToolExecutionIntercept(...)`
 
 ### Context Isolation
 
@@ -703,6 +936,108 @@ scope_register_subscriber(
 
 popScope(handle);  // auto-cleanup
 ```
+
+### Optimizer Runtime
+
+The WASM binding uses plain JavaScript objects for optimizer config:
+
+```javascript
+import init, {
+  OptimizerRuntime,
+  validateOptimizerConfig,
+} from "./pkg/nvidia_nat_nexus_wasm.js";
+
+await init();
+
+const config = {
+  version: 1,
+  state: { backend: { kind: "in_memory", config: {} } },
+  components: [
+    { kind: "telemetry", enabled: true, config: { learners: ["latency_sensitivity"] } },
+  ],
+};
+
+const validation = validateOptimizerConfig(config);
+const runtime = new OptimizerRuntime(config);
+runtime.report();
+await runtime.register();
+runtime.deregister();
+await runtime.shutdown();
+```
+
+### Optimizer Hosted Plugins
+
+The WASM binding also supports hosted plugins. Register the plugin handler in
+JavaScript, then activate it through `external_component` in the optimizer
+config:
+
+```javascript
+import init, {
+    OptimizerRuntime,
+    registerOptimizerPlugin,
+    deregisterOptimizerPlugin,
+    validateOptimizerConfig,
+} from './pkg/nvidia_nat_nexus_wasm.js';
+
+await init();
+
+registerOptimizerPlugin("example.header_plugin", {
+    validate(instanceId, pluginConfig) {
+        return [];
+    },
+    register(instanceId, pluginConfig, context) {
+        context.registerLlmRequestIntercept(
+            `${instanceId}.header`,
+            25,
+            false,
+            (name, request, annotated) => [
+                {
+                    headers: { ...request.headers, "x-plugin": instanceId },
+                    content: request.content,
+                },
+                annotated,
+            ],
+        );
+    },
+});
+
+const config = {
+    version: 1,
+    components: [
+        {
+            kind: "external_component",
+            enabled: true,
+            config: {
+                plugin_kind: "example.header_plugin",
+                instance_id: "plugin-1",
+            },
+        },
+    ],
+};
+
+console.log(validateOptimizerConfig(config));
+const runtime = new OptimizerRuntime(config);
+await runtime.register();
+runtime.deregister();
+await runtime.shutdown();
+deregisterOptimizerPlugin("example.header_plugin");
+```
+
+WASM hosted plugin contexts expose:
+
+- `registerSubscriber(...)`
+- `registerLlmRequestIntercept(...)`
+- `registerLlmExecutionIntercept(...)`
+- `registerLlmStreamExecutionIntercept(...)`
+- `registerToolRequestIntercept(...)`
+- `registerToolExecutionIntercept(...)`
+
+WASM stream execution note:
+
+- `registerLlmStreamExecutionIntercept(...)` in the WASM binding produces a
+  single-item stream result directly and does not delegate to downstream stream
+  handlers. WASM hosted plugins therefore cannot chain stream execution
+  intercepts the same way the Rust, Python, Go, and Node.js bindings can.
 
 ### Streaming LLM Example
 

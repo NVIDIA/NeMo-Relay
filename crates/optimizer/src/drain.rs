@@ -144,7 +144,7 @@ impl RunAccumulator {
 /// Background task that drains events from the telemetry channel, accumulates
 /// them into [`RunRecord`]s, stores completed runs, and refreshes the hot cache.
 ///
-/// Exits cleanly when the channel sender is dropped (proxy shutting down).
+/// Exits cleanly when the channel sender is dropped (optimizer shutting down).
 pub(crate) async fn drain_task(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<Event>,
     backend: Arc<dyn StorageBackendDyn + Send + Sync>,
@@ -159,7 +159,7 @@ pub(crate) async fn drain_task(
             // Store the completed run (WIRE-04: async, not on hot path)
             if let Err(e) = backend.store_run_dyn(&completed_run).await {
                 // Log error but continue -- don't crash the drain
-                eprintln!("nexus-proxy drain: store_run failed: {e}");
+                eprintln!("nexus-optimizer drain: store_run failed: {e}");
                 continue;
             }
 
@@ -169,7 +169,7 @@ pub(crate) async fn drain_task(
                     .process_run(&completed_run, backend.as_ref(), &hot_cache)
                     .await
                 {
-                    eprintln!("nexus-proxy drain: learner failed: {e}");
+                    eprintln!("nexus-optimizer drain: learner failed: {e}");
                     // Continue -- one learner failure doesn't stop others
                 }
             }
@@ -182,12 +182,12 @@ pub(crate) async fn drain_task(
                     }
                 }
                 Err(e) => {
-                    eprintln!("nexus-proxy drain: load_plan failed: {e}");
+                    eprintln!("nexus-optimizer drain: load_plan failed: {e}");
                 }
             }
         }
     }
-    // Channel closed -- sender dropped, proxy shutting down. Exit cleanly.
+    // Channel closed -- sender dropped, optimizer shutting down. Exit cleanly.
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@
 //! `tokio::sync::mpsc` channel for async processing by the drain task.
 //!
 //! It also provides helper functions for mapping raw [`Event`] values to
-//! proxy-specific types:
+//! optimizer-specific types:
 //!
 //! - [`event_to_call_record`] — converts LLM/Tool start events into
 //!   [`CallRecord`] entries.
@@ -34,7 +34,7 @@ use crate::types::{CallKind, CallRecord};
 ///
 /// The only work done is `event.clone()` followed by
 /// [`UnboundedSender::send`](tokio::sync::mpsc::UnboundedSender::send), which
-/// never blocks. If the receiver has been dropped (proxy is shutting down),
+/// never blocks. If the receiver has been dropped (optimizer is shutting down),
 /// `send` returns `Err` and the event is silently discarded via `let _ = ...`.
 pub(crate) fn create_subscriber(
     tx: tokio::sync::mpsc::UnboundedSender<Event>,

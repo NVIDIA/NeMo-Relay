@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Intercept factories for the nexus-proxy crate.
+//! Intercept factories for the nexus-optimizer crate.
 //!
 //! Provides [`create_tool_execution_intercept`], which builds a middleware-chain
 //! intercept that reads the hot cache for [`ParallelHint`](crate::types::ParallelHint)
@@ -25,7 +25,7 @@ use nvidia_nat_nexus_core::{Json, ToolExecutionFn, ToolExecutionNextFn};
 use crate::types::HotCache;
 
 /// Header key used to inject agent hints into LLM requests.
-pub const AGENT_HINTS_HEADER_KEY: &str = "x-nexus-proxy-agent-hints";
+pub const AGENT_HINTS_HEADER_KEY: &str = "x-nexus-optimizer-agent-hints";
 
 /// Creates a tool execution intercept that reads the hot cache for
 /// [`ParallelHint`](crate::types::ParallelHint) annotations.

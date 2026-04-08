@@ -11,7 +11,7 @@ import contextvars
 from typing import Any, AsyncIterator, Awaitable, Callable, Literal, Optional
 
 from nat_nexus import codecs as codecs
-from nat_nexus import proxy as proxy
+from nat_nexus import optimizer as optimizer
 from nat_nexus import scope as scope
 from nat_nexus import typed as typed
 from nat_nexus.codecs import LlmCodec as LlmCodec

@@ -50,6 +50,95 @@ cargo test -p nat-nexus-wasm
 wasm-pack test --node crates/wasm
 ```
 
+## Optimizer Runtime
+
+The WASM binding uses plain JavaScript objects for optimizer config and exports
+runtime helpers directly from the generated package.
+
+```javascript
+import init, {
+  OptimizerRuntime,
+  validateOptimizerConfig,
+} from "./pkg/nvidia_nat_nexus_wasm.js";
+
+await init();
+
+const config = {
+  version: 1,
+  state: { backend: { kind: "in_memory", config: {} } },
+  components: [
+    { kind: "telemetry", enabled: true, config: { learners: ["latency_sensitivity"] } },
+  ],
+};
+
+const validation = validateOptimizerConfig(config);
+const runtime = new OptimizerRuntime(config);
+```
+
+## Hosted Optimizer Plugins
+
+WASM hosted plugins register JavaScript handlers first, then enable themselves
+through `external_component` in the optimizer config.
+
+```javascript
+import init, {
+  OptimizerRuntime,
+  registerOptimizerPlugin,
+} from "./pkg/nvidia_nat_nexus_wasm.js";
+
+await init();
+
+registerOptimizerPlugin("example.header_plugin", {
+  validate(instanceId, pluginConfig) {
+    return [];
+  },
+  register(instanceId, pluginConfig, context) {
+    context.registerLlmRequestIntercept(
+      `${instanceId}.header`,
+      25,
+      false,
+      (name, request, annotated) => [
+        {
+          headers: { ...request.headers, "x-plugin": instanceId },
+          content: request.content,
+        },
+        annotated,
+      ],
+    );
+  },
+});
+
+const runtime = new OptimizerRuntime({
+  version: 1,
+  components: [
+    {
+      kind: "external_component",
+      enabled: true,
+      config: {
+        plugin_kind: "example.header_plugin",
+        instance_id: "plugin-1",
+      },
+    },
+  ],
+});
+```
+
+`context` exposes:
+
+- `registerSubscriber(...)`
+- `registerLlmRequestIntercept(...)`
+- `registerLlmExecutionIntercept(...)`
+- `registerLlmStreamExecutionIntercept(...)`
+- `registerToolRequestIntercept(...)`
+- `registerToolExecutionIntercept(...)`
+
+Current limitation:
+
+- `registerLlmStreamExecutionIntercept(...)` in the WASM binding produces a
+  single-item stream result directly and does not delegate to downstream stream
+  handlers. Hosted plugins therefore cannot chain stream execution intercepts
+  the same way they can in the Rust, Python, Go, and Node.js bindings.
+
 ## Documentation
 
 See [docs/language-bindings.md](../../docs/language-bindings.md) for WASM binding details.

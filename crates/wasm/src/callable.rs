@@ -14,10 +14,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use js_sys::Function;
+#[cfg(target_arch = "wasm32")]
 use send_wrapper::SendWrapper;
+#[cfg(target_arch = "wasm32")]
 use serde::Serialize;
 use serde_json::Value as Json;
-use wasm_bindgen::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsValue;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::JsFuture;
 
 use nvidia_nat_nexus_core::codec::{AnnotatedLLMRequest, LlmCodec};
@@ -27,18 +33,33 @@ use nvidia_nat_nexus_core::{
     NexusError, Result, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
 };
 
+#[cfg(target_arch = "wasm32")]
 use crate::convert::record_callback_error;
+#[cfg(target_arch = "wasm32")]
 use crate::convert::{js_to_json, json_to_js};
+#[cfg(target_arch = "wasm32")]
 use crate::types::WasmEvent;
 
 /// Extract a human-readable error message from a `JsValue`.
 ///
 /// Tries `.as_string()` first (for string errors), then falls back to debug format.
+#[cfg(target_arch = "wasm32")]
 fn js_error_message(e: &JsValue) -> String {
     e.as_string().unwrap_or_else(|| format!("{e:?}"))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn wasm_only_error() -> NexusError {
+    NexusError::Internal("WASM callback wrappers are only supported on wasm32 targets".to_string())
+}
+
 /// Wrap a JS function `(name, args) => result` for tool sanitize/intercept.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_tool_fn(_func: Function) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
+    Box::new(move |_name: &str, _args: Json| Json::Null)
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_tool_fn(func: Function) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
     let func = SendWrapper::new(func);
     Box::new(move |name: &str, args: Json| {
@@ -74,6 +95,12 @@ pub fn wrap_js_tool_fn(func: Function) -> Box<dyn Fn(&str, Json) -> Json + Send 
 }
 
 /// Wrap a JS function `(name, args) => string | null` for tool conditional guardrails.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_tool_conditional_fn(_func: Function) -> ToolConditionalFn {
+    Box::new(move |_name: &str, _args: &Json| Ok(None))
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_tool_conditional_fn(func: Function) -> ToolConditionalFn {
     let func = SendWrapper::new(func);
     Box::new(move |name: &str, args: &Json| {
@@ -97,6 +124,12 @@ pub fn wrap_js_tool_conditional_fn(func: Function) -> ToolConditionalFn {
 }
 
 /// Wrap a JS function `(name, args) => result` for fallible tool request intercepts.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_tool_request_intercept_fn(_func: Function) -> ToolInterceptFn {
+    Box::new(move |_name: &str, args: Json| Ok(args))
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_tool_request_intercept_fn(func: Function) -> ToolInterceptFn {
     let func = SendWrapper::new(func);
     Box::new(move |name: &str, args: Json| {
@@ -110,6 +143,14 @@ pub fn wrap_js_tool_request_intercept_fn(func: Function) -> ToolInterceptFn {
 }
 
 /// Wrap a JS function `(args) => result | Promise<result>` for tool execution.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_tool_exec_fn(
+    _func: Function,
+) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
+    Box::new(move |_args: Json| Box::pin(async move { Err(wasm_only_error()) }))
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_tool_exec_fn(
     func: Function,
 ) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
@@ -139,6 +180,16 @@ pub fn wrap_js_tool_exec_fn(
 
 /// Wrap a JS function `(name, request, annotated) => { request, annotated }` for
 /// unified LLM request intercepts (3-arg signature).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_llm_request_intercept_fn(_func: Function) -> LlmRequestInterceptFn {
+    Box::new(
+        move |_name: &str, request: LLMRequest, annotated: Option<AnnotatedLLMRequest>| {
+            Ok((request, annotated))
+        },
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn {
     let func = SendWrapper::new(func);
     Box::new(
@@ -202,6 +253,14 @@ pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn
 }
 
 /// Wrap a JS function for LLM sanitize request: `(request) => request`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_llm_sanitize_request_fn(
+    _func: Function,
+) -> Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync> {
+    Box::new(move |request: LLMRequest| request)
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_llm_sanitize_request_fn(
     func: Function,
 ) -> Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync> {
@@ -242,6 +301,12 @@ pub fn wrap_js_llm_sanitize_request_fn(
 }
 
 /// Wrap a JS function for LLM conditional guardrails: `(request) => string | null`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_llm_conditional_fn(_func: Function) -> LlmConditionalFn {
+    Box::new(move |_request: &LLMRequest| Ok(None))
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_llm_conditional_fn(func: Function) -> LlmConditionalFn {
     let func = SendWrapper::new(func);
     Box::new(move |request: &LLMRequest| {
@@ -267,6 +332,14 @@ pub fn wrap_js_llm_conditional_fn(func: Function) -> LlmConditionalFn {
 /// Wrap a JS function for LLM execution: `(request) => result | Promise<result>`.
 ///
 /// The `LLMRequest` is serialized to JSON before passing to JS.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_llm_exec_fn(
+    _func: Function,
+) -> Box<dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
+    Box::new(move |_request: LLMRequest| Box::pin(async move { Err(wasm_only_error()) }))
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_llm_exec_fn(
     func: Function,
 ) -> Box<dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
@@ -300,6 +373,12 @@ pub fn wrap_js_llm_exec_fn(
 /// It is used to accumulate chunks on the JavaScript side for aggregation.
 /// If the JS function throws, the exception is converted to a `NexusError::Internal`
 /// and returned as `Err`, which terminates the stream.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_collector_fn(_func: Function) -> Box<dyn FnMut(Json) -> Result<()> + Send> {
+    Box::new(move |_chunk: Json| Ok(()))
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_collector_fn(func: Function) -> Box<dyn FnMut(Json) -> Result<()> + Send> {
     let func = SendWrapper::new(func);
     Box::new(move |chunk: Json| {
@@ -322,6 +401,12 @@ pub fn wrap_js_collector_fn(func: Function) -> Box<dyn FnMut(Json) -> Result<()>
 /// The finalizer is called exactly once when the stream is exhausted.
 /// It takes no arguments and must return a JSON value representing the
 /// aggregated response.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_finalizer_fn(_func: Function) -> Box<dyn FnOnce() -> Json + Send> {
+    Box::new(move || Json::Null)
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_finalizer_fn(func: Function) -> Box<dyn FnOnce() -> Json + Send> {
     let func = SendWrapper::new(func);
     Box::new(move || match func.call0(&JsValue::NULL) {
@@ -353,6 +438,12 @@ pub fn wrap_js_finalizer_fn(func: Function) -> Box<dyn FnOnce() -> Json + Send> 
 }
 
 /// Wrap a JS function for event subscriber: `(event) => void`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_event_subscriber(_func: Function) -> nvidia_nat_nexus_core::EventSubscriberFn {
+    std::sync::Arc::new(move |_event: &nvidia_nat_nexus_core::Event| {})
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_event_subscriber(func: Function) -> nvidia_nat_nexus_core::EventSubscriberFn {
     let func = SendWrapper::new(func);
     std::sync::Arc::new(move |event: &nvidia_nat_nexus_core::Event| {
@@ -378,6 +469,18 @@ pub fn wrap_js_event_subscriber(func: Function) -> nvidia_nat_nexus_core::EventS
 /// The `next` parameter passed to JS is a reusable function `(args) => Promise<result>`
 /// that invokes the next layer in the middleware chain. It can be called multiple times
 /// to support retry patterns.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_tool_exec_intercept_fn(
+    _func: Function,
+) -> Arc<
+    dyn Fn(&str, Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+        + Send
+        + Sync,
+> {
+    Arc::new(move |_name: &str, args: Json, next: ToolExecutionNextFn| next(args))
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_tool_exec_intercept_fn(
     func: Function,
 ) -> Arc<
@@ -431,6 +534,22 @@ pub fn wrap_js_tool_exec_intercept_fn(
 /// that invokes the next layer in the middleware chain. It can be called multiple times
 /// to support retry patterns. The `LLMRequest` is serialized to JSON before passing to
 /// JS; when JS calls `next`, the argument is deserialized back.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_llm_exec_intercept_fn(
+    _func: Function,
+) -> Arc<
+    dyn Fn(
+            &str,
+            LLMRequest,
+            LlmExecutionNextFn,
+        ) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+        + Send
+        + Sync,
+> {
+    Arc::new(move |_name: &str, request: LLMRequest, next: LlmExecutionNextFn| next(request))
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_llm_exec_intercept_fn(
     func: Function,
 ) -> Arc<
@@ -492,6 +611,29 @@ pub fn wrap_js_llm_exec_intercept_fn(
 /// The intercept callable produces a single JSON result which is wrapped into a
 /// single-item stream internally. The `LLMRequest` is serialized to JSON before
 /// passing to JS.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_llm_stream_exec_intercept_fn(
+    _func: Function,
+) -> Arc<
+    dyn Fn(
+            &str,
+            LLMRequest,
+            LlmStreamExecutionNextFn,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            Pin<Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>>,
+                        >,
+                    > + Send,
+            >,
+        > + Send
+        + Sync,
+> {
+    Arc::new(move |_name: &str, request: LLMRequest, next: LlmStreamExecutionNextFn| next(request))
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_llm_stream_exec_intercept_fn(
     func: Function,
 ) -> Arc<
@@ -555,6 +697,7 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
 /// `SendWrapper` is used because JS functions are not `Send`. This is safe in
 /// WASM because the runtime is single-threaded. The pattern matches all other
 /// JS-function wrappers in this file.
+#[cfg(target_arch = "wasm32")]
 struct WasmCodec {
     decode_fn: SendWrapper<Function>,
     encode_fn: SendWrapper<Function>,
@@ -562,9 +705,12 @@ struct WasmCodec {
 
 // SAFETY: WASM is single-threaded; SendWrapper guarantees these are only accessed
 // from the thread that created them.
+#[cfg(target_arch = "wasm32")]
 unsafe impl Send for WasmCodec {}
+#[cfg(target_arch = "wasm32")]
 unsafe impl Sync for WasmCodec {}
 
+#[cfg(target_arch = "wasm32")]
 impl LlmCodec for WasmCodec {
     fn decode(&self, request: &LLMRequest) -> nvidia_nat_nexus_core::Result<AnnotatedLLMRequest> {
         let req_json = serde_json::to_value(request).unwrap_or(Json::Null);
@@ -602,6 +748,31 @@ impl LlmCodec for WasmCodec {
 
 /// Wrap two JS functions `(request) => annotated` and `(annotated, original) => request`
 /// into an `Arc<dyn LlmCodec>`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_codec(_decode_fn: Function, _encode_fn: Function) -> Arc<dyn LlmCodec> {
+    struct UnsupportedCodec;
+
+    impl LlmCodec for UnsupportedCodec {
+        fn decode(
+            &self,
+            _request: &LLMRequest,
+        ) -> nvidia_nat_nexus_core::Result<AnnotatedLLMRequest> {
+            Err(wasm_only_error())
+        }
+
+        fn encode(
+            &self,
+            _annotated: &AnnotatedLLMRequest,
+            _original: &LLMRequest,
+        ) -> nvidia_nat_nexus_core::Result<LLMRequest> {
+            Err(wasm_only_error())
+        }
+    }
+
+    Arc::new(UnsupportedCodec)
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_codec(decode_fn: Function, encode_fn: Function) -> Arc<dyn LlmCodec> {
     Arc::new(WasmCodec {
         decode_fn: SendWrapper::new(decode_fn),
@@ -612,6 +783,13 @@ pub fn wrap_js_codec(decode_fn: Function, encode_fn: Function) -> Arc<dyn LlmCod
 /// Wrap a JS function for LLM sanitize response: `(response) => response`.
 ///
 /// Takes a `Json` value, passes it to JS, and deserializes the result back.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_llm_response_fn(func: Function) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
+    let _ = func;
+    Box::new(move |response: Json| response)
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn wrap_js_llm_response_fn(func: Function) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
     let func = SendWrapper::new(func);
     Box::new(move |response: Json| {

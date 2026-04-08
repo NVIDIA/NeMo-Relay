@@ -196,4 +196,48 @@ module.exports = {
   typedToolExecute,
   typedLlmExecute,
   typedLlmStreamExecute,
+  defaultOptimizerConfig: () => ({ version: 1, components: [] }),
+  optimizerInMemoryBackend: () => ({ kind: 'in_memory', config: {} }),
+  optimizerRedisBackend: (url, keyPrefix = 'nexus:') => ({
+    kind: 'redis',
+    config: { url, key_prefix: keyPrefix },
+  }),
+  telemetryComponent: (config = {}) => ({ kind: 'telemetry', enabled: true, config }),
+  dynamoHintsComponent: (config = {}) => ({
+    kind: 'dynamo_hints',
+    enabled: true,
+    config: {
+      priority: 100,
+      break_chain: false,
+      inject_header: true,
+      inject_body_path: 'nvext.agent_hints',
+      ...config,
+    },
+  }),
+  toolParallelismComponent: (config = {}) => ({
+    kind: 'tool_parallelism',
+    enabled: true,
+    config: {
+      priority: 100,
+      mode: 'observe_only',
+      ...config,
+    },
+  }),
+  externalComponent: (pluginKind, instanceId, pluginConfig = {}) => ({
+    kind: 'external_component',
+    enabled: true,
+    config: {
+      plugin_kind: pluginKind,
+      instance_id: instanceId,
+      plugin_config: pluginConfig,
+    },
+  }),
+  registerOptimizerPlugin: (pluginKind, handler) => lib.registerOptimizerPlugin(
+    pluginKind,
+    handler.validate
+      ? (instanceId, pluginConfig) => handler.validate(instanceId, pluginConfig)
+      : null,
+    (instanceId, pluginConfig, context) => handler.register(instanceId, pluginConfig, context),
+  ),
+  deregisterOptimizerPlugin: (pluginKind) => lib.deregisterOptimizerPlugin(pluginKind),
 };

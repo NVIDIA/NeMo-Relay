@@ -7,6 +7,7 @@
 //! JavaScript consumers pull text chunks from a streaming LLM response one
 //! at a time via the `next()` method.
 
+#[cfg(target_arch = "wasm32")]
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -25,6 +26,7 @@ pub struct WasmLlmStream {
         tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvidia_nat_nexus_core::Result<Json>>>,
 }
 
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl WasmLlmStream {
     /// Returns the next chunk from the stream.
@@ -45,7 +47,7 @@ impl WasmLlmStream {
             Some(Ok(json_val)) => {
                 let js_val = json_val
                     .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
-                    .unwrap_or(JsValue::NULL);
+                    .map_err(|e| JsValue::from_str(&format!("serialization error: {e}")))?;
                 let obj = js_sys::Object::new();
                 js_sys::Reflect::set(&obj, &"value".into(), &js_val)?;
                 js_sys::Reflect::set(&obj, &"done".into(), &JsValue::FALSE)?;
@@ -53,5 +55,84 @@ impl WasmLlmStream {
             }
             Some(Err(e)) => Err(JsValue::from_str(&e.to_string())),
         }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[wasm_bindgen]
+impl WasmLlmStream {
+    pub async fn next(&self) -> Result<JsValue, JsValue> {
+        let _ = &self.receiver;
+        Ok(JsValue::NULL)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(target_arch = "wasm32")]
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn next_returns_value_done_false_and_then_done_true() {
+        use super::*;
+        use serde_json::json;
+
+        block_on(async {
+            let (tx, rx) = tokio::sync::mpsc::channel(2);
+            tx.send(Ok(json!({"chunk": 1}))).await.unwrap();
+            drop(tx);
+
+            let stream = WasmLlmStream {
+                receiver: tokio::sync::Mutex::new(rx),
+            };
+            let first = stream.next().await.unwrap();
+            assert_eq!(
+                js_sys::Reflect::get(&first, &JsValue::from_str("done"))
+                    .unwrap()
+                    .as_bool(),
+                Some(false)
+            );
+            let value = js_sys::Reflect::get(&first, &JsValue::from_str("value")).unwrap();
+            assert_eq!(
+                crate::convert::js_to_json(&value).unwrap(),
+                json!({"chunk": 1})
+            );
+
+            let second = stream.next().await.unwrap();
+            assert_eq!(
+                js_sys::Reflect::get(&second, &JsValue::from_str("done"))
+                    .unwrap()
+                    .as_bool(),
+                Some(true)
+            );
+        });
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn next_returns_js_error_for_stream_errors() {
+        use super::*;
+
+        block_on(async {
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            tx.send(Err(nvidia_nat_nexus_core::NexusError::Internal(
+                "stream failed".to_string(),
+            )))
+            .await
+            .unwrap();
+            drop(tx);
+
+            let stream = WasmLlmStream {
+                receiver: tokio::sync::Mutex::new(rx),
+            };
+            let err = stream.next().await.unwrap_err();
+            assert!(err.as_string().unwrap().contains("stream failed"));
+        });
     }
 }

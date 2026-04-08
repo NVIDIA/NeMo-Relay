@@ -7,10 +7,20 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
-const { typedToolExecute, typedLlmExecute, typedLlmStreamExecute, JsonPassthrough } = require('../typed.js');
+const {
+  typedToolExecute,
+  typedLlmExecute,
+  typedLlmStreamExecute,
+  JsonPassthrough,
+  defaultOptimizerConfig,
+  optimizerInMemoryBackend,
+  telemetryComponent,
+  dynamoHintsComponent,
+  toolParallelismComponent,
+} = require('../typed.js');
 
 const {
-  registerToolRequestIntercept, deregisterToolRequestIntercept,
+  registerToolRequestIntercept, deregisterToolRequestIntercept, OptimizerRuntime, validateOptimizerConfig,
 } = lib;
 
 // ===========================================================================
@@ -52,6 +62,38 @@ describe('JsonPassthrough', () => {
     const p = new JsonPassthrough();
     const obj = { b: 2 };
     assert.equal(p.fromJson(obj), obj);
+  });
+});
+
+describe('optimizer typed helpers', () => {
+  it('build default optimizer config and components', () => {
+    const config = defaultOptimizerConfig();
+    config.state = { backend: optimizerInMemoryBackend() };
+    config.components = [
+      telemetryComponent({ learners: ['latency_sensitivity'] }),
+      dynamoHintsComponent(),
+      toolParallelismComponent(),
+    ];
+
+    const report = validateOptimizerConfig(config);
+    assert.deepEqual(report.diagnostics, []);
+  });
+
+  it('runs optimizer runtime lifecycle from JS', async () => {
+    const runtime = new OptimizerRuntime({
+      version: 1,
+      state: { backend: optimizerInMemoryBackend() },
+      components: [
+        telemetryComponent({ learners: ['latency_sensitivity'] }),
+        dynamoHintsComponent(),
+        toolParallelismComponent(),
+      ],
+    });
+
+    assert.deepEqual((await runtime.report()).diagnostics, []);
+    await runtime.register();
+    await runtime.deregister();
+    await runtime.shutdown();
   });
 });
 

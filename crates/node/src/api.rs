@@ -10,18 +10,25 @@
 //! in the generated `index.d.ts` TypeScript definitions.
 
 use std::collections::HashMap;
+use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
-use napi::JsObject;
+use napi::{JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
 use nvidia_nat_nexus_core as core;
 use nvidia_nat_nexus_core::types as core_types;
+use nvidia_nat_nexus_optimizer::{
+    deregister_hosted_plugin_handler, register_hosted_plugin_handler, ComponentRegistration,
+    ConfigDiagnostic, ConfigReport, HostedPluginHandler, OptimizerConfig, OptimizerError,
+    OptimizerRuntime as NativeOptimizerRuntime,
+};
 
 use crate::callable;
 use crate::convert::{
@@ -276,6 +283,459 @@ fn forget_scope_local_promise_aware(scope_uuid: &str) {
         if let Some(pa_fn) = registrations.remove(&key) {
             pa_fn.close();
         }
+    }
+}
+
+/// # Safety
+/// Both `env` and `value` must contain valid N-API handles that point to live
+/// JavaScript objects in the same environment. The caller must also ensure the
+/// environment is not in a pending exception state.
+fn js_unknown_from_raw<T: NapiRaw>(env: &Env, value: &T) -> JsUnknown {
+    unsafe { JsUnknown::from_raw_unchecked(env.raw(), value.raw()) }
+}
+
+fn json_callback_tsfn(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<ThreadsafeFunction<Json, ErrorStrategy::Fatal>> {
+    let mut tsfn = func
+        .create_threadsafe_function::<Json, Json, _, ErrorStrategy::Fatal>(0, |ctx| {
+            Ok(vec![ctx.value])
+        })?;
+    tsfn.unref(env)?;
+    Ok(tsfn)
+}
+
+fn build_optimizer_plugin_context(
+    env: &Env,
+    registrations: Arc<StdMutex<Vec<ComponentRegistration>>>,
+) -> napi::Result<JsObject> {
+    let mut context = env.create_object()?;
+
+    let subscriber_regs = registrations.clone();
+    let register_subscriber = env.create_function_from_closure(
+        "__nat_nexus_optimizer_register_subscriber",
+        move |ctx| {
+            let name = ctx.get::<String>(0)?;
+            let callback = ctx.get::<JsFunction>(1)?;
+            let tsfn = json_callback_tsfn(ctx.env, &callback)?;
+            core::nat_nexus_register_subscriber(&name, callable::wrap_js_event_subscriber(tsfn))
+                .map_err(to_napi_err)?;
+
+            let name_clone = name.clone();
+            subscriber_regs
+                .lock()
+                .unwrap()
+                .push(ComponentRegistration::new(
+                    "external_component",
+                    name_clone.clone(),
+                    Box::new(move || {
+                        core::nat_nexus_deregister_subscriber(&name_clone)
+                            .map(|_| ())
+                            .map_err(|e| {
+                                OptimizerError::RegistrationFailed(format!(
+                                    "subscriber deregistration failed: {e}"
+                                ))
+                            })
+                    }),
+                ));
+            ctx.env.get_undefined()
+        },
+    )?;
+    context.set_named_property("registerSubscriber", register_subscriber)?;
+
+    let llm_regs = registrations.clone();
+    let register_llm_request_intercept = env.create_function_from_closure(
+        "__nat_nexus_optimizer_register_llm_request_intercept",
+        move |ctx| {
+            let name = ctx.get::<String>(0)?;
+            let priority = ctx.get::<i32>(1)?;
+            let break_chain = ctx.get::<bool>(2)?;
+            let callback = ctx.get::<JsFunction>(3)?;
+            let tsfn = json_callback_tsfn(ctx.env, &callback)?;
+            core::nat_nexus_register_llm_request_intercept(
+                &name,
+                priority,
+                break_chain,
+                callable::wrap_js_llm_request_intercept_fn(tsfn),
+            )
+            .map_err(to_napi_err)?;
+
+            let name_clone = name.clone();
+            llm_regs.lock().unwrap().push(ComponentRegistration::new(
+                "external_component",
+                name_clone.clone(),
+                Box::new(move || {
+                    core::nat_nexus_deregister_llm_request_intercept(&name_clone)
+                        .map(|_| ())
+                        .map_err(|e| {
+                            OptimizerError::RegistrationFailed(format!(
+                                "llm request intercept deregistration failed: {e}"
+                            ))
+                        })
+                }),
+            ));
+            ctx.env.get_undefined()
+        },
+    )?;
+    context.set_named_property(
+        "registerLlmRequestIntercept",
+        register_llm_request_intercept,
+    )?;
+
+    let llm_exec_regs = registrations.clone();
+    let register_llm_execution_intercept = env.create_function_from_closure(
+        "__nat_nexus_optimizer_register_llm_execution_intercept",
+        move |ctx| {
+            let name = ctx.get::<String>(0)?;
+            let priority = ctx.get::<i32>(1)?;
+            let callback = ctx.get::<JsFunction>(2)?;
+            let promise_fn = Arc::new(crate::promise_call::PromiseAwareFn::new(
+                ctx.env, &callback,
+            )?);
+            core::nat_nexus_register_llm_execution_intercept(
+                &name,
+                priority,
+                callable::wrap_js_llm_exec_intercept_fn(promise_fn.clone()),
+            )
+            .map_err(to_napi_err)?;
+
+            let name_clone = name.clone();
+            llm_exec_regs
+                .lock()
+                .unwrap()
+                .push(ComponentRegistration::new(
+                    "external_component",
+                    name_clone.clone(),
+                    Box::new(move || {
+                        let result =
+                            core::nat_nexus_deregister_llm_execution_intercept(&name_clone)
+                                .map(|_| ())
+                                .map_err(|e| {
+                                    OptimizerError::RegistrationFailed(format!(
+                                        "llm execution intercept deregistration failed: {e}"
+                                    ))
+                                });
+                        promise_fn.close();
+                        result
+                    }),
+                ));
+            ctx.env.get_undefined()
+        },
+    )?;
+    context.set_named_property(
+        "registerLlmExecutionIntercept",
+        register_llm_execution_intercept,
+    )?;
+
+    let llm_stream_exec_regs = registrations.clone();
+    let register_llm_stream_execution_intercept = env.create_function_from_closure(
+        "__nat_nexus_optimizer_register_llm_stream_execution_intercept",
+        move |ctx| {
+            let name = ctx.get::<String>(0)?;
+            let priority = ctx.get::<i32>(1)?;
+            let callback = ctx.get::<JsFunction>(2)?;
+            let promise_fn = Arc::new(crate::promise_call::PromiseAwareFn::new(
+                ctx.env, &callback,
+            )?);
+            core::nat_nexus_register_llm_stream_execution_intercept(
+                &name,
+                priority,
+                callable::wrap_js_llm_stream_exec_intercept_fn(promise_fn.clone()),
+            )
+            .map_err(to_napi_err)?;
+
+            let name_clone = name.clone();
+            llm_stream_exec_regs
+                .lock()
+                .unwrap()
+                .push(ComponentRegistration::new(
+                    "external_component",
+                    name_clone.clone(),
+                    Box::new(move || {
+                        let result =
+                            core::nat_nexus_deregister_llm_stream_execution_intercept(&name_clone)
+                                .map(|_| ())
+                                .map_err(|e| {
+                                    OptimizerError::RegistrationFailed(format!(
+                                        "llm stream execution intercept deregistration failed: {e}"
+                                    ))
+                                });
+                        promise_fn.close();
+                        result
+                    }),
+                ));
+            ctx.env.get_undefined()
+        },
+    )?;
+    context.set_named_property(
+        "registerLlmStreamExecutionIntercept",
+        register_llm_stream_execution_intercept,
+    )?;
+
+    let tool_request_regs = registrations.clone();
+    let register_tool_request_intercept = env.create_function_from_closure(
+        "__nat_nexus_optimizer_register_tool_request_intercept",
+        move |ctx| {
+            let name = ctx.get::<String>(0)?;
+            let priority = ctx.get::<i32>(1)?;
+            let break_chain = ctx.get::<bool>(2)?;
+            let callback =
+                ctx.get::<ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>>(3)?;
+            core::nat_nexus_register_tool_request_intercept(
+                &name,
+                priority,
+                break_chain,
+                callable::wrap_js_tool_request_intercept_fn(callback),
+            )
+            .map_err(to_napi_err)?;
+
+            let name_clone = name.clone();
+            tool_request_regs
+                .lock()
+                .unwrap()
+                .push(ComponentRegistration::new(
+                    "external_component",
+                    name_clone.clone(),
+                    Box::new(move || {
+                        core::nat_nexus_deregister_tool_request_intercept(&name_clone)
+                            .map(|_| ())
+                            .map_err(|e| {
+                                OptimizerError::RegistrationFailed(format!(
+                                    "tool request intercept deregistration failed: {e}"
+                                ))
+                            })
+                    }),
+                ));
+            ctx.env.get_undefined()
+        },
+    )?;
+    context.set_named_property(
+        "registerToolRequestIntercept",
+        register_tool_request_intercept,
+    )?;
+
+    let tool_regs = registrations.clone();
+    let register_tool_execution_intercept = env.create_function_from_closure(
+        "__nat_nexus_optimizer_register_tool_execution_intercept",
+        move |ctx| {
+            let name = ctx.get::<String>(0)?;
+            let priority = ctx.get::<i32>(1)?;
+            let callback = ctx.get::<JsFunction>(2)?;
+            let promise_fn = Arc::new(crate::promise_call::PromiseAwareFn::new(
+                ctx.env, &callback,
+            )?);
+            core::nat_nexus_register_tool_execution_intercept(
+                &name,
+                priority,
+                callable::wrap_js_tool_exec_intercept_fn(promise_fn.clone()),
+            )
+            .map_err(to_napi_err)?;
+
+            let name_clone = name.clone();
+            tool_regs.lock().unwrap().push(ComponentRegistration::new(
+                "external_component",
+                name_clone.clone(),
+                Box::new(move || {
+                    let result = core::nat_nexus_deregister_tool_execution_intercept(&name_clone)
+                        .map(|_| ())
+                        .map_err(|e| {
+                            OptimizerError::RegistrationFailed(format!(
+                                "tool execution intercept deregistration failed: {e}"
+                            ))
+                        });
+                    promise_fn.close();
+                    result
+                }),
+            ));
+            ctx.env.get_undefined()
+        },
+    )?;
+    context.set_named_property(
+        "registerToolExecutionIntercept",
+        register_tool_execution_intercept,
+    )?;
+
+    Ok(context)
+}
+
+struct NodePluginRegisterCall {
+    instance_id: String,
+    plugin_config: Json,
+    registrations: Arc<StdMutex<Vec<ComponentRegistration>>>,
+}
+
+/// # Safety
+/// `env` and `reference` must remain valid for the entire lifetime of this
+/// struct. `reference` must be a valid N-API reference created for a live
+/// JavaScript function in `env`, and `env` must not be used after the
+/// corresponding Node.js environment has been torn down.
+struct PersistentJsFunction {
+    env: napi::sys::napi_env,
+    reference: napi::sys::napi_ref,
+}
+
+// SAFETY: `PersistentJsFunction` only stores raw N-API handles. Callers are
+// responsible for constructing it from a live environment and function
+// reference, and all access goes back through that same environment.
+unsafe impl Send for PersistentJsFunction {}
+// SAFETY: The same invariants as `Send` apply. The struct does not provide
+// interior mutation beyond the N-API reference lifecycle managed by Node.
+unsafe impl Sync for PersistentJsFunction {}
+
+impl PersistentJsFunction {
+    fn new(env: &Env, func: &JsFunction) -> napi::Result<Self> {
+        let mut reference = ptr::null_mut();
+        // SAFETY: `env.raw()` and `func.raw()` are live N-API handles provided
+        // by napi-rs for the current environment. `reference` points to valid
+        // writable storage for the created reference.
+        let status =
+            unsafe { napi::sys::napi_create_reference(env.raw(), func.raw(), 1, &mut reference) };
+        if status == napi::sys::Status::napi_ok {
+            Ok(Self {
+                env: env.raw(),
+                reference,
+            })
+        } else {
+            Err(napi::Error::from_reason(format!(
+                "failed to create JS function reference: {:?}",
+                napi::Status::from(status)
+            )))
+        }
+    }
+
+    fn call_validate(&self, instance_id: &str, plugin_config: &Json) -> napi::Result<Json> {
+        // SAFETY: `self.env` was captured from a live N-API environment when
+        // this persistent reference was created and remains valid while the
+        // binding module is alive.
+        let env = unsafe { Env::from_raw(self.env) };
+        let mut value = ptr::null_mut();
+        // SAFETY: `self.reference` is a valid reference created by
+        // `napi_create_reference`; `value` is writable storage for the
+        // resolved function object.
+        let status =
+            unsafe { napi::sys::napi_get_reference_value(self.env, self.reference, &mut value) };
+        if status != napi::sys::Status::napi_ok {
+            return Err(napi::Error::from_reason(format!(
+                "failed to borrow JS function reference: {:?}",
+                napi::Status::from(status)
+            )));
+        }
+
+        // SAFETY: `value` came from `napi_get_reference_value` for a function
+        // reference owned by this struct, so it is a live JS function handle.
+        let func = unsafe { JsFunction::from_raw_unchecked(self.env, value) };
+        let instance = unsafe {
+            JsUnknown::from_raw_unchecked(
+                self.env,
+                env.create_string_from_std(instance_id.to_string())?.raw(),
+            )
+        };
+        let config = unsafe {
+            JsUnknown::from_raw_unchecked(
+                self.env,
+                Json::to_napi_value(self.env, plugin_config.clone())?,
+            )
+        };
+        let returned = func.call(None, &[instance, config])?;
+        // SAFETY: `returned` is the live result of invoking `func` in the same
+        // environment stored on this struct.
+        unsafe { Json::from_napi_value(self.env, returned.raw()) }
+    }
+}
+
+impl Drop for PersistentJsFunction {
+    fn drop(&mut self) {
+        // SAFETY: `self.reference` was created by `napi_create_reference` for
+        // `self.env` and is deleted exactly once here during drop.
+        let _ = unsafe { napi::sys::napi_delete_reference(self.env, self.reference) };
+    }
+}
+
+struct NodeHostedPluginHandler {
+    plugin_kind: String,
+    validate: Option<PersistentJsFunction>,
+    register: ThreadsafeFunction<NodePluginRegisterCall, ErrorStrategy::Fatal>,
+}
+
+impl HostedPluginHandler for NodeHostedPluginHandler {
+    fn plugin_kind(&self) -> &str {
+        &self.plugin_kind
+    }
+
+    fn validate(
+        &self,
+        instance_id: &str,
+        plugin_config: &serde_json::Map<String, serde_json::Value>,
+    ) -> Vec<ConfigDiagnostic> {
+        let Some(validate) = &self.validate else {
+            return vec![];
+        };
+        match validate.call_validate(instance_id, &Json::Object(plugin_config.clone())) {
+            Ok(value) => {
+                serde_json::from_value::<Vec<ConfigDiagnostic>>(value).unwrap_or_else(|e| {
+                    vec![ConfigDiagnostic {
+                        level: nvidia_nat_nexus_optimizer::DiagnosticLevel::Error,
+                        code: "optimizer.plugin_validate_failed".into(),
+                        component: Some("external_component".into()),
+                        field: None,
+                        message: format!(
+                            "JS optimizer plugin validate returned invalid diagnostics: {e}"
+                        ),
+                    }]
+                })
+            }
+            Err(e) => vec![ConfigDiagnostic {
+                level: nvidia_nat_nexus_optimizer::DiagnosticLevel::Error,
+                code: "optimizer.plugin_validate_failed".into(),
+                component: Some("external_component".into()),
+                field: None,
+                message: format!("JS optimizer plugin validate failed: {e}"),
+            }],
+        }
+    }
+
+    fn register(
+        &self,
+        instance_id: &str,
+        plugin_config: &serde_json::Map<String, serde_json::Value>,
+        ctx: &mut nvidia_nat_nexus_optimizer::HostedRegistrationContext,
+    ) -> nvidia_nat_nexus_optimizer::Result<()> {
+        let registrations = Arc::new(StdMutex::new(Vec::<ComponentRegistration>::new()));
+        let payload = NodePluginRegisterCall {
+            instance_id: instance_id.to_string(),
+            plugin_config: Json::Object(plugin_config.clone()),
+            registrations: registrations.clone(),
+        };
+        let (tx, rx) = std::sync::mpsc::sync_channel::<std::result::Result<(), String>>(1);
+        let status = self.register.call_with_return_value(
+            payload,
+            ThreadsafeFunctionCallMode::NonBlocking,
+            move |_val: JsUnknown| {
+                let _ = tx.send(Ok(()));
+                Ok(())
+            },
+        );
+        if status != napi::Status::Ok {
+            return Err(OptimizerError::RegistrationFailed(format!(
+                "failed to queue JS optimizer plugin register callback: {status:?}"
+            )));
+        }
+        rx.recv()
+            .map_err(|_| {
+                OptimizerError::RegistrationFailed(
+                    "JS optimizer plugin register completion channel closed".into(),
+                )
+            })?
+            .map_err(OptimizerError::RegistrationFailed)?;
+
+        let drained = std::mem::take(&mut *registrations.lock().map_err(|e| {
+            OptimizerError::RegistrationFailed(format!(
+                "optimizer plugin registrations lock poisoned: {e}"
+            ))
+        })?);
+        ctx.extend_registrations(drained);
+        Ok(())
     }
 }
 
@@ -2152,4 +2612,197 @@ impl JsOpenInferenceSubscriber {
             .shutdown()
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
+}
+
+/// Validate an optimizer config document and return a structured diagnostics report.
+#[napi]
+pub fn validate_optimizer_config(config: Json) -> napi::Result<Json> {
+    let config: OptimizerConfig =
+        serde_json::from_value(config).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    serde_json::to_value(NativeOptimizerRuntime::validate_config(&config))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+/// Register a hosted optimizer plugin handler backed by JavaScript callbacks.
+///
+/// `validate` receives `(instanceId, pluginConfig)` and should return a diagnostics array.
+/// `register` receives `(instanceId, pluginConfig, context)` and should use the context methods
+/// to attach subscribers or intercepts. Both callbacks must be synchronous.
+#[napi]
+pub fn register_optimizer_plugin(
+    env: Env,
+    plugin_kind: String,
+    validate: Option<JsFunction>,
+    register: JsFunction,
+) -> napi::Result<()> {
+    let validate_tsfn = match validate {
+        Some(func) => Some(PersistentJsFunction::new(&env, &func)?),
+        None => None,
+    };
+    let mut register_tsfn = register
+        .create_threadsafe_function::<NodePluginRegisterCall, JsUnknown, _, ErrorStrategy::Fatal>(
+            0,
+            move |ctx: napi::threadsafe_function::ThreadSafeCallContext<NodePluginRegisterCall>| {
+                let instance_id = ctx.env.create_string_from_std(ctx.value.instance_id)?;
+                let plugin_config = unsafe {
+                    JsUnknown::from_raw_unchecked(
+                        ctx.env.raw(),
+                        Json::to_napi_value(ctx.env.raw(), ctx.value.plugin_config)?,
+                    )
+                };
+                let plugin_context =
+                    build_optimizer_plugin_context(&ctx.env, ctx.value.registrations)?;
+                Ok(vec![
+                    js_unknown_from_raw(&ctx.env, &instance_id),
+                    plugin_config,
+                    js_unknown_from_raw(&ctx.env, &plugin_context),
+                ])
+            },
+        )?;
+    register_tsfn.unref(&env)?;
+
+    register_hosted_plugin_handler(Arc::new(NodeHostedPluginHandler {
+        plugin_kind,
+        validate: validate_tsfn,
+        register: register_tsfn,
+    }))
+    .map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+/// Deregister a hosted optimizer plugin handler by kind.
+#[napi]
+pub fn deregister_optimizer_plugin(plugin_kind: String) -> bool {
+    deregister_hosted_plugin_handler(&plugin_kind)
+}
+
+/// Dynamic optimizer runtime selected by config.
+#[napi(js_name = "OptimizerRuntime")]
+pub struct JsOptimizerRuntime {
+    inner: Arc<tokio::sync::Mutex<Option<JsOptimizerRuntimeState>>>,
+}
+
+enum JsOptimizerRuntimeState {
+    Pending {
+        config: OptimizerConfig,
+        report: ConfigReport,
+    },
+    Ready(NativeOptimizerRuntime),
+}
+
+#[napi]
+impl JsOptimizerRuntime {
+    /// Create a new optimizer runtime from a config object.
+    #[napi(constructor)]
+    pub fn new(config: Json) -> napi::Result<Self> {
+        let config: OptimizerConfig =
+            serde_json::from_value(config).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        let report = validate_optimizer_config_or_err(&config)?;
+        Ok(Self {
+            inner: Arc::new(tokio::sync::Mutex::new(Some(
+                JsOptimizerRuntimeState::Pending { config, report },
+            ))),
+        })
+    }
+
+    /// Register the runtime globally.
+    #[napi]
+    pub async fn register(&self) -> napi::Result<()> {
+        let state = {
+            let mut guard = self.inner.lock().await;
+            guard
+                .take()
+                .ok_or_else(|| napi::Error::from_reason("optimizer runtime already shut down"))?
+        };
+
+        let (result, next_state) = match state {
+            JsOptimizerRuntimeState::Pending { config, report } => {
+                match NativeOptimizerRuntime::new(config.clone()).await {
+                    Ok(mut runtime) => {
+                        let result = runtime
+                            .register()
+                            .await
+                            .map_err(|e| napi::Error::from_reason(e.to_string()));
+                        (result, Some(JsOptimizerRuntimeState::Ready(runtime)))
+                    }
+                    Err(err) => (
+                        Err(napi::Error::from_reason(err.to_string())),
+                        Some(JsOptimizerRuntimeState::Pending { config, report }),
+                    ),
+                }
+            }
+            JsOptimizerRuntimeState::Ready(mut runtime) => {
+                let result = runtime
+                    .register()
+                    .await
+                    .map_err(|e| napi::Error::from_reason(e.to_string()));
+                (result, Some(JsOptimizerRuntimeState::Ready(runtime)))
+            }
+        };
+
+        let mut guard = self.inner.lock().await;
+        *guard = next_state;
+        result
+    }
+
+    /// Deregister the runtime.
+    #[napi]
+    pub async fn deregister(&self) -> napi::Result<()> {
+        let mut guard = self.inner.lock().await;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| napi::Error::from_reason("optimizer runtime already shut down"))?;
+        match state {
+            JsOptimizerRuntimeState::Pending { .. } => Ok(()),
+            JsOptimizerRuntimeState::Ready(runtime) => runtime
+                .deregister()
+                .map_err(|e| napi::Error::from_reason(e.to_string())),
+        }
+    }
+
+    /// Shut down the runtime and wait for any background work to finish.
+    #[napi]
+    pub async fn shutdown(&self) -> napi::Result<()> {
+        let state = {
+            let mut guard = self.inner.lock().await;
+            guard
+                .take()
+                .ok_or_else(|| napi::Error::from_reason("optimizer runtime already shut down"))?
+        };
+        match state {
+            JsOptimizerRuntimeState::Pending { .. } => Ok(()),
+            JsOptimizerRuntimeState::Ready(runtime) => runtime
+                .shutdown()
+                .await
+                .map_err(|e| napi::Error::from_reason(e.to_string())),
+        }
+    }
+
+    /// Return the diagnostics report captured during runtime creation.
+    #[napi]
+    pub async fn report(&self) -> napi::Result<Json> {
+        let guard = self.inner.lock().await;
+        let state = guard
+            .as_ref()
+            .ok_or_else(|| napi::Error::from_reason("optimizer runtime already shut down"))?;
+        let report = match state {
+            JsOptimizerRuntimeState::Pending { report, .. } => report,
+            JsOptimizerRuntimeState::Ready(runtime) => runtime.report(),
+        };
+        serde_json::to_value(report).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+}
+
+fn validate_optimizer_config_or_err(config: &OptimizerConfig) -> napi::Result<ConfigReport> {
+    let report = NativeOptimizerRuntime::validate_config(config);
+    if report.has_errors() {
+        let joined = report
+            .diagnostics
+            .iter()
+            .filter(|diag| diag.level == nvidia_nat_nexus_optimizer::DiagnosticLevel::Error)
+            .map(|diag| diag.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(napi::Error::from_reason(joined));
+    }
+    Ok(report)
 }
