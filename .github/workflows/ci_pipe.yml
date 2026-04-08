@@ -111,10 +111,13 @@ jobs:
           pre-commit run --all-files --show-diff-on-failure
 
   build:
-    name: Build
+    name: Build (${{ matrix.arch }})
     needs: [check]
-    runs-on: linux-amd64-cpu4
+    runs-on: linux-${{ matrix.arch }}-cpu4
     timeout-minutes: 60
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
 
     steps:
       - name: Checkout
@@ -164,21 +167,23 @@ jobs:
           source ${{ env.NEXUS_CI_WORKSPACE_TMP }}/.venv/bin/activate
           uv sync --active --reinstall-package nvidia-nat-nexus
 
-          echo "Build WASM package"
-          cargo install wasm-pack
-          wasm-pack build --release crates/wasm --scope nvidia
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            echo "Build WASM package"
+            cargo install wasm-pack
+            wasm-pack build --release crates/wasm --scope nvidia
+          fi
 
       - name: Upload FFI shared libraries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ffi-libs
+          name: ffi-libs-${{ matrix.arch }}
           path: ${{ env.NEXUS_CI_WORKSPACE }}/target/release/lib*.so
           if-no-files-found: error
 
       - name: Upload Node.js addon
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: node-addon
+          name: node-addon-${{ matrix.arch }}
           path: |
             ${{ env.NEXUS_CI_WORKSPACE }}/crates/node/*.node
             ${{ env.NEXUS_CI_WORKSPACE }}/crates/node/index.js
@@ -187,6 +192,7 @@ jobs:
 
       - name: Upload WASM package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: matrix.arch == 'amd64'
         with:
           name: wasm-pkg
           path: ${{ env.NEXUS_CI_WORKSPACE }}/crates/wasm/pkg/
@@ -197,10 +203,13 @@ jobs:
         run: uv cache prune --ci
 
   test-go:
-    name: Test / Go
+    name: Test / Go (${{ matrix.arch }})
     needs: [build]
-    runs-on: linux-amd64-cpu4
+    runs-on: linux-${{ matrix.arch }}-cpu4
     timeout-minutes: 30
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
 
     env:
       CGO_LDFLAGS: "-L${{ github.workspace }}/nexus/target/release"
@@ -219,7 +228,7 @@ jobs:
       - name: Download FFI shared libraries
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: ffi-libs
+          name: ffi-libs-${{ matrix.arch }}
           path: ${{ env.NEXUS_CI_WORKSPACE }}/target/release/
 
       - name: Run Go tests
@@ -241,17 +250,20 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: coverage-go
+          name: coverage-go-${{ matrix.arch }}
           path: |
             ${{ env.NEXUS_CI_WORKSPACE }}/go_junit_report.xml
             ${{ env.NEXUS_CI_WORKSPACE }}/target/coverage/go_coverage_report.xml
           if-no-files-found: warn
 
   test-node:
-    name: Test / Node.js
+    name: Test / Node.js (${{ matrix.arch }})
     needs: [build]
-    runs-on: linux-amd64-cpu4
+    runs-on: linux-${{ matrix.arch }}-cpu4
     timeout-minutes: 30
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
 
     steps:
       - name: Checkout
@@ -302,7 +314,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: coverage-node
+          name: coverage-node-${{ matrix.arch }}
           path: |
             ${{ env.NEXUS_CI_WORKSPACE }}/target/coverage/nodejs_junit.xml
             ${{ env.NEXUS_CI_WORKSPACE }}/target/coverage/cobertura-coverage.xml
@@ -311,10 +323,13 @@ jobs:
           if-no-files-found: warn
 
   test-python:
-    name: Test / Python
+    name: Test / Python (${{ matrix.arch }})
     needs: [build]
-    runs-on: linux-amd64-cpu4
+    runs-on: linux-${{ matrix.arch }}-cpu4
     timeout-minutes: 30
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
 
     steps:
       - name: Checkout
@@ -368,7 +383,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: coverage-python
+          name: coverage-python-${{ matrix.arch }}
           path: |
             ${{ env.NEXUS_CI_WORKSPACE }}/target/coverage/pytest_junit_report.xml
             ${{ env.NEXUS_CI_WORKSPACE }}/target/coverage/pytest_coverage_report.xml
@@ -380,10 +395,13 @@ jobs:
         run: uv cache prune --ci
 
   test-rust:
-    name: Test / Rust
+    name: Test / Rust (${{ matrix.arch }})
     needs: [build]
-    runs-on: linux-amd64-cpu4
+    runs-on: linux-${{ matrix.arch }}-cpu4
     timeout-minutes: 30
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
 
     steps:
       - name: Checkout
@@ -421,17 +439,20 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: coverage-rust
+          name: coverage-rust-${{ matrix.arch }}
           path: |
             ${{ env.NEXUS_CI_WORKSPACE }}/target/nextest/ci/rust_junit_report.xml
             ${{ env.NEXUS_CI_WORKSPACE }}/target/coverage/rust-workspace.xml
           if-no-files-found: warn
 
   test-wasm:
-    name: Test / WASM
+    name: Test / WASM (${{ matrix.arch }})
     needs: [build]
-    runs-on: linux-amd64-cpu4
+    runs-on: linux-${{ matrix.arch }}-cpu4
     timeout-minutes: 30
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
 
     steps:
       - name: Checkout
@@ -490,7 +511,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: coverage-wasm
+          name: coverage-wasm-${{ matrix.arch }}
           path: |
             ${{ env.NEXUS_CI_WORKSPACE }}/target/coverage/wasm_junit.xml
             ${{ env.NEXUS_CI_WORKSPACE }}/target/coverage/wasm-rust.xml
@@ -516,7 +537,7 @@ jobs:
       - name: Download all coverage artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: coverage-*
+          pattern: coverage-*-amd64
           path: ${{ env.NEXUS_CI_WORKSPACE }}
           merge-multiple: true
 
@@ -552,10 +573,13 @@ jobs:
           if-no-files-found: warn
 
   package-nodejs:
-    name: Package / Node.js (x86_64)
+    name: Package / Node.js (${{ matrix.arch }})
     needs: [build]
-    runs-on: linux-amd64-cpu4
+    runs-on: linux-${{ matrix.arch }}-cpu4
     timeout-minutes: 30
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
 
     steps:
       - name: Checkout
@@ -570,7 +594,7 @@ jobs:
       - name: Download Node.js addon
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: node-addon
+          name: node-addon-${{ matrix.arch }}
           path: ${{ env.NEXUS_CI_WORKSPACE }}/crates/node/
 
       - name: Version and pack Node.js package
@@ -615,7 +639,7 @@ jobs:
           else
             echo "Tagged release ${{ github.ref_name }}: using version as-is"
           fi
-          echo "Packing x86_64 npm package"
+          echo "Packing ${{ matrix.arch }} npm package"
           pushd crates/node
           npm pack --pack-destination ${{ env.NEXUS_CI_WORKSPACE_TMP }}/npm
           popd
@@ -623,7 +647,7 @@ jobs:
       - name: Upload npm package artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: npm-x86_64
+          name: npm-${{ matrix.arch }}
           path: ${{ env.NEXUS_CI_WORKSPACE_TMP }}/npm/*.tgz
           if-no-files-found: error
 
@@ -691,10 +715,13 @@ jobs:
           if-no-files-found: error
 
   package-wheel:
-    name: Package / Python Wheel (x86_64)
+    name: Package / Python Wheel (${{ matrix.arch }})
     needs: [build]
-    runs-on: linux-amd64-cpu4
+    runs-on: linux-${{ matrix.arch }}-cpu4
     timeout-minutes: 30
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
 
     steps:
       - name: Checkout
@@ -739,8 +766,10 @@ jobs:
           else
             echo "Tagged release ${{ github.ref_name }}: using version as-is"
           fi
-          echo "Building x86_64 wheel"
-          maturin build --release --target x86_64-unknown-linux-gnu --out ${{ env.NEXUS_CI_WORKSPACE_TMP }}/wheels
+          echo "Building ${{ matrix.arch }} wheel"
+          maturin build --release \
+            --target ${{ matrix.arch == 'amd64' && 'x86_64-unknown-linux-gnu' || 'aarch64-unknown-linux-gnu' }} \
+            --out ${{ env.NEXUS_CI_WORKSPACE_TMP }}/wheels
           if [ ! -d ${{ env.NEXUS_CI_WORKSPACE_TMP }}/wheels ] || \
              [ -z "$(ls -A ${{ env.NEXUS_CI_WORKSPACE_TMP }}/wheels/*.whl 2>/dev/null)" ]; then
             echo "Error: No wheels found in ${{ env.NEXUS_CI_WORKSPACE_TMP }}/wheels/"
@@ -750,7 +779,7 @@ jobs:
       - name: Upload wheel artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: wheel-x86_64
+          name: wheel-${{ matrix.arch }}
           path: ${{ env.NEXUS_CI_WORKSPACE_TMP }}/wheels/*.whl
           if-no-files-found: error
 
