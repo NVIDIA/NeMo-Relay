@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "nvidia-nat-nexus-proxy"
+name = "nvidia-nat-nexus-optimizer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -24,3 +24,4 @@ redis-backend = ["redis"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-multi-thread"] }
+tokio-stream = "0.1"

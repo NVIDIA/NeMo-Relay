@@ -12,12 +12,10 @@ use serde::Serialize;
 use serde_json::Value as Json;
 use wasm_bindgen::prelude::*;
 
-use nvidia_nat_nexus_core::NexusError;
-
 static LAST_CALLBACK_ERROR: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 
-/// Converts an `NexusError` into a `JsValue` string for use as a JS exception.
-pub fn to_js_err(e: NexusError) -> JsValue {
+/// Converts a displayable Rust error into a `JsValue` string for use as a JS exception.
+pub fn to_js_err(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 

@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Core data types for the nexus-proxy crate.
+//! Core data types for the nexus-optimizer crate.
 //!
-//! This module defines the vocabulary types used by the proxy:
+//! This module defines the vocabulary types used by the optimizer:
 //! [`MetadataEnvelope`], [`ParallelHint`], [`RunRecord`], [`CallRecord`],
 //! [`CallKind`], [`ExecutionPlan`], and [`ParallelGroup`].
 //!
@@ -133,7 +133,7 @@ pub struct ExecutionPlan {
 /// Typed struct for agent hints injected into LLM request headers.
 ///
 /// Field names match NAT's `nvext.agent_hints` dict keys. Serialized as
-/// the `x-nexus-proxy-agent-hints` header value.
+/// the `x-nexus-optimizer-agent-hints` header value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentHints {
     /// Output Sequence Length (tokens), from prediction output_tokens p90.

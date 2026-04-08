@@ -66,12 +66,12 @@ func main() {
 }
 ```
 
-Run it with the FFI library on the loader path:
+Save the example as `main.go` outside `go/nat_nexus/`, then run it with the
+FFI library on the loader path:
 
 ```bash
-cd go/nat_nexus
-CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" \
-go run ./...
+CGO_LDFLAGS="-L$(pwd)/target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}$(pwd)/target/release" \
+go run ./main.go
 ```
 
 ## Minimal LLM Execution

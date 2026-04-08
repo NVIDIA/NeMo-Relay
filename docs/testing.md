@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # Testing Guide
 
 Nexus maintains test coverage across the core runtime, all language bindings,
-and the proxy layer. Every binding mirrors the same major test domains so that
+and the optimizer layer. Every binding mirrors the same major test domains so that
 behavioral parity is verified at each layer.
 
 ## Fast Local Sanity
@@ -14,7 +14,7 @@ behavioral parity is verified at each layer.
 Use this path when you want the shortest high-signal verification loop:
 
 ```bash
-# Core runtime + proxy crate
+# Core runtime + optimizer crate
 cargo test --workspace
 
 # Python wrapper
@@ -30,17 +30,17 @@ wasm-pack test --node crates/wasm
 ## Quick Reference
 
 ```bash
-# ── Rust (core + proxy + WASM unit tests) ──────────────────
+# ── Rust (core + optimizer + WASM unit tests) ──────────────────
 cargo test --workspace
 
 # Core only
 cargo test -p nvidia-nat-nexus-core
 
-# Proxy only (in-memory backend)
-cargo test -p nvidia-nat-nexus-proxy
+# Optimizer only (in-memory backend)
+cargo test -p nvidia-nat-nexus-optimizer
 
-# Proxy with Redis backend enabled
-cargo test -p nvidia-nat-nexus-proxy --features redis-backend redis_tests
+# Optimizer with Redis backend enabled
+cargo test -p nvidia-nat-nexus-optimizer --features redis-backend redis_tests
 
 # WASM unit tests
 cargo test -p nat-nexus-wasm
@@ -67,8 +67,8 @@ cd -
 # ── Full suite ─────────────────────────────────────────────
 cargo test --workspace && uv run pytest
 
-# Optional Redis-backed proxy validation
-cargo test -p nvidia-nat-nexus-proxy --features redis-backend redis_tests
+# Optional Redis-backed optimizer validation
+cargo test -p nvidia-nat-nexus-optimizer --features redis-backend redis_tests
 
 # ── Coverage artifacts ────────────────────────────────────
 # Python wrapper coverage
@@ -99,8 +99,8 @@ cargo llvm-cov report --release \
 | Go binding | `go test -race -v ./...` | Run from `go/nat_nexus` after building the FFI shared library |
 | Node binding | `cd crates/node && npm install && npm test` | Runs JS integration tests against the native addon |
 | WASM binding | `wasm-pack test --node crates/wasm` | Verifies the generated `wasm-bindgen` behavior path |
-| Proxy crate | `cargo test -p nvidia-nat-nexus-proxy` | Covers in-memory backend and end-to-end proxy registration |
-| Proxy crate with Redis | `cargo test -p nvidia-nat-nexus-proxy --features redis-backend redis_tests` | Requires a local Redis instance at `redis://127.0.0.1/` |
+| Optimizer crate | `cargo test -p nvidia-nat-nexus-optimizer` | Covers in-memory backend and end-to-end optimizer registration |
+| Optimizer crate with Redis | `cargo test -p nvidia-nat-nexus-optimizer --features redis-backend redis_tests` | Requires a local Redis instance at `redis://127.0.0.1/` |
 
 ## Test Helpers & Utilities
 
@@ -298,25 +298,27 @@ gocover-cobertura < coverage.out > ../../target/coverage/go_coverage_report.xml
 cd -
 ```
 
-### Proxy
+### Optimizer
 
-Proxy tests live under `crates/proxy/tests/` and are split by backend:
+Optimizer tests live under `crates/optimizer/tests/` and are split by backend:
 
-- `integration_tests.rs` exercises proxy registration, event capture, and
+- `runtime_integration_tests.rs` exercises optimizer registration, event capture, and
   hot-path intercept behavior using `InMemoryBackend`
+- the same in-memory suite now covers hosted plugin registration, unknown hosted
+  plugin diagnostics, and rollback on hosted plugin registration failure
 - `redis_tests.rs` exercises `RedisBackend` storage round-trips and is gated by
   the `redis-backend` feature
 
-Run the in-memory proxy suite with:
+Run the in-memory optimizer suite with:
 
 ```bash
-cargo test -p nvidia-nat-nexus-proxy
+cargo test -p nvidia-nat-nexus-optimizer
 ```
 
 Run the Redis-backed suite with:
 
 ```bash
-cargo test -p nvidia-nat-nexus-proxy --features redis-backend redis_tests
+cargo test -p nvidia-nat-nexus-optimizer --features redis-backend redis_tests
 ```
 
 Redis requirements:
@@ -337,6 +339,49 @@ cd -
 
 This writes structured coverage reports under `crates/node/coverage/`, including
 `coverage-summary.json` and `cobertura-coverage.xml`.
+
+Node optimizer plugin coverage lives in
+`crates/node/tests/optimizer_tests.mjs`.
+
+### Python Optimizer Helpers
+
+The external Python optimizer surface is validated through:
+
+- `python/tests/test_optimizer.py`
+- `python/tests/test_optimizer_config.py`
+
+If the native module changes, rebuild it before trusting those tests:
+
+```bash
+uv run maturin develop
+uv run pytest python/tests/test_optimizer.py python/tests/test_optimizer_config.py
+```
+
+### Go Optimizer Plugins
+
+Go hosted optimizer plugin coverage lives in:
+
+- `go/nat_nexus/optimizer_plugin_test.go`
+
+Run it with the normal Go suite after building the FFI library:
+
+```bash
+cargo build --release -p nvidia-nat-nexus-ffi
+cd go/nat_nexus
+CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" go test ./...
+```
+
+### WASM Optimizer Plugins
+
+WASM hosted optimizer plugin coverage lives in:
+
+- `crates/wasm/tests/optimizer_tests.rs`
+
+Run it with:
+
+```bash
+wasm-pack test --node crates/wasm
+```
 
 ### WASM
 

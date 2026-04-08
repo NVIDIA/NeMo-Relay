@@ -7,12 +7,17 @@
 //! [`NatNexusStatus`]. On failure, call [`nat_nexus_last_error`] to retrieve
 //! the error message.
 
+use std::ffi::CStr;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use libc::c_char;
 use nvidia_nat_nexus_core as core;
 use nvidia_nat_nexus_core::types as core_types;
+use nvidia_nat_nexus_optimizer::{
+    deregister_hosted_plugin_handler, register_hosted_plugin_handler, ConfigDiagnostic,
+    HostedPluginHandler, OptimizerConfig, OptimizerError, OptimizerRuntime,
+};
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
 
@@ -33,6 +38,530 @@ fn tokio_runtime() -> &'static Runtime {
             .build()
             .expect("Failed to create tokio runtime")
     })
+}
+
+struct FfiHostedPluginUserData {
+    ptr: *mut libc::c_void,
+    free_fn: NatNexusFreeFn,
+}
+
+unsafe impl Send for FfiHostedPluginUserData {}
+unsafe impl Sync for FfiHostedPluginUserData {}
+
+impl Drop for FfiHostedPluginUserData {
+    fn drop(&mut self) {
+        if let Some(free_fn) = self.free_fn {
+            unsafe { free_fn(self.ptr) };
+        }
+    }
+}
+
+struct FfiHostedPluginAdapter {
+    plugin_kind: String,
+    validate_cb: Option<NatNexusOptimizerPluginValidateCb>,
+    register_cb: NatNexusOptimizerPluginRegisterCb,
+    user_data: Arc<FfiHostedPluginUserData>,
+}
+
+impl HostedPluginHandler for FfiHostedPluginAdapter {
+    fn plugin_kind(&self) -> &str {
+        &self.plugin_kind
+    }
+
+    fn validate(
+        &self,
+        instance_id: &str,
+        plugin_config: &serde_json::Map<String, serde_json::Value>,
+    ) -> Vec<ConfigDiagnostic> {
+        let Some(validate_cb) = self.validate_cb else {
+            return vec![];
+        };
+
+        clear_last_error();
+        let c_instance_id = std::ffi::CString::new(instance_id).unwrap_or_default();
+        let plugin_config_json =
+            json_to_c_string(&serde_json::Value::Object(plugin_config.clone()));
+        let result_ptr = unsafe {
+            validate_cb(
+                self.user_data.ptr,
+                c_instance_id.as_ptr(),
+                plugin_config_json,
+            )
+        };
+        unsafe { nat_nexus_string_free(plugin_config_json) };
+
+        if result_ptr.is_null() {
+            let message = last_error_message().unwrap_or_else(|| {
+                format!(
+                    "hosted plugin '{}' validate callback returned null",
+                    self.plugin_kind
+                )
+            });
+            return vec![ConfigDiagnostic {
+                level: nvidia_nat_nexus_optimizer::DiagnosticLevel::Error,
+                code: "optimizer.plugin_validate_failed".to_string(),
+                component: Some("external_component".to_string()),
+                field: None,
+                message,
+            }];
+        }
+
+        let diagnostics = unsafe { CStr::from_ptr(result_ptr) }
+            .to_str()
+            .ok()
+            .and_then(|text| serde_json::from_str::<Vec<ConfigDiagnostic>>(text).ok());
+        unsafe { nat_nexus_string_free(result_ptr) };
+        diagnostics.unwrap_or_else(|| {
+            vec![ConfigDiagnostic {
+                level: nvidia_nat_nexus_optimizer::DiagnosticLevel::Error,
+                code: "optimizer.plugin_validate_failed".to_string(),
+                component: Some("external_component".to_string()),
+                field: None,
+                message: format!(
+                    "hosted plugin '{}' validate callback returned invalid diagnostics JSON",
+                    self.plugin_kind
+                ),
+            }]
+        })
+    }
+
+    fn register(
+        &self,
+        instance_id: &str,
+        plugin_config: &serde_json::Map<String, serde_json::Value>,
+        ctx: &mut nvidia_nat_nexus_optimizer::HostedRegistrationContext,
+    ) -> nvidia_nat_nexus_optimizer::Result<()> {
+        clear_last_error();
+        let c_instance_id = std::ffi::CString::new(instance_id).unwrap_or_default();
+        let plugin_config_json =
+            json_to_c_string(&serde_json::Value::Object(plugin_config.clone()));
+        let mut ffi_ctx = FfiOptimizerPluginContext(ctx as *mut _);
+        let status = unsafe {
+            (self.register_cb)(
+                self.user_data.ptr,
+                c_instance_id.as_ptr(),
+                plugin_config_json,
+                &mut ffi_ctx,
+            )
+        };
+        unsafe { nat_nexus_string_free(plugin_config_json) };
+        if status == NatNexusStatus::Ok {
+            Ok(())
+        } else if let Some(message) = last_error_message() {
+            Err(OptimizerError::RegistrationFailed(message))
+        } else {
+            Err(OptimizerError::RegistrationFailed(format!(
+                "hosted plugin '{}' register callback failed with status {:?}",
+                self.plugin_kind, status
+            )))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Optimizer runtime
+// ---------------------------------------------------------------------------
+
+/// Validate an optimizer config document and return the diagnostics report as JSON.
+///
+/// # Safety
+/// `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_validate_optimizer_config(
+    config_json: *const c_char,
+    out_json: *mut *mut c_char,
+) -> NatNexusStatus {
+    clear_last_error();
+    if out_json.is_null() {
+        set_last_error("out_json pointer is null");
+        return NatNexusStatus::NullPointer;
+    }
+    let config_value = match c_str_to_json(config_json) {
+        Some(value) => value,
+        None => return NatNexusStatus::InvalidJson,
+    };
+    let config: OptimizerConfig = match serde_json::from_value(config_value) {
+        Ok(config) => config,
+        Err(err) => {
+            set_last_error(&err.to_string());
+            return NatNexusStatus::InvalidJson;
+        }
+    };
+    let report = OptimizerRuntime::validate_config(&config);
+    let report_json = match serde_json::to_value(report) {
+        Ok(value) => value,
+        Err(err) => {
+            set_last_error(&err.to_string());
+            return NatNexusStatus::Internal;
+        }
+    };
+    unsafe { *out_json = json_to_c_string(&report_json) };
+    NatNexusStatus::Ok
+}
+
+/// Create an optimizer runtime from a JSON config document.
+///
+/// # Safety
+/// `config_json` must be a valid C string and `out` must be a valid, non-null pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_optimizer_runtime_create(
+    config_json: *const c_char,
+    out: *mut *mut FfiOptimizerRuntime,
+) -> NatNexusStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NatNexusStatus::NullPointer;
+    }
+    let config_value = match c_str_to_json(config_json) {
+        Some(value) => value,
+        None => return NatNexusStatus::InvalidJson,
+    };
+    let config: OptimizerConfig = match serde_json::from_value(config_value) {
+        Ok(config) => config,
+        Err(err) => {
+            set_last_error(&err.to_string());
+            return NatNexusStatus::InvalidJson;
+        }
+    };
+    match tokio_runtime().block_on(OptimizerRuntime::new(config)) {
+        Ok(runtime) => {
+            unsafe { *out = Box::into_raw(Box::new(FfiOptimizerRuntime(runtime))) };
+            NatNexusStatus::Ok
+        }
+        Err(err) => status_from_optimizer_error(&err),
+    }
+}
+
+/// Register a previously created optimizer runtime.
+///
+/// # Safety
+/// `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_optimizer_runtime_register(
+    runtime: *mut FfiOptimizerRuntime,
+) -> NatNexusStatus {
+    clear_last_error();
+    if runtime.is_null() {
+        set_last_error("runtime is null");
+        return NatNexusStatus::NullPointer;
+    }
+    match tokio_runtime().block_on((&mut *runtime).0.register()) {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(err) => status_from_optimizer_error(&err),
+    }
+}
+
+/// Deregister an optimizer runtime.
+///
+/// # Safety
+/// `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_optimizer_runtime_deregister(
+    runtime: *mut FfiOptimizerRuntime,
+) -> NatNexusStatus {
+    clear_last_error();
+    if runtime.is_null() {
+        set_last_error("runtime is null");
+        return NatNexusStatus::NullPointer;
+    }
+    match (&mut *runtime).0.deregister() {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(err) => status_from_optimizer_error(&err),
+    }
+}
+
+/// Shut down an optimizer runtime and free its background work.
+///
+/// # Safety
+/// `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_optimizer_runtime_shutdown(
+    runtime: *mut FfiOptimizerRuntime,
+) -> NatNexusStatus {
+    clear_last_error();
+    if runtime.is_null() {
+        set_last_error("runtime is null");
+        return NatNexusStatus::NullPointer;
+    }
+    let runtime = unsafe { Box::from_raw(runtime) };
+    match tokio_runtime().block_on(runtime.0.shutdown()) {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(err) => status_from_optimizer_error(&err),
+    }
+}
+
+/// Return the runtime creation diagnostics report as JSON.
+///
+/// # Safety
+/// `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer and `out_json`
+/// must be a valid, non-null pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_optimizer_runtime_report_json(
+    runtime: *const FfiOptimizerRuntime,
+    out_json: *mut *mut c_char,
+) -> NatNexusStatus {
+    clear_last_error();
+    if runtime.is_null() || out_json.is_null() {
+        set_last_error("runtime or out_json is null");
+        return NatNexusStatus::NullPointer;
+    }
+    let report_json = match serde_json::to_value((&*runtime).0.report()) {
+        Ok(value) => value,
+        Err(err) => {
+            set_last_error(&err.to_string());
+            return NatNexusStatus::Internal;
+        }
+    };
+    unsafe { *out_json = json_to_c_string(&report_json) };
+    NatNexusStatus::Ok
+}
+
+/// Register a hosted optimizer plugin handler backed by foreign callbacks.
+///
+/// # Safety
+/// `plugin_kind` must be a valid C string and `register_cb` must be a valid function pointer.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_optimizer_register_plugin(
+    plugin_kind: *const c_char,
+    validate_cb: Option<NatNexusOptimizerPluginValidateCb>,
+    register_cb: NatNexusOptimizerPluginRegisterCb,
+    user_data: *mut libc::c_void,
+    free_fn: NatNexusFreeFn,
+) -> NatNexusStatus {
+    clear_last_error();
+    let plugin_kind = match c_str_to_string(plugin_kind) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+
+    let handler = Arc::new(FfiHostedPluginAdapter {
+        plugin_kind: plugin_kind.clone(),
+        validate_cb,
+        register_cb,
+        user_data: Arc::new(FfiHostedPluginUserData {
+            ptr: user_data,
+            free_fn,
+        }),
+    });
+    match register_hosted_plugin_handler(handler) {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(err) => status_from_optimizer_error(&err),
+    }
+}
+
+/// Deregister a hosted optimizer plugin handler by kind.
+///
+/// # Safety
+/// `plugin_kind` must be a valid C string.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_optimizer_deregister_plugin(
+    plugin_kind: *const c_char,
+) -> NatNexusStatus {
+    clear_last_error();
+    let plugin_kind = match c_str_to_string(plugin_kind) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    if deregister_hosted_plugin_handler(&plugin_kind) {
+        NatNexusStatus::Ok
+    } else {
+        set_last_error(&format!("not found: hosted plugin '{plugin_kind}'"));
+        NatNexusStatus::NotFound
+    }
+}
+
+/// Register an event subscriber into the optimizer hosted plugin context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_subscriber(
+    ctx: *mut FfiOptimizerPluginContext,
+    name: *const c_char,
+    cb: NatNexusEventSubscriberCb,
+    user_data: *mut libc::c_void,
+    free_fn: NatNexusFreeFn,
+) -> NatNexusStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("optimizer plugin context is null");
+        return NatNexusStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_event_subscriber(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }.register_subscriber(&name, wrapped) {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(err) => status_from_optimizer_error(&err),
+    }
+}
+
+/// Register an LLM request intercept into the optimizer hosted plugin context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_llm_request_intercept(
+    ctx: *mut FfiOptimizerPluginContext,
+    name: *const c_char,
+    priority: i32,
+    break_chain: bool,
+    cb: NatNexusLlmRequestInterceptCb,
+    user_data: *mut libc::c_void,
+    free_fn: NatNexusFreeFn,
+) -> NatNexusStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("optimizer plugin context is null");
+        return NatNexusStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_llm_request_intercept_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }.register_llm_request_intercept(
+        &name,
+        priority,
+        break_chain,
+        wrapped,
+    ) {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(err) => status_from_optimizer_error(&err),
+    }
+}
+
+/// Register a tool execution intercept into the optimizer hosted plugin context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_tool_request_intercept(
+    ctx: *mut FfiOptimizerPluginContext,
+    name: *const c_char,
+    priority: i32,
+    break_chain: bool,
+    cb: NatNexusToolSanitizeCb,
+    user_data: *mut libc::c_void,
+    free_fn: NatNexusFreeFn,
+) -> NatNexusStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("optimizer plugin context is null");
+        return NatNexusStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_tool_request_intercept_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }.register_tool_request_intercept(
+        &name,
+        priority,
+        break_chain,
+        wrapped,
+    ) {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(err) => status_from_optimizer_error(&err),
+    }
+}
+
+/// Register an LLM execution intercept into the optimizer hosted plugin context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_llm_execution_intercept(
+    ctx: *mut FfiOptimizerPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NatNexusLlmExecInterceptCb,
+    user_data: *mut libc::c_void,
+    free_fn: NatNexusFreeFn,
+) -> NatNexusStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("optimizer plugin context is null");
+        return NatNexusStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_llm_exec_intercept_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }.register_llm_execution_intercept(&name, priority, wrapped) {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(err) => status_from_optimizer_error(&err),
+    }
+}
+
+/// Register an LLM stream execution intercept into the optimizer hosted plugin context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_llm_stream_execution_intercept(
+    ctx: *mut FfiOptimizerPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NatNexusLlmExecInterceptCb,
+    user_data: *mut libc::c_void,
+    free_fn: NatNexusFreeFn,
+) -> NatNexusStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("optimizer plugin context is null");
+        return NatNexusStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_llm_stream_exec_intercept_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }
+        .register_llm_stream_execution_intercept(&name, priority, wrapped)
+    {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(err) => status_from_optimizer_error(&err),
+    }
+}
+
+/// Register a tool execution intercept into the optimizer hosted plugin context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_tool_execution_intercept(
+    ctx: *mut FfiOptimizerPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NatNexusToolExecInterceptCb,
+    user_data: *mut libc::c_void,
+    free_fn: NatNexusFreeFn,
+) -> NatNexusStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("optimizer plugin context is null");
+        return NatNexusStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_tool_exec_intercept_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }.register_tool_execution_intercept(&name, priority, wrapped) {
+        Ok(()) => NatNexusStatus::Ok,
+        Err(err) => status_from_optimizer_error(&err),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3300,6 +3829,80 @@ mod tests {
         .unwrap();
         args["intercepted"] = json!(true);
         CString::new(args.to_string()).unwrap().into_raw()
+    }
+
+    #[test]
+    fn test_ffi_optimizer_runtime_validate_create_report_and_shutdown() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        reset_globals();
+
+        let config = cstring(
+            &json!({
+                "version": 1,
+                "state": {
+                    "backend": {
+                        "kind": "in_memory",
+                        "config": {}
+                    }
+                },
+                "components": [
+                    {
+                        "kind": "telemetry",
+                        "enabled": true,
+                        "config": {
+                            "learners": ["latency_sensitivity"]
+                        }
+                    },
+                    {
+                        "kind": "dynamo_hints",
+                        "enabled": true,
+                        "config": {}
+                    },
+                    {
+                        "kind": "tool_parallelism",
+                        "enabled": true,
+                        "config": {}
+                    }
+                ]
+            })
+            .to_string(),
+        );
+
+        let mut report_json = ptr::null_mut();
+        assert_eq!(
+            unsafe { nat_nexus_validate_optimizer_config(config.as_ptr(), &mut report_json) },
+            NatNexusStatus::Ok
+        );
+        let report = unsafe { returned_json(report_json) };
+        assert_eq!(report["diagnostics"], json!([]));
+
+        let mut runtime = ptr::null_mut();
+        assert_eq!(
+            unsafe { nat_nexus_optimizer_runtime_create(config.as_ptr(), &mut runtime) },
+            NatNexusStatus::Ok
+        );
+        assert!(!runtime.is_null());
+
+        let mut runtime_report_json = ptr::null_mut();
+        assert_eq!(
+            unsafe { nat_nexus_optimizer_runtime_report_json(runtime, &mut runtime_report_json) },
+            NatNexusStatus::Ok
+        );
+        let runtime_report = unsafe { returned_json(runtime_report_json) };
+        assert_eq!(runtime_report["diagnostics"], json!([]));
+
+        assert_eq!(
+            unsafe { nat_nexus_optimizer_runtime_register(runtime) },
+            NatNexusStatus::Ok
+        );
+        assert_eq!(
+            unsafe { nat_nexus_optimizer_runtime_deregister(runtime) },
+            NatNexusStatus::Ok
+        );
+        assert_eq!(
+            unsafe { nat_nexus_optimizer_runtime_shutdown(runtime) },
+            NatNexusStatus::Ok
+        );
     }
 
     unsafe extern "C" fn tool_allow_cb(

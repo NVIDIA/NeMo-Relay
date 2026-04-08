@@ -36,6 +36,7 @@ typedef char* (*NatNexusLlmConditionalCb)(void* user_data, const FfiLLMRequest* 
 typedef char* (*NatNexusLlmExecFn)(void* user_data, const char* native_json);
 typedef char* (*NatNexusLlmResponseFn)(void* user_data, const char* response_json);
 typedef void (*NatNexusEventSubscriberFn)(void* user_data, const FfiEvent* event);
+typedef struct FfiOptimizerPluginContext FfiOptimizerPluginContext;
 
 // Middleware chain next function types
 typedef char* (*NatNexusToolExecNextFn)(const char* args_json, void* next_ctx);
@@ -445,4 +446,47 @@ func goLlmRequestInterceptTrampoline(
 		*outAnnotatedJSON = C.CString(string(newAnnotated))
 	}
 	return 0 // NatNexusStatus::Ok
+}
+
+//export goOptimizerPluginValidateTrampoline
+func goOptimizerPluginValidateTrampoline(userData unsafe.Pointer, instanceID *C.char, pluginConfigJSON *C.char) *C.char {
+	handler := lookupClosure(userData).(OptimizerPluginHandler)
+	var pluginConfig map[string]any
+	if pluginConfigJSON != nil {
+		if err := json.Unmarshal([]byte(C.GoString(pluginConfigJSON)), &pluginConfig); err != nil {
+			setLastErrorMessage(err.Error())
+			return nil
+		}
+	}
+	diagnostics, err := handler.Validate(C.GoString(instanceID), pluginConfig)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	if diagnostics == nil {
+		diagnostics = []OptimizerConfigDiagnostic{}
+	}
+	payload, err := json.Marshal(diagnostics)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	return C.CString(string(payload))
+}
+
+//export goOptimizerPluginRegisterTrampoline
+func goOptimizerPluginRegisterTrampoline(userData unsafe.Pointer, instanceID *C.char, pluginConfigJSON *C.char, ctx *C.FfiOptimizerPluginContext) C.int32_t {
+	handler := lookupClosure(userData).(OptimizerPluginHandler)
+	var pluginConfig map[string]any
+	if pluginConfigJSON != nil {
+		if err := json.Unmarshal([]byte(C.GoString(pluginConfigJSON)), &pluginConfig); err != nil {
+			setLastErrorMessage(err.Error())
+			return 5
+		}
+	}
+	if err := handler.Register(C.GoString(instanceID), pluginConfig, &OptimizerPluginContext{ptr: ctx}); err != nil {
+		setLastErrorMessage(err.Error())
+		return 5
+	}
+	return 0
 }

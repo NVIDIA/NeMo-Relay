@@ -188,3 +188,48 @@ export async function typedLlmStreamExecute(
     null,
   );
 }
+
+export function defaultOptimizerConfig() {
+  return { version: 1, components: [] };
+}
+
+export function optimizerInMemoryBackend() {
+  return { kind: 'in_memory', config: {} };
+}
+
+export function optimizerRedisBackend(url, keyPrefix = 'nexus:') {
+  return {
+    kind: 'redis',
+    config: { url, key_prefix: keyPrefix },
+  };
+}
+
+export function telemetryComponent(config = {}) {
+  return { kind: 'telemetry', enabled: true, config };
+}
+
+export function dynamoHintsComponent(config = {}) {
+  return {
+    kind: 'dynamo_hints',
+    enabled: true,
+    config: {
+      priority: 100,
+      break_chain: false,
+      inject_header: true,
+      inject_body_path: 'nvext.agent_hints',
+      ...config,
+    },
+  };
+}
+
+export function toolParallelismComponent(config = {}) {
+  return {
+    kind: 'tool_parallelism',
+    enabled: true,
+    config: {
+      priority: 100,
+      mode: 'observe_only',
+      ...config,
+    },
+  };
+}

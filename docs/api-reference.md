@@ -13,8 +13,8 @@ See also:
 
 - [Typed API Reference](typed-api-reference.md) for `nat_nexus.typed` helper
   functions and codec types.
-- [Proxy API Reference](proxy-api-reference.md) for `nat_nexus.proxy`,
-  `NexusProxy`, backend types, and declarative proxy lifecycle helpers.
+- [Optimizer API Reference](optimizer-api-reference.md) for the config-driven
+  `nat_nexus.optimizer` runtime and component helpers.
 
 ## Scope Operations
 

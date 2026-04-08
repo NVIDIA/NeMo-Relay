@@ -14,6 +14,7 @@ crate-type = ["cdylib"]
 nvidia-nat-nexus-core = { path = "../core" }
 nvidia-nat-nexus-openinference = { path = "../openinference" }
 nvidia-nat-nexus-otel = { path = "../otel" }
+nvidia-nat-nexus-optimizer = { path = "../optimizer", features = ["redis-backend"] }
 napi = { version = "2", features = ["napi6", "async", "serde-json", "tokio_rt"] }
 napi-derive = "2"
 serde = { version = "1", features = ["derive"] }

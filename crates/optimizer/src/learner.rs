@@ -16,7 +16,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-use crate::error::{ProxyError, Result};
+use crate::error::{OptimizerError, Result};
 use crate::storage::StorageBackendDyn;
 use crate::trie::serialization::TrieEnvelope;
 use crate::trie::{PredictionTrieBuilder, PredictionTrieNode, SensitivityConfig};
@@ -89,9 +89,9 @@ impl Learner for LatencySensitivityLearner {
 
             // 5. Update hot cache atomically (no .await inside lock)
             {
-                let mut guard = hot_cache
-                    .write()
-                    .map_err(|e| ProxyError::Internal(format!("hot cache lock poisoned: {e}")))?;
+                let mut guard = hot_cache.write().map_err(|e| {
+                    OptimizerError::Internal(format!("hot cache lock poisoned: {e}"))
+                })?;
                 guard.agent_hints_default =
                     compute_default_hints(&trie_root, self.config.sensitivity_scale);
                 guard.trie = Some(trie_root);

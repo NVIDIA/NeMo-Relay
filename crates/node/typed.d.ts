@@ -118,3 +118,118 @@ export declare function typedLlmStreamExecute<TChunk, TResponse>(
   responseCodec: Codec<TResponse>,
   options?: TypedLlmStreamExecuteOptions,
 ): Promise<any>;
+
+export type UnsupportedBehavior = 'ignore' | 'warn' | 'error';
+
+export interface OptimizerConfigPolicy {
+  unknown_component?: UnsupportedBehavior;
+  unknown_field?: UnsupportedBehavior;
+  unsupported_value?: UnsupportedBehavior;
+}
+
+export interface OptimizerBackendSpec {
+  kind: string;
+  config?: Record<string, any>;
+}
+
+export interface OptimizerStateConfig {
+  backend: OptimizerBackendSpec;
+}
+
+export interface OptimizerComponentSpec {
+  kind: string;
+  enabled?: boolean;
+  config?: Record<string, any>;
+}
+
+export interface OptimizerConfig {
+  version?: number;
+  agent_id?: string;
+  state?: OptimizerStateConfig;
+  components?: OptimizerComponentSpec[];
+  policy?: OptimizerConfigPolicy;
+}
+
+export interface TelemetryComponentConfig {
+  subscriber_name?: string;
+  learners?: string[];
+}
+
+export interface DynamoHintsComponentConfig {
+  priority?: number;
+  break_chain?: boolean;
+  inject_header?: boolean;
+  inject_body_path?: string;
+}
+
+export interface ToolParallelismComponentConfig {
+  priority?: number;
+  mode?: 'observe_only' | 'inject_hints' | 'schedule' | string;
+}
+
+export interface ExternalComponentConfig {
+  plugin_kind: string;
+  instance_id: string;
+  plugin_config?: Record<string, any>;
+}
+
+export interface OptimizerPluginDiagnostic {
+  level: 'warning' | 'error';
+  code: string;
+  component?: string;
+  field?: string;
+  message: string;
+}
+
+export interface OptimizerPluginContext {
+  registerSubscriber(name: string, callback: (event: any) => void): void;
+  registerLlmRequestIntercept(
+    name: string,
+    priority: number,
+    breakChain: boolean,
+    callback: (name: string, request: any, annotated: any | null) => any,
+  ): void;
+  registerLlmExecutionIntercept(
+    name: string,
+    priority: number,
+    callback: (request: any, next: (request: any) => any) => any,
+  ): void;
+  registerLlmStreamExecutionIntercept(
+    name: string,
+    priority: number,
+    callback: (request: any, next: (request: any) => any) => any,
+  ): void;
+  registerToolRequestIntercept(
+    name: string,
+    priority: number,
+    breakChain: boolean,
+    callback: (name: string, args: any) => any,
+  ): void;
+  registerToolExecutionIntercept(
+    name: string,
+    priority: number,
+    callback: (args: any, next: (args: any) => any) => any,
+  ): void;
+}
+
+export interface OptimizerPluginHandler {
+  validate?(instanceId: string, pluginConfig: Record<string, any>): OptimizerPluginDiagnostic[];
+  register(instanceId: string, pluginConfig: Record<string, any>, context: OptimizerPluginContext): void;
+}
+
+export declare function defaultOptimizerConfig(): OptimizerConfig;
+export declare function optimizerInMemoryBackend(): OptimizerBackendSpec;
+export declare function optimizerRedisBackend(url: string, keyPrefix?: string): OptimizerBackendSpec;
+export declare function telemetryComponent(config?: TelemetryComponentConfig): OptimizerComponentSpec;
+export declare function dynamoHintsComponent(config?: DynamoHintsComponentConfig): OptimizerComponentSpec;
+export declare function toolParallelismComponent(config?: ToolParallelismComponentConfig): OptimizerComponentSpec;
+export declare function externalComponent(
+  pluginKind: string,
+  instanceId: string,
+  pluginConfig?: Record<string, any>,
+): OptimizerComponentSpec;
+export declare function registerOptimizerPlugin(
+  pluginKind: string,
+  handler: OptimizerPluginHandler,
+): void;
+export declare function deregisterOptimizerPlugin(pluginKind: string): boolean;

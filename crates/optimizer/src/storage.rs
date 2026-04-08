@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Storage abstraction for the nexus-proxy crate.
+//! Storage abstraction for the nexus-optimizer crate.
 //!
 //! Defines the [`StorageBackend`] trait (RPITIT, not object-safe), the
 //! [`StorageBackendDyn`] companion trait (object-safe, `Pin<Box<dyn Future>>`),
 //! and the [`InMemoryBackend`] implementation of both.
 //!
 //! [`StorageBackend`] provides the persistence seam so backends can be swapped
-//! without touching proxy logic. [`StorageBackendDyn`] adds trie/accumulator
+//! without touching optimizer logic. [`StorageBackendDyn`] adds trie/accumulator
 //! methods and enables `&dyn StorageBackendDyn` usage in the learner pipeline.
 //! [`InMemoryBackend`] validates the trait design and serves as the
 //! test/single-process backend.
@@ -18,12 +18,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::RwLock;
 
-use crate::error::{ProxyError, Result};
+use crate::error::{OptimizerError, Result};
 use crate::trie::serialization::TrieEnvelope;
 use crate::trie::AccumulatorState;
 use crate::types::{ExecutionPlan, RunRecord};
 
-/// The storage abstraction for nexus-proxy persistence.
+/// The storage abstraction for nexus-optimizer persistence.
 ///
 /// All methods return futures that are `Send`, enabling use across tokio task
 /// boundaries. Implementations must be `Send + Sync + 'static`.
@@ -143,7 +143,7 @@ impl StorageBackend for InMemoryBackend {
             let mut guard = self
                 .runs
                 .write()
-                .map_err(|e| ProxyError::Internal(format!("lock poisoned: {e}")));
+                .map_err(|e| OptimizerError::Internal(format!("lock poisoned: {e}")));
             match guard {
                 Ok(ref mut g) => {
                     g.entry(record.agent_id.clone())
@@ -165,7 +165,7 @@ impl StorageBackend for InMemoryBackend {
             let guard = self
                 .plans
                 .read()
-                .map_err(|e| ProxyError::Internal(format!("lock poisoned: {e}")));
+                .map_err(|e| OptimizerError::Internal(format!("lock poisoned: {e}")));
             match guard {
                 Ok(ref g) => Ok(g.get(agent_id).cloned()),
                 Err(e) => Err(e),
@@ -179,7 +179,7 @@ impl StorageBackend for InMemoryBackend {
             let guard = self
                 .runs
                 .read()
-                .map_err(|e| ProxyError::Internal(format!("lock poisoned: {e}")));
+                .map_err(|e| OptimizerError::Internal(format!("lock poisoned: {e}")));
             match guard {
                 Ok(ref g) => Ok(g.get(agent_id).cloned().unwrap_or_default()),
                 Err(e) => Err(e),
@@ -220,7 +220,7 @@ impl StorageBackendDyn for InMemoryBackend {
             let mut guard = self
                 .tries
                 .write()
-                .map_err(|e| ProxyError::Internal(format!("lock poisoned: {e}")));
+                .map_err(|e| OptimizerError::Internal(format!("lock poisoned: {e}")));
             match guard {
                 Ok(ref mut g) => {
                     g.insert(agent_id.to_string(), envelope.clone());
@@ -240,7 +240,7 @@ impl StorageBackendDyn for InMemoryBackend {
             let guard = self
                 .tries
                 .read()
-                .map_err(|e| ProxyError::Internal(format!("lock poisoned: {e}")));
+                .map_err(|e| OptimizerError::Internal(format!("lock poisoned: {e}")));
             match guard {
                 Ok(ref g) => Ok(g.get(agent_id).cloned()),
                 Err(e) => Err(e),
@@ -258,7 +258,7 @@ impl StorageBackendDyn for InMemoryBackend {
             let mut guard = self
                 .accumulators
                 .write()
-                .map_err(|e| ProxyError::Internal(format!("lock poisoned: {e}")));
+                .map_err(|e| OptimizerError::Internal(format!("lock poisoned: {e}")));
             match guard {
                 Ok(ref mut g) => {
                     g.insert(agent_id.to_string(), state.clone());
@@ -278,7 +278,7 @@ impl StorageBackendDyn for InMemoryBackend {
             let guard = self
                 .accumulators
                 .read()
-                .map_err(|e| ProxyError::Internal(format!("lock poisoned: {e}")));
+                .map_err(|e| OptimizerError::Internal(format!("lock poisoned: {e}")));
             match guard {
                 Ok(ref g) => Ok(g.get(agent_id).cloned()),
                 Err(e) => Err(e),
@@ -291,7 +291,7 @@ impl StorageBackendDyn for InMemoryBackend {
         let mut guard = self
             .plans
             .write()
-            .map_err(|e| ProxyError::Internal(format!("lock poisoned: {e}")))?;
+            .map_err(|e| OptimizerError::Internal(format!("lock poisoned: {e}")))?;
         guard.insert(plan.agent_id.clone(), plan.clone());
         Ok(())
     }
@@ -602,12 +602,6 @@ mod tests {
         let loaded = loaded.unwrap();
         assert_eq!(loaded.workflow_name, "any_workflow");
         assert_eq!(loaded.root.name, "any_root");
-    }
-
-    #[test]
-    fn test_nexus_proxy_any_backend_compiles() {
-        // Compile-time assertion: NexusProxy is a concrete type (no generics).
-        fn _assert_type(_proxy: &crate::proxy::NexusProxy) {}
     }
 
     // -----------------------------------------------------------------------

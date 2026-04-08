@@ -33,7 +33,7 @@ use nvidia_nat_nexus_core::{
 
 use crate::convert::json_to_c_string;
 use crate::error::{clear_last_error, last_error_message, set_last_error, NatNexusStatus};
-use crate::types::{FfiEvent, FfiLLMRequest};
+use crate::types::{FfiEvent, FfiLLMRequest, FfiOptimizerPluginContext};
 
 // ---------------------------------------------------------------------------
 // Callback typedefs (mirrored in the C header)
@@ -187,6 +187,24 @@ pub type NatNexusCollectorCb = unsafe extern "C" fn(chunk: *const c_char);
 /// The returned string must be allocated with `malloc` or equivalent; the
 /// runtime will free it.
 pub type NatNexusFinalizerCb = unsafe extern "C" fn() -> *mut c_char;
+
+/// Callback for optimizer hosted plugin validation.
+/// Receives an instance ID and plugin config JSON, returns a JSON array of diagnostics.
+pub type NatNexusOptimizerPluginValidateCb = unsafe extern "C" fn(
+    user_data: *mut libc::c_void,
+    instance_id: *const c_char,
+    plugin_config_json: *const c_char,
+) -> *mut c_char;
+
+/// Callback for optimizer hosted plugin registration.
+/// Receives an instance ID, plugin config JSON, and a plugin context pointer that is
+/// only valid for the duration of the call.
+pub type NatNexusOptimizerPluginRegisterCb = unsafe extern "C" fn(
+    user_data: *mut libc::c_void,
+    instance_id: *const c_char,
+    plugin_config_json: *const c_char,
+    ctx: *mut FfiOptimizerPluginContext,
+) -> NatNexusStatus;
 
 // ---------------------------------------------------------------------------
 // Shared user_data wrapper (ensures cleanup)

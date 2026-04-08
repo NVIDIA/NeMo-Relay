@@ -11,10 +11,10 @@
 use chrono::Utc;
 use uuid::Uuid;
 
-use nvidia_nat_nexus_proxy::trie::{
+use nvidia_nat_nexus_optimizer::trie::{
     AccumulatorState, NodeAccumulators, PredictionTrieNode, RunningStats, TrieEnvelope,
 };
-use nvidia_nat_nexus_proxy::{
+use nvidia_nat_nexus_optimizer::{
     ExecutionPlan, MetadataEnvelope, RedisBackend, RunRecord, StorageBackend, StorageBackendDyn,
 };
 

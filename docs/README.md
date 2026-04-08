@@ -57,9 +57,9 @@ Choose the path that matches what you are trying to do:
 7. [Context Isolation](context-isolation.md)
 8. [Testing](testing.md)
 
-### Using NexusProxy
+### Using the Optimizer Runtime
 
-1. [Proxy Layer](proxy-layer.md)
+1. [Optimizer Layer](optimizer-layer.md)
 2. [Online Learning Engine](online-learning-engine.md)
 3. [Context Isolation](context-isolation.md)
 4. [Testing](testing.md)
@@ -92,9 +92,9 @@ Choose the path that matches what you are trying to do:
 | [Getting Started: Node.js](getting-started-node.md) | Minimal install-to-first-tool-call path for Node.js |
 | [Getting Started: Go](getting-started-go.md) | Minimal install-to-first-tool-call path for Go |
 | [Getting Started: WebAssembly](getting-started-wasm.md) | Minimal install-to-first-tool-call path for WASM |
-| [Recipes](recipes.md) | Task-oriented patterns for logging, ATIF, proxy setup, and context propagation |
-| [Proxy Layer](proxy-layer.md) | NexusProxy configuration, DynamoIntercept, declarative and builder APIs |
-| [Proxy API Reference](proxy-api-reference.md) | Public `nat_nexus.proxy` types, backends, and lifecycle functions |
+| [Recipes](recipes.md) | Task-oriented patterns for logging, ATIF, optimizer setup, and context propagation |
+| [Optimizer Layer](optimizer-layer.md) | Dynamic optimizer config, built-in components, hosted plugins, and runtime lifecycle |
+| [Optimizer API Reference](optimizer-api-reference.md) | Public optimizer config types, diagnostics, runtime helpers, and plugin registration APIs |
 | [Online Learning Engine](online-learning-engine.md) | Prediction trie, sensitivity scoring, Redis persistence, and learner pipeline |
 | [Testing](testing.md) | Test commands, helpers, coverage, and conventions |
 | [Integration Best Practices](integration-best-practices.md) | Patterns for integrating Nexus into agent frameworks |

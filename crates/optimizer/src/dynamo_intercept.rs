@@ -89,7 +89,7 @@ impl DynamoIntercept {
                 let scope_depth = scope_path.len();
                 let call_index = this.call_counter.fetch_add(1, Ordering::Relaxed);
 
-                // Resolve agent ID: scope metadata → root scope name → proxy config
+                // Resolve agent ID: scope metadata → root scope name → optimizer config
                 let effective_agent_id =
                     resolve_agent_id().unwrap_or_else(|| this.agent_id.clone());
 
@@ -158,7 +158,7 @@ impl DynamoIntercept {
                                 nvext.insert("agent_hints".to_string(), val);
                             }
                         }
-                        // Also set the header for backward compat with proxy consumers
+                        // Also set the header for backward compat with optimizer consumers
                         if let Ok(header_val) = serde_json::to_value(&hints) {
                             request
                                 .headers

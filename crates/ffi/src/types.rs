@@ -40,6 +40,21 @@ pub struct FfiAtifExporter(pub nvidia_nat_nexus_core::atif::AtifExporter);
 pub struct FfiOpenTelemetrySubscriber(pub nvidia_nat_nexus_otel::OpenTelemetrySubscriber);
 /// Opaque OpenInference subscriber handle.
 pub struct FfiOpenInferenceSubscriber(pub nvidia_nat_nexus_openinference::OpenInferenceSubscriber);
+/// Opaque optimizer runtime handle.
+pub struct FfiOptimizerRuntime(pub nvidia_nat_nexus_optimizer::OptimizerRuntime);
+/// Opaque optimizer hosted plugin context.
+///
+/// This wrapper contains a borrowed raw pointer to an
+/// `nvidia_nat_nexus_optimizer::HostedRegistrationContext`, not an owned heap allocation.
+/// It is only valid for the duration of the hosted plugin registration callback that receives
+/// it. C callers must not store the pointer, use it after the callback returns, or attempt to
+/// free or drop it.
+///
+/// There is intentionally no `nat_nexus_optimizer_plugin_context_free` function because this FFI
+/// wrapper does not own the underlying registration context.
+pub struct FfiOptimizerPluginContext(
+    pub *mut nvidia_nat_nexus_optimizer::HostedRegistrationContext,
+);
 
 // ---------------------------------------------------------------------------
 // Enums exposed to C
@@ -212,6 +227,17 @@ pub unsafe extern "C" fn nat_nexus_otel_subscriber_free(ptr: *mut FfiOpenTelemet
 pub unsafe extern "C" fn nat_nexus_openinference_subscriber_free(
     ptr: *mut FfiOpenInferenceSubscriber,
 ) {
+    if !ptr.is_null() {
+        drop(unsafe { Box::from_raw(ptr) });
+    }
+}
+
+/// Free an optimizer runtime handle previously returned by `nat_nexus_optimizer_runtime_create`.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `nat_nexus_optimizer_runtime_create`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_optimizer_runtime_free(ptr: *mut FfiOptimizerRuntime) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -748,6 +774,165 @@ mod tests {
             take_string(unsafe { nat_nexus_scope_handle_metadata(&handle) }),
             Some(r#"{"meta":true}"#.into())
         );
+    }
+
+    #[test]
+    fn test_scope_type_conversions_and_handle_null_guards() {
+        let scope_types = [
+            (NatNexusScopeType::Agent, core_types::ScopeType::Agent),
+            (NatNexusScopeType::Function, core_types::ScopeType::Function),
+            (NatNexusScopeType::Tool, core_types::ScopeType::Tool),
+            (NatNexusScopeType::Llm, core_types::ScopeType::Llm),
+            (
+                NatNexusScopeType::Retriever,
+                core_types::ScopeType::Retriever,
+            ),
+            (NatNexusScopeType::Embedder, core_types::ScopeType::Embedder),
+            (NatNexusScopeType::Reranker, core_types::ScopeType::Reranker),
+            (
+                NatNexusScopeType::Guardrail,
+                core_types::ScopeType::Guardrail,
+            ),
+            (
+                NatNexusScopeType::Evaluator,
+                core_types::ScopeType::Evaluator,
+            ),
+            (NatNexusScopeType::Custom, core_types::ScopeType::Custom),
+            (NatNexusScopeType::Unknown, core_types::ScopeType::Unknown),
+        ];
+
+        for (ffi, core) in scope_types {
+            let round_trip: NatNexusScopeType = core.into();
+            assert_eq!(round_trip as i32, ffi as i32);
+            let back: core_types::ScopeType = ffi.into();
+            assert_eq!(back, core);
+        }
+
+        assert!(unsafe { nat_nexus_scope_handle_uuid(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_scope_handle_name(std::ptr::null()) }.is_null());
+        assert_eq!(
+            unsafe { nat_nexus_scope_handle_scope_type(std::ptr::null()) } as i32,
+            NatNexusScopeType::Unknown as i32
+        );
+        assert_eq!(
+            unsafe { nat_nexus_scope_handle_attributes(std::ptr::null()) },
+            0
+        );
+        assert!(unsafe { nat_nexus_scope_handle_parent_uuid(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_scope_handle_data(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_scope_handle_metadata(std::ptr::null()) }.is_null());
+    }
+
+    #[test]
+    fn test_tool_and_llm_handle_accessors_and_null_guards() {
+        let parent_uuid = Uuid::new_v4();
+        let tool = FfiToolHandle(core_types::ToolHandle::new(
+            "tool".into(),
+            core_types::ToolAttributes::LOCAL,
+            Some(parent_uuid),
+            None,
+            None,
+        ));
+        assert_eq!(
+            take_string(unsafe { nat_nexus_tool_handle_uuid(&tool) }),
+            Some(tool.0.uuid.to_string())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_tool_handle_name(&tool) }),
+            Some("tool".into())
+        );
+        assert_eq!(
+            unsafe { nat_nexus_tool_handle_attributes(&tool) },
+            core_types::ToolAttributes::LOCAL.bits()
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_tool_handle_parent_uuid(&tool) }),
+            Some(parent_uuid.to_string())
+        );
+
+        let llm = FfiLLMHandle(core_types::LLMHandle::new(
+            "llm".into(),
+            core_types::LLMAttributes::STATELESS | core_types::LLMAttributes::STREAMING,
+            Some(parent_uuid),
+            None,
+            None,
+        ));
+        assert_eq!(
+            take_string(unsafe { nat_nexus_llm_handle_uuid(&llm) }),
+            Some(llm.0.uuid.to_string())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_llm_handle_name(&llm) }),
+            Some("llm".into())
+        );
+        assert_eq!(
+            unsafe { nat_nexus_llm_handle_attributes(&llm) },
+            (core_types::LLMAttributes::STATELESS | core_types::LLMAttributes::STREAMING).bits()
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_llm_handle_parent_uuid(&llm) }),
+            Some(parent_uuid.to_string())
+        );
+
+        assert!(unsafe { nat_nexus_tool_handle_uuid(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_tool_handle_name(std::ptr::null()) }.is_null());
+        assert_eq!(
+            unsafe { nat_nexus_tool_handle_attributes(std::ptr::null()) },
+            0
+        );
+        assert!(unsafe { nat_nexus_tool_handle_parent_uuid(std::ptr::null()) }.is_null());
+
+        assert!(unsafe { nat_nexus_llm_handle_uuid(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_llm_handle_name(std::ptr::null()) }.is_null());
+        assert_eq!(
+            unsafe { nat_nexus_llm_handle_attributes(std::ptr::null()) },
+            0
+        );
+        assert!(unsafe { nat_nexus_llm_handle_parent_uuid(std::ptr::null()) }.is_null());
+    }
+
+    #[test]
+    fn test_llm_request_null_inputs_event_null_guards_and_free_nulls() {
+        let request_ptr = unsafe { nat_nexus_llm_request_new(std::ptr::null(), std::ptr::null()) };
+        assert!(!request_ptr.is_null());
+        assert_eq!(
+            take_string(unsafe { nat_nexus_llm_request_headers(request_ptr) }),
+            Some("{}".into())
+        );
+        assert_eq!(
+            take_string(unsafe { nat_nexus_llm_request_content(request_ptr) }),
+            Some("null".into())
+        );
+        unsafe { nat_nexus_llm_request_free(request_ptr) };
+
+        assert!(unsafe { nat_nexus_llm_request_headers(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_llm_request_content(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_event_uuid(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_event_name(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_event_kind(std::ptr::null()) }.is_null());
+        assert_eq!(unsafe { nat_nexus_event_attributes(std::ptr::null()) }, 0);
+        assert!(unsafe { nat_nexus_event_data(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_event_metadata(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_event_timestamp(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_event_input(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_event_output(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_event_model_name(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_event_tool_call_id(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_event_parent_uuid(std::ptr::null()) }.is_null());
+        assert!(unsafe { nat_nexus_event_scope_type(std::ptr::null()) }.is_null());
+
+        unsafe {
+            nat_nexus_scope_handle_free(std::ptr::null_mut());
+            nat_nexus_tool_handle_free(std::ptr::null_mut());
+            nat_nexus_llm_handle_free(std::ptr::null_mut());
+            nat_nexus_llm_request_free(std::ptr::null_mut());
+            nat_nexus_event_free(std::ptr::null_mut());
+            nat_nexus_scope_stack_free(std::ptr::null_mut());
+            nat_nexus_atif_exporter_free(std::ptr::null_mut());
+            nat_nexus_otel_subscriber_free(std::ptr::null_mut());
+            nat_nexus_openinference_subscriber_free(std::ptr::null_mut());
+            nat_nexus_optimizer_runtime_free(std::ptr::null_mut());
+        }
     }
 
     #[test]

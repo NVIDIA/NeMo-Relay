@@ -16,12 +16,12 @@
 //! # Metadata Convention
 //!
 //! Manual latency sensitivity is stored in scope metadata under the JSON path
-//! `/nexus_proxy/latency_sensitivity` as a positive integer.
+//! `/nexus_optimizer/latency_sensitivity` as a positive integer.
 
 use nvidia_nat_nexus_core::{current_scope_stack, ScopeType};
 
 /// Metadata key path for manual latency sensitivity annotation.
-pub const LATENCY_SENSITIVITY_POINTER: &str = "/nexus_proxy/latency_sensitivity";
+pub const LATENCY_SENSITIVITY_POINTER: &str = "/nexus_optimizer/latency_sensitivity";
 
 /// Extracts the current function call path from the Nexus scope stack.
 ///
@@ -47,7 +47,7 @@ pub fn extract_scope_path() -> Vec<String> {
 
 /// Reads the maximum manual latency sensitivity from all scopes in the current scope stack.
 ///
-/// Walks all scopes and checks metadata for `/nexus_proxy/latency_sensitivity`.
+/// Walks all scopes and checks metadata for `/nexus_optimizer/latency_sensitivity`.
 /// Uses max-merge semantics: if multiple scopes have annotations, the highest wins.
 ///
 /// Returns `None` if no manual annotation exists or the scope stack is unavailable.
@@ -99,10 +99,10 @@ pub fn set_latency_sensitivity(value: u32) -> std::result::Result<(), String> {
 
     let meta = scope.metadata.get_or_insert_with(|| serde_json::json!({}));
     if let Some(obj) = meta.as_object_mut() {
-        let nexus_proxy = obj
-            .entry("nexus_proxy")
+        let nexus_optimizer = obj
+            .entry("nexus_optimizer")
             .or_insert_with(|| serde_json::json!({}));
-        if let Some(np_obj) = nexus_proxy.as_object_mut() {
+        if let Some(np_obj) = nexus_optimizer.as_object_mut() {
             np_obj.insert(
                 "latency_sensitivity".to_string(),
                 serde_json::json!(effective),

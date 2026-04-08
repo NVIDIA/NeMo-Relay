@@ -140,7 +140,7 @@ asyncio.run(main())
 Use this when you want middleware to stay JSON-based while application code
 works with dataclasses or Pydantic models.
 
-## Enable NexusProxy with `InMemoryBackend`
+## Enable Optimizer Runtime with In-Memory State
 
 ```python
 import asyncio
@@ -149,10 +149,21 @@ import nat_nexus
 
 
 async def main() -> None:
-    nat_nexus.proxy.set_use_proxy(True)
-    nat_nexus.proxy.set_proxy_backend(nat_nexus.proxy.InMemoryBackend())
-    nat_nexus.proxy.set_dynamo_intercept(True)
-    await nat_nexus.proxy.ensure_proxy()
+    runtime = nat_nexus.optimizer.OptimizerRuntime(
+        nat_nexus.optimizer.OptimizerConfig(
+            state=nat_nexus.optimizer.StateConfig(
+                backend=nat_nexus.optimizer.BackendSpec.in_memory()
+            ),
+            components=[
+                nat_nexus.optimizer.TelemetryComponent(
+                    learners=["latency_sensitivity"]
+                ),
+                nat_nexus.optimizer.DynamoHintsComponent(),
+                nat_nexus.optimizer.ToolParallelismComponent(),
+            ],
+        )
+    )
+    await runtime.register()
 
 
 asyncio.run(main())
@@ -160,7 +171,7 @@ asyncio.run(main())
 
 Use this for local development, tests, and single-process runs.
 
-## Enable NexusProxy with `RedisBackend`
+## Enable Optimizer Runtime with Redis State
 
 ```python
 import asyncio
@@ -169,21 +180,31 @@ import nat_nexus
 
 
 async def main() -> None:
-    backend = await nat_nexus.proxy.RedisBackend.connect(
-        "redis://127.0.0.1:6379",
-        "nexus:",
+    runtime = nat_nexus.optimizer.OptimizerRuntime(
+        nat_nexus.optimizer.OptimizerConfig(
+            state=nat_nexus.optimizer.StateConfig(
+                backend=nat_nexus.optimizer.BackendSpec.redis(
+                    "redis://127.0.0.1:6379",
+                    "nexus:",
+                )
+            ),
+            components=[
+                nat_nexus.optimizer.TelemetryComponent(
+                    learners=["latency_sensitivity"]
+                ),
+                nat_nexus.optimizer.DynamoHintsComponent(),
+                nat_nexus.optimizer.ToolParallelismComponent(),
+            ],
+        )
     )
-    nat_nexus.proxy.set_use_proxy(True)
-    nat_nexus.proxy.set_proxy_backend(backend)
-    nat_nexus.proxy.set_dynamo_intercept(True)
-    await nat_nexus.proxy.ensure_proxy()
+    await runtime.register()
 
 
 asyncio.run(main())
 ```
 
 This requires Redis support in the underlying build. See
-[Proxy Layer](proxy-layer.md) and [Proxy API Reference](proxy-api-reference.md)
+[Optimizer Layer](optimizer-layer.md) and [Optimizer API Reference](optimizer-api-reference.md)
 for the feature-flagged build requirements.
 
 ## Propagate Scope Context to Worker Threads
@@ -229,7 +250,7 @@ Checklist:
 
 - [Getting Started: Python](getting-started-python.md)
 - [Typed API Reference](typed-api-reference.md)
-- [Proxy API Reference](proxy-api-reference.md)
+- [Optimizer API Reference](optimizer-api-reference.md)
 - [Context Isolation](context-isolation.md)
 - [Observability with OpenTelemetry](observability-with-opentelemetry.md)
 - [Observability with OpenInference](observability-with-openinference.md)

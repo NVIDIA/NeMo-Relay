@@ -5,10 +5,10 @@ SPDX-License-Identifier: Apache-2.0
 
 # Online Learning Engine
 
-The online learning engine observes agent executions in real-time, builds statistical models of each node's behavior, and produces predictions for future calls. It operates entirely within the NexusProxy drain task -- no separate service or batch job is required.
+The online learning engine observes agent executions in real-time, builds statistical models of each node's behavior, and produces predictions for future calls. It operates entirely within the optimizer runtime's telemetry pipeline -- no separate service or batch job is required.
 
-The implementation lives in the `nvidia-nat-nexus-proxy` crate. Redis-backed
-persistence is optional and depends on enabling the proxy crate's
+The implementation lives in the `nvidia-nat-nexus-optimizer` crate. Redis-backed
+persistence is optional and depends on enabling the optimizer crate's
 `redis-backend` feature.
 
 ## Overview
@@ -59,7 +59,7 @@ The engine learns from the agent's actual execution patterns, not from static co
 
 ### Drain Task
 
-The drain task is an async background task spawned by `NexusProxy::register()`. It reads events from the unbounded mpsc channel, constructs `RunRecord`s from event pairs (Start/End), and invokes the learner pipeline after each completed run. The task exits cleanly when the channel sender is dropped (proxy shutting down).
+The drain task is an async background task spawned by `OptimizerRuntime::register()` when the telemetry component is enabled. It reads events from the unbounded mpsc channel, constructs `RunRecord`s from event pairs (Start/End), and invokes the learner pipeline after each completed run. The task exits cleanly when the channel sender is dropped (optimizer shutting down).
 
 ### RunRecord
 
@@ -182,7 +182,7 @@ config = nat_nexus.SensitivityConfig(
 ```
 
 ```rust
-use nvidia_nat_nexus_proxy::trie::SensitivityConfig;
+use nvidia_nat_nexus_optimizer::trie::SensitivityConfig;
 
 let config = SensitivityConfig {
     sensitivity_scale: 5,
@@ -230,7 +230,7 @@ After 4-8 observed runs, the sensitivity scores converge to stable values that r
 The builder takes accumulated stats, computes sensitivity scores, and builds the `PredictionTrieNode` tree:
 
 ```rust
-use nvidia_nat_nexus_proxy::trie::PredictionTrieBuilder;
+use nvidia_nat_nexus_optimizer::trie::PredictionTrieBuilder;
 
 // From scratch
 let mut builder = PredictionTrieBuilder::new(Some(SensitivityConfig::default()));
@@ -260,7 +260,7 @@ The lookup provides a three-level fallback chain for fast hot-path reads:
 5. `None` if the trie has no predictions at all
 
 ```rust
-use nvidia_nat_nexus_proxy::trie::lookup::PredictionTrieLookup;
+use nvidia_nat_nexus_optimizer::trie::lookup::PredictionTrieLookup;
 
 let lookup = PredictionTrieLookup::new(&trie_root);
 let path = vec!["classify".to_string()];
@@ -293,12 +293,17 @@ The default backend. Zero-config, single-process only.
 - **Thread safety:** Uses `std::sync::RwLock` internally (fast for in-memory operations)
 
 ```python
-nat_nexus.set_proxy_backend(nat_nexus.InMemoryBackend())
+state = nat_nexus.optimizer.StateConfig(
+    backend=nat_nexus.optimizer.BackendSpec.in_memory()
+)
 ```
 
 ```rust
-use nvidia_nat_nexus_proxy::storage::InMemoryBackend;
-set_proxy_backend(AnyBackend::InMemory(InMemoryBackend::new()));
+use nvidia_nat_nexus_optimizer::{BackendSpec, StateConfig};
+
+let state = StateConfig {
+    backend: BackendSpec::in_memory(),
+};
 ```
 
 ### RedisBackend
@@ -311,14 +316,17 @@ Cross-process shared state with automatic reconnection.
 - **Feature gate:** Requires `redis-backend` Cargo feature
 
 ```python
-backend = await nat_nexus.RedisBackend.connect("redis://localhost:6379", "nexus:")
-nat_nexus.set_proxy_backend(backend)
+state = nat_nexus.optimizer.StateConfig(
+    backend=nat_nexus.optimizer.BackendSpec.redis("redis://localhost:6379", "nexus:")
+)
 ```
 
 ```rust
-use nvidia_nat_nexus_proxy::redis::RedisBackend;
-let backend = RedisBackend::new("redis://localhost:6379", "nexus:").await?;
-set_proxy_backend(AnyBackend::Redis(backend));
+use nvidia_nat_nexus_optimizer::{BackendSpec, StateConfig};
+
+let state = StateConfig {
+    backend: BackendSpec::redis("redis://localhost:6379", "nexus:"),
+};
 ```
 
 ### Redis Key Layout
@@ -340,10 +348,10 @@ Run records are stored individually and indexed via a Redis LIST for ordered ret
 The `Learner` trait is object-safe and designed for pipeline composition:
 
 ```rust
-use nvidia_nat_nexus_proxy::learner::Learner;
-use nvidia_nat_nexus_proxy::storage::StorageBackendDyn;
-use nvidia_nat_nexus_proxy::types::{HotCache, RunRecord};
-use nvidia_nat_nexus_proxy::error::Result;
+use nvidia_nat_nexus_optimizer::learner::Learner;
+use nvidia_nat_nexus_optimizer::storage::StorageBackendDyn;
+use nvidia_nat_nexus_optimizer::types::{HotCache, RunRecord};
+use nvidia_nat_nexus_optimizer::error::Result;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
@@ -409,6 +417,6 @@ The key validation: after 6+ runs, `classify_sensitivity > mean(parallel_branch_
 
 ## Cross-References
 
-- [Proxy Layer](proxy-layer.md) -- NexusProxy configuration, DynamoIntercept, declarative and builder APIs
+- [Optimizer Layer](optimizer-layer.md) -- dynamic optimizer config, built-in components, and runtime lifecycle
 - [Middleware Pipeline](middleware-pipeline.md) -- How intercepts are ordered and executed
 - [Context Isolation](context-isolation.md) -- Scope stack and `resolve_agent_id()` for multi-tenant isolation

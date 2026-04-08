@@ -23,7 +23,7 @@ use std::pin::Pin;
 
 use redis::aio::ConnectionManager;
 
-use crate::error::{ProxyError, Result};
+use crate::error::{OptimizerError, Result};
 use crate::storage::{StorageBackend, StorageBackendDyn};
 use crate::trie::serialization::TrieEnvelope;
 use crate::trie::AccumulatorState;
@@ -49,15 +49,15 @@ impl RedisBackend {
     ///
     /// # Errors
     ///
-    /// Returns [`ProxyError::Storage`] if the client cannot be created or the
+    /// Returns [`OptimizerError::Storage`] if the client cannot be created or the
     /// connection cannot be established.
     pub async fn new(url: &str, key_prefix: impl Into<String>) -> Result<Self> {
         let client = redis::Client::open(url)
-            .map_err(|e| ProxyError::Storage(format!("redis client: {e}")))?;
+            .map_err(|e| OptimizerError::Storage(format!("redis client: {e}")))?;
         let conn = client
             .get_connection_manager()
             .await
-            .map_err(|e| ProxyError::Storage(format!("redis connection: {e}")))?;
+            .map_err(|e| OptimizerError::Storage(format!("redis connection: {e}")))?;
         Ok(Self {
             conn,
             key_prefix: key_prefix.into(),
@@ -84,7 +84,7 @@ impl StorageBackend for RedisBackend {
         let run_id_str = record.id.to_string();
 
         async move {
-            let json = json.map_err(ProxyError::Serialization)?;
+            let json = json.map_err(OptimizerError::Serialization)?;
             redis::pipe()
                 .atomic()
                 .cmd("SET")
@@ -95,7 +95,7 @@ impl StorageBackend for RedisBackend {
                 .arg(&run_id_str)
                 .exec_async(&mut conn)
                 .await
-                .map_err(|e| ProxyError::Storage(format!("redis store_run pipeline: {e}")))?;
+                .map_err(|e| OptimizerError::Storage(format!("redis store_run pipeline: {e}")))?;
             Ok(())
         }
     }
@@ -112,10 +112,11 @@ impl StorageBackend for RedisBackend {
                 .arg(&key)
                 .query_async(&mut conn)
                 .await
-                .map_err(|e| ProxyError::Storage(format!("redis GET plan: {e}")))?;
+                .map_err(|e| OptimizerError::Storage(format!("redis GET plan: {e}")))?;
             match maybe_json {
                 Some(json) => {
-                    let plan = serde_json::from_str(&json).map_err(ProxyError::Serialization)?;
+                    let plan =
+                        serde_json::from_str(&json).map_err(OptimizerError::Serialization)?;
                     Ok(Some(plan))
                 }
                 None => Ok(None),
@@ -136,7 +137,7 @@ impl StorageBackend for RedisBackend {
                 .arg(-1i64)
                 .query_async(&mut conn)
                 .await
-                .map_err(|e| ProxyError::Storage(format!("redis LRANGE runs: {e}")))?;
+                .map_err(|e| OptimizerError::Storage(format!("redis LRANGE runs: {e}")))?;
 
             let mut records = Vec::with_capacity(ids.len());
             for id_str in &ids {
@@ -145,10 +146,10 @@ impl StorageBackend for RedisBackend {
                     .arg(&key)
                     .query_async(&mut conn)
                     .await
-                    .map_err(|e| ProxyError::Storage(format!("redis GET run: {e}")))?;
+                    .map_err(|e| OptimizerError::Storage(format!("redis GET run: {e}")))?;
                 if let Some(json) = maybe_json {
                     let record: RunRecord =
-                        serde_json::from_str(&json).map_err(ProxyError::Serialization)?;
+                        serde_json::from_str(&json).map_err(OptimizerError::Serialization)?;
                     records.push(record);
                 }
             }
@@ -189,13 +190,13 @@ impl StorageBackendDyn for RedisBackend {
         let json = serde_json::to_string(envelope);
 
         Box::pin(async move {
-            let json = json.map_err(ProxyError::Serialization)?;
+            let json = json.map_err(OptimizerError::Serialization)?;
             redis::cmd("SET")
                 .arg(&key)
                 .arg(&json)
                 .exec_async(&mut conn)
                 .await
-                .map_err(|e| ProxyError::Storage(format!("redis SET trie: {e}")))?;
+                .map_err(|e| OptimizerError::Storage(format!("redis SET trie: {e}")))?;
             Ok(())
         })
     }
@@ -212,11 +213,11 @@ impl StorageBackendDyn for RedisBackend {
                 .arg(&key)
                 .query_async(&mut conn)
                 .await
-                .map_err(|e| ProxyError::Storage(format!("redis GET trie: {e}")))?;
+                .map_err(|e| OptimizerError::Storage(format!("redis GET trie: {e}")))?;
             match maybe_json {
                 Some(json) => {
                     let envelope =
-                        serde_json::from_str(&json).map_err(ProxyError::Serialization)?;
+                        serde_json::from_str(&json).map_err(OptimizerError::Serialization)?;
                     Ok(Some(envelope))
                 }
                 None => Ok(None),
@@ -234,13 +235,13 @@ impl StorageBackendDyn for RedisBackend {
         let json = serde_json::to_string(state);
 
         Box::pin(async move {
-            let json = json.map_err(ProxyError::Serialization)?;
+            let json = json.map_err(OptimizerError::Serialization)?;
             redis::cmd("SET")
                 .arg(&key)
                 .arg(&json)
                 .exec_async(&mut conn)
                 .await
-                .map_err(|e| ProxyError::Storage(format!("redis SET accumulators: {e}")))?;
+                .map_err(|e| OptimizerError::Storage(format!("redis SET accumulators: {e}")))?;
             Ok(())
         })
     }
@@ -257,10 +258,11 @@ impl StorageBackendDyn for RedisBackend {
                 .arg(&key)
                 .query_async(&mut conn)
                 .await
-                .map_err(|e| ProxyError::Storage(format!("redis GET accumulators: {e}")))?;
+                .map_err(|e| OptimizerError::Storage(format!("redis GET accumulators: {e}")))?;
             match maybe_json {
                 Some(json) => {
-                    let state = serde_json::from_str(&json).map_err(ProxyError::Serialization)?;
+                    let state =
+                        serde_json::from_str(&json).map_err(OptimizerError::Serialization)?;
                     Ok(Some(state))
                 }
                 None => Ok(None),

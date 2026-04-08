@@ -17,6 +17,7 @@ use std::ffi::CString;
 use libc::c_char;
 
 use nvidia_nat_nexus_core::NexusError;
+use nvidia_nat_nexus_optimizer::OptimizerError;
 
 /// Status codes returned by all FFI functions.
 ///
@@ -131,6 +132,23 @@ pub fn status_from_error(e: &NexusError) -> NatNexusStatus {
     NatNexusStatus::from(e)
 }
 
+/// Convert an `OptimizerError` to an `NatNexusStatus`, storing the error message
+/// in thread-local storage.
+pub fn status_from_optimizer_error(e: &OptimizerError) -> NatNexusStatus {
+    set_last_error(&e.to_string());
+    match e {
+        OptimizerError::NotFound(_) => NatNexusStatus::NotFound,
+        OptimizerError::InvalidConfig(_) | OptimizerError::Serialization(_) => {
+            NatNexusStatus::InvalidArg
+        }
+        OptimizerError::Storage(_)
+        | OptimizerError::Internal(_)
+        | OptimizerError::RegistrationFailed(_)
+        | OptimizerError::ChannelClosed(_) => NatNexusStatus::Internal,
+        OptimizerError::Redis(_) => NatNexusStatus::Internal,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +224,35 @@ mod tests {
             let status = status_from_error(&error);
             assert_eq!(status, expected_status);
             assert_eq!(NatNexusStatus::from(&error), expected_status);
+            assert!(last_error_message().unwrap().contains(&error.to_string()));
+        }
+    }
+
+    #[test]
+    fn test_status_from_optimizer_error_maps_variants_and_sets_message() {
+        let cases = [
+            (
+                OptimizerError::NotFound("missing".into()),
+                NatNexusStatus::NotFound,
+            ),
+            (
+                OptimizerError::InvalidConfig("bad config".into()),
+                NatNexusStatus::InvalidArg,
+            ),
+            (
+                OptimizerError::Internal("boom".into()),
+                NatNexusStatus::Internal,
+            ),
+            (
+                OptimizerError::RegistrationFailed("subscriber".into()),
+                NatNexusStatus::Internal,
+            ),
+        ];
+
+        for (error, expected_status) in cases {
+            clear_last_error();
+            let status = status_from_optimizer_error(&error);
+            assert_eq!(status, expected_status);
             assert!(last_error_message().unwrap().contains(&error.to_string()));
         }
     }
