@@ -459,6 +459,7 @@ index 00000000..d2ffef76
 +        "Superstep End",
 +        data={"step": step, "task_count": task_count},
 +    )
++
 diff --git a/libs/langgraph/langgraph/pregel/_loop.py b/libs/langgraph/langgraph/pregel/_loop.py
 index 4f9c55d2..cabe5d3d 100644
 --- a/libs/langgraph/langgraph/pregel/_loop.py
