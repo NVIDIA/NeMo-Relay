@@ -519,6 +519,7 @@ pub fn nat_nexus_llm_call(
         opt_js_to_json(&data)?,
         opt_js_to_json(&metadata)?,
         model_name,
+        None,
     )
     .map(WasmLLMHandle::from)
     .map_err(to_js_err)
@@ -543,6 +544,7 @@ pub fn nat_nexus_llm_call_end(
         response_json,
         opt_js_to_json(&data)?,
         opt_js_to_json(&metadata)?,
+        None,
     )
     .map_err(to_js_err)
 }
@@ -577,6 +579,7 @@ pub async fn nat_nexus_llm_call_execute(
     model_name: Option<String>,
     codec_decode: Option<Function>,
     codec_encode: Option<Function>,
+    response_codec_decode: Option<Function>,
 ) -> Result<JsValue, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
@@ -592,6 +595,7 @@ pub async fn nat_nexus_llm_call_execute(
         (Some(d), Some(e)) => Some(callable::wrap_js_codec(d, e)),
         _ => None,
     };
+    let response_codec = response_codec_decode.map(callable::wrap_js_response_codec);
 
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
     let data_json = opt_js_to_json(&data)?;
@@ -608,6 +612,7 @@ pub async fn nat_nexus_llm_call_execute(
                 metadata_json,
                 model_name,
                 codec,
+                response_codec,
             )
             .await
         })
@@ -652,6 +657,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
     model_name: Option<String>,
     codec_decode: Option<Function>,
     codec_encode: Option<Function>,
+    response_codec_decode: Option<Function>,
 ) -> Result<WasmLlmStream, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
@@ -695,6 +701,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
         (Some(d), Some(e)) => Some(callable::wrap_js_codec(d, e)),
         _ => None,
     };
+    let response_codec = response_codec_decode.map(callable::wrap_js_response_codec);
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
     let data_json = opt_js_to_json(&data)?;
     let metadata_json = opt_js_to_json(&metadata)?;
@@ -712,6 +719,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
                 metadata_json,
                 model_name,
                 codec,
+                response_codec,
             )
             .await
         })

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for LangGraph superstep boundary event emission (LIFE-03).
+"""Unit tests for LangGraph superstep boundary event emission.
 
 Validates that emit_superstep_start and emit_superstep_end in _nat_nexus.py
 emit correct Nexus Mark events with expected name, step, and task_count fields.
@@ -25,7 +25,7 @@ from nat_nexus import create_scope_stack, set_thread_scope_stack
 
 
 class TestSuperstepEvents:
-    """Validate superstep boundary event emission (LIFE-03)."""
+    """Validate superstep boundary event emission."""
 
     @pytest.fixture(autouse=True)
     def scope_stack(self):
@@ -43,7 +43,7 @@ class TestSuperstepEvents:
         nat_nexus.subscribers.deregister("test-superstep-collector")
 
     def test_superstep_start_emits_event(self, scope_stack: Any, events: list[Any]) -> None:
-        """emit_superstep_start emits a Mark event with correct name and data fields (LIFE-03)."""
+        """emit_superstep_start emits a Mark event with correct name and data fields."""
         graph_handle = push_graph_scope("start_graph")
         emit_superstep_start(step=0, task_count=2)
         pop_graph_scope(graph_handle)
@@ -55,7 +55,7 @@ class TestSuperstepEvents:
         assert ev.data["task_count"] == 2
 
     def test_superstep_end_emits_event(self, scope_stack: Any, events: list[Any]) -> None:
-        """emit_superstep_end emits a Mark event with correct name and data fields (LIFE-03)."""
+        """emit_superstep_end emits a Mark event with correct name and data fields."""
         graph_handle = push_graph_scope("end_graph")
         emit_superstep_end(step=0, task_count=2)
         pop_graph_scope(graph_handle)

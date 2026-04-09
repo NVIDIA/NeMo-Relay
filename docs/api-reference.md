@@ -151,6 +151,8 @@ result = await nat_nexus.llm.execute(
     data: Any | None = None,
     metadata: Any | None = None,
     model_name: str | None = None,
+    codec: LlmCodec | None = None,              # request codec instance
+    response_codec: LlmResponseCodec | None = None,  # response codec instance
 ) -> dict
 
 # Execute a streaming LLM call
@@ -166,8 +168,16 @@ stream = await nat_nexus.llm.stream_execute(
     data: Any | None = None,
     metadata: Any | None = None,
     model_name: str | None = None,
+    codec: LlmCodec | None = None,              # request codec instance
+    response_codec: LlmResponseCodec | None = None,  # response codec instance
 ) -> LlmStream
 ```
+
+The `codec` parameter enables structured `AnnotatedLLMRequest` for
+request intercepts and populates `LLMStartEvent.annotated_request`. The
+`response_codec` parameter enables structured `AnnotatedLLMResponse` on
+`LLMEndEvent.annotated_response`. Both accept codec object instances (not
+strings). See [LLM Codecs](llm-codecs.md) for details.
 
 For managed LLM execute APIs, sanitize guardrails affect lifecycle event
 payloads (`Start.input`, `End.output`) rather than the request passed into
@@ -406,6 +416,8 @@ Additionally:
 | `output` | `Any \| None` | Post-guardrail response (End events) |
 | `model_name` | `str \| None` | LLM model name |
 | `tool_call_id` | `str \| None` | Tool correlation ID |
+| `annotated_request` | `AnnotatedLLMRequest \| None` | Structured request from codec decode (LLMStart events only) |
+| `annotated_response` | `AnnotatedLLMResponse \| None` | Structured response from response codec decode (LLMEnd events only) |
 
 Scope `Start` events are emitted after the scope has been pushed, and scope
 `End` events are emitted after the scope has been popped. Subscribers that call
@@ -509,6 +521,40 @@ stream collectors are fallible.
 | `scope_local.register_subscriber` | `ScopeRegisterSubscriber` | `scopeRegisterSubscriber` | `scope_register_subscriber` | `nat_nexus_scope_register_subscriber` |
 
 All scope-local registration functions follow the same naming pattern: prefix the global registration name with `scope_register_` (FFI/WASM), `scopeRegister` (Node.js), `ScopeRegister` (Go), or place it in the `scope_local` module (Python).
+
+## Built-In Codec Types
+
+Nexus ships three built-in codecs that implement both request codec
+(`LlmCodec`) and response codec (`LlmResponseCodec`). Each can be used
+for both `codec=` and `response_codec=` parameters.
+
+```python
+from nat_nexus import OpenAIChatCodec, OpenAIResponsesCodec, AnthropicMessagesCodec
+
+# Each codec instance exposes decode(), encode(), and decode_response()
+codec = OpenAIChatCodec()
+annotated_req = codec.decode(request)                      # -> AnnotatedLLMRequest
+encoded_req = codec.encode(annotated_req, original_req)    # -> LLMRequest
+annotated_resp = codec.decode_response(raw_response)       # -> AnnotatedLLMResponse
+```
+
+### AnnotatedLLMResponse Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | `str \| None` | Response ID from the API |
+| `model` | `str \| None` | Model that served the request |
+| `message` | `Any \| None` | Assistant's response content |
+| `tool_calls` | `list[dict] \| None` | Tool calls with parsed JSON arguments |
+| `finish_reason` | `str \| None` | Normalized: `"complete"`, `"length"`, `"tool_use"`, `"content_filter"` |
+| `usage` | `dict \| None` | Token usage (`prompt_tokens`, `completion_tokens`, `total_tokens`, `cache_read_tokens`, `cache_write_tokens`) |
+| `api_specific` | `dict \| None` | Provider-specific data |
+| `extra` | `dict` | Unmodeled top-level fields |
+
+Helper methods: `response_text()` returns the text content,
+`has_tool_calls()` returns `True` if tool calls are present.
+
+See [LLM Codecs](llm-codecs.md) for the full codec system documentation.
 
 ## ATIF Export
 

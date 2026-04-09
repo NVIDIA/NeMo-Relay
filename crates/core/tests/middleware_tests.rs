@@ -1790,6 +1790,7 @@ async fn test_llm_conditional_guardrail_rejects() {
         None,
         None,
         None,
+        None,
     )
     .await;
 
@@ -1877,6 +1878,7 @@ async fn test_llm_execution_intercept_chain() {
         func,
         None,
         LLMAttributes::empty(),
+        None,
         None,
         None,
         None,

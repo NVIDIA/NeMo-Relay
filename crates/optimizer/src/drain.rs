@@ -123,6 +123,20 @@ impl RunAccumulator {
                         .find(|c| c.name == event_name && c.ended_at.is_none())
                     {
                         call.ended_at = Some(*event.timestamp());
+
+                        // Extract structured telemetry from annotated response
+                        if let Event::LLMEnd(ref inner) = event {
+                            if let Some(ref annotated) = inner.annotated_response {
+                                if let Some(ref usage) = annotated.usage {
+                                    call.output_tokens = usage.completion_tokens.map(|t| t as u32);
+                                    call.prompt_tokens = usage.prompt_tokens.map(|t| t as u32);
+                                    call.total_tokens = usage.total_tokens.map(|t| t as u32);
+                                }
+                                call.model_name = annotated.model.clone();
+                                call.tool_call_count =
+                                    annotated.tool_calls.as_ref().map(|tc| tc.len() as u32);
+                            }
+                        }
                     }
                 }
                 self.event_roots.remove(&event.uuid());
@@ -156,7 +170,7 @@ pub(crate) async fn drain_task(
 
     while let Some(event) = rx.recv().await {
         if let Some(completed_run) = accumulator.process_event(&event) {
-            // Store the completed run (WIRE-04: async, not on hot path)
+            // Store the completed run (async, not on hot path)
             if let Err(e) = backend.store_run_dyn(&completed_run).await {
                 // Log error but continue -- don't crash the drain
                 eprintln!("nexus-optimizer drain: store_run failed: {e}");
@@ -174,7 +188,7 @@ pub(crate) async fn drain_task(
                 }
             }
 
-            // Update hot cache with latest plan from backend (WIRE-05)
+            // Update hot cache with latest plan from backend
             match backend.load_plan_dyn(&agent_id).await {
                 Ok(plan) => {
                     if let Ok(mut guard) = hot_cache.write() {
@@ -245,6 +259,7 @@ mod tests {
                 nvidia_nat_nexus_core::LLMAttributes::empty(),
                 None,
                 None,
+                None,
             ),
             (EventType::End, Some(ScopeType::Llm)) => Event::llm_end(
                 parent_uuid,
@@ -253,6 +268,7 @@ mod tests {
                 None,
                 None,
                 nvidia_nat_nexus_core::LLMAttributes::empty(),
+                None,
                 None,
                 None,
             ),
@@ -662,5 +678,230 @@ mod tests {
         let cached_plan = guard.plan.as_ref().unwrap();
         assert_eq!(cached_plan.agent_id, "agent-1");
         assert_eq!(cached_plan.parallel_groups.len(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Annotated response extraction tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: create an LLMEnd event with an annotated_response.
+    fn make_llm_end_with_annotated(
+        uuid: Uuid,
+        parent_uuid: Option<Uuid>,
+        name: &str,
+        annotated: nvidia_nat_nexus_core::AnnotatedLLMResponse,
+    ) -> Event {
+        Event::llm_end(
+            parent_uuid,
+            uuid,
+            name,
+            None,
+            None,
+            nvidia_nat_nexus_core::LLMAttributes::empty(),
+            None,
+            None,
+            Some(std::sync::Arc::new(annotated)),
+        )
+    }
+
+    #[test]
+    fn test_accumulator_extracts_annotated_response() {
+        use nvidia_nat_nexus_core::{AnnotatedLLMResponse, ResponseToolCall, Usage};
+
+        let mut acc = RunAccumulator::new("agent-1".to_string());
+
+        // Agent Start
+        let agent_start = make_agent_start();
+        let root_uuid = agent_start.uuid();
+        acc.process_event(&agent_start);
+
+        // LLM Start
+        let llm_uuid = Uuid::new_v4();
+        let llm_start = make_event(
+            EventType::Start,
+            Some(ScopeType::Llm),
+            Some("gpt-4o"),
+            llm_uuid,
+            Some(root_uuid),
+        );
+        acc.process_event(&llm_start);
+
+        // LLM End with full annotated response
+        let annotated = AnnotatedLLMResponse {
+            id: Some("chatcmpl-123".into()),
+            model: Some("gpt-4o".into()),
+            message: None,
+            tool_calls: Some(vec![
+                ResponseToolCall {
+                    id: "call_1".into(),
+                    name: "search".into(),
+                    arguments: serde_json::json!({"q": "test"}),
+                },
+                ResponseToolCall {
+                    id: "call_2".into(),
+                    name: "fetch".into(),
+                    arguments: serde_json::json!({"url": "http://example.com"}),
+                },
+            ]),
+            finish_reason: None,
+            usage: Some(Usage {
+                prompt_tokens: Some(50),
+                completion_tokens: Some(100),
+                total_tokens: Some(150),
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+            }),
+            api_specific: None,
+            extra: serde_json::Map::new(),
+        };
+
+        let llm_end = make_llm_end_with_annotated(llm_uuid, Some(root_uuid), "gpt-4o", annotated);
+        acc.process_event(&llm_end);
+
+        // Agent End
+        let run = acc
+            .process_event(&make_agent_end(root_uuid))
+            .expect("should return completed run");
+
+        assert_eq!(run.calls.len(), 1);
+        let call = &run.calls[0];
+        assert_eq!(
+            call.output_tokens,
+            Some(100),
+            "output_tokens from completion_tokens"
+        );
+        assert_eq!(call.prompt_tokens, Some(50), "prompt_tokens from usage");
+        assert_eq!(call.total_tokens, Some(150), "total_tokens from usage");
+        assert_eq!(
+            call.model_name.as_deref(),
+            Some("gpt-4o"),
+            "model_name from annotated"
+        );
+        assert_eq!(
+            call.tool_call_count,
+            Some(2),
+            "tool_call_count from tool_calls vec"
+        );
+    }
+
+    #[test]
+    fn test_accumulator_llm_end_no_annotated_response() {
+        let mut acc = RunAccumulator::new("agent-1".to_string());
+
+        let agent_start = make_agent_start();
+        let root_uuid = agent_start.uuid();
+        acc.process_event(&agent_start);
+
+        // LLM Start + LLM End without annotated (use existing make_event helper)
+        let llm_uuid = Uuid::new_v4();
+        let llm_start = make_event(
+            EventType::Start,
+            Some(ScopeType::Llm),
+            Some("gpt-4"),
+            llm_uuid,
+            Some(root_uuid),
+        );
+        acc.process_event(&llm_start);
+
+        let llm_end = make_event(
+            EventType::End,
+            Some(ScopeType::Llm),
+            Some("gpt-4"),
+            llm_uuid,
+            Some(root_uuid),
+        );
+        acc.process_event(&llm_end);
+
+        let run = acc
+            .process_event(&make_agent_end(root_uuid))
+            .expect("should return completed run");
+
+        assert_eq!(run.calls.len(), 1);
+        let call = &run.calls[0];
+        assert!(
+            call.output_tokens.is_none(),
+            "output_tokens should be None without annotated"
+        );
+        assert!(
+            call.prompt_tokens.is_none(),
+            "prompt_tokens should be None without annotated"
+        );
+        assert!(
+            call.total_tokens.is_none(),
+            "total_tokens should be None without annotated"
+        );
+        assert!(
+            call.model_name.is_none(),
+            "model_name should be None without annotated"
+        );
+        assert!(
+            call.tool_call_count.is_none(),
+            "tool_call_count should be None without annotated"
+        );
+    }
+
+    #[test]
+    fn test_accumulator_annotated_response_partial_data() {
+        use nvidia_nat_nexus_core::AnnotatedLLMResponse;
+
+        let mut acc = RunAccumulator::new("agent-1".to_string());
+
+        let agent_start = make_agent_start();
+        let root_uuid = agent_start.uuid();
+        acc.process_event(&agent_start);
+
+        let llm_uuid = Uuid::new_v4();
+        let llm_start = make_event(
+            EventType::Start,
+            Some(ScopeType::Llm),
+            Some("gpt-4o-mini"),
+            llm_uuid,
+            Some(root_uuid),
+        );
+        acc.process_event(&llm_start);
+
+        // Annotated with model but no usage and no tool_calls
+        let annotated = AnnotatedLLMResponse {
+            id: None,
+            model: Some("gpt-4o-mini".into()),
+            message: None,
+            tool_calls: None,
+            finish_reason: None,
+            usage: None,
+            api_specific: None,
+            extra: serde_json::Map::new(),
+        };
+
+        let llm_end =
+            make_llm_end_with_annotated(llm_uuid, Some(root_uuid), "gpt-4o-mini", annotated);
+        acc.process_event(&llm_end);
+
+        let run = acc
+            .process_event(&make_agent_end(root_uuid))
+            .expect("should return completed run");
+
+        assert_eq!(run.calls.len(), 1);
+        let call = &run.calls[0];
+        assert_eq!(
+            call.model_name.as_deref(),
+            Some("gpt-4o-mini"),
+            "model_name should be set"
+        );
+        assert!(
+            call.prompt_tokens.is_none(),
+            "prompt_tokens should be None when usage is None"
+        );
+        assert!(
+            call.output_tokens.is_none(),
+            "output_tokens should be None when usage is None"
+        );
+        assert!(
+            call.total_tokens.is_none(),
+            "total_tokens should be None when usage is None"
+        );
+        assert!(
+            call.tool_call_count.is_none(),
+            "tool_call_count should be None when tool_calls is None"
+        );
     }
 }

@@ -1008,6 +1008,7 @@ pub unsafe extern "C" fn nat_nexus_llm_call(
         data,
         metadata,
         model_name_opt,
+        None,
     ) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiLLMHandle(h))) };
@@ -1052,10 +1053,59 @@ pub unsafe extern "C" fn nat_nexus_llm_call_end(
         None => return NatNexusStatus::InvalidJson,
     };
 
-    match core::nat_nexus_llm_call_end(&unsafe { &*handle }.0, response, data, metadata) {
+    match core::nat_nexus_llm_call_end(&unsafe { &*handle }.0, response, data, metadata, None) {
         Ok(()) => NatNexusStatus::Ok,
         Err(e) => status_from_error(&e),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Built-in codec constructors
+// ---------------------------------------------------------------------------
+
+/// Create a new OpenAI Chat Completions codec handle.
+///
+/// The returned handle implements both request codec (decode/encode) and
+/// response codec (decode_response). Free with `nat_nexus_codec_free`.
+///
+/// # Safety
+/// Caller must free the returned handle via `nat_nexus_codec_free`.
+#[no_mangle]
+pub extern "C" fn nat_nexus_openai_chat_codec_new() -> *mut FfiCodecHandle {
+    Box::into_raw(Box::new(FfiCodecHandle {
+        codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIChatCodec),
+        response_codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIChatCodec),
+    }))
+}
+
+/// Create a new OpenAI Responses API codec handle.
+///
+/// The returned handle implements both request codec (decode/encode) and
+/// response codec (decode_response). Free with `nat_nexus_codec_free`.
+///
+/// # Safety
+/// Caller must free the returned handle via `nat_nexus_codec_free`.
+#[no_mangle]
+pub extern "C" fn nat_nexus_openai_responses_codec_new() -> *mut FfiCodecHandle {
+    Box::into_raw(Box::new(FfiCodecHandle {
+        codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIResponsesCodec),
+        response_codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIResponsesCodec),
+    }))
+}
+
+/// Create a new Anthropic Messages API codec handle.
+///
+/// The returned handle implements both request codec (decode/encode) and
+/// response codec (decode_response). Free with `nat_nexus_codec_free`.
+///
+/// # Safety
+/// Caller must free the returned handle via `nat_nexus_codec_free`.
+#[no_mangle]
+pub extern "C" fn nat_nexus_anthropic_messages_codec_new() -> *mut FfiCodecHandle {
+    Box::into_raw(Box::new(FfiCodecHandle {
+        codec: Arc::new(nvidia_nat_nexus_core::codec::AnthropicMessagesCodec),
+        response_codec: Arc::new(nvidia_nat_nexus_core::codec::AnthropicMessagesCodec),
+    }))
 }
 
 /// Execute an LLM call end-to-end: run conditional-execution guardrails (on raw
@@ -1098,6 +1148,7 @@ pub unsafe extern "C" fn nat_nexus_llm_call_execute(
     codec_encode: NatNexusCodecEncodeFn,
     codec_user_data: *mut libc::c_void,
     codec_free_fn: NatNexusFreeFn,
+    response_codec: *const FfiCodecHandle,
     out: *mut *mut c_char,
 ) -> NatNexusStatus {
     clear_last_error();
@@ -1151,6 +1202,11 @@ pub unsafe extern "C" fn nat_nexus_llm_call_execute(
         )),
         _ => None,
     };
+    let response_codec = if response_codec.is_null() {
+        None
+    } else {
+        Some(unsafe { &*response_codec }.response_codec.clone())
+    };
 
     let exec_fn = wrap_llm_exec_fn(func, func_user_data, func_free);
     let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn =
@@ -1170,6 +1226,7 @@ pub unsafe extern "C" fn nat_nexus_llm_call_execute(
                 metadata,
                 model_name_opt,
                 codec,
+                response_codec,
             )
             .await
         },
@@ -1240,6 +1297,7 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
     codec_encode: NatNexusCodecEncodeFn,
     codec_user_data: *mut libc::c_void,
     codec_free_fn: NatNexusFreeFn,
+    response_codec: *const FfiCodecHandle,
     out: *mut *mut FfiStream,
 ) -> NatNexusStatus {
     clear_last_error();
@@ -1293,6 +1351,11 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
         )),
         _ => None,
     };
+    let response_codec = if response_codec.is_null() {
+        None
+    } else {
+        Some(unsafe { &*response_codec }.response_codec.clone())
+    };
 
     let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
     let default_fn: nvidia_nat_nexus_core::LlmStreamExecutionNextFn =
@@ -1326,6 +1389,7 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
                 metadata,
                 model_name_opt,
                 codec,
+                response_codec,
             )
             .await
         },
@@ -4523,6 +4587,7 @@ mod tests {
                     None,
                     ptr::null_mut(),
                     None,
+                    ptr::null(),
                     ptr::null_mut(),
                 ),
                 NatNexusStatus::NullPointer
@@ -4543,6 +4608,7 @@ mod tests {
                     None,
                     ptr::null_mut(),
                     None,
+                    ptr::null(),
                     &mut out_json,
                 ),
                 NatNexusStatus::InvalidJson
@@ -4566,6 +4632,7 @@ mod tests {
                     None,
                     ptr::null_mut(),
                     None,
+                    ptr::null(),
                     ptr::null_mut(),
                 ),
                 NatNexusStatus::NullPointer
@@ -4588,6 +4655,7 @@ mod tests {
                     None,
                     ptr::null_mut(),
                     None,
+                    ptr::null(),
                     &mut stream,
                 ),
                 NatNexusStatus::InvalidJson
@@ -6327,6 +6395,7 @@ mod tests {
                     None,
                     ptr::null_mut(),
                     None,
+                    ptr::null(),
                     &mut execute_out,
                 ),
                 NatNexusStatus::Ok
@@ -6361,6 +6430,7 @@ mod tests {
                     None,
                     ptr::null_mut(),
                     None,
+                    ptr::null(),
                     &mut stream,
                 ),
                 NatNexusStatus::Ok

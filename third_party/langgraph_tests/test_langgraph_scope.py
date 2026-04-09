@@ -53,14 +53,13 @@ class TestLangGraphScope:
         nat_nexus.subscribers.deregister("test-lg-collector")
 
     # -------------------------------------------------------------------
-    # SCOPE-01 / SCOPE-02: Single-node graph scope hierarchy
+    # Single-node graph scope hierarchy
     # -------------------------------------------------------------------
 
     def test_single_node_graph_scope(self, scope_stack: Any, events: list[Any]) -> None:
         """Graph scope wraps node scope; node is child of graph.
 
-        Validates SCOPE-01 (graph-level scope) and SCOPE-02 (node-level scope
-        with parent-child relationship).
+        Validates graph-level scope and node-level scope with parent-child relationship.
 
         After Plan 15-02, push_node_scope pushes directly on the current stack
         (no isolated branch scope stacks), so the node is a direct child of
@@ -89,13 +88,13 @@ class TestLangGraphScope:
         pop_graph_scope(graph_handle)
 
     # -------------------------------------------------------------------
-    # SCOPE-02: Multi-node sequential graph scope
+    # Multi-node sequential graph scope
     # -------------------------------------------------------------------
 
     def test_multi_node_graph_scope(self, scope_stack: Any, events: list[Any]) -> None:
         """Multiple sequential nodes share the same graph parent scope.
 
-        Validates SCOPE-02: each node scope is a direct child of the graph scope.
+        Validates that each node scope is a direct child of the graph scope.
         """
         graph_handle = push_graph_scope("seq_graph")
 
@@ -133,13 +132,13 @@ class TestLangGraphScope:
         assert node_a_idx < node_b_idx, "node_a should start before node_b"
 
     # -------------------------------------------------------------------
-    # SCOPE-03: Parallel fan-out scope isolation
+    # Parallel fan-out scope isolation
     # -------------------------------------------------------------------
 
     def test_parallel_fanout_scope_isolation(self, scope_stack: Any, events: list[Any]) -> None:
         """Parallel branches get distinct node scopes as children of the graph scope.
 
-        Validates SCOPE-03: fan-out creates per-branch child scopes.
+        Validates that fan-out creates per-branch child scopes.
         After Plan 15-02, node scopes push directly on the current stack
         (no per-branch isolated scope stacks). For true thread parallelism,
         each thread gets its own scope stack via create_scope_stack.
@@ -197,7 +196,7 @@ class TestLangGraphScope:
         assert branch_results["branch_a"]["node_uuid"] != branch_results["branch_b"]["node_uuid"]
 
     # -------------------------------------------------------------------
-    # QUAL-04: Sync and async scope parity
+    # Sync and async scope parity
     # -------------------------------------------------------------------
 
     def test_sync_and_async_scope_parity(self, scope_stack: Any, events: list[Any]) -> None:
@@ -245,7 +244,7 @@ class TestLangGraphScope:
         )
 
     # -------------------------------------------------------------------
-    # SCOPE-04: LLM call within node scope
+    # LLM call within node scope
     # -------------------------------------------------------------------
 
     def test_llm_call_in_node_scope(self, scope_stack: Any, events: list[Any]) -> None:
@@ -277,7 +276,7 @@ class TestLangGraphScope:
         )
 
     # -------------------------------------------------------------------
-    # SCOPE-05: Tool call within node scope
+    # Tool call within node scope
     # -------------------------------------------------------------------
 
     def test_tool_call_in_node_scope(self, scope_stack: Any, events: list[Any]) -> None:
@@ -300,7 +299,7 @@ class TestLangGraphScope:
         )
 
     # -------------------------------------------------------------------
-    # SCOPE-06: No double-wrapping
+    # No double-wrapping
     # -------------------------------------------------------------------
 
     def test_no_double_wrapping(self, scope_stack: Any, events: list[Any]) -> None:
@@ -334,7 +333,7 @@ class TestLangGraphScope:
         assert len(node_starts) == 1, f"Expected exactly 1 node start event, got {len(node_starts)}"
 
     # -------------------------------------------------------------------
-    # QUAL-05: Comprehensive scope hierarchy validation
+    # Comprehensive scope hierarchy validation
     # -------------------------------------------------------------------
 
     def test_scope_hierarchy_event_ordering(self, scope_stack: Any, events: list[Any]) -> None:
@@ -384,7 +383,7 @@ class TestLangGraphScope:
 
 
 class TestLangGraphSubgraph:
-    """Validate subgraph scope nesting and ATIF graph topology metadata (HIER-01..04)."""
+    """Validate subgraph scope nesting and ATIF graph topology metadata."""
 
     @pytest.fixture(autouse=True)
     def scope_stack(self):
@@ -406,7 +405,7 @@ class TestLangGraphSubgraph:
         nat_nexus.subscribers.deregister("test_sub")
 
     # -------------------------------------------------------------------
-    # HIER-01: Subgraph nested scope hierarchy
+    # Subgraph nested scope hierarchy
     # -------------------------------------------------------------------
 
     def test_subgraph_nested_scope_hierarchy(self, scope_stack: Any, events: list[Any]) -> None:
@@ -448,7 +447,7 @@ class TestLangGraphSubgraph:
         pop_graph_scope(graph_handle)
 
     # -------------------------------------------------------------------
-    # HIER-02: Subgraph detection via CONFIG_KEY_TASK_ID
+    # Subgraph detection via CONFIG_KEY_TASK_ID
     # -------------------------------------------------------------------
 
     def test_subgraph_detection_via_config_key(self, scope_stack: Any, events: list[Any]) -> None:
@@ -473,7 +472,7 @@ class TestLangGraphSubgraph:
         pop_graph_scope(graph_handle)
 
     # -------------------------------------------------------------------
-    # HIER-02 continued: ContextVar restoration after subgraph pop
+    # ContextVar restoration after subgraph pop
     # -------------------------------------------------------------------
 
     def test_subgraph_contextvar_restoration(self, scope_stack: Any, events: list[Any]) -> None:
@@ -498,7 +497,7 @@ class TestLangGraphSubgraph:
         pop_graph_scope(graph_handle)
 
     # -------------------------------------------------------------------
-    # HIER-03, HIER-04: ATIF graph topology metadata
+    # ATIF graph topology metadata
     # -------------------------------------------------------------------
 
     def test_atif_graph_topology_metadata(self, scope_stack: Any, events: list[Any]) -> None:
@@ -535,7 +534,7 @@ class TestLangGraphSubgraph:
         pop_graph_scope(graph_handle)
 
     # -------------------------------------------------------------------
-    # HIER-01 + concurrent: Concurrent subgraph isolation
+    # Concurrent subgraph isolation
     # -------------------------------------------------------------------
 
     def test_concurrent_subgraph_isolation(self, scope_stack: Any) -> None:

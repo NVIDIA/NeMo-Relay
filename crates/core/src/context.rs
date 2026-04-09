@@ -26,7 +26,7 @@ use std::sync::{Arc, RwLock};
 use tokio_stream::Stream;
 use uuid::Uuid;
 
-use crate::codec::AnnotatedLLMRequest;
+use crate::codec::{AnnotatedLLMRequest, AnnotatedLLMResponse};
 use crate::error::{NexusError, Result};
 use crate::json::{merge_json, Json};
 use crate::registry::SortedRegistry;
@@ -793,7 +793,12 @@ impl NatNexusContextState {
     }
 
     /// Builds a Start event for the given LLM handle.
-    pub fn build_llm_start_event(&self, handle: &LLMHandle, input: Option<Json>) -> Event {
+    pub fn build_llm_start_event(
+        &self,
+        handle: &LLMHandle,
+        input: Option<Json>,
+        annotated_request: Option<Arc<AnnotatedLLMRequest>>,
+    ) -> Event {
         Event::llm_start(
             handle.parent_uuid,
             handle.uuid,
@@ -803,6 +808,7 @@ impl NatNexusContextState {
             handle.attributes,
             input,
             handle.model_name.clone(),
+            annotated_request,
         )
     }
 
@@ -815,6 +821,7 @@ impl NatNexusContextState {
         data: Option<Json>,
         metadata: Option<Json>,
         output: Option<Json>,
+        annotated_response: Option<Arc<AnnotatedLLMResponse>>,
     ) -> Event {
         Event::llm_end(
             handle.parent_uuid,
@@ -825,6 +832,7 @@ impl NatNexusContextState {
             handle.attributes,
             output,
             handle.model_name.clone(),
+            annotated_response,
         )
     }
 
@@ -1611,7 +1619,7 @@ mod tests {
 
         let handle = ctx.create_llm_handle("llm", None, LLMAttributes::STREAMING, None, None, None);
         let subscribers = ctx.collect_event_subscribers(&[]);
-        let event = ctx.build_llm_start_event(&handle, None);
+        let event = ctx.build_llm_start_event(&handle, None, None);
         NatNexusContextState::emit_event(&event, &subscribers);
 
         let captured = events.lock().unwrap();
@@ -1646,9 +1654,15 @@ mod tests {
             None,
         );
         let subscribers = ctx.collect_event_subscribers(&[]);
-        let start = ctx.build_llm_start_event(&handle, None);
+        let start = ctx.build_llm_start_event(&handle, None, None);
         NatNexusContextState::emit_event(&start, &subscribers);
-        let end = ctx.end_llm_handle(&handle, None, Some(serde_json::json!({"m2": false})), None);
+        let end = ctx.end_llm_handle(
+            &handle,
+            None,
+            Some(serde_json::json!({"m2": false})),
+            None,
+            None,
+        );
         NatNexusContextState::emit_event(&end, &subscribers);
 
         let captured = events.lock().unwrap();

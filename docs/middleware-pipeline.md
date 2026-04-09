@@ -56,15 +56,18 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["llm.execute(name, request, func)"] --> B{Conditional Execution<br/>Guardrails}
+    A["llm.execute(name, request, func, codec, response_codec)"] --> B{Conditional Execution<br/>Guardrails}
     B -->|"Rejected (reason)"| C["Emit Mark event<br/>Raise GuardrailRejected"]
-    B -->|"Allowed (None)"| D["Request Intercepts<br/>(LLMRequest → LLMRequest)"]
-    D --> E["Sanitize Request Guardrails<br/>(event payload only)"]
-    E --> F["Emit Start event<br/>(input = sanitized request)"]
+    B -->|"Allowed (None)"| CD["Codec decode<br/>(if codec provided)"]
+    CD --> D["Request Intercepts<br/>(LLMRequest + AnnotatedLLMRequest)"]
+    D --> CE["Codec encode<br/>(if annotated was modified)"]
+    CE --> E["Sanitize Request Guardrails<br/>(event payload only)"]
+    E --> F["Emit Start event<br/>(input = sanitized request,<br/>annotated_request = AnnotatedLLMRequest)"]
     F --> G["Execution Intercept Chain<br/>(llm_name, intercepted request, next) → Json"]
     G --> H["func(intercepted request) → Json"]
-    H --> I["Sanitize Response Guardrails<br/>(event payload only)"]
-    I --> J["Emit End event<br/>(output = sanitized response)"]
+    H --> RD["Response codec decode<br/>(if response_codec provided)"]
+    RD --> I["Sanitize Response Guardrails<br/>(event payload only)"]
+    I --> J["Emit End event<br/>(output = sanitized response,<br/>annotated_response = AnnotatedLLMResponse)"]
     J --> K[Return response Json]
 
     style C fill:#f66,stroke:#333
@@ -74,15 +77,21 @@ flowchart TD
 ### Type Flow
 
 ```
-LLMRequest  ──→  Conditional Guards  ──→  Request Intercepts  ──→  Sanitize Request
-    │                                                                      │
-    │                                                   Start event input only
-    │                                                                      │
-    │                          Execution Intercept Chain  ←────────────────┘
+LLMRequest  ──→  Conditional Guards  ──→  Codec.decode()  ──→  Request Intercepts
+    │                                     (AnnotatedLLMRequest)        │
+    │                                                        Codec.encode()
+    │                                                                  │
+    │                                                   Sanitize Request
+    │                                                   Start event (+ annotated_request)
+    │                                                                  │
+    │                          Execution Intercept Chain  ←────────────┘
     │                                      │
     │                        func(intercepted LLMRequest) → Json
     │                                      │
+    │                     ResponseCodec.decode_response() → AnnotatedLLMResponse
+    │                                      │
     │                     Sanitize Response (End event output only)
+    │                     End event (+ annotated_response)
     │                                      │
     └──────────────────────────────── Return raw execution Json
 ```
@@ -93,17 +102,24 @@ receives. Sanitize request/response guardrails currently affect the values
 recorded on lifecycle events, while execution functions still receive the
 intercepted request and callers still receive the raw execution response.
 
+When a request codec is provided, the pipeline decodes before request
+intercepts and encodes after. When a response codec is provided, the
+pipeline decodes the response before event dispatch. Both codec steps are
+non-fatal -- decode failures result in `None` for the annotated fields.
+
 ## LLM Stream Execute Pipeline
 
 `llm.stream_execute(name, request, func, collector, finalizer)` differs from the non-streaming path after the execution stage:
 
 ```mermaid
 flowchart TD
-    A["llm.stream_execute(...)"] --> B{Conditional Execution<br/>Guardrails}
+    A["llm.stream_execute(..., codec, response_codec)"] --> B{Conditional Execution<br/>Guardrails}
     B -->|Rejected| C[Mark event + error]
-    B -->|Allowed| D[Request Intercepts]
-    D --> E[Sanitize Request Guardrails<br/>(Start event payload only)]
-    E --> F[Emit Start event]
+    B -->|Allowed| CD["Codec decode (if provided)"]
+    CD --> D["Request Intercepts<br/>(LLMRequest + AnnotatedLLMRequest)"]
+    D --> CE["Codec encode (if modified)"]
+    CE --> E["Sanitize Request Guardrails<br/>(Start event payload only)"]
+    E --> F["Emit Start event<br/>(+ annotated_request)"]
     F --> G[Execution Intercept Chain]
     G --> H["func(request) → AsyncIterator"]
     H --> I["LlmStreamWrapper wraps stream"]
@@ -113,9 +129,10 @@ flowchart TD
     K -->|Each chunk| L["collector(chunk)"]
     L --> M[Yield chunk to caller]
     K -->|Stream exhausted| N["finalizer() → aggregated Json"]
-    N --> O["aggregated Json"]
-    O --> P[Sanitize Response Guardrails<br/>(End event payload only)]
-    P --> Q[Emit End event]
+    N --> RD["Response codec decode<br/>(if response_codec provided)"]
+    RD --> O["aggregated Json"]
+    O --> P["Sanitize Response Guardrails<br/>(End event payload only)"]
+    P --> Q["Emit End event<br/>(+ annotated_response)"]
 
     style C fill:#f66,stroke:#333
     style M fill:#6f6,stroke:#333

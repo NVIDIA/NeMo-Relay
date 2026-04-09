@@ -18,6 +18,9 @@ Classes:
     LlmCodec
         Protocol for LLM request codecs. Implement ``decode()`` and
         ``encode()`` to satisfy the protocol.
+    LlmResponseCodec
+        Protocol for LLM response codecs. Implement ``decode_response()``
+        to satisfy the protocol.
 
 Example::
 
@@ -42,9 +45,12 @@ Example::
     result = await llm.execute("gpt-4", request, my_fn, codec=MyCodec())
 """
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from nat_nexus._native import AnnotatedLLMRequest, LLMRequest
+
+if TYPE_CHECKING:
+    from nat_nexus._native import AnnotatedLLMResponse
 
 
 @runtime_checkable
@@ -87,7 +93,30 @@ class LlmCodec(Protocol):
         ...
 
 
+@runtime_checkable
+class LlmResponseCodec(Protocol):
+    """Protocol for LLM response codecs.
+
+    Implement ``decode_response()`` to provide response introspection.
+    Built-in codecs (``OpenAIChatCodec``, ``OpenAIResponsesCodec``,
+    ``AnthropicMessagesCodec``) implement both ``LlmCodec`` and
+    ``LlmResponseCodec``.
+    """
+
+    def decode_response(self, response: object) -> "AnnotatedLLMResponse":
+        """Parse a raw JSON response into a structured AnnotatedLLMResponse.
+
+        Args:
+            response: The raw LLM response as a JSON-serializable object.
+
+        Returns:
+            A structured AnnotatedLLMResponse with normalized fields.
+        """
+        ...
+
+
 __all__ = [
     "AnnotatedLLMRequest",
     "LlmCodec",
+    "LlmResponseCodec",
 ]

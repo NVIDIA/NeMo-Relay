@@ -26,10 +26,12 @@
 //! being included in the END event.
 
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio_stream::Stream;
 
+use crate::codec::{AnnotatedLLMResponse, LlmResponseCodec};
 use crate::context::{current_scope_stack, global_context, NatNexusContextState, ScopeStackHandle};
 use crate::error::Result;
 use crate::json::Json;
@@ -48,6 +50,7 @@ pub struct LlmStreamWrapper {
     scope_stack: ScopeStackHandle,
     collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
     finalizer: Option<Box<dyn FnOnce() -> Json + Send>>,
+    response_codec: Option<Arc<dyn LlmResponseCodec>>,
     data: Option<Json>,
     metadata: Option<Json>,
     ended: bool,
@@ -76,6 +79,7 @@ impl LlmStreamWrapper {
         finalizer: Box<dyn FnOnce() -> Json + Send>,
         data: Option<Json>,
         metadata: Option<Json>,
+        response_codec: Option<Arc<dyn LlmResponseCodec>>,
     ) -> Self {
         Self {
             inner,
@@ -83,6 +87,7 @@ impl LlmStreamWrapper {
             scope_stack: current_scope_stack(),
             collector,
             finalizer: Some(finalizer),
+            response_codec,
             data,
             metadata,
             ended: false,
@@ -116,6 +121,13 @@ impl LlmStreamWrapper {
             Json::Null
         };
 
+        // Decode aggregated response if response codec is present (non-fatal)
+        let annotated_response: Option<Arc<AnnotatedLLMResponse>> = self
+            .response_codec
+            .as_ref()
+            .and_then(|c| c.decode_response(&aggregated).ok())
+            .map(Arc::new);
+
         let event_snapshot = {
             let ss_guard = self.scope_stack.read().expect("scope stack lock poisoned");
             let sl =
@@ -129,6 +141,7 @@ impl LlmStreamWrapper {
                     self.data.clone(),
                     self.metadata.clone(),
                     Some(sanitized),
+                    annotated_response,
                 );
                 Some((event, subscribers))
             } else {

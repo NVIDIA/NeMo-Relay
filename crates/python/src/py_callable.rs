@@ -36,7 +36,7 @@ use nvidia_nat_nexus_core::{
 };
 
 use crate::convert::{json_to_py, py_to_json};
-use crate::py_types::{PyAnnotatedLLMRequest, PyLLMRequest};
+use crate::py_types::{PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest};
 
 /// Wrap a Python callable `(str, Json) -> Json` for tool sanitize/intercept fns.
 pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
@@ -1035,6 +1035,56 @@ impl LlmCodec for PyLlmCodecWrapper {
                         "Codec encode() returned unexpected type (expected LLMRequest): {e}"
                     ))
                 })
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LLM Response Codec wrapper
+// ---------------------------------------------------------------------------
+
+/// Wraps a Python object implementing the ``LlmResponseCodec`` protocol (``decode_response``).
+///
+/// The Python response codec object must implement:
+/// - ``decode_response(response: Any) -> AnnotatedLLMResponse``
+pub(crate) struct PyLlmResponseCodecWrapper {
+    pub py_codec: Py<PyAny>,
+}
+
+// SAFETY: The Py<PyAny> handle is GIL-independent (ref-counted via Python's
+// allocator). All access goes through `Python::attach` which acquires the GIL.
+unsafe impl Send for PyLlmResponseCodecWrapper {}
+unsafe impl Sync for PyLlmResponseCodecWrapper {}
+
+impl nvidia_nat_nexus_core::codec::LlmResponseCodec for PyLlmResponseCodecWrapper {
+    fn decode_response(
+        &self,
+        response: &Json,
+    ) -> nvidia_nat_nexus_core::Result<nvidia_nat_nexus_core::codec::AnnotatedLLMResponse> {
+        Python::attach(|py| {
+            let py_resp = json_to_py(py, response).map_err(|e| {
+                NexusError::Internal(format!(
+                    "Response codec: failed to convert JSON to Python: {e}"
+                ))
+            })?;
+            let result = self
+                .py_codec
+                .call_method1(py, "decode_response", (py_resp,))
+                .map_err(|e| {
+                    NexusError::Internal(format!("Response codec decode_response() failed: {e}"))
+                })?;
+            // PyAnnotatedLLMResponse has skip_from_py_object, so use downcast
+            // on the bound reference instead of extract.
+            let bound = result.bind(py);
+            let py_ref: pyo3::PyRef<'_, PyAnnotatedLLMResponse> = bound
+                .cast::<PyAnnotatedLLMResponse>()
+                .map_err(|e| {
+                    NexusError::Internal(format!(
+                        "Response codec decode_response() returned unexpected type (expected AnnotatedLLMResponse): {e}"
+                    ))
+                })?
+                .borrow();
+            Ok(py_ref.inner.clone())
         })
     }
 }

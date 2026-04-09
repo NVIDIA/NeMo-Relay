@@ -545,6 +545,10 @@ mod tests {
                 ended_at: Some(end),
                 metadata_snapshot: None,
                 output_tokens: tokens,
+                prompt_tokens: None,
+                total_tokens: None,
+                model_name: None,
+                tool_call_count: None,
             });
             offset_ms += 1100; // 1s call + 100ms gap
         }

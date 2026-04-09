@@ -82,6 +82,22 @@ pub struct CallRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub output_tokens: Option<u32>,
+    /// Prompt token count, populated from annotated_response.usage.prompt_tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub prompt_tokens: Option<u32>,
+    /// Total token count, populated from annotated_response.usage.total_tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub total_tokens: Option<u32>,
+    /// Actual serving model name, populated from annotated_response.model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub model_name: Option<String>,
+    /// Count of tool calls in the LLM response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub tool_call_count: Option<u32>,
 }
 
 /// Captures a complete agent execution run.
@@ -231,6 +247,10 @@ mod tests {
                 extensions: json!({}),
             }),
             output_tokens: None,
+            prompt_tokens: None,
+            total_tokens: None,
+            model_name: None,
+            tool_call_count: None,
         };
 
         let serialized = serde_json::to_string(&record).unwrap();
@@ -251,6 +271,10 @@ mod tests {
             ended_at: None,
             metadata_snapshot: None,
             output_tokens: None,
+            prompt_tokens: None,
+            total_tokens: None,
+            model_name: None,
+            tool_call_count: None,
         };
 
         let serialized = serde_json::to_string(&record).unwrap();
@@ -274,6 +298,10 @@ mod tests {
                     ended_at: Some(now),
                     metadata_snapshot: None,
                     output_tokens: None,
+                    prompt_tokens: None,
+                    total_tokens: None,
+                    model_name: None,
+                    tool_call_count: None,
                 },
                 CallRecord {
                     kind: CallKind::Tool,
@@ -282,6 +310,10 @@ mod tests {
                     ended_at: None,
                     metadata_snapshot: None,
                     output_tokens: None,
+                    prompt_tokens: None,
+                    total_tokens: None,
+                    model_name: None,
+                    tool_call_count: None,
                 },
             ],
             started_at: now,
@@ -431,6 +463,10 @@ mod tests {
             ended_at: None,
             metadata_snapshot: None,
             output_tokens: Some(256),
+            prompt_tokens: None,
+            total_tokens: None,
+            model_name: None,
+            tool_call_count: None,
         };
 
         let value = serde_json::to_value(&record).unwrap();
@@ -447,6 +483,10 @@ mod tests {
             ended_at: None,
             metadata_snapshot: None,
             output_tokens: None,
+            prompt_tokens: None,
+            total_tokens: None,
+            model_name: None,
+            tool_call_count: None,
         };
 
         let serialized = serde_json::to_string(&record).unwrap();
@@ -472,6 +512,95 @@ mod tests {
         assert!(
             record.output_tokens.is_none(),
             "missing output_tokens should default to None"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // New telemetry field tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_call_record_new_fields_serde_roundtrip() {
+        let now = Utc::now();
+        let record = CallRecord {
+            kind: CallKind::Llm,
+            name: "gpt-4".to_string(),
+            started_at: now,
+            ended_at: Some(now),
+            metadata_snapshot: None,
+            output_tokens: Some(100),
+            prompt_tokens: Some(100),
+            total_tokens: Some(150),
+            model_name: Some("gpt-4".to_string()),
+            tool_call_count: Some(2),
+        };
+
+        let serialized = serde_json::to_string(&record).unwrap();
+        let deserialized: CallRecord = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.prompt_tokens, Some(100));
+        assert_eq!(deserialized.total_tokens, Some(150));
+        assert_eq!(deserialized.model_name, Some("gpt-4".to_string()));
+        assert_eq!(deserialized.tool_call_count, Some(2));
+    }
+
+    #[test]
+    fn test_call_record_backward_compat_new_fields() {
+        // Old format JSON missing all new fields
+        let old_json = r#"{"kind":"llm","name":"gpt-4","started_at":"2026-03-31T12:00:00Z","ended_at":null,"metadata_snapshot":null}"#;
+
+        let record: CallRecord =
+            serde_json::from_str(old_json).expect("should deserialize old format");
+        assert!(
+            record.prompt_tokens.is_none(),
+            "missing prompt_tokens should default to None"
+        );
+        assert!(
+            record.total_tokens.is_none(),
+            "missing total_tokens should default to None"
+        );
+        assert!(
+            record.model_name.is_none(),
+            "missing model_name should default to None"
+        );
+        assert!(
+            record.tool_call_count.is_none(),
+            "missing tool_call_count should default to None"
+        );
+    }
+
+    #[test]
+    fn test_call_record_new_fields_none_omitted() {
+        let now = Utc::now();
+        let record = CallRecord {
+            kind: CallKind::Llm,
+            name: "gpt-4".to_string(),
+            started_at: now,
+            ended_at: None,
+            metadata_snapshot: None,
+            output_tokens: None,
+            prompt_tokens: None,
+            total_tokens: None,
+            model_name: None,
+            tool_call_count: None,
+        };
+
+        let serialized = serde_json::to_string(&record).unwrap();
+        assert!(
+            !serialized.contains("prompt_tokens"),
+            "prompt_tokens should be omitted when None, got: {serialized}"
+        );
+        assert!(
+            !serialized.contains("total_tokens"),
+            "total_tokens should be omitted when None, got: {serialized}"
+        );
+        assert!(
+            !serialized.contains("model_name"),
+            "model_name should be omitted when None, got: {serialized}"
+        );
+        assert!(
+            !serialized.contains("tool_call_count"),
+            "tool_call_count should be omitted when None, got: {serialized}"
         );
     }
 }

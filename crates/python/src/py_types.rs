@@ -8,6 +8,7 @@
 //! become Python `help()` output.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use pyo3::prelude::*;
@@ -887,6 +888,16 @@ impl PyLLMStartEvent {
     fn model_name(&self) -> Option<String> {
         self.inner.model_name.clone()
     }
+
+    #[getter]
+    fn annotated_request(&self) -> Option<PyAnnotatedLLMRequest> {
+        self.inner
+            .annotated_request
+            .as_ref()
+            .map(|a| PyAnnotatedLLMRequest {
+                inner: a.as_ref().clone(),
+            })
+    }
 }
 
 #[pyclass(name = "LLMEndEvent", skip_from_py_object)]
@@ -940,6 +951,16 @@ impl PyLLMEndEvent {
     #[getter]
     fn model_name(&self) -> Option<String> {
         self.inner.model_name.clone()
+    }
+
+    #[getter]
+    fn annotated_response(&self) -> Option<PyAnnotatedLLMResponse> {
+        self.inner
+            .annotated_response
+            .as_ref()
+            .map(|a| PyAnnotatedLLMResponse {
+                inner: a.as_ref().clone(),
+            })
     }
 }
 
@@ -1667,6 +1688,317 @@ impl PyAnnotatedLLMRequest {
 }
 
 // ---------------------------------------------------------------------------
+// AnnotatedLLMResponse (read-only wrapper)
+// ---------------------------------------------------------------------------
+
+/// Structured view of an LLM response produced by a response codec.
+///
+/// Read-only: fields are accessed via properties. Complex fields
+/// (message, tool_calls, usage, api_specific) return Python dicts/lists.
+///
+/// Properties:
+///     id -> str | None: Response ID from the API.
+///     model -> str | None: The model that served the request.
+///     message -> Any | None: The assistant's response content.
+///     tool_calls -> list | None: Tool calls requested by the model.
+///     finish_reason -> str | None: Why generation stopped.
+///     usage -> dict | None: Token usage statistics.
+///     api_specific -> dict | None: API-specific response data.
+///     extra -> dict: Unmodeled top-level fields (catch-all).
+///
+/// Helper methods:
+///     response_text() -> str | None: Text content of the response message.
+///     has_tool_calls() -> bool: Whether the response contains tool calls.
+#[pyclass(name = "AnnotatedLLMResponse", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyAnnotatedLLMResponse {
+    pub inner: codec::AnnotatedLLMResponse,
+}
+
+#[pymethods]
+impl PyAnnotatedLLMResponse {
+    #[getter]
+    fn id(&self) -> Option<String> {
+        self.inner.id.clone()
+    }
+
+    #[getter]
+    fn model(&self) -> Option<String> {
+        self.inner.model.clone()
+    }
+
+    #[getter]
+    fn message(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.inner.message {
+            Some(m) => {
+                let value = serde_json::to_value(m).map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("serialization error: {e}"))
+                })?;
+                json_to_py(py, &value)
+            }
+            None => Ok(py.None()),
+        }
+    }
+
+    #[getter]
+    fn tool_calls(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.inner.tool_calls {
+            Some(tc) => {
+                let value = serde_json::to_value(tc).map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("serialization error: {e}"))
+                })?;
+                json_to_py(py, &value)
+            }
+            None => Ok(py.None()),
+        }
+    }
+
+    #[getter]
+    fn finish_reason(&self) -> Option<String> {
+        self.inner
+            .finish_reason
+            .as_ref()
+            .and_then(|fr| serde_json::to_value(fr).ok())
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+    }
+
+    #[getter]
+    fn usage(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.inner.usage {
+            Some(u) => {
+                let value = serde_json::to_value(u).map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("serialization error: {e}"))
+                })?;
+                json_to_py(py, &value)
+            }
+            None => Ok(py.None()),
+        }
+    }
+
+    #[getter]
+    fn api_specific(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.inner.api_specific {
+            Some(a) => {
+                let value = serde_json::to_value(a).map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("serialization error: {e}"))
+                })?;
+                json_to_py(py, &value)
+            }
+            None => Ok(py.None()),
+        }
+    }
+
+    #[getter]
+    fn extra(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(py, &serde_json::Value::Object(self.inner.extra.clone()))
+    }
+
+    /// Extract the text content of the response message.
+    fn response_text(&self) -> Option<String> {
+        self.inner.response_text().map(|s| s.to_string())
+    }
+
+    /// Check if the response contains any tool calls.
+    fn has_tool_calls(&self) -> bool {
+        self.inner.has_tool_calls()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<AnnotatedLLMResponse id={:?} model={:?}>",
+            self.inner.id, self.inner.model
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Built-in LLM Codec pyclasses
+// ---------------------------------------------------------------------------
+
+/// Built-in codec for the OpenAI Chat Completions API.
+///
+/// Implements both ``LlmCodec`` (decode/encode for requests) and
+/// ``LlmResponseCodec`` (decode_response for responses).
+///
+/// Example::
+///
+///     from nat_nexus import OpenAIChatCodec
+///     codec = OpenAIChatCodec()
+///     annotated_req = codec.decode(request)
+///     annotated_resp = codec.decode_response(response)
+#[pyclass(name = "OpenAIChatCodec")]
+pub struct PyOpenAIChatCodec {
+    pub(crate) inner_codec: Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>,
+    pub(crate) inner_response_codec: Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>,
+}
+
+#[pymethods]
+impl PyOpenAIChatCodec {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner_codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIChatCodec),
+            inner_response_codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIChatCodec),
+        }
+    }
+
+    /// Parse an opaque ``LLMRequest`` into a structured ``AnnotatedLLMRequest``.
+    fn decode(&self, request: &PyLLMRequest) -> PyResult<PyAnnotatedLLMRequest> {
+        self.inner_codec
+            .decode(&request.inner)
+            .map(|r| PyAnnotatedLLMRequest { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Merge structured changes back into the opaque request.
+    fn encode(
+        &self,
+        annotated: &PyAnnotatedLLMRequest,
+        original: &PyLLMRequest,
+    ) -> PyResult<PyLLMRequest> {
+        self.inner_codec
+            .encode(&annotated.inner, &original.inner)
+            .map(|r| PyLLMRequest { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Parse a raw JSON response into a structured ``AnnotatedLLMResponse``.
+    fn decode_response(&self, response: &Bound<'_, PyAny>) -> PyResult<PyAnnotatedLLMResponse> {
+        let json = py_to_json(response)?;
+        self.inner_response_codec
+            .decode_response(&json)
+            .map(|r| PyAnnotatedLLMResponse { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "<OpenAIChatCodec>"
+    }
+}
+
+/// Built-in codec for the OpenAI Responses API.
+///
+/// Implements both ``LlmCodec`` (decode/encode for requests) and
+/// ``LlmResponseCodec`` (decode_response for responses).
+///
+/// Example::
+///
+///     from nat_nexus import OpenAIResponsesCodec
+///     codec = OpenAIResponsesCodec()
+///     annotated_req = codec.decode(request)
+///     annotated_resp = codec.decode_response(response)
+#[pyclass(name = "OpenAIResponsesCodec")]
+pub struct PyOpenAIResponsesCodec {
+    pub(crate) inner_codec: Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>,
+    pub(crate) inner_response_codec: Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>,
+}
+
+#[pymethods]
+impl PyOpenAIResponsesCodec {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner_codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIResponsesCodec),
+            inner_response_codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIResponsesCodec),
+        }
+    }
+
+    /// Parse an opaque ``LLMRequest`` into a structured ``AnnotatedLLMRequest``.
+    fn decode(&self, request: &PyLLMRequest) -> PyResult<PyAnnotatedLLMRequest> {
+        self.inner_codec
+            .decode(&request.inner)
+            .map(|r| PyAnnotatedLLMRequest { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Merge structured changes back into the opaque request.
+    fn encode(
+        &self,
+        annotated: &PyAnnotatedLLMRequest,
+        original: &PyLLMRequest,
+    ) -> PyResult<PyLLMRequest> {
+        self.inner_codec
+            .encode(&annotated.inner, &original.inner)
+            .map(|r| PyLLMRequest { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Parse a raw JSON response into a structured ``AnnotatedLLMResponse``.
+    fn decode_response(&self, response: &Bound<'_, PyAny>) -> PyResult<PyAnnotatedLLMResponse> {
+        let json = py_to_json(response)?;
+        self.inner_response_codec
+            .decode_response(&json)
+            .map(|r| PyAnnotatedLLMResponse { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "<OpenAIResponsesCodec>"
+    }
+}
+
+/// Built-in codec for the Anthropic Messages API.
+///
+/// Implements both ``LlmCodec`` (decode/encode for requests) and
+/// ``LlmResponseCodec`` (decode_response for responses).
+///
+/// Example::
+///
+///     from nat_nexus import AnthropicMessagesCodec
+///     codec = AnthropicMessagesCodec()
+///     annotated_req = codec.decode(request)
+///     annotated_resp = codec.decode_response(response)
+#[pyclass(name = "AnthropicMessagesCodec")]
+pub struct PyAnthropicMessagesCodec {
+    pub(crate) inner_codec: Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>,
+    pub(crate) inner_response_codec: Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>,
+}
+
+#[pymethods]
+impl PyAnthropicMessagesCodec {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner_codec: Arc::new(nvidia_nat_nexus_core::codec::AnthropicMessagesCodec),
+            inner_response_codec: Arc::new(nvidia_nat_nexus_core::codec::AnthropicMessagesCodec),
+        }
+    }
+
+    /// Parse an opaque ``LLMRequest`` into a structured ``AnnotatedLLMRequest``.
+    fn decode(&self, request: &PyLLMRequest) -> PyResult<PyAnnotatedLLMRequest> {
+        self.inner_codec
+            .decode(&request.inner)
+            .map(|r| PyAnnotatedLLMRequest { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Merge structured changes back into the opaque request.
+    fn encode(
+        &self,
+        annotated: &PyAnnotatedLLMRequest,
+        original: &PyLLMRequest,
+    ) -> PyResult<PyLLMRequest> {
+        self.inner_codec
+            .encode(&annotated.inner, &original.inner)
+            .map(|r| PyLLMRequest { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Parse a raw JSON response into a structured ``AnnotatedLLMResponse``.
+    fn decode_response(&self, response: &Bound<'_, PyAny>) -> PyResult<PyAnnotatedLLMResponse> {
+        let json = py_to_json(response)?;
+        self.inner_response_codec
+            .decode_response(&json)
+            .map(|r| PyAnnotatedLLMResponse { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "<AnthropicMessagesCodec>"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -1682,6 +2014,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLLMHandle>()?;
     m.add_class::<PyLLMRequest>()?;
     m.add_class::<PyAnnotatedLLMRequest>()?;
+    m.add_class::<PyAnnotatedLLMResponse>()?;
     m.add_class::<PyScopeStartEvent>()?;
     m.add_class::<PyScopeEndEvent>()?;
     m.add_class::<PyToolStartEvent>()?;
@@ -1694,6 +2027,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyOpenTelemetrySubscriber>()?;
     m.add_class::<PyOpenInferenceConfig>()?;
     m.add_class::<PyOpenInferenceSubscriber>()?;
+    m.add_class::<PyOpenAIChatCodec>()?;
+    m.add_class::<PyOpenAIResponsesCodec>()?;
+    m.add_class::<PyAnthropicMessagesCodec>()?;
     Ok(())
 }
 

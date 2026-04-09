@@ -14,17 +14,21 @@ use futures::StreamExt;
 use serde_json::json;
 use tokio_stream::Stream;
 
-use nvidia_nat_nexus_core::codec::{AnnotatedLLMRequest, LlmCodec};
+use nvidia_nat_nexus_core::codec::{
+    AnnotatedLLMRequest, AnnotatedLLMResponse, FinishReason, LlmCodec, LlmResponseCodec,
+    MessageContent,
+};
 use nvidia_nat_nexus_core::context::{
     create_scope_stack, global_context, set_thread_scope_stack, NatNexusContextState,
 };
 use nvidia_nat_nexus_core::error::{NexusError, Result};
-use nvidia_nat_nexus_core::types::{LLMAttributes, LLMRequest};
+use nvidia_nat_nexus_core::types::{Event, LLMAttributes, LLMRequest};
 use nvidia_nat_nexus_core::Json;
 use nvidia_nat_nexus_core::{
-    nat_nexus_deregister_llm_request_intercept, nat_nexus_llm_call_execute,
-    nat_nexus_llm_stream_call_execute, nat_nexus_register_llm_request_intercept,
-    LlmExecutionNextFn, LlmStreamExecutionNextFn,
+    nat_nexus_deregister_llm_request_intercept, nat_nexus_deregister_subscriber,
+    nat_nexus_llm_call_execute, nat_nexus_llm_stream_call_execute,
+    nat_nexus_register_llm_request_intercept, nat_nexus_register_subscriber, LlmExecutionNextFn,
+    LlmStreamExecutionNextFn,
 };
 
 // ---------------------------------------------------------------------------
@@ -220,6 +224,7 @@ async fn test_decode_runs_before_intercepts() {
         None,
         None,
         Some(codec),
+        None,
     )
     .await
     .unwrap();
@@ -283,6 +288,7 @@ async fn test_encode_runs_after_intercepts() {
         None,
         None,
         Some(codec),
+        None,
     )
     .await
     .unwrap();
@@ -343,6 +349,7 @@ async fn test_annotated_intercept_receives_both() {
         None,
         None,
         Some(codec),
+        None,
     )
     .await
     .unwrap();
@@ -405,6 +412,7 @@ async fn test_legacy_intercept_backward_compat() {
         None,
         None,
         None, // No codec
+        None,
     )
     .await
     .unwrap();
@@ -453,6 +461,7 @@ async fn test_legacy_intercept_backward_compat() {
         None,
         None,
         Some(codec),
+        None,
     )
     .await
     .unwrap();
@@ -511,6 +520,7 @@ async fn test_stream_path_also_decodes() {
         None,
         None,
         Some(codec),
+        None,
     )
     .await
     .unwrap();
@@ -574,6 +584,7 @@ async fn test_shared_helper_both_paths() {
         None,
         None,
         Some(codec.clone()),
+        None,
     )
     .await
     .unwrap();
@@ -595,6 +606,7 @@ async fn test_shared_helper_both_paths() {
         None,
         None,
         Some(codec),
+        None,
     )
     .await
     .unwrap();
@@ -657,6 +669,7 @@ async fn test_explicit_codec_param_overrides() {
         None,
         None,
         Some(codec_b),
+        None,
     )
     .await
     .unwrap();
@@ -719,6 +732,7 @@ async fn test_encode_merge_not_replace() {
         None,
         None,
         Some(codec),
+        None,
     )
     .await
     .unwrap();
@@ -790,6 +804,7 @@ async fn test_unified_chain_priority_order() {
         None,
         None,
         Some(codec),
+        None,
     )
     .await
     .unwrap();
@@ -841,6 +856,7 @@ async fn test_no_codec_annotated_intercept_receives_none() {
         None,
         None,
         None, // No codec
+        None,
     )
     .await
     .unwrap();
@@ -878,6 +894,7 @@ async fn test_decode_error_propagates() {
         None,
         None,
         Some(failing_codec),
+        None,
     )
     .await;
 
@@ -889,4 +906,328 @@ async fn test_decode_error_propagates() {
         }
         other => panic!("Expected Internal error from decode, got: {:?}", other),
     }
+}
+
+// ===========================================================================
+// Response Codec integration tests
+// ===========================================================================
+
+/// Mock response codec that returns a fixed AnnotatedLLMResponse.
+struct MockResponseCodec;
+
+impl LlmResponseCodec for MockResponseCodec {
+    fn decode_response(&self, _response: &Json) -> Result<AnnotatedLLMResponse> {
+        Ok(AnnotatedLLMResponse {
+            id: Some("mock-resp-id".into()),
+            model: Some("mock-model".into()),
+            message: Some(MessageContent::Text("mock response text".into())),
+            tool_calls: None,
+            finish_reason: Some(FinishReason::Complete),
+            usage: None,
+            api_specific: None,
+            extra: serde_json::Map::new(),
+        })
+    }
+}
+
+/// Mock response codec that always fails.
+struct FailingResponseCodec;
+
+impl LlmResponseCodec for FailingResponseCodec {
+    fn decode_response(&self, _response: &Json) -> Result<AnnotatedLLMResponse> {
+        Err(NexusError::Internal("decode failed".into()))
+    }
+}
+
+#[tokio::test]
+async fn test_response_codec_populates_annotated_response() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let ec = events.clone();
+    nat_nexus_register_subscriber(
+        "resp_codec_sub",
+        Arc::new(move |e: &Event| {
+            ec.lock().unwrap().push(e.clone());
+        }),
+    )
+    .unwrap();
+
+    let request = make_llm_request(json!({"messages": [{"role": "user", "content": "hello"}]}));
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(MockResponseCodec);
+
+    let _result = nat_nexus_llm_call_execute(
+        "test_llm",
+        request,
+        noop_exec_fn(),
+        None,
+        LLMAttributes::empty(),
+        None,
+        None,
+        None,
+        None,
+        Some(response_codec),
+    )
+    .await
+    .unwrap();
+
+    let captured = events.lock().unwrap();
+    let end_event = captured
+        .iter()
+        .find(|e| matches!(e, Event::LLMEnd(_)))
+        .expect("expected LLMEnd event");
+
+    match end_event {
+        Event::LLMEnd(inner) => {
+            assert!(
+                inner.annotated_response.is_some(),
+                "annotated_response should be Some when response codec is active"
+            );
+            let ann = inner.annotated_response.as_ref().unwrap();
+            assert_eq!(ann.id, Some("mock-resp-id".into()));
+            assert_eq!(ann.response_text(), Some("mock response text"));
+        }
+        _ => unreachable!(),
+    }
+
+    drop(captured);
+    nat_nexus_deregister_subscriber("resp_codec_sub").unwrap();
+}
+
+#[tokio::test]
+async fn test_response_codec_none_when_no_codec() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let ec = events.clone();
+    nat_nexus_register_subscriber(
+        "no_resp_codec_sub",
+        Arc::new(move |e: &Event| {
+            ec.lock().unwrap().push(e.clone());
+        }),
+    )
+    .unwrap();
+
+    let request = make_llm_request(json!({"messages": [{"role": "user", "content": "hello"}]}));
+
+    let _result = nat_nexus_llm_call_execute(
+        "test_llm",
+        request,
+        noop_exec_fn(),
+        None,
+        LLMAttributes::empty(),
+        None,
+        None,
+        None,
+        None,
+        None, // No response codec
+    )
+    .await
+    .unwrap();
+
+    let captured = events.lock().unwrap();
+    let end_event = captured
+        .iter()
+        .find(|e| matches!(e, Event::LLMEnd(_)))
+        .expect("expected LLMEnd event");
+
+    match end_event {
+        Event::LLMEnd(inner) => {
+            assert!(
+                inner.annotated_response.is_none(),
+                "annotated_response should be None when no response codec"
+            );
+        }
+        _ => unreachable!(),
+    }
+
+    drop(captured);
+    nat_nexus_deregister_subscriber("no_resp_codec_sub").unwrap();
+}
+
+#[tokio::test]
+async fn test_response_codec_failure_non_fatal() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let ec = events.clone();
+    nat_nexus_register_subscriber(
+        "fail_resp_codec_sub",
+        Arc::new(move |e: &Event| {
+            ec.lock().unwrap().push(e.clone());
+        }),
+    )
+    .unwrap();
+
+    let request = make_llm_request(json!({"messages": [{"role": "user", "content": "hello"}]}));
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(FailingResponseCodec);
+
+    // Pipeline should NOT return an error despite decode failure (non-fatal)
+    let result = nat_nexus_llm_call_execute(
+        "test_llm",
+        request,
+        noop_exec_fn(),
+        None,
+        LLMAttributes::empty(),
+        None,
+        None,
+        None,
+        None,
+        Some(response_codec),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "Pipeline should succeed even when response codec fails"
+    );
+
+    let captured = events.lock().unwrap();
+    let end_event = captured
+        .iter()
+        .find(|e| matches!(e, Event::LLMEnd(_)))
+        .expect("expected LLMEnd event");
+
+    match end_event {
+        Event::LLMEnd(inner) => {
+            assert!(
+                inner.annotated_response.is_none(),
+                "annotated_response should be None when decode fails"
+            );
+            assert!(inner.output.is_some(), "raw output should still be present");
+        }
+        _ => unreachable!(),
+    }
+
+    drop(captured);
+    nat_nexus_deregister_subscriber("fail_resp_codec_sub").unwrap();
+}
+
+#[tokio::test]
+async fn test_request_codec_populates_annotated_request() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let ec = events.clone();
+    nat_nexus_register_subscriber(
+        "req_codec_ann_sub",
+        Arc::new(move |e: &Event| {
+            ec.lock().unwrap().push(e.clone());
+        }),
+    )
+    .unwrap();
+
+    let (codec, _, _) = make_tracking_codec("req_codec_test");
+
+    let request = make_llm_request(json!({"messages": [{"role": "user", "content": "hello"}]}));
+
+    let _result = nat_nexus_llm_call_execute(
+        "test_llm",
+        request,
+        noop_exec_fn(),
+        None,
+        LLMAttributes::empty(),
+        None,
+        None,
+        None,
+        Some(codec),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let captured = events.lock().unwrap();
+    let start_event = captured
+        .iter()
+        .find(|e| matches!(e, Event::LLMStart(_)))
+        .expect("expected LLMStart event");
+
+    match start_event {
+        Event::LLMStart(inner) => {
+            assert!(
+                inner.annotated_request.is_some(),
+                "annotated_request should be Some when request codec is active"
+            );
+            let ann = inner.annotated_request.as_ref().unwrap();
+            assert_eq!(ann.model, Some("req_codec_test".into()));
+        }
+        _ => unreachable!(),
+    }
+
+    drop(captured);
+    nat_nexus_deregister_subscriber("req_codec_ann_sub").unwrap();
+}
+
+#[tokio::test]
+async fn test_stream_response_codec_populates_annotated_response() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let ec = events.clone();
+    nat_nexus_register_subscriber(
+        "stream_resp_codec_sub",
+        Arc::new(move |e: &Event| {
+            ec.lock().unwrap().push(e.clone());
+        }),
+    )
+    .unwrap();
+
+    let request = make_llm_request(json!({"messages": [{"role": "user", "content": "stream me"}]}));
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(MockResponseCodec);
+
+    let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(|_chunk| Ok(()));
+    let finalizer: Box<dyn FnOnce() -> Json + Send> =
+        Box::new(|| json!({"aggregated": "response"}));
+
+    let mut stream = nat_nexus_llm_stream_call_execute(
+        "test_stream",
+        request,
+        noop_stream_exec_fn(),
+        collector,
+        finalizer,
+        None,
+        LLMAttributes::empty(),
+        None,
+        None,
+        None,
+        None,
+        Some(response_codec),
+    )
+    .await
+    .unwrap();
+
+    // Drain the stream to trigger finalization and END event
+    while let Some(_chunk) = stream.next().await {}
+
+    let captured = events.lock().unwrap();
+    let end_event = captured
+        .iter()
+        .find(|e| matches!(e, Event::LLMEnd(_)))
+        .expect("expected LLMEnd event after stream drain");
+
+    match end_event {
+        Event::LLMEnd(inner) => {
+            assert!(
+                inner.annotated_response.is_some(),
+                "annotated_response should be Some on stream path when response codec is active"
+            );
+            let ann = inner.annotated_response.as_ref().unwrap();
+            assert_eq!(ann.id, Some("mock-resp-id".into()));
+            assert_eq!(ann.response_text(), Some("mock response text"));
+        }
+        _ => unreachable!(),
+    }
+
+    drop(captured);
+    nat_nexus_deregister_subscriber("stream_resp_codec_sub").unwrap();
 }

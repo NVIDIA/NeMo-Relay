@@ -159,6 +159,7 @@ async fn test_llm_execute_basic() {
         None,
         None,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -179,6 +180,7 @@ async fn test_llm_execute_promise() {
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
         None,
         None,
         None,
@@ -310,6 +312,7 @@ async fn test_llm_request_intercept_modifies_request() {
         None,
         None,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -335,6 +338,7 @@ async fn test_llm_execution_intercept_replaces_func() {
         None,
         JsValue::NULL,
         JsValue::NULL,
+        None,
         None,
         None,
         None,

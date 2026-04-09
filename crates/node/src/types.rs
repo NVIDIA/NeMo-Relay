@@ -361,6 +361,8 @@ pub enum JsEvent {
         attributes: u32,
         input: Option<serde_json::Value>,
         model_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        annotated_request: Option<serde_json::Value>,
     },
     LLMEnd {
         parent_uuid: Option<String>,
@@ -372,6 +374,8 @@ pub enum JsEvent {
         attributes: u32,
         output: Option<serde_json::Value>,
         model_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        annotated_response: Option<serde_json::Value>,
     },
     Mark {
         parent_uuid: Option<String>,
@@ -438,6 +442,10 @@ impl From<&core_types::Event> for JsEvent {
                 attributes: event.attributes.bits(),
                 input: event.input.clone(),
                 model_name: event.model_name.clone(),
+                annotated_request: event
+                    .annotated_request
+                    .as_ref()
+                    .and_then(|a| serde_json::to_value(a.as_ref()).ok()),
             },
             core_types::Event::LLMEnd(event) => Self::LLMEnd {
                 parent_uuid: event.parent_uuid.map(|u| u.to_string()),
@@ -449,6 +457,10 @@ impl From<&core_types::Event> for JsEvent {
                 attributes: event.attributes.bits(),
                 output: event.output.clone(),
                 model_name: event.model_name.clone(),
+                annotated_response: event
+                    .annotated_response
+                    .as_ref()
+                    .and_then(|a| serde_json::to_value(a.as_ref()).ok()),
             },
             core_types::Event::Mark(event) => Self::Mark {
                 parent_uuid: event.parent_uuid.map(|u| u.to_string()),
@@ -481,6 +493,196 @@ pub const LLM_ATTR_STATELESS: u32 = core_types::LLMAttributes::STATELESS.bits();
 /// LLM attribute flag: the LLM call uses streaming responses.
 #[napi]
 pub const LLM_ATTR_STREAMING: u32 = core_types::LLMAttributes::STREAMING.bits();
+
+// ---------------------------------------------------------------------------
+// Built-in codec classes
+// ---------------------------------------------------------------------------
+
+/// Built-in codec for the OpenAI Chat Completions API.
+///
+/// Implements both request codec (decode/encode) and response codec
+/// (decodeResponse). Construct with `new OpenAIChatCodec()`.
+#[napi]
+pub struct JsOpenAIChatCodec {
+    pub(crate) inner_codec: std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>,
+    pub(crate) inner_response_codec:
+        std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>,
+}
+
+#[napi]
+impl JsOpenAIChatCodec {
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner_codec: std::sync::Arc::new(nvidia_nat_nexus_core::codec::OpenAIChatCodec),
+            inner_response_codec: std::sync::Arc::new(
+                nvidia_nat_nexus_core::codec::OpenAIChatCodec,
+            ),
+        }
+    }
+
+    /// Decode an opaque LLM request into structured form.
+    #[napi]
+    pub fn decode(&self, request: Json) -> napi::Result<Json> {
+        let llm_req: nvidia_nat_nexus_core::types::LLMRequest = serde_json::from_value(request)
+            .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
+        let annotated = self
+            .inner_codec
+            .decode(&llm_req)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Encode structured changes back into an opaque LLM request.
+    #[napi]
+    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
+        let ann: nvidia_nat_nexus_core::codec::AnnotatedLLMRequest =
+            serde_json::from_value(annotated).map_err(|e| {
+                napi::Error::from_reason(format!("invalid AnnotatedLLMRequest: {e}"))
+            })?;
+        let orig: nvidia_nat_nexus_core::types::LLMRequest = serde_json::from_value(original)
+            .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
+        let result = self
+            .inner_codec
+            .encode(&ann, &orig)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Decode a raw LLM response into structured form.
+    #[napi(js_name = "decodeResponse")]
+    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
+        let annotated = self
+            .inner_response_codec
+            .decode_response(&response)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+}
+
+/// Built-in codec for the OpenAI Responses API.
+///
+/// Implements both request codec (decode/encode) and response codec
+/// (decodeResponse). Construct with `new OpenAIResponsesCodec()`.
+#[napi]
+pub struct JsOpenAIResponsesCodec {
+    pub(crate) inner_codec: std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>,
+    pub(crate) inner_response_codec:
+        std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>,
+}
+
+#[napi]
+impl JsOpenAIResponsesCodec {
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner_codec: std::sync::Arc::new(nvidia_nat_nexus_core::codec::OpenAIResponsesCodec),
+            inner_response_codec: std::sync::Arc::new(
+                nvidia_nat_nexus_core::codec::OpenAIResponsesCodec,
+            ),
+        }
+    }
+
+    /// Decode an opaque LLM request into structured form.
+    #[napi]
+    pub fn decode(&self, request: Json) -> napi::Result<Json> {
+        let llm_req: nvidia_nat_nexus_core::types::LLMRequest = serde_json::from_value(request)
+            .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
+        let annotated = self
+            .inner_codec
+            .decode(&llm_req)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Encode structured changes back into an opaque LLM request.
+    #[napi]
+    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
+        let ann: nvidia_nat_nexus_core::codec::AnnotatedLLMRequest =
+            serde_json::from_value(annotated).map_err(|e| {
+                napi::Error::from_reason(format!("invalid AnnotatedLLMRequest: {e}"))
+            })?;
+        let orig: nvidia_nat_nexus_core::types::LLMRequest = serde_json::from_value(original)
+            .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
+        let result = self
+            .inner_codec
+            .encode(&ann, &orig)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Decode a raw LLM response into structured form.
+    #[napi(js_name = "decodeResponse")]
+    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
+        let annotated = self
+            .inner_response_codec
+            .decode_response(&response)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+}
+
+/// Built-in codec for the Anthropic Messages API.
+///
+/// Implements both request codec (decode/encode) and response codec
+/// (decodeResponse). Construct with `new AnthropicMessagesCodec()`.
+#[napi]
+pub struct JsAnthropicMessagesCodec {
+    pub(crate) inner_codec: std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>,
+    pub(crate) inner_response_codec:
+        std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>,
+}
+
+#[napi]
+impl JsAnthropicMessagesCodec {
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner_codec: std::sync::Arc::new(nvidia_nat_nexus_core::codec::AnthropicMessagesCodec),
+            inner_response_codec: std::sync::Arc::new(
+                nvidia_nat_nexus_core::codec::AnthropicMessagesCodec,
+            ),
+        }
+    }
+
+    /// Decode an opaque LLM request into structured form.
+    #[napi]
+    pub fn decode(&self, request: Json) -> napi::Result<Json> {
+        let llm_req: nvidia_nat_nexus_core::types::LLMRequest = serde_json::from_value(request)
+            .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
+        let annotated = self
+            .inner_codec
+            .decode(&llm_req)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Encode structured changes back into an opaque LLM request.
+    #[napi]
+    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
+        let ann: nvidia_nat_nexus_core::codec::AnnotatedLLMRequest =
+            serde_json::from_value(annotated).map_err(|e| {
+                napi::Error::from_reason(format!("invalid AnnotatedLLMRequest: {e}"))
+            })?;
+        let orig: nvidia_nat_nexus_core::types::LLMRequest = serde_json::from_value(original)
+            .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
+        let result = self
+            .inner_codec
+            .encode(&ann, &orig)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Decode a raw LLM response into structured form.
+    #[napi(js_name = "decodeResponse")]
+    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
+        let annotated = self
+            .inner_response_codec
+            .decode_response(&response)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+}
 
 #[cfg(test)]
 #[path = "types_coverage_tests.rs"]

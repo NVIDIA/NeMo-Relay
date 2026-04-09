@@ -240,14 +240,21 @@ python/nat_nexus/
   __init__.py       # Re-exports, ContextVar-based scope isolation
   scope.py          # Scope operations
   tools.py          # Tool lifecycle
-  llm.py            # LLM lifecycle
+  llm.py            # LLM lifecycle (execute/stream_execute with codec/response_codec params)
   guardrails.py     # Guardrail registration
   intercepts.py     # Intercept registration
   subscribers.py    # Event subscriber registration
   scope_local.py    # Scope-local middleware registration
+  codecs.py         # LlmCodec and LlmResponseCodec protocols
   optimizer.py      # Config-driven optimizer runtime helpers
   typed.py          # Codec-based typed wrappers
 ```
+
+Built-in codec classes are exported from `nat_nexus` directly:
+`OpenAIChatCodec`, `OpenAIResponsesCodec`, `AnthropicMessagesCodec`.
+Each implements both `LlmCodec` (request decode/encode) and
+`LlmResponseCodec` (response decode). The protocol classes `LlmCodec`
+and `LlmResponseCodec` are in `nat_nexus.codecs`.
 
 The Python package wraps a PyO3 native extension (`_native`) built with the stable ABI (abi3), producing a single `.so` compatible with Python 3.11+.
 
@@ -1165,6 +1172,8 @@ opt into threaded builds (e.g., with `wasm-bindgen-rayon`).
 | Callback pattern | `PyAny` → closure | C trampolines | `ThreadsafeFunction` | `js_sys::Function` |
 | Stream support | AsyncIterator | Channel-based | Push-based bridge | Async iterator |
 | Typed wrappers | `nat_nexus.typed` | — | `typed.js` | — |
+| Built-in codecs | `OpenAIChatCodec`, `OpenAIResponsesCodec`, `AnthropicMessagesCodec` | `NewOpenAIChatCodec()`, `NewOpenAIResponsesCodec()`, `NewAnthropicMessagesCodec()` | `OpenAIChatCodec`, `OpenAIResponsesCodec`, `AnthropicMessagesCodec` | `WasmOpenAIChatCodec`, `WasmOpenAIResponsesCodec`, `WasmAnthropicMessagesCodec` |
+| Response codec param | `response_codec=` on execute/stream_execute | `WithLLMResponseCodec(codec)` | `responseCodecDecode` param | `response_codec_decode` param |
 | Memory management | GC | Manual (`Free`/`Close`) | GC | GC |
 
 ## Error Handling

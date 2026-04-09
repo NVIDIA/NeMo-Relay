@@ -17,52 +17,58 @@ Choose the path that matches what you are trying to do:
 
 1. [Getting Started: Python](getting-started-python.md)
 2. [Language Bindings](language-bindings.md#python)
-3. [Observability with OpenTelemetry](observability-with-opentelemetry.md)
-4. [Observability with OpenInference](observability-with-openinference.md)
-5. [Core Concepts](concepts.md)
+3. [Core Concepts](concepts.md)
+4. [Middleware Pipeline](middleware-pipeline.md)
+5. [LLM Codecs](llm-codecs.md)
 6. [API Reference](api-reference.md)
-7. [ATIF Export](atif-export.md)
-8. [Testing](testing.md)
+7. [Observability with OpenTelemetry](observability-with-opentelemetry.md)
+8. [Observability with OpenInference](observability-with-openinference.md)
+9. [ATIF Export](atif-export.md)
+10. [Testing](testing.md)
 
 ### Using Nexus from Node.js
 
 1. [Getting Started: Node.js](getting-started-node.md)
 2. [Language Bindings](language-bindings.md#nodejs)
-3. [Observability with OpenTelemetry](observability-with-opentelemetry.md)
-4. [Observability with OpenInference](observability-with-openinference.md)
-5. [Core Concepts](concepts.md)
-6. [Middleware Pipeline](middleware-pipeline.md)
-7. [Typed Wrappers](typed-wrappers.md)
-8. [Testing](testing.md)
+3. [Core Concepts](concepts.md)
+4. [Middleware Pipeline](middleware-pipeline.md)
+5. [LLM Codecs](llm-codecs.md)
+6. [Typed Wrappers](typed-wrappers.md)
+7. [Observability with OpenTelemetry](observability-with-opentelemetry.md)
+8. [Observability with OpenInference](observability-with-openinference.md)
+9. [Testing](testing.md)
 
 ### Using Nexus from Go
 
 1. [Getting Started: Go](getting-started-go.md)
 2. [Language Bindings](language-bindings.md#go)
-3. [Observability with OpenTelemetry](observability-with-opentelemetry.md)
-4. [Observability with OpenInference](observability-with-openinference.md)
-5. [Core Concepts](concepts.md)
-6. [Context Isolation](context-isolation.md)
-7. [API Reference](api-reference.md)
-8. [Testing](testing.md)
+3. [Core Concepts](concepts.md)
+4. [LLM Codecs](llm-codecs.md)
+5. [Context Isolation](context-isolation.md)
+6. [API Reference](api-reference.md)
+7. [Observability with OpenTelemetry](observability-with-opentelemetry.md)
+8. [Observability with OpenInference](observability-with-openinference.md)
+9. [Testing](testing.md)
 
 ### Using Nexus from WebAssembly
 
 1. [Getting Started: WebAssembly](getting-started-wasm.md)
 2. [Language Bindings](language-bindings.md#webassembly)
-3. [Observability with OpenTelemetry](observability-with-opentelemetry.md)
-4. [Observability with OpenInference](observability-with-openinference.md)
-5. [Core Concepts](concepts.md)
-6. [Middleware Pipeline](middleware-pipeline.md)
-7. [Context Isolation](context-isolation.md)
-8. [Testing](testing.md)
+3. [Core Concepts](concepts.md)
+4. [Middleware Pipeline](middleware-pipeline.md)
+5. [LLM Codecs](llm-codecs.md)
+6. [Context Isolation](context-isolation.md)
+7. [Observability with OpenTelemetry](observability-with-opentelemetry.md)
+8. [Observability with OpenInference](observability-with-openinference.md)
+9. [Testing](testing.md)
 
 ### Using the Optimizer Runtime
 
 1. [Optimizer Layer](optimizer-layer.md)
-2. [Online Learning Engine](online-learning-engine.md)
-3. [Context Isolation](context-isolation.md)
-4. [Testing](testing.md)
+2. [Optimizer API Reference](optimizer-api-reference.md)
+3. [Online Learning Engine](online-learning-engine.md)
+4. [Context Isolation](context-isolation.md)
+5. [Testing](testing.md)
 
 ### Contributing or Extending Bindings
 
@@ -80,7 +86,7 @@ Choose the path that matches what you are trying to do:
 | [Core Concepts](concepts.md) | Scopes, handles, events, and the middleware pipeline |
 | [API Reference](api-reference.md) | Core runtime function signatures shared across bindings |
 | [Middleware Pipeline](middleware-pipeline.md) | Detailed pipeline ordering for tool and LLM calls |
-| [LLM Codecs](llm-codecs.md) | Structured LLM request annotation, Codec authoring, and annotated intercepts |
+| [LLM Codecs](llm-codecs.md) | Request and response codecs, built-in API codecs (OpenAI Chat, OpenAI Responses, Anthropic Messages), event enrichment, and custom codec authoring |
 | [Typed Wrappers](typed-wrappers.md) | Codec-based typed APIs for Python and Node.js |
 | [Typed API Reference](typed-api-reference.md) | Function signatures and codec reference for `nat_nexus.typed` |
 | [Context Isolation](context-isolation.md) | Multi-tenant and concurrent scope stack management |

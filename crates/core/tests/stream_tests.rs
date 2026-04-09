@@ -65,7 +65,7 @@ async fn test_stream_wrapper_basic_chunks() {
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let mut chunks = Vec::new();
     while let Some(item) = wrapper.next().await {
@@ -87,7 +87,7 @@ async fn test_stream_wrapper_passthrough() {
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let mut chunks = Vec::new();
     while let Some(item) = wrapper.next().await {
@@ -107,7 +107,7 @@ async fn test_stream_wrapper_empty_stream() {
     let inner: Pin<Box<dyn Stream<Item = Result<Json>> + Send>> = Box::pin(tokio_stream::empty());
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let mut count = 0;
     while let Some(_item) = wrapper.next().await {
@@ -125,7 +125,7 @@ async fn test_stream_wrapper_single_chunk() {
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let mut chunks = Vec::new();
     while let Some(item) = wrapper.next().await {
@@ -169,11 +169,12 @@ async fn test_stream_wrapper_emits_end_event() {
         None,
         None,
         None,
+        None,
     )
     .unwrap();
 
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     // Consume the stream
     while let Some(_item) = wrapper.next().await {}
@@ -203,7 +204,7 @@ async fn test_stream_wrapper_error_propagation() {
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let first = wrapper.next().await.unwrap();
     assert!(first.is_ok());
@@ -222,7 +223,7 @@ async fn test_stream_wrapper_json_chunks() {
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let mut chunks = Vec::new();
     while let Some(item) = wrapper.next().await {
@@ -247,7 +248,7 @@ async fn test_stream_wrapper_collector_receives_all_chunks() {
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     // Consume the stream
     while let Some(_item) = wrapper.next().await {}
@@ -275,7 +276,7 @@ async fn test_stream_wrapper_finalizer_called_on_exhaustion() {
         *fc.lock().unwrap() = true;
         json!({"finalized": true})
     });
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     // Finalizer should not be called yet
     assert!(!*finalizer_called.lock().unwrap());
@@ -310,7 +311,7 @@ async fn test_stream_wrapper_error_skips_collector_and_finalizes_immediately() {
         *fc.lock().unwrap() = true;
         Json::Null
     });
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     // Consume the error
     let result = wrapper.next().await.unwrap();
@@ -357,12 +358,13 @@ async fn test_stream_wrapper_error_emits_end_event_on_first_error_poll() {
         None,
         None,
         None,
+        None,
     )
     .unwrap();
 
     let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(|_| Ok(()));
     let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| json!({"partial": true}));
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     let result = wrapper.next().await.unwrap();
     assert!(result.is_err());
@@ -408,11 +410,12 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
         None,
         None,
         None,
+        None,
     )
     .unwrap();
 
     let (collector, finalizer, _collected) = make_collector_finalizer();
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     // Consume the stream
     while let Some(_item) = wrapper.next().await {}
@@ -464,7 +467,7 @@ async fn test_stream_wrapper_collector_error_terminates_stream() {
         }
     });
     let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| Json::Null);
-    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None);
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
 
     // First chunk should succeed
     let first = wrapper.next().await;

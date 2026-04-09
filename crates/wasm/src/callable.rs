@@ -780,6 +780,73 @@ pub fn wrap_js_codec(decode_fn: Function, encode_fn: Function) -> Arc<dyn LlmCod
     })
 }
 
+// ---------------------------------------------------------------------------
+// Response codec wrapper
+// ---------------------------------------------------------------------------
+
+/// Wraps a JS function implementing `(response: JsValue) => JsValue` into an
+/// `Arc<dyn LlmResponseCodec>`.
+///
+/// # Safety
+///
+/// `SendWrapper` is used because JS functions are not `Send`. This is safe in
+/// WASM because the runtime is single-threaded.
+#[cfg(target_arch = "wasm32")]
+struct WasmResponseCodec {
+    decode_response_fn: SendWrapper<Function>,
+}
+
+#[cfg(target_arch = "wasm32")]
+unsafe impl Send for WasmResponseCodec {}
+#[cfg(target_arch = "wasm32")]
+unsafe impl Sync for WasmResponseCodec {}
+
+#[cfg(target_arch = "wasm32")]
+impl nvidia_nat_nexus_core::codec::LlmResponseCodec for WasmResponseCodec {
+    fn decode_response(
+        &self,
+        response: &Json,
+    ) -> nvidia_nat_nexus_core::Result<nvidia_nat_nexus_core::codec::AnnotatedLLMResponse> {
+        let js_resp = json_to_js(response);
+        let result = self
+            .decode_response_fn
+            .call1(&JsValue::NULL, &js_resp)
+            .map_err(|e| {
+                nvidia_nat_nexus_core::NexusError::Internal(format!(
+                    "decode_response() failed: {e:?}"
+                ))
+            })?;
+        let result_json = js_to_json(&result).map_err(|e| {
+            nvidia_nat_nexus_core::NexusError::Internal(format!(
+                "decode_response() returned invalid JSON: {e:?}"
+            ))
+        })?;
+        serde_json::from_value(result_json).map_err(|e| {
+            nvidia_nat_nexus_core::NexusError::Internal(format!(
+                "decode_response() returned unexpected type: {e}"
+            ))
+        })
+    }
+}
+
+/// Wrap a JS function into an `Arc<dyn LlmResponseCodec>`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wrap_js_response_codec(
+    _decode_response_fn: Function,
+) -> Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec> {
+    panic!("wrap_js_response_codec is only available on wasm32")
+}
+
+/// Wrap a JS function into an `Arc<dyn LlmResponseCodec>`.
+#[cfg(target_arch = "wasm32")]
+pub fn wrap_js_response_codec(
+    decode_response_fn: Function,
+) -> Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec> {
+    Arc::new(WasmResponseCodec {
+        decode_response_fn: SendWrapper::new(decode_response_fn),
+    })
+}
+
 /// Wrap a JS function for LLM sanitize response: `(response) => response`.
 ///
 /// Takes a `Json` value, passes it to JS, and deserializes the result back.

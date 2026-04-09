@@ -1070,6 +1070,7 @@ mod tests {
                     },
                     self.input,
                     self.model_name,
+                    None,
                 ),
                 (EventType::End, Some(ScopeType::Llm)) => Event::llm_end(
                     self.parent_uuid,
@@ -1083,6 +1084,7 @@ mod tests {
                     },
                     self.output,
                     self.model_name,
+                    None,
                 ),
                 (EventType::Start, Some(scope_type)) => Event::scope_start(
                     self.parent_uuid,

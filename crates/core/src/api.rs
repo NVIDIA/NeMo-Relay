@@ -32,7 +32,7 @@ use serde_json::json;
 use tokio_stream::Stream;
 use uuid::Uuid;
 
-use crate::codec::LlmCodec;
+use crate::codec::{AnnotatedLLMRequest, AnnotatedLLMResponse, LlmCodec, LlmResponseCodec};
 use crate::context::*;
 use crate::error::{NexusError, Result};
 use crate::json::Json;
@@ -378,7 +378,7 @@ fn run_request_intercepts_with_codec(
     name: &str,
     request: LLMRequest,
     codec: Option<Arc<dyn LlmCodec>>,
-) -> Result<LLMRequest> {
+) -> Result<(LLMRequest, Option<Arc<AnnotatedLLMRequest>>)> {
     let ss = current_scope_stack();
     let ss_guard = ss.read().expect("scope stack lock poisoned");
     let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_request_intercepts);
@@ -407,9 +407,9 @@ fn run_request_intercepts_with_codec(
             let mut encoded = c.encode(&ann, &original)?;
             // Preserve header modifications from intercepts
             encoded.headers = intercepted_request.headers;
-            Ok(encoded)
+            Ok((encoded, Some(Arc::new(ann))))
         }
-        _ => Ok(intercepted_request),
+        _ => Ok((intercepted_request, None)),
     }
 }
 
@@ -937,6 +937,7 @@ pub fn nat_nexus_llm_call(
     data: Option<Json>,
     metadata: Option<Json>,
     model_name: Option<String>,
+    annotated_request: Option<Arc<AnnotatedLLMRequest>>,
 ) -> Result<LLMHandle> {
     let parent_uuid = resolve_parent_uuid(parent);
     let (handle, event, subscribers) = {
@@ -954,7 +955,7 @@ pub fn nat_nexus_llm_call(
         let input = serde_json::to_value(&sanitized_request).unwrap_or(Json::Null);
         let handle =
             state.create_llm_handle(name, parent_uuid, attributes, data, metadata, model_name);
-        let event = state.build_llm_start_event(&handle, Some(input));
+        let event = state.build_llm_start_event(&handle, Some(input), annotated_request);
         (handle, event, subscribers)
     };
     NatNexusContextState::emit_event(&event, &subscribers);
@@ -969,6 +970,7 @@ pub fn nat_nexus_llm_call_end(
     response: Json,
     data: Option<Json>,
     metadata: Option<Json>,
+    annotated_response: Option<Arc<AnnotatedLLMResponse>>,
 ) -> Result<()> {
     let (event, subscribers) = {
         let ss = current_scope_stack();
@@ -982,7 +984,13 @@ pub fn nat_nexus_llm_call_end(
             .map_err(|e| NexusError::Internal(e.to_string()))?;
 
         let sanitized_response = state.llm_sanitize_response_chain(response, &sl);
-        let event = state.end_llm_handle(handle, data, metadata, Some(sanitized_response));
+        let event = state.end_llm_handle(
+            handle,
+            data,
+            metadata,
+            Some(sanitized_response),
+            annotated_response,
+        );
         (event, subscribers)
     };
     NatNexusContextState::emit_event(&event, &subscribers);
@@ -1004,7 +1012,7 @@ fn emit_llm_end_without_output(
             .read()
             .map_err(|e| NexusError::Internal(e.to_string()))?;
 
-        let event = state.end_llm_handle(handle, data, metadata, None);
+        let event = state.end_llm_handle(handle, data, metadata, None, None);
         (event, subscribers)
     };
     NatNexusContextState::emit_event(&event, &subscribers);
@@ -1033,6 +1041,7 @@ pub async fn nat_nexus_llm_call_execute(
     metadata: Option<Json>,
     model_name: Option<String>,
     codec: Option<Arc<dyn LlmCodec>>,
+    response_codec: Option<Arc<dyn LlmResponseCodec>>,
 ) -> Result<Json> {
     // Conditional guardrails — check on unmodified request
     {
@@ -1058,7 +1067,8 @@ pub async fn nat_nexus_llm_call_execute(
     }
 
     // Request intercepts with optional Codec decode/encode
-    let intercepted_request = run_request_intercepts_with_codec(name, request, codec)?;
+    let (intercepted_request, annotated_request) =
+        run_request_intercepts_with_codec(name, request, codec)?;
 
     // LLM call start (sanitize guardrails happen inside nat_nexus_llm_call)
     let handle = nat_nexus_llm_call(
@@ -1069,6 +1079,7 @@ pub async fn nat_nexus_llm_call_execute(
         data.clone(),
         metadata.clone(),
         model_name,
+        annotated_request,
     )?;
 
     // Execution chain — build middleware chain under lock, release, then await
@@ -1084,8 +1095,19 @@ pub async fn nat_nexus_llm_call_execute(
     };
     match exec_future(intercepted_request).await {
         Ok(response) => {
+            // Decode response before sanitize (annotated reflects raw API response)
+            let annotated_response = response_codec
+                .as_ref()
+                .and_then(|c| c.decode_response(&response).ok())
+                .map(Arc::new);
             // LLM call end (sanitize response guardrails happen inside nat_nexus_llm_call_end)
-            nat_nexus_llm_call_end(&handle, response.clone(), data, metadata)?;
+            nat_nexus_llm_call_end(
+                &handle,
+                response.clone(),
+                data,
+                metadata,
+                annotated_response,
+            )?;
             Ok(response)
         }
         Err(err) => {
@@ -1130,6 +1152,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
     metadata: Option<Json>,
     model_name: Option<String>,
     codec: Option<Arc<dyn LlmCodec>>,
+    response_codec: Option<Arc<dyn LlmResponseCodec>>,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<Json>> + Send>>> {
     // Conditional guardrails — check on unmodified request
     {
@@ -1155,7 +1178,8 @@ pub async fn nat_nexus_llm_stream_call_execute(
     }
 
     // Request intercepts with optional Codec decode/encode
-    let intercepted_request = run_request_intercepts_with_codec(name, request, codec)?;
+    let (intercepted_request, annotated_request) =
+        run_request_intercepts_with_codec(name, request, codec)?;
 
     // LLM call start (sanitize guardrails happen inside nat_nexus_llm_call)
     let handle = nat_nexus_llm_call(
@@ -1166,6 +1190,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
         data.clone(),
         metadata.clone(),
         model_name,
+        annotated_request,
     )?;
 
     // Stream execution chain — build middleware chain under lock, release, then await
@@ -1182,8 +1207,15 @@ pub async fn nat_nexus_llm_stream_call_execute(
     match exec_future(intercepted_request).await {
         Ok(raw_stream) => {
             // Wrap in LlmStreamWrapper which handles collector/finalizer and END event
-            let wrapper =
-                LlmStreamWrapper::new(raw_stream, handle, collector, finalizer, data, metadata);
+            let wrapper = LlmStreamWrapper::new(
+                raw_stream,
+                handle,
+                collector,
+                finalizer,
+                data,
+                metadata,
+                response_codec,
+            );
             Ok(Box::pin(wrapper))
         }
         Err(err) => {
@@ -1971,11 +2003,12 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         assert_eq!(handle.name, "my_llm");
 
-        nat_nexus_llm_call_end(&handle, json!({"response": "ok"}), None, None).unwrap();
+        nat_nexus_llm_call_end(&handle, json!({"response": "ok"}), None, None, None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -2023,6 +2056,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -2033,7 +2067,7 @@ mod tests {
         assert_eq!(input["headers"]["X-Sanitized"], "true");
 
         drop(captured);
-        nat_nexus_llm_call_end(&handle, json!("ok"), None, None).unwrap();
+        nat_nexus_llm_call_end(&handle, json!("ok"), None, None, None).unwrap();
         nat_nexus_deregister_subscriber("llm_san_test").unwrap();
         nat_nexus_deregister_llm_sanitize_request_guardrail("llm_sanitizer").unwrap();
     }
@@ -2058,6 +2092,7 @@ mod tests {
             func,
             None,
             LLMAttributes::empty(),
+            None,
             None,
             None,
             None,
@@ -2097,6 +2132,7 @@ mod tests {
             func,
             None,
             LLMAttributes::empty(),
+            None,
             None,
             None,
             None,
@@ -2153,6 +2189,7 @@ mod tests {
             func,
             None,
             LLMAttributes::empty(),
+            None,
             None,
             None,
             None,
@@ -2219,6 +2256,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2257,6 +2295,7 @@ mod tests {
             func,
             None,
             LLMAttributes::empty(),
+            None,
             None,
             None,
             None,
@@ -2545,6 +2584,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2590,6 +2630,7 @@ mod tests {
             Box::new(|| json!({"unused": true})),
             None,
             LLMAttributes::empty(),
+            None,
             None,
             None,
             None,
@@ -2669,6 +2710,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await;
 
@@ -2742,12 +2784,13 @@ mod tests {
             Some(json!({"custom": "data"})),
             Some(json!({"meta": "info"})),
             None,
+            None,
         )
         .unwrap();
 
         assert!(handle.attributes.contains(LLMAttributes::STATELESS));
         assert!(handle.attributes.contains(LLMAttributes::STREAMING));
-        nat_nexus_llm_call_end(&handle, json!({}), None, None).unwrap();
+        nat_nexus_llm_call_end(&handle, json!({}), None, None, None).unwrap();
     }
 
     // -- Standalone middleware chain tests --

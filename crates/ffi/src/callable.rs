@@ -1340,6 +1340,7 @@ mod tests {
             LLMAttributes::empty(),
             None,
             Some("test-model".into()),
+            None,
         );
         subscriber(&event);
         assert_eq!(seen.load(Ordering::SeqCst), 1);

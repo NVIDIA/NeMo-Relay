@@ -56,6 +56,18 @@ pub struct FfiOptimizerPluginContext(
     pub *mut nvidia_nat_nexus_optimizer::HostedRegistrationContext,
 );
 
+/// Opaque handle carrying both request and response codec trait objects.
+///
+/// Created by `nat_nexus_openai_chat_codec_new` (and similar constructors).
+/// Freed by `nat_nexus_codec_free`. The handle carries two `Arc`s pointing
+/// to the same underlying codec instance: one for the `LlmCodec` trait and
+/// one for the `LlmResponseCodec` trait.
+pub struct FfiCodecHandle {
+    #[allow(dead_code)]
+    pub(crate) codec: std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>,
+    pub(crate) response_codec: std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>,
+}
+
 // ---------------------------------------------------------------------------
 // Enums exposed to C
 // ---------------------------------------------------------------------------
@@ -229,6 +241,19 @@ pub unsafe extern "C" fn nat_nexus_openinference_subscriber_free(
 ) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
+    }
+}
+
+/// Free a codec handle previously returned by one of the codec constructor
+/// functions (`nat_nexus_openai_chat_codec_new`, etc.).
+///
+/// # Safety
+/// `handle` must be a valid pointer returned by one of the codec constructor
+/// functions, or null. Double-free is undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_codec_free(handle: *mut FfiCodecHandle) {
+    if !handle.is_null() {
+        drop(unsafe { Box::from_raw(handle) });
     }
 }
 
@@ -719,6 +744,52 @@ pub unsafe extern "C" fn nat_nexus_event_scope_type(ptr: *const FfiEvent) -> *mu
     }
 }
 
+/// Return the annotated request from an LLM start event as a JSON C string,
+/// or null if not available (non-LLM events, or no codec was active).
+/// Caller must free the result with `nat_nexus_string_free`.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiEvent` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_event_annotated_request(ptr: *const FfiEvent) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    match &unsafe { &*ptr }.0 {
+        core_types::Event::LLMStart(inner) => match &inner.annotated_request {
+            Some(a) => {
+                let value = serde_json::to_value(a.as_ref()).unwrap_or_default();
+                json_to_c_string(&value)
+            }
+            None => std::ptr::null_mut(),
+        },
+        _ => std::ptr::null_mut(),
+    }
+}
+
+/// Return the annotated response from an LLM end event as a JSON C string,
+/// or null if not available (non-LLM events, or no response codec was active).
+/// Caller must free the result with `nat_nexus_string_free`.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiEvent` pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn nat_nexus_event_annotated_response(ptr: *const FfiEvent) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    match &unsafe { &*ptr }.0 {
+        core_types::Event::LLMEnd(inner) => match &inner.annotated_response {
+            Some(a) => {
+                let value = serde_json::to_value(a.as_ref()).unwrap_or_default();
+                json_to_c_string(&value)
+            }
+            None => std::ptr::null_mut(),
+        },
+        _ => std::ptr::null_mut(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1019,6 +1090,7 @@ mod tests {
             core_types::LLMAttributes::empty(),
             Some(json!({"input": true})),
             Some("model".into()),
+            None,
         );
         let ffi_llm_event = FfiEvent(llm_event);
         assert_eq!(
