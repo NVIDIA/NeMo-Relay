@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Contributing to NeMo Agent Toolkit Nexus
+# Contributing to NeMo Flow
 
-Thank you for your interest in contributing to Nexus. This guide covers the development workflow, coding standards, and pull request process.
+Thank you for your interest in contributing to NeMo Flow. This guide covers the development workflow, coding standards, and pull request process.
 
 ## Development Setup
 
@@ -24,7 +24,7 @@ Ensure you have the following installed:
 
 ```bash
 # Clone the repository
-git clone <repo-url> && cd nexus
+git clone <repo-url> && cd NeMo-Flow
 
 # Install Python dependencies and build the native extension
 uv sync
@@ -36,7 +36,7 @@ uv run pre-commit install
 cargo build --workspace
 
 # Build the FFI shared library (needed for Go bindings)
-cargo build --release -p nvidia-nat-nexus-ffi
+cargo build --release -p nemo-flow-ffi
 
 # Build Node.js addon
 cd crates/node && npm install && npm run build && cd ../..
@@ -82,7 +82,7 @@ Examples: `feat/scope-context-managers`, `fix/node-wasm-silent-failures`, `docs/
 
 ### General
 
-- Use the naming conventions appropriate to each language: Rust `snake_case`, C FFI exports prefixed `nat_nexus_`, Go `PascalCase`, Node.js `camelCase`, Python `snake_case`.
+- Use the naming conventions appropriate to each language: Rust `snake_case`, C FFI exports prefixed `nemo_flow_`, Go `PascalCase`, Node.js `camelCase`, Python `snake_case`.
 
 ## Pre-commit Hooks
 
@@ -117,7 +117,7 @@ cargo test --workspace
 uv run pytest
 
 # Go (requires FFI lib built with --release)
-cd go/nat_nexus && \
+cd go/nemo_flow && \
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" \
 go test -race -v ./...
 
@@ -125,7 +125,7 @@ go test -race -v ./...
 cd crates/node && npm install && npm test
 
 # WASM (unit tests)
-cargo test -p nat-nexus-wasm
+cargo test -p nemo-flow-wasm
 
 # WASM (integration tests)
 wasm-pack test --node crates/wasm

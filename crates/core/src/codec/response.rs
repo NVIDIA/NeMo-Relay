@@ -251,7 +251,7 @@ mod tests {
 
     use super::super::request::ContentPart;
     use super::super::traits::LlmResponseCodec;
-    use crate::error::NexusError;
+    use crate::error::FlowError;
 
     /// Helper: build a fully-populated AnnotatedLLMResponse.
     fn full_response() -> AnnotatedLLMResponse {
@@ -581,7 +581,7 @@ mod tests {
 
     impl LlmResponseCodec for FailingMockResponseCodec {
         fn decode_response(&self, _response: &Json) -> crate::error::Result<AnnotatedLLMResponse> {
-            Err(NexusError::Internal("decode failed".into()))
+            Err(FlowError::Internal("decode failed".into()))
         }
     }
 

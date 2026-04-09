@@ -1,0 +1,573 @@
+diff --git a/bun.lock b/bun.lock
+index 35841622b..376ce0fd6 100644
+--- a/bun.lock
++++ b/bun.lock
+@@ -23,6 +23,9 @@
+         "sst": "3.18.10",
+         "turbo": "2.8.13",
+       },
++      "optionalDependencies": {
++        "@nvidia/nemo-flow-node": "file:../../crates/node",
++      },
+     },
+     "packages/app": {
+       "name": "@opencode-ai/app",
+@@ -413,6 +416,9 @@
+         "why-is-node-running": "3.2.2",
+         "zod-to-json-schema": "3.24.5",
+       },
++      "optionalDependencies": {
++        "@nvidia/nemo-flow-node": "file:../../crates/node",
++      },
+     },
+     "packages/plugin": {
+       "name": "@opencode-ai/plugin",
+@@ -1340,6 +1346,8 @@
+
+     "@msgpackr-extract/msgpackr-extract-win32-x64": ["@msgpackr-extract/msgpackr-extract-win32-x64@3.0.3", "", { "os": "win32", "cpu": "x64" }, "sha512-x0fWaQtYp4E6sktbsdAqnehxDgEc/VwM7uLsRCYWaiGu0ykYdZPiS8zCWdnjHwyiumousxfBm4SO31eXqwEZhQ=="],
+
++    "@napi-rs/cli": ["@napi-rs/cli@2.18.4", "", { "bin": { "napi": "scripts/index.js" } }, "sha512-SgJeA4df9DE2iAEpr3M2H0OKl/yjtg1BnRI5/JyowS71tUWhrfSu2LT0V3vlHET+g1hBVlrO60PmEXwUEKp8Mg=="],
++
+     "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@1.1.1", "", { "dependencies": { "@emnapi/core": "^1.7.1", "@emnapi/runtime": "^1.7.1", "@tybys/wasm-util": "^0.10.1" } }, "sha512-p64ah1M1ld8xjWv3qbvFwHiFVWrq1yFvV4f7w+mzaqiR4IlSgkqhcRdHwsGgomwzBH51sRY4NEowLxnaBjcW/A=="],
+
+     "@nodelib/fs.scandir": ["@nodelib/fs.scandir@2.1.5", "", { "dependencies": { "@nodelib/fs.stat": "2.0.5", "run-parallel": "^1.1.9" } }, "sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g=="],
+@@ -1352,6 +1360,8 @@
+
+     "@npmcli/fs": ["@npmcli/fs@4.0.0", "", { "dependencies": { "semver": "^7.3.5" } }, "sha512-/xGlezI6xfGO9NwuJlnwz/K14qD1kCSAGtacBHnGzeAIuJGazcp45KP5NuyARXoKb7cwulAGWVsbeSxdG/cb0Q=="],
+
++    "@nvidia/nemo-flow-node": ["@nvidia/nemo-flow-node@file:../../crates/node", { "devDependencies": { "@napi-rs/cli": "^2" } }],
++
+     "@octokit/auth-app": ["@octokit/auth-app@8.0.1", "", { "dependencies": { "@octokit/auth-oauth-app": "^9.0.1", "@octokit/auth-oauth-user": "^6.0.0", "@octokit/request": "^10.0.2", "@octokit/request-error": "^7.0.0", "@octokit/types": "^14.0.0", "toad-cache": "^3.7.0", "universal-github-app-jwt": "^2.2.0", "universal-user-agent": "^7.0.0" } }, "sha512-P2J5pB3pjiGwtJX4WqJVYCtNkcZ+j5T2Wm14aJAEIC3WJOrv12jvBley3G1U/XI8q9o1A7QMG54LiFED2BiFlg=="],
+
+     "@octokit/auth-oauth-app": ["@octokit/auth-oauth-app@9.0.3", "", { "dependencies": { "@octokit/auth-oauth-device": "^8.0.3", "@octokit/auth-oauth-user": "^6.0.2", "@octokit/request": "^10.0.6", "@octokit/types": "^16.0.0", "universal-user-agent": "^7.0.0" } }, "sha512-+yoFQquaF8OxJSxTb7rnytBIC2ZLbLqA/yb71I4ZXT9+Slw4TziV9j/kyGhUFRRTF2+7WlnIWsePZCWHs+OGjg=="],
+diff --git a/package.json b/package.json
+index 97087c0e7..b83d31674 100644
+--- a/package.json
++++ b/package.json
+@@ -111,5 +111,8 @@
+   "patchedDependencies": {
+     "@standard-community/standard-openapi@0.2.9": "patches/@standard-community%2Fstandard-openapi@0.2.9.patch",
+     "@openrouter/ai-sdk-provider@1.5.4": "patches/@openrouter%2Fai-sdk-provider@1.5.4.patch"
++  },
++  "optionalDependencies": {
++    "@nvidia/nemo-flow-node": "file:../../crates/node"
+   }
+ }
+diff --git a/packages/opencode/package.json b/packages/opencode/package.json
+index c462b1761..3859c7d11 100644
+--- a/packages/opencode/package.json
++++ b/packages/opencode/package.json
+@@ -139,6 +139,9 @@
+     "zod": "catalog:",
+     "zod-to-json-schema": "3.24.5"
+   },
++  "optionalDependencies": {
++    "@nvidia/nemo-flow-node": "file:../../crates/node"
++  },
+   "overrides": {
+     "drizzle-orm": "1.0.0-beta.16-ea816b6"
+   }
+diff --git a/packages/opencode/src/config/config.ts b/packages/opencode/src/config/config.ts
+index 27ba4e186..2d6855027 100644
+--- a/packages/opencode/src/config/config.ts
++++ b/packages/opencode/src/config/config.ts
+@@ -1205,6 +1205,7 @@ export namespace Config {
+         .object({
+           disable_paste_summary: z.boolean().optional(),
+           batch_tool: z.boolean().optional().describe("Enable the batch tool"),
++          nemo_flow: z.boolean().optional().describe("Enable NemoFlow agent tracing and ATIF trajectory export"),
+           openTelemetry: z
+             .boolean()
+             .optional()
+diff --git a/packages/opencode/src/flag/flag.ts b/packages/opencode/src/flag/flag.ts
+index a1cfd862b..4759ab4e6 100644
+--- a/packages/opencode/src/flag/flag.ts
++++ b/packages/opencode/src/flag/flag.ts
+@@ -41,6 +41,7 @@ export namespace Flag {
+   export const OPENCODE_ENABLE_QUESTION_TOOL = truthy("OPENCODE_ENABLE_QUESTION_TOOL")
+
+   // Experimental
++  export const NEMO_FLOW_ENABLED = truthy("NEMO_FLOW_ENABLED")
+   export const OPENCODE_EXPERIMENTAL = truthy("OPENCODE_EXPERIMENTAL")
+   export const OPENCODE_EXPERIMENTAL_FILEWATCHER = Config.boolean("OPENCODE_EXPERIMENTAL_FILEWATCHER").pipe(
+     Config.withDefault(false),
+diff --git a/packages/opencode/src/nemo_flow/index.ts b/packages/opencode/src/nemo_flow/index.ts
+new file mode 100644
+index 000000000..367966404
+--- /dev/null
++++ b/packages/opencode/src/nemo_flow/index.ts
+@@ -0,0 +1,259 @@
++import { Log } from "../util/log"
++import { Flag } from "../flag/flag"
++
++const log = Log.create({ service: "nemo_flow" })
++
++let lib: any = null
++let typedLib: any = null
++let enabled = false
++let initDone = false
++
++const exporters = new Map<string, any>()
++
++export namespace NemoFlow {
++  export let SCOPE_ATTR_PARALLEL = 0
++
++  export async function init(config?: { nemo_flow?: boolean }): Promise<boolean> {
++    if (initDone) return enabled
++    initDone = true
++    if (!Flag.NEMO_FLOW_ENABLED && !config?.nemo_flow) return false
++
++    try {
++      lib = await import("@nvidia/nemo-flow-node")
++      typedLib = await import("@nvidia/nemo-flow-node/typed")
++      enabled = true
++      SCOPE_ATTR_PARALLEL = lib.SCOPE_ATTR_PARALLEL ?? 0
++      log.info("initialized")
++    } catch (e) {
++      log.warn("native addon not available, disabling", { error: e })
++      enabled = false
++    }
++
++    return enabled
++  }
++
++  export function isEnabled(): boolean {
++    return enabled
++  }
++
++  export function pushAgentScope(name: string) {
++    if (!enabled || !lib) return null
++    try {
++      return lib.pushScope(name, 0 /* ScopeType.Agent */)
++    } catch (e) {
++      log.error("pushAgentScope", { error: e })
++      return null
++    }
++  }
++
++  export function pushFunctionScope(name: string, attributes?: number) {
++    if (!enabled || !lib) return null
++    try {
++      return lib.pushScope(name, 1 /* ScopeType.Function */, null, attributes ?? null)
++    } catch (e) {
++      log.error("pushFunctionScope", { error: e })
++      return null
++    }
++  }
++
++  export function popScope(handle: unknown) {
++    if (!enabled || !lib || !handle) return
++    try {
++      lib.popScope(handle)
++    } catch (e) {
++      log.error("popScope", { error: e })
++    }
++  }
++
++  export async function wrapToolExecute<T>(
++    name: string,
++    args: any,
++    fn: (args: any) => Promise<T>,
++  ): Promise<T> {
++    if (!enabled || !lib) return fn(args)
++    try {
++      // Capture the original JS result to avoid the lossy NAPI JSON round-trip.
++      // Tool results may contain non-JSON types (class instances, LSP diagnostics)
++      // that don't survive serde_json serialization. NemoFlow still sees a JSON copy
++      // for its events/intercepts; the caller gets the original object.
++      let originalResult: T
++      await lib.toolCallExecuteAsync(name, args, async (a: any) => {
++        originalResult = await fn(a)
++        return originalResult
++      }, null, null, null, null)
++      return originalResult!
++    } catch (e) {
++      log.error("wrapToolExecute", { error: e })
++      return fn(args)
++    }
++  }
++
++  // ---------------------------------------------------------------------------
++  // StreamInput codec — bidirectional serialization across the NAPI boundary
++  // ---------------------------------------------------------------------------
++  // Strips non-JSON-serializable fields (AbortSignal, Tool functions) during
++  // encoding. After NemoFlow intercepts potentially modify the serializable
++  // subset, applyIntercepted merges changes back while restoring the stripped
++  // fields from the original.
++
++  function encodeStreamInput(input: any): any {
++    const { abort: _abort, tools, ...rest } = input
++    return {
++      ...rest,
++      toolNames: Object.keys(tools),
++    }
++  }
++
++  function applyIntercepted(input: any, intercepted: any): void {
++    if (!intercepted) return
++    const { toolNames: _tn, ...fields } = intercepted
++    Object.assign(input, fields)
++  }
++
++  // ---------------------------------------------------------------------------
++  // wrapLlmStream — uses typedLlmStreamExecute with codecs
++  // ---------------------------------------------------------------------------
++
++  export async function* wrapLlmStream(
++    streamInput: any,
++    streamFn: () => AsyncIterable<any>,
++  ): AsyncGenerator<any> {
++    if (!enabled || !typedLib) {
++      yield* streamFn()
++      return
++    }
++    try {
++      const request = {
++        headers: {},
++        content: encodeStreamInput(streamInput),
++      }
++
++      // Buffer original AI SDK events — they contain non-serializable objects
++      // (Error instances, class instances) that can't survive NAPI JSON
++      // round-tripping, so we never pass them through serde.
++      const originals: any[] = []
++      const responseChunks: string[] = []
++      const toolCalls: any[] = []
++
++      // Chunk codec: toJson buffers the original and emits a JSON-safe marker;
++      // fromJson returns the buffered original so the collector sees real events.
++      const chunkCodec = {
++        toJson(event: any): any {
++          originals.push(event)
++          if (event.type === "text-delta" && event.text) {
++            responseChunks.push(event.text)
++          } else if (event.type === "tool-call") {
++            toolCalls.push({
++              id: event.toolCallId,
++              type: "function",
++              function: {
++                name: event.toolName,
++                arguments: JSON.stringify(event.input ?? {}),
++              },
++            })
++          }
++          return { _t: event.type ?? "chunk" }
++        },
++        fromJson(_data: any): any {
++          return originals.shift()
++        },
++      }
++
++      // Response codec: the ATIF finalizer response is already JSON-safe.
++      const responseCodec = new typedLib.JsonPassthrough()
++
++      const collected: any[] = []
++
++      const nvStream = await typedLib.typedLlmStreamExecute(
++        streamInput.model.providerID,
++        request,
++        (interceptedReq: any) => {
++          // Apply intercepted request changes back to streamInput before
++          // streamFn() reads it — streamFn captures streamInput by reference.
++          applyIntercepted(streamInput, interceptedReq?.content)
++          // Bridge NemoFlow-intercepted headers to the AI SDK HTTP request.
++          if (interceptedReq?.headers && Object.keys(interceptedReq.headers).length > 0) {
++            streamInput.extraHeaders = interceptedReq.headers
++          }
++          return streamFn()
++        },
++        (chunk: any) => {
++          collected.push(chunk)
++        },
++        () => {
++          const result: any = {
++            role: "assistant",
++            content: responseChunks.join("") || null,
++          }
++          if (toolCalls.length > 0) {
++            result.tool_calls = toolCalls
++          }
++          return result
++        },
++        chunkCodec,
++        responseCodec,
++        {
++          attributes: lib.LLM_ATTR_STREAMING,
++          modelName: streamInput.model.id,
++        },
++      )
++
++      // Drain NemoFlow stream (drives lifecycle/intercepts) and yield collected events
++      while ((await nvStream.next()) !== null) {
++        while (collected.length > 0) {
++          yield collected.shift()
++        }
++      }
++      // Yield any remaining buffered events
++      while (collected.length > 0) {
++        yield collected.shift()
++      }
++    } catch (e) {
++      log.error("wrapLlmStream", { error: e })
++      yield* streamFn()
++    }
++  }
++
++  export function hasExporter(sessionId: string): boolean {
++    return exporters.has(sessionId)
++  }
++
++  export function createExporter(
++    sessionId: string,
++    agentName: string,
++    modelName?: string,
++  ) {
++    if (!enabled || !lib) return null
++    try {
++      const exporter = new lib.JsAtifExporter(sessionId, agentName, "1.0.0", modelName ?? null)
++      exporter.register(`atif-${sessionId}`)
++      exporters.set(sessionId, exporter)
++      return exporter
++    } catch (e) {
++      log.error("createExporter", { error: e })
++      return null
++    }
++  }
++
++  export function exportTrajectory(sessionId: string): string | null {
++    const exporter = exporters.get(sessionId)
++    if (!exporter) return null
++    try {
++      return exporter.exportJson()
++    } catch (e) {
++      log.error("exportTrajectory", { error: e })
++      return null
++    }
++  }
++
++  export function clearExporter(sessionId: string) {
++    const exporter = exporters.get(sessionId)
++    if (!exporter) return
++    try {
++      exporter.deregister(`atif-${sessionId}`)
++      exporters.delete(sessionId)
++    } catch (e) {
++      log.error("clearExporter", { error: e })
++    }
++  }
++}
+diff --git a/packages/opencode/src/plugin/index.ts b/packages/opencode/src/plugin/index.ts
+index 8790efac4..b41431819 100644
+--- a/packages/opencode/src/plugin/index.ts
++++ b/packages/opencode/src/plugin/index.ts
+@@ -12,6 +12,7 @@ import { Session } from "../session"
+ import { NamedError } from "@opencode-ai/util/error"
+ import { CopilotAuthPlugin } from "./copilot"
+ import { gitlabAuthPlugin as GitlabAuthPlugin } from "@gitlab/opencode-gitlab-auth"
++import { NemoFlowPlugin } from "./nemo_flow"
+
+ export namespace Plugin {
+   const log = Log.create({ service: "plugin" })
+@@ -19,7 +20,7 @@ export namespace Plugin {
+   const BUILTIN = ["opencode-anthropic-auth@0.0.13"]
+
+   // Built-in plugins that are directly imported (not installed from npm)
+-  const INTERNAL_PLUGINS: PluginInstance[] = [CodexAuthPlugin, CopilotAuthPlugin, GitlabAuthPlugin]
++  const INTERNAL_PLUGINS: PluginInstance[] = [CodexAuthPlugin, CopilotAuthPlugin, GitlabAuthPlugin, NemoFlowPlugin]
+
+   const state = Instance.state(async () => {
+     const client = createOpencodeClient({
+diff --git a/packages/opencode/src/plugin/nemo_flow.ts b/packages/opencode/src/plugin/nemo_flow.ts
+new file mode 100644
+index 000000000..1344001b1
+--- /dev/null
++++ b/packages/opencode/src/plugin/nemo_flow.ts
+@@ -0,0 +1,50 @@
++import type { Hooks, Plugin as PluginInstance } from "@opencode-ai/plugin"
++import { Config } from "../config/config"
++import { NemoFlow } from "../nemo_flow"
++import { Global } from "../global"
++import { Log } from "../util/log"
++import path from "path"
++import fs from "fs/promises"
++
++const log = Log.create({ service: "plugin.nemo_flow" })
++
++export const NemoFlowPlugin: PluginInstance = async (_input) => {
++  const config = await Config.get()
++  const enabled = await NemoFlow.init({ nemo_flow: config.experimental?.nemo_flow })
++  if (!enabled) return {}
++
++  const atifDir = path.join(Global.Path.data, "atif")
++  await fs.mkdir(atifDir, { recursive: true })
++
++  return {
++    "chat.message": async (hookInput, _output) => {
++      if (!NemoFlow.hasExporter(hookInput.sessionID)) {
++        const modelStr = hookInput.model
++          ? `${hookInput.model.providerID}/${hookInput.model.modelID}`
++          : undefined
++        NemoFlow.createExporter(
++          hookInput.sessionID,
++          hookInput.agent ?? "opencode",
++          modelStr,
++        )
++      }
++    },
++
++    event: async ({ event }) => {
++      // Auto-export ATIF trajectory when session goes idle
++      const props = (event as any).properties
++      if ((event as any).type === "session.status" && props?.status?.type === "idle") {
++        const sessionID = props.sessionID as string
++        if (!sessionID || !NemoFlow.hasExporter(sessionID)) return
++
++        const trajectory = NemoFlow.exportTrajectory(sessionID)
++        if (!trajectory) return
++
++        const filePath = path.join(atifDir, `${sessionID}.json`)
++        await fs.writeFile(filePath, trajectory)
++        log.info("exported ATIF trajectory", { sessionID, path: filePath })
++        NemoFlow.clearExporter(sessionID)
++      }
++    },
++  } satisfies Hooks
++}
+diff --git a/packages/opencode/src/session/llm.ts b/packages/opencode/src/session/llm.ts
+index 88841a30a..0d31b9ce6 100644
+--- a/packages/opencode/src/session/llm.ts
++++ b/packages/opencode/src/session/llm.ts
+@@ -40,6 +40,7 @@ export namespace LLM {
+     tools: Record<string, Tool>
+     retries?: number
+     toolChoice?: "auto" | "required" | "none"
++    extraHeaders?: Record<string, string>
+   }
+
+   export type StreamOutput = StreamTextResult<ToolSet, unknown>
+@@ -221,6 +222,7 @@ export namespace LLM {
+             : undefined),
+         ...input.model.headers,
+         ...headers,
++        ...input.extraHeaders,
+       },
+       maxRetries: input.retries ?? 0,
+       messages: [
+diff --git a/packages/opencode/src/session/processor.ts b/packages/opencode/src/session/processor.ts
+index 38dac41b0..ae988f1cc 100644
+--- a/packages/opencode/src/session/processor.ts
++++ b/packages/opencode/src/session/processor.ts
+@@ -16,6 +16,7 @@ import { PermissionNext } from "@/permission/next"
+ import { Question } from "@/question"
+ import { PartID } from "./schema"
+ import type { SessionID, MessageID } from "./schema"
++import { NemoFlow } from "@/nemo_flow"
+
+ export namespace SessionProcessor {
+   const DOOM_LOOP_THRESHOLD = 3
+@@ -51,9 +52,16 @@ export namespace SessionProcessor {
+           try {
+             let currentText: MessageV2.TextPart | undefined
+             let reasoningMap: Record<string, MessageV2.ReasoningPart> = {}
+-            const stream = await LLM.stream(streamInput)
+-
+-            for await (const value of stream.fullStream) {
++            const eventStream = NemoFlow.wrapLlmStream(
++              streamInput,
++              async function*() {
++                const stream = await LLM.stream(streamInput)
++                for await (const event of stream.fullStream) {
++                  yield event
++                }
++              },
++            )
++            for await (const value of eventStream) {
+               input.abort.throwIfAborted()
+               switch (value.type) {
+                 case "start":
+diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
+index 5bde2608f..5d4c54dfe 100644
+--- a/packages/opencode/src/session/prompt.ts
++++ b/packages/opencode/src/session/prompt.ts
+@@ -38,6 +38,7 @@ import { ConfigMarkdown } from "../config/markdown"
+ import { SessionSummary } from "./summary"
+ import { NamedError } from "@opencode-ai/util/error"
+ import { fn } from "@/util/fn"
++import { NemoFlow } from "../nemo_flow"
+ import { SessionProcessor } from "./processor"
+ import { TaskTool } from "@/tool/task"
+ import { Tool } from "@/tool/tool"
+@@ -294,6 +295,8 @@ export namespace SessionPrompt {
+
+     let step = 0
+     const session = await Session.get(sessionID)
++    let agentScopeHandle: unknown = null
++    using _nemo_flowScope = defer(() => NemoFlow.popScope(agentScopeHandle))
+     while (true) {
+       SessionStatus.set(sessionID, { type: "busy" })
+       log.info("loop", { step, sessionID })
+@@ -559,6 +562,9 @@ export namespace SessionPrompt {
+
+       // normal processing
+       const agent = await Agent.get(lastUser.agent)
++      if (!agentScopeHandle) {
++        agentScopeHandle = NemoFlow.pushAgentScope(agent.name)
++      }
+       const maxSteps = agent.steps ?? Infinity
+       const isLastStep = step >= maxSteps
+       msgs = await insertReminders({
+@@ -811,7 +817,9 @@ export namespace SessionPrompt {
+               args,
+             },
+           )
+-          const result = await item.execute(args, ctx)
++          const result = await NemoFlow.wrapToolExecute(item.id, args, async (a) => {
++            return item.execute(a, ctx)
++          })
+           const output = {
+             ...result,
+             attachments: result.attachments?.map((attachment) => ({
+@@ -865,7 +873,9 @@ export namespace SessionPrompt {
+           always: ["*"],
+         })
+
+-        const result = await execute(args, opts)
++        const result = await NemoFlow.wrapToolExecute(key, args, async (a) => {
++          return execute(a, opts)
++        })
+
+         await Plugin.trigger(
+           "tool.execute.after",
+diff --git a/packages/opencode/src/tool/batch.ts b/packages/opencode/src/tool/batch.ts
+index 00c22bfe6..521cbfcbc 100644
+--- a/packages/opencode/src/tool/batch.ts
++++ b/packages/opencode/src/tool/batch.ts
+@@ -2,6 +2,7 @@ import z from "zod"
+ import { Tool } from "./tool"
+ import { ProviderID, ModelID } from "../provider/schema"
+ import DESCRIPTION from "./batch.txt"
++import { NemoFlow } from "../nemo_flow"
+
+ const DISALLOWED = new Set(["batch"])
+ const FILTERED_FROM_SUGGESTIONS = new Set(["invalid", "patch", ...DISALLOWED])
+@@ -77,7 +78,9 @@ export const BatchTool = Tool.define("batch", async () => {
+             },
+           })
+
+-          const result = await tool.execute(validatedParams, { ...ctx, callID: partID })
++          const result = await NemoFlow.wrapToolExecute(call.tool, validatedParams, async (args) => {
++            return tool.execute(args, { ...ctx, callID: partID })
++          })
+           const attachments = result.attachments?.map((attachment) => ({
+             ...attachment,
+             id: PartID.ascending(),
+@@ -130,7 +133,9 @@ export const BatchTool = Tool.define("batch", async () => {
+         }
+       }
+
++      const batchScope = NemoFlow.pushFunctionScope("batch-parallel", NemoFlow.SCOPE_ATTR_PARALLEL)
+       const results = await Promise.all(toolCalls.map((call) => executeCall(call)))
++      NemoFlow.popScope(batchScope)
+
+       // Add discarded calls as errors
+       const now = Date.now()

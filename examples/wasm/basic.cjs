@@ -11,7 +11,7 @@ Run from the repository root:
   node examples/wasm/basic.cjs
 */
 
-const wasm = require("../../crates/wasm/pkg/nvidia_nat_nexus_wasm.js");
+const wasm = require("../../crates/wasm/pkg/nemo_flow_wasm.js");
 const init = wasm.default;
 const { pushScope, popScope, toolCallExecute, SCOPE_TYPE_AGENT } = wasm;
 

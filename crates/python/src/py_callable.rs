@@ -28,11 +28,11 @@ use pyo3::prelude::*;
 use serde_json::Value as Json;
 use tokio_stream::Stream;
 
-use nvidia_nat_nexus_core::codec::{AnnotatedLLMRequest, LlmCodec};
-use nvidia_nat_nexus_core::types::LLMRequest;
-use nvidia_nat_nexus_core::{
-    LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionNextFn,
-    NexusError, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
+use nemo_flow_core::codec::{AnnotatedLLMRequest, LlmCodec};
+use nemo_flow_core::types::LLMRequest;
+use nemo_flow_core::{
+    FlowError, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
+    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
 };
 
 use crate::convert::{json_to_py, py_to_json};
@@ -45,19 +45,19 @@ pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> Box<dyn Fn(&str, Json) -> Json + Sen
             let py_args = match json_to_py(py, &args) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("nat_nexus: json_to_py failed in tool fn for '{name}': {e}");
+                    eprintln!("nemo_flow: json_to_py failed in tool fn for '{name}': {e}");
                     return args.clone();
                 }
             };
             let result = match py_fn.call1(py, (name, py_args)) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("nat_nexus: Python tool callable failed for '{name}': {e}");
+                    eprintln!("nemo_flow: Python tool callable failed for '{name}': {e}");
                     return args.clone();
                 }
             };
             py_to_json(result.bind(py)).unwrap_or_else(|e| {
-                eprintln!("nat_nexus: py_to_json failed in tool fn for '{name}': {e}");
+                eprintln!("nemo_flow: py_to_json failed in tool fn for '{name}': {e}");
                 args.clone()
             })
         })
@@ -69,12 +69,12 @@ pub fn wrap_py_tool_conditional_fn(py_fn: Py<PyAny>) -> ToolConditionalFn {
     Box::new(move |name: &str, args: &Json| {
         Python::attach(|py| {
             let py_args = json_to_py(py, args).map_err(|e| {
-                NexusError::Internal(format!(
+                FlowError::Internal(format!(
                     "tool conditional json_to_py failed for '{name}': {e}"
                 ))
             })?;
             let result = py_fn.call1(py, (name, py_args)).map_err(|e| {
-                NexusError::Internal(format!(
+                FlowError::Internal(format!(
                     "Python tool conditional callable failed for '{name}': {e}"
                 ))
             })?;
@@ -83,7 +83,7 @@ pub fn wrap_py_tool_conditional_fn(py_fn: Py<PyAny>) -> ToolConditionalFn {
                 Ok(None)
             } else {
                 bound.extract::<String>().map(Some).map_err(|e| {
-                    NexusError::Internal(format!(
+                    FlowError::Internal(format!(
                         "tool conditional guardrail for '{name}' returned unexpected type (expected str or None): {e}"
                     ))
                 })
@@ -97,13 +97,13 @@ pub fn wrap_py_tool_request_intercept_fn(py_fn: Py<PyAny>) -> ToolInterceptFn {
     Box::new(move |name: &str, args: Json| {
         Python::attach(|py| {
             let py_args = json_to_py(py, &args).map_err(|e| {
-                NexusError::Internal(format!("tool callback json_to_py failed for '{name}': {e}"))
+                FlowError::Internal(format!("tool callback json_to_py failed for '{name}': {e}"))
             })?;
             let result = py_fn.call1(py, (name, py_args)).map_err(|e| {
-                NexusError::Internal(format!("Python tool callable failed for '{name}': {e}"))
+                FlowError::Internal(format!("Python tool callable failed for '{name}': {e}"))
             })?;
             py_to_json(result.bind(py)).map_err(|e| {
-                NexusError::Internal(format!("tool callback py_to_json failed for '{name}': {e}"))
+                FlowError::Internal(format!("tool callback py_to_json failed for '{name}': {e}"))
             })
         })
     })
@@ -115,7 +115,7 @@ pub fn wrap_py_tool_request_intercept_fn(py_fn: Py<PyAny>) -> ToolInterceptFn {
 pub fn wrap_py_tool_exec_fn(
     py_fn: Py<PyAny>,
 ) -> Box<
-    dyn Fn(Json) -> Pin<Box<dyn Future<Output = nvidia_nat_nexus_core::Result<Json>> + Send>>
+    dyn Fn(Json) -> Pin<Box<dyn Future<Output = nemo_flow_core::Result<Json>> + Send>>
         + Send
         + Sync,
 > {
@@ -124,27 +124,27 @@ pub fn wrap_py_tool_exec_fn(
         let py_fn = py_fn.clone();
         Box::pin(async move {
             // Call the Python function and check if it returns a coroutine
-            let outcome: nvidia_nat_nexus_core::Result<
+            let outcome: nemo_flow_core::Result<
                 Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
             > = Python::attach(|py| {
-                let py_args = json_to_py(py, &args)
-                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
+                let py_args =
+                    json_to_py(py, &args).map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
                 let result = py_fn
                     .call1(py, (py_args,))
-                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
+                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
 
                 // Detect coroutine by checking for __await__
                 let bound = result.bind(py);
                 if bound.getattr("__await__").is_ok() {
                     let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-                        .map_err(|e| NexusError::Internal(e.to_string()))?;
+                        .map_err(|e| FlowError::Internal(e.to_string()))?;
                     Ok(Err(Box::pin(future)
                         as Pin<
                             Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>,
                         >))
                 } else {
-                    let json = py_to_json(bound)
-                        .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
+                    let json =
+                        py_to_json(bound).map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
                     Ok(Ok(json))
                 }
             });
@@ -154,10 +154,10 @@ pub fn wrap_py_tool_exec_fn(
                 Err(future) => {
                     let py_result = future
                         .await
-                        .map_err(|e| NexusError::Internal(e.to_string()))?;
+                        .map_err(|e| FlowError::Internal(e.to_string()))?;
                     Python::attach(|py| {
                         py_to_json(py_result.bind(py))
-                            .map_err(|e: PyErr| NexusError::Internal(e.to_string()))
+                            .map_err(|e: PyErr| FlowError::Internal(e.to_string()))
                     })
                 }
             }
@@ -233,7 +233,7 @@ impl PyLlmStreamNextFn {
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
             // Drain into mpsc channel and return PyLlmStream
-            let (tx, rx) = tokio::sync::mpsc::channel::<nvidia_nat_nexus_core::Result<Json>>(32);
+            let (tx, rx) = tokio::sync::mpsc::channel::<nemo_flow_core::Result<Json>>(32);
             tokio::spawn(async move {
                 use tokio_stream::StreamExt;
                 let mut stream = rust_stream;
@@ -260,7 +260,7 @@ pub fn wrap_py_tool_exec_intercept_fn(
             &str,
             Json,
             ToolExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = nvidia_nat_nexus_core::Result<Json>> + Send>>
+        ) -> Pin<Box<dyn Future<Output = nemo_flow_core::Result<Json>> + Send>>
         + Send
         + Sync,
 > {
@@ -269,11 +269,11 @@ pub fn wrap_py_tool_exec_intercept_fn(
         let py_fn = py_fn.clone();
         let name = name.to_string();
         Box::pin(async move {
-            let outcome: nvidia_nat_nexus_core::Result<
+            let outcome: nemo_flow_core::Result<
                 Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
             > = Python::attach(|py| {
-                let py_args = json_to_py(py, &args)
-                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
+                let py_args =
+                    json_to_py(py, &args).map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
                 let py_next = PyToolNextFn { inner: next };
                 let result = py_fn
                     .call1(
@@ -283,23 +283,23 @@ pub fn wrap_py_tool_exec_intercept_fn(
                             py_args,
                             py_next
                                 .into_pyobject(py)
-                                .map_err(|e| NexusError::Internal(e.to_string()))?
+                                .map_err(|e| FlowError::Internal(e.to_string()))?
                                 .into_any(),
                         ),
                     )
-                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
+                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
 
                 let bound = result.bind(py);
                 if bound.getattr("__await__").is_ok() {
                     let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-                        .map_err(|e| NexusError::Internal(e.to_string()))?;
+                        .map_err(|e| FlowError::Internal(e.to_string()))?;
                     Ok(Err(Box::pin(future)
                         as Pin<
                             Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>,
                         >))
                 } else {
-                    let json = py_to_json(bound)
-                        .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
+                    let json =
+                        py_to_json(bound).map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
                     Ok(Ok(json))
                 }
             });
@@ -309,10 +309,10 @@ pub fn wrap_py_tool_exec_intercept_fn(
                 Err(future) => {
                     let py_result = future
                         .await
-                        .map_err(|e| NexusError::Internal(e.to_string()))?;
+                        .map_err(|e| FlowError::Internal(e.to_string()))?;
                     Python::attach(|py| {
                         py_to_json(py_result.bind(py))
-                            .map_err(|e: PyErr| NexusError::Internal(e.to_string()))
+                            .map_err(|e: PyErr| FlowError::Internal(e.to_string()))
                     })
                 }
             }
@@ -328,7 +328,7 @@ pub fn wrap_py_llm_exec_intercept_fn(
             &str,
             LLMRequest,
             LlmExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = nvidia_nat_nexus_core::Result<Json>> + Send>>
+        ) -> Pin<Box<dyn Future<Output = nemo_flow_core::Result<Json>> + Send>>
         + Send
         + Sync,
 > {
@@ -338,7 +338,7 @@ pub fn wrap_py_llm_exec_intercept_fn(
             let py_fn = py_fn.clone();
             let name = name.to_string();
             Box::pin(async move {
-                let outcome: nvidia_nat_nexus_core::Result<
+                let outcome: nemo_flow_core::Result<
                     Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
                 > = Python::attach(|py| {
                     let py_req = PyLLMRequest { inner: request };
@@ -350,27 +350,27 @@ pub fn wrap_py_llm_exec_intercept_fn(
                                 &name,
                                 py_req
                                     .into_pyobject(py)
-                                    .map_err(|e| NexusError::Internal(e.to_string()))?
+                                    .map_err(|e| FlowError::Internal(e.to_string()))?
                                     .into_any(),
                                 py_next
                                     .into_pyobject(py)
-                                    .map_err(|e| NexusError::Internal(e.to_string()))?
+                                    .map_err(|e| FlowError::Internal(e.to_string()))?
                                     .into_any(),
                             ),
                         )
-                        .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
+                        .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
 
                     let bound = result.bind(py);
                     if bound.getattr("__await__").is_ok() {
                         let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-                            .map_err(|e| NexusError::Internal(e.to_string()))?;
+                            .map_err(|e| FlowError::Internal(e.to_string()))?;
                         Ok(Err(Box::pin(future)
                             as Pin<
                                 Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>,
                             >))
                     } else {
                         let json = py_to_json(bound)
-                            .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
+                            .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
                         Ok(Ok(json))
                     }
                 });
@@ -380,10 +380,10 @@ pub fn wrap_py_llm_exec_intercept_fn(
                     Err(future) => {
                         let py_result = future
                             .await
-                            .map_err(|e| NexusError::Internal(e.to_string()))?;
+                            .map_err(|e| FlowError::Internal(e.to_string()))?;
                         Python::attach(|py| {
                             py_to_json(py_result.bind(py))
-                                .map_err(|e: PyErr| NexusError::Internal(e.to_string()))
+                                .map_err(|e: PyErr| FlowError::Internal(e.to_string()))
                         })
                     }
                 }
@@ -403,8 +403,8 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
         ) -> Pin<
             Box<
                 dyn Future<
-                        Output = nvidia_nat_nexus_core::Result<
-                            Pin<Box<dyn Stream<Item = nvidia_nat_nexus_core::Result<Json>> + Send>>,
+                        Output = nemo_flow_core::Result<
+                            Pin<Box<dyn Stream<Item = nemo_flow_core::Result<Json>> + Send>>,
                         >,
                     > + Send,
             >,
@@ -427,26 +427,26 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                             (
                                 py_req
                                     .into_pyobject(py)
-                                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?
+                                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?
                                     .into_any(),
                                 py_next
                                     .into_pyobject(py)
-                                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?
+                                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?
                                     .into_any(),
                             ),
                         )
-                        .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
+                        .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
 
                     let bound = result.bind(py);
                     if bound.getattr("__await__").is_ok() {
                         let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-                            .map_err(|e| NexusError::Internal(e.to_string()))?;
+                            .map_err(|e| FlowError::Internal(e.to_string()))?;
                         Ok::<
                             Result<
                                 Py<PyAny>,
                                 Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>,
                             >,
-                            NexusError,
+                            FlowError,
                         >(Err(Box::pin(future)
                             as Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>))
                     } else {
@@ -456,15 +456,14 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                     Ok(iter) => iter,
                     Err(future) => future
                         .await
-                        .map_err(|e| NexusError::Internal(e.to_string()))?,
+                        .map_err(|e| FlowError::Internal(e.to_string()))?,
                 };
 
-                let (tx, rx) =
-                    tokio::sync::mpsc::channel::<nvidia_nat_nexus_core::Result<Json>>(32);
+                let (tx, rx) = tokio::sync::mpsc::channel::<nemo_flow_core::Result<Json>>(32);
 
                 let task_locals = Python::attach(|py| {
                     pyo3_async_runtimes::tokio::get_current_locals(py)
-                        .map_err(|e: pyo3::PyErr| NexusError::Internal(e.to_string()))
+                        .map_err(|e: pyo3::PyErr| FlowError::Internal(e.to_string()))
                 })?;
 
                 let async_iter = Arc::new(async_iter);
@@ -481,7 +480,7 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                                     ) {
                                         Ok(None)
                                     } else {
-                                        Err(NexusError::Internal(e.to_string()))
+                                        Err(FlowError::Internal(e.to_string()))
                                     }
                                 }
                             }
@@ -496,19 +495,19 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                             Ok(Some(coro)) => {
                                 let future_result = Python::attach(|py| {
                                     pyo3_async_runtimes::tokio::into_future(coro.into_bound(py))
-                                        .map_err(|e| NexusError::Internal(e.to_string()))
+                                        .map_err(|e| FlowError::Internal(e.to_string()))
                                 });
                                 let awaited: Result<Json, _> = match future_result {
                                     Ok(future) => match future.await {
                                         Ok(result) => Python::attach(|py| {
                                             py_to_json(result.bind(py))
-                                                .map_err(|e| NexusError::Internal(e.to_string()))
+                                                .map_err(|e| FlowError::Internal(e.to_string()))
                                         }),
                                         Err(e) => Python::attach(|py| {
                                             if e.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
-                                            return Err(NexusError::Internal("__stop__".into()));
+                                            return Err(FlowError::Internal("__stop__".into()));
                                         }
-                                            Err(NexusError::Internal(e.to_string()))
+                                            Err(FlowError::Internal(e.to_string()))
                                         }),
                                     },
                                     Err(e) => Err(e),
@@ -520,8 +519,8 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                                             break;
                                         }
                                     }
-                                    Err(NexusError::Internal(ref msg)) if msg == "__stop__" => {
-                                        break
+                                    Err(FlowError::Internal(ref msg)) if msg == "__stop__" => {
+                                        break;
                                     }
                                     Err(e) => {
                                         let _ = tx.send(Err(e)).await;
@@ -536,7 +535,7 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                 let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
                 Ok(Box::pin(stream)
                     as Pin<
-                        Box<dyn Stream<Item = nvidia_nat_nexus_core::Result<Json>> + Send>,
+                        Box<dyn Stream<Item = nemo_flow_core::Result<Json>> + Send>,
                     >)
             })
         },
@@ -555,15 +554,16 @@ pub fn wrap_py_llm_sanitize_request_fn(
             let result = match py_fn.call1(py, (py_req,)) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("nat_nexus: LLM sanitize request guardrail callable failed: {e}");
+                    eprintln!("nemo_flow: LLM sanitize request guardrail callable failed: {e}");
                     return request;
                 }
             };
-            match result.extract::<PyLLMRequest>(py) {
+            let extracted = result.extract::<PyLLMRequest>(py);
+            match extracted {
                 Ok(r) => r.inner,
                 Err(e) => {
                     eprintln!(
-                        "nat_nexus: LLM sanitize request guardrail returned unexpected type \
+                        "nemo_flow: LLM sanitize request guardrail returned unexpected type \
                          (expected LLMRequest): {e}"
                     );
                     request
@@ -581,14 +581,14 @@ pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
                 inner: request.clone(),
             };
             let result = py_fn.call1(py, (py_req,)).map_err(|e| {
-                NexusError::Internal(format!("LLM conditional guardrail callable failed: {e}"))
+                FlowError::Internal(format!("LLM conditional guardrail callable failed: {e}"))
             })?;
             let bound = result.bind(py);
             if bound.is_none() {
                 Ok(None)
             } else {
                 bound.extract::<String>().map(Some).map_err(|e| {
-                    NexusError::Internal(format!(
+                    FlowError::Internal(format!(
                         "LLM conditional guardrail returned unexpected type (expected str or None): {e}"
                     ))
                 })
@@ -606,7 +606,7 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
         move |name: &str,
               request: LLMRequest,
               annotated: Option<AnnotatedLLMRequest>|
-              -> nvidia_nat_nexus_core::Result<(LLMRequest, Option<AnnotatedLLMRequest>)> {
+              -> nemo_flow_core::Result<(LLMRequest, Option<AnnotatedLLMRequest>)> {
             Python::attach(|py| {
                 let py_req = PyLLMRequest {
                     inner: request.clone(),
@@ -617,7 +617,7 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
                         wrapper
                             .into_pyobject(py)
                             .map_err(|e| {
-                                NexusError::Internal(format!(
+                                FlowError::Internal(format!(
                                     "Failed to convert AnnotatedLLMRequest to Python: {e}"
                                 ))
                             })?
@@ -627,7 +627,7 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
                     None => py.None(),
                 };
                 let result = py_fn.call1(py, (name, py_req, py_ann)).map_err(|e| {
-                    NexusError::Internal(format!("LLM request intercept callable failed: {e}"))
+                    FlowError::Internal(format!("LLM request intercept callable failed: {e}"))
                 })?;
 
                 // Extract the tuple (LLMRequest, AnnotatedLLMRequest | None)
@@ -635,18 +635,18 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
                 let new_req: PyLLMRequest = tuple
                     .get_item(0)
                     .map_err(|e| {
-                        NexusError::Internal(format!(
+                        FlowError::Internal(format!(
                             "LLM request intercept result[0] extraction failed: {e}"
                         ))
                     })?
                     .extract()
                     .map_err(|e| {
-                        NexusError::Internal(format!(
+                        FlowError::Internal(format!(
                             "LLM request intercept result[0] is not LLMRequest: {e}"
                         ))
                     })?;
                 let ann_item = tuple.get_item(1).map_err(|e| {
-                    NexusError::Internal(format!(
+                    FlowError::Internal(format!(
                         "LLM request intercept result[1] extraction failed: {e}"
                     ))
                 })?;
@@ -657,7 +657,7 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
                         ann_item
                             .extract::<PyAnnotatedLLMRequest>()
                             .map_err(|e| {
-                                NexusError::Internal(format!(
+                                FlowError::Internal(format!(
                                     "LLM request intercept result[1] is not AnnotatedLLMRequest: {e}"
                                 ))
                             })?
@@ -676,7 +676,7 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
 pub fn wrap_py_llm_exec_fn(
     py_fn: Py<PyAny>,
 ) -> Box<
-    dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = nvidia_nat_nexus_core::Result<Json>> + Send>>
+    dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = nemo_flow_core::Result<Json>> + Send>>
         + Send
         + Sync,
 > {
@@ -684,25 +684,25 @@ pub fn wrap_py_llm_exec_fn(
     Box::new(move |request: LLMRequest| {
         let py_fn = py_fn.clone();
         Box::pin(async move {
-            let outcome: nvidia_nat_nexus_core::Result<
+            let outcome: nemo_flow_core::Result<
                 Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
             > = Python::attach(|py| {
                 let py_req = PyLLMRequest { inner: request };
                 let result = py_fn
                     .call1(py, (py_req,))
-                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
+                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
 
                 let bound = result.bind(py);
                 if bound.getattr("__await__").is_ok() {
                     let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-                        .map_err(|e| NexusError::Internal(e.to_string()))?;
+                        .map_err(|e| FlowError::Internal(e.to_string()))?;
                     Ok(Err(Box::pin(future)
                         as Pin<
                             Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>,
                         >))
                 } else {
-                    let json = py_to_json(bound)
-                        .map_err(|e: PyErr| NexusError::Internal(e.to_string()))?;
+                    let json =
+                        py_to_json(bound).map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
                     Ok(Ok(json))
                 }
             });
@@ -712,10 +712,10 @@ pub fn wrap_py_llm_exec_fn(
                 Err(future) => {
                     let py_result = future
                         .await
-                        .map_err(|e| NexusError::Internal(e.to_string()))?;
+                        .map_err(|e| FlowError::Internal(e.to_string()))?;
                     Python::attach(|py| {
                         py_to_json(py_result.bind(py))
-                            .map_err(|e: PyErr| NexusError::Internal(e.to_string()))
+                            .map_err(|e: PyErr| FlowError::Internal(e.to_string()))
                     })
                 }
             }
@@ -733,8 +733,8 @@ pub fn wrap_py_llm_stream_exec_fn(
         ) -> Pin<
             Box<
                 dyn Future<
-                        Output = nvidia_nat_nexus_core::Result<
-                            Pin<Box<dyn Stream<Item = nvidia_nat_nexus_core::Result<Json>> + Send>>,
+                        Output = nemo_flow_core::Result<
+                            Pin<Box<dyn Stream<Item = nemo_flow_core::Result<Json>> + Send>>,
                         >,
                     > + Send,
             >,
@@ -750,16 +750,16 @@ pub fn wrap_py_llm_stream_exec_fn(
                 let py_req = PyLLMRequest { inner: request };
                 py_fn
                     .call1(py, (py_req,))
-                    .map_err(|e: PyErr| NexusError::Internal(e.to_string()))
+                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))
             })?;
 
-            let (tx, rx) = tokio::sync::mpsc::channel::<nvidia_nat_nexus_core::Result<Json>>(32);
+            let (tx, rx) = tokio::sync::mpsc::channel::<nemo_flow_core::Result<Json>>(32);
 
             // Capture the Python event loop context so the spawned task can use
             // pyo3_async_runtimes::tokio::into_future (which needs TaskLocals).
             let task_locals = Python::attach(|py| {
                 pyo3_async_runtimes::tokio::get_current_locals(py)
-                    .map_err(|e: pyo3::PyErr| NexusError::Internal(e.to_string()))
+                    .map_err(|e: pyo3::PyErr| FlowError::Internal(e.to_string()))
             })?;
 
             // Spawn a task that drains the Python async iterator into the channel.
@@ -777,7 +777,7 @@ pub fn wrap_py_llm_stream_exec_fn(
                                 if e.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
                                     Ok(None)
                                 } else {
-                                    Err(NexusError::Internal(e.to_string()))
+                                    Err(FlowError::Internal(e.to_string()))
                                 }
                             }
                         }
@@ -793,22 +793,22 @@ pub fn wrap_py_llm_stream_exec_fn(
                             // Await the coroutine using pyo3_async_runtimes
                             let future_result = Python::attach(|py| {
                                 pyo3_async_runtimes::tokio::into_future(coro.into_bound(py))
-                                    .map_err(|e| NexusError::Internal(e.to_string()))
+                                    .map_err(|e| FlowError::Internal(e.to_string()))
                             });
                             let awaited: Result<Json, _> = match future_result {
                                 Ok(future) => match future.await {
                                     Ok(result) => Python::attach(|py| {
                                         py_to_json(result.bind(py))
-                                            .map_err(|e| NexusError::Internal(e.to_string()))
+                                            .map_err(|e| FlowError::Internal(e.to_string()))
                                     }),
                                     Err(e) => Python::attach(|py| {
                                         if e.is_instance_of::<
                                             pyo3::exceptions::PyStopAsyncIteration,
                                         >(py)
                                         {
-                                            return Err(NexusError::Internal("__stop__".into()));
+                                            return Err(FlowError::Internal("__stop__".into()));
                                         }
-                                        Err(NexusError::Internal(e.to_string()))
+                                        Err(FlowError::Internal(e.to_string()))
                                     }),
                                 },
                                 Err(e) => Err(e),
@@ -820,7 +820,7 @@ pub fn wrap_py_llm_stream_exec_fn(
                                         break; // receiver dropped
                                     }
                                 }
-                                Err(NexusError::Internal(ref msg)) if msg == "__stop__" => break,
+                                Err(FlowError::Internal(ref msg)) if msg == "__stop__" => break,
                                 Err(e) => {
                                     let _ = tx.send(Err(e)).await;
                                     break;
@@ -834,7 +834,7 @@ pub fn wrap_py_llm_stream_exec_fn(
             let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
             Ok(Box::pin(stream)
                 as Pin<
-                    Box<dyn Stream<Item = nvidia_nat_nexus_core::Result<Json>> + Send>,
+                    Box<dyn Stream<Item = nemo_flow_core::Result<Json>> + Send>,
                 >)
         })
     })
@@ -845,19 +845,19 @@ pub fn wrap_py_llm_stream_exec_fn(
 /// The collector is invoked with each intercepted chunk (after stream response
 /// intercepts have been applied). It receives a single JSON-converted Python
 /// object argument. If the Python callable raises an exception, it is converted
-/// to a `NexusError::Internal` and returned as `Err`, which terminates the
+/// to a `FlowError::Internal` and returned as `Err`, which terminates the
 /// stream. If the callable returns normally (including `None`), the collector
 /// returns `Ok(())`.
 pub fn wrap_py_collector_fn(
     py_fn: Py<PyAny>,
-) -> Box<dyn FnMut(Json) -> std::result::Result<(), NexusError> + Send> {
+) -> Box<dyn FnMut(Json) -> std::result::Result<(), FlowError> + Send> {
     Box::new(move |chunk: Json| {
         Python::attach(|py| {
             let py_chunk = json_to_py(py, &chunk)
-                .map_err(|e| NexusError::Internal(format!("collector json_to_py failed: {e}")))?;
+                .map_err(|e| FlowError::Internal(format!("collector json_to_py failed: {e}")))?;
             py_fn
                 .call1(py, (py_chunk,))
-                .map_err(|e| NexusError::Internal(format!("Python collector error: {e}")))?;
+                .map_err(|e| FlowError::Internal(format!("Python collector error: {e}")))?;
             Ok(())
         })
     })
@@ -874,12 +874,12 @@ pub fn wrap_py_finalizer_fn(py_fn: Py<PyAny>) -> Box<dyn FnOnce() -> Json + Send
             let result = match py_fn.call0(py) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("nat_nexus: Python finalizer callable failed: {e}");
+                    eprintln!("nemo_flow: Python finalizer callable failed: {e}");
                     return Json::Null;
                 }
             };
             py_to_json(result.bind(py)).unwrap_or_else(|e| {
-                eprintln!("nat_nexus: py_to_json failed in finalizer: {e}");
+                eprintln!("nemo_flow: py_to_json failed in finalizer: {e}");
                 Json::Null
             })
         })
@@ -896,7 +896,7 @@ pub fn wrap_py_llm_sanitize_response_fn(
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!(
-                        "nat_nexus: json_to_py failed in LLM sanitize response guardrail: {e}"
+                        "nemo_flow: json_to_py failed in LLM sanitize response guardrail: {e}"
                     );
                     return response.clone();
                 }
@@ -904,12 +904,12 @@ pub fn wrap_py_llm_sanitize_response_fn(
             let result = match py_fn.call1(py, (py_resp,)) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("nat_nexus: LLM sanitize response guardrail callable failed: {e}");
+                    eprintln!("nemo_flow: LLM sanitize response guardrail callable failed: {e}");
                     return response.clone();
                 }
             };
             py_to_json(result.bind(py)).unwrap_or_else(|e| {
-                eprintln!("nat_nexus: py_to_json failed in LLM sanitize response guardrail: {e}");
+                eprintln!("nemo_flow: py_to_json failed in LLM sanitize response guardrail: {e}");
                 response.clone()
             })
         })
@@ -917,47 +917,47 @@ pub fn wrap_py_llm_sanitize_response_fn(
 }
 
 /// Wrap a Python callable `(Event) -> None` for event subscribers.
-pub fn wrap_py_event_subscriber(py_fn: Py<PyAny>) -> nvidia_nat_nexus_core::EventSubscriberFn {
-    Arc::new(move |event: &nvidia_nat_nexus_core::Event| {
+pub fn wrap_py_event_subscriber(py_fn: Py<PyAny>) -> nemo_flow_core::EventSubscriberFn {
+    Arc::new(move |event: &nemo_flow_core::Event| {
         Python::attach(|py| {
             let result = match event {
-                nvidia_nat_nexus_core::Event::ScopeStart(inner) => py_fn.call1(
+                nemo_flow_core::Event::ScopeStart(inner) => py_fn.call1(
                     py,
                     (crate::py_types::PyScopeStartEvent {
                         inner: inner.clone(),
                     },),
                 ),
-                nvidia_nat_nexus_core::Event::ScopeEnd(inner) => py_fn.call1(
+                nemo_flow_core::Event::ScopeEnd(inner) => py_fn.call1(
                     py,
                     (crate::py_types::PyScopeEndEvent {
                         inner: inner.clone(),
                     },),
                 ),
-                nvidia_nat_nexus_core::Event::ToolStart(inner) => py_fn.call1(
+                nemo_flow_core::Event::ToolStart(inner) => py_fn.call1(
                     py,
                     (crate::py_types::PyToolStartEvent {
                         inner: inner.clone(),
                     },),
                 ),
-                nvidia_nat_nexus_core::Event::ToolEnd(inner) => py_fn.call1(
+                nemo_flow_core::Event::ToolEnd(inner) => py_fn.call1(
                     py,
                     (crate::py_types::PyToolEndEvent {
                         inner: inner.clone(),
                     },),
                 ),
-                nvidia_nat_nexus_core::Event::LLMStart(inner) => py_fn.call1(
+                nemo_flow_core::Event::LLMStart(inner) => py_fn.call1(
                     py,
                     (crate::py_types::PyLLMStartEvent {
                         inner: inner.clone(),
                     },),
                 ),
-                nvidia_nat_nexus_core::Event::LLMEnd(inner) => py_fn.call1(
+                nemo_flow_core::Event::LLMEnd(inner) => py_fn.call1(
                     py,
                     (crate::py_types::PyLLMEndEvent {
                         inner: inner.clone(),
                     },),
                 ),
-                nvidia_nat_nexus_core::Event::Mark(inner) => py_fn.call1(
+                nemo_flow_core::Event::Mark(inner) => py_fn.call1(
                     py,
                     (crate::py_types::PyMarkEvent {
                         inner: inner.clone(),
@@ -991,7 +991,7 @@ unsafe impl Send for PyLlmCodecWrapper {}
 unsafe impl Sync for PyLlmCodecWrapper {}
 
 impl LlmCodec for PyLlmCodecWrapper {
-    fn decode(&self, request: &LLMRequest) -> nvidia_nat_nexus_core::Result<AnnotatedLLMRequest> {
+    fn decode(&self, request: &LLMRequest) -> nemo_flow_core::Result<AnnotatedLLMRequest> {
         Python::attach(|py| {
             let py_req = PyLLMRequest {
                 inner: request.clone(),
@@ -999,12 +999,12 @@ impl LlmCodec for PyLlmCodecWrapper {
             let result = self
                 .py_codec
                 .call_method1(py, "decode", (py_req,))
-                .map_err(|e| NexusError::Internal(format!("Codec decode() failed: {e}")))?;
+                .map_err(|e| FlowError::Internal(format!("Codec decode() failed: {e}")))?;
             result
                 .extract::<PyAnnotatedLLMRequest>(py)
                 .map(|r| r.inner)
                 .map_err(|e| {
-                    NexusError::Internal(format!(
+                    FlowError::Internal(format!(
                         "Codec decode() returned unexpected type (expected AnnotatedLLMRequest): {e}"
                     ))
                 })
@@ -1015,7 +1015,7 @@ impl LlmCodec for PyLlmCodecWrapper {
         &self,
         annotated: &AnnotatedLLMRequest,
         original: &LLMRequest,
-    ) -> nvidia_nat_nexus_core::Result<LLMRequest> {
+    ) -> nemo_flow_core::Result<LLMRequest> {
         Python::attach(|py| {
             let py_ann = PyAnnotatedLLMRequest {
                 inner: annotated.clone(),
@@ -1026,12 +1026,12 @@ impl LlmCodec for PyLlmCodecWrapper {
             let result = self
                 .py_codec
                 .call_method1(py, "encode", (py_ann, py_orig))
-                .map_err(|e| NexusError::Internal(format!("Codec encode() failed: {e}")))?;
+                .map_err(|e| FlowError::Internal(format!("Codec encode() failed: {e}")))?;
             result
                 .extract::<PyLLMRequest>(py)
                 .map(|r| r.inner)
                 .map_err(|e| {
-                    NexusError::Internal(format!(
+                    FlowError::Internal(format!(
                         "Codec encode() returned unexpected type (expected LLMRequest): {e}"
                     ))
                 })
@@ -1056,14 +1056,14 @@ pub(crate) struct PyLlmResponseCodecWrapper {
 unsafe impl Send for PyLlmResponseCodecWrapper {}
 unsafe impl Sync for PyLlmResponseCodecWrapper {}
 
-impl nvidia_nat_nexus_core::codec::LlmResponseCodec for PyLlmResponseCodecWrapper {
+impl nemo_flow_core::codec::LlmResponseCodec for PyLlmResponseCodecWrapper {
     fn decode_response(
         &self,
         response: &Json,
-    ) -> nvidia_nat_nexus_core::Result<nvidia_nat_nexus_core::codec::AnnotatedLLMResponse> {
+    ) -> nemo_flow_core::Result<nemo_flow_core::codec::AnnotatedLLMResponse> {
         Python::attach(|py| {
             let py_resp = json_to_py(py, response).map_err(|e| {
-                NexusError::Internal(format!(
+                FlowError::Internal(format!(
                     "Response codec: failed to convert JSON to Python: {e}"
                 ))
             })?;
@@ -1071,7 +1071,7 @@ impl nvidia_nat_nexus_core::codec::LlmResponseCodec for PyLlmResponseCodecWrappe
                 .py_codec
                 .call_method1(py, "decode_response", (py_resp,))
                 .map_err(|e| {
-                    NexusError::Internal(format!("Response codec decode_response() failed: {e}"))
+                    FlowError::Internal(format!("Response codec decode_response() failed: {e}"))
                 })?;
             // PyAnnotatedLLMResponse has skip_from_py_object, so use downcast
             // on the bound reference instead of extract.
@@ -1079,7 +1079,7 @@ impl nvidia_nat_nexus_core::codec::LlmResponseCodec for PyLlmResponseCodecWrappe
             let py_ref: pyo3::PyRef<'_, PyAnnotatedLLMResponse> = bound
                 .cast::<PyAnnotatedLLMResponse>()
                 .map_err(|e| {
-                    NexusError::Internal(format!(
+                    FlowError::Internal(format!(
                         "Response codec decode_response() returned unexpected type (expected AnnotatedLLMResponse): {e}"
                     ))
                 })?

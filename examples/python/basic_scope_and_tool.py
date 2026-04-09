@@ -13,11 +13,11 @@ from __future__ import annotations
 
 import asyncio
 
-import nat_nexus
+import nemo_flow
 
 
 async def main() -> None:
-    nat_nexus.subscribers.register(
+    nemo_flow.subscribers.register(
         "example_logger",
         lambda event: print(f"[{event.kind}] {event.name}"),
     )
@@ -25,8 +25,8 @@ async def main() -> None:
     async def search_tool(args: dict) -> dict:
         return {"results": [f"echo:{args['query']}"]}
 
-    with nat_nexus.scope.scope("example-agent", nat_nexus.ScopeType.Agent):
-        result = await nat_nexus.tools.execute(
+    with nemo_flow.scope.scope("example-agent", nemo_flow.ScopeType.Agent):
+        result = await nemo_flow.tools.execute(
             "search",
             {"query": "hello"},
             search_tool,

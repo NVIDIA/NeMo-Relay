@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Error types for the nexus-optimizer crate.
+//! Error types for the nemo-flow-optimizer crate.
 
 use thiserror::Error;
 
-/// The error type for all nexus-optimizer operations.
+/// The error type for all nemo-flow-optimizer operations.
 #[derive(Debug, Error)]
 pub enum OptimizerError {
     /// Configuration validation failed.
@@ -28,7 +28,7 @@ pub enum OptimizerError {
     #[error("internal error: {0}")]
     Internal(String),
 
-    /// A registration with the Nexus runtime failed.
+    /// A registration with the NeMo Flow runtime failed.
     #[error("registration failed: {0}")]
     RegistrationFailed(String),
 
@@ -42,7 +42,7 @@ pub enum OptimizerError {
     Redis(#[from] redis::RedisError),
 }
 
-/// A specialized [`Result`](std::result::Result) type for nexus-optimizer operations.
+/// A specialized [`Result`](std::result::Result) type for nemo-flow-optimizer operations.
 pub type Result<T> = std::result::Result<T, OptimizerError>;
 
 #[cfg(test)]

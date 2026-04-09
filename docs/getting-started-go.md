@@ -10,7 +10,7 @@ and LLM call using the Go binding.
 
 All examples in this guide use:
 
-- an active Nexus scope
+- an active NeMo Flow scope
 - the managed execution APIs (`ToolCallExecute(...)` and `LlmCallExecute(...)`)
 
 This guide intentionally does not use the low-level manual lifecycle APIs.
@@ -25,12 +25,12 @@ This guide intentionally does not use the low-level manual lifecycle APIs.
 From the repository root:
 
 ```bash
-cargo build --release -p nvidia-nat-nexus-ffi
+cargo build --release -p nemo-flow-ffi
 ```
 
 ## Minimal Scope and Tool Execution
 
-This example uses the module path defined by `go/nat_nexus/go.mod`.
+This example uses the module path defined by `go/nemo_flow/go.mod`.
 
 ```go
 package main
@@ -39,17 +39,17 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus"
+	"github.com/NVIDIA/NeMo-Flow/go/nemo_flow"
 )
 
 func main() {
-	handle, err := nat_nexus.PushScope("quickstart-agent", nat_nexus.ScopeTypeAgent)
+	handle, err := nemo_flow.PushScope("quickstart-agent", nemo_flow.ScopeTypeAgent)
 	if err != nil {
 		panic(err)
 	}
-	defer nat_nexus.PopScope(handle)
+	defer nemo_flow.PopScope(handle)
 
-	result, err := nat_nexus.ToolCallExecute(
+	result, err := nemo_flow.ToolCallExecute(
 		"search",
 		json.RawMessage(`{"query":"hello"}`),
 		func(args json.RawMessage) (json.RawMessage, error) {
@@ -66,7 +66,7 @@ func main() {
 }
 ```
 
-Save the example as `main.go` outside `go/nat_nexus/`, then run it with the
+Save the example as `main.go` outside `go/nemo_flow/`, then run it with the
 FFI library on the loader path:
 
 ```bash
@@ -87,13 +87,13 @@ request := map[string]any{
 	},
 }
 
-response, err := nat_nexus.LlmCallExecute(
+response, err := nemo_flow.LlmCallExecute(
 	"gpt-4",
 	request,
 	func(_ json.RawMessage) (json.RawMessage, error) {
 		return json.Marshal(map[string]any{"response": "ok"})
 	},
-	nat_nexus.WithLLMModelName("gpt-4"),
+	nemo_flow.WithLLMModelName("gpt-4"),
 )
 ```
 

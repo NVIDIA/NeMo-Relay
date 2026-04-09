@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "nvidia-nat-nexus-openinference"
+name = "nemo-flow-openinference"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-nvidia-nat-nexus-core = { path = "../core" }
+nemo-flow-core = { path = "../core" }
 chrono = { version = "0.4", features = ["serde"] }
 openinference-semantic-conventions = "0.1.1"
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }

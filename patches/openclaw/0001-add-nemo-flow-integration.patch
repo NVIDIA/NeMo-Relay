@@ -1,0 +1,467 @@
+diff --git a/extensions/nemo_flow/index.ts b/extensions/nemo_flow/index.ts
+new file mode 100644
+index 000000000..4a400ee4a
+--- /dev/null
++++ b/extensions/nemo_flow/index.ts
+@@ -0,0 +1,43 @@
++// SPDX-License-Identifier: Apache-2.0
++import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
++import { NemoFlow } from "../../src/nemo_flow/index.js";
++
++export default definePluginEntry({
++  id: "nemo_flow",
++  name: "NemoFlow Tracing",
++  description: "NemoFlow agent tracing and ATIF trajectory export",
++
++  register(api: OpenClawPluginApi) {
++    api.on("gateway_start", async () => {
++      await NemoFlow.init();
++      if (NemoFlow.isEnabled()) {
++        api.logger.info("nemo_flow: tracing enabled");
++      }
++    });
++
++    api.on("session_start", async (event) => {
++      if (!NemoFlow.isEnabled()) return;
++      if (!NemoFlow.hasExporter(event.sessionId)) {
++        NemoFlow.createExporter(event.sessionId, "openclaw");
++      }
++    });
++
++    api.on("session_end", async (event) => {
++      if (!NemoFlow.isEnabled()) return;
++      if (!NemoFlow.hasExporter(event.sessionId)) return;
++
++      const trajectory = NemoFlow.exportTrajectory(event.sessionId);
++      if (trajectory) {
++        const fs = await import("node:fs/promises");
++        const path = await import("node:path");
++        const os = await import("node:os");
++        const atifDir = path.join(os.homedir(), ".openclaw", "atif");
++        await fs.mkdir(atifDir, { recursive: true });
++        const filePath = path.join(atifDir, `${event.sessionId}.json`);
++        await fs.writeFile(filePath, trajectory);
++        api.logger.info(`nemo_flow: exported ATIF trajectory to ${filePath}`);
++      }
++      NemoFlow.clearExporter(event.sessionId);
++    });
++  },
++});
+diff --git a/extensions/nemo_flow/openclaw.plugin.json b/extensions/nemo_flow/openclaw.plugin.json
+new file mode 100644
+index 000000000..605debd99
+--- /dev/null
++++ b/extensions/nemo_flow/openclaw.plugin.json
+@@ -0,0 +1,13 @@
++{
++  "id": "nemo_flow",
++  "configSchema": {
++    "type": "object",
++    "additionalProperties": false,
++    "properties": {
++      "enabled": {
++        "type": "boolean",
++        "description": "Enable NemoFlow agent tracing (also requires NEMO_FLOW_ENABLED env var)"
++      }
++    }
++  }
++}
+diff --git a/extensions/nemo_flow/package.json b/extensions/nemo_flow/package.json
+new file mode 100644
+index 000000000..49799187f
+--- /dev/null
++++ b/extensions/nemo_flow/package.json
+@@ -0,0 +1,15 @@
++{
++  "name": "@openclaw/nemo-flow",
++  "version": "2026.3.14",
++  "private": true,
++  "description": "NemoFlow agent tracing and ATIF trajectory export for OpenClaw",
++  "type": "module",
++  "optionalDependencies": {
++    "@nvidia/nemo-flow-node": "file:../../../crates/node"
++  },
++  "openclaw": {
++    "extensions": [
++      "./index.ts"
++    ]
++  }
++}
+diff --git a/package.json b/package.json
+index 95a240b08..727f72f77 100644
+--- a/package.json
++++ b/package.json
+@@ -662,6 +662,9 @@
+     "@napi-rs/canvas": "^0.1.89",
+     "node-llama-cpp": "3.16.2"
+   },
++  "optionalDependencies": {
++    "@nvidia/nemo-flow-node": "file:../../crates/node"
++  },
+   "peerDependenciesMeta": {
+     "node-llama-cpp": {
+       "optional": true
+diff --git a/pnpm-workspace.yaml b/pnpm-workspace.yaml
+index b708dca45..714516dfb 100644
+--- a/pnpm-workspace.yaml
++++ b/pnpm-workspace.yaml
+@@ -5,6 +5,7 @@ packages:
+   - extensions/*
+
+ onlyBuiltDependencies:
++  - "@napi-rs/cli"
+   - "@lydell/node-pty"
+   - "@matrix-org/matrix-sdk-crypto-nodejs"
+   - "@napi-rs/canvas"
+diff --git a/src/agents/pi-embedded-runner/run/attempt.ts b/src/agents/pi-embedded-runner/run/attempt.ts
+index 73b7d0fbf..7a6fe2fac 100644
+--- a/src/agents/pi-embedded-runner/run/attempt.ts
++++ b/src/agents/pi-embedded-runner/run/attempt.ts
+@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
+ import os from "node:os";
+ import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
+ import { streamSimple } from "@mariozechner/pi-ai";
++import { NemoFlow } from "../../../nemo_flow/index.js";
+ import {
+   createAgentSession,
+   DefaultResourceLoader,
+@@ -2091,6 +2092,20 @@ export async function runEmbeddedAttempt(
+         );
+       }
+
++      // NemoFlow: wrap streamFn for LLM lifecycle tracing + scope isolation.
++      // Applied last so NemoFlow sees the final request (after all provider wrappers)
++      // and can inject intercepted headers into the outermost layer.
++      let nemo_flowAgentScope: unknown = null;
++      if (NemoFlow.isEnabled()) {
++        // Create per-session scope stack for concurrent session isolation
++        const scopeStack = NemoFlow.createScopeStack();
++        if (scopeStack) {
++          NemoFlow.setThreadScopeStack(scopeStack);
++        }
++        nemo_flowAgentScope = NemoFlow.pushAgentScope(sessionAgentId ?? "openclaw");
++        activeSession.agent.streamFn = NemoFlow.wrapStreamFn(activeSession.agent.streamFn);
++      }
++
+       try {
+         const prior = await sanitizeSessionHistory({
+           messages: activeSession.messages,
+@@ -2783,6 +2798,9 @@ export async function runEmbeddedAttempt(
+             });
+         }
+       } finally {
++        // NemoFlow: pop agent scope on run cleanup
++        NemoFlow.popScope(nemo_flowAgentScope);
++
+         clearTimeout(abortTimer);
+         if (abortWarnTimer) {
+           clearTimeout(abortWarnTimer);
+diff --git a/src/agents/pi-tools.before-tool-call.ts b/src/agents/pi-tools.before-tool-call.ts
+index 62bf0e0fb..e0329eec6 100644
+--- a/src/agents/pi-tools.before-tool-call.ts
++++ b/src/agents/pi-tools.before-tool-call.ts
+@@ -1,6 +1,7 @@
+ import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+ import type { SessionState } from "../logging/diagnostic-session-state.js";
+ import { createSubsystemLogger } from "../logging/subsystem.js";
++import { NemoFlow } from "../nemo_flow/index.js";
+ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+ import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+ import { isPlainObject } from "../utils.js";
+@@ -223,26 +224,32 @@ export function wrapToolWithBeforeToolCallHook(
+         }
+       }
+       const normalizedToolName = normalizeToolName(toolName || "tool");
+-      try {
+-        const result = await execute(toolCallId, outcome.params, signal, onUpdate);
+-        await recordLoopOutcome({
+-          ctx,
+-          toolName: normalizedToolName,
+-          toolParams: outcome.params,
+-          toolCallId,
+-          result,
+-        });
+-        return result;
+-      } catch (err) {
+-        await recordLoopOutcome({
+-          ctx,
+-          toolName: normalizedToolName,
+-          toolParams: outcome.params,
+-          toolCallId,
+-          error: err,
+-        });
+-        throw err;
++      const executeFn = async (effectiveParams: unknown) => {
++        try {
++          const result = await execute(toolCallId, effectiveParams, signal, onUpdate);
++          await recordLoopOutcome({
++            ctx,
++            toolName: normalizedToolName,
++            toolParams: effectiveParams,
++            toolCallId,
++            result,
++          });
++          return result;
++        } catch (err) {
++          await recordLoopOutcome({
++            ctx,
++            toolName: normalizedToolName,
++            toolParams: effectiveParams,
++            toolCallId,
++            error: err,
++          });
++          throw err;
++        }
++      };
++      if (NemoFlow.isEnabled()) {
++        return NemoFlow.wrapToolExecute(normalizedToolName, outcome.params, executeFn);
+       }
++      return executeFn(outcome.params);
+     },
+   };
+   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
+diff --git a/src/nemo_flow/index.ts b/src/nemo_flow/index.ts
+new file mode 100644
+index 000000000..be0e9ccb2
+--- /dev/null
++++ b/src/nemo_flow/index.ts
+@@ -0,0 +1,239 @@
++// SPDX-License-Identifier: Apache-2.0
++import type { StreamFn } from "@mariozechner/pi-agent-core";
++import { createSubsystemLogger } from "../logging/subsystem.js";
++
++const log = createSubsystemLogger("nemo_flow");
++
++let lib: any = null;
++let typedLib: any = null;
++let enabled = false;
++let initDone = false;
++
++const exporters = new Map<string, any>();
++
++export namespace NemoFlow {
++  export async function init(): Promise<boolean> {
++    if (initDone) return enabled;
++    initDone = true;
++    if (!process.env.NEMO_FLOW_ENABLED) return false;
++
++    try {
++      lib = await import("@nvidia/nemo-flow-node");
++      typedLib = await import("@nvidia/nemo-flow-node/typed");
++      enabled = true;
++      log.info("initialized");
++    } catch (e) {
++      log.warn("native addon not available, disabling", { error: String(e) });
++      enabled = false;
++    }
++
++    return enabled;
++  }
++
++  export function isEnabled(): boolean {
++    return enabled;
++  }
++
++  // ---------------------------------------------------------------------------
++  // Scope stack isolation — one per session to prevent cross-session bleed
++  // ---------------------------------------------------------------------------
++
++  export function createScopeStack(): unknown {
++    if (!enabled || !lib) return null;
++    try {
++      return lib.createScopeStack();
++    } catch (e) {
++      log.error("createScopeStack failed", { error: String(e) });
++      return null;
++    }
++  }
++
++  export function setThreadScopeStack(stack: unknown): void {
++    if (!enabled || !lib || !stack) return;
++    try {
++      lib.setThreadScopeStack(stack);
++    } catch (e) {
++      log.error("setThreadScopeStack failed", { error: String(e) });
++    }
++  }
++
++  // ---------------------------------------------------------------------------
++  // Scope management
++  // ---------------------------------------------------------------------------
++
++  export function pushAgentScope(name: string): unknown {
++    if (!enabled || !lib) return null;
++    try {
++      return lib.pushScope(name, 0 /* ScopeType.Agent */);
++    } catch (e) {
++      log.error("pushAgentScope failed", { error: String(e) });
++      return null;
++    }
++  }
++
++  export function popScope(handle: unknown): void {
++    if (!enabled || !lib || !handle) return;
++    try {
++      lib.popScope(handle);
++    } catch (e) {
++      log.error("popScope failed", { error: String(e) });
++    }
++  }
++
++  // ---------------------------------------------------------------------------
++  // Tool execution wrapping
++  // ---------------------------------------------------------------------------
++
++  export async function wrapToolExecute<T>(
++    name: string,
++    args: any,
++    fn: (args: any) => Promise<T>,
++  ): Promise<T> {
++    if (!enabled || !lib) return fn(args);
++    try {
++      let originalResult: T;
++      await lib.toolCallExecuteAsync(name, args, async (a: any) => {
++        originalResult = await fn(a);
++        return originalResult;
++      }, null, null, null, null);
++      return originalResult!;
++    } catch (e) {
++      log.error("wrapToolExecute failed", { error: String(e) });
++      return fn(args);
++    }
++  }
++
++  // ---------------------------------------------------------------------------
++  // StreamFn wrapping — adapts pi-agent-core StreamFn for NemoFlow lifecycle
++  // ---------------------------------------------------------------------------
++  // Chunks pass through the full NAPI JSON round-trip so that intercept
++  // transformations are reflected in the yielded events.
++
++  export function wrapStreamFn(baseFn: StreamFn): StreamFn {
++    if (!enabled || !typedLib) return baseFn;
++
++    return ((model: any, context: any, options: any) => {
++      const modelName = typeof model?.id === "string" ? model.id : String(model);
++      const providerName = typeof model?.provider === "string" ? model.provider : modelName;
++
++      const request = {
++        headers: { ...options?.headers },
++        content: { model: modelName, provider: providerName },
++      };
++
++      const passthrough = new typedLib.JsonPassthrough();
++      const collected: any[] = [];
++      const responseChunks: string[] = [];
++      const toolCalls: any[] = [];
++
++      return {
++        async *[Symbol.asyncIterator]() {
++          try {
++            const nvStream = await typedLib.typedLlmStreamExecute(
++              providerName,
++              request,
++              (interceptedReq: any) => {
++                const extraHeaders = interceptedReq?.headers;
++                if (extraHeaders && Object.keys(extraHeaders).length > 0) {
++                  options = {
++                    ...options,
++                    headers: { ...options?.headers, ...extraHeaders },
++                  };
++                }
++                return baseFn(model, context, options);
++              },
++              (chunk: any) => {
++                collected.push(chunk);
++                // Accumulate for the finalizer's response summary
++                const eventType = chunk?.type;
++                if (eventType === "text" && typeof chunk?.text === "string") {
++                  responseChunks.push(chunk.text);
++                } else if (eventType === "tool_call" || eventType === "tool-call") {
++                  toolCalls.push({
++                    id: chunk.toolCallId ?? chunk.id,
++                    type: "function",
++                    function: {
++                      name: chunk.toolName ?? chunk.name,
++                      arguments: JSON.stringify(chunk.input ?? chunk.args ?? {}),
++                    },
++                  });
++                }
++              },
++              () => {
++                const result: any = {
++                  role: "assistant",
++                  content: responseChunks.join("") || null,
++                };
++                if (toolCalls.length > 0) {
++                  result.tool_calls = toolCalls;
++                }
++                return result;
++              },
++              passthrough,
++              passthrough,
++              {
++                attributes: lib.LLM_ATTR_STREAMING,
++                modelName,
++              },
++            );
++
++            while ((await nvStream.next()) !== null) {
++              while (collected.length > 0) {
++                yield collected.shift();
++              }
++            }
++            while (collected.length > 0) {
++              yield collected.shift();
++            }
++          } catch (e) {
++            log.error("wrapStreamFn failed, falling back to unwrapped", { error: String(e) });
++            yield* baseFn(model, context, options);
++          }
++        },
++      } as any;
++    }) as StreamFn;
++  }
++
++  // ---------------------------------------------------------------------------
++  // ATIF export
++  // ---------------------------------------------------------------------------
++
++  export function hasExporter(sessionId: string): boolean {
++    return exporters.has(sessionId);
++  }
++
++  export function createExporter(sessionId: string, agentName: string): unknown {
++    if (!enabled || !lib) return null;
++    try {
++      const exporter = new lib.JsAtifExporter(sessionId, agentName, "1.0.0", null);
++      exporter.register(`atif-${sessionId}`);
++      exporters.set(sessionId, exporter);
++      return exporter;
++    } catch (e) {
++      log.error("createExporter failed", { error: String(e) });
++      return null;
++    }
++  }
++
++  export function exportTrajectory(sessionId: string): string | null {
++    const exporter = exporters.get(sessionId);
++    if (!exporter) return null;
++    try {
++      return exporter.exportJson();
++    } catch (e) {
++      log.error("exportTrajectory failed", { error: String(e) });
++      return null;
++    }
++  }
++
++  export function clearExporter(sessionId: string): void {
++    const exporter = exporters.get(sessionId);
++    if (!exporter) return;
++    try {
++      exporter.deregister(`atif-${sessionId}`);
++      exporters.delete(sessionId);
++    } catch (e) {
++      log.error("clearExporter failed", { error: String(e) });
++    }
++  }
++}

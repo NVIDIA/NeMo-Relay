@@ -11,7 +11,7 @@
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use nvidia_nat_nexus_core::Json;
+use nemo_flow_core::Json;
 
 /// Wraps a streaming LLM response for consumption from JavaScript/TypeScript.
 ///
@@ -23,7 +23,7 @@ pub struct WasmLlmStream {
     /// underlying LLM stream. Wrapped in a `Mutex` to allow shared-ref
     /// `&self` calls from JavaScript.
     pub(crate) receiver:
-        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvidia_nat_nexus_core::Result<Json>>>,
+        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nemo_flow_core::Result<Json>>>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -61,8 +61,8 @@ impl WasmLlmStream {
 #[cfg(not(target_arch = "wasm32"))]
 #[wasm_bindgen]
 impl WasmLlmStream {
+    #[allow(tail_expr_drop_order)]
     pub async fn next(&self) -> Result<JsValue, JsValue> {
-        let _ = &self.receiver;
         Ok(JsValue::NULL)
     }
 }
@@ -121,7 +121,7 @@ mod tests {
 
         block_on(async {
             let (tx, rx) = tokio::sync::mpsc::channel(1);
-            tx.send(Err(nvidia_nat_nexus_core::NexusError::Internal(
+            tx.send(Err(nemo_flow_core::FlowError::Internal(
                 "stream failed".to_string(),
             )))
             .await

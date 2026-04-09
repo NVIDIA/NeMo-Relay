@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Typed API Reference
 
-This document covers the typed helper APIs exposed through `nat_nexus.typed`.
+This document covers the typed helper APIs exposed through `nemo_flow.typed`.
 Use [Typed Wrappers](typed-wrappers.md) for the conceptual model and data-flow
 diagrams; use this page for function signatures, built-in codecs, and behavior
 at the Python API boundary.
@@ -21,9 +21,9 @@ with structured Python objects. The public Python entry points are:
 
 All three APIs are thin wrappers over the core runtime:
 
-- tool helpers call `nat_nexus.tools.execute(...)`
-- LLM helpers call `nat_nexus.llm.execute(...)`
-- streaming helpers call `nat_nexus.llm.stream_execute(...)`
+- tool helpers call `nemo_flow.tools.execute(...)`
+- LLM helpers call `nemo_flow.llm.execute(...)`
+- streaming helpers call `nemo_flow.llm.stream_execute(...)`
 
 ## Codec Protocol
 

@@ -4,7 +4,7 @@
 //! Event subscriber factory and event-to-record mapping helpers.
 //!
 //! This module provides [`create_subscriber`], which produces an
-//! [`EventSubscriberFn`] callback that clones incoming Nexus events into a
+//! [`EventSubscriberFn`] callback that clones incoming NeMo Flow events into a
 //! `tokio::sync::mpsc` channel for async processing by the drain task.
 //!
 //! It also provides helper functions for mapping raw [`Event`] values to
@@ -15,7 +15,7 @@
 //! - [`is_run_boundary`] — detects Agent scope start/end events that
 //!   delineate run boundaries.
 
-use nvidia_nat_nexus_core::{Event, EventSubscriberFn, ScopeType};
+use nemo_flow_core::{Event, EventSubscriberFn, ScopeType};
 
 use crate::types::{CallKind, CallRecord};
 
@@ -24,12 +24,12 @@ use crate::types::{CallKind, CallRecord};
 ///
 /// # Hot-path safety
 ///
-/// The returned closure runs **synchronously** on the request path after Nexus
+/// The returned closure runs **synchronously** on the request path after NeMo Flow
 /// releases its runtime locks. It MUST NOT:
 ///
 /// - Perform I/O
 /// - Acquire write locks on the global context
-/// - Call Nexus API functions
+/// - Call NeMo Flow API functions
 /// - Panic
 ///
 /// The only work done is `event.clone()` followed by
@@ -41,13 +41,13 @@ pub(crate) fn create_subscriber(
 ) -> EventSubscriberFn {
     std::sync::Arc::new(move |event: &Event| {
         // CRITICAL: This runs synchronously on the call path, so it must stay non-blocking.
-        // MUST NOT: do I/O, acquire write locks, call Nexus APIs, or panic.
+        // MUST NOT: do I/O, acquire write locks, call NeMo Flow APIs, or panic.
         // ONLY: clone + send. UnboundedSender::send() never blocks.
         let _ = tx.send(event.clone());
     })
 }
 
-/// Maps a Nexus Start event to a partial [`CallRecord`] (with `ended_at = None`).
+/// Maps a NeMo Flow Start event to a partial [`CallRecord`] (with `ended_at = None`).
 ///
 /// Returns `None` for:
 /// - Events that are not start variants
@@ -89,7 +89,7 @@ pub(crate) fn is_run_boundary(event: &Event) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nvidia_nat_nexus_core::{Event, ScopeType};
+    use nemo_flow_core::{Event, ScopeType};
     use uuid::Uuid;
 
     #[derive(Clone, Copy)]
@@ -114,7 +114,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nvidia_nat_nexus_core::LLMAttributes::empty(),
+                nemo_flow_core::LLMAttributes::empty(),
                 None,
                 None,
                 None,
@@ -125,7 +125,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nvidia_nat_nexus_core::ToolAttributes::empty(),
+                nemo_flow_core::ToolAttributes::empty(),
                 None,
                 None,
             ),
@@ -135,7 +135,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nvidia_nat_nexus_core::ScopeAttributes::empty(),
+                nemo_flow_core::ScopeAttributes::empty(),
                 scope_type,
             ),
             (EventType::End, Some(ScopeType::Llm)) => Event::llm_end(
@@ -144,7 +144,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nvidia_nat_nexus_core::LLMAttributes::empty(),
+                nemo_flow_core::LLMAttributes::empty(),
                 None,
                 None,
                 None,
@@ -155,7 +155,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nvidia_nat_nexus_core::ToolAttributes::empty(),
+                nemo_flow_core::ToolAttributes::empty(),
                 None,
                 None,
             ),
@@ -165,7 +165,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nvidia_nat_nexus_core::ScopeAttributes::empty(),
+                nemo_flow_core::ScopeAttributes::empty(),
                 scope_type,
             ),
             (EventType::Mark, _) | (_, None) => {

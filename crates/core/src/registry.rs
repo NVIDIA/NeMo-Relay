@@ -4,7 +4,7 @@
 //! Priority-sorted named registry.
 //!
 //! [`SortedRegistry`] is the backbone data structure for all guardrail and intercept
-//! registries in the Nexus runtime. It stores entries by unique name and provides
+//! registries in the NeMo Flow runtime. It stores entries by unique name and provides
 //! iteration in ascending priority order, with eager re-sorting on every mutation.
 
 use std::collections::HashMap;
@@ -140,15 +140,16 @@ mod tests {
         assert_eq!(sorted, vec!["A", "B", "C"]);
 
         // duplicate
-        assert!(reg
-            .register(
+        assert!(
+            reg.register(
                 "a".into(),
                 PriorityItem {
                     priority: 5,
                     value: "A2".into(),
                 },
             )
-            .is_err());
+            .is_err()
+        );
 
         // deregister
         assert!(reg.deregister("b"));

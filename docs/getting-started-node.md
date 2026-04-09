@@ -10,7 +10,7 @@ call using the Node.js binding.
 
 All examples in this guide use:
 
-- an active Nexus scope
+- an active NeMo Flow scope
 - the managed execution APIs (`toolCallExecute(...)` and `llmCallExecute(...)`)
 
 This guide intentionally does not use the low-level manual lifecycle APIs such

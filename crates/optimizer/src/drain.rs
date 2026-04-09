@@ -3,7 +3,7 @@
 
 //! Background drain task for async telemetry processing.
 //!
-//! The drain task receives Nexus [`Event`]s from an unbounded mpsc channel,
+//! The drain task receives NeMo Flow [`Event`]s from an unbounded mpsc channel,
 //! accumulates them into [`RunRecord`]s via [`RunAccumulator`], and stores
 //! completed runs through the [`StorageBackend`]. After each stored run it
 //! refreshes the hot cache so intercepts can use up-to-date metadata.
@@ -17,7 +17,7 @@ use std::sync::{Arc, RwLock};
 
 use uuid::Uuid;
 
-use nvidia_nat_nexus_core::{Event, ScopeType};
+use nemo_flow_core::{Event, ScopeType};
 
 use crate::learner::Learner;
 use crate::storage::StorageBackendDyn;
@@ -104,10 +104,10 @@ impl RunAccumulator {
             Event::ToolStart(_) | Event::LLMStart(_) => {
                 let root_uuid = self.infer_root_uuid(event)?;
                 self.event_roots.insert(event.uuid(), root_uuid);
-                if let Some(record) = event_to_call_record(event) {
-                    if let Some(run) = self.open_runs.get_mut(&root_uuid) {
-                        run.calls.push(record);
-                    }
+                if let Some(record) = event_to_call_record(event)
+                    && let Some(run) = self.open_runs.get_mut(&root_uuid)
+                {
+                    run.calls.push(record);
                 }
                 None
             }
@@ -125,17 +125,17 @@ impl RunAccumulator {
                         call.ended_at = Some(*event.timestamp());
 
                         // Extract structured telemetry from annotated response
-                        if let Event::LLMEnd(ref inner) = event {
-                            if let Some(ref annotated) = inner.annotated_response {
-                                if let Some(ref usage) = annotated.usage {
-                                    call.output_tokens = usage.completion_tokens.map(|t| t as u32);
-                                    call.prompt_tokens = usage.prompt_tokens.map(|t| t as u32);
-                                    call.total_tokens = usage.total_tokens.map(|t| t as u32);
-                                }
-                                call.model_name = annotated.model.clone();
-                                call.tool_call_count =
-                                    annotated.tool_calls.as_ref().map(|tc| tc.len() as u32);
+                        if let Event::LLMEnd(inner) = event
+                            && let Some(ref annotated) = inner.annotated_response
+                        {
+                            if let Some(ref usage) = annotated.usage {
+                                call.output_tokens = usage.completion_tokens.map(|t| t as u32);
+                                call.prompt_tokens = usage.prompt_tokens.map(|t| t as u32);
+                                call.total_tokens = usage.total_tokens.map(|t| t as u32);
                             }
+                            call.model_name = annotated.model.clone();
+                            call.tool_call_count =
+                                annotated.tool_calls.as_ref().map(|tc| tc.len() as u32);
                         }
                     }
                 }
@@ -171,32 +171,35 @@ pub(crate) async fn drain_task(
     while let Some(event) = rx.recv().await {
         if let Some(completed_run) = accumulator.process_event(&event) {
             // Store the completed run (async, not on hot path)
-            if let Err(e) = backend.store_run_dyn(&completed_run).await {
+            let store_result = backend.store_run_dyn(&completed_run).await;
+            if let Err(e) = store_result {
                 // Log error but continue -- don't crash the drain
-                eprintln!("nexus-optimizer drain: store_run failed: {e}");
+                eprintln!("nemo-flow-optimizer drain: store_run failed: {e}");
                 continue;
             }
 
             // Invoke learner pipeline (each learner updates hot_cache internally)
             for learner in &learners {
-                if let Err(e) = learner
+                let learner_result = learner
                     .process_run(&completed_run, backend.as_ref(), &hot_cache)
-                    .await
-                {
-                    eprintln!("nexus-optimizer drain: learner failed: {e}");
+                    .await;
+                if let Err(e) = learner_result {
+                    eprintln!("nemo-flow-optimizer drain: learner failed: {e}");
                     // Continue -- one learner failure doesn't stop others
                 }
             }
 
             // Update hot cache with latest plan from backend
-            match backend.load_plan_dyn(&agent_id).await {
+            let plan_result = backend.load_plan_dyn(&agent_id).await;
+            match plan_result {
                 Ok(plan) => {
-                    if let Ok(mut guard) = hot_cache.write() {
+                    let hot_cache_write = hot_cache.write();
+                    if let Ok(mut guard) = hot_cache_write {
                         guard.plan = plan;
                     }
                 }
                 Err(e) => {
-                    eprintln!("nexus-optimizer drain: load_plan failed: {e}");
+                    eprintln!("nemo-flow-optimizer drain: load_plan failed: {e}");
                 }
             }
         }
@@ -209,7 +212,7 @@ mod tests {
     use super::*;
     use crate::storage::{InMemoryBackend, StorageBackend, StorageBackendDyn};
     use crate::types::{ExecutionPlan, HotCache, MetadataEnvelope, ParallelGroup};
-    use nvidia_nat_nexus_core::{Event, ScopeType};
+    use nemo_flow_core::{Event, ScopeType};
     use serde_json::json;
     use std::time::Duration;
     use uuid::Uuid;
@@ -236,7 +239,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nvidia_nat_nexus_core::ToolAttributes::empty(),
+                nemo_flow_core::ToolAttributes::empty(),
                 None,
                 None,
             ),
@@ -246,7 +249,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nvidia_nat_nexus_core::ToolAttributes::empty(),
+                nemo_flow_core::ToolAttributes::empty(),
                 None,
                 None,
             ),
@@ -256,7 +259,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nvidia_nat_nexus_core::LLMAttributes::empty(),
+                nemo_flow_core::LLMAttributes::empty(),
                 None,
                 None,
                 None,
@@ -267,7 +270,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nvidia_nat_nexus_core::LLMAttributes::empty(),
+                nemo_flow_core::LLMAttributes::empty(),
                 None,
                 None,
                 None,
@@ -278,7 +281,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nvidia_nat_nexus_core::ScopeAttributes::empty(),
+                nemo_flow_core::ScopeAttributes::empty(),
                 scope_type,
             ),
             (EventType::End, Some(scope_type)) => Event::scope_end(
@@ -287,7 +290,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nvidia_nat_nexus_core::ScopeAttributes::empty(),
+                nemo_flow_core::ScopeAttributes::empty(),
                 scope_type,
             ),
             (_, None) => Event::mark(parent_uuid, uuid, event_name, None, None),
@@ -303,7 +306,7 @@ mod tests {
             "my-agent",
             None,
             None,
-            nvidia_nat_nexus_core::ScopeAttributes::empty(),
+            nemo_flow_core::ScopeAttributes::empty(),
             ScopeType::Agent,
         )
     }
@@ -316,7 +319,7 @@ mod tests {
             "my-agent",
             None,
             None,
-            nvidia_nat_nexus_core::ScopeAttributes::empty(),
+            nemo_flow_core::ScopeAttributes::empty(),
             ScopeType::Agent,
         )
     }
@@ -689,7 +692,7 @@ mod tests {
         uuid: Uuid,
         parent_uuid: Option<Uuid>,
         name: &str,
-        annotated: nvidia_nat_nexus_core::AnnotatedLLMResponse,
+        annotated: nemo_flow_core::AnnotatedLLMResponse,
     ) -> Event {
         Event::llm_end(
             parent_uuid,
@@ -697,7 +700,7 @@ mod tests {
             name,
             None,
             None,
-            nvidia_nat_nexus_core::LLMAttributes::empty(),
+            nemo_flow_core::LLMAttributes::empty(),
             None,
             None,
             Some(std::sync::Arc::new(annotated)),
@@ -706,7 +709,7 @@ mod tests {
 
     #[test]
     fn test_accumulator_extracts_annotated_response() {
-        use nvidia_nat_nexus_core::{AnnotatedLLMResponse, ResponseToolCall, Usage};
+        use nemo_flow_core::{AnnotatedLLMResponse, ResponseToolCall, Usage};
 
         let mut acc = RunAccumulator::new("agent-1".to_string());
 
@@ -842,7 +845,7 @@ mod tests {
 
     #[test]
     fn test_accumulator_annotated_response_partial_data() {
-        use nvidia_nat_nexus_core::AnnotatedLLMResponse;
+        use nemo_flow_core::AnnotatedLLMResponse;
 
         let mut acc = RunAccumulator::new("agent-1".to_string());
 

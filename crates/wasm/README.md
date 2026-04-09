@@ -3,17 +3,17 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# nvidia-nat-nexus-wasm
+# nvidia-nemo-flow-wasm
 
-wasm-bindgen WebAssembly bindings for the Nexus core runtime.
+wasm-bindgen WebAssembly bindings for the NeMo Flow core runtime.
 
-The Cargo package name is `nat-nexus-wasm`. The compiled WASM library target
-and npm package are NVIDIA-branded (`nvidia_nat_nexus_wasm` and
-`@nvidia/nat-nexus-wasm`).
+The Cargo package name is `nemo-flow-wasm`. The compiled WASM library target
+and npm package are NVIDIA-branded (`nemo_flow_wasm` and
+`@nvidia/nemo-flow-wasm`).
 
 ## Overview
 
-This crate compiles the Nexus core API to WebAssembly via `wasm-bindgen`, making it usable in both browser and Node.js environments. It provides the same API surface as other language bindings, adapted for the single-threaded WASM execution model using `send_wrapper` for thread-safety bridging.
+This crate compiles the NeMo Flow core API to WebAssembly via `wasm-bindgen`, making it usable in both browser and Node.js environments. It provides the same API surface as other language bindings, adapted for the single-threaded WASM execution model using `send_wrapper` for thread-safety bridging.
 
 ## What It Provides
 
@@ -46,7 +46,7 @@ This produces a `pkg/` directory containing `.wasm`, `.js`, and `.d.ts` files re
 To run unit tests:
 
 ```bash
-cargo test -p nat-nexus-wasm
+cargo test -p nemo-flow-wasm
 wasm-pack test --node crates/wasm
 ```
 
@@ -56,7 +56,7 @@ The WASM binding uses plain JavaScript objects for optimizer config and exposes
 the optimizer surface through `optimizer.js`.
 
 ```javascript
-import init from "./pkg/nvidia_nat_nexus_wasm.js";
+import init from "./pkg/nemo_flow_wasm.js";
 import {
   Runtime,
   validateConfig,
@@ -82,7 +82,7 @@ WASM hosted plugins register JavaScript handlers first, then enable themselves
 through `external_component` in the optimizer config.
 
 ```javascript
-import init from "./pkg/nvidia_nat_nexus_wasm.js";
+import init from "./pkg/nemo_flow_wasm.js";
 import {
   Runtime,
   registerPlugin,

@@ -32,7 +32,7 @@ use std::task::{Context, Poll};
 use tokio_stream::Stream;
 
 use crate::codec::{AnnotatedLLMResponse, LlmResponseCodec};
-use crate::context::{current_scope_stack, global_context, NatNexusContextState, ScopeStackHandle};
+use crate::context::{NemoFlowContextState, ScopeStackHandle, current_scope_stack, global_context};
 use crate::error::Result;
 use crate::json::Json;
 use crate::types::*;
@@ -67,7 +67,7 @@ impl LlmStreamWrapper {
     /// - `handle` -- the [`LLMHandle`] for this call (used for the `End` event).
     /// - `collector` -- called with each chunk; use this to accumulate
     ///   streaming tokens or forward them to another sink. Return `Ok(())`
-    ///   to continue the stream, or `Err(NexusError)` to terminate it.
+    ///   to continue the stream, or `Err(FlowError)` to terminate it.
     /// - `finalizer` -- called once when the stream is exhausted; must return the
     ///   aggregated response as [`Json`]. The returned value flows through
     ///   sanitize response guardrails.
@@ -115,10 +115,9 @@ impl LlmStreamWrapper {
     /// Calls the finalizer to produce the aggregated response, runs sanitize
     /// response guardrails, and emits the END event.
     fn emit_end_event(&mut self) {
-        let aggregated = if let Some(finalizer) = self.finalizer.take() {
-            finalizer()
-        } else {
-            Json::Null
+        let aggregated = match self.finalizer.take() {
+            Some(finalizer) => finalizer(),
+            None => Json::Null,
         };
 
         // Decode aggregated response if response codec is present (non-fatal)
@@ -133,23 +132,26 @@ impl LlmStreamWrapper {
             let sl =
                 ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
             let sl_subs = ss_guard.collect_scope_local_subscribers();
-            if let Ok(state) = global_context().read() {
-                let subscribers = state.collect_event_subscribers(&sl_subs);
-                let sanitized = state.llm_sanitize_response_chain(aggregated, &sl);
-                let event = state.end_llm_handle(
-                    &self.handle,
-                    self.data.clone(),
-                    self.metadata.clone(),
-                    Some(sanitized),
-                    annotated_response,
-                );
-                Some((event, subscribers))
-            } else {
-                None
+            let ctx = global_context();
+            let state = ctx.read();
+            match state {
+                Ok(state) => {
+                    let subscribers = state.collect_event_subscribers(&sl_subs);
+                    let sanitized = state.llm_sanitize_response_chain(aggregated, &sl);
+                    let event = state.end_llm_handle(
+                        &self.handle,
+                        self.data.clone(),
+                        self.metadata.clone(),
+                        Some(sanitized),
+                        annotated_response,
+                    );
+                    Some((event, subscribers))
+                }
+                Err(_) => None,
             }
         };
         if let Some((event, subscribers)) = event_snapshot {
-            NatNexusContextState::emit_event(&event, &subscribers);
+            NemoFlowContextState::emit_event(&event, &subscribers);
         }
     }
 }

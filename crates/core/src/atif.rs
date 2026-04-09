@@ -4,7 +4,7 @@
 //! ATIF (Agent Trajectory Interchange Format) exporter.
 //!
 //! This module provides types and an exporter that collects lifecycle events
-//! from the Nexus runtime and converts them into ATIF trajectories conforming
+//! from the NeMo Flow runtime and converts them into ATIF trajectories conforming
 //! to the ATIF v1.6 schema.
 //!
 //! # Overview
@@ -14,9 +14,9 @@
 //!
 //! # Event-to-Step Mapping
 //!
-//! The core conversion from Nexus events to ATIF steps follows these rules:
+//! The core conversion from NeMo Flow events to ATIF steps follows these rules:
 //!
-//! | Nexus Event     | ATIF Step               | Notes                                |
+//! | NeMo Flow Event     | ATIF Step               | Notes                                |
 //! |-----------------|-------------------------|--------------------------------------|
 //! | LLM Start       | `user` step             | Messages extracted from LLMRequest   |
 //! | LLM End         | `agent` step            | Response content, tool_calls promoted|
@@ -297,7 +297,7 @@ impl AtifExporter {
     }
 
     /// Returns an event subscriber function that can be registered with
-    /// [`nat_nexus_register_subscriber`](crate::api::nat_nexus_register_subscriber).
+    /// [`nemo_flow_register_subscriber`](crate::api::nemo_flow_register_subscriber).
     pub fn subscriber(&self) -> EventSubscriberFn {
         let state = self.state.clone();
         Arc::new(move |event: &Event| {
@@ -340,12 +340,13 @@ impl AtifExporter {
 /// If `input` looks like an `LLMRequest` envelope (`{"content": ..., "headers": ...}`),
 /// return the inner `content` value. Otherwise return the input unchanged.
 ///
-/// This avoids leaking the Nexus transport wrapper into the trajectory.
+/// This avoids leaking the NeMo Flow transport wrapper into the trajectory.
 fn unwrap_llm_request(input: &Json) -> Json {
-    if let Some(obj) = input.as_object() {
-        if obj.contains_key("content") && obj.contains_key("headers") {
-            return obj.get("content").cloned().unwrap_or_else(|| input.clone());
-        }
+    if let Some(obj) = input.as_object()
+        && obj.contains_key("content")
+        && obj.contains_key("headers")
+    {
+        return obj.get("content").cloned().unwrap_or_else(|| input.clone());
     }
     input.clone()
 }
@@ -357,10 +358,10 @@ fn unwrap_llm_request(input: &Json) -> Json {
 fn extract_llm_response_message(output: &Json) -> Json {
     if let Some(obj) = output.as_object() {
         // Prefer the "content" field if it carries actual content.
-        if let Some(content) = obj.get("content") {
-            if !content.is_null() {
-                return content.clone();
-            }
+        if let Some(content) = obj.get("content")
+            && !content.is_null()
+        {
+            return content.clone();
         }
         // If content is null (e.g. tool_calls-only response), fall back to the
         // role + tool_calls summary so the step is still meaningful.
@@ -372,10 +373,10 @@ fn extract_llm_response_message(output: &Json) -> Json {
             if let Some(tc) = obj.get("tool_calls") {
                 summary.insert("tool_calls".to_string(), tc.clone());
             }
-            if let Some(r) = obj.get("reasoning") {
-                if !r.is_null() {
-                    summary.insert("reasoning".to_string(), r.clone());
-                }
+            if let Some(r) = obj.get("reasoning")
+                && !r.is_null()
+            {
+                summary.insert("reasoning".to_string(), r.clone());
             }
             if !summary.is_empty() {
                 return Json::Object(summary);
@@ -450,12 +451,11 @@ fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
 /// The request content may have `reasoning_effort` (e.g. `"high"`, `"medium"`,
 /// or a numeric value). Returns the value as Json for flexibility.
 fn extract_reasoning_effort(input: &Json) -> Option<Json> {
-    if let Some(obj) = input.as_object() {
-        if let Some(v) = obj.get("reasoning_effort") {
-            if !v.is_null() {
-                return Some(v.clone());
-            }
-        }
+    if let Some(obj) = input.as_object()
+        && let Some(v) = obj.get("reasoning_effort")
+        && !v.is_null()
+    {
+        return Some(v.clone());
     }
     None
 }
@@ -465,10 +465,10 @@ fn extract_reasoning_effort(input: &Json) -> Option<Json> {
 /// The agent's explicit internal reasoning may appear in the response under the
 /// `"reasoning"` key. Returns `None` if absent or not a string.
 fn extract_reasoning_content(output: &Json) -> Option<String> {
-    if let Some(obj) = output.as_object() {
-        if let Some(r) = obj.get("reasoning") {
-            return r.as_str().map(String::from);
-        }
+    if let Some(obj) = output.as_object()
+        && let Some(r) = obj.get("reasoning")
+    {
+        return r.as_str().map(String::from);
     }
     None
 }
@@ -481,10 +481,10 @@ fn extract_reasoning_content(output: &Json) -> Option<String> {
 ///
 /// Returns the `messages` value if present, otherwise the full input.
 fn extract_user_messages(input: &Json) -> Json {
-    if let Some(obj) = input.as_object() {
-        if let Some(messages) = obj.get("messages") {
-            return messages.clone();
-        }
+    if let Some(obj) = input.as_object()
+        && let Some(messages) = obj.get("messages")
+    {
+        return messages.clone();
     }
     input.clone()
 }
@@ -496,7 +496,7 @@ fn extract_user_messages(input: &Json) -> Json {
 /// "tool_calls": [{ "id": "...", "type": "function", "function": { "name": "...", "arguments": "..." } }]
 /// ```
 ///
-/// String `arguments` are parsed into JSON for consistency with Nexus tool events
+/// String `arguments` are parsed into JSON for consistency with NeMo Flow tool events
 /// which always provide parsed arguments.
 ///
 /// Returns `None` if there are no tool calls or the structure is unrecognized.
@@ -540,11 +540,7 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
             arguments,
         });
     }
-    if calls.is_empty() {
-        None
-    } else {
-        Some(calls)
-    }
+    if calls.is_empty() { None } else { Some(calls) }
 }
 
 /// Compute aggregate `final_metrics` by summing token counts across all steps.
@@ -594,7 +590,7 @@ fn compute_final_metrics(steps: &[AtifStep]) -> Option<AtifFinalMetrics> {
 // AtifStepExtra helpers
 // ---------------------------------------------------------------------------
 
-/// Build an [`AtifAncestry`] from a Nexus [`Event`].
+/// Build an [`AtifAncestry`] from a NeMo Flow [`Event`].
 ///
 /// `name_map` is a pre-pass uuid → name lookup used to resolve `parent_name`.
 fn build_ancestry(
@@ -695,39 +691,39 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
                                 tool_ancestry: &mut Vec<AtifAncestry>,
                                 tool_invocations: &mut Vec<AtifInvocationInfo>,
                                 tool_call_order: &[String]| {
-        if let (Some(i), Some(anc)) = (idx.take(), ancestry.take()) {
-            if let Some(step) = steps.get_mut(i) {
-                // Sort ancestry/invocations to match tool_calls declaration
-                // order. Tools may complete out of order (concurrent execution)
-                // but tool_ancestry[i] must align with tool_calls[i] by spec.
-                if !tool_call_order.is_empty() && !tool_ancestry.is_empty() {
-                    let mut pairs: Vec<(AtifAncestry, AtifInvocationInfo)> =
-                        std::mem::take(tool_ancestry)
-                            .into_iter()
-                            .zip(std::mem::take(tool_invocations))
-                            .collect();
-                    pairs.sort_by_key(|(_, inv)| {
-                        inv.invocation_id
-                            .as_deref()
-                            .and_then(|id| tool_call_order.iter().position(|o| o == id))
-                            .unwrap_or(usize::MAX)
-                    });
-                    let (sorted_anc, sorted_inv): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
-                    *tool_ancestry = sorted_anc;
-                    *tool_invocations = sorted_inv;
-                }
-                let extra = AtifStepExtra {
-                    ancestry: anc,
-                    invocation: invocation.take(),
-                    tool_ancestry: std::mem::take(tool_ancestry),
-                    tool_invocations: if tool_invocations.is_empty() {
-                        None
-                    } else {
-                        Some(std::mem::take(tool_invocations))
-                    },
-                };
-                step.extra = serde_json::to_value(&extra).ok();
+        if let (Some(i), Some(anc)) = (idx.take(), ancestry.take())
+            && let Some(step) = steps.get_mut(i)
+        {
+            // Sort ancestry/invocations to match tool_calls declaration
+            // order. Tools may complete out of order (concurrent execution)
+            // but tool_ancestry[i] must align with tool_calls[i] by spec.
+            if !tool_call_order.is_empty() && !tool_ancestry.is_empty() {
+                let mut pairs: Vec<(AtifAncestry, AtifInvocationInfo)> =
+                    std::mem::take(tool_ancestry)
+                        .into_iter()
+                        .zip(std::mem::take(tool_invocations))
+                        .collect();
+                pairs.sort_by_key(|(_, inv)| {
+                    inv.invocation_id
+                        .as_deref()
+                        .and_then(|id| tool_call_order.iter().position(|o| o == id))
+                        .unwrap_or(usize::MAX)
+                });
+                let (sorted_anc, sorted_inv): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+                *tool_ancestry = sorted_anc;
+                *tool_invocations = sorted_inv;
             }
+            let extra = AtifStepExtra {
+                ancestry: anc,
+                invocation: invocation.take(),
+                tool_ancestry: std::mem::take(tool_ancestry),
+                tool_invocations: if tool_invocations.is_empty() {
+                    None
+                } else {
+                    Some(std::mem::take(tool_invocations))
+                },
+            };
+            step.extra = serde_json::to_value(&extra).ok();
         }
     };
 
@@ -833,7 +829,7 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
                         start_ts,
                         llm_end.timestamp,
                         Some(llm_end.uuid.to_string()),
-                        "nexus",
+                        "nemo_flow",
                     ));
                     steps.push(AtifStep {
                         step_id: 0,
@@ -884,7 +880,7 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
                             .tool_call_id
                             .clone()
                             .or_else(|| Some(tool_end.uuid.to_string())),
-                        "nexus",
+                        "nemo_flow",
                     ));
                 }
             }
@@ -2080,7 +2076,7 @@ mod tests {
         // end must be >= start
         assert!(inv.end_timestamp.unwrap() >= inv.start_timestamp.unwrap());
         assert_eq!(inv.invocation_id, Some(llm_uuid.to_string()));
-        assert_eq!(inv.framework, Some("nexus".to_string()));
+        assert_eq!(inv.framework, Some("nemo_flow".to_string()));
     }
 
     #[test]

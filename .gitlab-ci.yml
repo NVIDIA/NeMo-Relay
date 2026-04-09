@@ -17,16 +17,16 @@ stages:
   - publish
 
 variables:
-  NEXUS_CI_GO_VERSION: "1.26.1"
-  NEXUS_CI_DEBIAN_VERSION: "trixie"
-  NEXUS_CI_DEFAULT_PYTHON_VER: "3.13"
-  NEXUS_CI_RUST_VERSION: "1.94.0"
-  NEXUS_CI_NODE_VERSION: "24"
-  NEXUS_CI_NVM_VERSION: "0.40.4"
-  NEXUS_CI_UV_VERSION: "0.9.28"
-  NEXUS_CI_WASM_VERSION: "0.2.20"
-  NEXUS_CI_RUST_ONLY_EXCLUDES: "--exclude nvidia-nat-nexus-node --exclude nvidia-nat-nexus-python --exclude nat-nexus-wasm"
-  NEXUS_CI_WORKSPACE_TMP: "${CI_PROJECT_DIR}/.tmp"
+  NEMO_FLOW_CI_GO_VERSION: "1.26.1"
+  NEMO_FLOW_CI_DEBIAN_VERSION: "trixie"
+  NEMO_FLOW_CI_DEFAULT_PYTHON_VER: "3.13"
+  NEMO_FLOW_CI_RUST_VERSION: "1.94.0"
+  NEMO_FLOW_CI_NODE_VERSION: "24"
+  NEMO_FLOW_CI_NVM_VERSION: "0.40.4"
+  NEMO_FLOW_CI_UV_VERSION: "0.9.28"
+  NEMO_FLOW_CI_WASM_VERSION: "0.2.20"
+  NEMO_FLOW_CI_RUST_ONLY_EXCLUDES: "--exclude nemo-flow-node --exclude nemo-flow-python --exclude nemo-flow-wasm"
+  NEMO_FLOW_CI_WORKSPACE_TMP: "${CI_PROJECT_DIR}/.tmp"
   UV_CACHE_DIR: .uv-cache
   UV_INSTALL_DIR: /usr/local/bin
   UV_PYTHON_DOWNLOADS: never
@@ -37,7 +37,7 @@ default:
       paths:
         - $UV_CACHE_DIR
   before_script:
-    - mkdir -p ${NEXUS_CI_WORKSPACE_TMP}
+    - mkdir -p ${NEMO_FLOW_CI_WORKSPACE_TMP}
 
 .install_build_essential: &install_build_essential
     - echo "Installing build-essential"
@@ -45,22 +45,22 @@ default:
 
 .install_nodejs: &install_nodejs
     - echo "Installing NodeJS"
-    - curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NEXUS_CI_NVM_VERSION}/install.sh | bash
+    - curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NEMO_FLOW_CI_NVM_VERSION}/install.sh | bash
     - \. "$HOME/.nvm/nvm.sh"
-    - nvm install ${NEXUS_CI_NODE_VERSION}
+    - nvm install ${NEMO_FLOW_CI_NODE_VERSION}
     - echo "NodeJS and NPM versions:"
     - node --version && npm --version
 
 .install_uv_and_python: &install_uv_and_python
     - echo "Installing uv"
-    - curl -LsSf https://astral.sh/uv/${NEXUS_CI_UV_VERSION}/install.sh | sh
+    - curl -LsSf https://astral.sh/uv/${NEMO_FLOW_CI_UV_VERSION}/install.sh | sh
     - echo "Installing Python"
-    - UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${NEXUS_CI_DEFAULT_PYTHON_VER}
-    - export PYO3_PYTHON=$(uv python find --managed-python ${NEXUS_CI_DEFAULT_PYTHON_VER})
+    - UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${NEMO_FLOW_CI_DEFAULT_PYTHON_VER}
+    - export PYO3_PYTHON=$(uv python find --managed-python ${NEMO_FLOW_CI_DEFAULT_PYTHON_VER})
 
 .export_managed_python_runtime: &export_managed_python_runtime
     - |
-      export PYO3_PYTHON="$(uv python find --managed-python ${NEXUS_CI_DEFAULT_PYTHON_VER})"
+      export PYO3_PYTHON="$(uv python find --managed-python ${NEMO_FLOW_CI_DEFAULT_PYTHON_VER})"
       eval "$("$PYO3_PYTHON" - <<'PY'
       import shlex
       import sys
@@ -82,18 +82,18 @@ default:
 
 .install_go: &install_go
     - echo "Installing Go"
-    - curl -LsSf https://go.dev/dl/go${NEXUS_CI_GO_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+    - curl -LsSf https://go.dev/dl/go${NEMO_FLOW_CI_GO_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xzf -
     - export PATH=$PATH:/usr/local/go/bin
 
 .setup_venv: &setup_venv
-    - uv venv --python=${NEXUS_CI_DEFAULT_PYTHON_VER} --seed ${NEXUS_CI_WORKSPACE_TMP}/.venv
-    - source ${NEXUS_CI_WORKSPACE_TMP}/.venv/bin/activate
-    - uv sync --active --reinstall-package nvidia-nat-nexus
+    - uv venv --python=${NEMO_FLOW_CI_DEFAULT_PYTHON_VER} --seed ${NEMO_FLOW_CI_WORKSPACE_TMP}/.venv
+    - source ${NEMO_FLOW_CI_WORKSPACE_TMP}/.venv/bin/activate
+    - uv sync --active --reinstall-package nemo-flow
 
 check:precommit:
   stage: check
   image:
-    name: rust:${NEXUS_CI_RUST_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
+    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   variables:
     PRE_COMMIT_HOME: ${CI_PROJECT_DIR}/.cache/pre-commit
@@ -128,7 +128,7 @@ check:precommit:
 build:
   stage: build
   image:
-    name: rust:${NEXUS_CI_RUST_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
+    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   artifacts:
     name: "cargo-build"
@@ -139,14 +139,14 @@ build:
       - crates/node/index.js
       - crates/node/index.d.ts
       - crates/wasm/pkg/
-      - python/nat_nexus/*.so
+      - python/nemo_flow/*.so
   script:
     - *install_build_essential
     - *install_nodejs
     - *install_uv_and_python
-    - echo "Building Nexus"
+    - echo "Building NeMo Flow"
     - cargo build --release --workspace
-    - cargo test --no-run --release --workspace ${NEXUS_CI_RUST_ONLY_EXCLUDES}
+    - cargo test --no-run --release --workspace ${NEMO_FLOW_CI_RUST_ONLY_EXCLUDES}
     - echo "Building Python Extension"
     - *setup_venv
     - echo "Building NodeJS package"
@@ -162,7 +162,7 @@ test:go:
   stage: test
   timeout: 30 minutes
   image:
-    name: golang:${NEXUS_CI_GO_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
+    name: golang:${NEMO_FLOW_CI_GO_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   needs:
     - job: build
@@ -181,7 +181,7 @@ test:go:
   script:
       - echo "Go Versions:"
       - go version
-      - cd go/nat_nexus
+      - cd go/nemo_flow
       - echo "Installing Go test reporting tools"
       - go install github.com/jstemmer/go-junit-report/v2@latest
       - go install github.com/boumenot/gocover-cobertura@latest
@@ -196,7 +196,7 @@ test:node:
   stage: test
   timeout: 30 minutes
   image:
-    name: rust:${NEXUS_CI_RUST_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
+    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   needs:
     - job: build
@@ -218,7 +218,7 @@ test:node:
     - mkdir -p target/coverage
     - eval "$(cargo llvm-cov show-env --sh)"
     - cargo llvm-cov clean --workspace
-    - cargo test -p nvidia-nat-nexus-node --lib
+    - cargo test -p nemo-flow-node --lib
     - echo "Running NodeJS tests and coverage"
     - |
       pushd crates/node
@@ -232,13 +232,13 @@ test:node:
           --test-reporter=junit --test-reporter-destination="${CI_PROJECT_DIR}/target/coverage/nodejs_junit.xml" \
           tests/*.mjs
       popd
-    - cargo llvm-cov report -p nvidia-nat-nexus-node --ignore-filename-regex '.*/src/.*_tests\.rs$' --cobertura --output-path target/coverage/node-rust.xml
+    - cargo llvm-cov report -p nemo-flow-node --ignore-filename-regex '.*/src/.*_tests\.rs$' --cobertura --output-path target/coverage/node-rust.xml
 
 test:python:
   stage: test
   timeout: 30 minutes
   image:
-    name: rust:${NEXUS_CI_RUST_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
+    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   needs:
     - job: build
@@ -264,22 +264,22 @@ test:python:
       set -e
       eval "$(cargo llvm-cov show-env --sh)"
       cargo llvm-cov clean --workspace
-      cargo test -p nvidia-nat-nexus-python --lib
-      uv venv --python=${NEXUS_CI_DEFAULT_PYTHON_VER} --seed ${NEXUS_CI_WORKSPACE_TMP}/.venv
-      source ${NEXUS_CI_WORKSPACE_TMP}/.venv/bin/activate
-      uv sync --active --reinstall-package nvidia-nat-nexus
+      cargo test -p nemo-flow-python --lib
+      uv venv --python=${NEMO_FLOW_CI_DEFAULT_PYTHON_VER} --seed ${NEMO_FLOW_CI_WORKSPACE_TMP}/.venv
+      source ${NEMO_FLOW_CI_WORKSPACE_TMP}/.venv/bin/activate
+      uv sync --active --reinstall-package nemo-flow
       uv run maturin develop
       uv run pytest python/tests \
-        --cov=nat_nexus --cov-report term-missing \
+        --cov=nemo_flow --cov-report term-missing \
         --junit-xml=${CI_PROJECT_DIR}/target/coverage/pytest_junit_report.xml \
         --cov-report xml:${CI_PROJECT_DIR}/target/coverage/pytest_coverage_report.xml
-      cargo llvm-cov report -p nvidia-nat-nexus-python --ignore-filename-regex '.*/src/.*_tests\.rs$' --cobertura --output-path target/coverage/python-rust.xml
+      cargo llvm-cov report -p nemo-flow-python --ignore-filename-regex '.*/src/.*_tests\.rs$' --cobertura --output-path target/coverage/python-rust.xml
 
 test:rust:
   stage: test
   timeout: 30 minutes
   image:
-    name: rust:${NEXUS_CI_RUST_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
+    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   needs:
     - job: build
@@ -300,14 +300,14 @@ test:rust:
     - mkdir -p target/coverage
     - eval "$(cargo llvm-cov show-env --sh)"
     - cargo llvm-cov clean --workspace
-    - cargo nextest run --workspace ${NEXUS_CI_RUST_ONLY_EXCLUDES} --release --profile ci
+    - cargo nextest run --workspace ${NEMO_FLOW_CI_RUST_ONLY_EXCLUDES} --release --profile ci
     - cargo llvm-cov report --release --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/src/(coverage_tests|.*_tests)\.rs$)' --cobertura --output-path target/coverage/rust-workspace.xml
 
 test:wasm:
   stage: test
   timeout: 30 minutes
   image:
-    name: rust:${NEXUS_CI_RUST_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
+    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   needs:
     - job: build
@@ -333,8 +333,8 @@ test:wasm:
       (
         eval "$(cargo llvm-cov show-env --sh)"
         cargo llvm-cov clean --workspace
-        cargo test -p nat-nexus-wasm --lib --release
-        cargo llvm-cov report -p nat-nexus-wasm --release \
+        cargo test -p nemo-flow-wasm --lib --release
+        cargo llvm-cov report -p nemo-flow-wasm --release \
           --ignore-filename-regex '.*/src/.*_tests\.rs$' \
           --cobertura --output-path target/coverage/wasm-rust.xml
       )
@@ -360,7 +360,7 @@ test:wasm:
 coverage:aggregate:
   stage: report
   image:
-    name: python:${NEXUS_CI_DEFAULT_PYTHON_VER}-slim
+    name: python:${NEMO_FLOW_CI_DEFAULT_PYTHON_VER}-slim
     pull_policy: if-not-present
   needs:
     - job: test:go
@@ -384,7 +384,7 @@ coverage:aggregate:
 package:nodejs:x86_64:
   stage: package
   image:
-    name: node:${NEXUS_CI_NODE_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
+    name: node:${NEMO_FLOW_CI_NODE_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   needs:
     - job: build
@@ -393,7 +393,7 @@ package:nodejs:x86_64:
     name: "nodejs-x86_64"
     when: on_success
     paths:
-      - ${NEXUS_CI_WORKSPACE_TMP}/npm/*.tgz
+      - ${NEMO_FLOW_CI_WORKSPACE_TMP}/npm/*.tgz
   script:
     - |
       set -e
@@ -437,21 +437,21 @@ package:nodejs:x86_64:
         NPM_PUBLISH_ARGS=""
       fi
       echo "Packing x86_64 npm package"
-      mkdir -p ${NEXUS_CI_WORKSPACE_TMP}/npm
+      mkdir -p ${NEMO_FLOW_CI_WORKSPACE_TMP}/npm
       pushd crates/node
-      npm pack --pack-destination ${NEXUS_CI_WORKSPACE_TMP}/npm
+      npm pack --pack-destination ${NEMO_FLOW_CI_WORKSPACE_TMP}/npm
       popd
       echo "Publishing npm package to GitLab package registry"
       REGISTRY_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/npm/"
       REGISTRY_KEY="${REGISTRY_URL#https:}"
       npm config set "@nvidia:registry" "${REGISTRY_URL}"
       npm config set "${REGISTRY_KEY}:_authToken" "${CI_JOB_TOKEN}"
-      npm publish ${NPM_PUBLISH_ARGS} ${NEXUS_CI_WORKSPACE_TMP}/npm/*.tgz
+      npm publish ${NPM_PUBLISH_ARGS} ${NEMO_FLOW_CI_WORKSPACE_TMP}/npm/*.tgz
 
 package:wasm:bundler:
   stage: package
   image:
-    name: node:${NEXUS_CI_NODE_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
+    name: node:${NEMO_FLOW_CI_NODE_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   needs:
     - job: build
@@ -460,7 +460,7 @@ package:wasm:bundler:
     name: "wasm-bundler"
     when: on_success
     paths:
-      - ${NEXUS_CI_WORKSPACE_TMP}/wasm/*.tgz
+      - ${NEMO_FLOW_CI_WORKSPACE_TMP}/wasm/*.tgz
   script:
     - |
       set -e
@@ -491,21 +491,21 @@ package:wasm:bundler:
         NPM_PUBLISH_ARGS=""
       fi
       echo "Packing x86_64 wasm package"
-      mkdir -p ${NEXUS_CI_WORKSPACE_TMP}/wasm
+      mkdir -p ${NEMO_FLOW_CI_WORKSPACE_TMP}/wasm
       pushd crates/wasm/pkg
-      npm pack --pack-destination ${NEXUS_CI_WORKSPACE_TMP}/wasm
+      npm pack --pack-destination ${NEMO_FLOW_CI_WORKSPACE_TMP}/wasm
       popd
       echo "Publishing wasm package to GitLab package registry"
       REGISTRY_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/npm/"
       REGISTRY_KEY="${REGISTRY_URL#https:}"
       npm config set "@nvidia:registry" "${REGISTRY_URL}"
       npm config set "${REGISTRY_KEY}:_authToken" "${CI_JOB_TOKEN}"
-      npm publish ${NPM_PUBLISH_ARGS} ${NEXUS_CI_WORKSPACE_TMP}/wasm/*.tgz
+      npm publish ${NPM_PUBLISH_ARGS} ${NEMO_FLOW_CI_WORKSPACE_TMP}/wasm/*.tgz
 
 package:wheel:x86_64:
   stage: package
   image:
-    name: rust:${NEXUS_CI_RUST_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
+    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   needs:
     - job: build
@@ -513,7 +513,7 @@ package:wheel:x86_64:
     name: "wheel-x86_64"
     when: on_success
     paths:
-      - ${NEXUS_CI_WORKSPACE_TMP}/wheels/
+      - ${NEMO_FLOW_CI_WORKSPACE_TMP}/wheels/
   script:
     - *install_build_essential
     - *install_uv_and_python
@@ -534,10 +534,10 @@ package:wheel:x86_64:
         echo "Tagged release ${CI_COMMIT_TAG}: using version as-is"
       fi
     - echo "Building x86_64 wheel"
-    - maturin build --release --target x86_64-unknown-linux-gnu --out ${NEXUS_CI_WORKSPACE_TMP}/wheels
+    - maturin build --release --target x86_64-unknown-linux-gnu --out ${NEMO_FLOW_CI_WORKSPACE_TMP}/wheels
     - |
-      if [ ! -d ${NEXUS_CI_WORKSPACE_TMP}/wheels ] || [ -z "$(ls -A ${NEXUS_CI_WORKSPACE_TMP}/wheels/*.whl 2>/dev/null)" ]; then
-        echo "Error: No wheels found in ${NEXUS_CI_WORKSPACE_TMP}/wheels/"
+      if [ ! -d ${NEMO_FLOW_CI_WORKSPACE_TMP}/wheels ] || [ -z "$(ls -A ${NEMO_FLOW_CI_WORKSPACE_TMP}/wheels/*.whl 2>/dev/null)" ]; then
+        echo "Error: No wheels found in ${NEMO_FLOW_CI_WORKSPACE_TMP}/wheels/"
         exit 1
       fi
     - echo "Uploading wheel to GitLab package registry"
@@ -546,7 +546,7 @@ package:wheel:x86_64:
       UV_PUBLISH_USERNAME=gitlab-ci-token \
       UV_PUBLISH_PASSWORD="${CI_JOB_TOKEN}" \
       UV_PUBLISH_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi" \
-      uv publish --no-progress ${NEXUS_CI_WORKSPACE_TMP}/wheels/*.whl
+      uv publish --no-progress ${NEMO_FLOW_CI_WORKSPACE_TMP}/wheels/*.whl
   after_script:
     - uv cache prune --ci
 
@@ -554,23 +554,23 @@ package:wheel:x86_64:
 publish:artifactory:wheel:
   stage: publish
   image:
-    name: ghcr.io/astral-sh/uv:${NEXUS_CI_UV_VERSION}-${NEXUS_CI_DEBIAN_VERSION}-slim
+    name: ghcr.io/astral-sh/uv:${NEMO_FLOW_CI_UV_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}-slim
     pull_policy: if-not-present
   needs:
     - job: package:wheel:x86_64
       artifacts: true
   script:
     - |
-      if [[ -z "${NEXUS_CI_ARTIFACTORY_USER}" || -z "${NEXUS_CI_ARTIFACTORY_KEY}" || -z "${NEXUS_CI_ARTIFACTORY_PYPI_URL}" ]]; then
-        echo "Error: uploading to artifactory requires the following environment variables: NEXUS_CI_ARTIFACTORY_USER, NEXUS_CI_ARTIFACTORY_KEY, NEXUS_CI_ARTIFACTORY_PYPI_URL."
+      if [[ -z "${NEMO_FLOW_CI_ARTIFACTORY_USER}" || -z "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" || -z "${NEMO_FLOW_CI_ARTIFACTORY_PYPI_URL}" ]]; then
+        echo "Error: uploading to artifactory requires the following environment variables: NEMO_FLOW_CI_ARTIFACTORY_USER, NEMO_FLOW_CI_ARTIFACTORY_KEY, NEMO_FLOW_CI_ARTIFACTORY_PYPI_URL."
         exit 1
       fi
 
       echo "Uploading wheels to Artifactory"
-      UV_PUBLISH_USERNAME="${NEXUS_CI_ARTIFACTORY_USER}" \
-        UV_PUBLISH_PASSWORD="${NEXUS_CI_ARTIFACTORY_KEY}" \
-        UV_PUBLISH_URL="${NEXUS_CI_ARTIFACTORY_PYPI_URL}" \
-        uv publish --no-progress ${NEXUS_CI_WORKSPACE_TMP}/wheels/*.whl
+      UV_PUBLISH_USERNAME="${NEMO_FLOW_CI_ARTIFACTORY_USER}" \
+        UV_PUBLISH_PASSWORD="${NEMO_FLOW_CI_ARTIFACTORY_KEY}" \
+        UV_PUBLISH_URL="${NEMO_FLOW_CI_ARTIFACTORY_PYPI_URL}" \
+        uv publish --no-progress ${NEMO_FLOW_CI_WORKSPACE_TMP}/wheels/*.whl
       RETURN_CODE=$?
       if [ $RETURN_CODE -ne 0 ]; then
         echo "Error: Failed to publish wheels to Artifactory"
@@ -583,7 +583,7 @@ publish:artifactory:wheel:
 publish:artifactory:npm:
   stage: publish
   image:
-    name: node:${NEXUS_CI_NODE_VERSION}-${NEXUS_CI_DEBIAN_VERSION}
+    name: node:${NEMO_FLOW_CI_NODE_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   needs:
     - job: package:nodejs:x86_64
@@ -592,14 +592,14 @@ publish:artifactory:npm:
       artifacts: true
   script:
     - |
-      if [[ -z "${NEXUS_CI_ARTIFACTORY_USER}" || -z "${NEXUS_CI_ARTIFACTORY_KEY}" || -z "${NEXUS_CI_ARTIFACTORY_NPM_URL}" ]]; then
-        echo "Error: uploading to artifactory requires the following environment variables: NEXUS_CI_ARTIFACTORY_USER, NEXUS_CI_ARTIFACTORY_KEY, NEXUS_CI_ARTIFACTORY_NPM_URL."
+      if [[ -z "${NEMO_FLOW_CI_ARTIFACTORY_USER}" || -z "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" || -z "${NEMO_FLOW_CI_ARTIFACTORY_NPM_URL}" ]]; then
+        echo "Error: uploading to artifactory requires the following environment variables: NEMO_FLOW_CI_ARTIFACTORY_USER, NEMO_FLOW_CI_ARTIFACTORY_KEY, NEMO_FLOW_CI_ARTIFACTORY_NPM_URL."
         exit 1
       fi
       echo "Uploading npm packages to Artifactory"
-      REGISTRY_URL="${NEXUS_CI_ARTIFACTORY_NPM_URL%/}/"
+      REGISTRY_URL="${NEMO_FLOW_CI_ARTIFACTORY_NPM_URL%/}/"
       REGISTRY_KEY="${REGISTRY_URL#https:}"
-      NPM_AUTH=$(printf '%s:%s' "${NEXUS_CI_ARTIFACTORY_USER}" "${NEXUS_CI_ARTIFACTORY_KEY}" | base64 | tr -d '\n')
+      NPM_AUTH=$(printf '%s:%s' "${NEMO_FLOW_CI_ARTIFACTORY_USER}" "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" | base64 | tr -d '\n')
       npm config set "@nvidia:registry" "${REGISTRY_URL}"
       npm config set "${REGISTRY_KEY}:_auth" "${NPM_AUTH}"
       npm config set "${REGISTRY_KEY}:email" "ci@nvidia.com"
@@ -609,7 +609,7 @@ publish:artifactory:npm:
         NPM_PUBLISH_ARGS=""
       fi
       RETURN_CODE=0
-      for pkg in $(ls ${NEXUS_CI_WORKSPACE_TMP}/npm/*.tgz ${NEXUS_CI_WORKSPACE_TMP}/wasm/*.tgz 2>/dev/null); do
+      for pkg in $(ls ${NEMO_FLOW_CI_WORKSPACE_TMP}/npm/*.tgz ${NEMO_FLOW_CI_WORKSPACE_TMP}/wasm/*.tgz 2>/dev/null); do
         filename=$(basename "$pkg")
         echo "Uploading ${filename} to Artifactory"
         npm publish ${NPM_PUBLISH_ARGS} "$pkg"

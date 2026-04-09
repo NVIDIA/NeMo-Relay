@@ -3,7 +3,7 @@
 
 //! Context helpers for reading scope metadata on the intercept hot path.
 //!
-//! These functions read from the Nexus scope stack (via [`current_scope_stack`])
+//! These functions read from the NeMo Flow scope stack (via [`current_scope_stack`])
 //! to extract information needed by the LLM request intercept:
 //!
 //! - [`extract_scope_path`]: collects function names from the scope stack for trie lookup
@@ -16,14 +16,14 @@
 //! # Metadata Convention
 //!
 //! Manual latency sensitivity is stored in scope metadata under the JSON path
-//! `/nexus_optimizer/latency_sensitivity` as a positive integer.
+//! `/nemo_flow_optimizer/latency_sensitivity` as a positive integer.
 
-use nvidia_nat_nexus_core::{current_scope_stack, ScopeType};
+use nemo_flow_core::{ScopeType, current_scope_stack};
 
 /// Metadata key path for manual latency sensitivity annotation.
-pub const LATENCY_SENSITIVITY_POINTER: &str = "/nexus_optimizer/latency_sensitivity";
+pub const LATENCY_SENSITIVITY_POINTER: &str = "/nemo_flow_optimizer/latency_sensitivity";
 
-/// Extracts the current function call path from the Nexus scope stack.
+/// Extracts the current function call path from the NeMo Flow scope stack.
 ///
 /// Walks all scopes from root to top, skipping the root scope (index 0),
 /// and collects names of Agent and Function scopes. This path is used
@@ -47,7 +47,7 @@ pub fn extract_scope_path() -> Vec<String> {
 
 /// Reads the maximum manual latency sensitivity from all scopes in the current scope stack.
 ///
-/// Walks all scopes and checks metadata for `/nexus_optimizer/latency_sensitivity`.
+/// Walks all scopes and checks metadata for `/nemo_flow_optimizer/latency_sensitivity`.
 /// Uses max-merge semantics: if multiple scopes have annotations, the highest wins.
 ///
 /// Returns `None` if no manual annotation exists or the scope stack is unavailable.
@@ -59,14 +59,13 @@ pub fn read_manual_latency_sensitivity() -> Option<u32> {
     };
     let mut max_val: Option<u32> = None;
     for scope in stack.scopes() {
-        if let Some(ref meta) = scope.metadata {
-            if let Some(val) = meta
+        if let Some(ref meta) = scope.metadata
+            && let Some(val) = meta
                 .pointer(LATENCY_SENSITIVITY_POINTER)
                 .and_then(|v| v.as_u64())
-            {
-                let val = val as u32;
-                max_val = Some(max_val.map_or(val, |prev: u32| prev.max(val)));
-            }
+        {
+            let val = val as u32;
+            max_val = Some(max_val.map_or(val, |prev: u32| prev.max(val)));
         }
     }
     max_val
@@ -99,10 +98,10 @@ pub fn set_latency_sensitivity(value: u32) -> std::result::Result<(), String> {
 
     let meta = scope.metadata.get_or_insert_with(|| serde_json::json!({}));
     if let Some(obj) = meta.as_object_mut() {
-        let nexus_optimizer = obj
-            .entry("nexus_optimizer")
+        let nemo_flow_optimizer = obj
+            .entry("nemo_flow_optimizer")
             .or_insert_with(|| serde_json::json!({}));
-        if let Some(np_obj) = nexus_optimizer.as_object_mut() {
+        if let Some(np_obj) = nemo_flow_optimizer.as_object_mut() {
             np_obj.insert(
                 "latency_sensitivity".to_string(),
                 serde_json::json!(effective),

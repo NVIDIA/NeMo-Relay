@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # Best Practices: Adding a Python Agent Framework Integration
 
 This guide walks through the recommended patterns for integrating a new Python agent
-framework (e.g., CrewAI, AutoGen, Semantic Kernel) with NeMo Agent Toolkit Nexus.
+framework (e.g., CrewAI, AutoGen, Semantic Kernel) with NeMo Flow.
 The [LangChain integration](../patches/langchain/) serves as the reference
 implementation throughout.
 
@@ -31,13 +31,13 @@ implementation throughout.
 
 Every integration must follow these rules:
 
-- **Optional dependency** — Nexus is never a hard requirement. The framework must
-  work identically when `nat_nexus` is not installed.
-- **Graceful degradation** — All Nexus errors are caught and logged at `DEBUG`. They
+- **Optional dependency** — NeMo Flow is never a hard requirement. The framework must
+  work identically when `nemo_flow` is not installed.
+- **Graceful degradation** — All NeMo Flow errors are caught and logged at `DEBUG`. They
   must never propagate to the framework's users.
 - **Transparent wrapping** — Minimal changes to existing framework code. Existing
-  tests must continue to pass without `nat_nexus` installed.
-- **Explicit activation** — Nexus only activates when a scope stack has been
+  tests must continue to pass without `nemo_flow` installed.
+- **Explicit activation** — NeMo Flow only activates when a scope stack has been
   initialized by the caller. It never auto-creates one.
 
 ---
@@ -45,12 +45,12 @@ Every integration must follow these rules:
 ## 2. Stubbing the Library
 
 Create a **lazy-import helper** module inside the framework's source tree. This is
-the single point of contact for checking Nexus availability.
+the single point of contact for checking NeMo Flow availability.
 
 ```python
-# <framework>/utils/_nat_nexus.py   (or <framework>/_nat_nexus.py)
+# <framework>/utils/_nemo_flow.py   (or <framework>/_nemo_flow.py)
 
-"""Lazy import helper for optional Nexus integration."""
+"""Lazy import helper for optional NeMo Flow integration."""
 
 from __future__ import annotations
 
@@ -58,27 +58,27 @@ import logging
 from types import ModuleType
 
 _logger = logging.getLogger(__name__)
-_nat_nexus: ModuleType | None | bool = False  # False = not yet attempted
+_nemo_flow: ModuleType | None | bool = False  # False = not yet attempted
 
 
-def get_nat_nexus() -> ModuleType | None:
-    """Return the ``nat_nexus`` module, or ``None`` if not installed.
+def get_nemo_flow() -> ModuleType | None:
+    """Return the ``nemo_flow`` module, or ``None`` if not installed.
 
     The import is performed lazily on first call and cached thereafter.
     """
-    global _nat_nexus  # noqa: PLW0603
-    if _nat_nexus is False:
+    global _nemo_flow  # noqa: PLW0603
+    if _nemo_flow is False:
         try:
-            import nat_nexus
-            _nat_nexus = nat_nexus
+            import nemo_flow
+            _nemo_flow = nemo_flow
         except ImportError:
-            _nat_nexus = None
-    return _nat_nexus  # type: ignore[return-value]
+            _nemo_flow = None
+    return _nemo_flow  # type: ignore[return-value]
 
 
 def is_available() -> bool:
-    """Return ``True`` if Nexus is installed and importable."""
-    return get_nat_nexus() is not None
+    """Return ``True`` if NeMo Flow is installed and importable."""
+    return get_nemo_flow() is not None
 ```
 
 ### Key decisions
@@ -87,7 +87,7 @@ def is_available() -> bool:
 |---|---|
 | `False` as sentinel (not `None`) | Distinguishes "not yet attempted" from "attempted and missing" |
 | Module-level cache | Avoids repeated `importlib` overhead on every call |
-| No top-level `import nat_nexus` | Prevents `ImportError` at framework import time |
+| No top-level `import nemo_flow` | Prevents `ImportError` at framework import time |
 
 For **provider-level** modules (LLM chat model classes), create a second bridge
 module that additionally checks for an active scope stack. See
@@ -97,33 +97,33 @@ module that additionally checks for an active scope stack. See
 
 ## 3. Transparent Fallback to Default Behavior
 
-The integration must have two code paths — one with Nexus, one without — and the
+The integration must have two code paths — one with NeMo Flow, one without — and the
 framework user should never notice the difference (except for the middleware
-features Nexus adds).
+features NeMo Flow adds).
 
 ### Provider-level availability check
 
-For LLM providers, Nexus should only activate when the caller has explicitly
-initialized a scope stack. This prevents unexpected behavior when `nat_nexus` is
+For LLM providers, NeMo Flow should only activate when the caller has explicitly
+initialized a scope stack. This prevents unexpected behavior when `nemo_flow` is
 installed but unused:
 
 ```python
-# <framework>/chat_models/_nat_nexus.py
+# <framework>/chat_models/_nemo_flow.py
 
 try:
-    import nat_nexus
-    from nat_nexus import LLMRequest
-    _HAS_NAT_NEXUS = True
+    import nemo_flow
+    from nemo_flow import LLMRequest
+    _HAS_NEMO_FLOW = True
 except ImportError:
-    _HAS_NAT_NEXUS = False
+    _HAS_NEMO_FLOW = False
 
 
 def available() -> bool:
-    """Return True when nat_nexus is importable *and* a scope stack is active."""
-    if not _HAS_NAT_NEXUS:
+    """Return True when nemo_flow is importable *and* a scope stack is active."""
+    if not _HAS_NEMO_FLOW:
         return False
     try:
-        return nat_nexus.scope_stack_active()
+        return nemo_flow.scope_stack_active()
     except Exception:
         return False
 ```
@@ -135,8 +135,8 @@ be the **original, unmodified code**:
 
 ```python
 # In a tool execution method:
-if (nnex := get_nat_nexus()) is not None:
-    # Nexus-wrapped path
+if (nnex := get_nemo_flow()) is not None:
+    # NeMo Flow-wrapped path
     codec = nnex.typed.BestEffortAnyCodec()
     response = await nnex.typed.tool_execute(
         self.name, tool_input, _func, codec, codec,
@@ -148,7 +148,7 @@ else:
 
 ### Error silencing
 
-Wrap **every** Nexus call in try/except at the callback and scope-management
+Wrap **every** NeMo Flow call in try/except at the callback and scope-management
 layers. Use `DEBUG`-level logging only — no warnings, no user-visible messages:
 
 ```python
@@ -156,7 +156,7 @@ try:
     handle = scope.push(name, nnex.ScopeType.Agent, handle=parent)
     self._scope_handles[run_id] = handle
 except Exception:
-    _logger.debug("Nexus: scope push failed", exc_info=True)
+    _logger.debug("NeMo Flow: scope push failed", exc_info=True)
 ```
 
 The tool and LLM execution wrappers (`typed.tool_execute`, `typed.llm_execute`)
@@ -172,23 +172,23 @@ request payload and SDK response.
 
 ### Non-streaming calls
 
-Use `nat_nexus.typed.llm_execute` with `JsonPassthrough` (since provider code
+Use `nemo_flow.typed.llm_execute` with `JsonPassthrough` (since provider code
 already converts SDK responses to dicts via `model_dump()` or equivalent):
 
 ```python
-from <framework>.chat_models import _nat_nexus
+from <framework>.chat_models import _nemo_flow
 
 # Inside the _generate or _call method:
-if _nat_nexus.available():
-    request = _nat_nexus.make_request(payload, extra_headers)
+if _nemo_flow.available():
+    request = _nemo_flow.make_request(payload, extra_headers)
 
     async def _call(req):
         # Use req.content (dict) and req.headers (dict) to make the real call
         raw = await self._async_client.chat.completions.create(**req.content)
         return raw.model_dump()
 
-    resp_dict = _nat_nexus.run_sync(
-        _nat_nexus.llm_execute(self.model_name, request, _call)
+    resp_dict = _nemo_flow.run_sync(
+        _nemo_flow.llm_execute(self.model_name, request, _call)
     )
     return self._process_response(resp_dict)
 
@@ -197,11 +197,11 @@ if _nat_nexus.available():
 
 ### Streaming calls
 
-Use `nat_nexus.typed.llm_stream_execute` with a collector/finalizer pattern:
+Use `nemo_flow.typed.llm_stream_execute` with a collector/finalizer pattern:
 
 ```python
-if _nat_nexus.available():
-    request = _nat_nexus.make_request(payload)
+if _nemo_flow.available():
+    request = _nemo_flow.make_request(payload)
     collected: list[dict] = []
 
     async def _call(req):
@@ -219,7 +219,7 @@ if _nat_nexus.available():
         return collected[-1] if collected else {}
 
     # Async context — use directly
-    stream = await _nat_nexus.llm_stream_execute(
+    stream = await _nemo_flow.llm_stream_execute(
         self.model_name, request, _call, _collector, _finalizer
     )
     async for chunk_dict in stream:
@@ -231,27 +231,27 @@ if _nat_nexus.available():
 
 ### The bridge module pattern
 
-Each provider package should have its own `_nat_nexus.py` bridge that wraps the
+Each provider package should have its own `_nemo_flow.py` bridge that wraps the
 typed API with the correct codec. This keeps the main chat model code clean:
 
 ```python
-# <framework>/chat_models/_nat_nexus.py
+# <framework>/chat_models/_nemo_flow.py
 
 async def llm_execute(model_name, request, func):
-    codec = nat_nexus.typed.JsonPassthrough()
-    return await nat_nexus.typed.llm_execute(
+    codec = nemo_flow.typed.JsonPassthrough()
+    return await nemo_flow.typed.llm_execute(
         model_name, request, func, codec, model_name=model_name,
     )
 
 async def llm_stream_execute(model_name, request, func, collector, finalizer):
-    codec = nat_nexus.typed.JsonPassthrough()
-    return await nat_nexus.typed.llm_stream_execute(
+    codec = nemo_flow.typed.JsonPassthrough()
+    return await nemo_flow.typed.llm_stream_execute(
         model_name, request, func, collector, finalizer,
         codec, codec, model_name=model_name,
     )
 
 def make_request(payload, extra_headers=None):
-    return nat_nexus.LLMRequest(extra_headers or {}, payload)
+    return nemo_flow.LLMRequest(extra_headers or {}, payload)
 
 def run_sync(coro):
     """Run a coroutine from sync context, handling running event loops."""
@@ -273,14 +273,14 @@ the framework calls the user's tool function.
 ### Async tool execution
 
 ```python
-from <framework>.utils._nat_nexus import get_nat_nexus
+from <framework>.utils._nemo_flow import get_nemo_flow
 
 # Inside the tool's async invoke/execute method:
 async def _func(_args):
     """Wraps the user's tool function."""
     return await self._arun(*tool_args, **tool_kwargs)
 
-if (nnex := get_nat_nexus()) is not None:
+if (nnex := get_nemo_flow()) is not None:
     codec = nnex.typed.BestEffortAnyCodec()
     response = await nnex.typed.tool_execute(
         self.name,       # tool name
@@ -295,7 +295,7 @@ else:
 
 ### Sync tool execution (with event loop handling)
 
-When wrapping a synchronous tool call, you need to bridge into Nexus's async
+When wrapping a synchronous tool call, you need to bridge into NeMo Flow's async
 pipeline. This requires handling the case where an event loop may already be
 running (e.g., Jupyter, nested async frameworks):
 
@@ -303,7 +303,7 @@ running (e.g., Jupyter, nested async frameworks):
 def _func(_args):
     return context.run(self._run, *tool_args, **tool_kwargs)
 
-if (nnex := get_nat_nexus()) is not None:
+if (nnex := get_nemo_flow()) is not None:
     import asyncio
     import contextvars
     from concurrent.futures import ThreadPoolExecutor
@@ -312,7 +312,7 @@ if (nnex := get_nat_nexus()) is not None:
     ctx = contextvars.copy_context()
     scope_stack = nnex.get_scope_stack()
 
-    async def _nat_nexus_run():
+    async def _nemo_flow_run():
         return await nnex.typed.tool_execute(
             self.name, tool_input, _func, codec, codec,
         )
@@ -320,7 +320,7 @@ if (nnex := get_nat_nexus()) is not None:
     def _run_with_scope_stack():
         # Propagate scope stack to the worker thread's Rust thread-local
         nnex.set_thread_scope_stack(scope_stack)
-        return asyncio.run(_nat_nexus_run())
+        return asyncio.run(_nemo_flow_run())
 
     try:
         asyncio.get_running_loop()
@@ -329,7 +329,7 @@ if (nnex := get_nat_nexus()) is not None:
             response = pool.submit(ctx.run, _run_with_scope_stack).result()
     except RuntimeError:
         # No event loop — safe to use asyncio.run directly
-        response = asyncio.run(_nat_nexus_run())
+        response = asyncio.run(_nemo_flow_run())
 else:
     response = _func(tool_input)
 ```
@@ -351,15 +351,15 @@ time, **always use `BestEffortAnyCodec`**.
 ## 6. Creating Scopes
 
 Scopes track the execution hierarchy. The framework integration should map the
-framework's own hierarchy concept to Nexus scopes.
+framework's own hierarchy concept to NeMo Flow scopes.
 
 ### Scope types
 
 ```python
-import nat_nexus
+import nemo_flow
 
-nat_nexus.ScopeType.Function  # Individual function/step
-nat_nexus.ScopeType.Agent     # An agent or chain invocation
+nemo_flow.ScopeType.Function  # Individual function/step
+nemo_flow.ScopeType.Agent     # An agent or chain invocation
 ```
 
 ### Agent scopes
@@ -369,7 +369,7 @@ execution. Pop it when execution ends (including on error):
 
 ```python
 # LangChain maps this via a callback handler:
-class NatNexusCallbackHandler(BaseCallbackHandler):
+class NemoFlowCallbackHandler(BaseCallbackHandler):
     def __init__(self):
         self._scope_handles: dict[UUID, Any] = {}
         self._nnex = _try_import()
@@ -387,7 +387,7 @@ class NatNexusCallbackHandler(BaseCallbackHandler):
             )
             self._scope_handles[run_id] = handle
         except Exception:
-            _logger.debug("Nexus: scope push failed", exc_info=True)
+            _logger.debug("NeMo Flow: scope push failed", exc_info=True)
 
     def on_chain_end(self, outputs, *, run_id, **kw):
         self._pop_scope(run_id)
@@ -404,14 +404,14 @@ class NatNexusCallbackHandler(BaseCallbackHandler):
         try:
             self._nnex.scope.pop(handle)
         except Exception:
-            _logger.debug("Nexus: scope.pop failed", exc_info=True)
+            _logger.debug("NeMo Flow: scope.pop failed", exc_info=True)
 ```
 
 If the framework doesn't have a callback/hook system, you can use the context
 manager form instead:
 
 ```python
-with nat_nexus.scope.scope("my-agent", nat_nexus.ScopeType.Agent) as handle:
+with nemo_flow.scope.scope("my-agent", nemo_flow.ScopeType.Agent) as handle:
     result = await agent.run(task)
 ```
 
@@ -421,7 +421,7 @@ Create `Function` scopes for discrete steps within an agent (e.g., a planner ste
 a retrieval step). These are typically shorter-lived than agent scopes:
 
 ```python
-with nat_nexus.scope.scope("plan", nat_nexus.ScopeType.Function) as handle:
+with nemo_flow.scope.scope("plan", nemo_flow.ScopeType.Function) as handle:
     plan = await planner.generate(task)
 ```
 
@@ -433,14 +433,14 @@ share the same parent:
 
 ```python
 import asyncio
-import nat_nexus
+import nemo_flow
 
-parent_handle = nat_nexus.scope.get_handle()
+parent_handle = nemo_flow.scope.get_handle()
 
 async def run_branch(name, task):
     # Each branch gets its own child scope
-    with nat_nexus.scope.scope(
-        name, nat_nexus.ScopeType.Function, handle=parent_handle
+    with nemo_flow.scope.scope(
+        name, nemo_flow.ScopeType.Function, handle=parent_handle
     ):
         return await execute(task)
 
@@ -469,7 +469,7 @@ parallel branch gets its own `run_id` with the same `parent_run_id`.
 
 ## 7. Thread and Async Safety
 
-Nexus uses both Python `contextvars` (for async task isolation) and Rust
+NeMo Flow uses both Python `contextvars` (for async task isolation) and Rust
 thread-locals (for native FFI calls). The integration must keep these in sync.
 
 ### Scope stack propagation
@@ -504,7 +504,7 @@ if nnex.scope_stack_active():
 
 ### Sync-to-async bridge
 
-Nexus's execute pipeline is async. When integrating into a sync code path:
+NeMo Flow's execute pipeline is async. When integrating into a sync code path:
 
 ```python
 def run_sync(coro):
@@ -533,7 +533,7 @@ third_party/
 
 patches/
   <framework>/
-    0001-add-nat-nexus-integration.patch
+    0001-add-nemo-flow-integration.patch
 ```
 
 Bootstrap the local upstream checkouts before applying or refreshing patches:
@@ -548,18 +548,18 @@ A typical integration touches these files:
 
 | File | Purpose |
 |---|---|
-| `<framework>/utils/_nat_nexus.py` | Lazy import helper (new file) |
-| `<framework>/chat_models/_nat_nexus.py` | Provider bridge with `available()`, `llm_execute`, `run_sync` (new file) |
+| `<framework>/utils/_nemo_flow.py` | Lazy import helper (new file) |
+| `<framework>/chat_models/_nemo_flow.py` | Provider bridge with `available()`, `llm_execute`, `run_sync` (new file) |
 | `<framework>/tools/base.py` | Tool execution wrapping (modify existing) |
-| `<framework>/callbacks/nat_nexus_handler.py` | Scope lifecycle callback handler (new file, if the framework supports callbacks) |
-| `tests/.../test_nat_nexus_handler.py` | Tests for scope lifecycle (new file) |
+| `<framework>/callbacks/nemo_flow_handler.py` | Scope lifecycle callback handler (new file, if the framework supports callbacks) |
+| `tests/.../test_nemo_flow_handler.py` | Tests for scope lifecycle (new file) |
 
 ### Generating the patch
 
 ```bash
 cd third_party/<framework>
 # Make your changes...
-git diff HEAD -- . > ../../patches/<framework>/0001-add-nat-nexus-integration.patch
+git diff HEAD -- . > ../../patches/<framework>/0001-add-nemo-flow-integration.patch
 ```
 
 ### Applying the patch
@@ -574,7 +574,7 @@ git diff HEAD -- . > ../../patches/<framework>/0001-add-nat-nexus-integration.pa
 
 ### Unit tests (within the framework's test suite)
 
-Test the callback handler / scope management with mocked Nexus:
+Test the callback handler / scope management with mocked NeMo Flow:
 
 ```python
 from types import ModuleType, SimpleNamespace
@@ -582,7 +582,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 def _make_mock_nnex():
-    nnex = ModuleType("nat_nexus")
+    nnex = ModuleType("nemo_flow")
     nnex.ScopeType = SimpleNamespace(Agent="Agent")
     scope = MagicMock()
     scope.push = MagicMock(
@@ -595,41 +595,41 @@ def _make_mock_nnex():
 
 class TestScopeLifecycle:
     def test_chain_start_pushes_scope(self):
-        handler = NatNexusCallbackHandler()
+        handler = NemoFlowCallbackHandler()
         handler._nnex = _make_mock_nnex()
         run_id = uuid4()
         handler.on_chain_start({"name": "MyAgent"}, {}, run_id=run_id)
         handler._nnex.scope.push.assert_called_once()
 
     def test_chain_end_pops_scope(self):
-        handler = NatNexusCallbackHandler()
+        handler = NemoFlowCallbackHandler()
         handler._nnex = _make_mock_nnex()
         run_id = uuid4()
         handler.on_chain_start({"name": "MyAgent"}, {}, run_id=run_id)
         handler.on_chain_end({}, run_id=run_id)
         handler._nnex.scope.pop.assert_called_once()
 
-    def test_no_nexus_is_silent_noop(self):
-        handler = NatNexusCallbackHandler()
+    def test_no_nemo_flow_is_silent_noop(self):
+        handler = NemoFlowCallbackHandler()
         handler._nnex = None
         handler.on_chain_start({"name": "x"}, {}, run_id=uuid4())  # no error
 
-    def test_nexus_error_is_swallowed(self):
+    def test_nemo_flow_error_is_swallowed(self):
         mock = _make_mock_nnex()
         mock.scope.push.side_effect = RuntimeError("boom")
-        handler = NatNexusCallbackHandler()
+        handler = NemoFlowCallbackHandler()
         handler._nnex = mock
         handler.on_chain_start({"name": "x"}, {}, run_id=uuid4())  # no error
 ```
 
 ### What to verify
 
-- Framework's existing test suite passes **without** `nat_nexus` installed.
+- Framework's existing test suite passes **without** `nemo_flow` installed.
 - Scope push/pop called correctly for agent/chain lifecycle events.
 - Parent scope handles are propagated for nested invocations.
-- All Nexus errors are swallowed — never surface to the framework.
+- All NeMo Flow errors are swallowed — never surface to the framework.
 - End-without-start is a no-op (no crash).
-- Tool and LLM execute calls go through Nexus when available, fall back when not.
+- Tool and LLM execute calls go through NeMo Flow when available, fall back when not.
 
 ---
 
@@ -648,10 +648,10 @@ Before submitting your integration:
       steps, proper push/pop on error
 - [ ] **Parallel scopes** — each concurrent branch gets its own child scope under a
       shared parent
-- [ ] **Error silencing** — all Nexus errors caught and logged at `DEBUG`
-- [ ] **No hard dependency** — framework works identically without `nat_nexus`
+- [ ] **Error silencing** — all NeMo Flow errors caught and logged at `DEBUG`
+- [ ] **No hard dependency** — framework works identically without `nemo_flow`
 - [ ] **Tests** — scope lifecycle, graceful no-op, error swallowing
-- [ ] **Patch generated** — `patches/<framework>/0001-add-nat-nexus-integration.patch`
+- [ ] **Patch generated** — `patches/<framework>/0001-add-nemo-flow-integration.patch`
 - [ ] **SPDX headers** — Apache-2.0 on all new files
 
 ---

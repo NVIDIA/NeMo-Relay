@@ -4,56 +4,89 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 ---
-description: Add a new API feature across all Nexus binding layers (Python, Go, Node.js, WASM, FFI)
+description: Add or change a public NeMo Flow API surface across the core runtime and every affected binding
 ---
 
-# Adding a New Feature Across All Bindings
+# Add a Binding Feature
 
-When adding a new API function or capability to Nexus, it must be implemented
-in the core Rust library and then exposed through all five binding layers.
+Use this skill when a change affects the public runtime surface and must stay in
+parity across the Rust core, FFI, and one or more bindings.
+
+Do not use this skill for:
+
+- internal-only core refactors with no public API change
+- binding-local bug fixes that do not change shared behavior
+- docs-only or example-only updates
 
 ## Implementation Order
 
-1. **Core Rust** (`crates/core/src/api.rs`) — Define the function with full doc comment
-2. **FFI/C** (`crates/ffi/src/api.rs`) — Add `extern "C"` wrapper, update `nat_nexus.h`
-3. **Python** (`crates/python/src/py_api.rs`) — Add PyO3 `#[pyfunction]` wrapper
-4. **Python wrapper** (`python/nat_nexus/`) — Add thin wrapper with docstring in the appropriate module
-5. **Go** (`go/nat_nexus/nat_nexus.go`) — Add Go function calling FFI via CGo
-6. **Node.js** (`crates/node/src/api.rs`) — Add `#[napi]` function
-7. **WASM** (`crates/wasm/src/api.rs`) — Add `#[wasm_bindgen]` function
+1. **Core Rust**
+   Implement the behavior first in `crates/core/src/api.rs` and `crates/core/src/types.rs`
+   or related core modules.
+2. **FFI / shared C surface**
+   Add or update FFI wrappers in `crates/ffi/src/api.rs` and ensure the generated
+   `crates/ffi/nemo_flow.h` stays correct.
+3. **Language-native bindings**
+   Update Python, Go, Node.js, and WASM for every surface that should expose the
+   capability.
+4. **Language wrapper helpers**
+   Update Python wrapper modules, Go shorthand packages, typed helpers, or optimizer
+   helpers if the new behavior belongs there.
+5. **Docs and examples**
+   Update reference docs, language-binding docs, and examples when the public
+   surface or expected usage changed.
+6. **Validation**
+   Run the validation matrix from the `validate-change` skill for the affected
+   surfaces.
 
 ## Naming Conventions
 
 | Layer   | Convention        | Example                              |
 |---------|-------------------|--------------------------------------|
-| Rust    | `snake_case`      | `nat_nexus_tool_call`                |
-| C FFI   | `nat_nexus_` prefix | `nat_nexus_tool_call`              |
-| Python  | `snake_case`      | `nat_nexus.tools.call`               |
-| Go      | `PascalCase`      | `nat_nexus.ToolCall`                 |
+| Rust    | `snake_case`      | `nemo_flow_tool_call`                |
+| C FFI   | `nemo_flow_` prefix | `nemo_flow_tool_call`              |
+| Python  | `snake_case`      | `nemo_flow.tools.call`               |
+| Go      | `PascalCase`      | `nemo_flow.ToolCall`                 |
 | Node.js | `camelCase`       | `toolCall`                           |
 | WASM    | `camelCase`       | `toolCall`                           |
 
-## Checklist
+## Parity Checklist
 
 - [ ] Core function with doc comment in `crates/core/src/api.rs`
 - [ ] Types added to `crates/core/src/types.rs` if needed
 - [ ] FFI wrapper in `crates/ffi/src/api.rs`
-- [ ] Regenerate header: `cargo build -p nvidia-nat-nexus-ffi` (cbindgen runs automatically)
+- [ ] Regenerate header with `cargo build -p nemo-flow-ffi`
 - [ ] Python native binding in `crates/python/src/py_api.rs`
-- [ ] Python wrapper with docstring in `python/nat_nexus/<module>.py`
-- [ ] Python type stub updated in `python/nat_nexus/__init__.pyi`
-- [ ] Go wrapper in `go/nat_nexus/nat_nexus.go` with doc comment
-- [ ] Go subpackage shorthand in `go/nat_nexus/<pkg>/<pkg>.go`
+- [ ] Python wrapper with docstring in `python/nemo_flow/<module>.py`
+- [ ] Python type stub updated in `python/nemo_flow/__init__.pyi`
+- [ ] Go wrapper in `go/nemo_flow/nemo_flow.go` with doc comment
+- [ ] Go shorthand package updated if the capability belongs there
 - [ ] Node.js binding in `crates/node/src/api.rs`
 - [ ] WASM binding in `crates/wasm/src/api.rs`
-- [ ] Tests in ALL languages that have tests for the feature area
+- [ ] Typed wrapper or optimizer helper surfaces updated when applicable
+- [ ] Tests added in every affected language surface
 - [ ] SPDX license header on any new files
 - [ ] `docs/api-reference.md` updated
-- [ ] `docs/language-bindings.md` updated if the feature has language-specific behavior
+- [ ] `docs/language-bindings.md` updated if behavior differs by language
+- [ ] Relevant getting-started, README, or example docs updated if usage changed
+
+## Decision Points
+
+Lock these before implementing:
+
+- Which bindings actually expose the new surface?
+- Is the change part of the plain JSON API, typed wrappers, optimizer helpers,
+  or observability helpers?
+- Does the new API need manual lifecycle and managed execute variants, or only
+  one of them?
+- Does the new behavior change event fields, metadata, or scope expectations?
+- Are docs/examples required because the intended usage changed?
 
 ## Key References
 
 - Architecture: `docs/architecture.md`
 - API reference: `docs/api-reference.md`
 - Language bindings guide: `docs/language-bindings.md`
-- Existing patterns: Look at how `nat_nexus_tool_call_execute` is implemented across all layers
+- Typed wrappers: `docs/typed-wrappers.md`
+- Existing pattern: follow a surface already implemented across core, FFI,
+  Python, Go, Node.js, and WASM rather than inventing a new shape

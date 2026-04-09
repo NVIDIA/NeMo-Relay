@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# nvidia-nat-nexus-openinference
+# nemo-flow-openinference
 
-OpenInference OTLP subscriber support for NeMo Agent Toolkit Nexus.
+OpenInference OTLP subscriber support for NeMo Flow.
 
 For the repository-level guide covering event mapping, binding-specific config
 objects, and runtime constraints, see
@@ -14,11 +14,11 @@ objects, and runtime constraints, see
 ## Overview
 
 This crate keeps OpenInference support out of the core runtime while still
-integrating cleanly with Nexus's existing event subscriber model.
+integrating cleanly with NeMo Flow's existing event subscriber model.
 
-- Nexus `Start` events become OpenInference spans
-- Nexus `End` events close those spans
-- Nexus `Mark` events become span events when a parent span is active
+- NeMo Flow `Start` events become OpenInference spans
+- NeMo Flow `End` events close those spans
+- NeMo Flow `Mark` events become span events when a parent span is active
 - OTLP/HTTP and OTLP/gRPC exporters are supported
 
 ## Example
@@ -26,7 +26,7 @@ integrating cleanly with Nexus's existing event subscriber model.
 ```rust
 use std::time::Duration;
 
-use nvidia_nat_nexus_openinference::{OpenInferenceConfig, OpenInferenceSubscriber, OtlpTransport};
+use nemo_flow_openinference::{OpenInferenceConfig, OpenInferenceSubscriber, OtlpTransport};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let subscriber = OpenInferenceSubscriber::new(config)?;
     subscriber.register("openinference")?;
 
-    // ... run Nexus-instrumented work here ...
+    // ... run NeMo Flow-instrumented work here ...
 
     subscriber.deregister("openinference")?;
     subscriber.force_flush()?;
@@ -52,6 +52,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Build
 
 ```bash
-cargo build -p nvidia-nat-nexus-openinference
-cargo test -p nvidia-nat-nexus-openinference
+cargo build -p nemo-flow-openinference
+cargo test -p nemo-flow-openinference
 ```

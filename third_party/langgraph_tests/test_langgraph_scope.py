@@ -4,9 +4,9 @@
 """Integration tests for LangGraph scope propagation.
 
 Validates that the LangGraph Pregel patch correctly instruments graph and
-node execution with Nexus scopes across sync, async, and parallel paths.
+node execution with NeMo Flow scopes across sync, async, and parallel paths.
 
-These tests exercise the ``_nat_nexus.py`` scope helpers directly to verify
+These tests exercise the ``_nemo_flow.py`` scope helpers directly to verify
 the scope hierarchy, parallel isolation, and double-wrap prevention behavior
 without requiring the full LangGraph graph execution engine.
 """
@@ -17,13 +17,13 @@ import contextvars
 import threading
 from typing import Any
 
-import nat_nexus
+import nemo_flow
 import pytest
-from langgraph._nat_nexus import (  # type: ignore[import-untyped]
+from langgraph._nemo_flow import (  # type: ignore[import-untyped]
     _graph_scope_info,
-    _langgraph_nexus_active,
+    _langgraph_nemo_flow_active,
     available,
-    langgraph_nexus_active,
+    langgraph_nemo_flow_active,
     pop_graph_scope,
     pop_node_scope,
     pop_subgraph_scope,
@@ -31,7 +31,7 @@ from langgraph._nat_nexus import (  # type: ignore[import-untyped]
     push_node_scope,
     push_subgraph_scope,
 )
-from nat_nexus import LLMStartEvent, ToolStartEvent, create_scope_stack, set_thread_scope_stack
+from nemo_flow import LLMStartEvent, ToolStartEvent, create_scope_stack, set_thread_scope_stack
 
 
 class TestLangGraphScope:
@@ -48,9 +48,9 @@ class TestLangGraphScope:
     def events(self):
         """Register an event subscriber and collect events."""
         collected: list[Any] = []
-        nat_nexus.subscribers.register("test-lg-collector", lambda e: collected.append(e))
+        nemo_flow.subscribers.register("test-lg-collector", lambda e: collected.append(e))
         yield collected
-        nat_nexus.subscribers.deregister("test-lg-collector")
+        nemo_flow.subscribers.deregister("test-lg-collector")
 
     # -------------------------------------------------------------------
     # Single-node graph scope hierarchy
@@ -252,11 +252,11 @@ class TestLangGraphScope:
         graph_handle = push_graph_scope("llm_graph")
         node_handle, _, _ = push_node_scope("llm_node", "task-llm")
 
-        llm_handle = nat_nexus.llm.call(
+        llm_handle = nemo_flow.llm.call(
             "test-model",
-            nat_nexus.LLMRequest({}, {"messages": [], "model": "test-model"}),
+            nemo_flow.LLMRequest({}, {"messages": [], "model": "test-model"}),
         )
-        nat_nexus.llm.call_end(llm_handle, {"response": "hello"})
+        nemo_flow.llm.call_end(llm_handle, {"response": "hello"})
 
         pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)
@@ -284,8 +284,8 @@ class TestLangGraphScope:
         graph_handle = push_graph_scope("tool_graph")
         node_handle, _, _ = push_node_scope("tool_node", "task-tool")
 
-        tool_handle = nat_nexus.tools.call("search_tool", {"query": "test"})
-        nat_nexus.tools.call_end(tool_handle, {"results": ["a", "b"]})
+        tool_handle = nemo_flow.tools.call("search_tool", {"query": "test"})
+        nemo_flow.tools.call_end(tool_handle, {"results": ["a", "b"]})
 
         pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)
@@ -304,17 +304,17 @@ class TestLangGraphScope:
 
     def test_no_double_wrapping(self, scope_stack: Any, events: list[Any]) -> None:
         """Graph and node scopes are created exactly once (no double-wrap)."""
-        assert langgraph_nexus_active() is False
+        assert langgraph_nemo_flow_active() is False
 
         graph_handle = push_graph_scope("single_graph")
 
-        assert langgraph_nexus_active() is True
+        assert langgraph_nemo_flow_active() is True
 
         node_handle, _, _ = push_node_scope("single_node", "task-1")
         pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)
 
-        assert langgraph_nexus_active() is False
+        assert langgraph_nemo_flow_active() is False
 
         graph_starts = [
             e for e in events if e.metadata and e.metadata.get("langgraph.graph") is True and e.kind == "ScopeStart"
@@ -400,9 +400,9 @@ class TestLangGraphSubgraph:
         def _subscriber(event: dict) -> None:
             collected.append(event)
 
-        nat_nexus.subscribers.register("test_sub", _subscriber)
+        nemo_flow.subscribers.register("test_sub", _subscriber)
         yield collected
-        nat_nexus.subscribers.deregister("test_sub")
+        nemo_flow.subscribers.deregister("test_sub")
 
     # -------------------------------------------------------------------
     # Subgraph nested scope hierarchy
@@ -416,9 +416,9 @@ class TestLangGraphSubgraph:
 
         sub_handle, active_tok, info_tok = push_subgraph_scope("inner_graph")
 
-        inner_node_handle = nat_nexus.scope.push(
+        inner_node_handle = nemo_flow.scope.push(
             "inner_node",
-            nat_nexus.ScopeType.Agent,
+            nemo_flow.ScopeType.Agent,
             metadata={"langgraph.node": True},
         )
 
@@ -441,7 +441,7 @@ class TestLangGraphSubgraph:
         assert subgraph_starts[0].metadata.get("langgraph.subgraph") is True
         assert subgraph_starts[0].metadata.get("langgraph.graph") is True
 
-        nat_nexus.scope.pop(inner_node_handle)
+        nemo_flow.scope.pop(inner_node_handle)
         pop_subgraph_scope(sub_handle, active_tok, info_tok)
         pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)
@@ -456,11 +456,11 @@ class TestLangGraphSubgraph:
 
         node_handle, _, _ = push_node_scope("a_node", "task-x")
 
-        assert _langgraph_nexus_active.get() is True
+        assert _langgraph_nemo_flow_active.get() is True
 
         sub_handle, active_tok, info_tok = push_subgraph_scope("sub_graph")
 
-        assert _langgraph_nexus_active.get() is True
+        assert _langgraph_nemo_flow_active.get() is True
 
         info = _graph_scope_info.get()
         assert info is not None
@@ -491,7 +491,7 @@ class TestLangGraphSubgraph:
         assert restored_info is not None, "_graph_scope_info should be restored, not None"
         assert restored_info.graph_name == "parent_graph", f"Expected 'parent_graph', got '{restored_info.graph_name}'"
 
-        assert _langgraph_nexus_active.get() is True
+        assert _langgraph_nemo_flow_active.get() is True
 
         pop_node_scope(node_handle)
         pop_graph_scope(graph_handle)
@@ -516,7 +516,7 @@ class TestLangGraphSubgraph:
 
         graph_handle = push_graph_scope("my_graph", graph_topology=topology)
 
-        handle = nat_nexus.scope.get_handle()
+        handle = nemo_flow.scope.get_handle()
         assert handle is not None
         assert handle.metadata is not None
         assert "graph_topology" in handle.metadata
@@ -546,7 +546,7 @@ class TestLangGraphSubgraph:
             with lock:
                 all_events.append(event)
 
-        nat_nexus.subscribers.register("concurrent-collector", _collect)
+        nemo_flow.subscribers.register("concurrent-collector", _collect)
 
         results: dict[str, dict[str, Any]] = {}
         errors: list[str] = []
@@ -582,7 +582,7 @@ class TestLangGraphSubgraph:
         t_b.start()
         t_b.join()
 
-        nat_nexus.subscribers.deregister("concurrent-collector")
+        nemo_flow.subscribers.deregister("concurrent-collector")
 
         assert not errors, f"Thread errors: {errors}"
         assert "A" in results and "B" in results

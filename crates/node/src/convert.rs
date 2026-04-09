@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Conversion utilities for bridging between Nexus core types and NAPI types.
+//! Conversion utilities for bridging between NeMo Flow core types and NAPI types.
 //!
 //! Provides helpers to convert errors and optional JSON values between the core
 //! runtime representation and the NAPI binding layer.
@@ -10,12 +10,12 @@ use std::sync::{LazyLock, Mutex};
 
 use serde_json::Value as Json;
 
-use nvidia_nat_nexus_core::NexusError;
+use nemo_flow_core::FlowError;
 
 static LAST_CALLBACK_ERROR: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 
-/// Convert an `NexusError` into a `napi::Error` by formatting the error as a reason string.
-pub fn to_napi_err(e: NexusError) -> napi::Error {
+/// Convert an `FlowError` into a `napi::Error` by formatting the error as a reason string.
+pub fn to_napi_err(e: FlowError) -> napi::Error {
     napi::Error::from_reason(e.to_string())
 }
 

@@ -7,7 +7,7 @@
 //! This module defines the callback signatures used by the C API for tool and
 //! LLM guardrails, intercepts, execution functions, and event subscribers. Each
 //! `pub type` alias corresponds to a C function pointer that appears in the
-//! generated `nat_nexus.h` header.
+//! generated `nemo_flow.h` header.
 //!
 //! The `wrap_*` functions convert C callbacks (with opaque `user_data` pointers)
 //! into Rust closures (`Box<dyn Fn(...)>`) that the core runtime can invoke.
@@ -24,15 +24,15 @@ use libc::c_char;
 use serde_json::Value as Json;
 use tokio_stream::{Stream, StreamExt};
 
-use nvidia_nat_nexus_core::codec::{AnnotatedLLMRequest, LlmCodec};
-use nvidia_nat_nexus_core::types::LLMRequest;
-use nvidia_nat_nexus_core::{
-    LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionNextFn,
-    NexusError, Result, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
+use nemo_flow_core::codec::{AnnotatedLLMRequest, LlmCodec};
+use nemo_flow_core::types::LLMRequest;
+use nemo_flow_core::{
+    FlowError, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
+    LlmStreamExecutionNextFn, Result, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
 };
 
 use crate::convert::json_to_c_string;
-use crate::error::{clear_last_error, last_error_message, set_last_error, NatNexusStatus};
+use crate::error::{NemoFlowStatus, clear_last_error, last_error_message, set_last_error};
 use crate::types::{FfiEvent, FfiLLMRequest, FfiOptimizerPluginContext};
 
 // ---------------------------------------------------------------------------
@@ -41,12 +41,12 @@ use crate::types::{FfiEvent, FfiLLMRequest, FfiOptimizerPluginContext};
 
 /// Optional destructor for user data passed to callbacks.
 /// Called when the runtime no longer needs the associated callback.
-pub type NatNexusFreeFn = Option<unsafe extern "C" fn(user_data: *mut libc::c_void)>;
+pub type NemoFlowFreeFn = Option<unsafe extern "C" fn(user_data: *mut libc::c_void)>;
 
 /// Callback for tool request/response sanitization guardrails and intercepts.
 /// Receives tool name and arguments as JSON, returns sanitized arguments as JSON.
 /// The returned string must be allocated with `malloc` or equivalent.
-pub type NatNexusToolSanitizeCb = unsafe extern "C" fn(
+pub type NemoFlowToolSanitizeCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     name: *const c_char,
     args_json: *const c_char,
@@ -55,7 +55,7 @@ pub type NatNexusToolSanitizeCb = unsafe extern "C" fn(
 /// Callback for tool conditional execution guardrails.
 /// Receives tool name and arguments as JSON.
 /// Returns NULL to allow execution, or an error message string to reject.
-pub type NatNexusToolConditionalCb = unsafe extern "C" fn(
+pub type NemoFlowToolConditionalCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     name: *const c_char,
     args_json: *const c_char,
@@ -64,79 +64,79 @@ pub type NatNexusToolConditionalCb = unsafe extern "C" fn(
 /// Callback for tool execution (default callable). Receives arguments as JSON,
 /// returns result as JSON. The returned string must be allocated with `malloc`
 /// or equivalent.
-pub type NatNexusToolExecCb =
+pub type NemoFlowToolExecCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, args_json: *const c_char) -> *mut c_char;
 
 /// Runtime-provided "next" callback for tool execution middleware chain.
 /// Call this from an intercept to invoke the next layer (or original function).
 /// `next_ctx` is an opaque pointer managed by the runtime.
-pub type NatNexusToolExecNextFn =
+pub type NemoFlowToolExecNextFn =
     unsafe extern "C" fn(args_json: *const c_char, next_ctx: *mut libc::c_void) -> *mut c_char;
 
 /// Callback for tool execution intercepts. Receives arguments as JSON plus
 /// a `next` callback and its context. Call `next_fn(args, next_ctx)` to invoke
 /// the next layer in the middleware chain, or return directly to short-circuit.
-pub type NatNexusToolExecInterceptCb = unsafe extern "C" fn(
+pub type NemoFlowToolExecInterceptCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     args_json: *const c_char,
-    next_fn: NatNexusToolExecNextFn,
+    next_fn: NemoFlowToolExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char;
 
 /// Generic JSON-to-JSON callback, used for LLM response sanitization and intercepts.
 /// The returned string must be allocated with `malloc` or equivalent.
-pub type NatNexusJsonCb =
+pub type NemoFlowJsonCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, json: *const c_char) -> *mut c_char;
 
 /// Callback for LLM request sanitization. Receives an `FfiLLMRequest` and returns
 /// a new (possibly modified) `FfiLLMRequest`. Return null to use defaults.
-pub type NatNexusLlmRequestCb = unsafe extern "C" fn(
+pub type NemoFlowLlmRequestCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
 ) -> *mut FfiLLMRequest;
 
 /// Callback for LLM conditional execution guardrails.
 /// Returns NULL to allow execution, or an error message string to reject.
-pub type NatNexusLlmConditionalCb = unsafe extern "C" fn(
+pub type NemoFlowLlmConditionalCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
 ) -> *mut c_char;
 
 /// Callback for LLM execution (default callable). Receives a native JSON C string,
 /// returns the response as a JSON C string.
-pub type NatNexusLlmExecCb =
+pub type NemoFlowLlmExecCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, native_json: *const c_char) -> *mut c_char;
 
 /// Runtime-provided "next" callback for LLM execution middleware chain.
 /// Takes a native JSON C string, returns a response JSON C string.
-pub type NatNexusLlmExecNextFn =
+pub type NemoFlowLlmExecNextFn =
     unsafe extern "C" fn(native_json: *const c_char, next_ctx: *mut libc::c_void) -> *mut c_char;
 
 /// Callback for LLM execution intercepts with middleware chain support.
 /// Receives native JSON C string plus a `next` callback and its context.
-pub type NatNexusLlmExecInterceptCb = unsafe extern "C" fn(
+pub type NemoFlowLlmExecInterceptCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     native_json: *const c_char,
-    next_fn: NatNexusLlmExecNextFn,
+    next_fn: NemoFlowLlmExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char;
 
 /// Callback for event subscribers. Invoked on each lifecycle event emitted by
 /// the runtime. The `FfiEvent` pointer is only valid for the duration of the call.
-pub type NatNexusEventSubscriberCb =
+pub type NemoFlowEventSubscriberCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, event: *const FfiEvent);
 
 /// Callback for Codec decode: translates an opaque `FfiLLMRequest` into
 /// an `AnnotatedLLMRequest` JSON string. Returns a heap-allocated C string
 /// on success, or null on error (after setting the last error message).
-pub type NatNexusCodecDecodeCb = unsafe extern "C" fn(
+pub type NemoFlowCodecDecodeCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     request: *const FfiLLMRequest,
 ) -> *mut c_char;
 
-/// Nullable version of [`NatNexusCodecDecodeCb`] for use as an optional
+/// Nullable version of [`NemoFlowCodecDecodeCb`] for use as an optional
 /// parameter in FFI execute functions. Pass null to indicate no codec.
-pub type NatNexusCodecDecodeFn = Option<
+pub type NemoFlowCodecDecodeFn = Option<
     unsafe extern "C" fn(
         user_data: *mut libc::c_void,
         request: *const FfiLLMRequest,
@@ -147,15 +147,15 @@ pub type NatNexusCodecDecodeFn = Option<
 /// request content. Receives the annotated request as a JSON C string and
 /// the original `FfiLLMRequest`. Returns a heap-allocated JSON C string
 /// representing the new `LLMRequest` content on success, or null on error.
-pub type NatNexusCodecEncodeCb = unsafe extern "C" fn(
+pub type NemoFlowCodecEncodeCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     annotated_json: *const c_char,
     original_request: *const FfiLLMRequest,
 ) -> *mut c_char;
 
-/// Nullable version of [`NatNexusCodecEncodeCb`] for use as an optional
+/// Nullable version of [`NemoFlowCodecEncodeCb`] for use as an optional
 /// parameter in FFI execute functions. Pass null to indicate no codec.
-pub type NatNexusCodecEncodeFn = Option<
+pub type NemoFlowCodecEncodeFn = Option<
     unsafe extern "C" fn(
         user_data: *mut libc::c_void,
         annotated_json: *const c_char,
@@ -167,30 +167,30 @@ pub type NatNexusCodecEncodeFn = Option<
 /// signature. Receives the intercept name, the opaque `FfiLLMRequest`, and
 /// optionally the annotated request as a JSON C string (null if no Codec
 /// resolved). Writes transformed outputs to `out_request` and
-/// `out_annotated_json`. Returns `NatNexusStatus`.
-pub type NatNexusLlmRequestInterceptCb = unsafe extern "C" fn(
+/// `out_annotated_json`. Returns `NemoFlowStatus`.
+pub type NemoFlowLlmRequestInterceptCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     name: *const c_char,
     request: *const FfiLLMRequest,
     annotated_json: *const c_char,
     out_request: *mut *mut FfiLLMRequest,
     out_annotated_json: *mut *mut c_char,
-) -> NatNexusStatus;
+) -> NemoFlowStatus;
 
 /// Callback for collecting intercepted stream chunks. Invoked with each chunk
 /// (after stream execution intercepts have been applied) as a null-terminated
 /// C string. The string is only valid for the duration of the call.
-pub type NatNexusCollectorCb = unsafe extern "C" fn(chunk: *const c_char);
+pub type NemoFlowCollectorCb = unsafe extern "C" fn(chunk: *const c_char);
 
 /// Callback for finalizing a collected stream. Invoked once when the stream is
 /// exhausted. Must return a JSON C string representing the aggregated response.
 /// The returned string must be allocated with `malloc` or equivalent; the
 /// runtime will free it.
-pub type NatNexusFinalizerCb = unsafe extern "C" fn() -> *mut c_char;
+pub type NemoFlowFinalizerCb = unsafe extern "C" fn() -> *mut c_char;
 
 /// Callback for optimizer hosted plugin validation.
 /// Receives an instance ID and plugin config JSON, returns a JSON array of diagnostics.
-pub type NatNexusOptimizerPluginValidateCb = unsafe extern "C" fn(
+pub type NemoFlowOptimizerPluginValidateCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     instance_id: *const c_char,
     plugin_config_json: *const c_char,
@@ -199,12 +199,12 @@ pub type NatNexusOptimizerPluginValidateCb = unsafe extern "C" fn(
 /// Callback for optimizer hosted plugin registration.
 /// Receives an instance ID, plugin config JSON, and a plugin context pointer that is
 /// only valid for the duration of the call.
-pub type NatNexusOptimizerPluginRegisterCb = unsafe extern "C" fn(
+pub type NemoFlowOptimizerPluginRegisterCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     instance_id: *const c_char,
     plugin_config_json: *const c_char,
     ctx: *mut FfiOptimizerPluginContext,
-) -> NatNexusStatus;
+) -> NemoFlowStatus;
 
 // ---------------------------------------------------------------------------
 // Shared user_data wrapper (ensures cleanup)
@@ -214,7 +214,7 @@ pub type NatNexusOptimizerPluginRegisterCb = unsafe extern "C" fn(
 /// Ensures the free function is called exactly once when dropped.
 struct UserData {
     ptr: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 }
 
 unsafe impl Send for UserData {}
@@ -230,7 +230,7 @@ impl Drop for UserData {
 
 fn make_user_data(
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> std::sync::Arc<UserData> {
     std::sync::Arc::new(UserData {
         ptr: user_data,
@@ -244,27 +244,27 @@ fn make_user_data(
 
 /// Wrap a C tool sanitize callback into a Rust closure for use by the core runtime.
 pub fn wrap_tool_sanitize_fn(
-    cb: NatNexusToolSanitizeCb,
+    cb: NemoFlowToolSanitizeCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |name: &str, args: Json| {
         let c_name = CString::new(name).unwrap_or_default();
         let c_args = json_to_c_string(&args);
         let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nat_nexus_string_free_internal(c_args) };
+        unsafe { nemo_flow_string_free_internal(c_args) };
         let result = ptr_to_json(result_ptr);
-        unsafe { nat_nexus_string_free_internal(result_ptr) };
+        unsafe { nemo_flow_string_free_internal(result_ptr) };
         result
     })
 }
 
 /// Wrap a C tool conditional callback into a Rust closure for use by the core runtime.
 pub fn wrap_tool_conditional_fn(
-    cb: NatNexusToolConditionalCb,
+    cb: NemoFlowToolConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> ToolConditionalFn {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |name: &str, args: &Json| {
@@ -272,25 +272,25 @@ pub fn wrap_tool_conditional_fn(
         let c_name = CString::new(name).unwrap_or_default();
         let c_args = json_to_c_string(args);
         let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nat_nexus_string_free_internal(c_args) };
+        unsafe { nemo_flow_string_free_internal(c_args) };
         let result = if result_ptr.is_null() {
             match last_error_message() {
-                Some(message) => Err(NexusError::Internal(message)),
+                Some(message) => Err(FlowError::Internal(message)),
                 None => Ok(None),
             }
         } else {
             Ok(ptr_to_opt_string(result_ptr))
         };
-        unsafe { nat_nexus_string_free_internal(result_ptr) };
+        unsafe { nemo_flow_string_free_internal(result_ptr) };
         result
     })
 }
 
 /// Wrap a C tool request intercept callback into a Rust closure for use by the core runtime.
 pub fn wrap_tool_request_intercept_fn(
-    cb: NatNexusToolSanitizeCb,
+    cb: NemoFlowToolSanitizeCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> ToolInterceptFn {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |name: &str, args: Json| {
@@ -298,19 +298,19 @@ pub fn wrap_tool_request_intercept_fn(
         let c_name = CString::new(name).unwrap_or_default();
         let c_args = json_to_c_string(&args);
         let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
-        unsafe { nat_nexus_string_free_internal(c_args) };
+        unsafe { nemo_flow_string_free_internal(c_args) };
         let result =
             json_result_from_ptr(result_ptr, "tool request intercept callback returned null");
-        unsafe { nat_nexus_string_free_internal(result_ptr) };
+        unsafe { nemo_flow_string_free_internal(result_ptr) };
         result
     })
 }
 
 /// Wrap a C tool execution callback into an async Rust closure.
 pub fn wrap_tool_exec_fn(
-    cb: NatNexusToolExecCb,
+    cb: NemoFlowToolExecCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |args: Json| {
@@ -318,9 +318,9 @@ pub fn wrap_tool_exec_fn(
         Box::pin(async move {
             let c_args = json_to_c_string(&args);
             let result_ptr = unsafe { cb(ud.ptr, c_args) };
-            unsafe { nat_nexus_string_free_internal(c_args) };
+            unsafe { nemo_flow_string_free_internal(c_args) };
             let result = json_result_from_ptr(result_ptr, "tool execution callback failed")?;
-            unsafe { nat_nexus_string_free_internal(result_ptr) };
+            unsafe { nemo_flow_string_free_internal(result_ptr) };
             Ok(result)
         })
     })
@@ -331,9 +331,9 @@ pub fn wrap_tool_exec_fn(
 /// The wrapper packages the Rust `ToolExecutionNextFn` into a C-callable
 /// `(next_fn, next_ctx)` pair and passes both to the C intercept callback.
 pub fn wrap_tool_exec_intercept_fn(
-    cb: NatNexusToolExecInterceptCb,
+    cb: NemoFlowToolExecInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> Arc<
     dyn Fn(&str, Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
@@ -362,7 +362,7 @@ pub fn wrap_tool_exec_intercept_fn(
                 };
                 // Use block_in_place to allow nested block_on within the
                 // multi-threaded tokio runtime (the outer block_on in
-                // nat_nexus_tool_call_execute already occupies this worker).
+                // nemo_flow_tool_call_execute already occupies this worker).
                 let handle = tokio::runtime::Handle::current();
                 let result = tokio::task::block_in_place(|| handle.block_on(next(args)));
                 match result {
@@ -377,10 +377,10 @@ pub fn wrap_tool_exec_intercept_fn(
             let c_args = json_to_c_string(&args);
             let result_ptr = unsafe { cb(ud.ptr, c_args, tool_next_trampoline, next_ctx) };
             unsafe { drop(Box::from_raw(next_ctx as *mut ToolExecutionNextFn)) };
-            unsafe { nat_nexus_string_free_internal(c_args) };
+            unsafe { nemo_flow_string_free_internal(c_args) };
             let result =
                 json_result_from_ptr(result_ptr, "tool execution intercept callback failed")?;
-            unsafe { nat_nexus_string_free_internal(result_ptr) };
+            unsafe { nemo_flow_string_free_internal(result_ptr) };
             Ok(result)
         })
     })
@@ -388,9 +388,9 @@ pub fn wrap_tool_exec_intercept_fn(
 
 /// Wrap a C LLM execution intercept callback into an `Arc<dyn Fn(LLMRequest, LlmExecutionNextFn) -> ...>`.
 pub fn wrap_llm_exec_intercept_fn(
-    cb: NatNexusLlmExecInterceptCb,
+    cb: NemoFlowLlmExecInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> Arc<
     dyn Fn(
             &str,
@@ -444,10 +444,10 @@ pub fn wrap_llm_exec_intercept_fn(
                 let c_request = json_to_c_string(&request_json);
                 let result_ptr = unsafe { cb(ud.ptr, c_request, llm_next_trampoline, next_ctx) };
                 unsafe { drop(Box::from_raw(next_ctx as *mut LlmExecutionNextFn)) };
-                unsafe { nat_nexus_string_free_internal(c_request) };
+                unsafe { nemo_flow_string_free_internal(c_request) };
                 let result =
                     json_result_from_ptr(result_ptr, "LLM execution intercept callback failed")?;
-                unsafe { nat_nexus_string_free_internal(result_ptr) };
+                unsafe { nemo_flow_string_free_internal(result_ptr) };
                 Ok(result)
             })
         },
@@ -458,9 +458,9 @@ pub fn wrap_llm_exec_intercept_fn(
 /// Since the C callback returns a single string (not a real stream), this wraps
 /// it as a single-item stream, same as `wrap_llm_stream_exec_fn`.
 pub fn wrap_llm_stream_exec_intercept_fn(
-    cb: NatNexusLlmExecInterceptCb,
+    cb: NemoFlowLlmExecInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> Arc<
     dyn Fn(
             &str,
@@ -524,12 +524,12 @@ pub fn wrap_llm_stream_exec_intercept_fn(
                 let result_ptr =
                     unsafe { cb(ud.ptr, c_request, llm_stream_next_trampoline, next_ctx) };
                 unsafe { drop(Box::from_raw(next_ctx as *mut LlmStreamExecutionNextFn)) };
-                unsafe { nat_nexus_string_free_internal(c_request) };
+                unsafe { nemo_flow_string_free_internal(c_request) };
                 let result = json_result_from_ptr(
                     result_ptr,
                     "LLM stream execution intercept callback failed",
                 )?;
-                unsafe { nat_nexus_string_free_internal(result_ptr) };
+                unsafe { nemo_flow_string_free_internal(result_ptr) };
                 let stream = tokio_stream::once(Ok(result));
                 Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
             })
@@ -539,17 +539,17 @@ pub fn wrap_llm_stream_exec_intercept_fn(
 
 /// Wrap a generic C JSON callback into a Rust closure.
 pub fn wrap_json_fn(
-    cb: NatNexusJsonCb,
+    cb: NemoFlowJsonCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |value: Json| {
         let c_json = json_to_c_string(&value);
         let result_ptr = unsafe { cb(ud.ptr, c_json) };
-        unsafe { nat_nexus_string_free_internal(c_json) };
+        unsafe { nemo_flow_string_free_internal(c_json) };
         let result = ptr_to_json(result_ptr);
-        unsafe { nat_nexus_string_free_internal(result_ptr) };
+        unsafe { nemo_flow_string_free_internal(result_ptr) };
         result
     })
 }
@@ -559,9 +559,9 @@ pub fn wrap_json_fn(
 /// the opaque `FfiLLMRequest`, and the annotated JSON (or null). It writes
 /// the transformed request and annotated JSON to output pointers.
 pub fn wrap_llm_request_intercept_fn(
-    cb: NatNexusLlmRequestInterceptCb,
+    cb: NemoFlowLlmRequestInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> LlmRequestInterceptFn {
     let ud = make_user_data(user_data, free_fn);
     Box::new(
@@ -602,15 +602,15 @@ pub fn wrap_llm_request_intercept_fn(
             // Free the input request
             unsafe { drop(Box::from_raw(ffi_req)) };
 
-            if status != NatNexusStatus::Ok {
+            if status != NemoFlowStatus::Ok {
                 let message = last_error_message()
                     .unwrap_or_else(|| "request intercept callback failed".to_string());
-                return Err(NexusError::Internal(message));
+                return Err(FlowError::Internal(message));
             }
 
             // Read output request
             let new_request = if out_request.is_null() {
-                return Err(NexusError::Internal(
+                return Err(FlowError::Internal(
                     "request intercept returned null out_request".to_string(),
                 ));
             } else {
@@ -624,7 +624,7 @@ pub fn wrap_llm_request_intercept_fn(
             } else {
                 let s = unsafe { CStr::from_ptr(out_annotated) }.to_string_lossy();
                 let parsed: Option<AnnotatedLLMRequest> = serde_json::from_str(&s).ok();
-                unsafe { nat_nexus_string_free_internal(out_annotated) };
+                unsafe { nemo_flow_string_free_internal(out_annotated) };
                 parsed
             };
 
@@ -637,26 +637,26 @@ pub fn wrap_llm_request_intercept_fn(
 /// sanitization. The callback receives the response as a JSON string and
 /// returns the (possibly modified) JSON string.
 pub fn wrap_llm_response_fn(
-    cb: NatNexusJsonCb,
+    cb: NemoFlowJsonCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |response: Json| {
         let c_json = json_to_c_string(&response);
         let result_ptr = unsafe { cb(ud.ptr, c_json) };
-        unsafe { nat_nexus_string_free_internal(c_json) };
+        unsafe { nemo_flow_string_free_internal(c_json) };
         let result_json = ptr_to_json(result_ptr);
-        unsafe { nat_nexus_string_free_internal(result_ptr) };
+        unsafe { nemo_flow_string_free_internal(result_ptr) };
         result_json
     })
 }
 
 /// Wrap a C LLM request sanitize callback into a Rust closure.
 pub fn wrap_llm_sanitize_request_fn(
-    cb: NatNexusLlmRequestCb,
+    cb: NemoFlowLlmRequestCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> Box<dyn Fn(LLMRequest) -> LLMRequest + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |request: LLMRequest| {
@@ -679,9 +679,9 @@ pub fn wrap_llm_sanitize_request_fn(
 
 /// Wrap a C LLM conditional callback into a Rust closure.
 pub fn wrap_llm_conditional_fn(
-    cb: NatNexusLlmConditionalCb,
+    cb: NemoFlowLlmConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> LlmConditionalFn {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |request: &LLMRequest| {
@@ -690,13 +690,13 @@ pub fn wrap_llm_conditional_fn(
         let result_ptr = unsafe { cb(ud.ptr, &ffi_req) };
         let result = if result_ptr.is_null() {
             match last_error_message() {
-                Some(message) => Err(NexusError::Internal(message)),
+                Some(message) => Err(FlowError::Internal(message)),
                 None => Ok(None),
             }
         } else {
             Ok(ptr_to_opt_string(result_ptr))
         };
-        unsafe { nat_nexus_string_free_internal(result_ptr) };
+        unsafe { nemo_flow_string_free_internal(result_ptr) };
         result
     })
 }
@@ -704,9 +704,9 @@ pub fn wrap_llm_conditional_fn(
 /// Wrap a C LLM execution callback into an async Rust closure.
 /// The C callback receives an `LLMRequest` serialized as a JSON string.
 pub fn wrap_llm_exec_fn(
-    cb: NatNexusLlmExecCb,
+    cb: NemoFlowLlmExecCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> Box<dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |request: LLMRequest| {
@@ -715,9 +715,9 @@ pub fn wrap_llm_exec_fn(
             let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             let c_request = json_to_c_string(&request_json);
             let result_ptr = unsafe { cb(ud.ptr, c_request) };
-            unsafe { nat_nexus_string_free_internal(c_request) };
+            unsafe { nemo_flow_string_free_internal(c_request) };
             let result = json_result_from_ptr(result_ptr, "LLM execution callback failed")?;
-            unsafe { nat_nexus_string_free_internal(result_ptr) };
+            unsafe { nemo_flow_string_free_internal(result_ptr) };
             Ok(result)
         })
     })
@@ -727,9 +727,9 @@ pub fn wrap_llm_exec_fn(
 /// The C callback returns the full response as a single JSON string, which is emitted
 /// as a single-item stream of Json values.
 pub fn wrap_llm_stream_exec_fn(
-    cb: NatNexusLlmExecCb,
+    cb: NemoFlowLlmExecCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> Box<
     dyn Fn(
             LLMRequest,
@@ -748,9 +748,9 @@ pub fn wrap_llm_stream_exec_fn(
             let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             let c_request = json_to_c_string(&request_json);
             let result_ptr = unsafe { cb(ud.ptr, c_request) };
-            unsafe { nat_nexus_string_free_internal(c_request) };
+            unsafe { nemo_flow_string_free_internal(c_request) };
             let result = json_result_from_ptr(result_ptr, "LLM stream execution callback failed")?;
-            unsafe { nat_nexus_string_free_internal(result_ptr) };
+            unsafe { nemo_flow_string_free_internal(result_ptr) };
             // The C callback returns the full response as a single JSON value for stream
             // We emit it as a single-item stream
             let stream = tokio_stream::once(Ok(result));
@@ -772,13 +772,13 @@ pub fn wrap_llm_stream_exec_fn(
 /// The caller must ensure `cb` remains valid for the lifetime of the returned
 /// closure. The C callback is invoked synchronously from the stream-consumption
 /// task.
-pub fn wrap_collector_fn(cb: NatNexusCollectorCb) -> Box<dyn FnMut(Json) -> Result<()> + Send> {
-    // NatNexusCollectorCb is a plain `extern "C" fn` pointer (no user_data),
+pub fn wrap_collector_fn(cb: NemoFlowCollectorCb) -> Box<dyn FnMut(Json) -> Result<()> + Send> {
+    // NemoFlowCollectorCb is a plain `extern "C" fn` pointer (no user_data),
     // which is Copy + Send, so it can be moved into the closure directly.
     Box::new(move |chunk: Json| {
         let c_chunk = json_to_c_string(&chunk);
         unsafe { cb(c_chunk) };
-        unsafe { nat_nexus_string_free_internal(c_chunk) };
+        unsafe { nemo_flow_string_free_internal(c_chunk) };
         Ok(())
     })
 }
@@ -791,23 +791,23 @@ pub fn wrap_collector_fn(cb: NatNexusCollectorCb) -> Box<dyn FnMut(Json) -> Resu
 /// The caller must ensure `cb` remains valid until the returned closure is
 /// invoked. The C callback must return a valid, heap-allocated JSON C string
 /// (or null, in which case `Json::Null` is returned).
-pub fn wrap_finalizer_fn(cb: NatNexusFinalizerCb) -> Box<dyn FnOnce() -> Json + Send> {
+pub fn wrap_finalizer_fn(cb: NemoFlowFinalizerCb) -> Box<dyn FnOnce() -> Json + Send> {
     Box::new(move || {
         let result_ptr = unsafe { cb() };
         let result = ptr_to_json(result_ptr);
-        unsafe { nat_nexus_string_free_internal(result_ptr) };
+        unsafe { nemo_flow_string_free_internal(result_ptr) };
         result
     })
 }
 
 /// Wrap a C event subscriber callback into a Rust closure.
 pub fn wrap_event_subscriber(
-    cb: NatNexusEventSubscriberCb,
+    cb: NemoFlowEventSubscriberCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> nvidia_nat_nexus_core::EventSubscriberFn {
+    free_fn: NemoFlowFreeFn,
+) -> nemo_flow_core::EventSubscriberFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |event: &nvidia_nat_nexus_core::Event| {
+    Arc::new(move |event: &nemo_flow_core::Event| {
         let ffi_event = FfiEvent(event.clone());
         unsafe { cb(ud.ptr, &ffi_event) };
     })
@@ -819,8 +819,8 @@ pub fn wrap_event_subscriber(
 
 /// FFI-backed Codec that delegates `decode`/`encode` to C callback pointers.
 struct FfiCodec {
-    decode_cb: NatNexusCodecDecodeCb,
-    encode_cb: NatNexusCodecEncodeCb,
+    decode_cb: NemoFlowCodecDecodeCb,
+    encode_cb: NemoFlowCodecEncodeCb,
     user_data: Arc<UserData>,
 }
 
@@ -828,7 +828,7 @@ unsafe impl Send for FfiCodec {}
 unsafe impl Sync for FfiCodec {}
 
 impl LlmCodec for FfiCodec {
-    fn decode(&self, request: &LLMRequest) -> nvidia_nat_nexus_core::Result<AnnotatedLLMRequest> {
+    fn decode(&self, request: &LLMRequest) -> nemo_flow_core::Result<AnnotatedLLMRequest> {
         clear_last_error();
         let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request.clone())));
         let result_ptr = unsafe { (self.decode_cb)(self.user_data.ptr, ffi_req) };
@@ -837,14 +837,14 @@ impl LlmCodec for FfiCodec {
         if result_ptr.is_null() {
             let message = last_error_message()
                 .unwrap_or_else(|| "codec decode callback returned null".to_string());
-            return Err(NexusError::Internal(message));
+            return Err(FlowError::Internal(message));
         }
         let result_str = unsafe { CStr::from_ptr(result_ptr) }.to_string_lossy();
         let annotated: AnnotatedLLMRequest = serde_json::from_str(&result_str).map_err(|e| {
-            unsafe { nat_nexus_string_free_internal(result_ptr) };
-            NexusError::Internal(format!("codec decode: invalid JSON: {e}"))
+            unsafe { nemo_flow_string_free_internal(result_ptr) };
+            FlowError::Internal(format!("codec decode: invalid JSON: {e}"))
         })?;
-        unsafe { nat_nexus_string_free_internal(result_ptr) };
+        unsafe { nemo_flow_string_free_internal(result_ptr) };
         Ok(annotated)
     }
 
@@ -852,12 +852,12 @@ impl LlmCodec for FfiCodec {
         &self,
         annotated: &AnnotatedLLMRequest,
         original: &LLMRequest,
-    ) -> nvidia_nat_nexus_core::Result<LLMRequest> {
+    ) -> nemo_flow_core::Result<LLMRequest> {
         clear_last_error();
         let annotated_str = serde_json::to_string(annotated)
-            .map_err(|e| NexusError::Internal(format!("codec encode: serialize failed: {e}")))?;
+            .map_err(|e| FlowError::Internal(format!("codec encode: serialize failed: {e}")))?;
         let c_annotated = CString::new(annotated_str)
-            .map_err(|e| NexusError::Internal(format!("codec encode: CString failed: {e}")))?;
+            .map_err(|e| FlowError::Internal(format!("codec encode: CString failed: {e}")))?;
         let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(original.clone())));
         let result_ptr =
             unsafe { (self.encode_cb)(self.user_data.ptr, c_annotated.as_ptr(), ffi_req) };
@@ -866,14 +866,14 @@ impl LlmCodec for FfiCodec {
         if result_ptr.is_null() {
             let message = last_error_message()
                 .unwrap_or_else(|| "codec encode callback returned null".to_string());
-            return Err(NexusError::Internal(message));
+            return Err(FlowError::Internal(message));
         }
         let result_str = unsafe { CStr::from_ptr(result_ptr) }.to_string_lossy();
         let content: serde_json::Value = serde_json::from_str(&result_str).map_err(|e| {
-            unsafe { nat_nexus_string_free_internal(result_ptr) };
-            NexusError::Internal(format!("codec encode: invalid result JSON: {e}"))
+            unsafe { nemo_flow_string_free_internal(result_ptr) };
+            FlowError::Internal(format!("codec encode: invalid result JSON: {e}"))
         })?;
-        unsafe { nat_nexus_string_free_internal(result_ptr) };
+        unsafe { nemo_flow_string_free_internal(result_ptr) };
         Ok(LLMRequest {
             headers: original.headers.clone(),
             content,
@@ -883,10 +883,10 @@ impl LlmCodec for FfiCodec {
 
 /// Wrap a pair of C codec callbacks into an `Arc<dyn LlmCodec>`.
 pub fn wrap_codec_fn(
-    decode_cb: NatNexusCodecDecodeCb,
-    encode_cb: NatNexusCodecEncodeCb,
+    decode_cb: NemoFlowCodecDecodeCb,
+    encode_cb: NemoFlowCodecEncodeCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 ) -> Arc<dyn LlmCodec> {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(FfiCodec {
@@ -911,7 +911,7 @@ fn ptr_to_json(ptr: *mut c_char) -> Json {
 fn json_result_from_ptr(ptr: *mut c_char, fallback: &str) -> Result<Json> {
     if ptr.is_null() {
         let message = last_error_message().unwrap_or_else(|| fallback.to_string());
-        return Err(NexusError::Internal(message));
+        return Err(FlowError::Internal(message));
     }
     Ok(ptr_to_json(ptr))
 }
@@ -928,7 +928,7 @@ fn ptr_to_opt_string(ptr: *mut c_char) -> Option<String> {
 }
 
 /// Internal helper to free C strings we allocated.
-unsafe fn nat_nexus_string_free_internal(ptr: *mut c_char) {
+unsafe fn nemo_flow_string_free_internal(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(unsafe { CString::from_raw(ptr) });
     }
@@ -939,7 +939,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use nvidia_nat_nexus_core::types::{Event, LLMAttributes, LLMHandle};
+    use nemo_flow_core::types::{Event, LLMAttributes, LLMHandle};
     use serde_json::json;
     use tokio_stream::StreamExt;
     use uuid::Uuid;
@@ -1015,7 +1015,7 @@ mod tests {
     unsafe extern "C" fn tool_exec_intercept_cb(
         _user_data: *mut libc::c_void,
         args_json: *const c_char,
-        next_fn: NatNexusToolExecNextFn,
+        next_fn: NemoFlowToolExecNextFn,
         next_ctx: *mut libc::c_void,
     ) -> *mut c_char {
         let result_ptr = unsafe { next_fn(args_json, next_ctx) };
@@ -1024,7 +1024,7 @@ mod tests {
         }
         let mut result: Json =
             serde_json::from_str(unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap()).unwrap();
-        unsafe { nat_nexus_string_free_internal(result_ptr) };
+        unsafe { nemo_flow_string_free_internal(result_ptr) };
         result["intercepted"] = json!(true);
         CString::new(result.to_string()).unwrap().into_raw()
     }
@@ -1038,7 +1038,7 @@ mod tests {
         annotated_json: *const c_char,
         out_request: *mut *mut FfiLLMRequest,
         out_annotated_json: *mut *mut c_char,
-    ) -> NatNexusStatus {
+    ) -> NemoFlowStatus {
         let mut req = unsafe { (&*request).0.clone() };
         req.content["intercepted"] = json!(true);
         unsafe { *out_request = Box::into_raw(Box::new(FfiLLMRequest(req))) };
@@ -1050,7 +1050,7 @@ mod tests {
                 .into_owned();
             unsafe { *out_annotated_json = CString::new(s).unwrap().into_raw() };
         }
-        NatNexusStatus::Ok
+        NemoFlowStatus::Ok
     }
 
     unsafe extern "C" fn llm_request_null_cb(
@@ -1105,7 +1105,7 @@ mod tests {
     unsafe extern "C" fn llm_exec_intercept_cb(
         _user_data: *mut libc::c_void,
         native_json: *const c_char,
-        next_fn: NatNexusLlmExecNextFn,
+        next_fn: NemoFlowLlmExecNextFn,
         next_ctx: *mut libc::c_void,
     ) -> *mut c_char {
         let result_ptr = unsafe { next_fn(native_json, next_ctx) };
@@ -1114,7 +1114,7 @@ mod tests {
         }
         let mut value: Json =
             serde_json::from_str(unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap()).unwrap();
-        unsafe { nat_nexus_string_free_internal(result_ptr) };
+        unsafe { nemo_flow_string_free_internal(result_ptr) };
         value["intercepted"] = json!(true);
         CString::new(value.to_string()).unwrap().into_raw()
     }
@@ -1122,7 +1122,7 @@ mod tests {
     unsafe extern "C" fn llm_exec_short_circuit_cb(
         _user_data: *mut libc::c_void,
         native_json: *const c_char,
-        _next_fn: NatNexusLlmExecNextFn,
+        _next_fn: NemoFlowLlmExecNextFn,
         _next_ctx: *mut libc::c_void,
     ) -> *mut c_char {
         let request: Json =
@@ -1209,7 +1209,7 @@ mod tests {
         let failing_intercept =
             wrap_tool_exec_intercept_fn(tool_exec_intercept_cb, std::ptr::null_mut(), None);
         let failing_next: ToolExecutionNextFn =
-            Arc::new(|_| Box::pin(async { Err(NexusError::Internal("next failed".into())) }));
+            Arc::new(|_| Box::pin(async { Err(FlowError::Internal("next failed".into())) }));
         let err = runtime
             .block_on(failing_intercept("tool", json!({"v": 2}), failing_next))
             .unwrap_err();

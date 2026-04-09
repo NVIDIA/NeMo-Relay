@@ -14,7 +14,7 @@ fn test_mutex() -> &'static Mutex<()> {
 
 fn reset_global() {
     let context = core::global_context();
-    *context.write().unwrap() = core::NatNexusContextState::new();
+    *context.write().unwrap() = core::NemoFlowContextState::new();
 }
 
 fn make_request() -> Json {
@@ -47,7 +47,7 @@ fn test_ensure_stream_callback_queued_cleans_up_channel_on_failure() {
 
     assert!(matches!(
         result,
-        Err(nvidia_nat_nexus_core::NexusError::Internal(_))
+        Err(nemo_flow_core::FlowError::Internal(_))
     ));
     assert!(!push_stream_chunk(id as f64, json!({"ok": false})));
 }
@@ -280,11 +280,13 @@ fn test_optimizer_runtime_validate_and_lifecycle_wrappers() {
         }]
     }))
     .unwrap();
-    assert!(report["diagnostics"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|diag| diag["code"] == "optimizer.unknown_component"));
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diag| diag["code"] == "optimizer.unknown_component")
+    );
 
     let err = match JsOptimizerRuntime::new(json!({
         "version": 1,
@@ -361,9 +363,10 @@ fn test_open_telemetry_subscriber_rejects_invalid_config() {
         ..Default::default()
     }))
     .unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("resourceAttributes must be an object"));
+    assert!(
+        err.to_string()
+            .contains("resourceAttributes must be an object")
+    );
 }
 
 #[test]
@@ -410,9 +413,10 @@ fn test_open_inference_subscriber_rejects_invalid_config() {
         ..Default::default()
     }))
     .unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("resourceAttributes must be an object"));
+    assert!(
+        err.to_string()
+            .contains("resourceAttributes must be an object")
+    );
 }
 
 #[test]

@@ -2,10 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [workspace]
-members = ["crates/core", "crates/python", "crates/ffi", "crates/node", "crates/wasm", "crates/optimizer", "crates/otel", "crates/openinference"]
+members = [
+    "crates/core",
+    # Language Bindings
+    "crates/python",
+    "crates/ffi",
+    "crates/node",
+    "crates/wasm",
+    # Optimizer
+    "crates/optimizer",
+    # Observability Subscribers
+    "crates/otel",
+    "crates/openinference"
+]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "Apache-2.0"

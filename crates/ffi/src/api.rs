@@ -4,7 +4,7 @@
 //! Top-level FFI API functions exported as `extern "C"`.
 //!
 //! Each function clears the thread-local error before executing and returns an
-//! [`NatNexusStatus`]. On failure, call [`nat_nexus_last_error`] to retrieve
+//! [`NemoFlowStatus`]. On failure, call [`nemo_flow_last_error`] to retrieve
 //! the error message.
 
 use std::ffi::CStr;
@@ -12,11 +12,11 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use libc::c_char;
-use nvidia_nat_nexus_core as core;
-use nvidia_nat_nexus_core::types as core_types;
-use nvidia_nat_nexus_optimizer::{
-    deregister_hosted_plugin_handler, register_hosted_plugin_handler, ConfigDiagnostic,
-    HostedPluginHandler, OptimizerConfig, OptimizerError, OptimizerRuntime,
+use nemo_flow_core as core;
+use nemo_flow_core::types as core_types;
+use nemo_flow_optimizer::{
+    ConfigDiagnostic, HostedPluginHandler, OptimizerConfig, OptimizerError, OptimizerRuntime,
+    deregister_hosted_plugin_handler, register_hosted_plugin_handler,
 };
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
@@ -42,7 +42,7 @@ fn tokio_runtime() -> &'static Runtime {
 
 struct FfiHostedPluginUserData {
     ptr: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
+    free_fn: NemoFlowFreeFn,
 }
 
 unsafe impl Send for FfiHostedPluginUserData {}
@@ -58,8 +58,8 @@ impl Drop for FfiHostedPluginUserData {
 
 struct FfiHostedPluginAdapter {
     plugin_kind: String,
-    validate_cb: Option<NatNexusOptimizerPluginValidateCb>,
-    register_cb: NatNexusOptimizerPluginRegisterCb,
+    validate_cb: Option<NemoFlowOptimizerPluginValidateCb>,
+    register_cb: NemoFlowOptimizerPluginRegisterCb,
     user_data: Arc<FfiHostedPluginUserData>,
 }
 
@@ -88,7 +88,7 @@ impl HostedPluginHandler for FfiHostedPluginAdapter {
                 plugin_config_json,
             )
         };
-        unsafe { nat_nexus_string_free(plugin_config_json) };
+        unsafe { nemo_flow_string_free(plugin_config_json) };
 
         if result_ptr.is_null() {
             let message = last_error_message().unwrap_or_else(|| {
@@ -98,7 +98,7 @@ impl HostedPluginHandler for FfiHostedPluginAdapter {
                 )
             });
             return vec![ConfigDiagnostic {
-                level: nvidia_nat_nexus_optimizer::DiagnosticLevel::Error,
+                level: nemo_flow_optimizer::DiagnosticLevel::Error,
                 code: "optimizer.plugin_validate_failed".to_string(),
                 component: Some("external_component".to_string()),
                 field: None,
@@ -110,10 +110,10 @@ impl HostedPluginHandler for FfiHostedPluginAdapter {
             .to_str()
             .ok()
             .and_then(|text| serde_json::from_str::<Vec<ConfigDiagnostic>>(text).ok());
-        unsafe { nat_nexus_string_free(result_ptr) };
+        unsafe { nemo_flow_string_free(result_ptr) };
         diagnostics.unwrap_or_else(|| {
             vec![ConfigDiagnostic {
-                level: nvidia_nat_nexus_optimizer::DiagnosticLevel::Error,
+                level: nemo_flow_optimizer::DiagnosticLevel::Error,
                 code: "optimizer.plugin_validate_failed".to_string(),
                 component: Some("external_component".to_string()),
                 field: None,
@@ -129,8 +129,8 @@ impl HostedPluginHandler for FfiHostedPluginAdapter {
         &self,
         instance_id: &str,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &mut nvidia_nat_nexus_optimizer::HostedRegistrationContext,
-    ) -> nvidia_nat_nexus_optimizer::Result<()> {
+        ctx: &mut nemo_flow_optimizer::HostedRegistrationContext,
+    ) -> nemo_flow_optimizer::Result<()> {
         clear_last_error();
         let c_instance_id = std::ffi::CString::new(instance_id).unwrap_or_default();
         let plugin_config_json =
@@ -144,8 +144,8 @@ impl HostedPluginHandler for FfiHostedPluginAdapter {
                 &mut ffi_ctx,
             )
         };
-        unsafe { nat_nexus_string_free(plugin_config_json) };
-        if status == NatNexusStatus::Ok {
+        unsafe { nemo_flow_string_free(plugin_config_json) };
+        if status == NemoFlowStatus::Ok {
             Ok(())
         } else if let Some(message) = last_error_message() {
             Err(OptimizerError::RegistrationFailed(message))
@@ -166,25 +166,25 @@ impl HostedPluginHandler for FfiHostedPluginAdapter {
 ///
 /// # Safety
 /// `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_validate_optimizer_config(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_validate_optimizer_config(
     config_json: *const c_char,
     out_json: *mut *mut c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if out_json.is_null() {
         set_last_error("out_json pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let config_value = match c_str_to_json(config_json) {
         Some(value) => value,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let config: OptimizerConfig = match serde_json::from_value(config_value) {
         Ok(config) => config,
         Err(err) => {
             set_last_error(&err.to_string());
-            return NatNexusStatus::InvalidJson;
+            return NemoFlowStatus::InvalidJson;
         }
     };
     let report = OptimizerRuntime::validate_config(&config);
@@ -192,42 +192,42 @@ pub unsafe extern "C" fn nat_nexus_validate_optimizer_config(
         Ok(value) => value,
         Err(err) => {
             set_last_error(&err.to_string());
-            return NatNexusStatus::Internal;
+            return NemoFlowStatus::Internal;
         }
     };
     unsafe { *out_json = json_to_c_string(&report_json) };
-    NatNexusStatus::Ok
+    NemoFlowStatus::Ok
 }
 
 /// Create an optimizer runtime from a JSON config document.
 ///
 /// # Safety
 /// `config_json` must be a valid C string and `out` must be a valid, non-null pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_optimizer_runtime_create(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_optimizer_runtime_create(
     config_json: *const c_char,
     out: *mut *mut FfiOptimizerRuntime,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let config_value = match c_str_to_json(config_json) {
         Some(value) => value,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let config: OptimizerConfig = match serde_json::from_value(config_value) {
         Ok(config) => config,
         Err(err) => {
             set_last_error(&err.to_string());
-            return NatNexusStatus::InvalidJson;
+            return NemoFlowStatus::InvalidJson;
         }
     };
     match tokio_runtime().block_on(OptimizerRuntime::new(config)) {
         Ok(runtime) => {
             unsafe { *out = Box::into_raw(Box::new(FfiOptimizerRuntime(runtime))) };
-            NatNexusStatus::Ok
+            NemoFlowStatus::Ok
         }
         Err(err) => status_from_optimizer_error(&err),
     }
@@ -237,18 +237,20 @@ pub unsafe extern "C" fn nat_nexus_optimizer_runtime_create(
 ///
 /// # Safety
 /// `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_optimizer_runtime_register(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_optimizer_runtime_register(
     runtime: *mut FfiOptimizerRuntime,
-) -> NatNexusStatus {
-    clear_last_error();
-    if runtime.is_null() {
-        set_last_error("runtime is null");
-        return NatNexusStatus::NullPointer;
-    }
-    match tokio_runtime().block_on((&mut *runtime).0.register()) {
-        Ok(()) => NatNexusStatus::Ok,
-        Err(err) => status_from_optimizer_error(&err),
+) -> NemoFlowStatus {
+    unsafe {
+        clear_last_error();
+        if runtime.is_null() {
+            set_last_error("runtime is null");
+            return NemoFlowStatus::NullPointer;
+        }
+        match tokio_runtime().block_on((&mut *runtime).0.register()) {
+            Ok(()) => NemoFlowStatus::Ok,
+            Err(err) => status_from_optimizer_error(&err),
+        }
     }
 }
 
@@ -256,18 +258,20 @@ pub unsafe extern "C" fn nat_nexus_optimizer_runtime_register(
 ///
 /// # Safety
 /// `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_optimizer_runtime_deregister(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_optimizer_runtime_deregister(
     runtime: *mut FfiOptimizerRuntime,
-) -> NatNexusStatus {
-    clear_last_error();
-    if runtime.is_null() {
-        set_last_error("runtime is null");
-        return NatNexusStatus::NullPointer;
-    }
-    match (&mut *runtime).0.deregister() {
-        Ok(()) => NatNexusStatus::Ok,
-        Err(err) => status_from_optimizer_error(&err),
+) -> NemoFlowStatus {
+    unsafe {
+        clear_last_error();
+        if runtime.is_null() {
+            set_last_error("runtime is null");
+            return NemoFlowStatus::NullPointer;
+        }
+        match (&mut *runtime).0.deregister() {
+            Ok(()) => NemoFlowStatus::Ok,
+            Err(err) => status_from_optimizer_error(&err),
+        }
     }
 }
 
@@ -275,18 +279,19 @@ pub unsafe extern "C" fn nat_nexus_optimizer_runtime_deregister(
 ///
 /// # Safety
 /// `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_optimizer_runtime_shutdown(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_optimizer_runtime_shutdown(
     runtime: *mut FfiOptimizerRuntime,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if runtime.is_null() {
         set_last_error("runtime is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let runtime = unsafe { Box::from_raw(runtime) };
-    match tokio_runtime().block_on(runtime.0.shutdown()) {
-        Ok(()) => NatNexusStatus::Ok,
+    let shutdown_result = tokio_runtime().block_on(runtime.0.shutdown());
+    match shutdown_result {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(err) => status_from_optimizer_error(&err),
     }
 }
@@ -296,39 +301,40 @@ pub unsafe extern "C" fn nat_nexus_optimizer_runtime_shutdown(
 /// # Safety
 /// `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer and `out_json`
 /// must be a valid, non-null pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_optimizer_runtime_report_json(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_optimizer_runtime_report_json(
     runtime: *const FfiOptimizerRuntime,
     out_json: *mut *mut c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if runtime.is_null() || out_json.is_null() {
         set_last_error("runtime or out_json is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
-    let report_json = match serde_json::to_value((&*runtime).0.report()) {
+    let report = unsafe { (&*runtime).0.report() };
+    let report_json = match serde_json::to_value(report) {
         Ok(value) => value,
         Err(err) => {
             set_last_error(&err.to_string());
-            return NatNexusStatus::Internal;
+            return NemoFlowStatus::Internal;
         }
     };
     unsafe { *out_json = json_to_c_string(&report_json) };
-    NatNexusStatus::Ok
+    NemoFlowStatus::Ok
 }
 
 /// Register a hosted optimizer plugin handler backed by foreign callbacks.
 ///
 /// # Safety
 /// `plugin_kind` must be a valid C string and `register_cb` must be a valid function pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_optimizer_register_plugin(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_optimizer_register_plugin(
     plugin_kind: *const c_char,
-    validate_cb: Option<NatNexusOptimizerPluginValidateCb>,
-    register_cb: NatNexusOptimizerPluginRegisterCb,
+    validate_cb: Option<NemoFlowOptimizerPluginValidateCb>,
+    register_cb: NemoFlowOptimizerPluginRegisterCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let plugin_kind = match c_str_to_string(plugin_kind) {
         Ok(value) => value,
@@ -345,7 +351,7 @@ pub unsafe extern "C" fn nat_nexus_optimizer_register_plugin(
         }),
     });
     match register_hosted_plugin_handler(handler) {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(err) => status_from_optimizer_error(&err),
     }
 }
@@ -354,20 +360,20 @@ pub unsafe extern "C" fn nat_nexus_optimizer_register_plugin(
 ///
 /// # Safety
 /// `plugin_kind` must be a valid C string.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_optimizer_deregister_plugin(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_optimizer_deregister_plugin(
     plugin_kind: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let plugin_kind = match c_str_to_string(plugin_kind) {
         Ok(value) => value,
         Err(status) => return status,
     };
     if deregister_hosted_plugin_handler(&plugin_kind) {
-        NatNexusStatus::Ok
+        NemoFlowStatus::Ok
     } else {
         set_last_error(&format!("not found: hosted plugin '{plugin_kind}'"));
-        NatNexusStatus::NotFound
+        NemoFlowStatus::NotFound
     }
 }
 
@@ -376,18 +382,18 @@ pub unsafe extern "C" fn nat_nexus_optimizer_deregister_plugin(
 /// # Safety
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the hosted plugin registration lifetime.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_subscriber(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_optimizer_plugin_context_register_subscriber(
     ctx: *mut FfiOptimizerPluginContext,
     name: *const c_char,
-    cb: NatNexusEventSubscriberCb,
+    cb: NemoFlowEventSubscriberCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("optimizer plugin context is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -395,7 +401,7 @@ pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_subscriber(
     };
     let wrapped = wrap_event_subscriber(cb, user_data, free_fn);
     match unsafe { &mut *((*ctx).0) }.register_subscriber(&name, wrapped) {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(err) => status_from_optimizer_error(&err),
     }
 }
@@ -405,20 +411,20 @@ pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_subscriber(
 /// # Safety
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the hosted plugin registration lifetime.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_llm_request_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_optimizer_plugin_context_register_llm_request_intercept(
     ctx: *mut FfiOptimizerPluginContext,
     name: *const c_char,
     priority: i32,
     break_chain: bool,
-    cb: NatNexusLlmRequestInterceptCb,
+    cb: NemoFlowLlmRequestInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("optimizer plugin context is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -431,7 +437,7 @@ pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_llm_request
         break_chain,
         wrapped,
     ) {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(err) => status_from_optimizer_error(&err),
     }
 }
@@ -441,20 +447,20 @@ pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_llm_request
 /// # Safety
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the hosted plugin registration lifetime.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_tool_request_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_optimizer_plugin_context_register_tool_request_intercept(
     ctx: *mut FfiOptimizerPluginContext,
     name: *const c_char,
     priority: i32,
     break_chain: bool,
-    cb: NatNexusToolSanitizeCb,
+    cb: NemoFlowToolSanitizeCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("optimizer plugin context is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -467,7 +473,7 @@ pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_tool_reques
         break_chain,
         wrapped,
     ) {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(err) => status_from_optimizer_error(&err),
     }
 }
@@ -477,19 +483,19 @@ pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_tool_reques
 /// # Safety
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the hosted plugin registration lifetime.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_llm_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_optimizer_plugin_context_register_llm_execution_intercept(
     ctx: *mut FfiOptimizerPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NatNexusLlmExecInterceptCb,
+    cb: NemoFlowLlmExecInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("optimizer plugin context is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -497,7 +503,7 @@ pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_llm_executi
     };
     let wrapped = wrap_llm_exec_intercept_fn(cb, user_data, free_fn);
     match unsafe { &mut *((*ctx).0) }.register_llm_execution_intercept(&name, priority, wrapped) {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(err) => status_from_optimizer_error(&err),
     }
 }
@@ -507,19 +513,19 @@ pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_llm_executi
 /// # Safety
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the hosted plugin registration lifetime.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_llm_stream_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_optimizer_plugin_context_register_llm_stream_execution_intercept(
     ctx: *mut FfiOptimizerPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NatNexusLlmExecInterceptCb,
+    cb: NemoFlowLlmExecInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("optimizer plugin context is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -529,7 +535,7 @@ pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_llm_stream_
     match unsafe { &mut *((*ctx).0) }
         .register_llm_stream_execution_intercept(&name, priority, wrapped)
     {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(err) => status_from_optimizer_error(&err),
     }
 }
@@ -539,19 +545,19 @@ pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_llm_stream_
 /// # Safety
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the hosted plugin registration lifetime.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_tool_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_optimizer_plugin_context_register_tool_execution_intercept(
     ctx: *mut FfiOptimizerPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NatNexusToolExecInterceptCb,
+    cb: NemoFlowToolExecInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("optimizer plugin context is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -559,7 +565,7 @@ pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_tool_execut
     };
     let wrapped = wrap_tool_exec_intercept_fn(cb, user_data, free_fn);
     match unsafe { &mut *((*ctx).0) }.register_tool_execution_intercept(&name, priority, wrapped) {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(err) => status_from_optimizer_error(&err),
     }
 }
@@ -572,21 +578,21 @@ pub unsafe extern "C" fn nat_nexus_optimizer_plugin_context_register_tool_execut
 ///
 /// # Parameters
 /// - `out`: On success, receives a heap-allocated `FfiScopeHandle` that must be
-///   freed with `nat_nexus_scope_handle_free`.
+///   freed with `nemo_flow_scope_handle_free`.
 ///
 /// # Safety
 /// `out` must be a valid, non-null pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_get_handle(out: *mut *mut FfiScopeHandle) -> NatNexusStatus {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_get_handle(out: *mut *mut FfiScopeHandle) -> NemoFlowStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
-    match core::nat_nexus_get_handle() {
+    match core::nemo_flow_get_handle() {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiScopeHandle(h))) };
-            NatNexusStatus::Ok
+            NemoFlowStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -606,20 +612,20 @@ pub unsafe extern "C" fn nat_nexus_get_handle(out: *mut *mut FfiScopeHandle) -> 
 /// # Safety
 /// `name` must be a valid C string. `out` must be non-null. `parent`,
 /// `data_json`, and `metadata_json` may be null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_push_scope(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_push_scope(
     name: *const c_char,
-    scope_type: NatNexusScopeType,
+    scope_type: NemoFlowScopeType,
     parent: *const FfiScopeHandle,
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
     out: *mut *mut FfiScopeHandle,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -633,17 +639,17 @@ pub unsafe extern "C" fn nat_nexus_push_scope(
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes);
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
 
-    match core::nat_nexus_push_scope(&name, scope_type.into(), parent_ref, attrs, data, metadata) {
+    match core::nemo_flow_push_scope(&name, scope_type.into(), parent_ref, attrs, data, metadata) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiScopeHandle(h))) };
-            NatNexusStatus::Ok
+            NemoFlowStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -656,15 +662,15 @@ pub unsafe extern "C" fn nat_nexus_push_scope(
 ///
 /// # Safety
 /// `handle` must be a valid, non-null `FfiScopeHandle` pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_pop_scope(handle: *const FfiScopeHandle) -> NatNexusStatus {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_pop_scope(handle: *const FfiScopeHandle) -> NemoFlowStatus {
     clear_last_error();
     if handle.is_null() {
         set_last_error("handle is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
-    match core::nat_nexus_pop_scope(&unsafe { &*handle }.0.uuid) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_pop_scope(&unsafe { &*handle }.0.uuid) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -679,13 +685,13 @@ pub unsafe extern "C" fn nat_nexus_pop_scope(handle: *const FfiScopeHandle) -> N
 ///
 /// # Safety
 /// `name` must be a valid C string. Other pointer args may be null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event(
     name: *const c_char,
     parent: *const FfiScopeHandle,
     data_json: *const c_char,
     metadata_json: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -698,15 +704,15 @@ pub unsafe extern "C" fn nat_nexus_event(
     };
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
 
-    match core::nat_nexus_event(&name, parent_ref, data, metadata) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_event(&name, parent_ref, data, metadata) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -729,8 +735,8 @@ pub unsafe extern "C" fn nat_nexus_event(
 ///
 /// # Safety
 /// `name` and `args_json` must be valid C strings. `out` must be non-null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_tool_call(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_tool_call(
     name: *const c_char,
     args_json: *const c_char,
     parent: *const FfiScopeHandle,
@@ -739,11 +745,11 @@ pub unsafe extern "C" fn nat_nexus_tool_call(
     metadata_json: *const c_char,
     tool_call_id: *const c_char,
     out: *mut *mut FfiToolHandle,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -751,7 +757,7 @@ pub unsafe extern "C" fn nat_nexus_tool_call(
     };
     let args = match c_str_to_json(args_json) {
         Some(a) => a,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let parent_ref = if parent.is_null() {
         None
@@ -761,11 +767,11 @@ pub unsafe extern "C" fn nat_nexus_tool_call(
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes);
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let tool_call_id_opt = if tool_call_id.is_null() {
         None
@@ -776,7 +782,7 @@ pub unsafe extern "C" fn nat_nexus_tool_call(
         }
     };
 
-    match core::nat_nexus_tool_call(
+    match core::nemo_flow_tool_call(
         &name,
         args,
         parent_ref,
@@ -787,7 +793,7 @@ pub unsafe extern "C" fn nat_nexus_tool_call(
     ) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiToolHandle(h))) };
-            NatNexusStatus::Ok
+            NemoFlowStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -796,40 +802,40 @@ pub unsafe extern "C" fn nat_nexus_tool_call(
 /// End a tool call, running post-call guardrails and intercepts.
 ///
 /// # Parameters
-/// - `handle`: The tool handle from `nat_nexus_tool_call`.
+/// - `handle`: The tool handle from `nemo_flow_tool_call`.
 /// - `result_json`: Tool result as a JSON C string.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
 ///
 /// # Safety
 /// `handle` and `result_json` must be valid, non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_tool_call_end(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_tool_call_end(
     handle: *const FfiToolHandle,
     result_json: *const c_char,
     data_json: *const c_char,
     metadata_json: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if handle.is_null() {
         set_last_error("handle is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let result = match c_str_to_json(result_json) {
         Some(r) => r,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
 
-    match core::nat_nexus_tool_call_end(&unsafe { &*handle }.0, result, data, metadata) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_tool_call_end(&unsafe { &*handle }.0, result, data, metadata) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -852,27 +858,27 @@ pub unsafe extern "C" fn nat_nexus_tool_call_end(
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `out`: On success, receives the result as a JSON C string. Caller must free
-///   with `nat_nexus_string_free`.
+///   with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `name`, `args_json`, and `out` must be valid, non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_tool_call_execute(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_tool_call_execute(
     name: *const c_char,
     args_json: *const c_char,
-    func: NatNexusToolExecCb,
+    func: NemoFlowToolExecCb,
     func_user_data: *mut libc::c_void,
-    func_free: NatNexusFreeFn,
+    func_free: NemoFlowFreeFn,
     parent: *const FfiScopeHandle,
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
     out: *mut *mut c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -880,7 +886,7 @@ pub unsafe extern "C" fn nat_nexus_tool_call_execute(
     };
     let args = match c_str_to_json(args_json) {
         Some(a) => a,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let parent_handle = if parent.is_null() {
         None
@@ -890,22 +896,20 @@ pub unsafe extern "C" fn nat_nexus_tool_call_execute(
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes);
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
 
     let exec_fn = wrap_tool_exec_fn(func, func_user_data, func_free);
-    let default_fn: nvidia_nat_nexus_core::ToolExecutionNextFn =
-        Arc::new(move |args| exec_fn(args));
+    let default_fn: nemo_flow_core::ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
 
     let scope_stack = core::current_scope_stack();
-    let result = tokio_runtime().block_on(nvidia_nat_nexus_core::TASK_SCOPE_STACK.scope(
-        scope_stack,
-        async {
-            core::nat_nexus_tool_call_execute(
+    let result =
+        tokio_runtime().block_on(nemo_flow_core::TASK_SCOPE_STACK.scope(scope_stack, async {
+            core::nemo_flow_tool_call_execute(
                 &name,
                 args,
                 default_fn,
@@ -915,13 +919,12 @@ pub unsafe extern "C" fn nat_nexus_tool_call_execute(
                 metadata,
             )
             .await
-        },
-    ));
+        }));
 
     match result {
         Ok(json) => {
             unsafe { *out = json_to_c_string(&json) };
-            NatNexusStatus::Ok
+            NemoFlowStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -946,8 +949,8 @@ pub unsafe extern "C" fn nat_nexus_tool_call_execute(
 ///
 /// # Safety
 /// `name`, `native_json`, and `out` must be valid, non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_call(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_call(
     name: *const c_char,
     native_json: *const c_char,
     parent: *const FfiScopeHandle,
@@ -956,11 +959,11 @@ pub unsafe extern "C" fn nat_nexus_llm_call(
     metadata_json: *const c_char,
     model_name: *const c_char,
     out: *mut *mut FfiLLMHandle,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("null pointer argument");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -968,13 +971,13 @@ pub unsafe extern "C" fn nat_nexus_llm_call(
     };
     let native = match c_str_to_json(native_json) {
         Some(n) => n,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let request: core_types::LLMRequest = match serde_json::from_value(native) {
         Ok(r) => r,
         Err(_) => {
             set_last_error("failed to parse native_json as LLMRequest");
-            return NatNexusStatus::InvalidJson;
+            return NemoFlowStatus::InvalidJson;
         }
     };
     let parent_ref = if parent.is_null() {
@@ -985,11 +988,11 @@ pub unsafe extern "C" fn nat_nexus_llm_call(
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes);
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let model_name_opt = if model_name.is_null() {
         None
@@ -1000,7 +1003,7 @@ pub unsafe extern "C" fn nat_nexus_llm_call(
         }
     };
 
-    match core::nat_nexus_llm_call(
+    match core::nemo_flow_llm_call(
         &name,
         &request,
         parent_ref,
@@ -1012,7 +1015,7 @@ pub unsafe extern "C" fn nat_nexus_llm_call(
     ) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiLLMHandle(h))) };
-            NatNexusStatus::Ok
+            NemoFlowStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -1021,40 +1024,40 @@ pub unsafe extern "C" fn nat_nexus_llm_call(
 /// End an LLM call, running post-call guardrails and intercepts.
 ///
 /// # Parameters
-/// - `handle`: The LLM handle from `nat_nexus_llm_call`.
+/// - `handle`: The LLM handle from `nemo_flow_llm_call`.
 /// - `response_json`: LLM response as a JSON C string.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
 ///
 /// # Safety
 /// `handle` and `response_json` must be valid, non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_call_end(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_call_end(
     handle: *const FfiLLMHandle,
     response_json: *const c_char,
     data_json: *const c_char,
     metadata_json: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if handle.is_null() {
         set_last_error("handle is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let response = match c_str_to_json(response_json) {
         Some(r) => r,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
 
-    match core::nat_nexus_llm_call_end(&unsafe { &*handle }.0, response, data, metadata, None) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_llm_call_end(&unsafe { &*handle }.0, response, data, metadata, None) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1066,45 +1069,45 @@ pub unsafe extern "C" fn nat_nexus_llm_call_end(
 /// Create a new OpenAI Chat Completions codec handle.
 ///
 /// The returned handle implements both request codec (decode/encode) and
-/// response codec (decode_response). Free with `nat_nexus_codec_free`.
+/// response codec (decode_response). Free with `nemo_flow_codec_free`.
 ///
 /// # Safety
-/// Caller must free the returned handle via `nat_nexus_codec_free`.
-#[no_mangle]
-pub extern "C" fn nat_nexus_openai_chat_codec_new() -> *mut FfiCodecHandle {
+/// Caller must free the returned handle via `nemo_flow_codec_free`.
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_flow_openai_chat_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIChatCodec),
-        response_codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIChatCodec),
+        codec: Arc::new(nemo_flow_core::codec::OpenAIChatCodec),
+        response_codec: Arc::new(nemo_flow_core::codec::OpenAIChatCodec),
     }))
 }
 
 /// Create a new OpenAI Responses API codec handle.
 ///
 /// The returned handle implements both request codec (decode/encode) and
-/// response codec (decode_response). Free with `nat_nexus_codec_free`.
+/// response codec (decode_response). Free with `nemo_flow_codec_free`.
 ///
 /// # Safety
-/// Caller must free the returned handle via `nat_nexus_codec_free`.
-#[no_mangle]
-pub extern "C" fn nat_nexus_openai_responses_codec_new() -> *mut FfiCodecHandle {
+/// Caller must free the returned handle via `nemo_flow_codec_free`.
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_flow_openai_responses_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIResponsesCodec),
-        response_codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIResponsesCodec),
+        codec: Arc::new(nemo_flow_core::codec::OpenAIResponsesCodec),
+        response_codec: Arc::new(nemo_flow_core::codec::OpenAIResponsesCodec),
     }))
 }
 
 /// Create a new Anthropic Messages API codec handle.
 ///
 /// The returned handle implements both request codec (decode/encode) and
-/// response codec (decode_response). Free with `nat_nexus_codec_free`.
+/// response codec (decode_response). Free with `nemo_flow_codec_free`.
 ///
 /// # Safety
-/// Caller must free the returned handle via `nat_nexus_codec_free`.
-#[no_mangle]
-pub extern "C" fn nat_nexus_anthropic_messages_codec_new() -> *mut FfiCodecHandle {
+/// Caller must free the returned handle via `nemo_flow_codec_free`.
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_flow_anthropic_messages_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nvidia_nat_nexus_core::codec::AnthropicMessagesCodec),
-        response_codec: Arc::new(nvidia_nat_nexus_core::codec::AnthropicMessagesCodec),
+        codec: Arc::new(nemo_flow_core::codec::AnthropicMessagesCodec),
+        response_codec: Arc::new(nemo_flow_core::codec::AnthropicMessagesCodec),
     }))
 }
 
@@ -1128,33 +1131,33 @@ pub extern "C" fn nat_nexus_anthropic_messages_codec_new() -> *mut FfiCodecHandl
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `model_name`: Optional LLM model identifier, or null.
 /// - `out`: On success, receives the response as a JSON C string. Caller must
-///   free with `nat_nexus_string_free`.
+///   free with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `name`, `native_json`, and `out` must be valid, non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_call_execute(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_call_execute(
     name: *const c_char,
     native_json: *const c_char,
-    func: NatNexusLlmExecCb,
+    func: NemoFlowLlmExecCb,
     func_user_data: *mut libc::c_void,
-    func_free: NatNexusFreeFn,
+    func_free: NemoFlowFreeFn,
     parent: *const FfiScopeHandle,
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
     model_name: *const c_char,
-    codec_decode: NatNexusCodecDecodeFn,
-    codec_encode: NatNexusCodecEncodeFn,
+    codec_decode: NemoFlowCodecDecodeFn,
+    codec_encode: NemoFlowCodecEncodeFn,
     codec_user_data: *mut libc::c_void,
-    codec_free_fn: NatNexusFreeFn,
+    codec_free_fn: NemoFlowFreeFn,
     response_codec: *const FfiCodecHandle,
     out: *mut *mut c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("null pointer argument");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -1162,13 +1165,13 @@ pub unsafe extern "C" fn nat_nexus_llm_call_execute(
     };
     let native = match c_str_to_json(native_json) {
         Some(n) => n,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let request: core_types::LLMRequest = match serde_json::from_value(native) {
         Ok(r) => r,
         Err(_) => {
             set_last_error("failed to parse native_json as LLMRequest");
-            return NatNexusStatus::InvalidJson;
+            return NemoFlowStatus::InvalidJson;
         }
     };
     let parent_handle = if parent.is_null() {
@@ -1179,11 +1182,11 @@ pub unsafe extern "C" fn nat_nexus_llm_call_execute(
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes);
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let model_name_opt = if model_name.is_null() {
         None
@@ -1209,14 +1212,12 @@ pub unsafe extern "C" fn nat_nexus_llm_call_execute(
     };
 
     let exec_fn = wrap_llm_exec_fn(func, func_user_data, func_free);
-    let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn =
-        Arc::new(move |request| exec_fn(request));
+    let default_fn: nemo_flow_core::LlmExecutionNextFn = Arc::new(move |request| exec_fn(request));
 
     let scope_stack = core::current_scope_stack();
-    let result = tokio_runtime().block_on(nvidia_nat_nexus_core::TASK_SCOPE_STACK.scope(
-        scope_stack,
-        async {
-            core::nat_nexus_llm_call_execute(
+    let result =
+        tokio_runtime().block_on(nemo_flow_core::TASK_SCOPE_STACK.scope(scope_stack, async {
+            core::nemo_flow_llm_call_execute(
                 &name,
                 request,
                 default_fn,
@@ -1229,13 +1230,12 @@ pub unsafe extern "C" fn nat_nexus_llm_call_execute(
                 response_codec,
             )
             .await
-        },
-    ));
+        }));
 
     match result {
         Ok(json) => {
             unsafe { *out = json_to_c_string(&json) };
-            NatNexusStatus::Ok
+            NemoFlowStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -1246,16 +1246,15 @@ pub unsafe extern "C" fn nat_nexus_llm_call_execute(
 // ---------------------------------------------------------------------------
 
 /// Opaque stream handle for consuming LLM streaming responses chunk by chunk.
-/// Use `nat_nexus_stream_next` to poll and `nat_nexus_stream_free` to release.
+/// Use `nemo_flow_stream_next` to poll and `nemo_flow_stream_free` to release.
 pub struct FfiStream {
-    receiver: tokio::sync::Mutex<
-        tokio::sync::mpsc::Receiver<nvidia_nat_nexus_core::Result<serde_json::Value>>,
-    >,
+    receiver:
+        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nemo_flow_core::Result<serde_json::Value>>>,
 }
 
 /// Execute a streaming LLM call end-to-end. Conditional-execution guardrails
 /// run first on the raw request. Returns a stream handle that can be polled
-/// with `nat_nexus_stream_next`. Blocks until the stream is set up.
+/// with `nemo_flow_stream_next`. Blocks until the stream is set up.
 ///
 /// # Parameters
 /// - `name`: Null-terminated LLM provider name.
@@ -1279,31 +1278,31 @@ pub struct FfiStream {
 /// # Safety
 /// `name`, `native_json`, and `out` must be valid, non-null pointers. `collector`
 /// and `finalizer` may be null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_stream_call_execute(
     name: *const c_char,
     native_json: *const c_char,
-    func: NatNexusLlmExecCb,
+    func: NemoFlowLlmExecCb,
     func_user_data: *mut libc::c_void,
-    func_free: NatNexusFreeFn,
-    collector: Option<NatNexusCollectorCb>,
-    finalizer: Option<NatNexusFinalizerCb>,
+    func_free: NemoFlowFreeFn,
+    collector: Option<NemoFlowCollectorCb>,
+    finalizer: Option<NemoFlowFinalizerCb>,
     parent: *const FfiScopeHandle,
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
     model_name: *const c_char,
-    codec_decode: NatNexusCodecDecodeFn,
-    codec_encode: NatNexusCodecEncodeFn,
+    codec_decode: NemoFlowCodecDecodeFn,
+    codec_encode: NemoFlowCodecEncodeFn,
     codec_user_data: *mut libc::c_void,
-    codec_free_fn: NatNexusFreeFn,
+    codec_free_fn: NemoFlowFreeFn,
     response_codec: *const FfiCodecHandle,
     out: *mut *mut FfiStream,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("null pointer argument");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -1311,13 +1310,13 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
     };
     let native = match c_str_to_json(native_json) {
         Some(n) => n,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let request: core_types::LLMRequest = match serde_json::from_value(native) {
         Ok(r) => r,
         Err(_) => {
             set_last_error("failed to parse native_json as LLMRequest");
-            return NatNexusStatus::InvalidJson;
+            return NemoFlowStatus::InvalidJson;
         }
     };
     let parent_handle = if parent.is_null() {
@@ -1328,11 +1327,11 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes);
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let model_name_opt = if model_name.is_null() {
         None
@@ -1358,15 +1357,14 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
     };
 
     let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
-    let default_fn: nvidia_nat_nexus_core::LlmStreamExecutionNextFn =
+    let default_fn: nemo_flow_core::LlmStreamExecutionNextFn =
         Arc::new(move |request| exec_fn(request));
 
-    let wrapped_collector: Box<
-        dyn FnMut(serde_json::Value) -> nvidia_nat_nexus_core::Result<()> + Send,
-    > = match collector {
-        Some(cb) => wrap_collector_fn(cb),
-        None => Box::new(|_: serde_json::Value| Ok(())),
-    };
+    let wrapped_collector: Box<dyn FnMut(serde_json::Value) -> nemo_flow_core::Result<()> + Send> =
+        match collector {
+            Some(cb) => wrap_collector_fn(cb),
+            None => Box::new(|_: serde_json::Value| Ok(())),
+        };
 
     let wrapped_finalizer: Box<dyn FnOnce() -> serde_json::Value + Send> = match finalizer {
         Some(cb) => wrap_finalizer_fn(cb),
@@ -1374,10 +1372,9 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
     };
 
     let scope_stack = core::current_scope_stack();
-    let result = tokio_runtime().block_on(nvidia_nat_nexus_core::TASK_SCOPE_STACK.scope(
-        scope_stack,
-        async {
-            core::nat_nexus_llm_stream_call_execute(
+    let result =
+        tokio_runtime().block_on(nemo_flow_core::TASK_SCOPE_STACK.scope(scope_stack, async {
+            core::nemo_flow_llm_stream_call_execute(
                 &name,
                 request,
                 default_fn,
@@ -1392,8 +1389,7 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
                 response_codec,
             )
             .await
-        },
-    ));
+        }));
 
     match result {
         Ok(rust_stream) => {
@@ -1410,7 +1406,7 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
                 receiver: tokio::sync::Mutex::new(rx),
             });
             unsafe { *out = Box::into_raw(ffi_stream) };
-            NatNexusStatus::Ok
+            NemoFlowStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -1421,14 +1417,14 @@ pub unsafe extern "C" fn nat_nexus_llm_stream_call_execute(
 ///
 /// # Returns
 /// - `1`: A chunk was written to `*out_chunk`. Caller must free with
-///   `nat_nexus_string_free`.
+///   `nemo_flow_string_free`.
 /// - `0`: The stream is complete (no more chunks).
-/// - `-1`: An error occurred. Call `nat_nexus_last_error` for details.
+/// - `-1`: An error occurred. Call `nemo_flow_last_error` for details.
 ///
 /// # Safety
 /// `stream` and `out_chunk` must be valid, non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_stream_next(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_stream_next(
     stream: *mut FfiStream,
     out_chunk: *mut *mut c_char,
 ) -> i32 {
@@ -1457,9 +1453,9 @@ pub unsafe extern "C" fn nat_nexus_stream_next(
 ///
 /// # Safety
 /// `stream` must be a valid `FfiStream` pointer returned by
-/// `nat_nexus_llm_stream_call_execute`, or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_stream_free(stream: *mut FfiStream) {
+/// `nemo_flow_llm_stream_call_execute`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_stream_free(stream: *mut FfiStream) {
     if !stream.is_null() {
         drop(unsafe { Box::from_raw(stream) });
     }
@@ -1474,14 +1470,14 @@ macro_rules! ffi_guardrail_tool_api {
      $(#[$dereg_doc:meta])* $deregister_name:ident,
      $core_register:path, $core_deregister:path, $wrapper:ident) => {
         $(#[$reg_doc])*
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $register_name(
             name: *const c_char,
             priority: i32,
-            cb: NatNexusToolSanitizeCb,
+            cb: NemoFlowToolSanitizeCb,
             user_data: *mut libc::c_void,
-            free_fn: NatNexusFreeFn,
-        ) -> NatNexusStatus {
+            free_fn: NemoFlowFreeFn,
+        ) -> NemoFlowStatus {
             clear_last_error();
             let name = match c_str_to_string(name) {
                 Ok(s) => s,
@@ -1489,23 +1485,23 @@ macro_rules! ffi_guardrail_tool_api {
             };
             let wrapped = $wrapper(cb, user_data, free_fn);
             match $core_register(&name, priority, wrapped) {
-                Ok(()) => NatNexusStatus::Ok,
+                Ok(()) => NemoFlowStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
 
         $(#[$dereg_doc])*
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $deregister_name(
             name: *const c_char,
-        ) -> NatNexusStatus {
+        ) -> NemoFlowStatus {
             clear_last_error();
             let name = match c_str_to_string(name) {
                 Ok(s) => s,
                 Err(status) => return status,
             };
             match $core_deregister(&name) {
-                Ok(_) => NatNexusStatus::Ok,
+                Ok(_) => NemoFlowStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -1525,14 +1521,14 @@ ffi_guardrail_tool_api!(
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nat_nexus_register_tool_sanitize_request_guardrail,
+    nemo_flow_register_tool_sanitize_request_guardrail,
     /// Deregister a tool request sanitization guardrail by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nat_nexus_deregister_tool_sanitize_request_guardrail,
-    core::nat_nexus_register_tool_sanitize_request_guardrail,
-    core::nat_nexus_deregister_tool_sanitize_request_guardrail,
+    nemo_flow_deregister_tool_sanitize_request_guardrail,
+    core::nemo_flow_register_tool_sanitize_request_guardrail,
+    core::nemo_flow_deregister_tool_sanitize_request_guardrail,
     wrap_tool_sanitize_fn
 );
 
@@ -1549,14 +1545,14 @@ ffi_guardrail_tool_api!(
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nat_nexus_register_tool_sanitize_response_guardrail,
+    nemo_flow_register_tool_sanitize_response_guardrail,
     /// Deregister a tool response sanitization guardrail by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nat_nexus_deregister_tool_sanitize_response_guardrail,
-    core::nat_nexus_register_tool_sanitize_response_guardrail,
-    core::nat_nexus_deregister_tool_sanitize_response_guardrail,
+    nemo_flow_deregister_tool_sanitize_response_guardrail,
+    core::nemo_flow_register_tool_sanitize_response_guardrail,
+    core::nemo_flow_deregister_tool_sanitize_response_guardrail,
     wrap_tool_sanitize_fn
 );
 
@@ -1571,27 +1567,27 @@ ffi_guardrail_tool_api!(
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
 /// The callback is fallible. To signal an internal callback failure instead of
-/// allow/reject, call [`crate::error::nat_nexus_set_last_error_message`] from C
+/// allow/reject, call [`crate::error::nemo_flow_set_last_error_message`] from C
 /// and return null.
 ///
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_register_tool_conditional_execution_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_register_tool_conditional_execution_guardrail(
     name: *const c_char,
     priority: i32,
-    cb: NatNexusToolConditionalCb,
+    cb: NemoFlowToolConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let wrapped = wrap_tool_conditional_fn(cb, user_data, free_fn);
-    match core::nat_nexus_register_tool_conditional_execution_guardrail(&name, priority, wrapped) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_register_tool_conditional_execution_guardrail(&name, priority, wrapped) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1600,17 +1596,17 @@ pub unsafe extern "C" fn nat_nexus_register_tool_conditional_execution_guardrail
 ///
 /// # Safety
 /// `name` must be a valid C string.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_deregister_tool_conditional_execution_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_deregister_tool_conditional_execution_guardrail(
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_deregister_tool_conditional_execution_guardrail(&name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_deregister_tool_conditional_execution_guardrail(&name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1624,15 +1620,15 @@ macro_rules! ffi_intercept_tool_api {
      $(#[$dereg_doc:meta])* $deregister_name:ident,
      $core_register:path, $core_deregister:path, $wrapper:ident) => {
         $(#[$reg_doc])*
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $register_name(
             name: *const c_char,
             priority: i32,
             break_chain: bool,
-            cb: NatNexusToolSanitizeCb,
+            cb: NemoFlowToolSanitizeCb,
             user_data: *mut libc::c_void,
-            free_fn: NatNexusFreeFn,
-        ) -> NatNexusStatus {
+            free_fn: NemoFlowFreeFn,
+        ) -> NemoFlowStatus {
             clear_last_error();
             let name = match c_str_to_string(name) {
                 Ok(s) => s,
@@ -1640,23 +1636,23 @@ macro_rules! ffi_intercept_tool_api {
             };
             let wrapped = $wrapper(cb, user_data, free_fn);
             match $core_register(&name, priority, break_chain, wrapped) {
-                Ok(()) => NatNexusStatus::Ok,
+                Ok(()) => NemoFlowStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
 
         $(#[$dereg_doc])*
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $deregister_name(
             name: *const c_char,
-        ) -> NatNexusStatus {
+        ) -> NemoFlowStatus {
             clear_last_error();
             let name = match c_str_to_string(name) {
                 Ok(s) => s,
                 Err(status) => return status,
             };
             match $core_deregister(&name) {
-                Ok(_) => NatNexusStatus::Ok,
+                Ok(_) => NemoFlowStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -1677,18 +1673,18 @@ ffi_intercept_tool_api!(
     /// - `free_fn`: Optional destructor for `user_data`.
     ///
     /// The callback is fallible. To signal failure, call
-    /// [`crate::error::nat_nexus_set_last_error_message`] from C and return null.
+    /// [`crate::error::nemo_flow_set_last_error_message`] from C and return null.
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nat_nexus_register_tool_request_intercept,
+    nemo_flow_register_tool_request_intercept,
     /// Deregister a tool request intercept by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nat_nexus_deregister_tool_request_intercept,
-    core::nat_nexus_register_tool_request_intercept,
-    core::nat_nexus_deregister_tool_request_intercept,
+    nemo_flow_deregister_tool_request_intercept,
+    core::nemo_flow_register_tool_request_intercept,
+    core::nemo_flow_deregister_tool_request_intercept,
     wrap_tool_request_intercept_fn
 );
 
@@ -1706,22 +1702,22 @@ ffi_intercept_tool_api!(
 ///
 /// # Safety
 /// `name` must be a valid C string. Callback pointers must be valid.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_register_tool_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_register_tool_execution_intercept(
     name: *const c_char,
     priority: i32,
-    exec_cb: NatNexusToolExecInterceptCb,
+    exec_cb: NemoFlowToolExecInterceptCb,
     exec_user_data: *mut libc::c_void,
-    exec_free: NatNexusFreeFn,
-) -> NatNexusStatus {
+    exec_free: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let exec = wrap_tool_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nat_nexus_register_tool_execution_intercept(&name, priority, exec) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_register_tool_execution_intercept(&name, priority, exec) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1730,17 +1726,17 @@ pub unsafe extern "C" fn nat_nexus_register_tool_execution_intercept(
 ///
 /// # Safety
 /// `name` must be a valid C string.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_deregister_tool_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_deregister_tool_execution_intercept(
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_deregister_tool_execution_intercept(&name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_deregister_tool_execution_intercept(&name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1761,22 +1757,22 @@ pub unsafe extern "C" fn nat_nexus_deregister_tool_execution_intercept(
 ///
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_register_llm_sanitize_request_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_register_llm_sanitize_request_guardrail(
     name: *const c_char,
     priority: i32,
-    cb: NatNexusLlmRequestCb,
+    cb: NemoFlowLlmRequestCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let wrapped = wrap_llm_sanitize_request_fn(cb, user_data, free_fn);
-    match core::nat_nexus_register_llm_sanitize_request_guardrail(&name, priority, wrapped) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_register_llm_sanitize_request_guardrail(&name, priority, wrapped) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1785,17 +1781,17 @@ pub unsafe extern "C" fn nat_nexus_register_llm_sanitize_request_guardrail(
 ///
 /// # Safety
 /// `name` must be a valid C string.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_deregister_llm_sanitize_request_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_deregister_llm_sanitize_request_guardrail(
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_deregister_llm_sanitize_request_guardrail(&name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_deregister_llm_sanitize_request_guardrail(&name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1812,22 +1808,22 @@ pub unsafe extern "C" fn nat_nexus_deregister_llm_sanitize_request_guardrail(
 ///
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_register_llm_sanitize_response_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_register_llm_sanitize_response_guardrail(
     name: *const c_char,
     priority: i32,
-    cb: NatNexusJsonCb,
+    cb: NemoFlowJsonCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let wrapped = wrap_llm_response_fn(cb, user_data, free_fn);
-    match core::nat_nexus_register_llm_sanitize_response_guardrail(&name, priority, wrapped) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_register_llm_sanitize_response_guardrail(&name, priority, wrapped) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1836,17 +1832,17 @@ pub unsafe extern "C" fn nat_nexus_register_llm_sanitize_response_guardrail(
 ///
 /// # Safety
 /// `name` must be a valid C string.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_deregister_llm_sanitize_response_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_deregister_llm_sanitize_response_guardrail(
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_deregister_llm_sanitize_response_guardrail(&name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_deregister_llm_sanitize_response_guardrail(&name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1862,27 +1858,27 @@ pub unsafe extern "C" fn nat_nexus_deregister_llm_sanitize_response_guardrail(
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
 /// The callback is fallible. To signal an internal callback failure instead of
-/// allow/reject, call [`crate::error::nat_nexus_set_last_error_message`] from C
+/// allow/reject, call [`crate::error::nemo_flow_set_last_error_message`] from C
 /// and return null.
 ///
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_register_llm_conditional_execution_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_register_llm_conditional_execution_guardrail(
     name: *const c_char,
     priority: i32,
-    cb: NatNexusLlmConditionalCb,
+    cb: NemoFlowLlmConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let wrapped = wrap_llm_conditional_fn(cb, user_data, free_fn);
-    match core::nat_nexus_register_llm_conditional_execution_guardrail(&name, priority, wrapped) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_register_llm_conditional_execution_guardrail(&name, priority, wrapped) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1891,17 +1887,17 @@ pub unsafe extern "C" fn nat_nexus_register_llm_conditional_execution_guardrail(
 ///
 /// # Safety
 /// `name` must be a valid C string.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_deregister_llm_conditional_execution_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_deregister_llm_conditional_execution_guardrail(
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_deregister_llm_conditional_execution_guardrail(&name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_deregister_llm_conditional_execution_guardrail(&name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1922,27 +1918,27 @@ pub unsafe extern "C" fn nat_nexus_deregister_llm_conditional_execution_guardrai
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
 /// The callback is fallible. To signal failure, call
-/// [`crate::error::nat_nexus_set_last_error_message`] from C and return null.
+/// [`crate::error::nemo_flow_set_last_error_message`] from C and return null.
 ///
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_register_llm_request_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_register_llm_request_intercept(
     name: *const c_char,
     priority: i32,
     break_chain: bool,
-    cb: NatNexusLlmRequestInterceptCb,
+    cb: NemoFlowLlmRequestInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let wrapped = wrap_llm_request_intercept_fn(cb, user_data, free_fn);
-    match core::nat_nexus_register_llm_request_intercept(&name, priority, break_chain, wrapped) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_register_llm_request_intercept(&name, priority, break_chain, wrapped) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1951,17 +1947,17 @@ pub unsafe extern "C" fn nat_nexus_register_llm_request_intercept(
 ///
 /// # Safety
 /// `name` must be a valid C string.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_deregister_llm_request_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_deregister_llm_request_intercept(
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_deregister_llm_request_intercept(&name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_deregister_llm_request_intercept(&name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -1980,22 +1976,22 @@ pub unsafe extern "C" fn nat_nexus_deregister_llm_request_intercept(
 ///
 /// # Safety
 /// `name` must be a valid C string. Callback pointers must be valid.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_register_llm_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_register_llm_execution_intercept(
     name: *const c_char,
     priority: i32,
-    exec_cb: NatNexusLlmExecInterceptCb,
+    exec_cb: NemoFlowLlmExecInterceptCb,
     exec_user_data: *mut libc::c_void,
-    exec_free: NatNexusFreeFn,
-) -> NatNexusStatus {
+    exec_free: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let exec = wrap_llm_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nat_nexus_register_llm_execution_intercept(&name, priority, exec) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_register_llm_execution_intercept(&name, priority, exec) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -2004,17 +2000,17 @@ pub unsafe extern "C" fn nat_nexus_register_llm_execution_intercept(
 ///
 /// # Safety
 /// `name` must be a valid C string.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_deregister_llm_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_deregister_llm_execution_intercept(
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_deregister_llm_execution_intercept(&name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_deregister_llm_execution_intercept(&name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -2033,22 +2029,22 @@ pub unsafe extern "C" fn nat_nexus_deregister_llm_execution_intercept(
 ///
 /// # Safety
 /// `name` must be a valid C string. Callback pointers must be valid.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_register_llm_stream_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_register_llm_stream_execution_intercept(
     name: *const c_char,
     priority: i32,
-    exec_cb: NatNexusLlmExecInterceptCb,
+    exec_cb: NemoFlowLlmExecInterceptCb,
     exec_user_data: *mut libc::c_void,
-    exec_free: NatNexusFreeFn,
-) -> NatNexusStatus {
+    exec_free: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let exec = wrap_llm_stream_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nat_nexus_register_llm_stream_execution_intercept(&name, priority, exec) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_register_llm_stream_execution_intercept(&name, priority, exec) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -2057,17 +2053,17 @@ pub unsafe extern "C" fn nat_nexus_register_llm_stream_execution_intercept(
 ///
 /// # Safety
 /// `name` must be a valid C string.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_deregister_llm_stream_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_deregister_llm_stream_execution_intercept(
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_deregister_llm_stream_execution_intercept(&name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_deregister_llm_stream_execution_intercept(&name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -2087,21 +2083,21 @@ pub unsafe extern "C" fn nat_nexus_deregister_llm_stream_execution_intercept(
 ///
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_register_subscriber(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_register_subscriber(
     name: *const c_char,
-    cb: NatNexusEventSubscriberCb,
+    cb: NemoFlowEventSubscriberCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let wrapped = wrap_event_subscriber(cb, user_data, free_fn);
-    match core::nat_nexus_register_subscriber(&name, wrapped) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_register_subscriber(&name, wrapped) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -2110,15 +2106,15 @@ pub unsafe extern "C" fn nat_nexus_register_subscriber(
 ///
 /// # Safety
 /// `name` must be a valid C string.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_deregister_subscriber(name: *const c_char) -> NatNexusStatus {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_deregister_subscriber(name: *const c_char) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_deregister_subscriber(&name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_deregister_subscriber(&name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -2130,33 +2126,33 @@ pub unsafe extern "C" fn nat_nexus_deregister_subscriber(name: *const c_char) ->
 /// Create a new isolated scope stack with its own root scope.
 ///
 /// Each scope stack is independent: scopes pushed on one do not appear on another.
-/// Use `nat_nexus_scope_stack_set_thread` to bind a stack to the current thread
-/// before making other Nexus API calls.
+/// Use `nemo_flow_scope_stack_set_thread` to bind a stack to the current thread
+/// before making other NeMo Flow API calls.
 ///
 /// # Parameters
 /// - `out`: On success, receives a heap-allocated `FfiScopeStack` that must be
-///   freed with `nat_nexus_scope_stack_free`.
+///   freed with `nemo_flow_scope_stack_free`.
 ///
 /// # Safety
 /// `out` must be a valid, non-null pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_stack_create(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_stack_create(
     out: *mut *mut FfiScopeStack,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let handle = core::create_scope_stack();
     unsafe { *out = Box::into_raw(Box::new(FfiScopeStack(handle))) };
-    NatNexusStatus::Ok
+    NemoFlowStatus::Ok
 }
 
 /// Bind an isolated scope stack to the current OS thread.
 ///
-/// After this call, all Nexus scope operations on the current thread
-/// (e.g. `nat_nexus_push_scope`, `nat_nexus_get_handle`) will use the
+/// After this call, all NeMo Flow scope operations on the current thread
+/// (e.g. `nemo_flow_push_scope`, `nemo_flow_get_handle`) will use the
 /// given scope stack. This is typically used from Go goroutines that have
 /// called `runtime.LockOSThread()`.
 ///
@@ -2165,28 +2161,28 @@ pub unsafe extern "C" fn nat_nexus_scope_stack_create(
 ///
 /// # Safety
 /// `stack` must be a valid, non-null `FfiScopeStack` pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_stack_set_thread(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_stack_set_thread(
     stack: *const FfiScopeStack,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if stack.is_null() {
         set_last_error("stack pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let handle = unsafe { &*stack }.0.clone();
     core::set_thread_scope_stack(handle);
-    NatNexusStatus::Ok
+    NemoFlowStatus::Ok
 }
 
 /// Returns whether the current execution context has an explicitly-initialized
 /// scope stack.
 ///
-/// Returns `true` if `nat_nexus_scope_stack_set_thread` has been called on the
+/// Returns `true` if `nemo_flow_scope_stack_set_thread` has been called on the
 /// current OS thread (or the caller is inside a tokio task-local scope).
 /// Returns `false` when only the auto-created default is present.
-#[no_mangle]
-pub extern "C" fn nat_nexus_scope_stack_active() -> bool {
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_flow_scope_stack_active() -> bool {
     core::scope_stack_active()
 }
 
@@ -2205,18 +2201,18 @@ pub extern "C" fn nat_nexus_scope_stack_active() -> bool {
 ///
 /// # Safety
 /// All non-null string pointers must be valid C strings. `out` must be valid.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_atif_exporter_create(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_atif_exporter_create(
     session_id: *const c_char,
     agent_name: *const c_char,
     agent_version: *const c_char,
     model_name: *const c_char,
     out: *mut *mut FfiAtifExporter,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let session_id = match c_str_to_string(session_id) {
         Ok(s) => s,
@@ -2239,7 +2235,7 @@ pub unsafe extern "C" fn nat_nexus_atif_exporter_create(
         }
     };
 
-    let agent_info = nvidia_nat_nexus_core::atif::AtifAgentInfo {
+    let agent_info = nemo_flow_core::atif::AtifAgentInfo {
         name: agent_name,
         version: agent_version,
         model_name: model_name_opt,
@@ -2247,9 +2243,9 @@ pub unsafe extern "C" fn nat_nexus_atif_exporter_create(
         extra: None,
     };
 
-    let exporter = nvidia_nat_nexus_core::atif::AtifExporter::new(session_id, agent_info);
+    let exporter = nemo_flow_core::atif::AtifExporter::new(session_id, agent_info);
     unsafe { *out = Box::into_raw(Box::new(FfiAtifExporter(exporter))) };
-    NatNexusStatus::Ok
+    NemoFlowStatus::Ok
 }
 
 /// Registers the exporter as an event subscriber.
@@ -2260,23 +2256,23 @@ pub unsafe extern "C" fn nat_nexus_atif_exporter_create(
 ///
 /// # Safety
 /// `exporter` and `name` must be valid, non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_atif_exporter_register(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_atif_exporter_register(
     exporter: *const FfiAtifExporter,
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if exporter.is_null() {
         set_last_error("exporter pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     let subscriber = unsafe { &*exporter }.0.subscriber();
-    match core::nat_nexus_register_subscriber(&name, subscriber) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_register_subscriber(&name, subscriber) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -2288,15 +2284,15 @@ pub unsafe extern "C" fn nat_nexus_atif_exporter_register(
 ///
 /// # Safety
 /// `name` must be a valid C string.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_atif_exporter_deregister(name: *const c_char) -> NatNexusStatus {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_atif_exporter_deregister(name: *const c_char) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_deregister_subscriber(&name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_deregister_subscriber(&name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -2306,33 +2302,33 @@ pub unsafe extern "C" fn nat_nexus_atif_exporter_deregister(name: *const c_char)
 /// # Parameters
 /// - `exporter`: The exporter handle.
 /// - `out`: On success, receives a JSON string (caller must free with
-///   `nat_nexus_string_free`).
+///   `nemo_flow_string_free`).
 ///
 /// # Safety
 /// `exporter` and `out` must be valid, non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_atif_exporter_export(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_atif_exporter_export(
     exporter: *const FfiAtifExporter,
     out: *mut *mut c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if exporter.is_null() {
         set_last_error("exporter pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let trajectory = unsafe { &*exporter }.0.export();
     match serde_json::to_string(&trajectory) {
         Ok(json_str) => {
             unsafe { *out = str_to_c_string(&json_str) };
-            NatNexusStatus::Ok
+            NemoFlowStatus::Ok
         }
         Err(e) => {
             set_last_error(&format!("failed to serialize trajectory: {e}"));
-            NatNexusStatus::Internal
+            NemoFlowStatus::Internal
         }
     }
 }
@@ -2344,17 +2340,17 @@ pub unsafe extern "C" fn nat_nexus_atif_exporter_export(
 ///
 /// # Safety
 /// `exporter` must be a valid, non-null `FfiAtifExporter` pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_atif_exporter_clear(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_atif_exporter_clear(
     exporter: *const FfiAtifExporter,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if exporter.is_null() {
         set_last_error("exporter pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     unsafe { &*exporter }.0.clear();
-    NatNexusStatus::Ok
+    NemoFlowStatus::Ok
 }
 
 // ---------------------------------------------------------------------------
@@ -2364,7 +2360,7 @@ pub unsafe extern "C" fn nat_nexus_atif_exporter_clear(
 fn parse_string_map_json(
     json_ptr: *const c_char,
     field_name: &str,
-) -> Result<std::collections::HashMap<String, String>, NatNexusStatus> {
+) -> Result<std::collections::HashMap<String, String>, NemoFlowStatus> {
     if json_ptr.is_null() {
         return Ok(std::collections::HashMap::new());
     }
@@ -2372,14 +2368,14 @@ fn parse_string_map_json(
     let json_string = c_str_to_string(json_ptr)?;
     let value: serde_json::Value = serde_json::from_str(&json_string).map_err(|e| {
         set_last_error(&format!("invalid {field_name} JSON: {e}"));
-        NatNexusStatus::InvalidJson
+        NemoFlowStatus::InvalidJson
     })?;
 
     let serde_json::Value::Object(map) = value else {
         set_last_error(&format!(
             "{field_name} must be a JSON object of string values"
         ));
-        return Err(NatNexusStatus::InvalidArg);
+        return Err(NemoFlowStatus::InvalidArg);
     };
 
     let mut out = std::collections::HashMap::with_capacity(map.len());
@@ -2388,7 +2384,7 @@ fn parse_string_map_json(
             set_last_error(&format!(
                 "{field_name} must be a JSON object of string values"
             ));
-            return Err(NatNexusStatus::InvalidArg);
+            return Err(NemoFlowStatus::InvalidArg);
         };
         out.insert(key, value);
     }
@@ -2403,8 +2399,8 @@ fn parse_string_map_json(
 ///
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_otel_subscriber_create(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_otel_subscriber_create(
     transport: *const c_char,
     endpoint: *const c_char,
     headers_json: *const c_char,
@@ -2415,11 +2411,11 @@ pub unsafe extern "C" fn nat_nexus_otel_subscriber_create(
     instrumentation_scope: *const c_char,
     timeout_millis: u64,
     out: *mut *mut FfiOpenTelemetrySubscriber,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
 
     let transport = if transport.is_null() {
@@ -2432,7 +2428,7 @@ pub unsafe extern "C" fn nat_nexus_otel_subscriber_create(
     };
 
     let service_name = if service_name.is_null() {
-        "nat-nexus".to_string()
+        "nemo-flow".to_string()
     } else {
         match c_str_to_string(service_name) {
             Ok(value) => value,
@@ -2441,13 +2437,13 @@ pub unsafe extern "C" fn nat_nexus_otel_subscriber_create(
     };
 
     let mut config = match transport.as_str() {
-        "http_binary" => nvidia_nat_nexus_otel::OpenTelemetryConfig::http_binary(service_name),
-        "grpc" => nvidia_nat_nexus_otel::OpenTelemetryConfig::grpc(service_name),
+        "http_binary" => nemo_flow_otel::OpenTelemetryConfig::http_binary(service_name),
+        "grpc" => nemo_flow_otel::OpenTelemetryConfig::grpc(service_name),
         other => {
             set_last_error(&format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}"
             ));
-            return NatNexusStatus::InvalidArg;
+            return NemoFlowStatus::InvalidArg;
         }
     };
 
@@ -2498,14 +2494,15 @@ pub unsafe extern "C" fn nat_nexus_otel_subscriber_create(
     }
 
     let _runtime_guard = tokio_runtime().enter();
-    match nvidia_nat_nexus_otel::OpenTelemetrySubscriber::new(config) {
+    let subscriber_result = nemo_flow_otel::OpenTelemetrySubscriber::new(config);
+    match subscriber_result {
         Ok(subscriber) => {
             unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetrySubscriber(subscriber))) };
-            NatNexusStatus::Ok
+            NemoFlowStatus::Ok
         }
         Err(e) => {
             set_last_error(&e.to_string());
-            NatNexusStatus::Internal
+            NemoFlowStatus::Internal
         }
     }
 }
@@ -2514,15 +2511,15 @@ pub unsafe extern "C" fn nat_nexus_otel_subscriber_create(
 ///
 /// # Safety
 /// `subscriber` and `name` must be valid, non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_otel_subscriber_register(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_otel_subscriber_register(
     subscriber: *const FfiOpenTelemetrySubscriber,
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if subscriber.is_null() {
         set_last_error("subscriber pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -2530,10 +2527,10 @@ pub unsafe extern "C" fn nat_nexus_otel_subscriber_register(
     };
 
     match unsafe { &*subscriber }.0.register(&name) {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => {
             set_last_error(&e.to_string());
-            NatNexusStatus::Internal
+            NemoFlowStatus::Internal
         }
     }
 }
@@ -2542,18 +2539,18 @@ pub unsafe extern "C" fn nat_nexus_otel_subscriber_register(
 ///
 /// # Safety
 /// `name` must be a valid C string.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_otel_subscriber_deregister(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_otel_subscriber_deregister(
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
 
-    match core::nat_nexus_deregister_subscriber(&name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_deregister_subscriber(&name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -2562,21 +2559,21 @@ pub unsafe extern "C" fn nat_nexus_otel_subscriber_deregister(
 ///
 /// # Safety
 /// `subscriber` must be a valid, non-null pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_otel_subscriber_force_flush(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_otel_subscriber_force_flush(
     subscriber: *const FfiOpenTelemetrySubscriber,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if subscriber.is_null() {
         set_last_error("subscriber pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
 
     match unsafe { &*subscriber }.0.force_flush() {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => {
             set_last_error(&e.to_string());
-            NatNexusStatus::Internal
+            NemoFlowStatus::Internal
         }
     }
 }
@@ -2585,21 +2582,21 @@ pub unsafe extern "C" fn nat_nexus_otel_subscriber_force_flush(
 ///
 /// # Safety
 /// `subscriber` must be a valid, non-null pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_otel_subscriber_shutdown(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_otel_subscriber_shutdown(
     subscriber: *const FfiOpenTelemetrySubscriber,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if subscriber.is_null() {
         set_last_error("subscriber pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
 
     match unsafe { &*subscriber }.0.shutdown() {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => {
             set_last_error(&e.to_string());
-            NatNexusStatus::Internal
+            NemoFlowStatus::Internal
         }
     }
 }
@@ -2612,8 +2609,8 @@ pub unsafe extern "C" fn nat_nexus_otel_subscriber_shutdown(
 ///
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_openinference_subscriber_create(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_openinference_subscriber_create(
     transport: *const c_char,
     endpoint: *const c_char,
     headers_json: *const c_char,
@@ -2624,11 +2621,11 @@ pub unsafe extern "C" fn nat_nexus_openinference_subscriber_create(
     instrumentation_scope: *const c_char,
     timeout_millis: u64,
     out: *mut *mut FfiOpenInferenceSubscriber,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
 
     let transport = if transport.is_null() {
@@ -2640,17 +2637,15 @@ pub unsafe extern "C" fn nat_nexus_openinference_subscriber_create(
         }
     };
 
-    let mut config = nvidia_nat_nexus_openinference::OpenInferenceConfig::new();
+    let mut config = nemo_flow_openinference::OpenInferenceConfig::new();
     config = match transport.as_str() {
-        "http_binary" => {
-            config.with_transport(nvidia_nat_nexus_openinference::OtlpTransport::HttpBinary)
-        }
-        "grpc" => config.with_transport(nvidia_nat_nexus_openinference::OtlpTransport::Grpc),
+        "http_binary" => config.with_transport(nemo_flow_openinference::OtlpTransport::HttpBinary),
+        "grpc" => config.with_transport(nemo_flow_openinference::OtlpTransport::Grpc),
         other => {
             set_last_error(&format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}"
             ));
-            return NatNexusStatus::InvalidArg;
+            return NemoFlowStatus::InvalidArg;
         }
     };
 
@@ -2708,14 +2703,15 @@ pub unsafe extern "C" fn nat_nexus_openinference_subscriber_create(
     }
 
     let _runtime_guard = tokio_runtime().enter();
-    match nvidia_nat_nexus_openinference::OpenInferenceSubscriber::new(config) {
+    let subscriber_result = nemo_flow_openinference::OpenInferenceSubscriber::new(config);
+    match subscriber_result {
         Ok(subscriber) => {
             unsafe { *out = Box::into_raw(Box::new(FfiOpenInferenceSubscriber(subscriber))) };
-            NatNexusStatus::Ok
+            NemoFlowStatus::Ok
         }
         Err(e) => {
             set_last_error(&e.to_string());
-            NatNexusStatus::Internal
+            NemoFlowStatus::Internal
         }
     }
 }
@@ -2724,15 +2720,15 @@ pub unsafe extern "C" fn nat_nexus_openinference_subscriber_create(
 ///
 /// # Safety
 /// `subscriber` and `name` must be valid, non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_openinference_subscriber_register(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_openinference_subscriber_register(
     subscriber: *const FfiOpenInferenceSubscriber,
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if subscriber.is_null() {
         set_last_error("subscriber pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -2740,10 +2736,10 @@ pub unsafe extern "C" fn nat_nexus_openinference_subscriber_register(
     };
 
     match unsafe { &*subscriber }.0.register(&name) {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => {
             set_last_error(&e.to_string());
-            NatNexusStatus::Internal
+            NemoFlowStatus::Internal
         }
     }
 }
@@ -2752,18 +2748,18 @@ pub unsafe extern "C" fn nat_nexus_openinference_subscriber_register(
 ///
 /// # Safety
 /// `name` must be a valid C string.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_openinference_subscriber_deregister(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_openinference_subscriber_deregister(
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
 
-    match core::nat_nexus_deregister_subscriber(&name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_deregister_subscriber(&name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -2772,21 +2768,21 @@ pub unsafe extern "C" fn nat_nexus_openinference_subscriber_deregister(
 ///
 /// # Safety
 /// `subscriber` must be a valid, non-null pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_openinference_subscriber_force_flush(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_openinference_subscriber_force_flush(
     subscriber: *const FfiOpenInferenceSubscriber,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if subscriber.is_null() {
         set_last_error("subscriber pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
 
     match unsafe { &*subscriber }.0.force_flush() {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => {
             set_last_error(&e.to_string());
-            NatNexusStatus::Internal
+            NemoFlowStatus::Internal
         }
     }
 }
@@ -2795,21 +2791,21 @@ pub unsafe extern "C" fn nat_nexus_openinference_subscriber_force_flush(
 ///
 /// # Safety
 /// `subscriber` must be a valid, non-null pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_openinference_subscriber_shutdown(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_openinference_subscriber_shutdown(
     subscriber: *const FfiOpenInferenceSubscriber,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     if subscriber.is_null() {
         set_last_error("subscriber pointer is null");
-        return NatNexusStatus::NullPointer;
+        return NemoFlowStatus::NullPointer;
     }
 
     match unsafe { &*subscriber }.0.shutdown() {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => {
             set_last_error(&e.to_string());
-            NatNexusStatus::Internal
+            NemoFlowStatus::Internal
         }
     }
 }
@@ -2819,11 +2815,11 @@ pub unsafe extern "C" fn nat_nexus_openinference_subscriber_shutdown(
 // ---------------------------------------------------------------------------
 
 /// Helper to parse a scope UUID from a C string.
-fn parse_scope_uuid(scope_uuid: *const c_char) -> Result<uuid::Uuid, NatNexusStatus> {
+fn parse_scope_uuid(scope_uuid: *const c_char) -> Result<uuid::Uuid, NemoFlowStatus> {
     let uuid_str = c_str_to_string(scope_uuid)?;
     uuid::Uuid::parse_str(&uuid_str).map_err(|e| {
         set_last_error(&format!("invalid scope UUID: {e}"));
-        NatNexusStatus::InvalidArg
+        NemoFlowStatus::InvalidArg
     })
 }
 
@@ -2832,15 +2828,15 @@ macro_rules! ffi_scope_guardrail_tool_api {
      $(#[$dereg_doc:meta])* $deregister_name:ident,
      $core_register:path, $core_deregister:path, $wrapper:ident) => {
         $(#[$reg_doc])*
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $register_name(
             scope_uuid: *const c_char,
             name: *const c_char,
             priority: i32,
-            cb: NatNexusToolSanitizeCb,
+            cb: NemoFlowToolSanitizeCb,
             user_data: *mut libc::c_void,
-            free_fn: NatNexusFreeFn,
-        ) -> NatNexusStatus {
+            free_fn: NemoFlowFreeFn,
+        ) -> NemoFlowStatus {
             clear_last_error();
             let uuid = match parse_scope_uuid(scope_uuid) {
                 Ok(u) => u,
@@ -2852,17 +2848,17 @@ macro_rules! ffi_scope_guardrail_tool_api {
             };
             let wrapped = $wrapper(cb, user_data, free_fn);
             match $core_register(&uuid, &name, priority, wrapped) {
-                Ok(()) => NatNexusStatus::Ok,
+                Ok(()) => NemoFlowStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
 
         $(#[$dereg_doc])*
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $deregister_name(
             scope_uuid: *const c_char,
             name: *const c_char,
-        ) -> NatNexusStatus {
+        ) -> NemoFlowStatus {
             clear_last_error();
             let uuid = match parse_scope_uuid(scope_uuid) {
                 Ok(u) => u,
@@ -2873,7 +2869,7 @@ macro_rules! ffi_scope_guardrail_tool_api {
                 Err(status) => return status,
             };
             match $core_deregister(&uuid, &name) {
-                Ok(_) => NatNexusStatus::Ok,
+                Ok(_) => NemoFlowStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -2893,14 +2889,14 @@ ffi_scope_guardrail_tool_api!(
     ///
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
-    nat_nexus_scope_register_tool_sanitize_request_guardrail,
+    nemo_flow_scope_register_tool_sanitize_request_guardrail,
     /// Deregister a scope-local tool request sanitization guardrail by name.
     ///
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings.
-    nat_nexus_scope_deregister_tool_sanitize_request_guardrail,
-    core::nat_nexus_scope_register_tool_sanitize_request_guardrail,
-    core::nat_nexus_scope_deregister_tool_sanitize_request_guardrail,
+    nemo_flow_scope_deregister_tool_sanitize_request_guardrail,
+    core::nemo_flow_scope_register_tool_sanitize_request_guardrail,
+    core::nemo_flow_scope_deregister_tool_sanitize_request_guardrail,
     wrap_tool_sanitize_fn
 );
 
@@ -2917,14 +2913,14 @@ ffi_scope_guardrail_tool_api!(
     ///
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
-    nat_nexus_scope_register_tool_sanitize_response_guardrail,
+    nemo_flow_scope_register_tool_sanitize_response_guardrail,
     /// Deregister a scope-local tool response sanitization guardrail by name.
     ///
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings.
-    nat_nexus_scope_deregister_tool_sanitize_response_guardrail,
-    core::nat_nexus_scope_register_tool_sanitize_response_guardrail,
-    core::nat_nexus_scope_deregister_tool_sanitize_response_guardrail,
+    nemo_flow_scope_deregister_tool_sanitize_response_guardrail,
+    core::nemo_flow_scope_register_tool_sanitize_response_guardrail,
+    core::nemo_flow_scope_deregister_tool_sanitize_response_guardrail,
     wrap_tool_sanitize_fn
 );
 
@@ -2939,20 +2935,20 @@ ffi_scope_guardrail_tool_api!(
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
 /// The callback is fallible. To signal an internal callback failure instead of
-/// allow/reject, call [`crate::error::nat_nexus_set_last_error_message`] from C
+/// allow/reject, call [`crate::error::nemo_flow_set_last_error_message`] from C
 /// and return null.
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_register_tool_conditional_execution_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_register_tool_conditional_execution_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    cb: NatNexusToolConditionalCb,
+    cb: NemoFlowToolConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -2963,10 +2959,10 @@ pub unsafe extern "C" fn nat_nexus_scope_register_tool_conditional_execution_gua
         Err(status) => return status,
     };
     let wrapped = wrap_tool_conditional_fn(cb, user_data, free_fn);
-    match core::nat_nexus_scope_register_tool_conditional_execution_guardrail(
+    match core::nemo_flow_scope_register_tool_conditional_execution_guardrail(
         &uuid, &name, priority, wrapped,
     ) {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -2975,11 +2971,11 @@ pub unsafe extern "C" fn nat_nexus_scope_register_tool_conditional_execution_gua
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_deregister_tool_conditional_execution_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_deregister_tool_conditional_execution_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -2989,8 +2985,8 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_tool_conditional_execution_g
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_scope_deregister_tool_conditional_execution_guardrail(&uuid, &name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_scope_deregister_tool_conditional_execution_guardrail(&uuid, &name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3004,16 +3000,16 @@ macro_rules! ffi_scope_intercept_tool_api {
      $(#[$dereg_doc:meta])* $deregister_name:ident,
      $core_register:path, $core_deregister:path, $wrapper:ident) => {
         $(#[$reg_doc])*
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $register_name(
             scope_uuid: *const c_char,
             name: *const c_char,
             priority: i32,
             break_chain: bool,
-            cb: NatNexusToolSanitizeCb,
+            cb: NemoFlowToolSanitizeCb,
             user_data: *mut libc::c_void,
-            free_fn: NatNexusFreeFn,
-        ) -> NatNexusStatus {
+            free_fn: NemoFlowFreeFn,
+        ) -> NemoFlowStatus {
             clear_last_error();
             let uuid = match parse_scope_uuid(scope_uuid) {
                 Ok(u) => u,
@@ -3025,17 +3021,17 @@ macro_rules! ffi_scope_intercept_tool_api {
             };
             let wrapped = $wrapper(cb, user_data, free_fn);
             match $core_register(&uuid, &name, priority, break_chain, wrapped) {
-                Ok(()) => NatNexusStatus::Ok,
+                Ok(()) => NemoFlowStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
 
         $(#[$dereg_doc])*
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $deregister_name(
             scope_uuid: *const c_char,
             name: *const c_char,
-        ) -> NatNexusStatus {
+        ) -> NemoFlowStatus {
             clear_last_error();
             let uuid = match parse_scope_uuid(scope_uuid) {
                 Ok(u) => u,
@@ -3046,7 +3042,7 @@ macro_rules! ffi_scope_intercept_tool_api {
                 Err(status) => return status,
             };
             match $core_deregister(&uuid, &name) {
-                Ok(_) => NatNexusStatus::Ok,
+                Ok(_) => NemoFlowStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -3066,18 +3062,18 @@ ffi_scope_intercept_tool_api!(
     /// - `free_fn`: Optional destructor for `user_data`.
     ///
     /// The callback is fallible. To signal failure, call
-    /// [`crate::error::nat_nexus_set_last_error_message`] from C and return null.
+    /// [`crate::error::nemo_flow_set_last_error_message`] from C and return null.
     ///
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
-    nat_nexus_scope_register_tool_request_intercept,
+    nemo_flow_scope_register_tool_request_intercept,
     /// Deregister a scope-local tool request intercept by name.
     ///
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings.
-    nat_nexus_scope_deregister_tool_request_intercept,
-    core::nat_nexus_scope_register_tool_request_intercept,
-    core::nat_nexus_scope_deregister_tool_request_intercept,
+    nemo_flow_scope_deregister_tool_request_intercept,
+    core::nemo_flow_scope_register_tool_request_intercept,
+    core::nemo_flow_scope_deregister_tool_request_intercept,
     wrap_tool_request_intercept_fn
 );
 
@@ -3094,15 +3090,15 @@ ffi_scope_intercept_tool_api!(
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. Callback pointers must be valid.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_register_tool_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_register_tool_execution_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    exec_cb: NatNexusToolExecInterceptCb,
+    exec_cb: NemoFlowToolExecInterceptCb,
     exec_user_data: *mut libc::c_void,
-    exec_free: NatNexusFreeFn,
-) -> NatNexusStatus {
+    exec_free: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3113,8 +3109,8 @@ pub unsafe extern "C" fn nat_nexus_scope_register_tool_execution_intercept(
         Err(status) => return status,
     };
     let exec = wrap_tool_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nat_nexus_scope_register_tool_execution_intercept(&uuid, &name, priority, exec) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_scope_register_tool_execution_intercept(&uuid, &name, priority, exec) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3123,11 +3119,11 @@ pub unsafe extern "C" fn nat_nexus_scope_register_tool_execution_intercept(
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_deregister_tool_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_deregister_tool_execution_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3137,8 +3133,8 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_tool_execution_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_scope_deregister_tool_execution_intercept(&uuid, &name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_scope_deregister_tool_execution_intercept(&uuid, &name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3159,15 +3155,15 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_tool_execution_intercept(
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_register_llm_sanitize_request_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_register_llm_sanitize_request_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    cb: NatNexusLlmRequestCb,
+    cb: NemoFlowLlmRequestCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3178,10 +3174,10 @@ pub unsafe extern "C" fn nat_nexus_scope_register_llm_sanitize_request_guardrail
         Err(status) => return status,
     };
     let wrapped = wrap_llm_sanitize_request_fn(cb, user_data, free_fn);
-    match core::nat_nexus_scope_register_llm_sanitize_request_guardrail(
+    match core::nemo_flow_scope_register_llm_sanitize_request_guardrail(
         &uuid, &name, priority, wrapped,
     ) {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3190,11 +3186,11 @@ pub unsafe extern "C" fn nat_nexus_scope_register_llm_sanitize_request_guardrail
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_sanitize_request_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_sanitize_request_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3204,8 +3200,8 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_sanitize_request_guardra
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_scope_deregister_llm_sanitize_request_guardrail(&uuid, &name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_scope_deregister_llm_sanitize_request_guardrail(&uuid, &name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3222,15 +3218,15 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_sanitize_request_guardra
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_register_llm_sanitize_response_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_register_llm_sanitize_response_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    cb: NatNexusJsonCb,
+    cb: NemoFlowJsonCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3241,10 +3237,10 @@ pub unsafe extern "C" fn nat_nexus_scope_register_llm_sanitize_response_guardrai
         Err(status) => return status,
     };
     let wrapped = wrap_llm_response_fn(cb, user_data, free_fn);
-    match core::nat_nexus_scope_register_llm_sanitize_response_guardrail(
+    match core::nemo_flow_scope_register_llm_sanitize_response_guardrail(
         &uuid, &name, priority, wrapped,
     ) {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3253,11 +3249,11 @@ pub unsafe extern "C" fn nat_nexus_scope_register_llm_sanitize_response_guardrai
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_sanitize_response_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_sanitize_response_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3267,8 +3263,8 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_sanitize_response_guardr
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_scope_deregister_llm_sanitize_response_guardrail(&uuid, &name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_scope_deregister_llm_sanitize_response_guardrail(&uuid, &name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3284,20 +3280,20 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_sanitize_response_guardr
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
 /// The callback is fallible. To signal an internal callback failure instead of
-/// allow/reject, call [`crate::error::nat_nexus_set_last_error_message`] from C
+/// allow/reject, call [`crate::error::nemo_flow_set_last_error_message`] from C
 /// and return null.
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_register_llm_conditional_execution_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_register_llm_conditional_execution_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    cb: NatNexusLlmConditionalCb,
+    cb: NemoFlowLlmConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3308,10 +3304,10 @@ pub unsafe extern "C" fn nat_nexus_scope_register_llm_conditional_execution_guar
         Err(status) => return status,
     };
     let wrapped = wrap_llm_conditional_fn(cb, user_data, free_fn);
-    match core::nat_nexus_scope_register_llm_conditional_execution_guardrail(
+    match core::nemo_flow_scope_register_llm_conditional_execution_guardrail(
         &uuid, &name, priority, wrapped,
     ) {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3320,11 +3316,11 @@ pub unsafe extern "C" fn nat_nexus_scope_register_llm_conditional_execution_guar
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_conditional_execution_guardrail(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_conditional_execution_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3334,8 +3330,8 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_conditional_execution_gu
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_scope_deregister_llm_conditional_execution_guardrail(&uuid, &name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_scope_deregister_llm_conditional_execution_guardrail(&uuid, &name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3356,20 +3352,20 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_conditional_execution_gu
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
 /// The callback is fallible. To signal failure, call
-/// [`crate::error::nat_nexus_set_last_error_message`] from C and return null.
+/// [`crate::error::nemo_flow_set_last_error_message`] from C and return null.
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_register_llm_request_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_register_llm_request_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
     break_chain: bool,
-    cb: NatNexusLlmRequestInterceptCb,
+    cb: NemoFlowLlmRequestInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3380,14 +3376,14 @@ pub unsafe extern "C" fn nat_nexus_scope_register_llm_request_intercept(
         Err(status) => return status,
     };
     let wrapped = wrap_llm_request_intercept_fn(cb, user_data, free_fn);
-    match core::nat_nexus_scope_register_llm_request_intercept(
+    match core::nemo_flow_scope_register_llm_request_intercept(
         &uuid,
         &name,
         priority,
         break_chain,
         wrapped,
     ) {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3396,11 +3392,11 @@ pub unsafe extern "C" fn nat_nexus_scope_register_llm_request_intercept(
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_request_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_request_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3410,8 +3406,8 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_request_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_scope_deregister_llm_request_intercept(&uuid, &name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_scope_deregister_llm_request_intercept(&uuid, &name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3429,15 +3425,15 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_request_intercept(
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. Callback pointers must be valid.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_register_llm_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_register_llm_execution_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    exec_cb: NatNexusLlmExecInterceptCb,
+    exec_cb: NemoFlowLlmExecInterceptCb,
     exec_user_data: *mut libc::c_void,
-    exec_free: NatNexusFreeFn,
-) -> NatNexusStatus {
+    exec_free: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3448,8 +3444,8 @@ pub unsafe extern "C" fn nat_nexus_scope_register_llm_execution_intercept(
         Err(status) => return status,
     };
     let exec = wrap_llm_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nat_nexus_scope_register_llm_execution_intercept(&uuid, &name, priority, exec) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_scope_register_llm_execution_intercept(&uuid, &name, priority, exec) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3458,11 +3454,11 @@ pub unsafe extern "C" fn nat_nexus_scope_register_llm_execution_intercept(
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_execution_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3472,8 +3468,8 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_execution_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_scope_deregister_llm_execution_intercept(&uuid, &name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_scope_deregister_llm_execution_intercept(&uuid, &name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3491,15 +3487,15 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_execution_intercept(
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. Callback pointers must be valid.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_register_llm_stream_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_register_llm_stream_execution_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    exec_cb: NatNexusLlmExecInterceptCb,
+    exec_cb: NemoFlowLlmExecInterceptCb,
     exec_user_data: *mut libc::c_void,
-    exec_free: NatNexusFreeFn,
-) -> NatNexusStatus {
+    exec_free: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3510,10 +3506,10 @@ pub unsafe extern "C" fn nat_nexus_scope_register_llm_stream_execution_intercept
         Err(status) => return status,
     };
     let exec = wrap_llm_stream_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nat_nexus_scope_register_llm_stream_execution_intercept(
+    match core::nemo_flow_scope_register_llm_stream_execution_intercept(
         &uuid, &name, priority, exec,
     ) {
-        Ok(()) => NatNexusStatus::Ok,
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3522,11 +3518,11 @@ pub unsafe extern "C" fn nat_nexus_scope_register_llm_stream_execution_intercept
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_stream_execution_intercept(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_stream_execution_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3536,8 +3532,8 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_stream_execution_interce
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_scope_deregister_llm_stream_execution_intercept(&uuid, &name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_scope_deregister_llm_stream_execution_intercept(&uuid, &name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3557,14 +3553,14 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_llm_stream_execution_interce
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_register_subscriber(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_register_subscriber(
     scope_uuid: *const c_char,
     name: *const c_char,
-    cb: NatNexusEventSubscriberCb,
+    cb: NemoFlowEventSubscriberCb,
     user_data: *mut libc::c_void,
-    free_fn: NatNexusFreeFn,
-) -> NatNexusStatus {
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3575,8 +3571,8 @@ pub unsafe extern "C" fn nat_nexus_scope_register_subscriber(
         Err(status) => return status,
     };
     let wrapped = wrap_event_subscriber(cb, user_data, free_fn);
-    match core::nat_nexus_scope_register_subscriber(&uuid, &name, wrapped) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_scope_register_subscriber(&uuid, &name, wrapped) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3585,11 +3581,11 @@ pub unsafe extern "C" fn nat_nexus_scope_register_subscriber(
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_deregister_subscriber(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_deregister_subscriber(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -3599,8 +3595,8 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_subscriber(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nat_nexus_scope_deregister_subscriber(&uuid, &name) {
-        Ok(_) => NatNexusStatus::Ok,
+    match core::nemo_flow_scope_deregister_subscriber(&uuid, &name) {
+        Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3615,16 +3611,16 @@ pub unsafe extern "C" fn nat_nexus_scope_deregister_subscriber(
 /// - `name`: Tool name (null-terminated C string).
 /// - `args_json`: Tool arguments as a JSON C string.
 /// - `out`: On success, receives the transformed JSON string (caller must free
-///   with `nat_nexus_string_free`).
+///   with `nemo_flow_string_free`).
 ///
 /// # Safety
 /// All pointers must be valid. `out` must be non-null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_tool_request_intercepts(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_tool_request_intercepts(
     name: *const c_char,
     args_json: *const c_char,
     out: *mut *mut c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -3632,12 +3628,12 @@ pub unsafe extern "C" fn nat_nexus_tool_request_intercepts(
     };
     let args = match c_str_to_json(args_json) {
         Some(a) => a,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
-    match core::nat_nexus_tool_request_intercepts(&name, args) {
+    match core::nemo_flow_tool_request_intercepts(&name, args) {
         Ok(result) => {
             unsafe { *out = json_to_c_string(&result) };
-            NatNexusStatus::Ok
+            NemoFlowStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -3645,8 +3641,8 @@ pub unsafe extern "C" fn nat_nexus_tool_request_intercepts(
 
 /// Run the registered tool conditional execution guardrail chain.
 ///
-/// Returns `NatNexusStatus::Ok` if all guardrails pass, or
-/// `NatNexusStatus::GuardrailRejected` if blocked.
+/// Returns `NemoFlowStatus::Ok` if all guardrails pass, or
+/// `NemoFlowStatus::GuardrailRejected` if blocked.
 ///
 /// # Parameters
 /// - `name`: Tool name (null-terminated C string).
@@ -3654,11 +3650,11 @@ pub unsafe extern "C" fn nat_nexus_tool_request_intercepts(
 ///
 /// # Safety
 /// All pointers must be valid.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_tool_conditional_execution(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_tool_conditional_execution(
     name: *const c_char,
     args_json: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -3666,10 +3662,10 @@ pub unsafe extern "C" fn nat_nexus_tool_conditional_execution(
     };
     let args = match c_str_to_json(args_json) {
         Some(a) => a,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
-    match core::nat_nexus_tool_conditional_execution(&name, &args) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_tool_conditional_execution(&name, &args) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3680,16 +3676,16 @@ pub unsafe extern "C" fn nat_nexus_tool_conditional_execution(
 /// - `native_json`: The request payload as a JSON C string representing an
 ///   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
 /// - `out`: On success, receives the transformed JSON string (caller must free
-///   with `nat_nexus_string_free`). The output is a serialized `LLMRequest`.
+///   with `nemo_flow_string_free`). The output is a serialized `LLMRequest`.
 ///
 /// # Safety
 /// All pointers must be valid. `out` must be non-null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_request_intercepts(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_request_intercepts(
     name: *const c_char,
     native_json: *const c_char,
     out: *mut *mut c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let name_str = if name.is_null() {
         ""
@@ -3700,20 +3696,20 @@ pub unsafe extern "C" fn nat_nexus_llm_request_intercepts(
     };
     let native = match c_str_to_json(native_json) {
         Some(j) => j,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let request: core_types::LLMRequest = match serde_json::from_value(native) {
         Ok(r) => r,
         Err(_) => {
             set_last_error("failed to parse native_json as LLMRequest");
-            return NatNexusStatus::InvalidJson;
+            return NemoFlowStatus::InvalidJson;
         }
     };
-    match core::nat_nexus_llm_request_intercepts(name_str, request) {
+    match core::nemo_flow_llm_request_intercepts(name_str, request) {
         Ok(transformed) => {
             let result_json = serde_json::to_value(&transformed).unwrap_or(serde_json::Value::Null);
             unsafe { *out = json_to_c_string(&result_json) };
-            NatNexusStatus::Ok
+            NemoFlowStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -3721,8 +3717,8 @@ pub unsafe extern "C" fn nat_nexus_llm_request_intercepts(
 
 /// Run the registered LLM conditional execution guardrail chain.
 ///
-/// Returns `NatNexusStatus::Ok` if all guardrails pass, or
-/// `NatNexusStatus::GuardrailRejected` if blocked.
+/// Returns `NemoFlowStatus::Ok` if all guardrails pass, or
+/// `NemoFlowStatus::GuardrailRejected` if blocked.
 ///
 /// # Parameters
 /// - `native_json`: The request payload as a JSON C string representing an
@@ -3730,24 +3726,24 @@ pub unsafe extern "C" fn nat_nexus_llm_request_intercepts(
 ///
 /// # Safety
 /// All pointers must be valid.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_conditional_execution(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_conditional_execution(
     native_json: *const c_char,
-) -> NatNexusStatus {
+) -> NemoFlowStatus {
     clear_last_error();
     let native = match c_str_to_json(native_json) {
         Some(j) => j,
-        None => return NatNexusStatus::InvalidJson,
+        None => return NemoFlowStatus::InvalidJson,
     };
     let request: core_types::LLMRequest = match serde_json::from_value(native) {
         Ok(r) => r,
         Err(_) => {
             set_last_error("failed to parse native_json as LLMRequest");
-            return NatNexusStatus::InvalidJson;
+            return NemoFlowStatus::InvalidJson;
         }
     };
-    match core::nat_nexus_llm_conditional_execution(&request) {
-        Ok(()) => NatNexusStatus::Ok,
+    match core::nemo_flow_llm_conditional_execution(&request) {
+        Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -3759,26 +3755,27 @@ mod tests {
     use std::ptr;
     use std::sync::{Mutex, OnceLock};
 
-    use serde_json::{json, Value as Json};
+    use serde_json::{Value as Json, json};
     use uuid::Uuid;
 
-    use crate::convert::nat_nexus_string_free;
-    use crate::error::{nat_nexus_last_error, NatNexusStatus};
+    use crate::convert::nemo_flow_string_free;
+    use crate::error::{NemoFlowStatus, nemo_flow_last_error};
     use crate::types::{
-        nat_nexus_atif_exporter_free, nat_nexus_event_data, nat_nexus_event_input,
-        nat_nexus_event_metadata, nat_nexus_event_model_name, nat_nexus_event_name,
-        nat_nexus_event_output, nat_nexus_event_parent_uuid, nat_nexus_event_scope_type,
-        nat_nexus_event_timestamp, nat_nexus_event_tool_call_id, nat_nexus_event_uuid,
-        nat_nexus_llm_handle_attributes, nat_nexus_llm_handle_free, nat_nexus_llm_handle_name,
-        nat_nexus_llm_handle_parent_uuid, nat_nexus_llm_handle_uuid, nat_nexus_llm_request_content,
-        nat_nexus_llm_request_free, nat_nexus_llm_request_headers, nat_nexus_llm_request_new,
-        nat_nexus_otel_subscriber_free, nat_nexus_scope_handle_attributes,
-        nat_nexus_scope_handle_data, nat_nexus_scope_handle_free, nat_nexus_scope_handle_metadata,
-        nat_nexus_scope_handle_name, nat_nexus_scope_handle_parent_uuid,
-        nat_nexus_scope_handle_scope_type, nat_nexus_scope_handle_uuid, nat_nexus_scope_stack_free,
-        nat_nexus_tool_handle_attributes, nat_nexus_tool_handle_free, nat_nexus_tool_handle_name,
-        nat_nexus_tool_handle_parent_uuid, nat_nexus_tool_handle_uuid, FfiAtifExporter, FfiEvent,
-        FfiLLMHandle, FfiLLMRequest, FfiOpenTelemetrySubscriber, FfiScopeStack, FfiToolHandle,
+        FfiAtifExporter, FfiEvent, FfiLLMHandle, FfiLLMRequest, FfiOpenTelemetrySubscriber,
+        FfiScopeStack, FfiToolHandle, nemo_flow_atif_exporter_free, nemo_flow_event_data,
+        nemo_flow_event_input, nemo_flow_event_metadata, nemo_flow_event_model_name,
+        nemo_flow_event_name, nemo_flow_event_output, nemo_flow_event_parent_uuid,
+        nemo_flow_event_scope_type, nemo_flow_event_timestamp, nemo_flow_event_tool_call_id,
+        nemo_flow_event_uuid, nemo_flow_llm_handle_attributes, nemo_flow_llm_handle_free,
+        nemo_flow_llm_handle_name, nemo_flow_llm_handle_parent_uuid, nemo_flow_llm_handle_uuid,
+        nemo_flow_llm_request_content, nemo_flow_llm_request_free, nemo_flow_llm_request_headers,
+        nemo_flow_llm_request_new, nemo_flow_otel_subscriber_free,
+        nemo_flow_scope_handle_attributes, nemo_flow_scope_handle_data,
+        nemo_flow_scope_handle_free, nemo_flow_scope_handle_metadata, nemo_flow_scope_handle_name,
+        nemo_flow_scope_handle_parent_uuid, nemo_flow_scope_handle_scope_type,
+        nemo_flow_scope_handle_uuid, nemo_flow_scope_stack_free, nemo_flow_tool_handle_attributes,
+        nemo_flow_tool_handle_free, nemo_flow_tool_handle_name, nemo_flow_tool_handle_parent_uuid,
+        nemo_flow_tool_handle_uuid,
     };
 
     static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -3817,12 +3814,12 @@ mod tests {
         let s = unsafe { CStr::from_ptr(ptr) }
             .to_string_lossy()
             .into_owned();
-        unsafe { nat_nexus_string_free(ptr) };
+        unsafe { nemo_flow_string_free(ptr) };
         Some(s)
     }
 
     unsafe fn read_last_error() -> Option<String> {
-        let ptr = nat_nexus_last_error();
+        let ptr = nemo_flow_last_error();
         if ptr.is_null() {
             None
         } else {
@@ -3841,13 +3838,13 @@ mod tests {
     unsafe fn fresh_scope_stack() -> *mut FfiScopeStack {
         let mut stack = ptr::null_mut();
         assert_eq!(
-            unsafe { nat_nexus_scope_stack_create(&mut stack) },
-            NatNexusStatus::Ok
+            unsafe { nemo_flow_scope_stack_create(&mut stack) },
+            NemoFlowStatus::Ok
         );
         assert!(!stack.is_null());
         assert_eq!(
-            unsafe { nat_nexus_scope_stack_set_thread(stack) },
-            NatNexusStatus::Ok
+            unsafe { nemo_flow_scope_stack_set_thread(stack) },
+            NemoFlowStatus::Ok
         );
         stack
     }
@@ -3860,22 +3857,22 @@ mod tests {
 
     unsafe extern "C" fn subscriber_cb(_user_data: *mut libc::c_void, event: *const FfiEvent) {
         let payload = json!({
-            "uuid": unsafe { take_string(nat_nexus_event_uuid(event)) }.unwrap_or_default(),
-            "name": unsafe { take_string(nat_nexus_event_name(event)) }.unwrap_or_default(),
-            "kind": unsafe { take_string(crate::types::nat_nexus_event_kind(event)) }.unwrap_or_default(),
-            "data": unsafe { take_string(nat_nexus_event_data(event)) }
+            "uuid": unsafe { take_string(nemo_flow_event_uuid(event)) }.unwrap_or_default(),
+            "name": unsafe { take_string(nemo_flow_event_name(event)) }.unwrap_or_default(),
+            "kind": unsafe { take_string(crate::types::nemo_flow_event_kind(event)) }.unwrap_or_default(),
+            "data": unsafe { take_string(nemo_flow_event_data(event)) }
                 .map(|s| serde_json::from_str::<Json>(&s).unwrap()),
-            "metadata": unsafe { take_string(nat_nexus_event_metadata(event)) }
+            "metadata": unsafe { take_string(nemo_flow_event_metadata(event)) }
                 .map(|s| serde_json::from_str::<Json>(&s).unwrap()),
-            "timestamp": unsafe { take_string(nat_nexus_event_timestamp(event)) }.unwrap_or_default(),
-            "input": unsafe { take_string(nat_nexus_event_input(event)) }
+            "timestamp": unsafe { take_string(nemo_flow_event_timestamp(event)) }.unwrap_or_default(),
+            "input": unsafe { take_string(nemo_flow_event_input(event)) }
                 .map(|s| serde_json::from_str::<Json>(&s).unwrap()),
-            "output": unsafe { take_string(nat_nexus_event_output(event)) }
+            "output": unsafe { take_string(nemo_flow_event_output(event)) }
                 .map(|s| serde_json::from_str::<Json>(&s).unwrap()),
-            "model_name": unsafe { take_string(nat_nexus_event_model_name(event)) },
-            "tool_call_id": unsafe { take_string(nat_nexus_event_tool_call_id(event)) },
-            "parent_uuid": unsafe { take_string(nat_nexus_event_parent_uuid(event)) },
-            "scope_type": unsafe { take_string(nat_nexus_event_scope_type(event)) },
+            "model_name": unsafe { take_string(nemo_flow_event_model_name(event)) },
+            "tool_call_id": unsafe { take_string(nemo_flow_event_tool_call_id(event)) },
+            "parent_uuid": unsafe { take_string(nemo_flow_event_parent_uuid(event)) },
+            "scope_type": unsafe { take_string(nemo_flow_event_scope_type(event)) },
         });
         lock_unpoisoned(event_log()).push(payload);
     }
@@ -3934,38 +3931,38 @@ mod tests {
 
         let mut report_json = ptr::null_mut();
         assert_eq!(
-            unsafe { nat_nexus_validate_optimizer_config(config.as_ptr(), &mut report_json) },
-            NatNexusStatus::Ok
+            unsafe { nemo_flow_validate_optimizer_config(config.as_ptr(), &mut report_json) },
+            NemoFlowStatus::Ok
         );
         let report = unsafe { returned_json(report_json) };
         assert_eq!(report["diagnostics"], json!([]));
 
         let mut runtime = ptr::null_mut();
         assert_eq!(
-            unsafe { nat_nexus_optimizer_runtime_create(config.as_ptr(), &mut runtime) },
-            NatNexusStatus::Ok
+            unsafe { nemo_flow_optimizer_runtime_create(config.as_ptr(), &mut runtime) },
+            NemoFlowStatus::Ok
         );
         assert!(!runtime.is_null());
 
         let mut runtime_report_json = ptr::null_mut();
         assert_eq!(
-            unsafe { nat_nexus_optimizer_runtime_report_json(runtime, &mut runtime_report_json) },
-            NatNexusStatus::Ok
+            unsafe { nemo_flow_optimizer_runtime_report_json(runtime, &mut runtime_report_json) },
+            NemoFlowStatus::Ok
         );
         let runtime_report = unsafe { returned_json(runtime_report_json) };
         assert_eq!(runtime_report["diagnostics"], json!([]));
 
         assert_eq!(
-            unsafe { nat_nexus_optimizer_runtime_register(runtime) },
-            NatNexusStatus::Ok
+            unsafe { nemo_flow_optimizer_runtime_register(runtime) },
+            NemoFlowStatus::Ok
         );
         assert_eq!(
-            unsafe { nat_nexus_optimizer_runtime_deregister(runtime) },
-            NatNexusStatus::Ok
+            unsafe { nemo_flow_optimizer_runtime_deregister(runtime) },
+            NemoFlowStatus::Ok
         );
         assert_eq!(
-            unsafe { nat_nexus_optimizer_runtime_shutdown(runtime) },
-            NatNexusStatus::Ok
+            unsafe { nemo_flow_optimizer_runtime_shutdown(runtime) },
+            NemoFlowStatus::Ok
         );
     }
 
@@ -4002,25 +3999,25 @@ mod tests {
     unsafe extern "C" fn tool_exec_intercept_cb(
         _user_data: *mut libc::c_void,
         args_json: *const c_char,
-        next_fn: crate::callable::NatNexusToolExecNextFn,
+        next_fn: crate::callable::NemoFlowToolExecNextFn,
         next_ctx: *mut libc::c_void,
     ) -> *mut c_char {
-        next_fn(args_json, next_ctx)
+        unsafe { next_fn(args_json, next_ctx) }
     }
 
     unsafe extern "C" fn llm_request_cb(
         _user_data: *mut libc::c_void,
         request: *const FfiLLMRequest,
     ) -> *mut FfiLLMRequest {
-        let headers = unsafe { take_string(nat_nexus_llm_request_headers(request)) }
+        let headers = unsafe { take_string(nemo_flow_llm_request_headers(request)) }
             .unwrap_or_else(|| "{}".to_string());
-        let content = unsafe { take_string(nat_nexus_llm_request_content(request)) }
+        let content = unsafe { take_string(nemo_flow_llm_request_content(request)) }
             .unwrap_or_else(|| "null".to_string());
         let mut content_json: Json = serde_json::from_str(&content).unwrap();
         content_json["intercepted"] = json!(true);
         let headers_c = CString::new(headers).unwrap();
         let content_c = CString::new(content_json.to_string()).unwrap();
-        unsafe { nat_nexus_llm_request_new(headers_c.as_ptr(), content_c.as_ptr()) }
+        unsafe { nemo_flow_llm_request_new(headers_c.as_ptr(), content_c.as_ptr()) }
     }
 
     /// Intercept-specific callback with the unified annotated-aware signature.
@@ -4033,16 +4030,16 @@ mod tests {
         annotated_json: *const c_char,
         out_request: *mut *mut FfiLLMRequest,
         out_annotated_json: *mut *mut c_char,
-    ) -> NatNexusStatus {
-        let headers = unsafe { take_string(nat_nexus_llm_request_headers(request)) }
+    ) -> NemoFlowStatus {
+        let headers = unsafe { take_string(nemo_flow_llm_request_headers(request)) }
             .unwrap_or_else(|| "{}".to_string());
-        let content = unsafe { take_string(nat_nexus_llm_request_content(request)) }
+        let content = unsafe { take_string(nemo_flow_llm_request_content(request)) }
             .unwrap_or_else(|| "null".to_string());
         let mut content_json: Json = serde_json::from_str(&content).unwrap();
         content_json["intercepted"] = json!(true);
         let headers_c = CString::new(headers).unwrap();
         let content_c = CString::new(content_json.to_string()).unwrap();
-        unsafe { *out_request = nat_nexus_llm_request_new(headers_c.as_ptr(), content_c.as_ptr()) };
+        unsafe { *out_request = nemo_flow_llm_request_new(headers_c.as_ptr(), content_c.as_ptr()) };
         // Pass through annotated JSON if present
         if annotated_json.is_null() {
             unsafe { *out_annotated_json = ptr::null_mut() };
@@ -4052,7 +4049,7 @@ mod tests {
                 .into_owned();
             unsafe { *out_annotated_json = CString::new(s).unwrap().into_raw() };
         }
-        NatNexusStatus::Ok
+        NemoFlowStatus::Ok
     }
 
     unsafe extern "C" fn llm_allow_cb(
@@ -4110,10 +4107,10 @@ mod tests {
     unsafe extern "C" fn llm_exec_intercept_cb(
         _user_data: *mut libc::c_void,
         native_json: *const c_char,
-        next_fn: crate::callable::NatNexusLlmExecNextFn,
+        next_fn: crate::callable::NemoFlowLlmExecNextFn,
         next_ctx: *mut libc::c_void,
     ) -> *mut c_char {
-        next_fn(native_json, next_ctx)
+        unsafe { next_fn(native_json, next_ctx) }
     }
 
     unsafe extern "C" fn collector_cb(chunk: *const c_char) {
@@ -4137,8 +4134,8 @@ mod tests {
 
         unsafe {
             assert_eq!(
-                nat_nexus_get_handle(ptr::null_mut()),
-                NatNexusStatus::NullPointer
+                nemo_flow_get_handle(ptr::null_mut()),
+                NemoFlowStatus::NullPointer
             );
             assert!(read_last_error().unwrap().contains("out pointer is null"));
 
@@ -4146,76 +4143,76 @@ mod tests {
             let invalid_json = cstring("{");
             let mut handle = ptr::null_mut();
             assert_eq!(
-                nat_nexus_push_scope(
+                nemo_flow_push_scope(
                     name.as_ptr(),
-                    NatNexusScopeType::Agent,
+                    NemoFlowScopeType::Agent,
                     ptr::null(),
                     0,
                     invalid_json.as_ptr(),
                     ptr::null(),
                     &mut handle,
                 ),
-                NatNexusStatus::InvalidJson
+                NemoFlowStatus::InvalidJson
             );
 
             let stack = fresh_scope_stack();
-            assert!(nat_nexus_scope_stack_active());
+            assert!(nemo_flow_scope_stack_active());
 
             let mut root = ptr::null_mut();
-            assert_eq!(nat_nexus_get_handle(&mut root), NatNexusStatus::Ok);
-            let root_uuid = take_string(nat_nexus_scope_handle_uuid(root)).unwrap();
+            assert_eq!(nemo_flow_get_handle(&mut root), NemoFlowStatus::Ok);
+            let root_uuid = take_string(nemo_flow_scope_handle_uuid(root)).unwrap();
             assert!(!root_uuid.is_empty());
             assert_eq!(
-                nat_nexus_scope_handle_scope_type(root) as i32,
-                NatNexusScopeType::Agent as i32
+                nemo_flow_scope_handle_scope_type(root) as i32,
+                NemoFlowScopeType::Agent as i32
             );
-            assert_eq!(nat_nexus_scope_handle_attributes(root), 0);
-            nat_nexus_scope_handle_free(root);
+            assert_eq!(nemo_flow_scope_handle_attributes(root), 0);
+            nemo_flow_scope_handle_free(root);
 
             let scope_name = cstring("ffi_scope");
             let scope_data = cstring(r#"{"scope":true}"#);
             let scope_metadata = cstring(r#"{"meta":"ok"}"#);
             let mut scope = ptr::null_mut();
             assert_eq!(
-                nat_nexus_push_scope(
+                nemo_flow_push_scope(
                     scope_name.as_ptr(),
-                    NatNexusScopeType::Function,
+                    NemoFlowScopeType::Function,
                     ptr::null(),
                     1,
                     scope_data.as_ptr(),
                     scope_metadata.as_ptr(),
                     &mut scope,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                take_string(nat_nexus_scope_handle_name(scope)).unwrap(),
+                take_string(nemo_flow_scope_handle_name(scope)).unwrap(),
                 "ffi_scope"
             );
             assert_eq!(
-                nat_nexus_scope_handle_scope_type(scope) as i32,
-                NatNexusScopeType::Function as i32
+                nemo_flow_scope_handle_scope_type(scope) as i32,
+                NemoFlowScopeType::Function as i32
             );
-            assert_eq!(nat_nexus_scope_handle_attributes(scope), 1);
-            assert!(take_string(nat_nexus_scope_handle_parent_uuid(scope)).is_some());
+            assert_eq!(nemo_flow_scope_handle_attributes(scope), 1);
+            assert!(take_string(nemo_flow_scope_handle_parent_uuid(scope)).is_some());
             assert_eq!(
                 serde_json::from_str::<Json>(
-                    &take_string(nat_nexus_scope_handle_data(scope)).unwrap()
+                    &take_string(nemo_flow_scope_handle_data(scope)).unwrap()
                 )
                 .unwrap(),
                 json!({"scope": true})
             );
             assert_eq!(
                 serde_json::from_str::<Json>(
-                    &take_string(nat_nexus_scope_handle_metadata(scope)).unwrap()
+                    &take_string(nemo_flow_scope_handle_metadata(scope)).unwrap()
                 )
                 .unwrap(),
                 json!({"meta": "ok"})
             );
-            assert_eq!(nat_nexus_pop_scope(scope), NatNexusStatus::Ok);
-            nat_nexus_scope_handle_free(scope);
+            assert_eq!(nemo_flow_pop_scope(scope), NemoFlowStatus::Ok);
+            nemo_flow_scope_handle_free(scope);
 
-            nat_nexus_scope_stack_free(stack);
+            nemo_flow_scope_stack_free(stack);
         }
     }
 
@@ -4229,19 +4226,19 @@ mod tests {
             let subscriber_name = unique_name("ffi_subscriber");
             let subscriber_name_c = cstring(&subscriber_name);
             assert_eq!(
-                nat_nexus_register_subscriber(
+                nemo_flow_register_subscriber(
                     subscriber_name_c.as_ptr(),
                     subscriber_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let intercept_name = unique_name("ffi_tool_intercept");
             let intercept_name_c = cstring(&intercept_name);
             assert_eq!(
-                nat_nexus_register_tool_request_intercept(
+                nemo_flow_register_tool_request_intercept(
                     intercept_name_c.as_ptr(),
                     1,
                     false,
@@ -4249,46 +4246,46 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let conditional_name = unique_name("ffi_tool_conditional");
             let conditional_name_c = cstring(&conditional_name);
             assert_eq!(
-                nat_nexus_register_tool_conditional_execution_guardrail(
+                nemo_flow_register_tool_conditional_execution_guardrail(
                     conditional_name_c.as_ptr(),
                     1,
                     tool_allow_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let tool_name = cstring("ffi_tool");
             let args = cstring(r#"{"value": 1}"#);
             let mut intercepted_out = ptr::null_mut();
             assert_eq!(
-                nat_nexus_tool_request_intercepts(
+                nemo_flow_tool_request_intercepts(
                     tool_name.as_ptr(),
                     args.as_ptr(),
                     &mut intercepted_out
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             let intercepted_json = returned_json(intercepted_out);
             assert_eq!(intercepted_json["intercepted"], json!(true));
 
             assert_eq!(
-                nat_nexus_tool_conditional_execution(tool_name.as_ptr(), args.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_tool_conditional_execution(tool_name.as_ptr(), args.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             let tool_call_id = cstring("call_ffi_123");
             let metadata = cstring(r#"{"source":"ffi-test"}"#);
             let mut handle: *mut FfiToolHandle = ptr::null_mut();
             assert_eq!(
-                nat_nexus_tool_call(
+                nemo_flow_tool_call(
                     tool_name.as_ptr(),
                     args.as_ptr(),
                     ptr::null(),
@@ -4298,26 +4295,26 @@ mod tests {
                     tool_call_id.as_ptr(),
                     &mut handle,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
-            assert!(take_string(nat_nexus_tool_handle_uuid(handle)).is_some());
+            assert!(take_string(nemo_flow_tool_handle_uuid(handle)).is_some());
             assert_eq!(
-                take_string(nat_nexus_tool_handle_name(handle)).unwrap(),
+                take_string(nemo_flow_tool_handle_name(handle)).unwrap(),
                 "ffi_tool"
             );
-            assert_eq!(nat_nexus_tool_handle_attributes(handle), 1);
-            assert!(take_string(nat_nexus_tool_handle_parent_uuid(handle)).is_some());
+            assert_eq!(nemo_flow_tool_handle_attributes(handle), 1);
+            assert!(take_string(nemo_flow_tool_handle_parent_uuid(handle)).is_some());
 
             let result = cstring(r#"{"ok": true}"#);
             assert_eq!(
-                nat_nexus_tool_call_end(handle, result.as_ptr(), ptr::null(), ptr::null()),
-                NatNexusStatus::Ok
+                nemo_flow_tool_call_end(handle, result.as_ptr(), ptr::null(), ptr::null()),
+                NemoFlowStatus::Ok
             );
-            nat_nexus_tool_handle_free(handle);
+            nemo_flow_tool_handle_free(handle);
 
             let mut execute_out = ptr::null_mut();
             assert_eq!(
-                nat_nexus_tool_call_execute(
+                nemo_flow_tool_call_execute(
                     tool_name.as_ptr(),
                     args.as_ptr(),
                     tool_exec_cb,
@@ -4329,7 +4326,7 @@ mod tests {
                     ptr::null(),
                     &mut execute_out,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             let executed_json = returned_json(execute_out);
             assert_eq!(executed_json["intercepted"], json!(true));
@@ -4337,24 +4334,28 @@ mod tests {
 
             let events = lock_unpoisoned(event_log()).clone();
             assert!(events.iter().any(|event| event["name"] == "ffi_tool"));
-            assert!(events
-                .iter()
-                .any(|event| event["tool_call_id"] == "call_ffi_123"));
-            assert!(events
-                .iter()
-                .any(|event| event["timestamp"].as_str().is_some_and(|s| !s.is_empty())));
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event["tool_call_id"] == "call_ffi_123")
+            );
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event["timestamp"].as_str().is_some_and(|s| !s.is_empty()))
+            );
 
             let mark_name = cstring("ffi_mark");
             let mark_data = cstring(r#"{"mark":true}"#);
             let mark_metadata = cstring(r#"{"origin":"ffi"}"#);
             assert_eq!(
-                nat_nexus_event(
+                nemo_flow_event(
                     mark_name.as_ptr(),
                     ptr::null(),
                     mark_data.as_ptr(),
                     mark_metadata.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             let events = lock_unpoisoned(event_log()).clone();
             assert!(events.iter().any(|event| {
@@ -4365,20 +4366,20 @@ mod tests {
             }));
 
             assert_eq!(
-                nat_nexus_deregister_tool_request_intercept(intercept_name_c.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_tool_request_intercept(intercept_name_c.as_ptr()),
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_deregister_tool_conditional_execution_guardrail(
+                nemo_flow_deregister_tool_conditional_execution_guardrail(
                     conditional_name_c.as_ptr()
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_deregister_subscriber(subscriber_name_c.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_subscriber(subscriber_name_c.as_ptr()),
+                NemoFlowStatus::Ok
             );
-            nat_nexus_scope_stack_free(stack);
+            nemo_flow_scope_stack_free(stack);
         }
     }
 
@@ -4400,7 +4401,7 @@ mod tests {
             let mut stream: *mut FfiStream = ptr::null_mut();
 
             assert_eq!(
-                nat_nexus_tool_call(
+                nemo_flow_tool_call(
                     name.as_ptr(),
                     args.as_ptr(),
                     ptr::null(),
@@ -4410,10 +4411,10 @@ mod tests {
                     ptr::null(),
                     ptr::null_mut(),
                 ),
-                NatNexusStatus::NullPointer
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_tool_call(
+                nemo_flow_tool_call(
                     name.as_ptr(),
                     invalid_json.as_ptr(),
                     ptr::null(),
@@ -4423,10 +4424,10 @@ mod tests {
                     ptr::null(),
                     &mut handle,
                 ),
-                NatNexusStatus::InvalidJson
+                NemoFlowStatus::InvalidJson
             );
             assert_eq!(
-                nat_nexus_tool_call(
+                nemo_flow_tool_call(
                     name.as_ptr(),
                     args.as_ptr(),
                     ptr::null(),
@@ -4436,11 +4437,11 @@ mod tests {
                     ptr::null(),
                     &mut handle,
                 ),
-                NatNexusStatus::InvalidJson
+                NemoFlowStatus::InvalidJson
             );
 
             assert_eq!(
-                nat_nexus_tool_call(
+                nemo_flow_tool_call(
                     name.as_ptr(),
                     args.as_ptr(),
                     ptr::null(),
@@ -4450,28 +4451,28 @@ mod tests {
                     ptr::null(),
                     &mut handle,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_tool_call_end(ptr::null(), args.as_ptr(), ptr::null(), ptr::null()),
-                NatNexusStatus::NullPointer
+                nemo_flow_tool_call_end(ptr::null(), args.as_ptr(), ptr::null(), ptr::null()),
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_tool_call_end(handle, invalid_json.as_ptr(), ptr::null(), ptr::null()),
-                NatNexusStatus::InvalidJson
+                nemo_flow_tool_call_end(handle, invalid_json.as_ptr(), ptr::null(), ptr::null()),
+                NemoFlowStatus::InvalidJson
             );
             assert_eq!(
-                nat_nexus_tool_call_end(handle, args.as_ptr(), invalid_json.as_ptr(), ptr::null(),),
-                NatNexusStatus::InvalidJson
+                nemo_flow_tool_call_end(handle, args.as_ptr(), invalid_json.as_ptr(), ptr::null(),),
+                NemoFlowStatus::InvalidJson
             );
             assert_eq!(
-                nat_nexus_tool_call_end(handle, args.as_ptr(), ptr::null(), ptr::null()),
-                NatNexusStatus::Ok
+                nemo_flow_tool_call_end(handle, args.as_ptr(), ptr::null(), ptr::null()),
+                NemoFlowStatus::Ok
             );
-            nat_nexus_tool_handle_free(handle);
+            nemo_flow_tool_handle_free(handle);
 
             assert_eq!(
-                nat_nexus_tool_call_execute(
+                nemo_flow_tool_call_execute(
                     name.as_ptr(),
                     args.as_ptr(),
                     tool_exec_cb,
@@ -4483,10 +4484,10 @@ mod tests {
                     ptr::null(),
                     ptr::null_mut(),
                 ),
-                NatNexusStatus::NullPointer
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_tool_call_execute(
+                nemo_flow_tool_call_execute(
                     name.as_ptr(),
                     invalid_json.as_ptr(),
                     tool_exec_cb,
@@ -4498,11 +4499,11 @@ mod tests {
                     ptr::null(),
                     &mut out_json,
                 ),
-                NatNexusStatus::InvalidJson
+                NemoFlowStatus::InvalidJson
             );
 
             assert_eq!(
-                nat_nexus_llm_call(
+                nemo_flow_llm_call(
                     name.as_ptr(),
                     request.as_ptr(),
                     ptr::null(),
@@ -4512,10 +4513,10 @@ mod tests {
                     ptr::null(),
                     ptr::null_mut(),
                 ),
-                NatNexusStatus::NullPointer
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_llm_call(
+                nemo_flow_llm_call(
                     name.as_ptr(),
                     invalid_json.as_ptr(),
                     ptr::null(),
@@ -4525,10 +4526,10 @@ mod tests {
                     ptr::null(),
                     &mut llm_handle,
                 ),
-                NatNexusStatus::InvalidJson
+                NemoFlowStatus::InvalidJson
             );
             assert_eq!(
-                nat_nexus_llm_call(
+                nemo_flow_llm_call(
                     name.as_ptr(),
                     invalid_request_shape.as_ptr(),
                     ptr::null(),
@@ -4538,14 +4539,16 @@ mod tests {
                     ptr::null(),
                     &mut llm_handle,
                 ),
-                NatNexusStatus::InvalidJson
+                NemoFlowStatus::InvalidJson
             );
-            assert!(read_last_error()
-                .unwrap_or_default()
-                .contains("failed to parse native_json as LLMRequest"));
+            assert!(
+                read_last_error()
+                    .unwrap_or_default()
+                    .contains("failed to parse native_json as LLMRequest")
+            );
 
             assert_eq!(
-                nat_nexus_llm_call(
+                nemo_flow_llm_call(
                     name.as_ptr(),
                     request.as_ptr(),
                     ptr::null(),
@@ -4555,24 +4558,24 @@ mod tests {
                     ptr::null(),
                     &mut llm_handle,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_llm_call_end(ptr::null(), args.as_ptr(), ptr::null(), ptr::null()),
-                NatNexusStatus::NullPointer
+                nemo_flow_llm_call_end(ptr::null(), args.as_ptr(), ptr::null(), ptr::null()),
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_llm_call_end(llm_handle, invalid_json.as_ptr(), ptr::null(), ptr::null(),),
-                NatNexusStatus::InvalidJson
+                nemo_flow_llm_call_end(llm_handle, invalid_json.as_ptr(), ptr::null(), ptr::null(),),
+                NemoFlowStatus::InvalidJson
             );
             assert_eq!(
-                nat_nexus_llm_call_end(llm_handle, args.as_ptr(), ptr::null(), ptr::null()),
-                NatNexusStatus::Ok
+                nemo_flow_llm_call_end(llm_handle, args.as_ptr(), ptr::null(), ptr::null()),
+                NemoFlowStatus::Ok
             );
-            nat_nexus_llm_handle_free(llm_handle);
+            nemo_flow_llm_handle_free(llm_handle);
 
             assert_eq!(
-                nat_nexus_llm_call_execute(
+                nemo_flow_llm_call_execute(
                     name.as_ptr(),
                     request.as_ptr(),
                     llm_exec_cb,
@@ -4590,10 +4593,10 @@ mod tests {
                     ptr::null(),
                     ptr::null_mut(),
                 ),
-                NatNexusStatus::NullPointer
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_llm_call_execute(
+                nemo_flow_llm_call_execute(
                     name.as_ptr(),
                     invalid_request_shape.as_ptr(),
                     llm_exec_cb,
@@ -4611,11 +4614,11 @@ mod tests {
                     ptr::null(),
                     &mut out_json,
                 ),
-                NatNexusStatus::InvalidJson
+                NemoFlowStatus::InvalidJson
             );
 
             assert_eq!(
-                nat_nexus_llm_stream_call_execute(
+                nemo_flow_llm_stream_call_execute(
                     name.as_ptr(),
                     request.as_ptr(),
                     llm_exec_cb,
@@ -4635,10 +4638,10 @@ mod tests {
                     ptr::null(),
                     ptr::null_mut(),
                 ),
-                NatNexusStatus::NullPointer
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_llm_stream_call_execute(
+                nemo_flow_llm_stream_call_execute(
                     name.as_ptr(),
                     invalid_request_shape.as_ptr(),
                     llm_exec_cb,
@@ -4658,10 +4661,10 @@ mod tests {
                     ptr::null(),
                     &mut stream,
                 ),
-                NatNexusStatus::InvalidJson
+                NemoFlowStatus::InvalidJson
             );
 
-            nat_nexus_scope_stack_free(stack);
+            nemo_flow_scope_stack_free(stack);
         }
     }
 
@@ -4672,149 +4675,149 @@ mod tests {
 
         unsafe {
             assert_eq!(
-                nat_nexus_scope_stack_create(ptr::null_mut()),
-                NatNexusStatus::NullPointer
+                nemo_flow_scope_stack_create(ptr::null_mut()),
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_scope_stack_set_thread(ptr::null()),
-                NatNexusStatus::NullPointer
+                nemo_flow_scope_stack_set_thread(ptr::null()),
+                NemoFlowStatus::NullPointer
             );
 
             let stack = fresh_scope_stack();
             let scope_name = cstring("ffi_scope_local");
             let mut scope = ptr::null_mut();
             assert_eq!(
-                nat_nexus_push_scope(
+                nemo_flow_push_scope(
                     scope_name.as_ptr(),
-                    NatNexusScopeType::Function,
+                    NemoFlowScopeType::Function,
                     ptr::null(),
                     0,
                     ptr::null(),
                     ptr::null(),
                     &mut scope,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
-            let scope_uuid = cstring(&take_string(nat_nexus_scope_handle_uuid(scope)).unwrap());
+            let scope_uuid = cstring(&take_string(nemo_flow_scope_handle_uuid(scope)).unwrap());
             let invalid_uuid = cstring("not-a-uuid");
 
             let global_tool_san_req = cstring(&unique_name("ffi_tool_san_req"));
             assert_eq!(
-                nat_nexus_register_tool_sanitize_request_guardrail(
+                nemo_flow_register_tool_sanitize_request_guardrail(
                     global_tool_san_req.as_ptr(),
                     1,
                     tool_request_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_register_tool_sanitize_request_guardrail(
+                nemo_flow_register_tool_sanitize_request_guardrail(
                     global_tool_san_req.as_ptr(),
                     1,
                     tool_request_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::AlreadyExists
+                NemoFlowStatus::AlreadyExists
             );
             assert_eq!(
-                nat_nexus_deregister_tool_sanitize_request_guardrail(global_tool_san_req.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_tool_sanitize_request_guardrail(global_tool_san_req.as_ptr()),
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_deregister_tool_sanitize_request_guardrail(global_tool_san_req.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_tool_sanitize_request_guardrail(global_tool_san_req.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             let global_tool_san_resp = cstring(&unique_name("ffi_tool_san_resp"));
             assert_eq!(
-                nat_nexus_register_tool_sanitize_response_guardrail(
+                nemo_flow_register_tool_sanitize_response_guardrail(
                     global_tool_san_resp.as_ptr(),
                     1,
                     tool_request_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_deregister_tool_sanitize_response_guardrail(
+                nemo_flow_deregister_tool_sanitize_response_guardrail(
                     global_tool_san_resp.as_ptr()
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let global_tool_exec = cstring(&unique_name("ffi_tool_exec"));
             assert_eq!(
-                nat_nexus_register_tool_execution_intercept(
+                nemo_flow_register_tool_execution_intercept(
                     global_tool_exec.as_ptr(),
                     1,
                     tool_exec_intercept_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_deregister_tool_execution_intercept(global_tool_exec.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_tool_execution_intercept(global_tool_exec.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             let global_llm_san_req = cstring(&unique_name("ffi_llm_san_req"));
             assert_eq!(
-                nat_nexus_register_llm_sanitize_request_guardrail(
+                nemo_flow_register_llm_sanitize_request_guardrail(
                     global_llm_san_req.as_ptr(),
                     1,
                     llm_request_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_deregister_llm_sanitize_request_guardrail(global_llm_san_req.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_llm_sanitize_request_guardrail(global_llm_san_req.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             let global_llm_exec = cstring(&unique_name("ffi_llm_exec"));
             assert_eq!(
-                nat_nexus_register_llm_execution_intercept(
+                nemo_flow_register_llm_execution_intercept(
                     global_llm_exec.as_ptr(),
                     1,
                     llm_exec_intercept_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_deregister_llm_execution_intercept(global_llm_exec.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_llm_execution_intercept(global_llm_exec.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             let global_llm_stream_exec = cstring(&unique_name("ffi_llm_stream_exec"));
             assert_eq!(
-                nat_nexus_register_llm_stream_execution_intercept(
+                nemo_flow_register_llm_stream_execution_intercept(
                     global_llm_stream_exec.as_ptr(),
                     1,
                     llm_exec_intercept_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_deregister_llm_stream_execution_intercept(
+                nemo_flow_deregister_llm_stream_execution_intercept(
                     global_llm_stream_exec.as_ptr()
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_tool_san_req = cstring(&unique_name("scope_tool_san_req"));
             assert_eq!(
-                nat_nexus_scope_register_tool_sanitize_request_guardrail(
+                nemo_flow_scope_register_tool_sanitize_request_guardrail(
                     invalid_uuid.as_ptr(),
                     scope_tool_san_req.as_ptr(),
                     1,
@@ -4822,10 +4825,10 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::InvalidArg
+                NemoFlowStatus::InvalidArg
             );
             assert_eq!(
-                nat_nexus_scope_register_tool_sanitize_request_guardrail(
+                nemo_flow_scope_register_tool_sanitize_request_guardrail(
                     scope_uuid.as_ptr(),
                     scope_tool_san_req.as_ptr(),
                     1,
@@ -4833,19 +4836,19 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_scope_deregister_tool_sanitize_request_guardrail(
+                nemo_flow_scope_deregister_tool_sanitize_request_guardrail(
                     scope_uuid.as_ptr(),
                     scope_tool_san_req.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_tool_san_resp = cstring(&unique_name("scope_tool_san_resp"));
             assert_eq!(
-                nat_nexus_scope_register_tool_sanitize_response_guardrail(
+                nemo_flow_scope_register_tool_sanitize_response_guardrail(
                     scope_uuid.as_ptr(),
                     scope_tool_san_resp.as_ptr(),
                     1,
@@ -4853,19 +4856,19 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_scope_deregister_tool_sanitize_response_guardrail(
+                nemo_flow_scope_deregister_tool_sanitize_response_guardrail(
                     scope_uuid.as_ptr(),
                     scope_tool_san_resp.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_tool_cond = cstring(&unique_name("scope_tool_cond"));
             assert_eq!(
-                nat_nexus_scope_register_tool_conditional_execution_guardrail(
+                nemo_flow_scope_register_tool_conditional_execution_guardrail(
                     scope_uuid.as_ptr(),
                     scope_tool_cond.as_ptr(),
                     1,
@@ -4873,19 +4876,19 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_scope_deregister_tool_conditional_execution_guardrail(
+                nemo_flow_scope_deregister_tool_conditional_execution_guardrail(
                     scope_uuid.as_ptr(),
                     scope_tool_cond.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_tool_req = cstring(&unique_name("scope_tool_req"));
             assert_eq!(
-                nat_nexus_scope_register_tool_request_intercept(
+                nemo_flow_scope_register_tool_request_intercept(
                     scope_uuid.as_ptr(),
                     scope_tool_req.as_ptr(),
                     1,
@@ -4894,19 +4897,19 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_scope_deregister_tool_request_intercept(
+                nemo_flow_scope_deregister_tool_request_intercept(
                     scope_uuid.as_ptr(),
                     scope_tool_req.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_tool_exec = cstring(&unique_name("scope_tool_exec"));
             assert_eq!(
-                nat_nexus_scope_register_tool_execution_intercept(
+                nemo_flow_scope_register_tool_execution_intercept(
                     scope_uuid.as_ptr(),
                     scope_tool_exec.as_ptr(),
                     1,
@@ -4914,19 +4917,19 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_scope_deregister_tool_execution_intercept(
+                nemo_flow_scope_deregister_tool_execution_intercept(
                     scope_uuid.as_ptr(),
                     scope_tool_exec.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_llm_san_req = cstring(&unique_name("scope_llm_san_req"));
             assert_eq!(
-                nat_nexus_scope_register_llm_sanitize_request_guardrail(
+                nemo_flow_scope_register_llm_sanitize_request_guardrail(
                     scope_uuid.as_ptr(),
                     scope_llm_san_req.as_ptr(),
                     1,
@@ -4934,19 +4937,19 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_scope_deregister_llm_sanitize_request_guardrail(
+                nemo_flow_scope_deregister_llm_sanitize_request_guardrail(
                     scope_uuid.as_ptr(),
                     scope_llm_san_req.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_llm_san_resp = cstring(&unique_name("scope_llm_san_resp"));
             assert_eq!(
-                nat_nexus_scope_register_llm_sanitize_response_guardrail(
+                nemo_flow_scope_register_llm_sanitize_response_guardrail(
                     scope_uuid.as_ptr(),
                     scope_llm_san_resp.as_ptr(),
                     1,
@@ -4954,19 +4957,19 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_scope_deregister_llm_sanitize_response_guardrail(
+                nemo_flow_scope_deregister_llm_sanitize_response_guardrail(
                     scope_uuid.as_ptr(),
                     scope_llm_san_resp.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_llm_cond = cstring(&unique_name("scope_llm_cond"));
             assert_eq!(
-                nat_nexus_scope_register_llm_conditional_execution_guardrail(
+                nemo_flow_scope_register_llm_conditional_execution_guardrail(
                     scope_uuid.as_ptr(),
                     scope_llm_cond.as_ptr(),
                     1,
@@ -4974,19 +4977,19 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_scope_deregister_llm_conditional_execution_guardrail(
+                nemo_flow_scope_deregister_llm_conditional_execution_guardrail(
                     scope_uuid.as_ptr(),
                     scope_llm_cond.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_llm_req = cstring(&unique_name("scope_llm_req"));
             assert_eq!(
-                nat_nexus_scope_register_llm_request_intercept(
+                nemo_flow_scope_register_llm_request_intercept(
                     scope_uuid.as_ptr(),
                     scope_llm_req.as_ptr(),
                     1,
@@ -4995,19 +4998,19 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_scope_deregister_llm_request_intercept(
+                nemo_flow_scope_deregister_llm_request_intercept(
                     scope_uuid.as_ptr(),
                     scope_llm_req.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_llm_exec = cstring(&unique_name("scope_llm_exec"));
             assert_eq!(
-                nat_nexus_scope_register_llm_execution_intercept(
+                nemo_flow_scope_register_llm_execution_intercept(
                     scope_uuid.as_ptr(),
                     scope_llm_exec.as_ptr(),
                     1,
@@ -5015,19 +5018,19 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_scope_deregister_llm_execution_intercept(
+                nemo_flow_scope_deregister_llm_execution_intercept(
                     scope_uuid.as_ptr(),
                     scope_llm_exec.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_llm_stream_exec = cstring(&unique_name("scope_llm_stream_exec"));
             assert_eq!(
-                nat_nexus_scope_register_llm_stream_execution_intercept(
+                nemo_flow_scope_register_llm_stream_execution_intercept(
                     scope_uuid.as_ptr(),
                     scope_llm_stream_exec.as_ptr(),
                     1,
@@ -5035,40 +5038,40 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_scope_deregister_llm_stream_execution_intercept(
+                nemo_flow_scope_deregister_llm_stream_execution_intercept(
                     scope_uuid.as_ptr(),
                     scope_llm_stream_exec.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_subscriber = cstring(&unique_name("scope_subscriber"));
             assert_eq!(
-                nat_nexus_scope_register_subscriber(
+                nemo_flow_scope_register_subscriber(
                     scope_uuid.as_ptr(),
                     scope_subscriber.as_ptr(),
                     subscriber_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_scope_deregister_subscriber(
+                nemo_flow_scope_deregister_subscriber(
                     scope_uuid.as_ptr(),
                     scope_subscriber.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_scope_deregister_subscriber(
+                nemo_flow_scope_deregister_subscriber(
                     scope_uuid.as_ptr(),
                     scope_subscriber.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let mut exporter: *mut FfiAtifExporter = ptr::null_mut();
@@ -5076,69 +5079,69 @@ mod tests {
             let agent = cstring("ffi-agent");
             let version = cstring("1.0.0");
             assert_eq!(
-                nat_nexus_atif_exporter_create(
+                nemo_flow_atif_exporter_create(
                     session.as_ptr(),
                     agent.as_ptr(),
                     version.as_ptr(),
                     ptr::null(),
                     &mut exporter,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_atif_exporter_create(
+                nemo_flow_atif_exporter_create(
                     session.as_ptr(),
                     agent.as_ptr(),
                     version.as_ptr(),
                     ptr::null(),
                     ptr::null_mut(),
                 ),
-                NatNexusStatus::NullPointer
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_atif_exporter_register(ptr::null(), scope_subscriber.as_ptr()),
-                NatNexusStatus::NullPointer
+                nemo_flow_atif_exporter_register(ptr::null(), scope_subscriber.as_ptr()),
+                NemoFlowStatus::NullPointer
             );
             let mut null_export = ptr::null_mut();
             assert_eq!(
-                nat_nexus_atif_exporter_export(ptr::null(), &mut null_export),
-                NatNexusStatus::NullPointer
+                nemo_flow_atif_exporter_export(ptr::null(), &mut null_export),
+                NemoFlowStatus::NullPointer
             );
             let exporter_name = cstring(&unique_name("ffi_exporter_sub"));
             assert_eq!(
-                nat_nexus_atif_exporter_register(exporter, exporter_name.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_atif_exporter_register(exporter, exporter_name.as_ptr()),
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_atif_exporter_register(exporter, exporter_name.as_ptr()),
-                NatNexusStatus::AlreadyExists
+                nemo_flow_atif_exporter_register(exporter, exporter_name.as_ptr()),
+                NemoFlowStatus::AlreadyExists
             );
             assert_eq!(
-                nat_nexus_atif_exporter_export(exporter, ptr::null_mut()),
-                NatNexusStatus::NullPointer
+                nemo_flow_atif_exporter_export(exporter, ptr::null_mut()),
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_atif_exporter_clear(ptr::null()),
-                NatNexusStatus::NullPointer
+                nemo_flow_atif_exporter_clear(ptr::null()),
+                NemoFlowStatus::NullPointer
             );
             let missing_exporter = cstring("missing_exporter");
             assert_eq!(
-                nat_nexus_atif_exporter_deregister(missing_exporter.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_atif_exporter_deregister(missing_exporter.as_ptr()),
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_atif_exporter_deregister(exporter_name.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_atif_exporter_deregister(exporter_name.as_ptr()),
+                NemoFlowStatus::Ok
             );
-            nat_nexus_atif_exporter_free(exporter);
+            nemo_flow_atif_exporter_free(exporter);
 
             let mut chunk = ptr::null_mut();
-            assert_eq!(nat_nexus_stream_next(ptr::null_mut(), &mut chunk), -1);
-            assert_eq!(nat_nexus_stream_next(ptr::null_mut(), ptr::null_mut()), -1);
+            assert_eq!(nemo_flow_stream_next(ptr::null_mut(), &mut chunk), -1);
+            assert_eq!(nemo_flow_stream_next(ptr::null_mut(), ptr::null_mut()), -1);
 
-            assert_eq!(nat_nexus_pop_scope(scope), NatNexusStatus::Ok);
-            nat_nexus_scope_handle_free(scope);
-            nat_nexus_scope_stack_free(stack);
+            assert_eq!(nemo_flow_pop_scope(scope), NemoFlowStatus::Ok);
+            nemo_flow_scope_handle_free(scope);
+            nemo_flow_scope_stack_free(stack);
         }
     }
 
@@ -5160,7 +5163,7 @@ mod tests {
             let invalid_headers = cstring(r#"{"authorization":1}"#);
 
             assert_eq!(
-                nat_nexus_otel_subscriber_create(
+                nemo_flow_otel_subscriber_create(
                     ptr::null(),
                     endpoint.as_ptr(),
                     headers.as_ptr(),
@@ -5172,10 +5175,10 @@ mod tests {
                     1250,
                     ptr::null_mut(),
                 ),
-                NatNexusStatus::NullPointer
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_otel_subscriber_create(
+                nemo_flow_otel_subscriber_create(
                     invalid_transport.as_ptr(),
                     endpoint.as_ptr(),
                     headers.as_ptr(),
@@ -5187,10 +5190,10 @@ mod tests {
                     1250,
                     &mut subscriber,
                 ),
-                NatNexusStatus::InvalidArg
+                NemoFlowStatus::InvalidArg
             );
             assert_eq!(
-                nat_nexus_otel_subscriber_create(
+                nemo_flow_otel_subscriber_create(
                     ptr::null(),
                     endpoint.as_ptr(),
                     invalid_headers.as_ptr(),
@@ -5202,10 +5205,10 @@ mod tests {
                     1250,
                     &mut subscriber,
                 ),
-                NatNexusStatus::InvalidArg
+                NemoFlowStatus::InvalidArg
             );
             assert_eq!(
-                nat_nexus_otel_subscriber_create(
+                nemo_flow_otel_subscriber_create(
                     ptr::null(),
                     endpoint.as_ptr(),
                     headers.as_ptr(),
@@ -5217,45 +5220,45 @@ mod tests {
                     1250,
                     &mut subscriber,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert!(!subscriber.is_null());
 
             let name = cstring(&unique_name("ffi_otel"));
             assert_eq!(
-                nat_nexus_otel_subscriber_register(ptr::null(), name.as_ptr()),
-                NatNexusStatus::NullPointer
+                nemo_flow_otel_subscriber_register(ptr::null(), name.as_ptr()),
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_otel_subscriber_force_flush(ptr::null()),
-                NatNexusStatus::NullPointer
+                nemo_flow_otel_subscriber_force_flush(ptr::null()),
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_otel_subscriber_shutdown(ptr::null()),
-                NatNexusStatus::NullPointer
+                nemo_flow_otel_subscriber_shutdown(ptr::null()),
+                NemoFlowStatus::NullPointer
             );
 
             assert_eq!(
-                nat_nexus_otel_subscriber_register(subscriber, name.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_otel_subscriber_register(subscriber, name.as_ptr()),
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_otel_subscriber_deregister(name.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_otel_subscriber_deregister(name.as_ptr()),
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_otel_subscriber_deregister(name.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_otel_subscriber_deregister(name.as_ptr()),
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_otel_subscriber_force_flush(subscriber),
-                NatNexusStatus::Ok
+                nemo_flow_otel_subscriber_force_flush(subscriber),
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_otel_subscriber_shutdown(subscriber),
-                NatNexusStatus::Ok
+                nemo_flow_otel_subscriber_shutdown(subscriber),
+                NemoFlowStatus::Ok
             );
-            nat_nexus_otel_subscriber_free(subscriber);
+            nemo_flow_otel_subscriber_free(subscriber);
         }
     }
 
@@ -5277,7 +5280,7 @@ mod tests {
             let invalid_headers = cstring(r#"{"authorization":1}"#);
 
             assert_eq!(
-                nat_nexus_openinference_subscriber_create(
+                nemo_flow_openinference_subscriber_create(
                     ptr::null(),
                     endpoint.as_ptr(),
                     headers.as_ptr(),
@@ -5289,10 +5292,10 @@ mod tests {
                     1250,
                     ptr::null_mut(),
                 ),
-                NatNexusStatus::NullPointer
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_openinference_subscriber_create(
+                nemo_flow_openinference_subscriber_create(
                     invalid_transport.as_ptr(),
                     endpoint.as_ptr(),
                     headers.as_ptr(),
@@ -5304,10 +5307,10 @@ mod tests {
                     1250,
                     &mut subscriber,
                 ),
-                NatNexusStatus::InvalidArg
+                NemoFlowStatus::InvalidArg
             );
             assert_eq!(
-                nat_nexus_openinference_subscriber_create(
+                nemo_flow_openinference_subscriber_create(
                     ptr::null(),
                     endpoint.as_ptr(),
                     invalid_headers.as_ptr(),
@@ -5319,10 +5322,10 @@ mod tests {
                     1250,
                     &mut subscriber,
                 ),
-                NatNexusStatus::InvalidArg
+                NemoFlowStatus::InvalidArg
             );
             assert_eq!(
-                nat_nexus_openinference_subscriber_create(
+                nemo_flow_openinference_subscriber_create(
                     ptr::null(),
                     endpoint.as_ptr(),
                     headers.as_ptr(),
@@ -5334,45 +5337,45 @@ mod tests {
                     1250,
                     &mut subscriber,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert!(!subscriber.is_null());
 
             let name = cstring(&unique_name("ffi_openinference"));
             assert_eq!(
-                nat_nexus_openinference_subscriber_register(ptr::null(), name.as_ptr()),
-                NatNexusStatus::NullPointer
+                nemo_flow_openinference_subscriber_register(ptr::null(), name.as_ptr()),
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_openinference_subscriber_force_flush(ptr::null()),
-                NatNexusStatus::NullPointer
+                nemo_flow_openinference_subscriber_force_flush(ptr::null()),
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_openinference_subscriber_shutdown(ptr::null()),
-                NatNexusStatus::NullPointer
+                nemo_flow_openinference_subscriber_shutdown(ptr::null()),
+                NemoFlowStatus::NullPointer
             );
 
             assert_eq!(
-                nat_nexus_openinference_subscriber_register(subscriber, name.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_openinference_subscriber_register(subscriber, name.as_ptr()),
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_openinference_subscriber_deregister(name.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_openinference_subscriber_deregister(name.as_ptr()),
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_openinference_subscriber_deregister(name.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_openinference_subscriber_deregister(name.as_ptr()),
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_openinference_subscriber_force_flush(subscriber),
-                NatNexusStatus::Ok
+                nemo_flow_openinference_subscriber_force_flush(subscriber),
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_openinference_subscriber_shutdown(subscriber),
-                NatNexusStatus::Ok
+                nemo_flow_openinference_subscriber_shutdown(subscriber),
+                NemoFlowStatus::Ok
             );
-            nat_nexus_openinference_subscriber_free(subscriber);
+            nemo_flow_openinference_subscriber_free(subscriber);
         }
     }
 
@@ -5392,88 +5395,88 @@ mod tests {
             let mut null_llm_out = ptr::null_mut();
 
             assert_eq!(
-                nat_nexus_tool_request_intercepts(ptr::null(), args.as_ptr(), ptr::null_mut()),
-                NatNexusStatus::NullPointer
+                nemo_flow_tool_request_intercepts(ptr::null(), args.as_ptr(), ptr::null_mut()),
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_tool_request_intercepts(
+                nemo_flow_tool_request_intercepts(
                     tool_name.as_ptr(),
                     invalid_json.as_ptr(),
                     ptr::null_mut()
                 ),
-                NatNexusStatus::InvalidJson
+                NemoFlowStatus::InvalidJson
             );
             assert_eq!(
-                nat_nexus_tool_conditional_execution(ptr::null(), args.as_ptr()),
-                NatNexusStatus::NullPointer
+                nemo_flow_tool_conditional_execution(ptr::null(), args.as_ptr()),
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_tool_conditional_execution(tool_name.as_ptr(), invalid_json.as_ptr()),
-                NatNexusStatus::InvalidJson
+                nemo_flow_tool_conditional_execution(tool_name.as_ptr(), invalid_json.as_ptr()),
+                NemoFlowStatus::InvalidJson
             );
 
             let tool_guard = cstring(&unique_name("ffi_tool_reject"));
             assert_eq!(
-                nat_nexus_register_tool_conditional_execution_guardrail(
+                nemo_flow_register_tool_conditional_execution_guardrail(
                     tool_guard.as_ptr(),
                     1,
                     tool_reject_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_tool_conditional_execution(tool_name.as_ptr(), args.as_ptr()),
-                NatNexusStatus::GuardrailRejected
+                nemo_flow_tool_conditional_execution(tool_name.as_ptr(), args.as_ptr()),
+                NemoFlowStatus::GuardrailRejected
             );
             assert_eq!(
-                nat_nexus_deregister_tool_conditional_execution_guardrail(tool_guard.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_tool_conditional_execution_guardrail(tool_guard.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             let mut llm_out = ptr::null_mut();
             assert_eq!(
-                nat_nexus_llm_request_intercepts(ptr::null(), request.as_ptr(), &mut llm_out),
-                NatNexusStatus::Ok
+                nemo_flow_llm_request_intercepts(ptr::null(), request.as_ptr(), &mut llm_out),
+                NemoFlowStatus::Ok
             );
             let llm_json = returned_json(llm_out);
             assert_eq!(llm_json["content"]["model"], json!("ffi-model"));
 
             assert_eq!(
-                nat_nexus_llm_request_intercepts(
+                nemo_flow_llm_request_intercepts(
                     llm_name.as_ptr(),
                     invalid_json.as_ptr(),
                     &mut null_llm_out
                 ),
-                NatNexusStatus::InvalidJson
+                NemoFlowStatus::InvalidJson
             );
             assert_eq!(
-                nat_nexus_llm_conditional_execution(invalid_json.as_ptr()),
-                NatNexusStatus::InvalidJson
+                nemo_flow_llm_conditional_execution(invalid_json.as_ptr()),
+                NemoFlowStatus::InvalidJson
             );
 
             let llm_guard = cstring(&unique_name("ffi_llm_reject"));
             assert_eq!(
-                nat_nexus_register_llm_conditional_execution_guardrail(
+                nemo_flow_register_llm_conditional_execution_guardrail(
                     llm_guard.as_ptr(),
                     1,
                     llm_reject_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_llm_conditional_execution(request.as_ptr()),
-                NatNexusStatus::GuardrailRejected
+                nemo_flow_llm_conditional_execution(request.as_ptr()),
+                NemoFlowStatus::GuardrailRejected
             );
             assert_eq!(
-                nat_nexus_deregister_llm_conditional_execution_guardrail(llm_guard.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_llm_conditional_execution_guardrail(llm_guard.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
-            nat_nexus_scope_stack_free(stack);
+            nemo_flow_scope_stack_free(stack);
         }
     }
 
@@ -5483,13 +5486,13 @@ mod tests {
         reset_globals();
 
         macro_rules! assert_invalid_arg {
-            ($expr:expr) => {
-                assert_eq!($expr, NatNexusStatus::InvalidArg);
+            ($expr:expr_2021) => {
+                assert_eq!($expr, NemoFlowStatus::InvalidArg);
             };
         }
         macro_rules! assert_null_pointer {
-            ($expr:expr) => {
-                assert_eq!($expr, NatNexusStatus::NullPointer);
+            ($expr:expr_2021) => {
+                assert_eq!($expr, NemoFlowStatus::NullPointer);
             };
         }
 
@@ -5498,53 +5501,53 @@ mod tests {
             let scope_name = cstring("ffi_error_sweep_scope");
             let mut scope = ptr::null_mut();
             assert_eq!(
-                nat_nexus_push_scope(
+                nemo_flow_push_scope(
                     scope_name.as_ptr(),
-                    NatNexusScopeType::Function,
+                    NemoFlowScopeType::Function,
                     ptr::null(),
                     0,
                     ptr::null(),
                     ptr::null(),
                     &mut scope,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let valid_scope_uuid =
-                cstring(&take_string(nat_nexus_scope_handle_uuid(scope)).unwrap());
+                cstring(&take_string(nemo_flow_scope_handle_uuid(scope)).unwrap());
             let invalid_scope_uuid = cstring("not-a-uuid");
 
-            assert_null_pointer!(nat_nexus_register_tool_sanitize_request_guardrail(
+            assert_null_pointer!(nemo_flow_register_tool_sanitize_request_guardrail(
                 ptr::null(),
                 1,
                 tool_request_cb,
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_deregister_tool_sanitize_request_guardrail(
+            assert_null_pointer!(nemo_flow_deregister_tool_sanitize_request_guardrail(
                 ptr::null()
             ));
-            assert_null_pointer!(nat_nexus_register_tool_sanitize_response_guardrail(
+            assert_null_pointer!(nemo_flow_register_tool_sanitize_response_guardrail(
                 ptr::null(),
                 1,
                 tool_request_cb,
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_deregister_tool_sanitize_response_guardrail(
+            assert_null_pointer!(nemo_flow_deregister_tool_sanitize_response_guardrail(
                 ptr::null()
             ));
-            assert_null_pointer!(nat_nexus_register_tool_conditional_execution_guardrail(
+            assert_null_pointer!(nemo_flow_register_tool_conditional_execution_guardrail(
                 ptr::null(),
                 1,
                 tool_allow_cb,
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_deregister_tool_conditional_execution_guardrail(
+            assert_null_pointer!(nemo_flow_deregister_tool_conditional_execution_guardrail(
                 ptr::null()
             ));
-            assert_null_pointer!(nat_nexus_register_tool_request_intercept(
+            assert_null_pointer!(nemo_flow_register_tool_request_intercept(
                 ptr::null(),
                 1,
                 false,
@@ -5552,46 +5555,46 @@ mod tests {
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_deregister_tool_request_intercept(ptr::null()));
-            assert_null_pointer!(nat_nexus_register_tool_execution_intercept(
+            assert_null_pointer!(nemo_flow_deregister_tool_request_intercept(ptr::null()));
+            assert_null_pointer!(nemo_flow_register_tool_execution_intercept(
                 ptr::null(),
                 1,
                 tool_exec_intercept_cb,
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_deregister_tool_execution_intercept(ptr::null()));
-            assert_null_pointer!(nat_nexus_register_llm_sanitize_request_guardrail(
+            assert_null_pointer!(nemo_flow_deregister_tool_execution_intercept(ptr::null()));
+            assert_null_pointer!(nemo_flow_register_llm_sanitize_request_guardrail(
                 ptr::null(),
                 1,
                 llm_request_cb,
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_deregister_llm_sanitize_request_guardrail(
+            assert_null_pointer!(nemo_flow_deregister_llm_sanitize_request_guardrail(
                 ptr::null()
             ));
-            assert_null_pointer!(nat_nexus_register_llm_sanitize_response_guardrail(
+            assert_null_pointer!(nemo_flow_register_llm_sanitize_response_guardrail(
                 ptr::null(),
                 1,
                 llm_response_cb,
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_deregister_llm_sanitize_response_guardrail(
+            assert_null_pointer!(nemo_flow_deregister_llm_sanitize_response_guardrail(
                 ptr::null()
             ));
-            assert_null_pointer!(nat_nexus_register_llm_conditional_execution_guardrail(
+            assert_null_pointer!(nemo_flow_register_llm_conditional_execution_guardrail(
                 ptr::null(),
                 1,
                 llm_allow_cb,
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_deregister_llm_conditional_execution_guardrail(
+            assert_null_pointer!(nemo_flow_deregister_llm_conditional_execution_guardrail(
                 ptr::null()
             ));
-            assert_null_pointer!(nat_nexus_register_llm_request_intercept(
+            assert_null_pointer!(nemo_flow_register_llm_request_intercept(
                 ptr::null(),
                 1,
                 false,
@@ -5599,34 +5602,34 @@ mod tests {
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_deregister_llm_request_intercept(ptr::null()));
-            assert_null_pointer!(nat_nexus_register_llm_execution_intercept(
+            assert_null_pointer!(nemo_flow_deregister_llm_request_intercept(ptr::null()));
+            assert_null_pointer!(nemo_flow_register_llm_execution_intercept(
                 ptr::null(),
                 1,
                 llm_exec_intercept_cb,
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_deregister_llm_execution_intercept(ptr::null()));
-            assert_null_pointer!(nat_nexus_register_llm_stream_execution_intercept(
+            assert_null_pointer!(nemo_flow_deregister_llm_execution_intercept(ptr::null()));
+            assert_null_pointer!(nemo_flow_register_llm_stream_execution_intercept(
                 ptr::null(),
                 1,
                 llm_exec_intercept_cb,
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_deregister_llm_stream_execution_intercept(
+            assert_null_pointer!(nemo_flow_deregister_llm_stream_execution_intercept(
                 ptr::null()
             ));
-            assert_null_pointer!(nat_nexus_register_subscriber(
+            assert_null_pointer!(nemo_flow_register_subscriber(
                 ptr::null(),
                 subscriber_cb,
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_deregister_subscriber(ptr::null()));
+            assert_null_pointer!(nemo_flow_deregister_subscriber(ptr::null()));
 
-            assert_invalid_arg!(nat_nexus_scope_register_tool_sanitize_request_guardrail(
+            assert_invalid_arg!(nemo_flow_scope_register_tool_sanitize_request_guardrail(
                 invalid_scope_uuid.as_ptr(),
                 ptr::null(),
                 1,
@@ -5634,11 +5637,11 @@ mod tests {
                 ptr::null_mut(),
                 None,
             ));
-            assert_invalid_arg!(nat_nexus_scope_deregister_tool_sanitize_request_guardrail(
+            assert_invalid_arg!(nemo_flow_scope_deregister_tool_sanitize_request_guardrail(
                 invalid_scope_uuid.as_ptr(),
                 ptr::null(),
             ));
-            assert_null_pointer!(nat_nexus_scope_register_tool_sanitize_response_guardrail(
+            assert_null_pointer!(nemo_flow_scope_register_tool_sanitize_response_guardrail(
                 valid_scope_uuid.as_ptr(),
                 ptr::null(),
                 1,
@@ -5646,12 +5649,12 @@ mod tests {
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_scope_deregister_tool_sanitize_response_guardrail(
+            assert_null_pointer!(nemo_flow_scope_deregister_tool_sanitize_response_guardrail(
                 valid_scope_uuid.as_ptr(),
                 ptr::null(),
             ));
             assert_invalid_arg!(
-                nat_nexus_scope_register_tool_conditional_execution_guardrail(
+                nemo_flow_scope_register_tool_conditional_execution_guardrail(
                     invalid_scope_uuid.as_ptr(),
                     ptr::null(),
                     1,
@@ -5661,12 +5664,12 @@ mod tests {
                 )
             );
             assert_invalid_arg!(
-                nat_nexus_scope_deregister_tool_conditional_execution_guardrail(
+                nemo_flow_scope_deregister_tool_conditional_execution_guardrail(
                     invalid_scope_uuid.as_ptr(),
                     ptr::null(),
                 )
             );
-            assert_null_pointer!(nat_nexus_scope_register_tool_request_intercept(
+            assert_null_pointer!(nemo_flow_scope_register_tool_request_intercept(
                 valid_scope_uuid.as_ptr(),
                 ptr::null(),
                 1,
@@ -5675,11 +5678,11 @@ mod tests {
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_scope_deregister_tool_request_intercept(
+            assert_null_pointer!(nemo_flow_scope_deregister_tool_request_intercept(
                 valid_scope_uuid.as_ptr(),
                 ptr::null(),
             ));
-            assert_invalid_arg!(nat_nexus_scope_register_tool_execution_intercept(
+            assert_invalid_arg!(nemo_flow_scope_register_tool_execution_intercept(
                 invalid_scope_uuid.as_ptr(),
                 ptr::null(),
                 1,
@@ -5687,11 +5690,11 @@ mod tests {
                 ptr::null_mut(),
                 None,
             ));
-            assert_invalid_arg!(nat_nexus_scope_deregister_tool_execution_intercept(
+            assert_invalid_arg!(nemo_flow_scope_deregister_tool_execution_intercept(
                 invalid_scope_uuid.as_ptr(),
                 ptr::null(),
             ));
-            assert_null_pointer!(nat_nexus_scope_register_llm_sanitize_request_guardrail(
+            assert_null_pointer!(nemo_flow_scope_register_llm_sanitize_request_guardrail(
                 valid_scope_uuid.as_ptr(),
                 ptr::null(),
                 1,
@@ -5699,11 +5702,11 @@ mod tests {
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_scope_deregister_llm_sanitize_request_guardrail(
+            assert_null_pointer!(nemo_flow_scope_deregister_llm_sanitize_request_guardrail(
                 valid_scope_uuid.as_ptr(),
                 ptr::null(),
             ));
-            assert_invalid_arg!(nat_nexus_scope_register_llm_sanitize_response_guardrail(
+            assert_invalid_arg!(nemo_flow_scope_register_llm_sanitize_response_guardrail(
                 invalid_scope_uuid.as_ptr(),
                 ptr::null(),
                 1,
@@ -5711,12 +5714,12 @@ mod tests {
                 ptr::null_mut(),
                 None,
             ));
-            assert_invalid_arg!(nat_nexus_scope_deregister_llm_sanitize_response_guardrail(
+            assert_invalid_arg!(nemo_flow_scope_deregister_llm_sanitize_response_guardrail(
                 invalid_scope_uuid.as_ptr(),
                 ptr::null(),
             ));
             assert_null_pointer!(
-                nat_nexus_scope_register_llm_conditional_execution_guardrail(
+                nemo_flow_scope_register_llm_conditional_execution_guardrail(
                     valid_scope_uuid.as_ptr(),
                     ptr::null(),
                     1,
@@ -5726,12 +5729,12 @@ mod tests {
                 )
             );
             assert_null_pointer!(
-                nat_nexus_scope_deregister_llm_conditional_execution_guardrail(
+                nemo_flow_scope_deregister_llm_conditional_execution_guardrail(
                     valid_scope_uuid.as_ptr(),
                     ptr::null(),
                 )
             );
-            assert_invalid_arg!(nat_nexus_scope_register_llm_request_intercept(
+            assert_invalid_arg!(nemo_flow_scope_register_llm_request_intercept(
                 invalid_scope_uuid.as_ptr(),
                 ptr::null(),
                 1,
@@ -5740,11 +5743,11 @@ mod tests {
                 ptr::null_mut(),
                 None,
             ));
-            assert_invalid_arg!(nat_nexus_scope_deregister_llm_request_intercept(
+            assert_invalid_arg!(nemo_flow_scope_deregister_llm_request_intercept(
                 invalid_scope_uuid.as_ptr(),
                 ptr::null(),
             ));
-            assert_null_pointer!(nat_nexus_scope_register_llm_execution_intercept(
+            assert_null_pointer!(nemo_flow_scope_register_llm_execution_intercept(
                 valid_scope_uuid.as_ptr(),
                 ptr::null(),
                 1,
@@ -5752,11 +5755,11 @@ mod tests {
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_scope_deregister_llm_execution_intercept(
+            assert_null_pointer!(nemo_flow_scope_deregister_llm_execution_intercept(
                 valid_scope_uuid.as_ptr(),
                 ptr::null(),
             ));
-            assert_invalid_arg!(nat_nexus_scope_register_llm_stream_execution_intercept(
+            assert_invalid_arg!(nemo_flow_scope_register_llm_stream_execution_intercept(
                 invalid_scope_uuid.as_ptr(),
                 ptr::null(),
                 1,
@@ -5764,25 +5767,25 @@ mod tests {
                 ptr::null_mut(),
                 None,
             ));
-            assert_invalid_arg!(nat_nexus_scope_deregister_llm_stream_execution_intercept(
+            assert_invalid_arg!(nemo_flow_scope_deregister_llm_stream_execution_intercept(
                 invalid_scope_uuid.as_ptr(),
                 ptr::null(),
             ));
-            assert_null_pointer!(nat_nexus_scope_register_subscriber(
+            assert_null_pointer!(nemo_flow_scope_register_subscriber(
                 valid_scope_uuid.as_ptr(),
                 ptr::null(),
                 subscriber_cb,
                 ptr::null_mut(),
                 None,
             ));
-            assert_null_pointer!(nat_nexus_scope_deregister_subscriber(
+            assert_null_pointer!(nemo_flow_scope_deregister_subscriber(
                 valid_scope_uuid.as_ptr(),
                 ptr::null(),
             ));
 
-            assert_eq!(nat_nexus_pop_scope(scope), NatNexusStatus::Ok);
-            nat_nexus_scope_handle_free(scope);
-            nat_nexus_scope_stack_free(stack);
+            assert_eq!(nemo_flow_pop_scope(scope), NemoFlowStatus::Ok);
+            nemo_flow_scope_handle_free(scope);
+            nemo_flow_scope_stack_free(stack);
         }
     }
 
@@ -5792,8 +5795,8 @@ mod tests {
         reset_globals();
 
         macro_rules! assert_already_exists {
-            ($expr:expr) => {
-                assert_eq!($expr, NatNexusStatus::AlreadyExists);
+            ($expr:expr_2021) => {
+                assert_eq!($expr, NemoFlowStatus::AlreadyExists);
             };
         }
 
@@ -5821,31 +5824,31 @@ mod tests {
             let scope_name = cstring("ffi_duplicate_scope");
             let mut scope = ptr::null_mut();
             assert_eq!(
-                nat_nexus_push_scope(
+                nemo_flow_push_scope(
                     scope_name.as_ptr(),
-                    NatNexusScopeType::Function,
+                    NemoFlowScopeType::Function,
                     ptr::null(),
                     0,
                     ptr::null(),
                     ptr::null(),
                     &mut scope,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
-            let scope_uuid = cstring(&take_string(nat_nexus_scope_handle_uuid(scope)).unwrap());
+            let scope_uuid = cstring(&take_string(nemo_flow_scope_handle_uuid(scope)).unwrap());
 
             let tool_cond = cstring(&unique_name("dup_tool_cond"));
             assert_eq!(
-                nat_nexus_register_tool_conditional_execution_guardrail(
+                nemo_flow_register_tool_conditional_execution_guardrail(
                     tool_cond.as_ptr(),
                     1,
                     tool_allow_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
-            assert_already_exists!(nat_nexus_register_tool_conditional_execution_guardrail(
+            assert_already_exists!(nemo_flow_register_tool_conditional_execution_guardrail(
                 tool_cond.as_ptr(),
                 1,
                 tool_allow_cb,
@@ -5853,13 +5856,13 @@ mod tests {
                 None,
             ));
             assert_eq!(
-                nat_nexus_deregister_tool_conditional_execution_guardrail(tool_cond.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_tool_conditional_execution_guardrail(tool_cond.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             let tool_req = cstring(&unique_name("dup_tool_req"));
             assert_eq!(
-                nat_nexus_register_tool_request_intercept(
+                nemo_flow_register_tool_request_intercept(
                     tool_req.as_ptr(),
                     1,
                     false,
@@ -5867,9 +5870,9 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
-            assert_already_exists!(nat_nexus_register_tool_request_intercept(
+            assert_already_exists!(nemo_flow_register_tool_request_intercept(
                 tool_req.as_ptr(),
                 1,
                 false,
@@ -5878,22 +5881,22 @@ mod tests {
                 None,
             ));
             assert_eq!(
-                nat_nexus_deregister_tool_request_intercept(tool_req.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_tool_request_intercept(tool_req.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             let llm_san_resp = cstring(&unique_name("dup_llm_san_resp"));
             assert_eq!(
-                nat_nexus_register_llm_sanitize_response_guardrail(
+                nemo_flow_register_llm_sanitize_response_guardrail(
                     llm_san_resp.as_ptr(),
                     1,
                     llm_response_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
-            assert_already_exists!(nat_nexus_register_llm_sanitize_response_guardrail(
+            assert_already_exists!(nemo_flow_register_llm_sanitize_response_guardrail(
                 llm_san_resp.as_ptr(),
                 1,
                 llm_response_cb,
@@ -5901,22 +5904,22 @@ mod tests {
                 None,
             ));
             assert_eq!(
-                nat_nexus_deregister_llm_sanitize_response_guardrail(llm_san_resp.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_llm_sanitize_response_guardrail(llm_san_resp.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             let llm_cond = cstring(&unique_name("dup_llm_cond"));
             assert_eq!(
-                nat_nexus_register_llm_conditional_execution_guardrail(
+                nemo_flow_register_llm_conditional_execution_guardrail(
                     llm_cond.as_ptr(),
                     1,
                     llm_allow_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
-            assert_already_exists!(nat_nexus_register_llm_conditional_execution_guardrail(
+            assert_already_exists!(nemo_flow_register_llm_conditional_execution_guardrail(
                 llm_cond.as_ptr(),
                 1,
                 llm_allow_cb,
@@ -5924,13 +5927,13 @@ mod tests {
                 None,
             ));
             assert_eq!(
-                nat_nexus_deregister_llm_conditional_execution_guardrail(llm_cond.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_llm_conditional_execution_guardrail(llm_cond.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             let llm_req = cstring(&unique_name("dup_llm_req"));
             assert_eq!(
-                nat_nexus_register_llm_request_intercept(
+                nemo_flow_register_llm_request_intercept(
                     llm_req.as_ptr(),
                     1,
                     false,
@@ -5938,9 +5941,9 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
-            assert_already_exists!(nat_nexus_register_llm_request_intercept(
+            assert_already_exists!(nemo_flow_register_llm_request_intercept(
                 llm_req.as_ptr(),
                 1,
                 false,
@@ -5949,34 +5952,34 @@ mod tests {
                 None,
             ));
             assert_eq!(
-                nat_nexus_deregister_llm_request_intercept(llm_req.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_llm_request_intercept(llm_req.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             let subscriber = cstring(&unique_name("dup_subscriber"));
             assert_eq!(
-                nat_nexus_register_subscriber(
+                nemo_flow_register_subscriber(
                     subscriber.as_ptr(),
                     subscriber_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
-            assert_already_exists!(nat_nexus_register_subscriber(
+            assert_already_exists!(nemo_flow_register_subscriber(
                 subscriber.as_ptr(),
                 subscriber_cb,
                 ptr::null_mut(),
                 None,
             ));
             assert_eq!(
-                nat_nexus_deregister_subscriber(subscriber.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_subscriber(subscriber.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             let scope_tool_cond = cstring(&unique_name("dup_scope_tool_cond"));
             assert_eq!(
-                nat_nexus_scope_register_tool_conditional_execution_guardrail(
+                nemo_flow_scope_register_tool_conditional_execution_guardrail(
                     scope_uuid.as_ptr(),
                     scope_tool_cond.as_ptr(),
                     1,
@@ -5984,10 +5987,10 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_already_exists!(
-                nat_nexus_scope_register_tool_conditional_execution_guardrail(
+                nemo_flow_scope_register_tool_conditional_execution_guardrail(
                     scope_uuid.as_ptr(),
                     scope_tool_cond.as_ptr(),
                     1,
@@ -5997,16 +6000,16 @@ mod tests {
                 )
             );
             assert_eq!(
-                nat_nexus_scope_deregister_tool_conditional_execution_guardrail(
+                nemo_flow_scope_deregister_tool_conditional_execution_guardrail(
                     scope_uuid.as_ptr(),
                     scope_tool_cond.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_tool_req = cstring(&unique_name("dup_scope_tool_req"));
             assert_eq!(
-                nat_nexus_scope_register_tool_request_intercept(
+                nemo_flow_scope_register_tool_request_intercept(
                     scope_uuid.as_ptr(),
                     scope_tool_req.as_ptr(),
                     1,
@@ -6015,9 +6018,9 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
-            assert_already_exists!(nat_nexus_scope_register_tool_request_intercept(
+            assert_already_exists!(nemo_flow_scope_register_tool_request_intercept(
                 scope_uuid.as_ptr(),
                 scope_tool_req.as_ptr(),
                 1,
@@ -6027,16 +6030,16 @@ mod tests {
                 None,
             ));
             assert_eq!(
-                nat_nexus_scope_deregister_tool_request_intercept(
+                nemo_flow_scope_deregister_tool_request_intercept(
                     scope_uuid.as_ptr(),
                     scope_tool_req.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_llm_cond = cstring(&unique_name("dup_scope_llm_cond"));
             assert_eq!(
-                nat_nexus_scope_register_llm_conditional_execution_guardrail(
+                nemo_flow_scope_register_llm_conditional_execution_guardrail(
                     scope_uuid.as_ptr(),
                     scope_llm_cond.as_ptr(),
                     1,
@@ -6044,10 +6047,10 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_already_exists!(
-                nat_nexus_scope_register_llm_conditional_execution_guardrail(
+                nemo_flow_scope_register_llm_conditional_execution_guardrail(
                     scope_uuid.as_ptr(),
                     scope_llm_cond.as_ptr(),
                     1,
@@ -6057,16 +6060,16 @@ mod tests {
                 )
             );
             assert_eq!(
-                nat_nexus_scope_deregister_llm_conditional_execution_guardrail(
+                nemo_flow_scope_deregister_llm_conditional_execution_guardrail(
                     scope_uuid.as_ptr(),
                     scope_llm_cond.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_llm_req = cstring(&unique_name("dup_scope_llm_req"));
             assert_eq!(
-                nat_nexus_scope_register_llm_request_intercept(
+                nemo_flow_scope_register_llm_request_intercept(
                     scope_uuid.as_ptr(),
                     scope_llm_req.as_ptr(),
                     1,
@@ -6075,9 +6078,9 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
-            assert_already_exists!(nat_nexus_scope_register_llm_request_intercept(
+            assert_already_exists!(nemo_flow_scope_register_llm_request_intercept(
                 scope_uuid.as_ptr(),
                 scope_llm_req.as_ptr(),
                 1,
@@ -6087,25 +6090,25 @@ mod tests {
                 None,
             ));
             assert_eq!(
-                nat_nexus_scope_deregister_llm_request_intercept(
+                nemo_flow_scope_deregister_llm_request_intercept(
                     scope_uuid.as_ptr(),
                     scope_llm_req.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let scope_subscriber = cstring(&unique_name("dup_scope_subscriber"));
             assert_eq!(
-                nat_nexus_scope_register_subscriber(
+                nemo_flow_scope_register_subscriber(
                     scope_uuid.as_ptr(),
                     scope_subscriber.as_ptr(),
                     subscriber_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
-            assert_already_exists!(nat_nexus_scope_register_subscriber(
+            assert_already_exists!(nemo_flow_scope_register_subscriber(
                 scope_uuid.as_ptr(),
                 scope_subscriber.as_ptr(),
                 subscriber_cb,
@@ -6113,11 +6116,11 @@ mod tests {
                 None,
             ));
             assert_eq!(
-                nat_nexus_scope_deregister_subscriber(
+                nemo_flow_scope_deregister_subscriber(
                     scope_uuid.as_ptr(),
                     scope_subscriber.as_ptr(),
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let session = cstring("dup-session");
@@ -6125,67 +6128,67 @@ mod tests {
             let version = cstring("1.0.0");
             let mut exporter = ptr::null_mut();
             assert_eq!(
-                nat_nexus_atif_exporter_create(
+                nemo_flow_atif_exporter_create(
                     ptr::null(),
                     agent.as_ptr(),
                     version.as_ptr(),
                     ptr::null(),
                     &mut exporter,
                 ),
-                NatNexusStatus::NullPointer
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_atif_exporter_create(
+                nemo_flow_atif_exporter_create(
                     session.as_ptr(),
                     ptr::null(),
                     version.as_ptr(),
                     ptr::null(),
                     &mut exporter,
                 ),
-                NatNexusStatus::NullPointer
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_atif_exporter_create(
+                nemo_flow_atif_exporter_create(
                     session.as_ptr(),
                     agent.as_ptr(),
                     ptr::null(),
                     ptr::null(),
                     &mut exporter,
                 ),
-                NatNexusStatus::NullPointer
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_atif_exporter_create(
+                nemo_flow_atif_exporter_create(
                     session.as_ptr(),
                     agent.as_ptr(),
                     version.as_ptr(),
                     ptr::null(),
                     &mut exporter,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_atif_exporter_register(exporter, ptr::null()),
-                NatNexusStatus::NullPointer
+                nemo_flow_atif_exporter_register(exporter, ptr::null()),
+                NemoFlowStatus::NullPointer
             );
             let exporter_name = cstring(&unique_name("dup_exporter_subscriber"));
             assert_eq!(
-                nat_nexus_atif_exporter_register(exporter, exporter_name.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_atif_exporter_register(exporter, exporter_name.as_ptr()),
+                NemoFlowStatus::Ok
             );
-            assert_already_exists!(nat_nexus_atif_exporter_register(
+            assert_already_exists!(nemo_flow_atif_exporter_register(
                 exporter,
                 exporter_name.as_ptr(),
             ));
             assert_eq!(
-                nat_nexus_atif_exporter_deregister(ptr::null()),
-                NatNexusStatus::NullPointer
+                nemo_flow_atif_exporter_deregister(ptr::null()),
+                NemoFlowStatus::NullPointer
             );
             assert_eq!(
-                nat_nexus_atif_exporter_deregister(exporter_name.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_atif_exporter_deregister(exporter_name.as_ptr()),
+                NemoFlowStatus::Ok
             );
-            nat_nexus_atif_exporter_free(exporter);
+            nemo_flow_atif_exporter_free(exporter);
 
             let args = cstring(r#"{"value":1}"#);
             let tool_intercept_json = take_string(tool_exec_intercept_cb(
@@ -6214,9 +6217,9 @@ mod tests {
                 json!({"role":"assistant","content":"next","tool_calls":[]})
             );
 
-            assert_eq!(nat_nexus_pop_scope(scope), NatNexusStatus::Ok);
-            nat_nexus_scope_handle_free(scope);
-            nat_nexus_scope_stack_free(stack);
+            assert_eq!(nemo_flow_pop_scope(scope), NemoFlowStatus::Ok);
+            nemo_flow_scope_handle_free(scope);
+            nemo_flow_scope_stack_free(stack);
         }
     }
 
@@ -6231,23 +6234,23 @@ mod tests {
             let subscriber_name = unique_name("ffi_llm_subscriber");
             let subscriber_name_c = cstring(&subscriber_name);
             assert_eq!(
-                nat_nexus_register_subscriber(
+                nemo_flow_register_subscriber(
                     subscriber_name_c.as_ptr(),
                     subscriber_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let mut root = ptr::null_mut();
-            assert_eq!(nat_nexus_get_handle(&mut root), NatNexusStatus::Ok);
-            nat_nexus_scope_handle_free(root);
+            assert_eq!(nemo_flow_get_handle(&mut root), NemoFlowStatus::Ok);
+            nemo_flow_scope_handle_free(root);
 
             let intercept_name = unique_name("ffi_llm_intercept");
             let intercept_name_c = cstring(&intercept_name);
             assert_eq!(
-                nat_nexus_register_llm_request_intercept(
+                nemo_flow_register_llm_request_intercept(
                     intercept_name_c.as_ptr(),
                     1,
                     false,
@@ -6255,33 +6258,33 @@ mod tests {
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let conditional_name = unique_name("ffi_llm_conditional");
             let conditional_name_c = cstring(&conditional_name);
             assert_eq!(
-                nat_nexus_register_llm_conditional_execution_guardrail(
+                nemo_flow_register_llm_conditional_execution_guardrail(
                     conditional_name_c.as_ptr(),
                     1,
                     llm_allow_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let sanitize_name = unique_name("ffi_llm_sanitize");
             let sanitize_name_c = cstring(&sanitize_name);
             assert_eq!(
-                nat_nexus_register_llm_sanitize_response_guardrail(
+                nemo_flow_register_llm_sanitize_response_guardrail(
                     sanitize_name_c.as_ptr(),
                     1,
                     llm_response_cb,
                     ptr::null_mut(),
                     None,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let mut exporter: *mut FfiAtifExporter = ptr::null_mut();
@@ -6290,21 +6293,21 @@ mod tests {
             let version = cstring("1.0.0");
             let model_name = cstring("ffi-model");
             assert_eq!(
-                nat_nexus_atif_exporter_create(
+                nemo_flow_atif_exporter_create(
                     session.as_ptr(),
                     agent.as_ptr(),
                     version.as_ptr(),
                     model_name.as_ptr(),
                     &mut exporter,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
 
             let exporter_sub = unique_name("ffi_exporter");
             let exporter_sub_c = cstring(&exporter_sub);
             assert_eq!(
-                nat_nexus_atif_exporter_register(exporter, exporter_sub_c.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_atif_exporter_register(exporter, exporter_sub_c.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             let llm_name = cstring("ffi_llm");
@@ -6313,44 +6316,44 @@ mod tests {
             );
             let headers = cstring(r#"{"Authorization":"Bearer token"}"#);
             let content = cstring(r#"{"messages":[],"model":"ffi-model"}"#);
-            let llm_request = nat_nexus_llm_request_new(headers.as_ptr(), content.as_ptr());
+            let llm_request = nemo_flow_llm_request_new(headers.as_ptr(), content.as_ptr());
             assert!(!llm_request.is_null());
             assert_eq!(
                 serde_json::from_str::<Json>(
-                    &take_string(nat_nexus_llm_request_headers(llm_request)).unwrap()
+                    &take_string(nemo_flow_llm_request_headers(llm_request)).unwrap()
                 )
                 .unwrap(),
                 json!({"Authorization": "Bearer token"})
             );
             assert_eq!(
                 serde_json::from_str::<Json>(
-                    &take_string(nat_nexus_llm_request_content(llm_request)).unwrap()
+                    &take_string(nemo_flow_llm_request_content(llm_request)).unwrap()
                 )
                 .unwrap(),
                 json!({"messages": [], "model": "ffi-model"})
             );
-            nat_nexus_llm_request_free(llm_request);
+            nemo_flow_llm_request_free(llm_request);
 
             let mut helper_out = ptr::null_mut();
             assert_eq!(
-                nat_nexus_llm_request_intercepts(
+                nemo_flow_llm_request_intercepts(
                     llm_name.as_ptr(),
                     request.as_ptr(),
                     &mut helper_out
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             let helper_json = returned_json(helper_out);
             assert_eq!(helper_json["content"]["intercepted"], json!(true));
 
             assert_eq!(
-                nat_nexus_llm_conditional_execution(request.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_llm_conditional_execution(request.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             let mut handle: *mut FfiLLMHandle = ptr::null_mut();
             assert_eq!(
-                nat_nexus_llm_call(
+                nemo_flow_llm_call(
                     llm_name.as_ptr(),
                     request.as_ptr(),
                     ptr::null(),
@@ -6360,27 +6363,27 @@ mod tests {
                     model_name.as_ptr(),
                     &mut handle,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
-            assert!(take_string(nat_nexus_llm_handle_uuid(handle)).is_some());
+            assert!(take_string(nemo_flow_llm_handle_uuid(handle)).is_some());
             assert_eq!(
-                take_string(nat_nexus_llm_handle_name(handle)).unwrap(),
+                take_string(nemo_flow_llm_handle_name(handle)).unwrap(),
                 "ffi_llm"
             );
-            assert_eq!(nat_nexus_llm_handle_attributes(handle), 2);
-            assert!(take_string(nat_nexus_llm_handle_parent_uuid(handle)).is_some());
+            assert_eq!(nemo_flow_llm_handle_attributes(handle), 2);
+            assert!(take_string(nemo_flow_llm_handle_parent_uuid(handle)).is_some());
 
             let response =
                 cstring(r#"{"content":"manual end","role":"assistant","tool_calls":[]}"#);
             assert_eq!(
-                nat_nexus_llm_call_end(handle, response.as_ptr(), ptr::null(), ptr::null()),
-                NatNexusStatus::Ok
+                nemo_flow_llm_call_end(handle, response.as_ptr(), ptr::null(), ptr::null()),
+                NemoFlowStatus::Ok
             );
-            nat_nexus_llm_handle_free(handle);
+            nemo_flow_llm_handle_free(handle);
 
             let mut execute_out = ptr::null_mut();
             assert_eq!(
-                nat_nexus_llm_call_execute(
+                nemo_flow_llm_call_execute(
                     llm_name.as_ptr(),
                     request.as_ptr(),
                     llm_exec_cb,
@@ -6398,22 +6401,26 @@ mod tests {
                     ptr::null(),
                     &mut execute_out,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             let execute_json = returned_json(execute_out);
             assert_eq!(execute_json["content"], json!("hello from ffi"));
             assert_eq!(execute_json["model_seen"], json!("ffi-model"));
             let events = lock_unpoisoned(event_log()).clone();
-            assert!(events
-                .iter()
-                .any(|event| event["output"]["sanitized"] == json!(true)));
-            assert!(events
-                .iter()
-                .any(|event| event["model_name"] == "ffi-model"));
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event["output"]["sanitized"] == json!(true))
+            );
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event["model_name"] == "ffi-model")
+            );
 
             let mut stream = ptr::null_mut();
             assert_eq!(
-                nat_nexus_llm_stream_call_execute(
+                nemo_flow_llm_stream_call_execute(
                     llm_name.as_ptr(),
                     request.as_ptr(),
                     llm_exec_cb,
@@ -6433,61 +6440,61 @@ mod tests {
                     ptr::null(),
                     &mut stream,
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             let mut chunk = ptr::null_mut();
-            assert_eq!(nat_nexus_stream_next(stream, &mut chunk), 1);
+            assert_eq!(nemo_flow_stream_next(stream, &mut chunk), 1);
             let chunk_json = returned_json(chunk);
             assert_eq!(chunk_json["content"], json!("hello from ffi"));
-            assert_eq!(nat_nexus_stream_next(stream, &mut chunk), 0);
-            nat_nexus_stream_free(stream);
+            assert_eq!(nemo_flow_stream_next(stream, &mut chunk), 0);
+            nemo_flow_stream_free(stream);
 
             assert_eq!(lock_unpoisoned(collected_chunks()).len(), 1);
             assert_eq!(*lock_unpoisoned(finalizer_calls()), 1);
 
             let mut exported = ptr::null_mut();
             assert_eq!(
-                nat_nexus_atif_exporter_export(exporter, &mut exported),
-                NatNexusStatus::Ok
+                nemo_flow_atif_exporter_export(exporter, &mut exported),
+                NemoFlowStatus::Ok
             );
             let trajectory = returned_json(exported);
             assert_eq!(trajectory["schema_version"], json!("ATIF-v1.6"));
             assert!(trajectory["steps"].as_array().unwrap().len() >= 4);
 
-            assert_eq!(nat_nexus_atif_exporter_clear(exporter), NatNexusStatus::Ok);
+            assert_eq!(nemo_flow_atif_exporter_clear(exporter), NemoFlowStatus::Ok);
             let mut cleared = ptr::null_mut();
             assert_eq!(
-                nat_nexus_atif_exporter_export(exporter, &mut cleared),
-                NatNexusStatus::Ok
+                nemo_flow_atif_exporter_export(exporter, &mut cleared),
+                NemoFlowStatus::Ok
             );
             let cleared_json = returned_json(cleared);
             assert_eq!(cleared_json["steps"].as_array().unwrap().len(), 0);
 
             assert_eq!(
-                nat_nexus_atif_exporter_deregister(exporter_sub_c.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_atif_exporter_deregister(exporter_sub_c.as_ptr()),
+                NemoFlowStatus::Ok
             );
-            nat_nexus_atif_exporter_free(exporter);
+            nemo_flow_atif_exporter_free(exporter);
             assert_eq!(
-                nat_nexus_deregister_subscriber(subscriber_name_c.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_subscriber(subscriber_name_c.as_ptr()),
+                NemoFlowStatus::Ok
             );
 
             assert_eq!(
-                nat_nexus_deregister_llm_request_intercept(intercept_name_c.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_llm_request_intercept(intercept_name_c.as_ptr()),
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_deregister_llm_conditional_execution_guardrail(
+                nemo_flow_deregister_llm_conditional_execution_guardrail(
                     conditional_name_c.as_ptr()
                 ),
-                NatNexusStatus::Ok
+                NemoFlowStatus::Ok
             );
             assert_eq!(
-                nat_nexus_deregister_llm_sanitize_response_guardrail(sanitize_name_c.as_ptr()),
-                NatNexusStatus::Ok
+                nemo_flow_deregister_llm_sanitize_response_guardrail(sanitize_name_c.as_ptr()),
+                NemoFlowStatus::Ok
             );
-            nat_nexus_scope_stack_free(stack);
+            nemo_flow_scope_stack_free(stack);
         }
     }
 }

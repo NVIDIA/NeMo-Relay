@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Storage abstraction for the nexus-optimizer crate.
+//! Storage abstraction for the nemo-flow-optimizer crate.
 //!
 //! Defines the [`StorageBackend`] trait (RPITIT, not object-safe), the
 //! [`StorageBackendDyn`] companion trait (object-safe, `Pin<Box<dyn Future>>`),
@@ -19,11 +19,11 @@ use std::pin::Pin;
 use std::sync::RwLock;
 
 use crate::error::{OptimizerError, Result};
-use crate::trie::serialization::TrieEnvelope;
 use crate::trie::AccumulatorState;
+use crate::trie::serialization::TrieEnvelope;
 use crate::types::{ExecutionPlan, RunRecord};
 
-/// The storage abstraction for nexus-optimizer persistence.
+/// The storage abstraction for nemo-flow-optimizer persistence.
 ///
 /// All methods return futures that are `Send`, enabling use across tokio task
 /// boundaries. Implementations must be `Send + Sync + 'static`.

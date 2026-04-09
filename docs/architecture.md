@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ## System Design
 
-Nexus is a Rust-core runtime with bindings for Python, Node.js, Go, and WebAssembly. The core handles all middleware logic, event emission, and scope management. Each binding is a thin translation layer that marshals types between the host language and Rust.
+NeMo Flow is a Rust-core runtime with bindings for Python, Node.js, Go, and WebAssembly. The core handles all middleware logic, event emission, and scope management. Each binding is a thin translation layer that marshals types between the host language and Rust.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -21,7 +21,7 @@ Nexus is a Rust-core runtime with bindings for Python, Node.js, Go, and WebAssem
 └──────┬───┘  └───┬────┘ └───┬───┘ └───┬──────┘
        │          │          │         │
 ┌──────▼──────────▼──────────▼─────────▼──────┐
-│              nvidia-nat-nexus-core (Rust)            │
+│              nemo-flow-core (Rust)            │
 │                                             │
 │  ┌──────────┐  ┌──────────┐  ┌───────────┐  │
 │  │  Scopes  │  │  Tools   │  │    LLM    │  │
@@ -55,7 +55,7 @@ graph TD
     end
 
     subgraph "Core"
-        CORE[crates/core<br/>nvidia-nat-nexus-core]
+        CORE[crates/core<br/>nemo-flow-core]
     end
 
     PY --> PYO3
@@ -89,7 +89,7 @@ crates/
         anthropic.rs      # Built-in Anthropic Messages API codec
       registry.rs     # SortedRegistry<T> for priority-ordered middleware
       stream.rs       # LlmStreamWrapper for streaming LLM responses
-      error.rs        # NexusError enum
+      error.rs        # FlowError enum
       json.rs         # Json type alias, merge_json helper
       atif.rs         # ATIF trajectory exporter
     tests/
@@ -108,8 +108,8 @@ crates/
   otel/            # OpenTelemetry trace subscriber
   openinference/   # OpenInference trace subscriber
 
-python/            # Python wrapper package (nat_nexus/)
-  nat_nexus/
+python/            # Python wrapper package (nemo_flow/)
+  nemo_flow/
     __init__.py        # Re-exports all submodules and types
     __init__.pyi       # Type stubs for the native C extension
     scope.py           # Scope operations
@@ -123,7 +123,7 @@ python/            # Python wrapper package (nat_nexus/)
     typed.py           # Codec-based typed wrappers
     optimizer.py       # Optimizer config helpers and runtime lifecycle
 
-go/nat_nexus/        # Go CGo bindings
+go/nemo_flow/        # Go CGo bindings
 ```
 
 ## Global Context
@@ -134,7 +134,7 @@ Middleware registrations exist at two levels: **global** (shared by all scope st
 
 ```mermaid
 graph LR
-    subgraph "NatNexusContextState (Global)"
+    subgraph "NemoFlowContextState (Global)"
         TSR[Tool Sanitize<br/>Request Guards]
         TSP[Tool Sanitize<br/>Response Guards]
         TCE[Tool Conditional<br/>Execution Guards]
@@ -182,7 +182,7 @@ See [Core Concepts: Scope-Local Middleware](concepts.md#scope-local-middleware) 
 ```mermaid
 sequenceDiagram
     participant App
-    participant Core as nvidia-nat-nexus-core
+    participant Core as nemo-flow-core
     participant Guards as Guardrails
     participant Ints as Intercepts
     participant Func as User Function

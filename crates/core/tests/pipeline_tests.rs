@@ -14,21 +14,20 @@ use futures::StreamExt;
 use serde_json::json;
 use tokio_stream::Stream;
 
-use nvidia_nat_nexus_core::codec::{
+use nemo_flow_core::Json;
+use nemo_flow_core::codec::{
     AnnotatedLLMRequest, AnnotatedLLMResponse, FinishReason, LlmCodec, LlmResponseCodec,
     MessageContent,
 };
-use nvidia_nat_nexus_core::context::{
-    create_scope_stack, global_context, set_thread_scope_stack, NatNexusContextState,
+use nemo_flow_core::context::{
+    NemoFlowContextState, create_scope_stack, global_context, set_thread_scope_stack,
 };
-use nvidia_nat_nexus_core::error::{NexusError, Result};
-use nvidia_nat_nexus_core::types::{Event, LLMAttributes, LLMRequest};
-use nvidia_nat_nexus_core::Json;
-use nvidia_nat_nexus_core::{
-    nat_nexus_deregister_llm_request_intercept, nat_nexus_deregister_subscriber,
-    nat_nexus_llm_call_execute, nat_nexus_llm_stream_call_execute,
-    nat_nexus_register_llm_request_intercept, nat_nexus_register_subscriber, LlmExecutionNextFn,
-    LlmStreamExecutionNextFn,
+use nemo_flow_core::error::{FlowError, Result};
+use nemo_flow_core::types::{Event, LLMAttributes, LLMRequest};
+use nemo_flow_core::{
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, nemo_flow_deregister_llm_request_intercept,
+    nemo_flow_deregister_subscriber, nemo_flow_llm_call_execute, nemo_flow_llm_stream_call_execute,
+    nemo_flow_register_llm_request_intercept, nemo_flow_register_subscriber,
 };
 
 // ---------------------------------------------------------------------------
@@ -40,7 +39,7 @@ static TEST_MUTEX: Mutex<()> = Mutex::new(());
 fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NatNexusContextState::new();
+    *state = NemoFlowContextState::new();
 }
 
 fn setup_isolated_thread() {
@@ -131,7 +130,7 @@ struct FailingCodec;
 
 impl LlmCodec for FailingCodec {
     fn decode(&self, _request: &LLMRequest) -> Result<AnnotatedLLMRequest> {
-        Err(NexusError::Internal("decode failed on purpose".into()))
+        Err(FlowError::Internal("decode failed on purpose".into()))
     }
 
     fn encode(
@@ -201,7 +200,7 @@ async fn test_decode_runs_before_intercepts() {
     // Register an annotated intercept that captures what it receives
     let captured = Arc::new(Mutex::new(None::<Option<AnnotatedLLMRequest>>));
     let cap = captured.clone();
-    nat_nexus_register_llm_request_intercept(
+    nemo_flow_register_llm_request_intercept(
         "ann_i",
         1,
         false,
@@ -214,7 +213,7 @@ async fn test_decode_runs_before_intercepts() {
 
     let request = make_llm_request(json!({"messages": [{"role": "user", "content": "hello"}]}));
 
-    let _result = nat_nexus_llm_call_execute(
+    let _result = nemo_flow_llm_call_execute(
         "test_llm",
         request,
         noop_exec_fn(),
@@ -240,7 +239,7 @@ async fn test_decode_runs_before_intercepts() {
     assert_eq!(annotated.model, Some("codec_A".into()));
 
     // Cleanup
-    nat_nexus_deregister_llm_request_intercept("ann_i").unwrap();
+    nemo_flow_deregister_llm_request_intercept("ann_i").unwrap();
 }
 
 // ===========================================================================
@@ -256,7 +255,7 @@ async fn test_encode_runs_after_intercepts() {
     let (codec, _decode_log, encode_log) = make_tracking_codec("codec_B");
 
     // Annotated intercept modifies the model field
-    nat_nexus_register_llm_request_intercept(
+    nemo_flow_register_llm_request_intercept(
         "modify_model",
         1,
         false,
@@ -278,7 +277,7 @@ async fn test_encode_runs_after_intercepts() {
 
     let request = make_llm_request(json!({"messages": [{"role": "user", "content": "hi"}]}));
 
-    let _result = nat_nexus_llm_call_execute(
+    let _result = nemo_flow_llm_call_execute(
         "test_llm",
         request,
         func,
@@ -304,7 +303,7 @@ async fn test_encode_runs_after_intercepts() {
     assert_eq!(req.content["model"], json!("modified"));
 
     // Cleanup
-    nat_nexus_deregister_llm_request_intercept("modify_model").unwrap();
+    nemo_flow_deregister_llm_request_intercept("modify_model").unwrap();
 }
 
 // ===========================================================================
@@ -323,7 +322,7 @@ async fn test_annotated_intercept_receives_both() {
         None::<(LLMRequest, Option<AnnotatedLLMRequest>)>,
     ));
     let cp = captured_pair.clone();
-    nat_nexus_register_llm_request_intercept(
+    nemo_flow_register_llm_request_intercept(
         "capture_both",
         1,
         false,
@@ -339,7 +338,7 @@ async fn test_annotated_intercept_receives_both() {
         "model": "original-model"
     }));
 
-    let _result = nat_nexus_llm_call_execute(
+    let _result = nemo_flow_llm_call_execute(
         "test_llm",
         request,
         noop_exec_fn(),
@@ -366,7 +365,7 @@ async fn test_annotated_intercept_receives_both() {
     assert!(!annotated.messages.is_empty());
 
     // Cleanup
-    nat_nexus_deregister_llm_request_intercept("capture_both").unwrap();
+    nemo_flow_deregister_llm_request_intercept("capture_both").unwrap();
 }
 
 // ===========================================================================
@@ -382,7 +381,7 @@ async fn test_legacy_intercept_backward_compat() {
     // Part 1: Legacy intercept with no Codec
     let legacy_called_1 = Arc::new(Mutex::new(false));
     let lc1 = legacy_called_1.clone();
-    nat_nexus_register_llm_request_intercept(
+    nemo_flow_register_llm_request_intercept(
         "legacy_1",
         1,
         false,
@@ -402,7 +401,7 @@ async fn test_legacy_intercept_backward_compat() {
     });
 
     let request = make_llm_request(json!({"prompt": "hi"}));
-    let _result = nat_nexus_llm_call_execute(
+    let _result = nemo_flow_llm_call_execute(
         "test_llm",
         request,
         func,
@@ -422,7 +421,7 @@ async fn test_legacy_intercept_backward_compat() {
     assert_eq!(cap.as_ref().unwrap().headers["x-legacy"], json!("was-here"));
 
     // Cleanup part 1
-    nat_nexus_deregister_llm_request_intercept("legacy_1").unwrap();
+    nemo_flow_deregister_llm_request_intercept("legacy_1").unwrap();
 
     // Part 2: Legacy intercept WITH Codec — legacy intercept still runs
     reset_global();
@@ -431,7 +430,7 @@ async fn test_legacy_intercept_backward_compat() {
 
     let legacy_called_2 = Arc::new(Mutex::new(false));
     let lc2 = legacy_called_2.clone();
-    nat_nexus_register_llm_request_intercept(
+    nemo_flow_register_llm_request_intercept(
         "legacy_2",
         1,
         false,
@@ -451,7 +450,7 @@ async fn test_legacy_intercept_backward_compat() {
     });
 
     let request2 = make_llm_request(json!({"messages": [{"role": "user", "content": "hi"}]}));
-    let _result = nat_nexus_llm_call_execute(
+    let _result = nemo_flow_llm_call_execute(
         "test_llm",
         request2,
         func2,
@@ -475,7 +474,7 @@ async fn test_legacy_intercept_backward_compat() {
     );
 
     // Cleanup
-    nat_nexus_deregister_llm_request_intercept("legacy_2").unwrap();
+    nemo_flow_deregister_llm_request_intercept("legacy_2").unwrap();
 }
 
 // ===========================================================================
@@ -492,7 +491,7 @@ async fn test_stream_path_also_decodes() {
 
     let captured_ann = Arc::new(Mutex::new(None::<Option<AnnotatedLLMRequest>>));
     let ca = captured_ann.clone();
-    nat_nexus_register_llm_request_intercept(
+    nemo_flow_register_llm_request_intercept(
         "stream_ann",
         1,
         false,
@@ -508,7 +507,7 @@ async fn test_stream_path_also_decodes() {
     let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(|_chunk| Ok(()));
     let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| json!({"done": true}));
 
-    let mut stream = nat_nexus_llm_stream_call_execute(
+    let mut stream = nemo_flow_llm_stream_call_execute(
         "test_stream",
         request,
         noop_stream_exec_fn(),
@@ -542,7 +541,7 @@ async fn test_stream_path_also_decodes() {
     );
 
     // Cleanup
-    nat_nexus_deregister_llm_request_intercept("stream_ann").unwrap();
+    nemo_flow_deregister_llm_request_intercept("stream_ann").unwrap();
 }
 
 // ===========================================================================
@@ -560,7 +559,7 @@ async fn test_shared_helper_both_paths() {
     // Same annotated intercept that modifies model — used for both calls
     let ann_call_count = Arc::new(Mutex::new(0u32));
     let acc = ann_call_count.clone();
-    nat_nexus_register_llm_request_intercept(
+    nemo_flow_register_llm_request_intercept(
         "shared_ann",
         1,
         false,
@@ -574,7 +573,7 @@ async fn test_shared_helper_both_paths() {
     // Non-streaming call
     let request1 =
         make_llm_request(json!({"messages": [{"role": "user", "content": "non-stream"}]}));
-    let _result = nat_nexus_llm_call_execute(
+    let _result = nemo_flow_llm_call_execute(
         "test_llm",
         request1,
         noop_exec_fn(),
@@ -594,7 +593,7 @@ async fn test_shared_helper_both_paths() {
     let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(|_| Ok(()));
     let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| json!({"done": true}));
 
-    let mut stream = nat_nexus_llm_stream_call_execute(
+    let mut stream = nemo_flow_llm_stream_call_execute(
         "test_stream",
         request2,
         noop_stream_exec_fn(),
@@ -623,7 +622,7 @@ async fn test_shared_helper_both_paths() {
     assert_eq!(*ann_call_count.lock().unwrap(), 2);
 
     // Cleanup
-    nat_nexus_deregister_llm_request_intercept("shared_ann").unwrap();
+    nemo_flow_deregister_llm_request_intercept("shared_ann").unwrap();
 }
 
 // ===========================================================================
@@ -643,7 +642,7 @@ async fn test_explicit_codec_param_overrides() {
     // Capture which model the annotated intercept sees
     let captured_model = Arc::new(Mutex::new(None::<String>));
     let cm = captured_model.clone();
-    nat_nexus_register_llm_request_intercept(
+    nemo_flow_register_llm_request_intercept(
         "check_model",
         1,
         false,
@@ -659,7 +658,7 @@ async fn test_explicit_codec_param_overrides() {
     let request = make_llm_request(json!({"messages": [{"role": "user", "content": "test"}]}));
 
     // Pass codec B directly
-    let _result = nat_nexus_llm_call_execute(
+    let _result = nemo_flow_llm_call_execute(
         "test_llm",
         request,
         noop_exec_fn(),
@@ -679,7 +678,7 @@ async fn test_explicit_codec_param_overrides() {
     assert_eq!(model.as_deref(), Some("B"));
 
     // Cleanup
-    nat_nexus_deregister_llm_request_intercept("check_model").unwrap();
+    nemo_flow_deregister_llm_request_intercept("check_model").unwrap();
 }
 
 // ===========================================================================
@@ -695,7 +694,7 @@ async fn test_encode_merge_not_replace() {
     let (codec, _, _) = make_tracking_codec("codec_merge");
 
     // Annotated intercept modifies the model
-    nat_nexus_register_llm_request_intercept(
+    nemo_flow_register_llm_request_intercept(
         "merge_mod",
         1,
         false,
@@ -722,7 +721,7 @@ async fn test_encode_merge_not_replace() {
         "custom_key": 42
     }));
 
-    let _result = nat_nexus_llm_call_execute(
+    let _result = nemo_flow_llm_call_execute(
         "test_llm",
         request,
         func,
@@ -749,7 +748,7 @@ async fn test_encode_merge_not_replace() {
     assert_eq!(req.content["custom_key"], json!(42));
 
     // Cleanup
-    nat_nexus_deregister_llm_request_intercept("merge_mod").unwrap();
+    nemo_flow_deregister_llm_request_intercept("merge_mod").unwrap();
 }
 
 // ===========================================================================
@@ -768,7 +767,7 @@ async fn test_unified_chain_priority_order() {
 
     // Legacy intercept at priority 10
     let cl1 = call_log.clone();
-    nat_nexus_register_llm_request_intercept(
+    nemo_flow_register_llm_request_intercept(
         "legacy_p10",
         10,
         false,
@@ -781,7 +780,7 @@ async fn test_unified_chain_priority_order() {
 
     // Annotated intercept at priority 5 (should run first)
     let cl2 = call_log.clone();
-    nat_nexus_register_llm_request_intercept(
+    nemo_flow_register_llm_request_intercept(
         "annotated_p5",
         5,
         false,
@@ -794,7 +793,7 @@ async fn test_unified_chain_priority_order() {
 
     let request = make_llm_request(json!({"messages": [{"role": "user", "content": "order"}]}));
 
-    let _result = nat_nexus_llm_call_execute(
+    let _result = nemo_flow_llm_call_execute(
         "test_llm",
         request,
         noop_exec_fn(),
@@ -816,8 +815,8 @@ async fn test_unified_chain_priority_order() {
     assert_eq!(log[1], "legacy_p10");
 
     // Cleanup
-    nat_nexus_deregister_llm_request_intercept("legacy_p10").unwrap();
-    nat_nexus_deregister_llm_request_intercept("annotated_p5").unwrap();
+    nemo_flow_deregister_llm_request_intercept("legacy_p10").unwrap();
+    nemo_flow_deregister_llm_request_intercept("annotated_p5").unwrap();
 }
 
 // ===========================================================================
@@ -833,7 +832,7 @@ async fn test_no_codec_annotated_intercept_receives_none() {
     // Register annotated intercept but NO codec
     let captured_ann = Arc::new(Mutex::new(None::<Option<AnnotatedLLMRequest>>));
     let ca = captured_ann.clone();
-    nat_nexus_register_llm_request_intercept(
+    nemo_flow_register_llm_request_intercept(
         "no_codec_ann",
         1,
         false,
@@ -846,7 +845,7 @@ async fn test_no_codec_annotated_intercept_receives_none() {
 
     let request = make_llm_request(json!({"messages": [{"role": "user", "content": "hi"}]}));
 
-    let _result = nat_nexus_llm_call_execute(
+    let _result = nemo_flow_llm_call_execute(
         "test_llm",
         request,
         noop_exec_fn(),
@@ -866,7 +865,7 @@ async fn test_no_codec_annotated_intercept_receives_none() {
     assert!(ann.as_ref().unwrap().is_none());
 
     // Cleanup
-    nat_nexus_deregister_llm_request_intercept("no_codec_ann").unwrap();
+    nemo_flow_deregister_llm_request_intercept("no_codec_ann").unwrap();
 }
 
 // ===========================================================================
@@ -884,7 +883,7 @@ async fn test_decode_error_propagates() {
 
     let request = make_llm_request(json!({"messages": []}));
 
-    let result = nat_nexus_llm_call_execute(
+    let result = nemo_flow_llm_call_execute(
         "test_llm",
         request,
         noop_exec_fn(),
@@ -901,7 +900,7 @@ async fn test_decode_error_propagates() {
     // The execute call should return Err with the decode error
     assert!(result.is_err());
     match result.unwrap_err() {
-        NexusError::Internal(msg) => {
+        FlowError::Internal(msg) => {
             assert!(msg.contains("decode failed on purpose"), "Got: {}", msg);
         }
         other => panic!("Expected Internal error from decode, got: {:?}", other),
@@ -935,7 +934,7 @@ struct FailingResponseCodec;
 
 impl LlmResponseCodec for FailingResponseCodec {
     fn decode_response(&self, _response: &Json) -> Result<AnnotatedLLMResponse> {
-        Err(NexusError::Internal("decode failed".into()))
+        Err(FlowError::Internal("decode failed".into()))
     }
 }
 
@@ -947,7 +946,7 @@ async fn test_response_codec_populates_annotated_response() {
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nat_nexus_register_subscriber(
+    nemo_flow_register_subscriber(
         "resp_codec_sub",
         Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
@@ -958,7 +957,7 @@ async fn test_response_codec_populates_annotated_response() {
     let request = make_llm_request(json!({"messages": [{"role": "user", "content": "hello"}]}));
     let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(MockResponseCodec);
 
-    let _result = nat_nexus_llm_call_execute(
+    let _result = nemo_flow_llm_call_execute(
         "test_llm",
         request,
         noop_exec_fn(),
@@ -993,7 +992,7 @@ async fn test_response_codec_populates_annotated_response() {
     }
 
     drop(captured);
-    nat_nexus_deregister_subscriber("resp_codec_sub").unwrap();
+    nemo_flow_deregister_subscriber("resp_codec_sub").unwrap();
 }
 
 #[tokio::test]
@@ -1004,7 +1003,7 @@ async fn test_response_codec_none_when_no_codec() {
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nat_nexus_register_subscriber(
+    nemo_flow_register_subscriber(
         "no_resp_codec_sub",
         Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
@@ -1014,7 +1013,7 @@ async fn test_response_codec_none_when_no_codec() {
 
     let request = make_llm_request(json!({"messages": [{"role": "user", "content": "hello"}]}));
 
-    let _result = nat_nexus_llm_call_execute(
+    let _result = nemo_flow_llm_call_execute(
         "test_llm",
         request,
         noop_exec_fn(),
@@ -1046,7 +1045,7 @@ async fn test_response_codec_none_when_no_codec() {
     }
 
     drop(captured);
-    nat_nexus_deregister_subscriber("no_resp_codec_sub").unwrap();
+    nemo_flow_deregister_subscriber("no_resp_codec_sub").unwrap();
 }
 
 #[tokio::test]
@@ -1057,7 +1056,7 @@ async fn test_response_codec_failure_non_fatal() {
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nat_nexus_register_subscriber(
+    nemo_flow_register_subscriber(
         "fail_resp_codec_sub",
         Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
@@ -1069,7 +1068,7 @@ async fn test_response_codec_failure_non_fatal() {
     let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(FailingResponseCodec);
 
     // Pipeline should NOT return an error despite decode failure (non-fatal)
-    let result = nat_nexus_llm_call_execute(
+    let result = nemo_flow_llm_call_execute(
         "test_llm",
         request,
         noop_exec_fn(),
@@ -1106,7 +1105,7 @@ async fn test_response_codec_failure_non_fatal() {
     }
 
     drop(captured);
-    nat_nexus_deregister_subscriber("fail_resp_codec_sub").unwrap();
+    nemo_flow_deregister_subscriber("fail_resp_codec_sub").unwrap();
 }
 
 #[tokio::test]
@@ -1117,7 +1116,7 @@ async fn test_request_codec_populates_annotated_request() {
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nat_nexus_register_subscriber(
+    nemo_flow_register_subscriber(
         "req_codec_ann_sub",
         Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
@@ -1129,7 +1128,7 @@ async fn test_request_codec_populates_annotated_request() {
 
     let request = make_llm_request(json!({"messages": [{"role": "user", "content": "hello"}]}));
 
-    let _result = nat_nexus_llm_call_execute(
+    let _result = nemo_flow_llm_call_execute(
         "test_llm",
         request,
         noop_exec_fn(),
@@ -1163,7 +1162,7 @@ async fn test_request_codec_populates_annotated_request() {
     }
 
     drop(captured);
-    nat_nexus_deregister_subscriber("req_codec_ann_sub").unwrap();
+    nemo_flow_deregister_subscriber("req_codec_ann_sub").unwrap();
 }
 
 #[tokio::test]
@@ -1174,7 +1173,7 @@ async fn test_stream_response_codec_populates_annotated_response() {
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nat_nexus_register_subscriber(
+    nemo_flow_register_subscriber(
         "stream_resp_codec_sub",
         Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
@@ -1189,7 +1188,7 @@ async fn test_stream_response_codec_populates_annotated_response() {
     let finalizer: Box<dyn FnOnce() -> Json + Send> =
         Box::new(|| json!({"aggregated": "response"}));
 
-    let mut stream = nat_nexus_llm_stream_call_execute(
+    let mut stream = nemo_flow_llm_stream_call_execute(
         "test_stream",
         request,
         noop_stream_exec_fn(),
@@ -1229,5 +1228,5 @@ async fn test_stream_response_codec_populates_annotated_response() {
     }
 
     drop(captured);
-    nat_nexus_deregister_subscriber("stream_resp_codec_sub").unwrap();
+    nemo_flow_deregister_subscriber("stream_resp_codec_sub").unwrap();
 }

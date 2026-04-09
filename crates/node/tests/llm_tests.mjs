@@ -362,8 +362,8 @@ describe('LLM intercepts', () => {
       'stream_llm',
       native,
       (wrapper) => {
-        lib.pushStreamChunk(wrapper.__nat_nexus_stream_id, { chunk: wrapper.__nat_nexus_native.content.intercepted });
-        lib.endStream(wrapper.__nat_nexus_stream_id);
+        lib.pushStreamChunk(wrapper.__nemo_flow_stream_id, { chunk: wrapper.__nemo_flow_native.content.intercepted });
+        lib.endStream(wrapper.__nemo_flow_stream_id);
       },
       null,
       null,
@@ -427,8 +427,8 @@ describe('LLM intercepts', () => {
         'stream_invalid_next_llm',
         makeNative(),
         (wrapper) => {
-          lib.pushStreamChunk(wrapper.__nat_nexus_stream_id, { chunk: true });
-          lib.endStream(wrapper.__nat_nexus_stream_id);
+          lib.pushStreamChunk(wrapper.__nemo_flow_stream_id, { chunk: true });
+          lib.endStream(wrapper.__nemo_flow_stream_id);
         },
         null,
         null,

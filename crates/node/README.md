@@ -3,13 +3,13 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# nvidia-nat-nexus-node
+# nemo-flow-node
 
-NAPI-RS Node.js bindings for the Nexus core runtime.
+NAPI-RS Node.js bindings for the NeMo Flow core runtime.
 
 ## Overview
 
-This crate compiles to a native `.node` addon using NAPI-RS, exposing the full Nexus API to Node.js. It supports both synchronous callbacks and Promise-based async operations, with automatic conversion between JavaScript values and Rust types via `serde-json`.
+This crate compiles to a native `.node` addon using NAPI-RS, exposing the full NeMo Flow API to Node.js. It supports both synchronous callbacks and Promise-based async operations, with automatic conversion between JavaScript values and Rust types via `serde-json`.
 
 ## What It Provides
 

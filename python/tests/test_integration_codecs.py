@@ -13,8 +13,8 @@ as in the LangChain and LangChain-NVIDIA patch files).
 
 from typing import cast
 
-from nat_nexus import AnnotatedLLMRequest, JsonObject, LLMRequest, ScopeType, llm, scope
-from nat_nexus.codecs import (
+from nemo_flow import AnnotatedLLMRequest, JsonObject, LLMRequest, ScopeType, llm, scope
+from nemo_flow.codecs import (
     LlmCodec,
 )
 
@@ -442,7 +442,7 @@ class TestLangGraphDelegation:
 
         intercept_data = {}
 
-        from nat_nexus import intercepts
+        from nemo_flow import intercepts
 
         def annotated_intercept(name, request, annotated):
             if annotated is not None:

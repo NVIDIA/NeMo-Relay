@@ -11,14 +11,14 @@ __pycache__/
 *.pyo
 *.egg-info/
 *.so
-python/nat_nexus/_native*.so
+python/nemo_flow/_native*.so
 
 # Python (Windows)
-python/nat_nexus/_native*.pyd
+python/nemo_flow/_native*.pyd
 
 # Go
-go/nat_nexus/nat_nexus_test
-go/nat_nexus/nat_nexus_test.exe
+go/nemo_flow/nemo_flow_test
+go/nemo_flow/nemo_flow_test.exe
 
 # Node.js (NAPI-RS)
 node_modules/
@@ -42,7 +42,7 @@ crates/wasm/pkg-test/
 .coverage
 *.profraw
 *.profdata
-go/nat_nexus/coverage.out
+go/nemo_flow/coverage.out
 go_junit_report.xml
 *.dSYM/
 

@@ -9,10 +9,10 @@ use pyo3::types::PyModule;
 use serde_json::json;
 use uuid::Uuid;
 
-use nvidia_nat_nexus_optimizer::storage::StorageBackendDyn;
-use nvidia_nat_nexus_optimizer::trie::data_models::PredictionTrieNode;
-use nvidia_nat_nexus_optimizer::trie::{AccumulatorState, NodeAccumulators, RunningStats};
-use nvidia_nat_nexus_optimizer::types::{
+use nemo_flow_optimizer::storage::StorageBackendDyn;
+use nemo_flow_optimizer::trie::data_models::PredictionTrieNode;
+use nemo_flow_optimizer::trie::{AccumulatorState, NodeAccumulators, RunningStats};
+use nemo_flow_optimizer::types::{
     CallKind, CallRecord, ExecutionPlan, MetadataEnvelope, ParallelGroup, ParallelHint, RunRecord,
 };
 
@@ -324,11 +324,13 @@ class FailingBackend:
             pyo3_async_runtimes::tokio::run_until_complete(event_loop, async move {
                 assert!(none_backend.load_plan_dyn("agent").await.unwrap().is_none());
                 assert!(none_backend.load_trie("agent").await.unwrap().is_none());
-                assert!(none_backend
-                    .load_accumulators("agent")
-                    .await
-                    .unwrap()
-                    .is_none());
+                assert!(
+                    none_backend
+                        .load_accumulators("agent")
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
 
                 let err = failing_backend.store_run_dyn(&run).await.unwrap_err();
                 assert!(err.to_string().contains("Python store_run"));

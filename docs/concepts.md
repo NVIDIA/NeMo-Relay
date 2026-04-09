@@ -114,7 +114,7 @@ codecs are **decode-only** (introspection, not modification) and
 
 ### Built-In Codecs
 
-Nexus ships three built-in codecs that implement both traits:
+NeMo Flow ships three built-in codecs that implement both traits:
 
 | Codec | API | Request Fields | Response Fields |
 |-------|-----|---------------|-----------------|
@@ -156,9 +156,9 @@ Every lifecycle operation emits events to registered subscribers. Events carry:
 | `annotated_request` | Structured request from codec (LLMStart events, when codec is active) |
 | `annotated_response` | Structured response from response codec (LLMEnd events, when response codec is active) |
 
-Subscriber callbacks run synchronously on the calling thread, but Nexus snapshots
+Subscriber callbacks run synchronously on the calling thread, but NeMo Flow snapshots
 the subscriber list and releases its runtime locks before invoking them. This
-means subscribers can safely call back into Nexus APIs without deadlocking, but
+means subscribers can safely call back into NeMo Flow APIs without deadlocking, but
 they should still stay lightweight because they are on the request path.
 
 ### Event Types
@@ -175,7 +175,7 @@ call `get_handle()` therefore observe the post-mutation active scope.
 
 ### Callback Contracts
 
-Nexus has two callback contracts:
+NeMo Flow has two callback contracts:
 
 | Surface | Contract | Notes |
 |---------|----------|-------|
@@ -259,9 +259,9 @@ Event subscribers observe all lifecycle events. They are registered by name and 
 def my_subscriber(event):
     print(f"{event.kind}: {event.name} [{event.uuid}]")
 
-nat_nexus.subscribers.register("logger", my_subscriber)
+nemo_flow.subscribers.register("logger", my_subscriber)
 # ... run operations ...
-nat_nexus.subscribers.deregister("logger")
+nemo_flow.subscribers.deregister("logger")
 ```
 
 Subscribers are infallible callbacks. They still run on the request path, but
@@ -273,7 +273,7 @@ Guardrails, intercepts, and event subscribers can be registered on a **specific 
 
 ### How It Works
 
-- **Registration** — Instead of calling `nat_nexus.guardrails.register_*()` (global), call `nat_nexus.scope_local.register_*()` with a `ScopeHandle` to bind the middleware to that scope.
+- **Registration** — Instead of calling `nemo_flow.guardrails.register_*()` (global), call `nemo_flow.scope_local.register_*()` with a `ScopeHandle` to bind the middleware to that scope.
 - **Storage** — Scope-local entries are stored in the `ScopeStack`, keyed by scope UUID. The per-scope registry is lazily created on first registration.
 - **Execution** — When the pipeline runs, global entries and scope-local entries from all ancestor scopes (root through current top) are merged into a single priority-sorted list.
 - **Cleanup** — When a scope is popped, all its scope-local middleware is automatically removed. No manual `deregister_*` calls needed.
@@ -291,22 +291,22 @@ Guardrails, intercepts, and event subscribers can be registered on a **specific 
 ### Example
 
 ```python
-import nat_nexus
+import nemo_flow
 
 # Global: always active
-nat_nexus.guardrails.register_llm_conditional_execution(
+nemo_flow.guardrails.register_llm_conditional_execution(
     "compliance_gate", 1, compliance_check,
 )
 
-with nat_nexus.scope.scope("session_42", nat_nexus.ScopeType.Agent) as handle:
+with nemo_flow.scope.scope("session_42", nemo_flow.ScopeType.Agent) as handle:
     # Scope-local: active only inside this scope
-    nat_nexus.scope_local.register_tool_conditional_execution(
+    nemo_flow.scope_local.register_tool_conditional_execution(
         handle, "block_dangerous", 10, lambda name, args: "blocked" if name == "rm" else None,
     )
 
     # Both compliance_gate (global, priority=1) and
     # block_dangerous (scope-local, priority=10) run during tool calls
-    result = await nat_nexus.tools.execute("search", {"q": "test"}, search_func)
+    result = await nemo_flow.tools.execute("search", {"q": "test"}, search_func)
 
 # handle is popped — block_dangerous is automatically removed
 ```

@@ -3,10 +3,10 @@
 
 //! Error handling for the FFI layer.
 //!
-//! This module defines the [`NatNexusStatus`] enum returned by every exported
+//! This module defines the [`NemoFlowStatus`] enum returned by every exported
 //! FFI function, along with thread-local storage for human-readable error
 //! messages. After any non-`Ok` return, the caller should invoke
-//! [`nat_nexus_last_error`] on the same thread to obtain a diagnostic string.
+//! [`nemo_flow_last_error`] on the same thread to obtain a diagnostic string.
 //! The error message remains valid until the next FFI call on that thread clears
 //! it via [`clear_last_error`].
 
@@ -16,17 +16,17 @@ use std::ffi::CString;
 
 use libc::c_char;
 
-use nvidia_nat_nexus_core::NexusError;
-use nvidia_nat_nexus_optimizer::OptimizerError;
+use nemo_flow_core::FlowError;
+use nemo_flow_optimizer::OptimizerError;
 
 /// Status codes returned by all FFI functions.
 ///
-/// Every `extern "C"` function in this library returns an `NatNexusStatus`.
-/// On non-`Ok` returns, call [`nat_nexus_last_error`] on the same thread to
+/// Every `extern "C"` function in this library returns an `NemoFlowStatus`.
+/// On non-`Ok` returns, call [`nemo_flow_last_error`] on the same thread to
 /// retrieve a human-readable error message.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NatNexusStatus {
+pub enum NemoFlowStatus {
     /// Operation completed successfully.
     Ok = 0,
     /// A resource with the given name already exists.
@@ -82,8 +82,8 @@ pub fn last_error_message() -> Option<String> {
 /// The returned pointer borrows from thread-local storage and is valid only
 /// until the next FFI call on the same thread. Do **not** free the returned
 /// pointer.
-#[no_mangle]
-pub extern "C" fn nat_nexus_last_error() -> *const c_char {
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_flow_last_error() -> *const c_char {
     LAST_ERROR.with(|cell| {
         cell.borrow()
             .as_ref()
@@ -100,8 +100,8 @@ pub extern "C" fn nat_nexus_last_error() -> *const c_char {
 /// # Safety
 /// `msg` must be either null or a valid, null-terminated C string for the
 /// duration of this call.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_set_last_error_message(msg: *const c_char) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_set_last_error_message(msg: *const c_char) {
     if msg.is_null() {
         set_last_error("unknown callback error");
         return;
@@ -112,40 +112,40 @@ pub unsafe extern "C" fn nat_nexus_set_last_error_message(msg: *const c_char) {
     }
 }
 
-impl From<&NexusError> for NatNexusStatus {
-    fn from(e: &NexusError) -> Self {
+impl From<&FlowError> for NemoFlowStatus {
+    fn from(e: &FlowError) -> Self {
         match e {
-            NexusError::AlreadyExists(_) => NatNexusStatus::AlreadyExists,
-            NexusError::NotFound(_) => NatNexusStatus::NotFound,
-            NexusError::InvalidArgument(_) => NatNexusStatus::InvalidArg,
-            NexusError::ScopeStackEmpty => NatNexusStatus::ScopeStackEmpty,
-            NexusError::GuardrailRejected(_) => NatNexusStatus::GuardrailRejected,
-            NexusError::Internal(_) => NatNexusStatus::Internal,
+            FlowError::AlreadyExists(_) => NemoFlowStatus::AlreadyExists,
+            FlowError::NotFound(_) => NemoFlowStatus::NotFound,
+            FlowError::InvalidArgument(_) => NemoFlowStatus::InvalidArg,
+            FlowError::ScopeStackEmpty => NemoFlowStatus::ScopeStackEmpty,
+            FlowError::GuardrailRejected(_) => NemoFlowStatus::GuardrailRejected,
+            FlowError::Internal(_) => NemoFlowStatus::Internal,
         }
     }
 }
 
-/// Convert an `NexusError` to an `NatNexusStatus`, storing the error message
+/// Convert an `FlowError` to an `NemoFlowStatus`, storing the error message
 /// in thread-local storage.
-pub fn status_from_error(e: &NexusError) -> NatNexusStatus {
+pub fn status_from_error(e: &FlowError) -> NemoFlowStatus {
     set_last_error(&e.to_string());
-    NatNexusStatus::from(e)
+    NemoFlowStatus::from(e)
 }
 
-/// Convert an `OptimizerError` to an `NatNexusStatus`, storing the error message
+/// Convert an `OptimizerError` to an `NemoFlowStatus`, storing the error message
 /// in thread-local storage.
-pub fn status_from_optimizer_error(e: &OptimizerError) -> NatNexusStatus {
+pub fn status_from_optimizer_error(e: &OptimizerError) -> NemoFlowStatus {
     set_last_error(&e.to_string());
     match e {
-        OptimizerError::NotFound(_) => NatNexusStatus::NotFound,
+        OptimizerError::NotFound(_) => NemoFlowStatus::NotFound,
         OptimizerError::InvalidConfig(_) | OptimizerError::Serialization(_) => {
-            NatNexusStatus::InvalidArg
+            NemoFlowStatus::InvalidArg
         }
         OptimizerError::Storage(_)
         | OptimizerError::Internal(_)
         | OptimizerError::RegistrationFailed(_)
-        | OptimizerError::ChannelClosed(_) => NatNexusStatus::Internal,
-        OptimizerError::Redis(_) => NatNexusStatus::Internal,
+        | OptimizerError::ChannelClosed(_) => NemoFlowStatus::Internal,
+        OptimizerError::Redis(_) => NemoFlowStatus::Internal,
     }
 }
 
@@ -158,12 +158,12 @@ mod tests {
     fn test_last_error_round_trip_and_clear() {
         clear_last_error();
         assert_eq!(last_error_message(), None);
-        assert!(nat_nexus_last_error().is_null());
+        assert!(nemo_flow_last_error().is_null());
 
         set_last_error("ffi failure");
         assert_eq!(last_error_message(), Some("ffi failure".into()));
 
-        let raw = nat_nexus_last_error();
+        let raw = nemo_flow_last_error();
         assert_eq!(
             unsafe { CStr::from_ptr(raw) }.to_str().unwrap(),
             "ffi failure"
@@ -171,17 +171,17 @@ mod tests {
 
         clear_last_error();
         assert_eq!(last_error_message(), None);
-        assert!(nat_nexus_last_error().is_null());
+        assert!(nemo_flow_last_error().is_null());
     }
 
     #[test]
     fn test_set_last_error_message_handles_null_and_invalid_utf8() {
-        unsafe { nat_nexus_set_last_error_message(std::ptr::null()) };
+        unsafe { nemo_flow_set_last_error_message(std::ptr::null()) };
         assert_eq!(last_error_message(), Some("unknown callback error".into()));
 
         let invalid_utf8 = [0xffu8, 0];
         unsafe {
-            nat_nexus_set_last_error_message(invalid_utf8.as_ptr() as *const c_char);
+            nemo_flow_set_last_error_message(invalid_utf8.as_ptr() as *const c_char);
         }
         assert_eq!(
             last_error_message(),
@@ -189,7 +189,7 @@ mod tests {
         );
 
         let valid = CString::new("callback failed").unwrap();
-        unsafe { nat_nexus_set_last_error_message(valid.as_ptr()) };
+        unsafe { nemo_flow_set_last_error_message(valid.as_ptr()) };
         assert_eq!(last_error_message(), Some("callback failed".into()));
     }
 
@@ -197,33 +197,30 @@ mod tests {
     fn test_status_from_error_maps_variants_and_sets_message() {
         let cases = [
             (
-                NexusError::AlreadyExists("dup".into()),
-                NatNexusStatus::AlreadyExists,
+                FlowError::AlreadyExists("dup".into()),
+                NemoFlowStatus::AlreadyExists,
             ),
             (
-                NexusError::NotFound("missing".into()),
-                NatNexusStatus::NotFound,
+                FlowError::NotFound("missing".into()),
+                NemoFlowStatus::NotFound,
             ),
             (
-                NexusError::InvalidArgument("bad arg".into()),
-                NatNexusStatus::InvalidArg,
+                FlowError::InvalidArgument("bad arg".into()),
+                NemoFlowStatus::InvalidArg,
             ),
             (
-                NexusError::GuardrailRejected("blocked".into()),
-                NatNexusStatus::GuardrailRejected,
+                FlowError::GuardrailRejected("blocked".into()),
+                NemoFlowStatus::GuardrailRejected,
             ),
-            (
-                NexusError::Internal("boom".into()),
-                NatNexusStatus::Internal,
-            ),
-            (NexusError::ScopeStackEmpty, NatNexusStatus::ScopeStackEmpty),
+            (FlowError::Internal("boom".into()), NemoFlowStatus::Internal),
+            (FlowError::ScopeStackEmpty, NemoFlowStatus::ScopeStackEmpty),
         ];
 
         for (error, expected_status) in cases {
             clear_last_error();
             let status = status_from_error(&error);
             assert_eq!(status, expected_status);
-            assert_eq!(NatNexusStatus::from(&error), expected_status);
+            assert_eq!(NemoFlowStatus::from(&error), expected_status);
             assert!(last_error_message().unwrap().contains(&error.to_string()));
         }
     }
@@ -233,19 +230,19 @@ mod tests {
         let cases = [
             (
                 OptimizerError::NotFound("missing".into()),
-                NatNexusStatus::NotFound,
+                NemoFlowStatus::NotFound,
             ),
             (
                 OptimizerError::InvalidConfig("bad config".into()),
-                NatNexusStatus::InvalidArg,
+                NemoFlowStatus::InvalidArg,
             ),
             (
                 OptimizerError::Internal("boom".into()),
-                NatNexusStatus::Internal,
+                NemoFlowStatus::Internal,
             ),
             (
                 OptimizerError::RegistrationFailed("subscriber".into()),
-                NatNexusStatus::Internal,
+                NemoFlowStatus::Internal,
             ),
         ];
 

@@ -14,11 +14,11 @@ from __future__ import annotations
 import asyncio
 import json
 
-import nat_nexus
+import nemo_flow
 
 
 async def main() -> None:
-    exporter = nat_nexus.AtifExporter(
+    exporter = nemo_flow.AtifExporter(
         session_id="example-session",
         agent_name="example-agent",
         agent_version="1.0",
@@ -29,8 +29,8 @@ async def main() -> None:
     async def tool(args: dict) -> dict:
         return {"results": [args["query"]]}
 
-    with nat_nexus.scope.scope("example-agent", nat_nexus.ScopeType.Agent):
-        await nat_nexus.tools.execute("search", {"query": "hello"}, tool)
+    with nemo_flow.scope.scope("example-agent", nemo_flow.ScopeType.Agent):
+        await nemo_flow.tools.execute("search", {"query": "hello"}, tool)
 
     trajectory = exporter.export_json()
     print(json.dumps(json.loads(trajectory), indent=2))

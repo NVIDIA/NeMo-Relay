@@ -3,11 +3,11 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# NeMo Agent Toolkit Nexus
+# NeMo Flow
 
-## What is Nexus?
+## What is NeMo Flow?
 
-Nexus is a multi-language agent runtime framework that gives AI agent developers a unified way to manage execution scopes, lifecycle events, and middleware pipelines across tool and LLM calls. Built as a high-performance Rust core with native bindings for Python, Go, Node.js, and WebAssembly, Nexus provides:
+NeMo Flow is a multi-language agent runtime framework that gives AI agent developers a unified way to manage execution scopes, lifecycle events, and middleware pipelines across tool and LLM calls. Built as a high-performance Rust core with native bindings for Python, Go, Node.js, and WebAssembly, NeMo Flow provides:
 
 - **Hierarchical scope management** -- organize agent execution into nested scopes with automatic cleanup, enabling clean multi-tenant and concurrent agent isolation.
 - **Middleware pipelines** -- plug in guardrails (sanitize or gate requests/responses) and intercepts (transform requests, wrap execution) with priority-based ordering and short-circuit support.
@@ -15,11 +15,11 @@ Nexus is a multi-language agent runtime framework that gives AI agent developers
 - **ATIF trajectory export** -- automatically collect lifecycle events and export them as [ATIF v1.6](https://github.com/nvidia/ATIF) trajectory files for evaluation and debugging.
 - **Stream wrapping** -- buffer and parse SSE events from streaming LLM responses, feeding chunks to collectors and calling finalizers on stream end.
 
-Write your agent logic once and instrument it with Nexus middleware and events that work consistently across all supported languages.
+Write your agent logic once and instrument it with NeMo Flow middleware and events that work consistently across all supported languages.
 
 All bindings also expose OTLP-backed observability subscribers. Direct Rust
 users can depend on the separate workspace crates
-`nvidia-nat-nexus-otel` and `nvidia-nat-nexus-openinference`, while Python,
+`nemo-flow-otel` and `nemo-flow-openinference`, while Python,
 Node.js, Go, and WASM expose binding-native config objects on top of those
 implementations. See
 [Observability with OpenTelemetry](docs/observability-with-opentelemetry.md)
@@ -31,14 +31,14 @@ for the canonical setup guides.
 Install the Python package and run your first instrumented agent call in a few lines:
 
 ```python
-import nat_nexus
+import nemo_flow
 
 # Subscribe to lifecycle events
-nat_nexus.subscribers.register("logger", lambda event: print(f"[{event.kind}] {event.name}"))
+nemo_flow.subscribers.register("logger", lambda event: print(f"[{event.kind}] {event.name}"))
 
 # Execute a tool call inside an agent scope (inside an async function)
-with nat_nexus.scope.scope("my-agent", nat_nexus.ScopeType.Agent):
-    result = await nat_nexus.tools.execute("search", {"query": "hello"}, my_tool_func)
+with nemo_flow.scope.scope("my-agent", nemo_flow.ScopeType.Agent):
+    result = await nemo_flow.tools.execute("search", {"query": "hello"}, my_tool_func)
 ```
 
 For complete quick-start examples in all supported languages, see the [Language Bindings](docs/language-bindings.md) guide. A fully worked example with LangChain integration is available in [examples/](examples/).
@@ -72,22 +72,22 @@ Comprehensive documentation lives in the [docs/](docs/) directory. The canonical
 | [Recipes](docs/recipes.md) | Task-oriented patterns for logging, ATIF, optimizer setup, and context propagation |
 | [Optimizer Layer](docs/optimizer-layer.md) | Dynamic optimizer config, built-in components, hosted plugins, and runtime lifecycle |
 | [Online Learning Engine](docs/online-learning-engine.md) | Prediction trie, sensitivity scoring, Redis persistence, and learner pipeline |
-| [Integration Best Practices](docs/integration-best-practices.md) | Patterns for integrating Nexus into existing agent frameworks |
+| [Integration Best Practices](docs/integration-best-practices.md) | Patterns for integrating NeMo Flow into existing agent frameworks |
 | [Testing](docs/testing.md) | Testing strategy and how to run tests across all languages |
 
 ## Repository Structure
 
 ```
 crates/
-  core/       # Core runtime library (nvidia-nat-nexus-core)
-  otel/       # OpenTelemetry OTLP subscriber crate (nvidia-nat-nexus-otel)
-  openinference/ # OpenInference OTLP subscriber crate (nvidia-nat-nexus-openinference)
+  core/       # Core runtime library (nemo-flow-core)
+  otel/       # OpenTelemetry OTLP subscriber crate (nemo-flow-otel)
+  openinference/ # OpenInference OTLP subscriber crate (nemo-flow-openinference)
   python/     # PyO3 Python bindings (_native C extension)
   ffi/        # C FFI layer (used by Go, generates header via cbindgen)
   node/       # NAPI Node.js bindings
   wasm/       # wasm-bindgen WebAssembly bindings
   optimizer/      # Optimizer layer with online learning and scheduling hints
-python/       # Python wrapper module (nat_nexus/)
+python/       # Python wrapper module (nemo_flow/)
 go/           # Go CGo bindings
 docs/         # Comprehensive documentation
 examples/     # Runnable example scripts
@@ -110,9 +110,9 @@ examples/     # Runnable example scripts
 
 ```bash
 cargo build --workspace
-cargo build -p nvidia-nat-nexus-core          # Core only
-cargo build -p nvidia-nat-nexus-otel          # OpenTelemetry OTLP subscriber
-cargo build -p nvidia-nat-nexus-openinference # OpenInference OTLP subscriber
+cargo build -p nemo-flow-core          # Core only
+cargo build -p nemo-flow-otel          # OpenTelemetry OTLP subscriber
+cargo build -p nemo-flow-openinference # OpenInference OTLP subscriber
 ```
 
 ### Python
@@ -126,7 +126,7 @@ uv sync                                       # Create venv, install deps, build
 The Go bindings link against the FFI shared library, so build it first:
 
 ```bash
-cargo build --release -p nvidia-nat-nexus-ffi
+cargo build --release -p nemo-flow-ffi
 ```
 
 ### Node.js
@@ -149,12 +149,12 @@ Use [docs/testing.md](docs/testing.md) for the full matrix. Common entry points:
 ```bash
 cargo test --workspace                                # Core + optimizer + Rust bindings
 uv run pytest                                         # Python
-cd go/nat_nexus && \
+cd go/nemo_flow && \
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" \
 go test -race -v ./...
 cd crates/node && npm install && npm test             # Node.js
 wasm-pack test --node crates/wasm                     # WASM
-cargo test -p nvidia-nat-nexus-optimizer --features redis-backend redis_tests  # Optimizer + Redis
+cargo test -p nemo-flow-optimizer --features redis-backend redis_tests  # Optimizer + Redis
 ```
 
 ## Dev Tooling
@@ -171,7 +171,7 @@ Pre-commit hooks run automatically on `git commit` after setup (`uv run pre-comm
 
 ## Architecture Overview
 
-Nexus manages a **scope stack** of hierarchical execution scopes (identified by UUID handles) with a root scope always present. Scopes carry registered tools, LLM providers, guardrails, intercepts, and event subscribers.
+NeMo Flow manages a **scope stack** of hierarchical execution scopes (identified by UUID handles) with a root scope always present. Scopes carry registered tools, LLM providers, guardrails, intercepts, and event subscribers.
 
 The tool/LLM call lifecycle pipeline:
 
@@ -263,4 +263,4 @@ See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for development setup, coding sta
 
 ## License
 
-Nexus is licensed under the [Apache License 2.0](LICENSE). All source files must include SPDX license headers.
+NeMo Flow is licensed under the [Apache License 2.0](LICENSE). All source files must include SPDX license headers.

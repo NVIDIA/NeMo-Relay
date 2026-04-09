@@ -12,6 +12,21 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MANIFEST_FILE="$REPO_ROOT/third_party/sources.lock"
 
+verify_patch_applies_to_clean_head() {
+    local repo_dir="$1"
+    local patch_file="$2"
+
+    (
+        local temp_root temp_worktree
+        temp_root="$(mktemp -d)"
+        temp_worktree="$temp_root/worktree"
+        trap 'git -C "$repo_dir" worktree remove --force "$temp_worktree" >/dev/null 2>&1 || true; rm -rf "$temp_root"' EXIT
+
+        git -C "$repo_dir" worktree add --detach "$temp_worktree" >/dev/null
+        git -C "$temp_worktree" apply --check "$patch_file"
+    )
+}
+
 generate_patches() {
     local path="$1"
     local name="$2"
@@ -34,7 +49,7 @@ generate_patches() {
     fi
 
     mkdir -p "$patch_dir"
-    local patch_file="$patch_dir/0001-add-nat-nexus-integration.patch"
+    local patch_file="$patch_dir/0001-add-nemo-flow-integration.patch"
 
     # Combine tracked diffs and new file diffs
     {
@@ -49,6 +64,10 @@ generate_patches() {
             done <<< "$has_untracked"
         fi
     } > "$patch_file"
+
+    if [[ -s "$patch_file" ]]; then
+        verify_patch_applies_to_clean_head "$target_dir" "$patch_file"
+    fi
 
     echo "Generated $patch_file ($(wc -l < "$patch_file") lines)"
 }

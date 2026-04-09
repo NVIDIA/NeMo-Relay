@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 
 Typed wrappers provide a generic serialization layer that converts typed domain objects to/from JSON at API boundaries. The Rust core middleware pipeline operates on plain JSON throughout; typed wrappers encode before entry and decode after exit, giving user code full type safety while keeping middleware uniform.
 
-Available in **Python** (`nat_nexus.typed`) and **Node.js** (`typed.js` / `typed.d.ts`).
+Available in **Python** (`nemo_flow.typed`) and **Node.js** (`typed.js` / `typed.d.ts`).
 
 For function signatures and the Python public API surface, see
 [Typed API Reference](typed-api-reference.md).
@@ -232,7 +232,7 @@ result = await typed.tool_execute(
 
 Node.js uses a push-based stream bridge due to NAPI limitations with resolving JS Promises from native code:
 
-1. The wrapper receives `{ __nat_nexus_native: req, __nat_nexus_stream_id: streamId }`
+1. The wrapper receives `{ __nemo_flow_native: req, __nemo_flow_stream_id: streamId }`
 2. JavaScript drives async generator iteration
 3. Each chunk is pushed via `lib.pushStreamChunk(streamId, json_chunk)`
 4. Stream end is signaled via `lib.endStream(streamId)`

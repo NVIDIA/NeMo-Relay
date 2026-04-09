@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Basic LangChain agent with NeMo Agent Toolkit Nexus event logging and ATIF trajectory export.
+"""Basic LangChain agent with NeMo Flow event logging and ATIF trajectory export.
 
 This example creates a ReAct agent using ChatNVIDIA and registers:
   1. An event subscriber that logs all lifecycle events to the console
@@ -22,7 +22,7 @@ import json
 import os
 import sys
 
-import nat_nexus
+import nemo_flow
 from langchain.agents import create_agent
 from langchain_core.tools import tool
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
@@ -57,12 +57,12 @@ def get_population(city: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# NeMo Agent Toolkit Nexus event subscriber
+# NeMo Flow event subscriber
 # ---------------------------------------------------------------------------
 
 
-def log_event(event: nat_nexus.Event) -> None:
-    """Log every NeMo Agent Toolkit Nexus lifecycle event to stdout."""
+def log_event(event: nemo_flow.Event) -> None:
+    """Log every NeMo Flow lifecycle event to stdout."""
     parts = [
         f"[{event.kind}]",
         f"name={event.name}",
@@ -99,10 +99,10 @@ async def amain() -> None:
         sys.exit(1)
 
     # Register the console logging subscriber.
-    nat_nexus.subscribers.register("console-logger", log_event)
+    nemo_flow.subscribers.register("console-logger", log_event)
 
     # Set up ATIF trajectory exporter.
-    exporter = nat_nexus.AtifExporter(
+    exporter = nemo_flow.AtifExporter(
         "example-session",
         "example-agent",
         "0.1.0",
@@ -111,7 +111,7 @@ async def amain() -> None:
     exporter.register("atif-exporter")
 
     # Push a top-level agent scope.
-    with nat_nexus.scope.scope("example-agent", nat_nexus.ScopeType.Agent):
+    with nemo_flow.scope.scope("example-agent", nemo_flow.ScopeType.Agent):
         # Create the LLM and agent.
         llm = ChatNVIDIA(model="nvidia/nemotron-3-nano-30b-a3b")
         agent = create_agent(llm, tools=[get_weather, get_population])
@@ -137,7 +137,7 @@ async def amain() -> None:
 
     # Clean up.
     exporter.deregister("atif-exporter")
-    nat_nexus.subscribers.deregister("console-logger")
+    nemo_flow.subscribers.deregister("console-logger")
 
 
 if __name__ == "__main__":

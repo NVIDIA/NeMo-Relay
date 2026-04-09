@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { OptimizerRuntime as Runtime } from './pkg/nvidia_nat_nexus_wasm';
+import { OptimizerRuntime as Runtime } from './pkg/nemo_flow_wasm';
 import type { JsonObject, JsonValue, LlmRequestShape } from './typed';
 
 export type UnsupportedBehavior = 'ignore' | 'warn' | 'error';

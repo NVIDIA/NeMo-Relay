@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Top-level Nexus API functions exposed to JavaScript via `wasm_bindgen`.
+//! Top-level NeMo Flow API functions exposed to JavaScript via `wasm_bindgen`.
 //!
 //! This module contains all public entry points for:
 //!
@@ -29,15 +29,15 @@ use std::sync::{Arc, Mutex};
 
 use js_sys::Function;
 use serde::{Deserialize, Serialize};
+use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 
-use nvidia_nat_nexus_core::types as core_types;
-use nvidia_nat_nexus_optimizer::{
-    deregister_hosted_plugin_handler, register_hosted_plugin_handler, ComponentRegistration,
-    ConfigDiagnostic, ConfigReport, DiagnosticLevel, HostedPluginHandler, OptimizerConfig,
-    OptimizerError, OptimizerRuntime as NativeOptimizerRuntime,
+use nemo_flow_core::types as core_types;
+use nemo_flow_optimizer::{
+    ComponentRegistration, ConfigDiagnostic, ConfigReport, DiagnosticLevel, HostedPluginHandler,
+    OptimizerConfig, OptimizerError, OptimizerRuntime as NativeOptimizerRuntime,
+    deregister_hosted_plugin_handler, register_hosted_plugin_handler,
 };
 
 use crate::callable;
@@ -65,10 +65,10 @@ impl Default for WasmOpenTelemetryConfig {
             endpoint: None,
             headers: Some(HashMap::new()),
             resource_attributes: Some(HashMap::new()),
-            service_name: Some("nat-nexus".to_string()),
+            service_name: Some("nemo-flow".to_string()),
             service_namespace: None,
             service_version: None,
-            instrumentation_scope: Some("nvidia-nat-nexus-otel".to_string()),
+            instrumentation_scope: Some("nemo-flow-otel".to_string()),
             timeout_millis: Some(3_000),
         }
     }
@@ -94,10 +94,10 @@ impl Default for WasmOpenInferenceConfig {
             endpoint: None,
             headers: Some(HashMap::new()),
             resource_attributes: Some(HashMap::new()),
-            service_name: Some("nat-nexus".to_string()),
+            service_name: Some("nemo-flow".to_string()),
             service_namespace: None,
             service_version: None,
-            instrumentation_scope: Some("nvidia-nat-nexus-openinference".to_string()),
+            instrumentation_scope: Some("nemo-flow-openinference".to_string()),
             timeout_millis: Some(3_000),
         }
     }
@@ -105,22 +105,22 @@ impl Default for WasmOpenInferenceConfig {
 
 fn build_otel_config(
     config: Option<WasmOpenTelemetryConfig>,
-) -> Result<nvidia_nat_nexus_otel::OpenTelemetryConfig, JsValue> {
+) -> Result<nemo_flow_otel::OpenTelemetryConfig, JsValue> {
     let config = config.unwrap_or_default();
     let transport = config
         .transport
         .unwrap_or_else(|| "http_binary".to_string());
     let service_name = config
         .service_name
-        .unwrap_or_else(|| "nat-nexus".to_string());
+        .unwrap_or_else(|| "nemo-flow".to_string());
     let instrumentation_scope = config
         .instrumentation_scope
-        .unwrap_or_else(|| "nvidia-nat-nexus-otel".to_string());
+        .unwrap_or_else(|| "nemo-flow-otel".to_string());
     let timeout_millis = config.timeout_millis.unwrap_or(3_000);
 
     let mut otel_config = match transport.as_str() {
-        "http_binary" => nvidia_nat_nexus_otel::OpenTelemetryConfig::http_binary(service_name),
-        "grpc" => nvidia_nat_nexus_otel::OpenTelemetryConfig::grpc(service_name),
+        "http_binary" => nemo_flow_otel::OpenTelemetryConfig::http_binary(service_name),
+        "grpc" => nemo_flow_otel::OpenTelemetryConfig::grpc(service_name),
         other => {
             return Err(JsValue::from_str(&format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}",
@@ -150,22 +150,22 @@ fn build_otel_config(
 
 fn build_openinference_config(
     config: Option<WasmOpenInferenceConfig>,
-) -> Result<nvidia_nat_nexus_openinference::OpenInferenceConfig, JsValue> {
+) -> Result<nemo_flow_openinference::OpenInferenceConfig, JsValue> {
     let config = config.unwrap_or_default();
     let transport = config
         .transport
         .unwrap_or_else(|| "http_binary".to_string());
     let service_name = config
         .service_name
-        .unwrap_or_else(|| "nat-nexus".to_string());
+        .unwrap_or_else(|| "nemo-flow".to_string());
     let instrumentation_scope = config
         .instrumentation_scope
-        .unwrap_or_else(|| "nvidia-nat-nexus-openinference".to_string());
+        .unwrap_or_else(|| "nemo-flow-openinference".to_string());
     let timeout_millis = config.timeout_millis.unwrap_or(3_000);
 
     let transport = match transport.as_str() {
-        "http_binary" => nvidia_nat_nexus_openinference::OtlpTransport::HttpBinary,
-        "grpc" => nvidia_nat_nexus_openinference::OtlpTransport::Grpc,
+        "http_binary" => nemo_flow_openinference::OtlpTransport::HttpBinary,
+        "grpc" => nemo_flow_openinference::OtlpTransport::Grpc,
         other => {
             return Err(JsValue::from_str(&format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}",
@@ -173,7 +173,7 @@ fn build_openinference_config(
         }
     };
 
-    let mut openinference_config = nvidia_nat_nexus_openinference::OpenInferenceConfig::new()
+    let mut openinference_config = nemo_flow_openinference::OpenInferenceConfig::new()
         .with_transport(transport)
         .with_service_name(service_name)
         .with_instrumentation_scope(instrumentation_scope)
@@ -205,8 +205,8 @@ fn build_openinference_config(
 ///
 /// Throws if the scope stack is empty.
 #[wasm_bindgen(js_name = "getHandle")]
-pub fn nat_nexus_get_handle() -> Result<WasmScopeHandle, JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_get_handle()
+pub fn nemo_flow_get_handle() -> Result<WasmScopeHandle, JsValue> {
+    nemo_flow_core::nemo_flow_get_handle()
         .map(WasmScopeHandle::from)
         .map_err(to_js_err)
 }
@@ -220,7 +220,7 @@ pub fn nat_nexus_get_handle() -> Result<WasmScopeHandle, JsValue> {
 /// - `data` - Optional JSON application data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "pushScope")]
-pub fn nat_nexus_push_scope(
+pub fn nemo_flow_push_scope(
     name: &str,
     scope_type: i32,
     parent: Option<WasmScopeHandle>,
@@ -229,7 +229,7 @@ pub fn nat_nexus_push_scope(
     metadata: JsValue,
 ) -> Result<WasmScopeHandle, JsValue> {
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    nvidia_nat_nexus_core::nat_nexus_push_scope(
+    nemo_flow_core::nemo_flow_push_scope(
         name,
         i32_to_scope_type(scope_type),
         parent.as_ref().map(|h| &h.inner),
@@ -245,19 +245,19 @@ pub fn nat_nexus_push_scope(
 ///
 /// Throws if the handle does not match the current top of the stack.
 #[wasm_bindgen(js_name = "popScope")]
-pub fn nat_nexus_pop_scope(handle: &WasmScopeHandle) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_pop_scope(&handle.inner.uuid).map_err(to_js_err)
+pub fn nemo_flow_pop_scope(handle: &WasmScopeHandle) -> Result<(), JsValue> {
+    nemo_flow_core::nemo_flow_pop_scope(&handle.inner.uuid).map_err(to_js_err)
 }
 
 /// Returns the most recent callback error that could not be surfaced through a direct exception.
 #[wasm_bindgen(js_name = "getLastCallbackError")]
-pub fn nat_nexus_get_last_callback_error() -> Option<String> {
+pub fn nemo_flow_get_last_callback_error() -> Option<String> {
     get_last_callback_error()
 }
 
 /// Clears the most recent callback error recorded by the WASM binding.
 #[wasm_bindgen(js_name = "clearLastCallbackError")]
-pub fn nat_nexus_clear_last_callback_error() {
+pub fn nemo_flow_clear_last_callback_error() {
     clear_last_callback_error();
 }
 
@@ -276,7 +276,7 @@ pub fn nat_nexus_clear_last_callback_error() {
 /// - `data` - Optional JSON application data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "withScope")]
-pub fn nat_nexus_with_scope(
+pub fn nemo_flow_with_scope(
     name: &str,
     scope_type: i32,
     callback: &Function,
@@ -286,7 +286,7 @@ pub fn nat_nexus_with_scope(
     metadata: JsValue,
 ) -> Result<JsValue, JsValue> {
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    let scope_handle = nvidia_nat_nexus_core::nat_nexus_push_scope(
+    let scope_handle = nemo_flow_core::nemo_flow_push_scope(
         name,
         i32_to_scope_type(scope_type),
         parent.as_ref().map(|h| &h.inner),
@@ -310,13 +310,13 @@ pub fn nat_nexus_with_scope(
 
             let then_uuid = scope_uuid;
             let then_cb = Closure::once(move |resolved: JsValue| -> JsValue {
-                let _ = nvidia_nat_nexus_core::nat_nexus_pop_scope(&then_uuid);
+                let _ = nemo_flow_core::nemo_flow_pop_scope(&then_uuid);
                 resolved
             });
 
             let catch_uuid = scope_uuid;
             let catch_cb = Closure::once(move |rejected: JsValue| -> JsValue {
-                let _ = nvidia_nat_nexus_core::nat_nexus_pop_scope(&catch_uuid);
+                let _ = nemo_flow_core::nemo_flow_pop_scope(&catch_uuid);
                 // Re-throw by returning a rejected promise
                 js_sys::Promise::reject(&rejected).into()
             });
@@ -331,12 +331,12 @@ pub fn nat_nexus_with_scope(
         }
         Ok(val) => {
             // Synchronous return — pop immediately.
-            let _ = nvidia_nat_nexus_core::nat_nexus_pop_scope(&scope_uuid);
+            let _ = nemo_flow_core::nemo_flow_pop_scope(&scope_uuid);
             Ok(val)
         }
         Err(err) => {
             // Callback threw — pop and propagate the error.
-            let _ = nvidia_nat_nexus_core::nat_nexus_pop_scope(&scope_uuid);
+            let _ = nemo_flow_core::nemo_flow_pop_scope(&scope_uuid);
             Err(err)
         }
     }
@@ -349,13 +349,13 @@ pub fn nat_nexus_with_scope(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "event")]
-pub fn nat_nexus_event(
+pub fn nemo_flow_event(
     name: &str,
     parent: Option<WasmScopeHandle>,
     data: JsValue,
     metadata: JsValue,
 ) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_event(
+    nemo_flow_core::nemo_flow_event(
         name,
         parent.as_ref().map(|h| &h.inner),
         opt_js_to_json(&data)?,
@@ -379,7 +379,7 @@ pub fn nat_nexus_event(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "toolCall")]
-pub fn nat_nexus_tool_call(
+pub fn nemo_flow_tool_call(
     name: &str,
     args: JsValue,
     parent: Option<WasmScopeHandle>,
@@ -390,7 +390,7 @@ pub fn nat_nexus_tool_call(
 ) -> Result<WasmToolHandle, JsValue> {
     let args_json = js_to_json(&args)?;
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    nvidia_nat_nexus_core::nat_nexus_tool_call(
+    nemo_flow_core::nemo_flow_tool_call(
         name,
         args_json,
         parent.as_ref().map(|h| &h.inner),
@@ -410,14 +410,14 @@ pub fn nat_nexus_tool_call(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "toolCallEnd")]
-pub fn nat_nexus_tool_call_end(
+pub fn nemo_flow_tool_call_end(
     handle: &WasmToolHandle,
     result: JsValue,
     data: JsValue,
     metadata: JsValue,
 ) -> Result<(), JsValue> {
     let result_json = js_to_json(&result)?;
-    nvidia_nat_nexus_core::nat_nexus_tool_call_end(
+    nemo_flow_core::nemo_flow_tool_call_end(
         &handle.inner,
         result_json,
         opt_js_to_json(&data)?,
@@ -441,7 +441,7 @@ pub fn nat_nexus_tool_call_end(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "toolCallExecute")]
-pub async fn nat_nexus_tool_call_execute(
+pub async fn nemo_flow_tool_call_execute(
     name: &str,
     args: JsValue,
     func: Function,
@@ -454,17 +454,16 @@ pub async fn nat_nexus_tool_call_execute(
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
-        .unwrap_or_else(nvidia_nat_nexus_core::task_scope_top);
+        .unwrap_or_else(nemo_flow_core::task_scope_top);
     let exec_fn = callable::wrap_js_tool_exec_fn(func);
-    let default_fn: nvidia_nat_nexus_core::ToolExecutionNextFn =
-        Arc::new(move |args| exec_fn(args));
+    let default_fn: nemo_flow_core::ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
 
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
     let data_json = opt_js_to_json(&data)?;
     let metadata_json = opt_js_to_json(&metadata)?;
-    let result = nvidia_nat_nexus_core::TASK_SCOPE_STACK
+    let result = nemo_flow_core::TASK_SCOPE_STACK
         .scope(scope_stack, async move {
-            nvidia_nat_nexus_core::nat_nexus_tool_call_execute(
+            nemo_flow_core::nemo_flow_tool_call_execute(
                 name,
                 args_json,
                 default_fn,
@@ -498,7 +497,7 @@ pub async fn nat_nexus_tool_call_execute(
 /// - `model_name` - Optional model name string.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmCall")]
-pub fn nat_nexus_llm_call(
+pub fn nemo_flow_llm_call(
     name: &str,
     request: JsValue,
     parent: Option<WasmScopeHandle>,
@@ -509,9 +508,9 @@ pub fn nat_nexus_llm_call(
 ) -> Result<WasmLLMHandle, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nemo_flow_core::FlowError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    nvidia_nat_nexus_core::nat_nexus_llm_call(
+    nemo_flow_core::nemo_flow_llm_call(
         name,
         &llm_request,
         parent.as_ref().map(|h| &h.inner),
@@ -532,14 +531,14 @@ pub fn nat_nexus_llm_call(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "llmCallEnd")]
-pub fn nat_nexus_llm_call_end(
+pub fn nemo_flow_llm_call_end(
     handle: &WasmLLMHandle,
     response: JsValue,
     data: JsValue,
     metadata: JsValue,
 ) -> Result<(), JsValue> {
     let response_json = js_to_json(&response)?;
-    nvidia_nat_nexus_core::nat_nexus_llm_call_end(
+    nemo_flow_core::nemo_flow_llm_call_end(
         &handle.inner,
         response_json,
         opt_js_to_json(&data)?,
@@ -568,7 +567,7 @@ pub fn nat_nexus_llm_call_end(
 /// - `codec_encode` - Optional JS encode function for annotated-aware request intercepts.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmCallExecute")]
-pub async fn nat_nexus_llm_call_execute(
+pub async fn nemo_flow_llm_call_execute(
     name: &str,
     request: JsValue,
     func: Function,
@@ -583,26 +582,25 @@ pub async fn nat_nexus_llm_call_execute(
 ) -> Result<JsValue, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nemo_flow_core::FlowError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
-        .unwrap_or_else(nvidia_nat_nexus_core::task_scope_top);
+        .unwrap_or_else(nemo_flow_core::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
-    let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn =
-        Arc::new(move |request| exec_fn(request));
+    let default_fn: nemo_flow_core::LlmExecutionNextFn = Arc::new(move |request| exec_fn(request));
     let codec = match (codec_decode, codec_encode) {
         (Some(d), Some(e)) => Some(callable::wrap_js_codec(d, e)),
         _ => None,
     };
     let response_codec = response_codec_decode.map(callable::wrap_js_response_codec);
 
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
     let data_json = opt_js_to_json(&data)?;
     let metadata_json = opt_js_to_json(&metadata)?;
-    let result = nvidia_nat_nexus_core::TASK_SCOPE_STACK
+    let result = nemo_flow_core::TASK_SCOPE_STACK
         .scope(scope_stack, async move {
-            nvidia_nat_nexus_core::nat_nexus_llm_call_execute(
+            nemo_flow_core::nemo_flow_llm_call_execute(
                 name,
                 llm_request,
                 default_fn,
@@ -644,7 +642,7 @@ pub async fn nat_nexus_llm_call_execute(
 /// - `codec_encode` - Optional JS encode function for annotated-aware request intercepts.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmStreamCallExecute")]
-pub async fn nat_nexus_llm_stream_call_execute(
+pub async fn nemo_flow_llm_stream_call_execute(
     name: &str,
     request: JsValue,
     func: Function,
@@ -661,19 +659,18 @@ pub async fn nat_nexus_llm_stream_call_execute(
 ) -> Result<WasmLlmStream, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nemo_flow_core::FlowError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
-        .unwrap_or_else(nvidia_nat_nexus_core::task_scope_top);
+        .unwrap_or_else(nemo_flow_core::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
 
-    let wrapped_collector: Box<
-        dyn FnMut(serde_json::Value) -> nvidia_nat_nexus_core::Result<()> + Send,
-    > = match collector {
-        Some(cb) => callable::wrap_js_collector_fn(cb),
-        None => Box::new(|_: serde_json::Value| Ok(())),
-    };
+    let wrapped_collector: Box<dyn FnMut(serde_json::Value) -> nemo_flow_core::Result<()> + Send> =
+        match collector {
+            Some(cb) => callable::wrap_js_collector_fn(cb),
+            None => Box::new(|_: serde_json::Value| Ok(())),
+        };
 
     let wrapped_finalizer: Box<dyn FnOnce() -> serde_json::Value + Send> = match finalizer {
         Some(cb) => callable::wrap_js_finalizer_fn(cb),
@@ -681,7 +678,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
     };
 
     // Bridge LlmExecutionFn -> LlmStreamExecutionNextFn
-    let default_fn: nvidia_nat_nexus_core::LlmStreamExecutionNextFn = Arc::new(move |request| {
+    let default_fn: nemo_flow_core::LlmStreamExecutionNextFn = Arc::new(move |request| {
         let fut = exec_fn(request);
         Box::pin(async move {
             let result = fut.await?;
@@ -689,9 +686,8 @@ pub async fn nat_nexus_llm_stream_call_execute(
             Ok(Box::pin(stream)
                 as std::pin::Pin<
                     Box<
-                        dyn tokio_stream::Stream<
-                                Item = nvidia_nat_nexus_core::Result<serde_json::Value>,
-                            > + Send,
+                        dyn tokio_stream::Stream<Item = nemo_flow_core::Result<serde_json::Value>>
+                            + Send,
                     >,
                 >)
         })
@@ -702,12 +698,12 @@ pub async fn nat_nexus_llm_stream_call_execute(
         _ => None,
     };
     let response_codec = response_codec_decode.map(callable::wrap_js_response_codec);
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
     let data_json = opt_js_to_json(&data)?;
     let metadata_json = opt_js_to_json(&metadata)?;
-    let rust_stream = nvidia_nat_nexus_core::TASK_SCOPE_STACK
+    let rust_stream = nemo_flow_core::TASK_SCOPE_STACK
         .scope(scope_stack, async move {
-            nvidia_nat_nexus_core::nat_nexus_llm_stream_call_execute(
+            nemo_flow_core::nemo_flow_llm_stream_call_execute(
                 name,
                 llm_request,
                 default_fn,
@@ -757,7 +753,7 @@ pub fn register_tool_sanitize_request_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_register_tool_sanitize_request_guardrail(
+    nemo_flow_core::nemo_flow_register_tool_sanitize_request_guardrail(
         name,
         priority,
         callable::wrap_js_tool_fn(guardrail),
@@ -770,8 +766,7 @@ pub fn register_tool_sanitize_request_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolSanitizeRequestGuardrail")]
 pub fn deregister_tool_sanitize_request_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_deregister_tool_sanitize_request_guardrail(name)
-        .map_err(to_js_err)
+    nemo_flow_core::nemo_flow_deregister_tool_sanitize_request_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that sanitizes tool response data after execution.
@@ -785,7 +780,7 @@ pub fn register_tool_sanitize_response_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_register_tool_sanitize_response_guardrail(
+    nemo_flow_core::nemo_flow_register_tool_sanitize_response_guardrail(
         name,
         priority,
         callable::wrap_js_tool_fn(guardrail),
@@ -798,8 +793,7 @@ pub fn register_tool_sanitize_response_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolSanitizeResponseGuardrail")]
 pub fn deregister_tool_sanitize_response_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_deregister_tool_sanitize_response_guardrail(name)
-        .map_err(to_js_err)
+    nemo_flow_core::nemo_flow_deregister_tool_sanitize_response_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that conditionally gates tool execution.
@@ -816,7 +810,7 @@ pub fn register_tool_conditional_execution_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_register_tool_conditional_execution_guardrail(
+    nemo_flow_core::nemo_flow_register_tool_conditional_execution_guardrail(
         name,
         priority,
         callable::wrap_js_tool_conditional_fn(guardrail),
@@ -829,7 +823,7 @@ pub fn register_tool_conditional_execution_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolConditionalExecutionGuardrail")]
 pub fn deregister_tool_conditional_execution_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_deregister_tool_conditional_execution_guardrail(name)
+    nemo_flow_core::nemo_flow_deregister_tool_conditional_execution_guardrail(name)
         .map_err(to_js_err)
 }
 
@@ -848,7 +842,7 @@ pub fn register_tool_request_intercept(
     break_chain: bool,
     func: Function,
 ) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_register_tool_request_intercept(
+    nemo_flow_core::nemo_flow_register_tool_request_intercept(
         name,
         priority,
         break_chain,
@@ -862,7 +856,7 @@ pub fn register_tool_request_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolRequestIntercept")]
 pub fn deregister_tool_request_intercept(name: &str) -> Result<bool, JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_deregister_tool_request_intercept(name).map_err(to_js_err)
+    nemo_flow_core::nemo_flow_deregister_tool_request_intercept(name).map_err(to_js_err)
 }
 
 /// Registers a tool execution intercept following the middleware chain pattern.
@@ -877,7 +871,7 @@ pub fn register_tool_execution_intercept(
     priority: i32,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_register_tool_execution_intercept(
+    nemo_flow_core::nemo_flow_register_tool_execution_intercept(
         name,
         priority,
         callable::wrap_js_tool_exec_intercept_fn(exec_fn),
@@ -890,7 +884,7 @@ pub fn register_tool_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolExecutionIntercept")]
 pub fn deregister_tool_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_deregister_tool_execution_intercept(name).map_err(to_js_err)
+    nemo_flow_core::nemo_flow_deregister_tool_execution_intercept(name).map_err(to_js_err)
 }
 
 // LLM guardrails
@@ -906,7 +900,7 @@ pub fn register_llm_sanitize_request_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_register_llm_sanitize_request_guardrail(
+    nemo_flow_core::nemo_flow_register_llm_sanitize_request_guardrail(
         name,
         priority,
         callable::wrap_js_llm_sanitize_request_fn(guardrail),
@@ -919,8 +913,7 @@ pub fn register_llm_sanitize_request_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmSanitizeRequestGuardrail")]
 pub fn deregister_llm_sanitize_request_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_deregister_llm_sanitize_request_guardrail(name)
-        .map_err(to_js_err)
+    nemo_flow_core::nemo_flow_deregister_llm_sanitize_request_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that sanitizes LLM response data after the call.
@@ -934,7 +927,7 @@ pub fn register_llm_sanitize_response_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_register_llm_sanitize_response_guardrail(
+    nemo_flow_core::nemo_flow_register_llm_sanitize_response_guardrail(
         name,
         priority,
         callable::wrap_js_llm_response_fn(guardrail),
@@ -947,8 +940,7 @@ pub fn register_llm_sanitize_response_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmSanitizeResponseGuardrail")]
 pub fn deregister_llm_sanitize_response_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_deregister_llm_sanitize_response_guardrail(name)
-        .map_err(to_js_err)
+    nemo_flow_core::nemo_flow_deregister_llm_sanitize_response_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that conditionally gates LLM execution.
@@ -965,7 +957,7 @@ pub fn register_llm_conditional_execution_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_register_llm_conditional_execution_guardrail(
+    nemo_flow_core::nemo_flow_register_llm_conditional_execution_guardrail(
         name,
         priority,
         callable::wrap_js_llm_conditional_fn(guardrail),
@@ -978,7 +970,7 @@ pub fn register_llm_conditional_execution_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmConditionalExecutionGuardrail")]
 pub fn deregister_llm_conditional_execution_guardrail(name: &str) -> Result<bool, JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_deregister_llm_conditional_execution_guardrail(name)
+    nemo_flow_core::nemo_flow_deregister_llm_conditional_execution_guardrail(name)
         .map_err(to_js_err)
 }
 
@@ -997,7 +989,7 @@ pub fn register_llm_request_intercept(
     break_chain: bool,
     func: Function,
 ) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_register_llm_request_intercept(
+    nemo_flow_core::nemo_flow_register_llm_request_intercept(
         name,
         priority,
         break_chain,
@@ -1011,7 +1003,7 @@ pub fn register_llm_request_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmRequestIntercept")]
 pub fn deregister_llm_request_intercept(name: &str) -> Result<bool, JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_deregister_llm_request_intercept(name).map_err(to_js_err)
+    nemo_flow_core::nemo_flow_deregister_llm_request_intercept(name).map_err(to_js_err)
 }
 
 /// Registers an LLM execution intercept following the middleware chain pattern.
@@ -1026,7 +1018,7 @@ pub fn register_llm_execution_intercept(
     priority: i32,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_register_llm_execution_intercept(
+    nemo_flow_core::nemo_flow_register_llm_execution_intercept(
         name,
         priority,
         callable::wrap_js_llm_exec_intercept_fn(exec_fn),
@@ -1039,7 +1031,7 @@ pub fn register_llm_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmExecutionIntercept")]
 pub fn deregister_llm_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_deregister_llm_execution_intercept(name).map_err(to_js_err)
+    nemo_flow_core::nemo_flow_deregister_llm_execution_intercept(name).map_err(to_js_err)
 }
 
 /// Registers a streaming LLM execution intercept following the middleware chain pattern.
@@ -1056,7 +1048,7 @@ pub fn register_llm_stream_execution_intercept(
     priority: i32,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_register_llm_stream_execution_intercept(
+    nemo_flow_core::nemo_flow_register_llm_stream_execution_intercept(
         name,
         priority,
         callable::wrap_js_llm_stream_exec_intercept_fn(exec_fn),
@@ -1069,8 +1061,7 @@ pub fn register_llm_stream_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmStreamExecutionIntercept")]
 pub fn deregister_llm_stream_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_deregister_llm_stream_execution_intercept(name)
-        .map_err(to_js_err)
+    nemo_flow_core::nemo_flow_deregister_llm_stream_execution_intercept(name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1083,7 +1074,7 @@ pub fn deregister_llm_stream_execution_intercept(name: &str) -> Result<bool, JsV
 /// - `callback` - JS function `(event) => void` called for each event.
 #[wasm_bindgen(js_name = "registerSubscriber")]
 pub fn register_subscriber(name: &str, callback: Function) -> Result<(), JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_register_subscriber(
+    nemo_flow_core::nemo_flow_register_subscriber(
         name,
         callable::wrap_js_event_subscriber(callback),
     )
@@ -1095,7 +1086,7 @@ pub fn register_subscriber(name: &str, callback: Function) -> Result<(), JsValue
 /// Returns `true` if the subscriber was found and removed.
 #[wasm_bindgen(js_name = "deregisterSubscriber")]
 pub fn deregister_subscriber(name: &str) -> Result<bool, JsValue> {
-    nvidia_nat_nexus_core::nat_nexus_deregister_subscriber(name).map_err(to_js_err)
+    nemo_flow_core::nemo_flow_deregister_subscriber(name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1117,7 +1108,7 @@ pub fn scope_register_tool_sanitize_request_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_register_tool_sanitize_request_guardrail(
+    nemo_flow_core::nemo_flow_scope_register_tool_sanitize_request_guardrail(
         &uuid,
         name,
         priority,
@@ -1136,7 +1127,7 @@ pub fn scope_deregister_tool_sanitize_request_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_deregister_tool_sanitize_request_guardrail(&uuid, name)
+    nemo_flow_core::nemo_flow_scope_deregister_tool_sanitize_request_guardrail(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1155,7 +1146,7 @@ pub fn scope_register_tool_sanitize_response_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_register_tool_sanitize_response_guardrail(
+    nemo_flow_core::nemo_flow_scope_register_tool_sanitize_response_guardrail(
         &uuid,
         name,
         priority,
@@ -1174,7 +1165,7 @@ pub fn scope_deregister_tool_sanitize_response_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_deregister_tool_sanitize_response_guardrail(&uuid, name)
+    nemo_flow_core::nemo_flow_scope_deregister_tool_sanitize_response_guardrail(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1196,7 +1187,7 @@ pub fn scope_register_tool_conditional_execution_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_register_tool_conditional_execution_guardrail(
+    nemo_flow_core::nemo_flow_scope_register_tool_conditional_execution_guardrail(
         &uuid,
         name,
         priority,
@@ -1215,10 +1206,8 @@ pub fn scope_deregister_tool_conditional_execution_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_deregister_tool_conditional_execution_guardrail(
-        &uuid, name,
-    )
-    .map_err(to_js_err)
+    nemo_flow_core::nemo_flow_scope_deregister_tool_conditional_execution_guardrail(&uuid, name)
+        .map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1242,7 +1231,7 @@ pub fn scope_register_tool_request_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_register_tool_request_intercept(
+    nemo_flow_core::nemo_flow_scope_register_tool_request_intercept(
         &uuid,
         name,
         priority,
@@ -1262,7 +1251,7 @@ pub fn scope_deregister_tool_request_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_deregister_tool_request_intercept(&uuid, name)
+    nemo_flow_core::nemo_flow_scope_deregister_tool_request_intercept(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1282,7 +1271,7 @@ pub fn scope_register_tool_execution_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_register_tool_execution_intercept(
+    nemo_flow_core::nemo_flow_scope_register_tool_execution_intercept(
         &uuid,
         name,
         priority,
@@ -1301,7 +1290,7 @@ pub fn scope_deregister_tool_execution_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_deregister_tool_execution_intercept(&uuid, name)
+    nemo_flow_core::nemo_flow_scope_deregister_tool_execution_intercept(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1324,7 +1313,7 @@ pub fn scope_register_llm_sanitize_request_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_register_llm_sanitize_request_guardrail(
+    nemo_flow_core::nemo_flow_scope_register_llm_sanitize_request_guardrail(
         &uuid,
         name,
         priority,
@@ -1343,7 +1332,7 @@ pub fn scope_deregister_llm_sanitize_request_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_deregister_llm_sanitize_request_guardrail(&uuid, name)
+    nemo_flow_core::nemo_flow_scope_deregister_llm_sanitize_request_guardrail(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1362,7 +1351,7 @@ pub fn scope_register_llm_sanitize_response_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_register_llm_sanitize_response_guardrail(
+    nemo_flow_core::nemo_flow_scope_register_llm_sanitize_response_guardrail(
         &uuid,
         name,
         priority,
@@ -1381,7 +1370,7 @@ pub fn scope_deregister_llm_sanitize_response_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_deregister_llm_sanitize_response_guardrail(&uuid, name)
+    nemo_flow_core::nemo_flow_scope_deregister_llm_sanitize_response_guardrail(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1403,7 +1392,7 @@ pub fn scope_register_llm_conditional_execution_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_register_llm_conditional_execution_guardrail(
+    nemo_flow_core::nemo_flow_scope_register_llm_conditional_execution_guardrail(
         &uuid,
         name,
         priority,
@@ -1422,10 +1411,8 @@ pub fn scope_deregister_llm_conditional_execution_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_deregister_llm_conditional_execution_guardrail(
-        &uuid, name,
-    )
-    .map_err(to_js_err)
+    nemo_flow_core::nemo_flow_scope_deregister_llm_conditional_execution_guardrail(&uuid, name)
+        .map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1449,7 +1436,7 @@ pub fn scope_register_llm_request_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_register_llm_request_intercept(
+    nemo_flow_core::nemo_flow_scope_register_llm_request_intercept(
         &uuid,
         name,
         priority,
@@ -1469,8 +1456,7 @@ pub fn scope_deregister_llm_request_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_deregister_llm_request_intercept(&uuid, name)
-        .map_err(to_js_err)
+    nemo_flow_core::nemo_flow_scope_deregister_llm_request_intercept(&uuid, name).map_err(to_js_err)
 }
 
 /// Registers a scope-local LLM execution intercept following the middleware chain pattern.
@@ -1489,7 +1475,7 @@ pub fn scope_register_llm_execution_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_register_llm_execution_intercept(
+    nemo_flow_core::nemo_flow_scope_register_llm_execution_intercept(
         &uuid,
         name,
         priority,
@@ -1508,7 +1494,7 @@ pub fn scope_deregister_llm_execution_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_deregister_llm_execution_intercept(&uuid, name)
+    nemo_flow_core::nemo_flow_scope_deregister_llm_execution_intercept(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1530,7 +1516,7 @@ pub fn scope_register_llm_stream_execution_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_register_llm_stream_execution_intercept(
+    nemo_flow_core::nemo_flow_scope_register_llm_stream_execution_intercept(
         &uuid,
         name,
         priority,
@@ -1549,7 +1535,7 @@ pub fn scope_deregister_llm_stream_execution_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_deregister_llm_stream_execution_intercept(&uuid, name)
+    nemo_flow_core::nemo_flow_scope_deregister_llm_stream_execution_intercept(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1571,7 +1557,7 @@ pub fn scope_register_subscriber(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_register_subscriber(
+    nemo_flow_core::nemo_flow_scope_register_subscriber(
         &uuid,
         name,
         callable::wrap_js_event_subscriber(callback),
@@ -1586,7 +1572,7 @@ pub fn scope_register_subscriber(
 pub fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nvidia_nat_nexus_core::nat_nexus_scope_deregister_subscriber(&uuid, name).map_err(to_js_err)
+    nemo_flow_core::nemo_flow_scope_deregister_subscriber(&uuid, name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1597,7 +1583,7 @@ pub fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> Result<bool,
 #[wasm_bindgen(js_name = "createScopeStack")]
 pub fn create_scope_stack() -> WasmScopeStack {
     WasmScopeStack {
-        inner: nvidia_nat_nexus_core::create_scope_stack(),
+        inner: nemo_flow_core::create_scope_stack(),
     }
 }
 
@@ -1605,14 +1591,14 @@ pub fn create_scope_stack() -> WasmScopeStack {
 #[wasm_bindgen(js_name = "currentScopeStack")]
 pub fn current_scope_stack() -> WasmScopeStack {
     WasmScopeStack {
-        inner: nvidia_nat_nexus_core::current_scope_stack(),
+        inner: nemo_flow_core::current_scope_stack(),
     }
 }
 
 /// Binds a scope stack to the current thread.
 #[wasm_bindgen(js_name = "setThreadScopeStack")]
 pub fn set_thread_scope_stack(stack: &WasmScopeStack) {
-    nvidia_nat_nexus_core::set_thread_scope_stack(stack.inner.clone());
+    nemo_flow_core::set_thread_scope_stack(stack.inner.clone());
 }
 
 /// Returns whether the current execution context has an explicitly-initialized
@@ -1622,7 +1608,7 @@ pub fn set_thread_scope_stack(stack: &WasmScopeStack) {
 /// when only the auto-created default is present.
 #[wasm_bindgen(js_name = "scopeStackActive")]
 pub fn scope_stack_active() -> bool {
-    nvidia_nat_nexus_core::scope_stack_active()
+    nemo_flow_core::scope_stack_active()
 }
 
 // ---------------------------------------------------------------------------
@@ -1631,36 +1617,36 @@ pub fn scope_stack_active() -> bool {
 
 /// Runs the registered tool request intercept chain on the given arguments.
 #[wasm_bindgen(js_name = "toolRequestIntercepts")]
-pub fn nat_nexus_tool_request_intercepts_wasm(
+pub fn nemo_flow_tool_request_intercepts_wasm(
     name: &str,
     args: JsValue,
 ) -> Result<JsValue, JsValue> {
     let args_json = js_to_json(&args)?;
-    let result = nvidia_nat_nexus_core::nat_nexus_tool_request_intercepts(name, args_json)
-        .map_err(to_js_err)?;
+    let result =
+        nemo_flow_core::nemo_flow_tool_request_intercepts(name, args_json).map_err(to_js_err)?;
     Ok(json_to_js(&result))
 }
 
 /// Runs the registered tool conditional execution guardrail chain.
 #[wasm_bindgen(js_name = "toolConditionalExecution")]
-pub fn nat_nexus_tool_conditional_execution_wasm(name: &str, args: JsValue) -> Result<(), JsValue> {
+pub fn nemo_flow_tool_conditional_execution_wasm(name: &str, args: JsValue) -> Result<(), JsValue> {
     let args_json = js_to_json(&args)?;
-    nvidia_nat_nexus_core::nat_nexus_tool_conditional_execution(name, &args_json).map_err(to_js_err)
+    nemo_flow_core::nemo_flow_tool_conditional_execution(name, &args_json).map_err(to_js_err)
 }
 
 /// Runs the registered LLM request intercept chain on the given `LLMRequest`.
 #[wasm_bindgen(js_name = "llmRequestIntercepts")]
-pub fn nat_nexus_llm_request_intercepts_wasm(
+pub fn nemo_flow_llm_request_intercepts_wasm(
     name: &str,
     request: JsValue,
 ) -> Result<JsValue, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string())))?;
-    let result = nvidia_nat_nexus_core::nat_nexus_llm_request_intercepts(name, llm_request)
-        .map_err(to_js_err)?;
+        .map_err(|e| to_js_err(nemo_flow_core::FlowError::Internal(e.to_string())))?;
+    let result =
+        nemo_flow_core::nemo_flow_llm_request_intercepts(name, llm_request).map_err(to_js_err)?;
     let result_json = serde_json::to_value(&result)
-        .map_err(|e| to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nemo_flow_core::FlowError::Internal(e.to_string())))?;
     Ok(json_to_js(&result_json))
 }
 
@@ -1668,11 +1654,11 @@ pub fn nat_nexus_llm_request_intercepts_wasm(
 ///
 /// - `request` - The LLM request as a JSON value with `{ headers, content }` shape.
 #[wasm_bindgen(js_name = "llmConditionalExecution")]
-pub fn nat_nexus_llm_conditional_execution_wasm(request: JsValue) -> Result<(), JsValue> {
+pub fn nemo_flow_llm_conditional_execution_wasm(request: JsValue) -> Result<(), JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string())))?;
-    nvidia_nat_nexus_core::nat_nexus_llm_conditional_execution(&llm_request).map_err(to_js_err)
+        .map_err(|e| to_js_err(nemo_flow_core::FlowError::Internal(e.to_string())))?;
+    nemo_flow_core::nemo_flow_llm_conditional_execution(&llm_request).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1682,7 +1668,7 @@ pub fn nat_nexus_llm_conditional_execution_wasm(request: JsValue) -> Result<(), 
 /// ATIF trajectory exporter for collecting events and producing ATIF JSON.
 #[wasm_bindgen]
 pub struct WasmAtifExporter {
-    inner: nvidia_nat_nexus_core::atif::AtifExporter,
+    inner: nemo_flow_core::atif::AtifExporter,
 }
 
 #[wasm_bindgen]
@@ -1695,7 +1681,7 @@ impl WasmAtifExporter {
         agent_version: String,
         model_name: Option<String>,
     ) -> Self {
-        let agent_info = nvidia_nat_nexus_core::atif::AtifAgentInfo {
+        let agent_info = nemo_flow_core::atif::AtifAgentInfo {
             name: agent_name,
             version: agent_version,
             model_name,
@@ -1703,20 +1689,20 @@ impl WasmAtifExporter {
             extra: None,
         };
         Self {
-            inner: nvidia_nat_nexus_core::atif::AtifExporter::new(session_id, agent_info),
+            inner: nemo_flow_core::atif::AtifExporter::new(session_id, agent_info),
         }
     }
 
     /// Registers the exporter as an event subscriber.
     pub fn register(&self, name: &str) -> Result<(), JsValue> {
         let subscriber = self.inner.subscriber();
-        nvidia_nat_nexus_core::nat_nexus_register_subscriber(name, subscriber)
+        nemo_flow_core::nemo_flow_register_subscriber(name, subscriber)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Deregisters the exporter subscriber.
     pub fn deregister(&self, name: &str) -> Result<bool, JsValue> {
-        nvidia_nat_nexus_core::nat_nexus_deregister_subscriber(name)
+        nemo_flow_core::nemo_flow_deregister_subscriber(name)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
@@ -1743,7 +1729,7 @@ pub fn default_open_telemetry_config() -> Result<JsValue, JsValue> {
 /// OpenTelemetry-backed event subscriber.
 #[wasm_bindgen(js_name = OpenTelemetrySubscriber)]
 pub struct WasmOpenTelemetrySubscriber {
-    inner: nvidia_nat_nexus_otel::OpenTelemetrySubscriber,
+    inner: nemo_flow_otel::OpenTelemetrySubscriber,
 }
 
 #[wasm_bindgen(js_class = OpenTelemetrySubscriber)]
@@ -1763,7 +1749,7 @@ impl WasmOpenTelemetrySubscriber {
             _ => None,
         };
 
-        let inner = nvidia_nat_nexus_otel::OpenTelemetrySubscriber::new(build_otel_config(config)?)
+        let inner = nemo_flow_otel::OpenTelemetrySubscriber::new(build_otel_config(config)?)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(Self { inner })
     }
@@ -1841,7 +1827,7 @@ impl WasmOptimizerPluginContext {
 impl WasmOptimizerPluginContext {
     #[wasm_bindgen(js_name = registerSubscriber)]
     pub fn register_subscriber(&self, name: &str, callback: Function) -> Result<(), JsValue> {
-        nvidia_nat_nexus_core::nat_nexus_register_subscriber(
+        nemo_flow_core::nemo_flow_register_subscriber(
             name,
             crate::callable::wrap_js_event_subscriber(callback),
         )
@@ -1852,7 +1838,7 @@ impl WasmOptimizerPluginContext {
             "external_component",
             name_owned.clone(),
             Box::new(move || {
-                nvidia_nat_nexus_core::nat_nexus_deregister_subscriber(&name_owned)
+                nemo_flow_core::nemo_flow_deregister_subscriber(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         OptimizerError::RegistrationFailed(format!(
@@ -1871,7 +1857,7 @@ impl WasmOptimizerPluginContext {
         break_chain: bool,
         callback: Function,
     ) -> Result<(), JsValue> {
-        nvidia_nat_nexus_core::nat_nexus_register_llm_request_intercept(
+        nemo_flow_core::nemo_flow_register_llm_request_intercept(
             name,
             priority,
             break_chain,
@@ -1884,7 +1870,7 @@ impl WasmOptimizerPluginContext {
             "external_component",
             name_owned.clone(),
             Box::new(move || {
-                nvidia_nat_nexus_core::nat_nexus_deregister_llm_request_intercept(&name_owned)
+                nemo_flow_core::nemo_flow_deregister_llm_request_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         OptimizerError::RegistrationFailed(format!(
@@ -1902,7 +1888,7 @@ impl WasmOptimizerPluginContext {
         priority: i32,
         callback: Function,
     ) -> Result<(), JsValue> {
-        nvidia_nat_nexus_core::nat_nexus_register_llm_execution_intercept(
+        nemo_flow_core::nemo_flow_register_llm_execution_intercept(
             name,
             priority,
             crate::callable::wrap_js_llm_exec_intercept_fn(callback),
@@ -1914,7 +1900,7 @@ impl WasmOptimizerPluginContext {
             "external_component",
             name_owned.clone(),
             Box::new(move || {
-                nvidia_nat_nexus_core::nat_nexus_deregister_llm_execution_intercept(&name_owned)
+                nemo_flow_core::nemo_flow_deregister_llm_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         OptimizerError::RegistrationFailed(format!(
@@ -1932,7 +1918,7 @@ impl WasmOptimizerPluginContext {
         priority: i32,
         callback: Function,
     ) -> Result<(), JsValue> {
-        nvidia_nat_nexus_core::nat_nexus_register_llm_stream_execution_intercept(
+        nemo_flow_core::nemo_flow_register_llm_stream_execution_intercept(
             name,
             priority,
             crate::callable::wrap_js_llm_stream_exec_intercept_fn(callback),
@@ -1944,15 +1930,13 @@ impl WasmOptimizerPluginContext {
             "external_component",
             name_owned.clone(),
             Box::new(move || {
-                nvidia_nat_nexus_core::nat_nexus_deregister_llm_stream_execution_intercept(
-                    &name_owned,
-                )
-                .map(|_| ())
-                .map_err(|e| {
-                    OptimizerError::RegistrationFailed(format!(
-                        "llm stream execution intercept deregistration failed: {e}"
-                    ))
-                })
+                nemo_flow_core::nemo_flow_deregister_llm_stream_execution_intercept(&name_owned)
+                    .map(|_| ())
+                    .map_err(|e| {
+                        OptimizerError::RegistrationFailed(format!(
+                            "llm stream execution intercept deregistration failed: {e}"
+                        ))
+                    })
             }),
         ))
     }
@@ -1965,7 +1949,7 @@ impl WasmOptimizerPluginContext {
         break_chain: bool,
         callback: Function,
     ) -> Result<(), JsValue> {
-        nvidia_nat_nexus_core::nat_nexus_register_tool_request_intercept(
+        nemo_flow_core::nemo_flow_register_tool_request_intercept(
             name,
             priority,
             break_chain,
@@ -1978,7 +1962,7 @@ impl WasmOptimizerPluginContext {
             "external_component",
             name_owned.clone(),
             Box::new(move || {
-                nvidia_nat_nexus_core::nat_nexus_deregister_tool_request_intercept(&name_owned)
+                nemo_flow_core::nemo_flow_deregister_tool_request_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         OptimizerError::RegistrationFailed(format!(
@@ -1996,7 +1980,7 @@ impl WasmOptimizerPluginContext {
         priority: i32,
         callback: Function,
     ) -> Result<(), JsValue> {
-        nvidia_nat_nexus_core::nat_nexus_register_tool_execution_intercept(
+        nemo_flow_core::nemo_flow_register_tool_execution_intercept(
             name,
             priority,
             crate::callable::wrap_js_tool_exec_intercept_fn(callback),
@@ -2008,7 +1992,7 @@ impl WasmOptimizerPluginContext {
             "external_component",
             name_owned.clone(),
             Box::new(move || {
-                nvidia_nat_nexus_core::nat_nexus_deregister_tool_execution_intercept(&name_owned)
+                nemo_flow_core::nemo_flow_deregister_tool_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         OptimizerError::RegistrationFailed(format!(
@@ -2048,15 +2032,14 @@ impl HostedPluginHandler for WasmHostedPluginHandler {
             return vec![];
         };
         let plugin_config_js = json_to_js(&serde_json::Value::Object(plugin_config.clone()));
-        match validate.call2(
-            &JsValue::NULL,
-            &JsValue::from_str(instance_id),
-            &plugin_config_js,
-        ) {
+        let this_arg = JsValue::NULL;
+        let instance_arg = JsValue::from_str(instance_id);
+        let validation = validate.call2(&this_arg, &instance_arg, &plugin_config_js);
+        match validation {
             Ok(value) => serde_wasm_bindgen::from_value::<Vec<ConfigDiagnostic>>(value)
                 .unwrap_or_else(|e| {
                     vec![ConfigDiagnostic {
-                        level: nvidia_nat_nexus_optimizer::DiagnosticLevel::Error,
+                        level: nemo_flow_optimizer::DiagnosticLevel::Error,
                         code: "optimizer.plugin_validate_failed".into(),
                         component: Some("external_component".into()),
                         field: None,
@@ -2066,7 +2049,7 @@ impl HostedPluginHandler for WasmHostedPluginHandler {
                     }]
                 }),
             Err(err) => vec![ConfigDiagnostic {
-                level: nvidia_nat_nexus_optimizer::DiagnosticLevel::Error,
+                level: nemo_flow_optimizer::DiagnosticLevel::Error,
                 code: "optimizer.plugin_validate_failed".into(),
                 component: Some("external_component".into()),
                 field: None,
@@ -2081,8 +2064,8 @@ impl HostedPluginHandler for WasmHostedPluginHandler {
         &self,
         instance_id: &str,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &mut nvidia_nat_nexus_optimizer::HostedRegistrationContext,
-    ) -> nvidia_nat_nexus_optimizer::Result<()> {
+        ctx: &mut nemo_flow_optimizer::HostedRegistrationContext,
+    ) -> nemo_flow_optimizer::Result<()> {
         let plugin_context = WasmOptimizerPluginContext {
             registrations: Arc::new(Mutex::new(vec![])),
         };
@@ -2145,6 +2128,7 @@ enum WasmOptimizerRuntimeState {
     Ready(NativeOptimizerRuntime),
 }
 
+#[allow(tail_expr_drop_order)]
 #[wasm_bindgen]
 impl WasmOptimizerRuntime {
     #[wasm_bindgen(constructor)]
@@ -2189,13 +2173,17 @@ impl WasmOptimizerRuntime {
 
     #[wasm_bindgen]
     pub fn deregister(&self) -> Result<(), JsValue> {
-        let mut guard = self.inner.borrow_mut();
-        let state = guard
-            .as_mut()
-            .ok_or_else(|| JsValue::from_str("optimizer runtime already shut down"))?;
-        match state {
-            WasmOptimizerRuntimeState::Pending { .. } => Ok(()),
-            WasmOptimizerRuntimeState::Ready(runtime) => runtime.deregister().map_err(to_js_err),
+        {
+            let mut guard = self.inner.borrow_mut();
+            let state = guard
+                .as_mut()
+                .ok_or_else(|| JsValue::from_str("optimizer runtime already shut down"))?;
+            match state {
+                WasmOptimizerRuntimeState::Pending { .. } => Ok(()),
+                WasmOptimizerRuntimeState::Ready(runtime) => {
+                    runtime.deregister().map_err(to_js_err)
+                }
+            }
         }
     }
 
@@ -2216,15 +2204,17 @@ impl WasmOptimizerRuntime {
 
     #[wasm_bindgen]
     pub fn report(&self) -> Result<JsValue, JsValue> {
-        let guard = self.inner.borrow();
-        let state = guard
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str("optimizer runtime already shut down"))?;
-        let report = match state {
-            WasmOptimizerRuntimeState::Pending { report, .. } => report,
-            WasmOptimizerRuntimeState::Ready(runtime) => runtime.report(),
+        let report = {
+            let guard = self.inner.borrow();
+            let state = guard
+                .as_ref()
+                .ok_or_else(|| JsValue::from_str("optimizer runtime already shut down"))?;
+            match state {
+                WasmOptimizerRuntimeState::Pending { report, .. } => report.clone(),
+                WasmOptimizerRuntimeState::Ready(runtime) => runtime.report().clone(),
+            }
         };
-        serde_wasm_bindgen::to_value(report).map_err(|e| JsValue::from_str(&e.to_string()))
+        serde_wasm_bindgen::to_value(&report).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }
 
@@ -2246,7 +2236,7 @@ fn validate_optimizer_config_or_js_err(config: &OptimizerConfig) -> Result<Confi
 /// OpenInference-backed event subscriber.
 #[wasm_bindgen(js_name = OpenInferenceSubscriber)]
 pub struct WasmOpenInferenceSubscriber {
-    inner: nvidia_nat_nexus_openinference::OpenInferenceSubscriber,
+    inner: nemo_flow_openinference::OpenInferenceSubscriber,
 }
 
 #[wasm_bindgen(js_class = OpenInferenceSubscriber)]
@@ -2262,7 +2252,7 @@ impl WasmOpenInferenceSubscriber {
             _ => None,
         };
 
-        let inner = nvidia_nat_nexus_openinference::OpenInferenceSubscriber::new(
+        let inner = nemo_flow_openinference::OpenInferenceSubscriber::new(
             build_openinference_config(config)?,
         )
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -2312,10 +2302,10 @@ mod tests {
     fn wasm_config_defaults_match_expected_values() {
         let otel_config = WasmOpenTelemetryConfig::default();
         assert_eq!(otel_config.transport.as_deref(), Some("http_binary"));
-        assert_eq!(otel_config.service_name.as_deref(), Some("nat-nexus"));
+        assert_eq!(otel_config.service_name.as_deref(), Some("nemo-flow"));
         assert_eq!(
             otel_config.instrumentation_scope.as_deref(),
-            Some("nvidia-nat-nexus-otel")
+            Some("nemo-flow-otel")
         );
         assert_eq!(otel_config.timeout_millis, Some(3_000));
 
@@ -2326,54 +2316,58 @@ mod tests {
         );
         assert_eq!(
             openinference_config.service_name.as_deref(),
-            Some("nat-nexus")
+            Some("nemo-flow")
         );
         assert_eq!(
             openinference_config.instrumentation_scope.as_deref(),
-            Some("nvidia-nat-nexus-openinference")
+            Some("nemo-flow-openinference")
         );
         assert_eq!(openinference_config.timeout_millis, Some(3_000));
     }
 
     #[test]
     fn config_builders_accept_explicit_overrides() {
-        assert!(build_otel_config(Some(WasmOpenTelemetryConfig {
-            transport: Some("grpc".to_string()),
-            endpoint: Some("http://localhost:4317".to_string()),
-            headers: Some(HashMap::from([(
-                "authorization".to_string(),
-                "Bearer token".to_string()
-            )])),
-            resource_attributes: Some(HashMap::from([(
-                "deployment.environment".to_string(),
-                "test".to_string(),
-            )])),
-            service_name: Some("demo-agent".to_string()),
-            service_namespace: Some("agents".to_string()),
-            service_version: Some("1.2.3".to_string()),
-            instrumentation_scope: Some("demo-scope".to_string()),
-            timeout_millis: Some(1_250),
-        }))
-        .is_ok());
+        assert!(
+            build_otel_config(Some(WasmOpenTelemetryConfig {
+                transport: Some("grpc".to_string()),
+                endpoint: Some("http://localhost:4317".to_string()),
+                headers: Some(HashMap::from([(
+                    "authorization".to_string(),
+                    "Bearer token".to_string()
+                )])),
+                resource_attributes: Some(HashMap::from([(
+                    "deployment.environment".to_string(),
+                    "test".to_string(),
+                )])),
+                service_name: Some("demo-agent".to_string()),
+                service_namespace: Some("agents".to_string()),
+                service_version: Some("1.2.3".to_string()),
+                instrumentation_scope: Some("demo-scope".to_string()),
+                timeout_millis: Some(1_250),
+            }))
+            .is_ok()
+        );
 
-        assert!(build_openinference_config(Some(WasmOpenInferenceConfig {
-            transport: Some("grpc".to_string()),
-            endpoint: Some("http://localhost:4317".to_string()),
-            headers: Some(HashMap::from([(
-                "authorization".to_string(),
-                "Bearer token".to_string()
-            )])),
-            resource_attributes: Some(HashMap::from([(
-                "deployment.environment".to_string(),
-                "test".to_string(),
-            )])),
-            service_name: Some("demo-agent".to_string()),
-            service_namespace: Some("agents".to_string()),
-            service_version: Some("1.2.3".to_string()),
-            instrumentation_scope: Some("demo-scope".to_string()),
-            timeout_millis: Some(1_250),
-        }))
-        .is_ok());
+        assert!(
+            build_openinference_config(Some(WasmOpenInferenceConfig {
+                transport: Some("grpc".to_string()),
+                endpoint: Some("http://localhost:4317".to_string()),
+                headers: Some(HashMap::from([(
+                    "authorization".to_string(),
+                    "Bearer token".to_string()
+                )])),
+                resource_attributes: Some(HashMap::from([(
+                    "deployment.environment".to_string(),
+                    "test".to_string(),
+                )])),
+                service_name: Some("demo-agent".to_string()),
+                service_namespace: Some("agents".to_string()),
+                service_version: Some("1.2.3".to_string()),
+                instrumentation_scope: Some("demo-scope".to_string()),
+                timeout_millis: Some(1_250),
+            }))
+            .is_ok()
+        );
     }
 
     fn wasm_atif_exporter_exports_full_trajectory_without_root_parameter() {
@@ -2441,16 +2435,16 @@ mod tests {
     #[test]
     fn callback_error_wrapper_accessors_round_trip() {
         clear_last_callback_error();
-        assert_eq!(nat_nexus_get_last_callback_error(), None);
+        assert_eq!(nemo_flow_get_last_callback_error(), None);
 
         record_callback_error("wasm wrapper callback failed");
         assert_eq!(
-            nat_nexus_get_last_callback_error(),
+            nemo_flow_get_last_callback_error(),
             Some("wasm wrapper callback failed".to_string())
         );
 
-        nat_nexus_clear_last_callback_error();
-        assert_eq!(nat_nexus_get_last_callback_error(), None);
+        nemo_flow_clear_last_callback_error();
+        assert_eq!(nemo_flow_get_last_callback_error(), None);
     }
 
     #[test]

@@ -18,7 +18,7 @@
 
 use serde::Deserialize;
 
-use crate::error::{NexusError, Result};
+use crate::error::{FlowError, Result};
 use crate::json::Json;
 use crate::types::LLMRequest;
 
@@ -200,9 +200,8 @@ fn extract_system_text(msg: &Message) -> Option<String> {
 
 impl LlmResponseCodec for AnthropicMessagesCodec {
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLLMResponse> {
-        let raw: RawAnthropicResponse = serde_json::from_value(response.clone()).map_err(|e| {
-            NexusError::Internal(format!("Anthropic Messages response decode: {e}"))
-        })?;
+        let raw: RawAnthropicResponse = serde_json::from_value(response.clone())
+            .map_err(|e| FlowError::Internal(format!("Anthropic Messages response decode: {e}")))?;
 
         // Process content blocks.
         let content_blocks = raw.content.as_ref();
@@ -310,7 +309,7 @@ impl LlmCodec for AnthropicMessagesCodec {
         let obj = request
             .content
             .as_object()
-            .ok_or_else(|| NexusError::Internal("request content is not an object".into()))?;
+            .ok_or_else(|| FlowError::Internal("request content is not an object".into()))?;
 
         // Extract system from top-level field.
         let system_msg = obj.get("system").and_then(extract_system_message);
@@ -373,11 +372,7 @@ impl LlmCodec for AnthropicMessagesCodec {
                     })
                 })
                 .collect();
-            if defs.is_empty() {
-                None
-            } else {
-                Some(defs)
-            }
+            if defs.is_empty() { None } else { Some(defs) }
         });
 
         // Extract tool_choice: Anthropic format.
@@ -406,7 +401,7 @@ impl LlmCodec for AnthropicMessagesCodec {
         let mut content = original.content.clone();
         let obj = content
             .as_object_mut()
-            .ok_or_else(|| NexusError::Internal("original content is not an object".into()))?;
+            .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
 
         // Extract system message from annotated.messages, write as top-level field.
         // Remaining (non-system) messages go into the messages array.
@@ -429,7 +424,7 @@ impl LlmCodec for AnthropicMessagesCodec {
         obj.insert(
             "messages".into(),
             serde_json::to_value(&non_system_messages).map_err(|e| {
-                NexusError::Internal(format!("Anthropic Messages messages encode: {e}"))
+                FlowError::Internal(format!("Anthropic Messages messages encode: {e}"))
             })?,
         );
 
@@ -455,7 +450,7 @@ impl LlmCodec for AnthropicMessagesCodec {
                 obj.insert(
                     "stop_sequences".into(),
                     serde_json::to_value(stop).map_err(|e| {
-                        NexusError::Internal(format!(
+                        FlowError::Internal(format!(
                             "Anthropic Messages stop_sequences encode: {e}"
                         ))
                     })?,
@@ -483,7 +478,7 @@ impl LlmCodec for AnthropicMessagesCodec {
             obj.insert(
                 "tools".into(),
                 serde_json::to_value(&anthropic_tools).map_err(|e| {
-                    NexusError::Internal(format!("Anthropic Messages tools encode: {e}"))
+                    FlowError::Internal(format!("Anthropic Messages tools encode: {e}"))
                 })?,
             );
         }

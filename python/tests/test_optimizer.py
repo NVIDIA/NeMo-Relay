@@ -5,8 +5,8 @@
 
 from typing import cast
 
-from nat_nexus import JsonObject, LLMRequest, llm, tools
-from nat_nexus.optimizer import (
+from nemo_flow import JsonObject, LLMRequest, llm, tools
+from nemo_flow.optimizer import (
     BackendSpec,
     ComponentSpec,
     ConfigPolicy,
@@ -28,7 +28,7 @@ class TestOptimizerConfigHelpers:
         assert BackendSpec.in_memory().to_dict() == {"kind": "in_memory", "config": {}}
         assert BackendSpec.redis("redis://127.0.0.1:6379").to_dict() == {
             "kind": "redis",
-            "config": {"url": "redis://127.0.0.1:6379", "key_prefix": "nexus:"},
+            "config": {"url": "redis://127.0.0.1:6379", "key_prefix": "nemo_flow:"},
         }
 
     def test_component_helpers(self):

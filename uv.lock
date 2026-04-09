@@ -272,7 +272,7 @@ wheels = [
 ]
 
 [[package]]
-name = "nvidia-nat-nexus"
+name = "nemo-flow"
 source = { editable = "." }
 
 [package.dev-dependencies]

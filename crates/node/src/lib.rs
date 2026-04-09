@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! NAPI-RS bindings for Nexus, exposing the agent runtime framework to Node.js.
+//! NAPI-RS bindings for NeMo Flow, exposing the agent runtime framework to Node.js.
 //!
 //! This crate provides JavaScript/TypeScript access to scope management, tool and LLM
 //! lifecycle operations, guardrails, intercepts, event subscriptions, and ATIF trajectory

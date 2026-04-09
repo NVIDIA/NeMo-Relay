@@ -7,17 +7,17 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus"
+	"github.com/NVIDIA/NeMo-Flow/go/nemo_flow"
 )
 
 func main() {
-	handle, err := nat_nexus.PushScope("example-agent", nat_nexus.ScopeTypeAgent)
+	handle, err := nemo_flow.PushScope("example-agent", nemo_flow.ScopeTypeAgent)
 	if err != nil {
 		panic(err)
 	}
-	defer nat_nexus.PopScope(handle)
+	defer nemo_flow.PopScope(handle)
 
-	result, err := nat_nexus.ToolCallExecute(
+	result, err := nemo_flow.ToolCallExecute(
 		"search",
 		json.RawMessage(`{"query":"hello"}`),
 		func(args json.RawMessage) (json.RawMessage, error) {

@@ -6,12 +6,12 @@
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use nvidia_nat_nexus_core::context::*;
-use nvidia_nat_nexus_core::error::Result;
-use nvidia_nat_nexus_core::json::Json;
-use nvidia_nat_nexus_core::stream::LlmStreamWrapper;
-use nvidia_nat_nexus_core::types::*;
-use nvidia_nat_nexus_core::*;
+use nemo_flow_core::context::*;
+use nemo_flow_core::error::Result;
+use nemo_flow_core::json::Json;
+use nemo_flow_core::stream::LlmStreamWrapper;
+use nemo_flow_core::types::*;
+use nemo_flow_core::*;
 use serde_json::json;
 use tokio_stream::{Stream, StreamExt};
 
@@ -21,7 +21,7 @@ static TEST_MUTEX: Mutex<()> = Mutex::new(());
 fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NatNexusContextState::new();
+    *state = NemoFlowContextState::new();
 }
 
 fn make_llm_handle(name: &str) -> LLMHandle {
@@ -143,7 +143,7 @@ async fn test_stream_wrapper_emits_end_event() {
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nat_nexus_register_subscriber(
+    nemo_flow_register_subscriber(
         "stream_end_test",
         Arc::new(move |e: &Event| {
             ec.lock()
@@ -161,7 +161,7 @@ async fn test_stream_wrapper_emits_end_event() {
         headers: serde_json::Map::new(),
         content: json!({"messages": []}),
     };
-    let handle = nat_nexus_llm_call(
+    let handle = nemo_flow_llm_call(
         "test_llm",
         &request,
         None,
@@ -187,7 +187,7 @@ async fn test_stream_wrapper_emits_end_event() {
     assert_eq!(captured.last().unwrap().0, "LLMEnd");
 
     drop(captured);
-    nat_nexus_deregister_subscriber("stream_end_test").unwrap();
+    nemo_flow_deregister_subscriber("stream_end_test").unwrap();
 }
 
 #[tokio::test]
@@ -197,9 +197,7 @@ async fn test_stream_wrapper_error_propagation() {
 
     let items: Vec<Result<Json>> = vec![
         Ok(json!("good chunk")),
-        Err(nvidia_nat_nexus_core::NexusError::Internal(
-            "stream error".into(),
-        )),
+        Err(nemo_flow_core::FlowError::Internal("stream error".into())),
     ];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
@@ -298,9 +296,7 @@ async fn test_stream_wrapper_error_skips_collector_and_finalizes_immediately() {
     let finalizer_called = Arc::new(Mutex::new(false));
     let fc = finalizer_called.clone();
 
-    let items: Vec<Result<Json>> = vec![Err(nvidia_nat_nexus_core::NexusError::Internal(
-        "error".into(),
-    ))];
+    let items: Vec<Result<Json>> = vec![Err(nemo_flow_core::FlowError::Internal("error".into()))];
     let inner = make_stream(items);
     let handle = make_llm_handle("test_llm");
     let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(move |_| {
@@ -334,7 +330,7 @@ async fn test_stream_wrapper_error_emits_end_event_on_first_error_poll() {
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let captured = events.clone();
-    nat_nexus_register_subscriber(
+    nemo_flow_register_subscriber(
         "stream_error_end_test",
         Arc::new(move |e: &Event| {
             captured.lock().unwrap().push(e.clone());
@@ -342,15 +338,13 @@ async fn test_stream_wrapper_error_emits_end_event_on_first_error_poll() {
     )
     .unwrap();
 
-    let items: Vec<Result<Json>> = vec![Err(nvidia_nat_nexus_core::NexusError::Internal(
-        "error".into(),
-    ))];
+    let items: Vec<Result<Json>> = vec![Err(nemo_flow_core::FlowError::Internal("error".into()))];
     let inner = make_stream(items);
     let request = LLMRequest {
         headers: serde_json::Map::new(),
         content: json!({"messages": []}),
     };
-    let handle = nat_nexus_llm_call(
+    let handle = nemo_flow_llm_call(
         "stream_error_llm",
         &request,
         None,
@@ -377,7 +371,7 @@ async fn test_stream_wrapper_error_emits_end_event_on_first_error_poll() {
     assert_eq!(end_event.output(), Some(&json!({"partial": true})));
 
     drop(events);
-    nat_nexus_deregister_subscriber("stream_error_end_test").unwrap();
+    nemo_flow_deregister_subscriber("stream_error_end_test").unwrap();
 }
 
 #[tokio::test]
@@ -387,7 +381,7 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nat_nexus_register_subscriber(
+    nemo_flow_register_subscriber(
         "end_event_test",
         Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
@@ -402,7 +396,7 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
         headers: serde_json::Map::new(),
         content: json!({"messages": []}),
     };
-    let handle = nat_nexus_llm_call(
+    let handle = nemo_flow_llm_call(
         "test_llm",
         &request,
         None,
@@ -435,7 +429,7 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
     assert_eq!(arr[1]["token"], "b");
 
     drop(captured);
-    nat_nexus_deregister_subscriber("end_event_test").unwrap();
+    nemo_flow_deregister_subscriber("end_event_test").unwrap();
 }
 
 #[tokio::test]
@@ -459,7 +453,7 @@ async fn test_stream_wrapper_collector_error_terminates_stream() {
         let mut count = cc.lock().unwrap();
         *count += 1;
         if *count >= 2 {
-            Err(nvidia_nat_nexus_core::NexusError::Internal(
+            Err(nemo_flow_core::FlowError::Internal(
                 "collector error".into(),
             ))
         } else {
@@ -480,7 +474,7 @@ async fn test_stream_wrapper_collector_error_terminates_stream() {
     let second_result = second.unwrap();
     assert!(second_result.is_err());
     match second_result {
-        Err(nvidia_nat_nexus_core::NexusError::Internal(msg)) => {
+        Err(nemo_flow_core::FlowError::Internal(msg)) => {
             assert_eq!(msg, "collector error");
         }
         other => panic!("expected Internal error, got {other:?}"),

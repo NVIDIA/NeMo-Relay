@@ -3,8 +3,8 @@
 
 """Integration tests for LangGraph lifecycle event emission.
 
-Validates that the four lifecycle event helper functions in ``_nat_nexus.py``
-emit correct Nexus Mark events with the expected names, event types, and data
+Validates that the four lifecycle event helper functions in ``_nemo_flow.py``
+emit correct NeMo Flow Mark events with the expected names, event types, and data
 fields, and that guard behavior prevents spurious events when no scope stack
 is active.
 
@@ -17,9 +17,9 @@ import threading
 from collections import namedtuple
 from typing import Any
 
-import nat_nexus
+import nemo_flow
 import pytest
-from langgraph._nat_nexus import (  # type: ignore[import-untyped]
+from langgraph._nemo_flow import (  # type: ignore[import-untyped]
     available,
     emit_checkpoint_restore,
     emit_checkpoint_save,
@@ -28,7 +28,7 @@ from langgraph._nat_nexus import (  # type: ignore[import-untyped]
     pop_graph_scope,
     push_graph_scope,
 )
-from nat_nexus import create_scope_stack, set_thread_scope_stack
+from nemo_flow import create_scope_stack, set_thread_scope_stack
 
 
 class TestCheckpointEvents:
@@ -45,9 +45,9 @@ class TestCheckpointEvents:
     def events(self):
         """Register an event subscriber and collect events."""
         collected: list[Any] = []
-        nat_nexus.subscribers.register("test-lifecycle-collector", lambda e: collected.append(e))
+        nemo_flow.subscribers.register("test-lifecycle-collector", lambda e: collected.append(e))
         yield collected
-        nat_nexus.subscribers.deregister("test-lifecycle-collector")
+        nemo_flow.subscribers.deregister("test-lifecycle-collector")
 
     # -------------------------------------------------------------------
     # Checkpoint Save events
@@ -142,9 +142,9 @@ class TestInterruptEvents:
     def events(self):
         """Register an event subscriber and collect events."""
         collected: list[Any] = []
-        nat_nexus.subscribers.register("test-interrupt-collector", lambda e: collected.append(e))
+        nemo_flow.subscribers.register("test-interrupt-collector", lambda e: collected.append(e))
         yield collected
-        nat_nexus.subscribers.deregister("test-interrupt-collector")
+        nemo_flow.subscribers.deregister("test-interrupt-collector")
 
     # -------------------------------------------------------------------
     # Graph Interrupt events

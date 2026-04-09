@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# NeMo Agent Toolkit Nexus Documentation
+# NeMo Flow Documentation
 
-Nexus is a multi-language agent runtime framework providing execution scope management, lifecycle event tracking, and configurable middleware pipelines for tool and LLM calls.
+NeMo Flow is a multi-language agent runtime framework providing execution scope management, lifecycle event tracking, and configurable middleware pipelines for tool and LLM calls.
 
 This file is the canonical documentation index for the repository.
 
@@ -13,7 +13,7 @@ This file is the canonical documentation index for the repository.
 
 Choose the path that matches what you are trying to do:
 
-### Using Nexus from Python
+### Using NeMo Flow from Python
 
 1. [Getting Started: Python](getting-started-python.md)
 2. [Language Bindings](language-bindings.md#python)
@@ -26,7 +26,7 @@ Choose the path that matches what you are trying to do:
 9. [ATIF Export](atif-export.md)
 10. [Testing](testing.md)
 
-### Using Nexus from Node.js
+### Using NeMo Flow from Node.js
 
 1. [Getting Started: Node.js](getting-started-node.md)
 2. [Language Bindings](language-bindings.md#nodejs)
@@ -38,7 +38,7 @@ Choose the path that matches what you are trying to do:
 8. [Observability with OpenInference](observability-with-openinference.md)
 9. [Testing](testing.md)
 
-### Using Nexus from Go
+### Using NeMo Flow from Go
 
 1. [Getting Started: Go](getting-started-go.md)
 2. [Language Bindings](language-bindings.md#go)
@@ -50,7 +50,7 @@ Choose the path that matches what you are trying to do:
 8. [Observability with OpenInference](observability-with-openinference.md)
 9. [Testing](testing.md)
 
-### Using Nexus from WebAssembly
+### Using NeMo Flow from WebAssembly
 
 1. [Getting Started: WebAssembly](getting-started-wasm.md)
 2. [Language Bindings](language-bindings.md#webassembly)
@@ -88,7 +88,7 @@ Choose the path that matches what you are trying to do:
 | [Middleware Pipeline](middleware-pipeline.md) | Detailed pipeline ordering for tool and LLM calls |
 | [LLM Codecs](llm-codecs.md) | Request and response codecs, built-in API codecs (OpenAI Chat, OpenAI Responses, Anthropic Messages), event enrichment, and custom codec authoring |
 | [Typed Wrappers](typed-wrappers.md) | Codec-based typed APIs for Python and Node.js |
-| [Typed API Reference](typed-api-reference.md) | Function signatures and codec reference for `nat_nexus.typed` |
+| [Typed API Reference](typed-api-reference.md) | Function signatures and codec reference for `nemo_flow.typed` |
 | [Context Isolation](context-isolation.md) | Multi-tenant and concurrent scope stack management |
 | [ATIF Export](atif-export.md) | Agent Trajectory Interchange Format export |
 | [Observability with OpenTelemetry](observability-with-opentelemetry.md) | OTLP subscriber setup, event mapping, and per-language examples |
@@ -103,7 +103,7 @@ Choose the path that matches what you are trying to do:
 | [Optimizer API Reference](optimizer-api-reference.md) | Public optimizer config types, diagnostics, runtime helpers, and plugin registration APIs |
 | [Online Learning Engine](online-learning-engine.md) | Prediction trie, sensitivity scoring, Redis persistence, and learner pipeline |
 | [Testing](testing.md) | Test commands, helpers, coverage, and conventions |
-| [Integration Best Practices](integration-best-practices.md) | Patterns for integrating Nexus into agent frameworks |
+| [Integration Best Practices](integration-best-practices.md) | Patterns for integrating NeMo Flow into agent frameworks |
 
 See also: [Contributing Guide](../.github/CONTRIBUTING.md) for development setup, branch naming, and PR process.
 
@@ -112,7 +112,7 @@ See also: [Contributing Guide](../.github/CONTRIBUTING.md) for development setup
 ```python
 import asyncio
 
-import nat_nexus
+import nemo_flow
 
 async def amain():
     # Define your tool and LLM functions
@@ -120,19 +120,19 @@ async def amain():
     my_llm_func = lambda request: {**request.content, "response": "ok"}
 
     # Subscribe to lifecycle events
-    nat_nexus.subscribers.register("logger", lambda event: print(event.name))
+    nemo_flow.subscribers.register("logger", lambda event: print(event.name))
 
-    # Run the agent inside a Nexus scope
-    with nat_nexus.scope.scope("my_agent", nat_nexus.ScopeType.Agent) as handle:
+    # Run the agent inside a NeMo Flow scope
+    with nemo_flow.scope.scope("my_agent", nemo_flow.ScopeType.Agent) as handle:
         # Execute an LLM call through the full middleware pipeline
-        request = nat_nexus.LLMRequest(
+        request = nemo_flow.LLMRequest(
             headers={"Authorization": "Bearer ..."},
             content={"messages": [{"role": "user", "content": "Hello"}], "model": "gpt-4"},
         )
-        response = await nat_nexus.llm.execute("gpt-4", request, my_llm_func)
+        response = await nemo_flow.llm.execute("gpt-4", request, my_llm_func)
 
         # Execute a tool call
-        result = await nat_nexus.tools.execute("search", {"query": "example"}, my_tool_func)
+        result = await nemo_flow.tools.execute("search", {"query": "example"}, my_tool_func)
         print(result)
 
 

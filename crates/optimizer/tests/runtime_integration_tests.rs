@@ -4,22 +4,22 @@
 use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex};
 
-use nvidia_nat_nexus_core::{
-    global_context, nat_nexus_llm_call_execute, nat_nexus_llm_request_intercepts,
-    nat_nexus_llm_stream_call_execute, nat_nexus_register_subscriber, nat_nexus_tool_call_execute,
-    LLMAttributes, LLMRequest, LlmExecutionNextFn, LlmStreamExecutionNextFn, NatNexusContextState,
-    ToolAttributes, ToolExecutionNextFn,
+use nemo_flow_core::{
+    LLMAttributes, LLMRequest, LlmExecutionNextFn, LlmStreamExecutionNextFn, NemoFlowContextState,
+    ToolAttributes, ToolExecutionNextFn, global_context, nemo_flow_llm_call_execute,
+    nemo_flow_llm_request_intercepts, nemo_flow_llm_stream_call_execute,
+    nemo_flow_register_subscriber, nemo_flow_tool_call_execute,
 };
-use nvidia_nat_nexus_optimizer::{
+use nemo_flow_optimizer::{
+    BackendSpec, BuildContext, ComponentSpec, ConfigDiagnostic, ConfigPolicy, DiagnosticLevel,
+    DynamoHintsComponentConfig, HostedPluginHandler, HostedRegistrationContext, OptimizerComponent,
+    OptimizerComponentFactory, OptimizerConfig, OptimizerError, OptimizerRuntime,
+    RegistrationContext, Result, StateConfig, TelemetryComponentConfig,
+    ToolParallelismComponentConfig, UnsupportedBehavior, ValidationContext,
     deregister_component_factory, deregister_hosted_plugin_handler, register_component_factory,
-    register_hosted_plugin_handler, BackendSpec, BuildContext, ComponentSpec, ConfigDiagnostic,
-    ConfigPolicy, DiagnosticLevel, DynamoHintsComponentConfig, HostedPluginHandler,
-    HostedRegistrationContext, OptimizerComponent, OptimizerComponentFactory, OptimizerConfig,
-    OptimizerError, OptimizerRuntime, RegistrationContext, Result, StateConfig,
-    TelemetryComponentConfig, ToolParallelismComponentConfig, UnsupportedBehavior,
-    ValidationContext,
+    register_hosted_plugin_handler,
 };
-use serde_json::{json, Map, Value as Json};
+use serde_json::{Map, Value as Json, json};
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 
@@ -28,7 +28,7 @@ static TEST_MUTEX: Mutex<()> = Mutex::const_new(());
 fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NatNexusContextState::new();
+    *state = NemoFlowContextState::new();
 }
 
 #[tokio::test]
@@ -58,7 +58,7 @@ async fn test_runtime_registers_and_passes_calls_through() {
 
     let llm_func: LlmExecutionNextFn =
         Arc::new(|_req: LLMRequest| Box::pin(async { Ok(serde_json::json!({"response": "ok"})) }));
-    let llm_result = nat_nexus_llm_call_execute(
+    let llm_result = nemo_flow_llm_call_execute(
         "test-llm",
         LLMRequest {
             headers: serde_json::Map::new(),
@@ -78,7 +78,7 @@ async fn test_runtime_registers_and_passes_calls_through() {
     assert_eq!(llm_result, serde_json::json!({"response": "ok"}));
 
     let tool_func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let tool_result = nat_nexus_tool_call_execute(
+    let tool_result = nemo_flow_tool_call_execute(
         "search",
         serde_json::json!({"query": "test"}),
         tool_func,
@@ -100,10 +100,12 @@ async fn test_runtime_validate_unknown_component_policy() {
         components: vec![ComponentSpec::new("future_component")],
         ..OptimizerConfig::default()
     });
-    assert!(report
-        .diagnostics
-        .iter()
-        .any(|diag| diag.code == "optimizer.unknown_component"));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.code == "optimizer.unknown_component")
+    );
 
     let err = OptimizerRuntime::new(OptimizerConfig {
         policy: ConfigPolicy {
@@ -132,10 +134,12 @@ fn test_external_component_warns_when_plugin_kind_is_unknown() {
         }],
         ..OptimizerConfig::default()
     });
-    assert!(report
-        .diagnostics
-        .iter()
-        .any(|diag| diag.code == "optimizer.unknown_plugin_kind"));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.code == "optimizer.unknown_plugin_kind")
+    );
 }
 
 struct NativeTestFactory;
@@ -209,7 +213,7 @@ async fn test_custom_component_factory_registers_runtime_behavior() {
     .unwrap();
 
     runtime.register().await.unwrap();
-    let request = nat_nexus_llm_request_intercepts(
+    let request = nemo_flow_llm_request_intercepts(
         "test-model",
         LLMRequest {
             headers: serde_json::Map::new(),
@@ -301,13 +305,14 @@ impl HostedPluginHandler for HeaderPluginHandler {
                         }
                         chunks.push(Ok(chunk));
                     }
-                    Ok(Box::pin(tokio_stream::iter(chunks))
+                    let stream = Box::pin(tokio_stream::iter(chunks))
                         as Pin<
                             Box<
-                                dyn tokio_stream::Stream<Item = nvidia_nat_nexus_core::Result<Json>>
+                                dyn tokio_stream::Stream<Item = nemo_flow_core::Result<Json>>
                                     + Send,
                             >,
-                        >)
+                        >;
+                    Ok(stream)
                 })
             }),
         )
@@ -337,7 +342,7 @@ async fn test_hosted_plugin_registers_request_and_execution_intercepts() {
     .unwrap();
 
     runtime.register().await.unwrap();
-    let request = nat_nexus_llm_request_intercepts(
+    let request = nemo_flow_llm_request_intercepts(
         "test-model",
         LLMRequest {
             headers: serde_json::Map::new(),
@@ -348,7 +353,7 @@ async fn test_hosted_plugin_registers_request_and_execution_intercepts() {
     assert_eq!(request.headers.get("x-hosted-plugin"), Some(&json!("set")));
 
     let tool_func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let tool_result = nat_nexus_tool_call_execute(
+    let tool_result = nemo_flow_tool_call_execute(
         "search",
         json!({"query": "test"}),
         tool_func,
@@ -363,7 +368,7 @@ async fn test_hosted_plugin_registers_request_and_execution_intercepts() {
 
     let llm_func: LlmExecutionNextFn =
         Arc::new(|_req: LLMRequest| Box::pin(async move { Ok(json!({"response": "ok"})) }));
-    let llm_result = nat_nexus_llm_call_execute(
+    let llm_result = nemo_flow_llm_call_execute(
         "test-llm",
         LLMRequest {
             headers: serde_json::Map::new(),
@@ -387,15 +392,13 @@ async fn test_hosted_plugin_registers_request_and_execution_intercepts() {
             let chunks = vec![Ok(json!({"streamed": true}))];
             Ok(Box::pin(tokio_stream::iter(chunks))
                 as Pin<
-                    Box<
-                        dyn tokio_stream::Stream<Item = nvidia_nat_nexus_core::Result<Json>> + Send,
-                    >,
+                    Box<dyn tokio_stream::Stream<Item = nemo_flow_core::Result<Json>> + Send>,
                 >)
         })
     });
     let collected = Arc::new(StdMutex::new(Vec::new()));
     let collected_for_closure = collected.clone();
-    let mut stream = nat_nexus_llm_stream_call_execute(
+    let mut stream = nemo_flow_llm_stream_call_execute(
         "test-stream-llm",
         LLMRequest {
             headers: serde_json::Map::new(),
@@ -487,8 +490,8 @@ async fn test_hosted_plugin_registration_rolls_back_partial_work() {
     let err = runtime.register().await.unwrap_err();
     assert!(err.to_string().contains("simulated hosted plugin failure"));
 
-    nat_nexus_register_subscriber("failing_plugin_subscriber", Arc::new(|_| {})).unwrap();
-    nvidia_nat_nexus_core::nat_nexus_deregister_subscriber("failing_plugin_subscriber").unwrap();
+    nemo_flow_register_subscriber("failing_plugin_subscriber", Arc::new(|_| {})).unwrap();
+    nemo_flow_core::nemo_flow_deregister_subscriber("failing_plugin_subscriber").unwrap();
 
     assert!(deregister_hosted_plugin_handler("test.failing_plugin"));
 }

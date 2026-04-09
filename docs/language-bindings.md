@@ -5,11 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # Language Bindings
 
-Nexus provides native bindings for Python, Node.js, Go, and WebAssembly. All bindings mirror the full API surface: scopes, tools, LLM, guardrails, intercepts, subscribers, and ATIF export.
+NeMo Flow provides native bindings for Python, Node.js, Go, and WebAssembly. All bindings mirror the full API surface: scopes, tools, LLM, guardrails, intercepts, subscribers, and ATIF export.
 
 Across all bindings, subscriber callbacks run synchronously on the calling
-thread after Nexus snapshots the subscriber list and releases its runtime
-locks. They may call back into Nexus APIs, but they should remain lightweight
+thread after NeMo Flow snapshots the subscriber list and releases its runtime
+locks. They may call back into NeMo Flow APIs, but they should remain lightweight
 because they still execute on the request path.
 
 ## Architecture
@@ -26,12 +26,12 @@ graph TD
     subgraph "Binding Layers"
         PYO3["PyO3 (abi3, Python 3.11+)"]
         NAPI["NAPI-RS (Node.js addon)"]
-        FFI["C FFI (cbindgen → nat_nexus.h)"]
+        FFI["C FFI (cbindgen → nemo_flow.h)"]
         WASM["wasm-bindgen"]
     end
 
     subgraph "Core"
-        CORE["nvidia-nat-nexus-core (Rust)"]
+        CORE["nemo-flow-core (Rust)"]
     end
 
     PY --> PYO3 --> CORE
@@ -44,22 +44,22 @@ graph TD
 
 | Aspect | Python | Go | Node.js | WASM | FFI/C |
 |--------|--------|----|---------|------|-------|
-| Functions | `snake_case` | `PascalCase` | `camelCase` | `camelCase` | `nat_nexus_snake_case` |
+| Functions | `snake_case` | `PascalCase` | `camelCase` | `camelCase` | `nemo_flow_snake_case` |
 | Types | `PascalCase` | `PascalCase` | `PascalCase` | `PascalCase` | `FfiPascalCase` |
-| Enums | `ScopeType.Agent` | `ScopeTypeAgent` | `ScopeType.Agent` | `ScopeType.Agent` | `NatNexusScopeTypeAgent` |
-| Errors | `RuntimeError` | `error` | JS exception | JS exception | `NatNexusStatus` + `nat_nexus_last_error()` |
+| Enums | `ScopeType.Agent` | `ScopeTypeAgent` | `ScopeType.Agent` | `ScopeType.Agent` | `NemoFlowScopeTypeAgent` |
+| Errors | `RuntimeError` | `error` | JS exception | JS exception | `NemoFlowStatus` + `nemo_flow_last_error()` |
 
 ## Rust Core Notes
 
-Direct Rust users of `nvidia-nat-nexus-core` should note that
+Direct Rust users of `nemo-flow-core` should note that
 `EventSubscriberFn` is an `Arc<dyn Fn(&Event) + Send + Sync>`. Register
 subscribers with `Arc::new(...)`, not `Box::new(...)`.
 
 If you want OTLP export without adding exporter logic to your own callback,
-use the separate `nvidia-nat-nexus-otel` crate. It turns Nexus lifecycle
+use the separate `nemo-flow-otel` crate. It turns NeMo Flow lifecycle
 events into OpenTelemetry spans and exposes a normal `EventSubscriberFn`.
 If you want OTLP export with OpenInference semantic conventions, use the
-separate `nvidia-nat-nexus-openinference` crate instead.
+separate `nemo-flow-openinference` crate instead.
 
 ## OpenTelemetry
 
@@ -79,13 +79,13 @@ full per-language setup examples.
 Minimal examples:
 
 ```python
-import nat_nexus
+import nemo_flow
 
-config = nat_nexus.OpenTelemetryConfig()
+config = nemo_flow.OpenTelemetryConfig()
 config.endpoint = "http://localhost:4318/v1/traces"
 config.service_name = "demo-agent"
 
-subscriber = nat_nexus.OpenTelemetrySubscriber(config)
+subscriber = nemo_flow.OpenTelemetrySubscriber(config)
 subscriber.register("otel")
 ```
 
@@ -120,13 +120,13 @@ per-language setup examples.
 Minimal examples:
 
 ```python
-import nat_nexus
+import nemo_flow
 
-config = nat_nexus.OpenInferenceConfig()
+config = nemo_flow.OpenInferenceConfig()
 config.endpoint = "http://localhost:4318/v1/traces"
 config.service_name = "demo-agent"
 
-subscriber = nat_nexus.OpenInferenceSubscriber(config)
+subscriber = nemo_flow.OpenInferenceSubscriber(config)
 subscriber.register("openinference")
 ```
 
@@ -143,18 +143,18 @@ subscriber.register("openinference");
 ```
 
 ```go
-config := nat_nexus.NewOpenInferenceConfig()
+config := nemo_flow.NewOpenInferenceConfig()
 config.Endpoint = "http://localhost:4318/v1/traces"
 config.ServiceName = "demo-agent"
 
-subscriber, err := nat_nexus.NewOpenInferenceSubscriber(config)
+subscriber, err := nemo_flow.NewOpenInferenceSubscriber(config)
 ```
 
 ```javascript
 import init, {
   defaultOpenInferenceConfig,
   OpenInferenceSubscriber,
-} from "./pkg/nvidia_nat_nexus_wasm.js";
+} from "./pkg/nemo_flow_wasm.js";
 
 await init();
 
@@ -167,18 +167,18 @@ subscriber.register("openinference");
 ```
 
 ```go
-config := nat_nexus.NewOpenTelemetryConfig()
+config := nemo_flow.NewOpenTelemetryConfig()
 config.Endpoint = "http://localhost:4318/v1/traces"
 config.ServiceName = "demo-agent"
 
-subscriber, err := nat_nexus.NewOpenTelemetrySubscriber(config)
+subscriber, err := nemo_flow.NewOpenTelemetrySubscriber(config)
 ```
 
 ```javascript
 import init, {
   defaultOpenTelemetryConfig,
   OpenTelemetrySubscriber,
-} from "./pkg/nvidia_nat_nexus_wasm.js";
+} from "./pkg/nemo_flow_wasm.js";
 
 await init();
 
@@ -192,15 +192,15 @@ subscriber.register("otel");
 
 ## Callback Contracts
 
-Nexus intentionally distinguishes fallible callback surfaces from infallible
+NeMo Flow intentionally distinguishes fallible callback surfaces from infallible
 ones:
 
 | Surface | Contract | Failure Behavior |
 |--------|----------|------------------|
 | Sanitize guardrails | Infallible | Handle failures inside the callback; there is no propagated error channel |
-| Conditional execution guardrails | Fallible | Callback failure aborts the originating Nexus call |
-| Request intercepts | Fallible | Callback failure aborts the originating Nexus call |
-| Execution intercepts | Fallible | Callback failure aborts the originating Nexus call |
+| Conditional execution guardrails | Fallible | Callback failure aborts the originating NeMo Flow call |
+| Request intercepts | Fallible | Callback failure aborts the originating NeMo Flow call |
+| Execution intercepts | Fallible | Callback failure aborts the originating NeMo Flow call |
 | Stream collector | Fallible | Callback failure aborts the stream |
 | Stream finalizer | Infallible | Handle failures inside the callback; there is no propagated error channel |
 | Subscribers | Infallible | Handle failures inside the callback; there is no propagated error channel |
@@ -210,10 +210,10 @@ Language-specific error surfacing:
 - Rust uses `Result<...>` for fallible conditionals, request intercepts,
   execution intercepts, and stream collectors.
 - Python uses normal callback return types; raising an exception from a
-  fallible callback propagates as `RuntimeError` from the originating Nexus API
+  fallible callback propagates as `RuntimeError` from the originating NeMo Flow API
   call.
 - Node.js and WASM use normal callback return types; throwing from a fallible
-  callback propagates as the thrown JS exception from the originating Nexus API
+  callback propagates as the thrown JS exception from the originating NeMo Flow API
   call.
 - Go follows the FFI callback surface, which remains the least expressive
   binding here; consult the Go API docs before assuming parity with the higher
@@ -236,7 +236,7 @@ uv run pytest  # Run tests
 ### Module Structure
 
 ```
-python/nat_nexus/
+python/nemo_flow/
   __init__.py       # Re-exports, ContextVar-based scope isolation
   scope.py          # Scope operations
   tools.py          # Tool lifecycle
@@ -250,7 +250,7 @@ python/nat_nexus/
   typed.py          # Codec-based typed wrappers
 ```
 
-Built-in codec classes live in `nat_nexus.codecs`:
+Built-in codec classes live in `nemo_flow.codecs`:
 `OpenAIChatCodec`, `OpenAIResponsesCodec`, `AnthropicMessagesCodec`.
 Each implements both `LlmCodec` (request decode/encode) and
 `LlmResponseCodec` (response decode).
@@ -259,10 +259,10 @@ The Python package wraps a PyO3 native extension (`_native`) built with the stab
 
 ### Optimizer Runtime
 
-Python exposes typed optimizer helpers in `nat_nexus.optimizer`:
+Python exposes typed optimizer helpers in `nemo_flow.optimizer`:
 
 ```python
-from nat_nexus.optimizer import (
+from nemo_flow.optimizer import (
     BackendSpec,
     OptimizerConfig,
     OptimizerRuntime,
@@ -289,7 +289,7 @@ Python can register hosted optimizer plugins that the Rust optimizer runtime
 calls during validation and registration.
 
 ```python
-from nat_nexus.optimizer import (
+from nemo_flow.optimizer import (
     ExternalComponent,
     OptimizerConfig,
     OptimizerRuntime,
@@ -337,62 +337,62 @@ runtime = OptimizerRuntime(
 ### Usage
 
 ```python
-import nat_nexus
+import nemo_flow
 
 # Guardrails
-nat_nexus.guardrails.register_tool_conditional_execution(
+nemo_flow.guardrails.register_tool_conditional_execution(
     "block_dangerous", 1,
     lambda name, args: "blocked" if name == "rm" else None,
 )
 
 # Intercepts
-nat_nexus.intercepts.register_tool_request(
+nemo_flow.intercepts.register_tool_request(
     "add_context", 1, False,
     lambda name, args: {**args, "context": "injected"},
 )
 
 # Scope Context Management
-with nat_nexus.scope.scope("my_agent", nat_nexus.ScopeType.Agent) as handle:
+with nemo_flow.scope.scope("my_agent", nemo_flow.ScopeType.Agent) as handle:
     # Inside this block, the scope "my_agent" is active
     ...
 
 # Alternatively, manual scope push/pop:
-handle = nat_nexus.scope.push("my_agent", nat_nexus.ScopeType.Agent)
-nat_nexus.scope.pop(handle)
+handle = nemo_flow.scope.push("my_agent", nemo_flow.ScopeType.Agent)
+nemo_flow.scope.pop(handle)
 
 # The following examples assume you are inside an active scope context.
 # Some require running inside of a coroutine (the ones that use an `await` expression).
 
 # Tool execution
-result = await nat_nexus.tools.execute("search", {"q": "test"}, search_func)
+result = await nemo_flow.tools.execute("search", {"q": "test"}, search_func)
 
 # LLM execution
-request = nat_nexus.LLMRequest(
+request = nemo_flow.LLMRequest(
     headers={"Authorization": "Bearer ..."},
     content={"messages": [{"role": "user", "content": "Hello"}], "model": "gpt-4"},
 )
-response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
+response = await nemo_flow.llm.execute("gpt-4", request, llm_func)
 ```
 
 ### Scope-Local Middleware
 
 ```python
-import nat_nexus
+import nemo_flow
 
-handle = nat_nexus.scope.push("session", nat_nexus.ScopeType.Agent)
+handle = nemo_flow.scope.push("session", nemo_flow.ScopeType.Agent)
 
 # Register middleware bound to this scope
-nat_nexus.scope_local.register_tool_conditional_execution(
+nemo_flow.scope_local.register_tool_conditional_execution(
     handle, "session_guard", 10,
     lambda name, args: "blocked" if name == "rm" else None,
 )
-nat_nexus.scope_local.register_subscriber(
+nemo_flow.scope_local.register_subscriber(
     handle, "session_logger", lambda event: print(event.name),
 )
 
 # ... middleware is active while scope is on the stack ...
 
-nat_nexus.scope.pop(handle)  # both registrations automatically removed
+nemo_flow.scope.pop(handle)  # both registrations automatically removed
 ```
 
 During the scope's `Start` callback, `get_handle()` sees `handle` as the active
@@ -406,16 +406,16 @@ Python uses `contextvars.ContextVar` for async-safe per-task isolation. Each `as
 ```python
 async def handle_request():
     # get_scope_stack() lazily creates an isolated stack per task
-    nat_nexus.get_scope_stack()
+    nemo_flow.get_scope_stack()
     # All scope operations now use this isolated stack
 ```
 
 Check whether a scope stack is active, and propagate to worker threads:
 
 ```python
-if nat_nexus.scope_stack_active():
-    stack = nat_nexus.propagate_scope_to_thread()
-    # Pass `stack` to worker, call nat_nexus.set_thread_scope_stack(stack) there
+if nemo_flow.scope_stack_active():
+    stack = nemo_flow.propagate_scope_to_thread()
+    # Pass `stack` to worker, call nemo_flow.set_thread_scope_stack(stack) there
 ```
 
 ## Node.js
@@ -595,18 +595,18 @@ Node hosted plugin contexts expose:
 
 ```bash
 # Build the FFI shared library first
-cargo build --release -p nvidia-nat-nexus-ffi
+cargo build --release -p nemo-flow-ffi
 
 # Run Go tests
-cd go/nat_nexus
+cd go/nemo_flow
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" go test -v ./...
 ```
 
 ### Package Structure
 
 ```
-go/nat_nexus/
-  nat_nexus.go        # CGo declarations, core bindings
+go/nemo_flow/
+  nemo_flow.go        # CGo declarations, core bindings
   types.go          # Type definitions (ScopeHandle, ToolHandle, etc.)
   stream.go         # LLM stream handling
   callbacks.go      # Go trampolines for Rust callbacks
@@ -626,7 +626,7 @@ import (
     "encoding/json"
     "fmt"
 
-    "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus"
+    "github.com/NVIDIA/NeMo-Flow/go/nemo_flow"
 )
 
 func searchFunc(args json.RawMessage) (json.RawMessage, error) {
@@ -643,10 +643,10 @@ func llmFunc(request json.RawMessage) (json.RawMessage, error) {
 
 func main() {
     // Scopes
-    handle, _ := nat_nexus.PushScope("my_agent", nat_nexus.ScopeTypeAgent)
+    handle, _ := nemo_flow.PushScope("my_agent", nemo_flow.ScopeTypeAgent)
 
     // Tool execution
-    result, _ := nat_nexus.ToolCallExecute("search", json.RawMessage(`{"q": "test"}`), searchFunc)
+    result, _ := nemo_flow.ToolCallExecute("search", json.RawMessage(`{"q": "test"}`), searchFunc)
 
     fmt.Println("tool result:", string(result))
 
@@ -659,10 +659,10 @@ func main() {
             "model":    "gpt-4",
         },
     }
-    response, _ := nat_nexus.LlmCallExecute("gpt-4", request, llmFunc, nat_nexus.WithLLMModelName("gpt-4"))
+    response, _ := nemo_flow.LlmCallExecute("gpt-4", request, llmFunc, nemo_flow.WithLLMModelName("gpt-4"))
     fmt.Println("llm response:", string(response))
 
-    nat_nexus.PopScope(handle)
+    nemo_flow.PopScope(handle)
 }
 ```
 
@@ -670,14 +670,14 @@ func main() {
 
 ```go
 import (
-    "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus"
-    "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/scope"
+    "github.com/NVIDIA/NeMo-Flow/go/nemo_flow"
+    "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/scope"
 )
 
-handle, _ := scope.Push("session", nat_nexus.ScopeTypeAgent, 0, nil)
+handle, _ := scope.Push("session", nemo_flow.ScopeTypeAgent, 0, nil)
 
 // Register middleware bound to this scope
-nat_nexus.ScopeRegisterToolConditionalExecution(handle, "session_guard", 10,
+nemo_flow.ScopeRegisterToolConditionalExecution(handle, "session_guard", 10,
     func(name string, args json.RawMessage) *string {
         if name == "rm" {
             reason := "blocked"
@@ -686,7 +686,7 @@ nat_nexus.ScopeRegisterToolConditionalExecution(handle, "session_guard", 10,
         return nil
     },
 )
-nat_nexus.ScopeRegisterSubscriber(handle, "session_logger",
+nemo_flow.ScopeRegisterSubscriber(handle, "session_logger",
     func(event json.RawMessage) { fmt.Println("event:", string(event)) },
 )
 
@@ -713,7 +713,7 @@ Go exposes typed optimizer config builders and a synchronous runtime wrapper
 through the `optimizer` subpackage:
 
 ```go
-import optimizer "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/optimizer"
+import optimizer "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/optimizer"
 
 config := optimizer.NewConfig()
 config.State = &optimizer.StateConfig{
@@ -747,7 +747,7 @@ context for adding subscribers and intercepts:
 import (
     "encoding/json"
 
-    optimizer "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/optimizer"
+    optimizer "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/optimizer"
 )
 
 pluginKind := "example.header_plugin"
@@ -798,7 +798,7 @@ config.Components = []optimizer.ComponentSpec{
 Go goroutines use `ScopeStack.Run()` which pins the goroutine to an OS thread:
 
 ```go
-stack, _ := nat_nexus.NewScopeStack()
+stack, _ := nemo_flow.NewScopeStack()
 defer stack.Close()
 
 go func() {
@@ -807,7 +807,7 @@ go func() {
         scope.Push("agent", scope.TypeAgent)
 
         // Check if a scope stack is explicitly bound
-        if nat_nexus.ScopeStackActive() {
+        if nemo_flow.ScopeStackActive() {
             // ...
         }
     })
@@ -822,15 +822,15 @@ go func() {
 wasm-pack build crates/wasm --scope nvidia # Produces pkg/ with .wasm, .js, .d.ts
 
 # Unit tests
-cargo test -p nat-nexus-wasm
+cargo test -p nemo-flow-wasm
 
 # Integration tests
 wasm-pack test --node crates/wasm
 ```
 
-The Cargo package remains `nat-nexus-wasm`, while the compiled WASM library
-target and generated npm package are NVIDIA-branded (`nvidia_nat_nexus_wasm`
-and `@nvidia/nat-nexus-wasm`).
+The Cargo package remains `nemo-flow-wasm`, while the compiled WASM library
+target and generated npm package are NVIDIA-branded (`nemo_flow_wasm`
+and `@nvidia/nemo-flow-wasm`).
 
 ### Build Targets
 
@@ -858,7 +858,7 @@ When using `--target web`, you must call the default-exported `init()` function
 before invoking any other API:
 
 ```javascript
-import init, { pushScope, popScope } from './pkg/nvidia_nat_nexus_wasm.js';
+import init, { pushScope, popScope } from './pkg/nemo_flow_wasm.js';
 
 await init();  // loads and instantiates the .wasm binary
 // Now the API is ready
@@ -876,7 +876,7 @@ import init, {
     toolCallExecute,
     registerToolConditionalExecutionGuardrail,
     SCOPE_TYPE_AGENT,
-} from './pkg/nvidia_nat_nexus_wasm.js';
+} from './pkg/nemo_flow_wasm.js';
 
 // Required for --target web; no-op when using bundler or nodejs targets
 await init();
@@ -923,7 +923,7 @@ import {
     pushScope, popScope,
     scope_register_tool_conditional_execution,
     scope_register_subscriber,
-} from './pkg/nvidia_nat_nexus_wasm.js';
+} from './pkg/nemo_flow_wasm.js';
 
 const handle = pushScope("session", 0 /* SCOPE_TYPE_AGENT */, null, null);
 
@@ -947,7 +947,7 @@ The WASM binding uses plain JavaScript objects for optimizer config and exposes
 the optimizer surface through `optimizer.js`:
 
 ```javascript
-import init from "./pkg/nvidia_nat_nexus_wasm.js";
+import init from "./pkg/nemo_flow_wasm.js";
 import {
   Runtime,
   validateConfig,
@@ -978,7 +978,7 @@ JavaScript, then activate it through `external_component` in the optimizer
 config:
 
 ```javascript
-import init from './pkg/nvidia_nat_nexus_wasm.js';
+import init from './pkg/nemo_flow_wasm.js';
 import {
     Runtime,
     registerPlugin,
@@ -1052,7 +1052,7 @@ import init, {
     pushScope, popScope,
     llmStreamCallExecute,
     SCOPE_TYPE_AGENT,
-} from './pkg/nvidia_nat_nexus_wasm.js';
+} from './pkg/nemo_flow_wasm.js';
 
 await init();
 
@@ -1111,7 +1111,7 @@ the scope remains active until the Promise settles (resolves or rejects),
 making it safe for async workflows:
 
 ```javascript
-import { withScope, toolCallExecute, SCOPE_TYPE_AGENT } from './pkg/nvidia_nat_nexus_wasm.js';
+import { withScope, toolCallExecute, SCOPE_TYPE_AGENT } from './pkg/nemo_flow_wasm.js';
 
 // Synchronous callback — scope is popped immediately on return
 const syncResult = withScope("sync_op", SCOPE_TYPE_AGENT, (handle) => {
@@ -1142,7 +1142,7 @@ Cross-Origin-Embedder-Policy: require-corp
 ```
 
 Without these headers, browsers will block `SharedArrayBuffer` usage and
-the WASM module may fail to initialize. Note that Nexus WASM is
+the WASM module may fail to initialize. Note that NeMo Flow WASM is
 single-threaded by default, so `SharedArrayBuffer` is only required if you
 opt into threaded builds (e.g., with `wasm-bindgen-rayon`).
 
@@ -1165,14 +1165,14 @@ opt into threaded builds (e.g., with `wasm-bindgen-rayon`).
 | Context isolation | `contextvars` + `scope_stack_active()` | `ScopeStack.Run()` + `ScopeStackActive()` | `setThreadScopeStack()` + `scopeStackActive()` | `setThreadScopeStack()` + `scopeStackActive()` |
 | Callback pattern | `PyAny` → closure | C trampolines | `ThreadsafeFunction` | `js_sys::Function` |
 | Stream support | AsyncIterator | Channel-based | Push-based bridge | Async iterator |
-| Typed wrappers | `nat_nexus.typed` | — | `typed.js` | — |
-| Built-in codecs | `nat_nexus.codecs.OpenAIChatCodec`, `nat_nexus.codecs.OpenAIResponsesCodec`, `nat_nexus.codecs.AnthropicMessagesCodec` | `NewOpenAIChatCodec()`, `NewOpenAIResponsesCodec()`, `NewAnthropicMessagesCodec()` | `OpenAIChatCodec`, `OpenAIResponsesCodec`, `AnthropicMessagesCodec` | `WasmOpenAIChatCodec`, `WasmOpenAIResponsesCodec`, `WasmAnthropicMessagesCodec` |
+| Typed wrappers | `nemo_flow.typed` | — | `typed.js` | — |
+| Built-in codecs | `nemo_flow.codecs.OpenAIChatCodec`, `nemo_flow.codecs.OpenAIResponsesCodec`, `nemo_flow.codecs.AnthropicMessagesCodec` | `NewOpenAIChatCodec()`, `NewOpenAIResponsesCodec()`, `NewAnthropicMessagesCodec()` | `OpenAIChatCodec`, `OpenAIResponsesCodec`, `AnthropicMessagesCodec` | `WasmOpenAIChatCodec`, `WasmOpenAIResponsesCodec`, `WasmAnthropicMessagesCodec` |
 | Response codec param | `response_codec=` on execute/stream_execute | `WithLLMResponseCodec(codec)` | `responseCodecDecode` param | `response_codec_decode` param |
 | Memory management | GC | Manual (`Free`/`Close`) | GC | GC |
 
 ## Error Handling
 
-All bindings map core `NexusError` variants to language-appropriate errors:
+All bindings map core `FlowError` variants to language-appropriate errors:
 
 | Error | Python | Go | Node.js / WASM |
 |-------|--------|----|-----------------|
@@ -1182,4 +1182,4 @@ All bindings map core `NexusError` variants to language-appropriate errors:
 | `ScopeStackEmpty` | `RuntimeError` | `error` | thrown exception |
 | `Internal` | `RuntimeError` | `error` | thrown exception |
 
-Go additionally provides the FFI pattern of `NatNexusStatus` return codes with `nat_nexus_last_error()` for the error message string.
+Go additionally provides the FFI pattern of `NemoFlowStatus` return codes with `nemo_flow_last_error()` for the error message string.

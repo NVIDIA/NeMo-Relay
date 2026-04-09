@@ -16,11 +16,11 @@ use std::sync::{Arc, Mutex};
 use pyo3::prelude::*;
 use pyo3_async_runtimes::TaskLocals;
 
-use nvidia_nat_nexus_optimizer::error::{OptimizerError, Result};
-use nvidia_nat_nexus_optimizer::storage::StorageBackendDyn;
-use nvidia_nat_nexus_optimizer::trie::serialization::TrieEnvelope;
-use nvidia_nat_nexus_optimizer::trie::AccumulatorState;
-use nvidia_nat_nexus_optimizer::types::{ExecutionPlan, RunRecord};
+use nemo_flow_optimizer::error::{OptimizerError, Result};
+use nemo_flow_optimizer::storage::StorageBackendDyn;
+use nemo_flow_optimizer::trie::AccumulatorState;
+use nemo_flow_optimizer::trie::serialization::TrieEnvelope;
+use nemo_flow_optimizer::types::{ExecutionPlan, RunRecord};
 
 use crate::convert::{json_to_py, py_to_json};
 
@@ -66,7 +66,8 @@ impl PyStorageBackend {
             return Ok(Some(locals.clone()));
         }
 
-        match pyo3_async_runtimes::tokio::get_current_locals(py) {
+        let current_locals = pyo3_async_runtimes::tokio::get_current_locals(py);
+        match current_locals {
             Ok(locals) => {
                 *guard = Some(locals.clone());
                 Ok(Some(locals))
@@ -80,14 +81,19 @@ impl PyStorageBackend {
         py: Python<'_>,
         coro: Bound<'_, PyAny>,
     ) -> Result<PyAsyncResult> {
-        if let Some(locals) = Self::get_or_capture_task_locals(task_locals, py)? {
-            let fut = pyo3_async_runtimes::into_future_with_locals(&locals, coro)
-                .map_err(|e| OptimizerError::Internal(format!("into_future_with_locals: {e}")))?;
-            Ok(Box::pin(fut))
-        } else {
-            let fut = pyo3_async_runtimes::tokio::into_future(coro)
-                .map_err(|e| OptimizerError::Internal(format!("into_future: {e}")))?;
-            Ok(Box::pin(fut))
+        match Self::get_or_capture_task_locals(task_locals, py)? {
+            Some(locals) => {
+                let fut =
+                    pyo3_async_runtimes::into_future_with_locals(&locals, coro).map_err(|e| {
+                        OptimizerError::Internal(format!("into_future_with_locals: {e}"))
+                    })?;
+                Ok(Box::pin(fut))
+            }
+            None => {
+                let fut = pyo3_async_runtimes::tokio::into_future(coro)
+                    .map_err(|e| OptimizerError::Internal(format!("into_future: {e}")))?;
+                Ok(Box::pin(fut))
+            }
         }
     }
 }

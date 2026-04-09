@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #![allow(clippy::type_complexity)]
-//! JavaScript callable wrappers for Nexus callbacks.
+//! JavaScript callable wrappers for NeMo Flow callbacks.
 //!
 //! This module bridges JavaScript functions (received as NAPI `ThreadsafeFunction` values)
-//! into the Rust closure signatures expected by the Nexus core runtime. Each wrapper
+//! into the Rust closure signatures expected by the NeMo Flow core runtime. Each wrapper
 //! handles serialization of arguments to/from JSON and manages cross-thread communication
 //! between the Rust async runtime and the Node.js event loop.
 
@@ -17,11 +17,11 @@ use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFun
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
-use nvidia_nat_nexus_core::codec::{AnnotatedLLMRequest, LlmCodec};
-use nvidia_nat_nexus_core::types::LLMRequest;
-use nvidia_nat_nexus_core::{
-    LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionNextFn,
-    NexusError, Result, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
+use nemo_flow_core::codec::{AnnotatedLLMRequest, LlmCodec};
+use nemo_flow_core::types::LLMRequest;
+use nemo_flow_core::{
+    FlowError, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
+    LlmStreamExecutionNextFn, Result, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
 };
 
 use crate::convert::record_callback_error;
@@ -37,7 +37,7 @@ fn recv_json_or_null(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) ->
 
 fn recv_json_result(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) -> Result<Json> {
     rx.recv()
-        .map_err(|e| NexusError::Internal(format!("{error_prefix}: {e}")))
+        .map_err(|e| FlowError::Internal(format!("{error_prefix}: {e}")))
 }
 
 fn recv_json_or_value(
@@ -58,7 +58,7 @@ fn recv_option_string_result(
     match recv_json_result(rx, error_prefix)? {
         Json::Null => Ok(None),
         Json::String(value) => Ok(Some(value)),
-        other => Err(NexusError::Internal(format!(
+        other => Err(FlowError::Internal(format!(
             "{error_prefix}: expected string or null, got {other:?}",
         ))),
     }
@@ -84,7 +84,7 @@ fn recv_llm_request_result(
 ) -> Result<LLMRequest> {
     let result = recv_json_result(rx, error_prefix)?;
     serde_json::from_value(result).map_err(|e| {
-        NexusError::Internal(format!(
+        FlowError::Internal(format!(
             "{error_prefix}: failed to deserialize LLMRequest: {e}"
         ))
     })
@@ -109,13 +109,13 @@ pub fn wrap_js_tool_fn(
         );
         if status != napi::Status::Ok {
             record_callback_error(format!(
-                "nat_nexus: failed to queue JS tool callback: {status:?}"
+                "nemo_flow: failed to queue JS tool callback: {status:?}"
             ));
             return Json::Null;
         }
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
-        recv_json_or_null(rx, "nat_nexus: JS tool callback failed")
+        recv_json_or_null(rx, "nemo_flow: JS tool callback failed")
     })
 }
 
@@ -138,7 +138,7 @@ pub fn wrap_js_tool_conditional_fn(
             },
         );
         if status != napi::Status::Ok {
-            return Err(NexusError::Internal(format!(
+            return Err(FlowError::Internal(format!(
                 "failed to queue JS tool conditional callback: {status:?}",
             )));
         }
@@ -164,7 +164,7 @@ pub fn wrap_js_tool_request_intercept_fn(
             },
         );
         if status != napi::Status::Ok {
-            return Err(NexusError::Internal(format!(
+            return Err(FlowError::Internal(format!(
                 "failed to queue JS tool callback: {status:?}",
             )));
         }
@@ -190,11 +190,11 @@ pub fn wrap_js_tool_exec_fn(
                 },
             );
             if status != napi::Status::Ok {
-                return Err(NexusError::Internal(format!(
+                return Err(FlowError::Internal(format!(
                     "failed to queue JS tool execution callback: {status:?}",
                 )));
             }
-            rx.await.map_err(|e| NexusError::Internal(e.to_string()))
+            rx.await.map_err(|e| FlowError::Internal(e.to_string()))
         })
     })
 }
@@ -234,7 +234,7 @@ pub fn wrap_js_llm_request_intercept_fn(
                 },
             );
             if status != napi::Status::Ok {
-                return Err(NexusError::Internal(format!(
+                return Err(FlowError::Internal(format!(
                     "failed to queue JS LLM request intercept callback: {status:?}",
                 )));
             }
@@ -242,7 +242,7 @@ pub fn wrap_js_llm_request_intercept_fn(
 
             // Validate expected shape: { "request": {...}, "annotated": ... }
             let obj = result.as_object().ok_or_else(|| {
-                NexusError::Internal(
+                FlowError::Internal(
                     "JS LLM request intercept: expected object with 'request' and 'annotated' fields".to_string(),
                 )
             })?;
@@ -251,7 +251,7 @@ pub fn wrap_js_llm_request_intercept_fn(
                 obj.get("request").cloned().unwrap_or(Json::Null),
             )
             .map_err(|e| {
-                NexusError::Internal(format!(
+                FlowError::Internal(format!(
                     "JS LLM request intercept: failed to deserialize request: {e}"
                 ))
             })?;
@@ -259,7 +259,7 @@ pub fn wrap_js_llm_request_intercept_fn(
             let new_annotated: Option<AnnotatedLLMRequest> = match obj.get("annotated") {
                 Some(Json::Null) | None => None,
                 Some(val) => Some(serde_json::from_value(val.clone()).map_err(|e| {
-                    NexusError::Internal(format!(
+                    FlowError::Internal(format!(
                         "JS LLM request intercept: failed to deserialize annotated: {e}"
                     ))
                 })?),
@@ -290,7 +290,7 @@ pub fn wrap_js_llm_sanitize_request_fn(
         );
         if status != napi::Status::Ok {
             record_callback_error(format!(
-                "nat_nexus: failed to queue JS LLM sanitize request callback: {status:?}"
+                "nemo_flow: failed to queue JS LLM sanitize request callback: {status:?}"
             ));
             return request;
         }
@@ -298,7 +298,7 @@ pub fn wrap_js_llm_sanitize_request_fn(
         // errors through the type system. Log the error so failures are not silent.
         recv_llm_request_or_value(
             rx,
-            "nat_nexus: JS LLM sanitize request callback failed",
+            "nemo_flow: JS LLM sanitize request callback failed",
             request,
         )
     })
@@ -322,13 +322,13 @@ pub fn wrap_js_llm_response_fn(
         );
         if status != napi::Status::Ok {
             record_callback_error(format!(
-                "nat_nexus: failed to queue JS LLM response callback: {status:?}"
+                "nemo_flow: failed to queue JS LLM response callback: {status:?}"
             ));
             return response;
         }
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error and fall back to original response.
-        recv_json_or_value(rx, "nat_nexus: JS LLM response callback failed", response)
+        recv_json_or_value(rx, "nemo_flow: JS LLM response callback failed", response)
     })
 }
 
@@ -350,7 +350,7 @@ pub fn wrap_js_llm_conditional_fn(
             },
         );
         if status != napi::Status::Ok {
-            return Err(NexusError::Internal(format!(
+            return Err(FlowError::Internal(format!(
                 "failed to queue JS LLM conditional callback: {status:?}",
             )));
         }
@@ -380,11 +380,11 @@ pub fn wrap_js_llm_exec_fn(
                 },
             );
             if status != napi::Status::Ok {
-                return Err(NexusError::Internal(format!(
+                return Err(FlowError::Internal(format!(
                     "failed to queue JS LLM execution callback: {status:?}",
                 )));
             }
-            rx.await.map_err(|e| NexusError::Internal(e.to_string()))
+            rx.await.map_err(|e| FlowError::Internal(e.to_string()))
         })
     })
 }
@@ -404,9 +404,9 @@ pub fn wrap_js_collector_fn(
         if status == napi::Status::Ok {
             Ok(())
         } else {
-            let message = format!("nat_nexus: failed to queue JS collector callback: {status:?}");
+            let message = format!("nemo_flow: failed to queue JS collector callback: {status:?}");
             record_callback_error(message.clone());
-            Err(NexusError::Internal(message))
+            Err(FlowError::Internal(message))
         }
     })
 }
@@ -431,27 +431,27 @@ pub fn wrap_js_finalizer_fn(
         );
         if status != napi::Status::Ok {
             record_callback_error(format!(
-                "nat_nexus: failed to queue JS finalizer callback: {status:?}"
+                "nemo_flow: failed to queue JS finalizer callback: {status:?}"
             ));
             return Json::Null;
         }
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
-        recv_json_or_null(rx, "nat_nexus: JS finalizer callback failed")
+        recv_json_or_null(rx, "nemo_flow: JS finalizer callback failed")
     })
 }
 
 /// Wrap a JS function for event subscriber: `(event: JsEvent) => void`.
 pub fn wrap_js_event_subscriber(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> nvidia_nat_nexus_core::EventSubscriberFn {
+) -> nemo_flow_core::EventSubscriberFn {
     let func = Arc::new(func);
-    Arc::new(move |event: &nvidia_nat_nexus_core::Event| {
+    Arc::new(move |event: &nemo_flow_core::Event| {
         let event_json = serde_json::to_value(JsEvent::from(event)).unwrap_or(Json::Null);
         let status = func.call(event_json, ThreadsafeFunctionCallMode::NonBlocking);
         if status != napi::Status::Ok {
             record_callback_error(format!(
-                "nat_nexus: failed to queue JS event subscriber callback: {status:?}"
+                "nemo_flow: failed to queue JS event subscriber callback: {status:?}"
             ));
         }
     })
@@ -481,13 +481,13 @@ impl LlmCodec for NapiCodec {
             },
         );
         if status != napi::Status::Ok {
-            return Err(NexusError::Internal(format!(
+            return Err(FlowError::Internal(format!(
                 "failed to queue JS codec decode callback: {status:?}",
             )));
         }
         let result = recv_json_result(rx, "JS codec decode callback failed")?;
         serde_json::from_value(result).map_err(|e| {
-            NexusError::Internal(format!(
+            FlowError::Internal(format!(
                 "JS codec decode callback: failed to deserialize AnnotatedLLMRequest: {e}"
             ))
         })
@@ -507,7 +507,7 @@ impl LlmCodec for NapiCodec {
             },
         );
         if status != napi::Status::Ok {
-            return Err(NexusError::Internal(format!(
+            return Err(FlowError::Internal(format!(
                 "failed to queue JS codec encode callback: {status:?}",
             )));
         }
@@ -537,11 +537,11 @@ struct NapiResponseCodec {
     decode_response: Arc<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 }
 
-impl nvidia_nat_nexus_core::codec::LlmResponseCodec for NapiResponseCodec {
+impl nemo_flow_core::codec::LlmResponseCodec for NapiResponseCodec {
     fn decode_response(
         &self,
         response: &Json,
-    ) -> nvidia_nat_nexus_core::Result<nvidia_nat_nexus_core::codec::AnnotatedLLMResponse> {
+    ) -> nemo_flow_core::Result<nemo_flow_core::codec::AnnotatedLLMResponse> {
         let (tx, rx) = std::sync::mpsc::channel();
         let status = self.decode_response.call_with_return_value(
             response.clone(),
@@ -552,17 +552,15 @@ impl nvidia_nat_nexus_core::codec::LlmResponseCodec for NapiResponseCodec {
             },
         );
         if status != napi::Status::Ok {
-            return Err(nvidia_nat_nexus_core::NexusError::Internal(format!(
+            return Err(nemo_flow_core::FlowError::Internal(format!(
                 "decode_response call failed: {status:?}"
             )));
         }
         let result = rx.recv().map_err(|_| {
-            nvidia_nat_nexus_core::NexusError::Internal(
-                "decode_response callback did not return".into(),
-            )
+            nemo_flow_core::FlowError::Internal("decode_response callback did not return".into())
         })?;
         serde_json::from_value(result).map_err(|e| {
-            nvidia_nat_nexus_core::NexusError::Internal(format!(
+            nemo_flow_core::FlowError::Internal(format!(
                 "decode_response returned invalid AnnotatedLLMResponse: {e}"
             ))
         })
@@ -572,7 +570,7 @@ impl nvidia_nat_nexus_core::codec::LlmResponseCodec for NapiResponseCodec {
 /// Wrap a JS decode_response function into an `Arc<dyn LlmResponseCodec>`.
 pub fn wrap_js_response_codec(
     decode_response: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec> {
+) -> Arc<dyn nemo_flow_core::codec::LlmResponseCodec> {
     Arc::new(NapiResponseCodec {
         decode_response: Arc::new(decode_response),
     })
@@ -625,7 +623,7 @@ pub fn wrap_js_llm_exec_intercept_fn(
                 Box::pin(async move {
                     let next_request: LLMRequest = serde_json::from_value(next_request_json)
                         .map_err(|e| {
-                            NexusError::Internal(format!("invalid LLMRequest from JS next: {e}"))
+                            FlowError::Internal(format!("invalid LLMRequest from JS next: {e}"))
                         })?;
                     next(next_request).await
                 })
@@ -668,7 +666,7 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
                 Box::pin(async move {
                     let next_request: LLMRequest = serde_json::from_value(next_request_json)
                         .map_err(|e| {
-                            NexusError::Internal(format!("invalid LLMRequest from JS next: {e}"))
+                            FlowError::Internal(format!("invalid LLMRequest from JS next: {e}"))
                         })?;
                     let mut stream = next(next_request).await?;
                     let mut chunks = Vec::new();

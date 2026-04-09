@@ -3,13 +3,13 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# nvidia-nat-nexus-python
+# nemo-flow-python
 
-PyO3 Python bindings for the Nexus core runtime, built as a native C extension using the abi3 stable ABI.
+PyO3 Python bindings for the NeMo Flow core runtime, built as a native C extension using the abi3 stable ABI.
 
 ## Overview
 
-This crate compiles to a `_native` shared library (`.so` / `.pyd`) that the `nat_nexus` Python package imports. It wraps the full Nexus core API for Python, bridging Rust async with Python's `asyncio` via `pyo3-async-runtimes` and converting between Rust/Python types using `pythonize`.
+This crate compiles to a `_native` shared library (`.so` / `.pyd`) that the `nemo_flow` Python package imports. It wraps the full NeMo Flow core API for Python, bridging Rust async with Python's `asyncio` via `pyo3-async-runtimes` and converting between Rust/Python types using `pythonize`.
 
 ## What It Provides
 
@@ -17,7 +17,7 @@ This crate compiles to a `_native` shared library (`.so` / `.pyd`) that the `nat
 - **Async bridge** -- Rust `Future`s are bridged to Python coroutines through `pyo3-async-runtimes` with Tokio backend.
 - **abi3 stable ABI** -- Targets Python 3.11+ with a single compiled artifact that works across Python minor versions.
 - **Type conversion** -- Automatic conversion between Python dicts/lists and Rust `serde_json::Value` via `pythonize`.
-- **Callable wrapping** -- Python callables (sync and async) are wrapped for use as Nexus tool handlers, guardrails, and intercepts.
+- **Callable wrapping** -- Python callables (sync and async) are wrapped for use as NeMo Flow tool handlers, guardrails, and intercepts.
 
 ## Key Files
 

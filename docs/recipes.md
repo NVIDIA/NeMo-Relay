@@ -12,9 +12,9 @@ to demonstrate the runtime behavior.
 ## Add Event Logging
 
 ```python
-import nat_nexus
+import nemo_flow
 
-nat_nexus.subscribers.register(
+nemo_flow.subscribers.register(
     "logger",
     lambda event: print(f"[{event.kind}] {event.name} parent={event.parent_uuid}"),
 )
@@ -26,9 +26,9 @@ without introducing a full exporter.
 ## Export ATIF Trajectories
 
 ```python
-import nat_nexus
+import nemo_flow
 
-exporter = nat_nexus.AtifExporter(
+exporter = nemo_flow.AtifExporter(
     session_id="session-001",
     agent_name="demo-agent",
     agent_version="1.0",
@@ -49,7 +49,7 @@ Read [ATIF Export](atif-export.md) when you need the schema mapping details.
 ## Export Traces to OpenTelemetry
 
 ```rust
-use nvidia_nat_nexus_otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+use nemo_flow_otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     subscriber.register("otel")?;
 
-    // ... run Nexus-instrumented work here ...
+    // ... run NeMo Flow-instrumented work here ...
 
     subscriber.deregister("otel")?;
     subscriber.force_flush()?;
@@ -70,24 +70,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Use this when you want Nexus scopes, tool calls, LLM calls, and mark events to
+Use this when you want NeMo Flow scopes, tool calls, LLM calls, and mark events to
 show up in an OTLP-compatible backend such as the OpenTelemetry Collector,
 Jaeger, Tempo, or Honeycomb. For config fields, event mapping, lifecycle
 guidance, and binding-specific examples, see
 [Observability with OpenTelemetry](observability-with-opentelemetry.md).
 
 If you need Phoenix or another OpenInference-oriented backend instead, use
-`nvidia-nat-nexus-openinference` and
+`nemo-flow-openinference` and
 [Observability with OpenInference](observability-with-openinference.md).
 
 ## Register Scope-Local Middleware
 
 ```python
-import nat_nexus
+import nemo_flow
 
-handle = nat_nexus.scope.push("session", nat_nexus.ScopeType.Agent)
+handle = nemo_flow.scope.push("session", nemo_flow.ScopeType.Agent)
 
-nat_nexus.scope_local.register_tool_conditional_execution(
+nemo_flow.scope_local.register_tool_conditional_execution(
     handle,
     "session-guard",
     10,
@@ -98,7 +98,7 @@ try:
     # tool and LLM calls here see the scope-local middleware
     ...
 finally:
-    nat_nexus.scope.pop(handle)
+    nemo_flow.scope.pop(handle)
 ```
 
 Use this when middleware should apply only within one request, one tenant, or
@@ -110,7 +110,7 @@ one temporary agent session.
 import asyncio
 from dataclasses import dataclass
 
-import nat_nexus.typed as typed
+import nemo_flow.typed as typed
 
 
 @dataclass
@@ -145,21 +145,21 @@ works with dataclasses or Pydantic models.
 ```python
 import asyncio
 
-import nat_nexus
+import nemo_flow
 
 
 async def main() -> None:
-    runtime = nat_nexus.optimizer.OptimizerRuntime(
-        nat_nexus.optimizer.OptimizerConfig(
-            state=nat_nexus.optimizer.StateConfig(
-                backend=nat_nexus.optimizer.BackendSpec.in_memory()
+    runtime = nemo_flow.optimizer.OptimizerRuntime(
+        nemo_flow.optimizer.OptimizerConfig(
+            state=nemo_flow.optimizer.StateConfig(
+                backend=nemo_flow.optimizer.BackendSpec.in_memory()
             ),
             components=[
-                nat_nexus.optimizer.TelemetryComponent(
+                nemo_flow.optimizer.TelemetryComponent(
                     learners=["latency_sensitivity"]
                 ),
-                nat_nexus.optimizer.DynamoHintsComponent(),
-                nat_nexus.optimizer.ToolParallelismComponent(),
+                nemo_flow.optimizer.DynamoHintsComponent(),
+                nemo_flow.optimizer.ToolParallelismComponent(),
             ],
         )
     )
@@ -176,24 +176,24 @@ Use this for local development, tests, and single-process runs.
 ```python
 import asyncio
 
-import nat_nexus
+import nemo_flow
 
 
 async def main() -> None:
-    runtime = nat_nexus.optimizer.OptimizerRuntime(
-        nat_nexus.optimizer.OptimizerConfig(
-            state=nat_nexus.optimizer.StateConfig(
-                backend=nat_nexus.optimizer.BackendSpec.redis(
+    runtime = nemo_flow.optimizer.OptimizerRuntime(
+        nemo_flow.optimizer.OptimizerConfig(
+            state=nemo_flow.optimizer.StateConfig(
+                backend=nemo_flow.optimizer.BackendSpec.redis(
                     "redis://127.0.0.1:6379",
-                    "nexus:",
+                    "nemo_flow:",
                 )
             ),
             components=[
-                nat_nexus.optimizer.TelemetryComponent(
+                nemo_flow.optimizer.TelemetryComponent(
                     learners=["latency_sensitivity"]
                 ),
-                nat_nexus.optimizer.DynamoHintsComponent(),
-                nat_nexus.optimizer.ToolParallelismComponent(),
+                nemo_flow.optimizer.DynamoHintsComponent(),
+                nemo_flow.optimizer.ToolParallelismComponent(),
             ],
         )
     )
@@ -212,16 +212,16 @@ for the feature-flagged build requirements.
 ```python
 from concurrent.futures import ThreadPoolExecutor
 
-import nat_nexus
+import nemo_flow
 
 
 def worker(stack):
-    nat_nexus.set_thread_scope_stack(stack)
-    return nat_nexus.scope.get_handle().name
+    nemo_flow.set_thread_scope_stack(stack)
+    return nemo_flow.scope.get_handle().name
 
 
-with nat_nexus.scope.scope("thread-demo", nat_nexus.ScopeType.Agent):
-    stack = nat_nexus.propagate_scope_to_thread()
+with nemo_flow.scope.scope("thread-demo", nemo_flow.ScopeType.Agent):
+    stack = nemo_flow.propagate_scope_to_thread()
     with ThreadPoolExecutor() as pool:
         current_name = pool.submit(worker, stack).result()
         print(current_name)
@@ -239,7 +239,7 @@ Symptoms:
 Checklist:
 
 1. Ensure you pushed a scope before calling managed tool or LLM APIs.
-2. In Python async code, call `nat_nexus.get_scope_stack()` if an integration
+2. In Python async code, call `nemo_flow.get_scope_stack()` if an integration
    needs to force initialization before first use.
 3. For worker threads, propagate the stack explicitly with
    `propagate_scope_to_thread()` and `set_thread_scope_stack(...)`.

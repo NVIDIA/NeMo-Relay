@@ -1,7 +1,7 @@
 {
-  "name": "@nvidia/nat-nexus-node",
+  "name": "@nvidia/nemo-flow-node",
   "version": "0.1.0",
-  "description": "Nexus Node.js bindings via napi-rs",
+  "description": "NeMo Flow Node.js bindings via napi-rs",
   "main": "index.js",
   "types": "index.d.ts",
   "exports": {
@@ -19,7 +19,7 @@
     }
   },
   "napi": {
-    "name": "nat-nexus",
+    "name": "nemo-flow",
     "triples": {}
   },
   "scripts": {
