@@ -6,12 +6,13 @@
 import http.server
 import json
 import threading
-from typing import Any, cast
+from typing import TypedDict, cast
 from uuid import uuid4
 
 import pytest
 from nat_nexus import (
     AtifExporter,
+    JsonObject,
     LLMAttributes,
     LLMEndEvent,
     LLMRequest,
@@ -54,6 +55,12 @@ class _OtelCollectorHandler(http.server.BaseHTTPRequestHandler):
         return
 
 
+class _CollectorRequest(TypedDict):
+    path: str
+    headers: dict[str, str]
+    body: bytes
+
+
 class _OtelCollector:
     server: "_OtelCollectorServer"
 
@@ -74,13 +81,13 @@ class _OtelCollector:
     def endpoint(self) -> str:
         return f"http://127.0.0.1:{self.server.server_port}/v1/traces"
 
-    def wait_for_request(self, timeout: float = 5.0) -> dict[str, Any]:
+    def wait_for_request(self, timeout: float = 5.0) -> _CollectorRequest:
         assert self.server.request_event.wait(timeout), "timed out waiting for OTLP request"
         return self.server.requests[0]
 
 
 class _OtelCollectorServer(http.server.ThreadingHTTPServer):
-    requests: list[dict[str, Any]]
+    requests: list[_CollectorRequest]
     request_event: threading.Event
 
 
@@ -209,7 +216,7 @@ class TestLLMRequest:
 
     def test_headers_must_be_dict(self):
         with pytest.raises(TypeError, match="not an instance of 'dict'"):
-            LLMRequest(cast(Any, []), {"model": "gpt-4"})
+            LLMRequest(cast(dict[str, str], []), {"model": "gpt-4"})
 
 
 class TestHandleTypes:
@@ -413,12 +420,13 @@ class TestAtifExporterType:
             exported = exporter.export()
             exported_json_all = json.loads(exporter.export_json())
             exported_json = json.loads(exporter.export_json())
+            agent = cast(JsonObject, cast(JsonObject, exported)["agent"])
 
             assert exported_all["session_id"] == "session-types"
             assert exported["session_id"] == "session-types"
-            assert exported["agent"]["name"] == "py-agent"
-            assert exported["agent"]["tool_definitions"] == [{"name": "typed_tool"}]
-            assert exported["agent"]["extra"] == {"team": "qa"}
+            assert cast(str, agent["name"]) == "py-agent"
+            assert cast(list[JsonObject], agent["tool_definitions"]) == [{"name": "typed_tool"}]
+            assert cast(JsonObject, agent["extra"]) == {"team": "qa"}
             assert exported["steps"]
             assert exported_json_all["session_id"] == "session-types"
             assert exported_json["session_id"] == "session-types"
@@ -460,10 +468,10 @@ class TestOpenTelemetryTypes:
         config = OpenTelemetryConfig()
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
-            config.headers = cast(Any, [])
+            config.headers = cast(dict[str, str], [])
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
-            config.resource_attributes = {"env": cast(Any, 1)}
+            config.resource_attributes = cast(dict[str, str], {"env": 1})
 
     def test_subscriber_lifecycle_and_invalid_transport(self):
         config = OpenTelemetryConfig()
@@ -549,10 +557,10 @@ class TestOpenInferenceTypes:
         config = OpenInferenceConfig()
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
-            config.headers = cast(Any, [])
+            config.headers = cast(dict[str, str], [])
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
-            config.resource_attributes = {"env": cast(Any, 1)}
+            config.resource_attributes = cast(dict[str, str], {"env": 1})
 
     def test_subscriber_lifecycle_and_invalid_transport(self):
         config = OpenInferenceConfig()

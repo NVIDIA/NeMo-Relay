@@ -130,7 +130,7 @@ pub struct PyScopeAttributes {
 #[pymethods]
 impl PyScopeAttributes {
     #[new]
-    #[pyo3(signature = (value=0))]
+    #[pyo3(signature = (value: "int"=0), text_signature = "(value: int = 0)")]
     fn new(value: u32) -> Self {
         Self {
             inner: core_types::ScopeAttributes::from_bits_truncate(value),
@@ -197,7 +197,7 @@ pub struct PyToolAttributes {
 #[pymethods]
 impl PyToolAttributes {
     #[new]
-    #[pyo3(signature = (value=0))]
+    #[pyo3(signature = (value: "int"=0), text_signature = "(value: int = 0)")]
     fn new(value: u32) -> Self {
         Self {
             inner: core_types::ToolAttributes::from_bits_truncate(value),
@@ -257,7 +257,7 @@ pub struct PyLLMAttributes {
 #[pymethods]
 impl PyLLMAttributes {
     #[new]
-    #[pyo3(signature = (value=0))]
+    #[pyo3(signature = (value: "int"=0), text_signature = "(value: int = 0)")]
     fn new(value: u32) -> Self {
         Self {
             inner: core_types::LLMAttributes::from_bits_truncate(value),
@@ -592,6 +592,10 @@ impl PyLLMRequest {
     ///     headers: A dict of metadata key-value pairs.
     ///     content: The request payload (any JSON-serializable object).
     #[new]
+    #[pyo3(
+        signature = (headers: "dict[str, str]", content: "object"),
+        text_signature = "(headers: dict[str, str], content: object)"
+    )]
     fn new(headers: &Bound<'_, PyDict>, content: &Bound<'_, PyAny>) -> PyResult<Self> {
         let headers_json = py_to_json(headers.as_any())?;
         let headers_map = match headers_json {
@@ -1822,7 +1826,7 @@ impl PyAnnotatedLLMResponse {
 ///
 /// Example::
 ///
-///     from nat_nexus import OpenAIChatCodec
+///     from nat_nexus.codecs import OpenAIChatCodec
 ///     codec = OpenAIChatCodec()
 ///     annotated_req = codec.decode(request)
 ///     annotated_resp = codec.decode_response(response)
@@ -1883,7 +1887,7 @@ impl PyOpenAIChatCodec {
 ///
 /// Example::
 ///
-///     from nat_nexus import OpenAIResponsesCodec
+///     from nat_nexus.codecs import OpenAIResponsesCodec
 ///     codec = OpenAIResponsesCodec()
 ///     annotated_req = codec.decode(request)
 ///     annotated_resp = codec.decode_response(response)
@@ -1944,7 +1948,7 @@ impl PyOpenAIResponsesCodec {
 ///
 /// Example::
 ///
-///     from nat_nexus import AnthropicMessagesCodec
+///     from nat_nexus.codecs import AnthropicMessagesCodec
 ///     codec = AnthropicMessagesCodec()
 ///     annotated_req = codec.decode(request)
 ///     annotated_resp = codec.decode_response(response)

@@ -4,9 +4,10 @@
 """Tests for NeMo Agent Toolkit Nexus typed wrappers with explicit Codec protocol."""
 
 import dataclasses
+from typing import cast
 
 import pytest
-from nat_nexus import LLMRequest, intercepts, typed
+from nat_nexus import JsonObject, LLMRequest, intercepts, typed
 from nat_nexus.typed import BestEffortAnyCodec, Codec, DataclassCodec, JsonPassthrough
 
 # ---------------------------------------------------------------------------
@@ -719,12 +720,12 @@ class TestBestEffortAnyCodec:
 
     def test_faulty_model_dump_falls_back_to_pickle(self):
         encoded = self.codec.to_json(FaultyDumpValue())
-        assert "__nv_pickle__" in encoded
+        assert "__nv_pickle__" in cast(JsonObject, encoded)
 
     def test_unpickleable_value_falls_back_to_string(self):
-        encoded = self.codec.to_json(UnpickleableValue())
-        assert encoded["__nv_fallback_str__"].endswith(".UnpickleableValue")
-        assert encoded["data"] == "unpickleable"
+        encoded = cast(JsonObject, self.codec.to_json(UnpickleableValue()))
+        assert cast(str, encoded["__nv_fallback_str__"]).endswith(".UnpickleableValue")
+        assert cast(str, encoded["data"]) == "unpickleable"
 
     # -- from_json: non-dict inputs (the original bug) --
 
@@ -787,9 +788,9 @@ class TestBestEffortAnyCodec:
     # -- to_json: tagging --
 
     def test_to_json_dataclass_tagged(self):
-        encoded = self.codec.to_json(BEPoint(x=0, y=0))
+        encoded = cast(JsonObject, self.codec.to_json(BEPoint(x=0, y=0)))
         assert "__nv_dataclass__" in encoded
-        assert encoded["data"] == {"x": 0, "y": 0}
+        assert cast(JsonObject, encoded["data"]) == {"x": 0, "y": 0}
 
     def test_to_json_native_types_untagged(self):
         """JSON-native types should pass through without tags."""

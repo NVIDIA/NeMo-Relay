@@ -335,7 +335,7 @@ and `response_codec` (response) are optional and independent:
 
 ```python
 import nat_nexus
-from nat_nexus import OpenAIChatCodec
+from nat_nexus.codecs import OpenAIChatCodec
 
 codec = OpenAIChatCodec()
 
@@ -373,7 +373,7 @@ string-based codec resolution -- you always pass an instance directly.
 
 ```python
 import nat_nexus
-from nat_nexus import OpenAIChatCodec, OpenAIResponsesCodec, AnthropicMessagesCodec
+from nat_nexus.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 # Built-in codecs implement both request and response decoding
 codec = OpenAIChatCodec()

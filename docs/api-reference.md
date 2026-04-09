@@ -529,7 +529,7 @@ Nexus ships three built-in codecs that implement both request codec
 for both `codec=` and `response_codec=` parameters.
 
 ```python
-from nat_nexus import OpenAIChatCodec, OpenAIResponsesCodec, AnthropicMessagesCodec
+from nat_nexus.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 # Each codec instance exposes decode(), encode(), and decode_response()
 codec = OpenAIChatCodec()

@@ -60,6 +60,10 @@ impl PyOptimizerPluginContext {
 
 #[pymethods]
 impl PyOptimizerPluginContext {
+    #[pyo3(
+        signature = (name: "str", callback: "object") -> "None",
+        text_signature = "(name: str, callback: object) -> None"
+    )]
     fn register_subscriber(&self, name: &str, callback: Py<PyAny>) -> PyResult<()> {
         nat_nexus_register_subscriber(name, wrap_py_event_subscriber(callback))
             .map_err(to_py_err)?;
@@ -86,6 +90,12 @@ impl PyOptimizerPluginContext {
         Ok(())
     }
 
+    #[pyo3(signature = (
+        name: "str",
+        priority: "int",
+        break_chain: "bool",
+        callback: "object"
+    ) -> "None", text_signature = "(name: str, priority: int, break_chain: bool, callback: object) -> None")]
     fn register_llm_request_intercept(
         &self,
         name: &str,
@@ -123,6 +133,7 @@ impl PyOptimizerPluginContext {
         Ok(())
     }
 
+    #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
     fn register_llm_execution_intercept(
         &self,
         name: &str,
@@ -158,6 +169,7 @@ impl PyOptimizerPluginContext {
         Ok(())
     }
 
+    #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
     fn register_llm_stream_execution_intercept(
         &self,
         name: &str,
@@ -193,6 +205,12 @@ impl PyOptimizerPluginContext {
         Ok(())
     }
 
+    #[pyo3(signature = (
+        name: "str",
+        priority: "int",
+        break_chain: "bool",
+        callback: "object"
+    ) -> "None", text_signature = "(name: str, priority: int, break_chain: bool, callback: object) -> None")]
     fn register_tool_request_intercept(
         &self,
         name: &str,
@@ -230,6 +248,7 @@ impl PyOptimizerPluginContext {
         Ok(())
     }
 
+    #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
     fn register_tool_execution_intercept(
         &self,
         name: &str,
@@ -381,6 +400,7 @@ impl HostedPluginHandler for PyHostedPluginHandler {
 #[pymethods]
 impl PyOptimizerRuntime {
     #[new]
+    #[pyo3(signature = (config: "object"), text_signature = "(config: object)")]
     fn new(config: &Bound<'_, PyAny>) -> PyResult<Self> {
         let config_json = py_to_json(config)?;
         let config: OptimizerConfig = serde_json::from_value(config_json)
@@ -393,6 +413,7 @@ impl PyOptimizerRuntime {
         })
     }
 
+    #[pyo3(signature = () -> "object", text_signature = "() -> object")]
     fn register<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -428,6 +449,7 @@ impl PyOptimizerRuntime {
         })
     }
 
+    #[pyo3(signature = () -> "None", text_signature = "() -> None")]
     fn deregister(&self) -> PyResult<()> {
         let mut guard = self.inner.try_lock().map_err(|_| {
             pyo3::exceptions::PyRuntimeError::new_err(
@@ -443,6 +465,7 @@ impl PyOptimizerRuntime {
         }
     }
 
+    #[pyo3(signature = () -> "object", text_signature = "() -> object")]
     fn shutdown<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -461,6 +484,7 @@ impl PyOptimizerRuntime {
         })
     }
 
+    #[pyo3(signature = () -> "object", text_signature = "() -> object")]
     fn report(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let guard = self.inner.try_lock().map_err(|_| {
             pyo3::exceptions::PyRuntimeError::new_err(
@@ -500,6 +524,7 @@ fn validate_optimizer_config_or_err(config: &OptimizerConfig) -> PyResult<Config
 }
 
 #[pyfunction]
+#[pyo3(signature = (config: "object") -> "object", text_signature = "(config: object) -> object")]
 fn validate_optimizer_config(py: Python<'_>, config: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let config_json = py_to_json(config)?;
     let config: OptimizerConfig = serde_json::from_value(config_json)
@@ -511,6 +536,7 @@ fn validate_optimizer_config(py: Python<'_>, config: &Bound<'_, PyAny>) -> PyRes
 }
 
 #[pyfunction]
+#[pyo3(signature = (plugin_kind: "str", handler: "object") -> "None", text_signature = "(plugin_kind: str, handler: object) -> None")]
 fn register_optimizer_plugin(plugin_kind: &str, handler: Py<PyAny>) -> PyResult<()> {
     register_hosted_plugin_handler(Arc::new(PyHostedPluginHandler {
         plugin_kind: plugin_kind.to_string(),
@@ -520,11 +546,13 @@ fn register_optimizer_plugin(plugin_kind: &str, handler: Py<PyAny>) -> PyResult<
 }
 
 #[pyfunction]
+#[pyo3(signature = (plugin_kind: "str") -> "bool", text_signature = "(plugin_kind: str) -> bool")]
 fn deregister_optimizer_plugin(plugin_kind: &str) -> bool {
     deregister_hosted_plugin_handler(plugin_kind)
 }
 
 #[pyfunction]
+#[pyo3(signature = (value: "int") -> "None", text_signature = "(value: int) -> None")]
 fn set_latency_sensitivity(value: u32) -> PyResult<()> {
     if value == 0 {
         return Err(pyo3::exceptions::PyValueError::new_err(

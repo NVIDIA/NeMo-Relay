@@ -1,56 +1,23 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Scope-local guardrail, intercept, and subscriber registration.
+"""Scope-local middleware and subscriber registration.
 
-Scope-local registrations are scoped to a particular scope handle and are
-automatically cleaned up when that scope is popped. This allows middleware
-to be registered per-request or per-agent without polluting the global
-registry.
+These helpers mirror the global ``guardrails``, ``intercepts``, and
+``subscribers`` modules, but the registrations apply only while the owning
+scope is active. When that scope is popped, the registrations are removed
+automatically.
 
-All ``register_*`` functions take a ``ScopeHandle`` as the first argument.
-The scope handle's ``.uuid`` is used to look up the scope in the scope stack.
-
-**Tool guardrails** (scope-local):
-
-    register_tool_sanitize_request(scope_handle, name, priority, fn)
-    register_tool_sanitize_response(scope_handle, name, priority, fn)
-    register_tool_conditional_execution(scope_handle, name, priority, fn)
-
-**Tool intercepts** (scope-local):
-
-    register_tool_request(scope_handle, name, priority, break_chain, fn)
-    register_tool_execution(scope_handle, name, priority, fn)
-
-**LLM guardrails** (scope-local):
-
-    register_llm_sanitize_request(scope_handle, name, priority, fn)
-    register_llm_sanitize_response(scope_handle, name, priority, fn)
-    register_llm_conditional_execution(scope_handle, name, priority, fn)
-
-**LLM intercepts** (scope-local):
-
-    register_llm_request(scope_handle, name, priority, break_chain, fn)
-    register_llm_execution(scope_handle, name, priority, fn)
-    register_llm_stream_execution(scope_handle, name, priority, fn)
-
-**Subscribers** (scope-local):
-
-    register_subscriber(scope_handle, name, callback)
-
-Each ``register_*`` has a corresponding ``deregister_*`` that takes the
-scope handle and name, and returns ``True`` if found and removed.
-
-Example::
-
+Example:
+    ```python
     import nat_nexus
 
-    def redact_pii(tool_name, args):
-        return {k: "***" if "ssn" in k else v for k, v in args.items()}
+    def redact(tool_name, args):
+        return {**args, "api_key": "***"}
 
-    with nat_nexus.scope.scope("my-agent", nat_nexus.ScopeType.Agent) as handle:
-        nat_nexus.scope_local.register_tool_sanitize_request(handle, "pii-filter", 10, redact_pii)
-        # ... guardrail is active only within this scope ...
+    with nat_nexus.scope.scope("request", nat_nexus.ScopeType.Agent) as handle:
+        nat_nexus.scope_local.register_tool_sanitize_request(handle, "redact", 10, redact)
+    ```
 """
 
 from nat_nexus._native import (
@@ -135,19 +102,30 @@ def register_tool_sanitize_request(scope_handle, name, priority, guardrail):
     """Register a scope-local tool sanitize-request guardrail.
 
     Args:
-        scope_handle: The ``ScopeHandle`` to register under.
-        name: Unique guardrail name.
-        priority: Priority (ascending order).
-        guardrail: ``(tool_name: str, args: Any) -> Any``. In managed
-            ``tools.execute(...)`` calls, the returned value is used for the
-            emitted ``Start`` event payload and does not replace the arguments
-            passed to ``func(...)``.
+        scope_handle: Owning scope handle. The registration is removed when
+            this scope is popped.
+        name: Unique guardrail name within the owning scope.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callable invoked as ``guardrail(tool_name, args)`` that
+            returns the sanitized payload recorded on emitted start events.
+
+    Notes:
+        As with the global variant, this sanitizes emitted event payloads only.
     """
     return _register_tool_sanitize_request(scope_handle.uuid, name, priority, guardrail)
 
 
 def deregister_tool_sanitize_request(scope_handle, name):
-    """Remove a scope-local tool sanitize-request guardrail. Returns ``True`` if found."""
+    """Remove a scope-local tool sanitize-request guardrail.
+
+    Args:
+        scope_handle: Scope handle that owns the registration.
+        name: Guardrail name previously passed to
+            ``register_tool_sanitize_request()``.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     return _deregister_tool_sanitize_request(scope_handle.uuid, name)
 
 
@@ -155,19 +133,27 @@ def register_tool_sanitize_response(scope_handle, name, priority, guardrail):
     """Register a scope-local tool sanitize-response guardrail.
 
     Args:
-        scope_handle: The ``ScopeHandle`` to register under.
-        name: Unique guardrail name.
-        priority: Priority (ascending order).
-        guardrail: ``(tool_name: str, result: Any) -> Any``. In managed
-            ``tools.execute(...)`` calls, the returned value is used for the
-            emitted ``End`` event payload and does not replace the value
-            returned to the caller.
+        scope_handle: Owning scope handle. The registration is removed when
+            this scope is popped.
+        name: Unique guardrail name within the owning scope.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callable invoked as ``guardrail(tool_name, result)`` that
+            returns the sanitized payload recorded on emitted end events.
     """
     return _register_tool_sanitize_response(scope_handle.uuid, name, priority, guardrail)
 
 
 def deregister_tool_sanitize_response(scope_handle, name):
-    """Remove a scope-local tool sanitize-response guardrail. Returns ``True`` if found."""
+    """Remove a scope-local tool sanitize-response guardrail.
+
+    Args:
+        scope_handle: Scope handle that owns the registration.
+        name: Guardrail name previously passed to
+            ``register_tool_sanitize_response()``.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     return _deregister_tool_sanitize_response(scope_handle.uuid, name)
 
 
@@ -175,16 +161,27 @@ def register_tool_conditional_execution(scope_handle, name, priority, guardrail)
     """Register a scope-local tool conditional-execution guardrail.
 
     Args:
-        scope_handle: The ``ScopeHandle`` to register under.
-        name: Unique guardrail name.
-        priority: Priority (ascending order).
-        guardrail: ``(tool_name: str, args: Any) -> Optional[str]``.
+        scope_handle: Owning scope handle. The registration is removed when
+            this scope is popped.
+        name: Unique guardrail name within the owning scope.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callable invoked as ``guardrail(tool_name, args)``. Return
+            ``None`` to allow execution or a rejection message to block it.
     """
     return _register_tool_conditional_execution(scope_handle.uuid, name, priority, guardrail)
 
 
 def deregister_tool_conditional_execution(scope_handle, name):
-    """Remove a scope-local tool conditional-execution guardrail. Returns ``True`` if found."""
+    """Remove a scope-local tool conditional-execution guardrail.
+
+    Args:
+        scope_handle: Scope handle that owns the registration.
+        name: Guardrail name previously passed to
+            ``register_tool_conditional_execution()``.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     return _deregister_tool_conditional_execution(scope_handle.uuid, name)
 
 
@@ -197,34 +194,57 @@ def register_tool_request(scope_handle, name, priority, break_chain, fn):
     """Register a scope-local tool request intercept.
 
     Args:
-        scope_handle: The ``ScopeHandle`` to register under.
-        name: Unique intercept name.
-        priority: Priority (ascending order).
-        break_chain: If ``True``, no lower-priority intercepts run after this one.
-        fn: ``(tool_name: str, args: Any) -> Any``.
+        scope_handle: Owning scope handle. The registration is removed when
+            this scope is popped.
+        name: Unique intercept name within the owning scope.
+        priority: Execution order for the intercept. Lower values run first.
+        break_chain: Whether to stop applying lower-priority request intercepts
+            after this intercept runs.
+        fn: Callable invoked as ``fn(tool_name, args)`` that returns the
+            rewritten tool arguments.
     """
     return _register_tool_request(scope_handle.uuid, name, priority, break_chain, fn)
 
 
 def deregister_tool_request(scope_handle, name):
-    """Remove a scope-local tool request intercept. Returns ``True`` if found."""
+    """Remove a scope-local tool request intercept.
+
+    Args:
+        scope_handle: Scope handle that owns the registration.
+        name: Intercept name previously passed to ``register_tool_request()``.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     return _deregister_tool_request(scope_handle.uuid, name)
 
 
 def register_tool_execution(scope_handle, name, priority, fn):
-    """Register a scope-local tool execution intercept (middleware chain pattern).
+    """Register scope-local middleware around tool execution.
 
     Args:
-        scope_handle: The ``ScopeHandle`` to register under.
-        name: Unique intercept name.
-        priority: Priority (ascending order).
-        fn: ``async (tool_name: str, args: Any, next) -> Any``.
+        scope_handle: Owning scope handle. The registration is removed when
+            this scope is popped.
+        name: Unique intercept name within the owning scope.
+        priority: Execution order for the intercept. Lower values run first.
+        fn: Callable invoked as ``fn(tool_name, args, next_call)``. It may call
+            ``next_call(args)`` to continue execution, modify the result, or
+            short-circuit the tool call entirely.
     """
     return _register_tool_execution(scope_handle.uuid, name, priority, fn)
 
 
 def deregister_tool_execution(scope_handle, name):
-    """Remove a scope-local tool execution intercept. Returns ``True`` if found."""
+    """Remove a scope-local tool execution intercept.
+
+    Args:
+        scope_handle: Scope handle that owns the registration.
+        name: Intercept name previously passed to
+            ``register_tool_execution()``.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     return _deregister_tool_execution(scope_handle.uuid, name)
 
 
@@ -237,19 +257,27 @@ def register_llm_sanitize_request(scope_handle, name, priority, guardrail):
     """Register a scope-local LLM sanitize-request guardrail.
 
     Args:
-        scope_handle: The ``ScopeHandle`` to register under.
-        name: Unique guardrail name.
-        priority: Priority (ascending order).
-        guardrail: ``(request: LLMRequest) -> LLMRequest``. In managed
-            ``llm.execute(...)`` and ``llm.stream_execute(...)`` calls, the
-            returned value is used for the emitted ``Start`` event payload and
-            does not replace the request passed to ``func(...)``.
+        scope_handle: Owning scope handle. The registration is removed when
+            this scope is popped.
+        name: Unique guardrail name within the owning scope.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callable invoked as ``guardrail(request)`` that returns the
+            sanitized request recorded on emitted start events.
     """
     return _register_llm_sanitize_request(scope_handle.uuid, name, priority, guardrail)
 
 
 def deregister_llm_sanitize_request(scope_handle, name):
-    """Remove a scope-local LLM sanitize-request guardrail. Returns ``True`` if found."""
+    """Remove a scope-local LLM sanitize-request guardrail.
+
+    Args:
+        scope_handle: Scope handle that owns the registration.
+        name: Guardrail name previously passed to
+            ``register_llm_sanitize_request()``.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     return _deregister_llm_sanitize_request(scope_handle.uuid, name)
 
 
@@ -257,19 +285,27 @@ def register_llm_sanitize_response(scope_handle, name, priority, guardrail):
     """Register a scope-local LLM sanitize-response guardrail.
 
     Args:
-        scope_handle: The ``ScopeHandle`` to register under.
-        name: Unique guardrail name.
-        priority: Priority (ascending order).
-        guardrail: ``(response: dict) -> dict``. In managed
-            ``llm.execute(...)`` and ``llm.stream_execute(...)`` calls, the
-            returned value is used for the emitted ``End`` event payload and
-            does not replace the value returned to the caller.
+        scope_handle: Owning scope handle. The registration is removed when
+            this scope is popped.
+        name: Unique guardrail name within the owning scope.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callable invoked as ``guardrail(response)`` that returns the
+            sanitized payload recorded on emitted end events.
     """
     return _register_llm_sanitize_response(scope_handle.uuid, name, priority, guardrail)
 
 
 def deregister_llm_sanitize_response(scope_handle, name):
-    """Remove a scope-local LLM sanitize-response guardrail. Returns ``True`` if found."""
+    """Remove a scope-local LLM sanitize-response guardrail.
+
+    Args:
+        scope_handle: Scope handle that owns the registration.
+        name: Guardrail name previously passed to
+            ``register_llm_sanitize_response()``.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     return _deregister_llm_sanitize_response(scope_handle.uuid, name)
 
 
@@ -277,16 +313,27 @@ def register_llm_conditional_execution(scope_handle, name, priority, guardrail):
     """Register a scope-local LLM conditional-execution guardrail.
 
     Args:
-        scope_handle: The ``ScopeHandle`` to register under.
-        name: Unique guardrail name.
-        priority: Priority (ascending order).
-        guardrail: ``(request: LLMRequest) -> Optional[str]``.
+        scope_handle: Owning scope handle. The registration is removed when
+            this scope is popped.
+        name: Unique guardrail name within the owning scope.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callable invoked as ``guardrail(request)``. Return ``None``
+            to allow execution or a rejection message to block it.
     """
     return _register_llm_conditional_execution(scope_handle.uuid, name, priority, guardrail)
 
 
 def deregister_llm_conditional_execution(scope_handle, name):
-    """Remove a scope-local LLM conditional-execution guardrail. Returns ``True`` if found."""
+    """Remove a scope-local LLM conditional-execution guardrail.
+
+    Args:
+        scope_handle: Scope handle that owns the registration.
+        name: Guardrail name previously passed to
+            ``register_llm_conditional_execution()``.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     return _deregister_llm_conditional_execution(scope_handle.uuid, name)
 
 
@@ -299,51 +346,85 @@ def register_llm_request(scope_handle, name, priority, break_chain, fn):
     """Register a scope-local LLM request intercept.
 
     Args:
-        scope_handle: The ``ScopeHandle`` to register under.
-        name: Unique intercept name.
-        priority: Priority (ascending order).
-        break_chain: If ``True``, no lower-priority intercepts run after this one.
-        fn: ``(name: str, request: LLMRequest) -> LLMRequest``.
+        scope_handle: Owning scope handle. The registration is removed when
+            this scope is popped.
+        name: Unique intercept name within the owning scope.
+        priority: Execution order for the intercept. Lower values run first.
+        break_chain: Whether to stop applying lower-priority request intercepts
+            after this intercept runs.
+        fn: Callable invoked as ``fn(name, request, annotated)`` that returns a
+            tuple of ``(request, annotated)`` for the next stage.
     """
     return _register_llm_request(scope_handle.uuid, name, priority, break_chain, fn)
 
 
 def deregister_llm_request(scope_handle, name):
-    """Remove a scope-local LLM request intercept. Returns ``True`` if found."""
+    """Remove a scope-local LLM request intercept.
+
+    Args:
+        scope_handle: Scope handle that owns the registration.
+        name: Intercept name previously passed to ``register_llm_request()``.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     return _deregister_llm_request(scope_handle.uuid, name)
 
 
 def register_llm_execution(scope_handle, name, priority, fn):
-    """Register a scope-local LLM execution intercept (middleware chain pattern).
+    """Register scope-local middleware around non-streaming LLM execution.
 
     Args:
-        scope_handle: The ``ScopeHandle`` to register under.
-        name: Unique intercept name.
-        priority: Priority (ascending order).
-        fn: ``async (name: str, request: LLMRequest, next) -> Any``.
+        scope_handle: Owning scope handle. The registration is removed when
+            this scope is popped.
+        name: Unique intercept name within the owning scope.
+        priority: Execution order for the intercept. Lower values run first.
+        fn: Callable invoked as ``fn(name, request, next_call)`` that may call
+            ``next_call(request)`` to continue execution or short-circuit it.
     """
     return _register_llm_execution(scope_handle.uuid, name, priority, fn)
 
 
 def deregister_llm_execution(scope_handle, name):
-    """Remove a scope-local LLM execution intercept. Returns ``True`` if found."""
+    """Remove a scope-local LLM execution intercept.
+
+    Args:
+        scope_handle: Scope handle that owns the registration.
+        name: Intercept name previously passed to
+            ``register_llm_execution()``.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     return _deregister_llm_execution(scope_handle.uuid, name)
 
 
 def register_llm_stream_execution(scope_handle, name, priority, fn):
-    """Register a scope-local LLM stream-execution intercept (middleware chain pattern).
+    """Register scope-local middleware around streaming LLM execution.
 
     Args:
-        scope_handle: The ``ScopeHandle`` to register under.
-        name: Unique intercept name.
-        priority: Priority (ascending order).
-        fn: ``async (request: LLMRequest, next) -> AsyncIterator[Any]``.
+        scope_handle: Owning scope handle. The registration is removed when
+            this scope is popped.
+        name: Unique intercept name within the owning scope.
+        priority: Execution order for the intercept. Lower values run first.
+        fn: Callable invoked as ``fn(request, next_call)`` that returns an
+            async iterator of chunks, either by delegating to ``next_call`` or
+            by replacing the stream entirely.
     """
     return _register_llm_stream_execution(scope_handle.uuid, name, priority, fn)
 
 
 def deregister_llm_stream_execution(scope_handle, name):
-    """Remove a scope-local LLM stream-execution intercept. Returns ``True`` if found."""
+    """Remove a scope-local streaming LLM execution intercept.
+
+    Args:
+        scope_handle: Scope handle that owns the registration.
+        name: Intercept name previously passed to
+            ``register_llm_stream_execution()``.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     return _deregister_llm_stream_execution(scope_handle.uuid, name)
 
 
@@ -353,18 +434,39 @@ def deregister_llm_stream_execution(scope_handle, name):
 
 
 def register_subscriber(scope_handle, name, callback):
-    """Register a scope-local event subscriber.
+    """Register an event subscriber that is active only for ``scope_handle``.
 
     Args:
-        scope_handle: The ``ScopeHandle`` to register under.
-        name: Unique subscriber name.
-        callback: ``(event: Event) -> None``.
+        scope_handle: Owning scope handle. The registration is removed when
+            this scope is popped.
+        name: Unique subscriber name within the owning scope.
+        callback: Callable invoked as ``callback(event)`` for each lifecycle
+            event emitted while the scope remains active.
+
+    Example:
+        ```python
+        import nat_nexus
+
+        def log_event(event):
+            print(event.kind, event.name)
+
+        with nat_nexus.scope.scope("request", nat_nexus.ScopeType.Agent) as handle:
+            nat_nexus.scope_local.register_subscriber(handle, "logger", log_event)
+        ```
     """
     return _register_subscriber(scope_handle.uuid, name, callback)
 
 
 def deregister_subscriber(scope_handle, name):
-    """Remove a scope-local event subscriber. Returns ``True`` if found."""
+    """Remove a scope-local event subscriber.
+
+    Args:
+        scope_handle: Scope handle that owns the registration.
+        name: Subscriber name previously passed to ``register_subscriber()``.
+
+    Returns:
+        bool: ``True`` if a subscriber was removed, otherwise ``False``.
+    """
     return _deregister_subscriber(scope_handle.uuid, name)
 
 

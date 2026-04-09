@@ -8,7 +8,8 @@ all types exported from the native Rust extension and all API functions.
 """
 
 import contextvars
-from typing import Any, AsyncIterator, Awaitable, Callable, Literal, Optional
+from collections.abc import Mapping, Sequence
+from typing import AsyncIterator, Awaitable, Callable, Literal, Optional, TypeAlias
 
 from nat_nexus import codecs as codecs
 from nat_nexus import optimizer as optimizer
@@ -17,8 +18,35 @@ from nat_nexus import typed as typed
 from nat_nexus.codecs import LlmCodec as LlmCodec
 from nat_nexus.codecs import LlmResponseCodec as LlmResponseCodec
 
-Json = Any
+JsonPrimitive: TypeAlias = str | int | float | bool | None
+JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"]
+JsonObject: TypeAlias = dict[str, JsonValue]
+Json: TypeAlias = JsonValue
 """Type alias for JSON-serializable Python objects (dicts, lists, strings, numbers, etc.)."""
+UnsupportedBehavior: TypeAlias = Literal["ignore", "warn", "error"]
+
+ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json]
+ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str]]
+LlmSanitizeRequestGuardrail: TypeAlias = Callable[["LLMRequest"], "LLMRequest"]
+LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject], JsonObject]
+LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional[str]]
+ToolRequestIntercept: TypeAlias = Callable[[str, Json], Json]
+ToolExecutionIntercept: TypeAlias = Callable[
+    [str, Json, Callable[[Json], Awaitable[Json]]],
+    Json | Awaitable[Json],
+]
+LlmRequestIntercept: TypeAlias = Callable[
+    [str, "LLMRequest", "AnnotatedLLMRequest | None"],
+    tuple["LLMRequest", "AnnotatedLLMRequest | None"],
+]
+LlmExecutionIntercept: TypeAlias = Callable[
+    [str, "LLMRequest", Callable[["LLMRequest"], Awaitable[Json]]],
+    Json | Awaitable[Json],
+]
+LlmStreamExecutionIntercept: TypeAlias = Callable[
+    ["LLMRequest", Callable[["LLMRequest"], Awaitable[AsyncIterator[Json]]]],
+    AsyncIterator[Json] | Awaitable[AsyncIterator[Json]],
+]
 
 # ---------------------------------------------------------------------------
 # Attribute flag classes
@@ -242,20 +270,21 @@ class LLMRequest:
     Flows through the entire middleware pipeline: guardrails, intercepts,
     and execution functions all receive and return ``LLMRequest``.
 
-    Example::
-
+    Example:
+        ```python
         request = LLMRequest(
             {"Authorization": "Bearer tok"},
             {"model": "gpt-4", "messages": [{"role": "user", "content": "Hi"}]},
         )
         print(request.headers)   # {"Authorization": "Bearer tok"}
         print(request.content)   # {"model": "gpt-4", ...}
+        ```
     """
 
     def __init__(
         self,
-        headers: dict[str, Any],
-        content: Json,
+        headers: Mapping[str, JsonValue],
+        content: JsonObject,
     ) -> None:
         """Create an LLM request.
 
@@ -265,11 +294,11 @@ class LLMRequest:
         """
         ...
     @property
-    def headers(self) -> dict[str, Any]:
+    def headers(self) -> JsonObject:
         """Metadata key-value pairs."""
         ...
     @property
-    def content(self) -> Json:
+    def content(self) -> JsonObject:
         """The request payload."""
         ...
 
@@ -283,38 +312,38 @@ class AnnotatedLLMRequest:
 
     def __init__(
         self,
-        messages: list[dict[str, Any]],
+        messages: Sequence[Mapping[str, JsonValue]],
         *,
         model: Optional[str] = None,
-        params: Optional[dict[str, Any]] = None,
-        tools: Optional[list[dict[str, Any]]] = None,
-        tool_choice: Optional[str | dict[str, Any]] = None,
-        extra: Optional[dict[str, Any]] = None,
+        params: Optional[Mapping[str, JsonValue]] = None,
+        tools: Optional[Sequence[Mapping[str, JsonValue]]] = None,
+        tool_choice: Optional[str | Mapping[str, JsonValue]] = None,
+        extra: Optional[Mapping[str, JsonValue]] = None,
     ) -> None: ...
     @property
-    def messages(self) -> list[dict[str, Any]]: ...
+    def messages(self) -> list[JsonObject]: ...
     @messages.setter
-    def messages(self, value: list[dict[str, Any]]) -> None: ...
+    def messages(self, value: Sequence[Mapping[str, JsonValue]]) -> None: ...
     @property
     def model(self) -> Optional[str]: ...
     @model.setter
     def model(self, value: Optional[str]) -> None: ...
     @property
-    def params(self) -> Optional[dict[str, Any]]: ...
+    def params(self) -> Optional[JsonObject]: ...
     @params.setter
-    def params(self, value: Optional[dict[str, Any]]) -> None: ...
+    def params(self, value: Optional[Mapping[str, JsonValue]]) -> None: ...
     @property
-    def tools(self) -> Optional[list[dict[str, Any]]]: ...
+    def tools(self) -> Optional[list[JsonObject]]: ...
     @tools.setter
-    def tools(self, value: Optional[list[dict[str, Any]]]) -> None: ...
+    def tools(self, value: Optional[Sequence[Mapping[str, JsonValue]]]) -> None: ...
     @property
-    def tool_choice(self) -> Optional[str | dict[str, Any]]: ...
+    def tool_choice(self) -> Optional[str | JsonObject]: ...
     @tool_choice.setter
-    def tool_choice(self, value: Optional[str | dict[str, Any]]) -> None: ...
+    def tool_choice(self, value: Optional[str | Mapping[str, JsonValue]]) -> None: ...
     @property
-    def extra(self) -> dict[str, Any]: ...
+    def extra(self) -> JsonObject: ...
     @extra.setter
-    def extra(self, value: dict[str, Any]) -> None: ...
+    def extra(self, value: Mapping[str, JsonValue]) -> None: ...
     def system_prompt(self) -> Optional[str]: ...
     def last_user_message(self) -> Optional[str]: ...
     def has_tool_calls(self) -> bool: ...
@@ -331,56 +360,19 @@ class AnnotatedLLMResponse:
     @property
     def model(self) -> Optional[str]: ...
     @property
-    def message(self) -> Optional[Any]: ...
+    def message(self) -> Optional[Json]: ...
     @property
-    def tool_calls(self) -> Optional[list[dict[str, Any]]]: ...
+    def tool_calls(self) -> Optional[list[JsonObject]]: ...
     @property
     def finish_reason(self) -> Optional[str]: ...
     @property
-    def usage(self) -> Optional[dict[str, Any]]: ...
+    def usage(self) -> Optional[JsonObject]: ...
     @property
-    def api_specific(self) -> Optional[dict[str, Any]]: ...
+    def api_specific(self) -> Optional[JsonObject]: ...
     @property
-    def extra(self) -> dict[str, Any]: ...
+    def extra(self) -> JsonObject: ...
     def response_text(self) -> Optional[str]: ...
     def has_tool_calls(self) -> bool: ...
-
-# ---------------------------------------------------------------------------
-# Built-in LLM Codec classes
-# ---------------------------------------------------------------------------
-
-class OpenAIChatCodec:
-    """Built-in codec for OpenAI Chat Completions API.
-
-    Implements both LlmCodec (decode/encode for requests) and
-    LlmResponseCodec (decode_response for responses).
-    """
-    def __init__(self) -> None: ...
-    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest: ...
-    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest: ...
-    def decode_response(self, response: Json) -> AnnotatedLLMResponse: ...
-
-class OpenAIResponsesCodec:
-    """Built-in codec for OpenAI Responses API.
-
-    Implements both LlmCodec (decode/encode for requests) and
-    LlmResponseCodec (decode_response for responses).
-    """
-    def __init__(self) -> None: ...
-    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest: ...
-    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest: ...
-    def decode_response(self, response: Json) -> AnnotatedLLMResponse: ...
-
-class AnthropicMessagesCodec:
-    """Built-in codec for Anthropic Messages API.
-
-    Implements both LlmCodec (decode/encode for requests) and
-    LlmResponseCodec (decode_response for responses).
-    """
-    def __init__(self) -> None: ...
-    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest: ...
-    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest: ...
-    def decode_response(self, response: Json) -> AnnotatedLLMResponse: ...
 
 class ScopeStartEvent:
     @property
@@ -440,7 +432,7 @@ class ToolStartEvent:
     @property
     def attributes(self) -> ToolAttributes: ...
     @property
-    def input(self) -> Optional[Any]: ...
+    def input(self) -> Optional[Json]: ...
     @property
     def tool_call_id(self) -> Optional[str]: ...
 
@@ -462,7 +454,7 @@ class ToolEndEvent:
     @property
     def attributes(self) -> ToolAttributes: ...
     @property
-    def output(self) -> Optional[Any]: ...
+    def output(self) -> Optional[Json]: ...
     @property
     def tool_call_id(self) -> Optional[str]: ...
 
@@ -484,7 +476,7 @@ class LLMStartEvent:
     @property
     def attributes(self) -> LLMAttributes: ...
     @property
-    def input(self) -> Optional[Any]: ...
+    def input(self) -> Optional[Json]: ...
     @property
     def model_name(self) -> Optional[str]: ...
     @property
@@ -508,7 +500,7 @@ class LLMEndEvent:
     @property
     def attributes(self) -> LLMAttributes: ...
     @property
-    def output(self) -> Optional[Any]: ...
+    def output(self) -> Optional[Json]: ...
     @property
     def model_name(self) -> Optional[str]: ...
     @property
@@ -535,13 +527,14 @@ Event = ScopeStartEvent | ScopeEndEvent | ToolStartEvent | ToolEndEvent | LLMSta
 class AtifExporter:
     """ATIF trajectory exporter that collects events and exports ATIF trajectories.
 
-    Example::
-
+    Example:
+        ```python
         exporter = AtifExporter("session-1", "my-agent", "1.0.0", model_name="gpt-4")
         exporter.register("my-exporter")
         # ... run agent workflow ...
         trajectory = exporter.export()
         exporter.deregister("my-exporter")
+        ```
     """
 
     def __init__(
@@ -551,8 +544,8 @@ class AtifExporter:
         agent_version: str,
         *,
         model_name: Optional[str] = None,
-        tool_definitions: Optional[list[Any]] = None,
-        extra: Optional[Any] = None,
+        tool_definitions: Optional[list[JsonObject]] = None,
+        extra: Optional[Json] = None,
     ) -> None: ...
     def register(self, name: str) -> None:
         """Register this exporter as an event subscriber with the given name."""
@@ -560,7 +553,7 @@ class AtifExporter:
     def deregister(self, name: str) -> bool:
         """Deregister the event subscriber. Returns ``True`` if found."""
         ...
-    def export(self) -> dict[str, Any]:
+    def export(self) -> JsonObject:
         """Export collected events as an ATIF trajectory dict."""
         ...
     def export_json(self) -> str:
@@ -661,11 +654,12 @@ class OpenInferenceSubscriber:
 class ScopeStack:
     """An isolated scope stack for per-request/per-task isolation.
 
-    Example::
-
+    Example:
+        ```python
         stack = create_scope_stack()
         # Use with contextvars for per-task isolation:
         nat_nexus._scope_stack_var.set(stack)
+        ```
     """
     def __repr__(self) -> str: ...
 
@@ -698,6 +692,10 @@ def get_scope_stack() -> ScopeStack:
 
 def set_thread_scope_stack(stack: ScopeStack) -> None:
     """Bind a ``ScopeStack`` to the current thread's thread-local storage.
+
+    Args:
+        stack: Scope stack to install for subsequent Nexus API calls on the
+            current thread.
 
     After this call, all Nexus API calls on the current thread will use
     the given scope stack. Primarily used to propagate scope context into
@@ -762,14 +760,15 @@ def nat_nexus_push_scope(
     Returns:
         The newly created ``ScopeHandle``.
 
-    Example::
-
+    Example:
+        ```python
         handle = nat_nexus_push_scope("my-agent", ScopeType.Agent)
         try:
             # ... do work ...
             pass
         finally:
             nat_nexus_pop_scope(handle)
+        ```
     """
     ...
 
@@ -815,8 +814,18 @@ def nat_nexus_tool_call(
 ) -> ToolHandle:
     """Begin a tool call manually.
 
-    Returns a ``ToolHandle`` that must be passed to ``nat_nexus_tool_call_end``.
-    Emits a Start event.
+    Args:
+        name: Tool name recorded on emitted lifecycle events.
+        args: JSON-compatible tool arguments to associate with the call.
+        handle: Optional parent scope handle.
+        attributes: Optional ``ToolAttributes`` bitflags.
+        data: Optional application data recorded on the start event.
+        metadata: Optional metadata recorded on the start event.
+        tool_call_id: Optional provider-specific tool call identifier.
+
+    Returns:
+        ToolHandle: Handle that must be passed to
+        ``nat_nexus_tool_call_end()``.
     """
     ...
 
@@ -827,7 +836,14 @@ def nat_nexus_tool_call_end(
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
 ) -> None:
-    """End a manual tool call. Records the result and emits an End event."""
+    """End a manual tool call.
+
+    Args:
+        handle: Tool handle returned by ``nat_nexus_tool_call()``.
+        result: JSON-compatible tool result to record on the end event.
+        data: Optional application data recorded on the end event.
+        metadata: Optional metadata recorded on the end event.
+    """
     ...
 
 def nat_nexus_tool_call_execute(
@@ -863,12 +879,13 @@ def nat_nexus_tool_call_execute(
         intercepts. Sanitize guardrails do not rewrite the value returned to
         the caller.
 
-    Example::
-
+    Example:
+        ```python
         async def my_tool(args):
             return {"answer": args["x"] + args["y"]}
 
         result = await nat_nexus_tool_call_execute("add", {"x": 1, "y": 2}, my_tool)
+        ```
     """
     ...
 
@@ -904,7 +921,14 @@ def nat_nexus_llm_call_end(
     data: Optional[Json] = None,
     metadata: Optional[Json] = None,
 ) -> None:
-    """End a manual LLM call. Records the response and emits an End event."""
+    """End a manual LLM call.
+
+    Args:
+        handle: LLM handle returned by ``nat_nexus_llm_call()``.
+        response: JSON-compatible response to record on the end event.
+        data: Optional application data recorded on the end event.
+        metadata: Optional metadata recorded on the end event.
+    """
     ...
 
 def nat_nexus_llm_call_execute(
@@ -918,7 +942,7 @@ def nat_nexus_llm_call_execute(
     metadata: Optional[Json] = None,
     model_name: Optional[str] = None,
     codec: Optional[LlmCodec] = None,
-    response_codec: Optional[Any] = None,
+    response_codec: Optional[LlmResponseCodec] = None,
 ) -> Awaitable[Json]:
     """Execute an LLM call through the full middleware pipeline.
 
@@ -943,14 +967,15 @@ def nat_nexus_llm_call_execute(
         intercepts. Sanitize guardrails do not rewrite the value returned to
         the caller.
 
-    Example::
-
+    Example:
+        ```python
         async def call_openai(req: LLMRequest) -> dict:
             # req.headers and req.content may have been modified by intercepts
             return await httpx_client.post("/chat/completions", json=req.content)
 
         request = LLMRequest({}, {"model": "gpt-4", "messages": [...]})
         response = await nat_nexus_llm_call_execute("gpt-4", request, call_openai)
+        ```
     """
     ...
 
@@ -959,7 +984,7 @@ async def nat_nexus_llm_stream_call_execute(
     request: LLMRequest,
     func: Callable[[LLMRequest], AsyncIterator[Json]],
     collector: Callable[[Json], None],
-    finalizer: Callable[[], Any],
+    finalizer: Callable[[], Json],
     *,
     handle: Optional[ScopeHandle] = None,
     attributes: Optional[LLMAttributes] = None,
@@ -967,7 +992,7 @@ async def nat_nexus_llm_stream_call_execute(
     metadata: Optional[Json] = None,
     model_name: Optional[str] = None,
     codec: Optional[LlmCodec] = None,
-    response_codec: Optional[Any] = None,
+    response_codec: Optional[LlmResponseCodec] = None,
 ) -> LlmStream:
     """Execute a streaming LLM call through the full middleware pipeline.
 
@@ -982,7 +1007,7 @@ async def nat_nexus_llm_stream_call_execute(
             Json chunks.
         collector: A callable ``(chunk: Json) -> None`` invoked with each
             intercepted chunk after stream execution intercepts have been applied.
-        finalizer: A callable ``() -> Any`` invoked once when the stream is
+        finalizer: A callable ``() -> Json`` invoked once when the stream is
             exhausted. Its return value is the aggregated response.
         handle: Optional parent scope handle.
         attributes: Optional ``LLMAttributes`` bitflags.
@@ -1001,12 +1026,21 @@ async def nat_nexus_llm_stream_call_execute(
 def nat_nexus_tool_request_intercepts(name: str, args: Json) -> Json:
     """Run the registered tool request intercept chain.
 
-    Returns the transformed arguments.
+    Args:
+        name: Tool name used when evaluating intercepts.
+        args: JSON-compatible tool arguments to transform.
+
+    Returns:
+        Json: The transformed arguments.
     """
     ...
 
 def nat_nexus_tool_conditional_execution(name: str, args: Json) -> None:
     """Run the registered tool conditional execution guardrail chain.
+
+    Args:
+        name: Tool name used when evaluating guardrails.
+        args: JSON-compatible tool arguments to validate.
 
     Raises ``RuntimeError`` if any guardrail rejects.
     """
@@ -1015,12 +1049,20 @@ def nat_nexus_tool_conditional_execution(name: str, args: Json) -> None:
 def nat_nexus_llm_request_intercepts(name: str, request: LLMRequest) -> LLMRequest:
     """Run the registered LLM request intercept chain.
 
-    Returns the transformed ``LLMRequest``.
+    Args:
+        name: Provider or logical call name used when evaluating intercepts.
+        request: ``LLMRequest`` to transform.
+
+    Returns:
+        LLMRequest: The transformed request.
     """
     ...
 
 def nat_nexus_llm_conditional_execution(request: LLMRequest) -> None:
     """Run the registered LLM conditional execution guardrail chain.
+
+    Args:
+        request: ``LLMRequest`` to validate.
 
     Raises ``RuntimeError`` if any guardrail rejects.
     """
@@ -1031,58 +1073,96 @@ def nat_nexus_llm_conditional_execution(request: LLMRequest) -> None:
 # ---------------------------------------------------------------------------
 
 def nat_nexus_register_tool_sanitize_request_guardrail(
-    name: str, priority: int, guardrail: Callable[[str, Json], Json]
+    name: str, priority: int, guardrail: ToolSanitizeGuardrail
 ) -> None:
     """Register a tool sanitize-request guardrail.
 
-    Callback: ``(tool_name, args) -> sanitized_args``.
+    Args:
+        name: Unique guardrail name.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callback invoked as ``(tool_name, args) ->
+            sanitized_args``.
 
-    Example::
-
+    Example:
+        ```python
         def redact_keys(tool_name: str, args: dict) -> dict:
             return {k: "***" if "secret" in k else v for k, v in args.items()}
 
         nat_nexus_register_tool_sanitize_request_guardrail("redact", 0, redact_keys)
+        ```
     """
     ...
 
 def nat_nexus_deregister_tool_sanitize_request_guardrail(name: str) -> bool:
-    """Remove a tool sanitize-request guardrail. Returns ``True`` if found."""
+    """Remove a tool sanitize-request guardrail.
+
+    Args:
+        name: Guardrail name previously passed to
+            ``nat_nexus_register_tool_sanitize_request_guardrail()``.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     ...
 
 def nat_nexus_register_tool_sanitize_response_guardrail(
-    name: str, priority: int, guardrail: Callable[[str, Json], Json]
+    name: str, priority: int, guardrail: ToolSanitizeGuardrail
 ) -> None:
     """Register a tool sanitize-response guardrail.
 
-    Callback: ``(tool_name, result) -> sanitized_result``.
+    Args:
+        name: Unique guardrail name.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callback invoked as ``(tool_name, result) ->
+            sanitized_result``.
     """
     ...
 
 def nat_nexus_deregister_tool_sanitize_response_guardrail(name: str) -> bool:
-    """Remove a tool sanitize-response guardrail. Returns ``True`` if found."""
+    """Remove a tool sanitize-response guardrail.
+
+    Args:
+        name: Guardrail name previously passed to
+            ``nat_nexus_register_tool_sanitize_response_guardrail()``.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     ...
 
 def nat_nexus_register_tool_conditional_execution_guardrail(
-    name: str, priority: int, guardrail: Callable[[str, Json], Optional[str]]
+    name: str, priority: int, guardrail: ToolConditionalExecutionGuardrail
 ) -> None:
     """Register a tool conditional-execution guardrail.
 
-    Callback: ``(tool_name, args) -> None | rejection_reason``.
+    Args:
+        name: Unique guardrail name.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callback invoked as ``(tool_name, args) -> None |
+            rejection_reason``.
 
-    Example::
-
+    Example:
+        ```python
         def block_dangerous(tool_name: str, args: dict) -> str | None:
             if tool_name == "rm_rf":
                 return "dangerous tool blocked"
             return None  # allow
 
         nat_nexus_register_tool_conditional_execution_guardrail("safety", 0, block_dangerous)
+        ```
     """
     ...
 
 def nat_nexus_deregister_tool_conditional_execution_guardrail(name: str) -> bool:
-    """Remove a tool conditional-execution guardrail. Returns ``True`` if found."""
+    """Remove a tool conditional-execution guardrail.
+
+    Args:
+        name: Guardrail name previously passed to
+            ``nat_nexus_register_tool_conditional_execution_guardrail()``.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     ...
 
 # ---------------------------------------------------------------------------
@@ -1093,31 +1173,50 @@ def nat_nexus_register_tool_request_intercept(
     name: str,
     priority: int,
     break_chain: bool,
-    callable: Callable[[str, Json], Json],
+    callable: ToolRequestIntercept,
 ) -> None:
     """Register a tool request intercept.
 
-    Callback: ``(tool_name, args) -> transformed_args``.
+    Args:
+        name: Unique intercept name.
+        priority: Execution order for the intercept. Lower values run first.
+        break_chain: Whether to stop lower-priority request intercepts after
+            this one runs.
+        callable: Callback invoked as ``(tool_name, args) ->
+            transformed_args``.
     """
     ...
 
 def nat_nexus_deregister_tool_request_intercept(name: str) -> bool:
-    """Remove a tool request intercept. Returns ``True`` if found."""
+    """Remove a tool request intercept.
+
+    Args:
+        name: Intercept name previously passed to
+            ``nat_nexus_register_tool_request_intercept()``.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     ...
 
 def nat_nexus_register_tool_execution_intercept(
     name: str,
     priority: int,
-    callable: Callable[[str, Json, Callable[[Json], Awaitable[Json]]], Awaitable[Json]],
+    callable: ToolExecutionIntercept,
 ) -> None:
     """Register a tool execution intercept (middleware chain pattern).
+
+    Args:
+        name: Unique intercept name.
+        priority: Execution order for the intercept. Lower values run first.
+        callable: Intercept callback.
 
     ``callable``: ``async (tool_name, args, next) -> result`` — intercept function.
     Call ``await next(args)`` to invoke the next intercept or original
     implementation. Skip calling ``next`` to short-circuit the chain.
 
-    Example::
-
+    Example:
+        ```python
         async def cache_intercept(tool_name, args, next):
             key = json.dumps(args, sort_keys=True)
             if key in cache:
@@ -1127,11 +1226,20 @@ def nat_nexus_register_tool_execution_intercept(
             return result
 
         nat_nexus_register_tool_execution_intercept("cache", 0, cache_intercept)
+        ```
     """
     ...
 
 def nat_nexus_deregister_tool_execution_intercept(name: str) -> bool:
-    """Remove a tool execution intercept. Returns ``True`` if found."""
+    """Remove a tool execution intercept.
+
+    Args:
+        name: Intercept name previously passed to
+            ``nat_nexus_register_tool_execution_intercept()``.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     ...
 
 # ---------------------------------------------------------------------------
@@ -1139,42 +1247,76 @@ def nat_nexus_deregister_tool_execution_intercept(name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def nat_nexus_register_llm_sanitize_request_guardrail(
-    name: str, priority: int, guardrail: Callable[[LLMRequest], LLMRequest]
+    name: str, priority: int, guardrail: LlmSanitizeRequestGuardrail
 ) -> None:
     """Register an LLM sanitize-request guardrail.
 
-    Callback: ``(request) -> sanitized_request``.
+    Args:
+        name: Unique guardrail name.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callback invoked as ``(request) -> sanitized_request``.
     """
     ...
 
 def nat_nexus_deregister_llm_sanitize_request_guardrail(name: str) -> bool:
-    """Remove an LLM sanitize-request guardrail. Returns ``True`` if found."""
+    """Remove an LLM sanitize-request guardrail.
+
+    Args:
+        name: Guardrail name previously passed to
+            ``nat_nexus_register_llm_sanitize_request_guardrail()``.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     ...
 
 def nat_nexus_register_llm_sanitize_response_guardrail(
-    name: str, priority: int, guardrail: Callable[[dict], dict]
+    name: str, priority: int, guardrail: LlmSanitizeResponseGuardrail
 ) -> None:
     """Register an LLM sanitize-response guardrail.
 
-    Callback: ``(response: dict) -> dict``.
+    Args:
+        name: Unique guardrail name.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callback invoked as ``(response: dict) -> dict``.
     """
     ...
 
 def nat_nexus_deregister_llm_sanitize_response_guardrail(name: str) -> bool:
-    """Remove an LLM sanitize-response guardrail. Returns ``True`` if found."""
+    """Remove an LLM sanitize-response guardrail.
+
+    Args:
+        name: Guardrail name previously passed to
+            ``nat_nexus_register_llm_sanitize_response_guardrail()``.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     ...
 
 def nat_nexus_register_llm_conditional_execution_guardrail(
-    name: str, priority: int, guardrail: Callable[[LLMRequest], Optional[str]]
+    name: str, priority: int, guardrail: LlmConditionalExecutionGuardrail
 ) -> None:
     """Register an LLM conditional-execution guardrail.
 
-    Callback: ``(request) -> None | rejection_reason``.
+    Args:
+        name: Unique guardrail name.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callback invoked as ``(request) -> None |
+            rejection_reason``.
     """
     ...
 
 def nat_nexus_deregister_llm_conditional_execution_guardrail(name: str) -> bool:
-    """Remove an LLM conditional-execution guardrail. Returns ``True`` if found."""
+    """Remove an LLM conditional-execution guardrail.
+
+    Args:
+        name: Guardrail name previously passed to
+            ``nat_nexus_register_llm_conditional_execution_guardrail()``.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     ...
 
 # ---------------------------------------------------------------------------
@@ -1185,31 +1327,49 @@ def nat_nexus_register_llm_request_intercept(
     name: str,
     priority: int,
     break_chain: bool,
-    callable: Callable[[str, LLMRequest], LLMRequest],
+    callable: LlmRequestIntercept,
 ) -> None:
     """Register an LLM request intercept.
 
-    Callback: ``(name: str, request: LLMRequest) -> LLMRequest`` — transforms the LLM request.
+    Args:
+        name: Unique intercept name.
+        priority: Execution order for the intercept. Lower values run first.
+        break_chain: Whether to stop lower-priority request intercepts after
+            this one runs.
+        callable: Callback that transforms the LLM request.
     """
     ...
 
 def nat_nexus_deregister_llm_request_intercept(name: str) -> bool:
-    """Remove an LLM request intercept. Returns ``True`` if found."""
+    """Remove an LLM request intercept.
+
+    Args:
+        name: Intercept name previously passed to
+            ``nat_nexus_register_llm_request_intercept()``.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     ...
 
 def nat_nexus_register_llm_execution_intercept(
     name: str,
     priority: int,
-    callable: Callable[[str, LLMRequest, Callable[[LLMRequest], Awaitable[Json]]], Awaitable[Json]],
+    callable: LlmExecutionIntercept,
 ) -> None:
     """Register an LLM execution intercept (middleware chain pattern).
+
+    Args:
+        name: Unique intercept name.
+        priority: Execution order for the intercept. Lower values run first.
+        callable: Intercept callback.
 
     ``callable``: ``async (name, request, next) -> response`` — intercept function.
     Call ``await next(request)`` to invoke the next intercept or original
     implementation. Skip calling ``next`` to short-circuit the chain.
 
-    Example::
-
+    Example:
+        ```python
         async def logging_intercept(name: str, request: LLMRequest, next):
             print(f"LLM request: {request.content['model']}")
             response = await next(request)
@@ -1217,21 +1377,33 @@ def nat_nexus_register_llm_execution_intercept(
             return response
 
         nat_nexus_register_llm_execution_intercept("logger", 0, logging_intercept)
+        ```
     """
     ...
 
 def nat_nexus_deregister_llm_execution_intercept(name: str) -> bool:
-    """Remove an LLM execution intercept. Returns ``True`` if found."""
+    """Remove an LLM execution intercept.
+
+    Args:
+        name: Intercept name previously passed to
+            ``nat_nexus_register_llm_execution_intercept()``.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     ...
 
 def nat_nexus_register_llm_stream_execution_intercept(
     name: str,
     priority: int,
-    callable: Callable[
-        [LLMRequest, Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]]], Awaitable[AsyncIterator[Json]]
-    ],
+    callable: LlmStreamExecutionIntercept,
 ) -> None:
     """Register an LLM stream-execution intercept (middleware chain pattern).
+
+    Args:
+        name: Unique intercept name.
+        priority: Execution order for the intercept. Lower values run first.
+        callable: Streaming intercept callback.
 
     ``callable``: ``async (request, next) -> AsyncIterator[Json]`` — intercept
     function. Call ``await next(request)`` to invoke the next intercept or
@@ -1240,7 +1412,15 @@ def nat_nexus_register_llm_stream_execution_intercept(
     ...
 
 def nat_nexus_deregister_llm_stream_execution_intercept(name: str) -> bool:
-    """Remove an LLM stream-execution intercept. Returns ``True`` if found."""
+    """Remove an LLM stream-execution intercept.
+
+    Args:
+        name: Intercept name previously passed to
+            ``nat_nexus_register_llm_stream_execution_intercept()``.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     ...
 
 # ---------------------------------------------------------------------------
@@ -1250,19 +1430,30 @@ def nat_nexus_deregister_llm_stream_execution_intercept(name: str) -> bool:
 def nat_nexus_register_subscriber(name: str, callback: Callable[[Event], None]) -> None:
     """Register an event subscriber.
 
-    Callback: ``(event) -> None`` — called for every lifecycle event.
+    Args:
+        name: Unique subscriber name.
+        callback: Callback invoked for every lifecycle event.
 
-    Example::
-
+    Example:
+        ```python
         def on_event(event: Event) -> None:
             print(f"[{event.kind}] {event.name} @ {event.timestamp}")
 
         nat_nexus_register_subscriber("my-logger", on_event)
+        ```
     """
     ...
 
 def nat_nexus_deregister_subscriber(name: str) -> bool:
-    """Remove an event subscriber. Returns ``True`` if found."""
+    """Remove an event subscriber.
+
+    Args:
+        name: Subscriber name previously passed to
+            ``nat_nexus_register_subscriber()``.
+
+    Returns:
+        bool: ``True`` if a subscriber was removed, otherwise ``False``.
+    """
     ...
 
 # ---------------------------------------------------------------------------
@@ -1270,7 +1461,7 @@ def nat_nexus_deregister_subscriber(name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def nat_nexus_scope_register_tool_sanitize_request_guardrail(
-    scope_uuid: str, name: str, priority: int, guardrail: Callable[[str, Json], Json]
+    scope_uuid: str, name: str, priority: int, guardrail: ToolSanitizeGuardrail
 ) -> None:
     """Register a scope-local tool sanitize-request guardrail.
 
@@ -1286,11 +1477,19 @@ def nat_nexus_scope_register_tool_sanitize_request_guardrail(
     ...
 
 def nat_nexus_scope_deregister_tool_sanitize_request_guardrail(scope_uuid: str, name: str) -> bool:
-    """Remove a scope-local tool sanitize-request guardrail. Returns ``True`` if found."""
+    """Remove a scope-local tool sanitize-request guardrail.
+
+    Args:
+        scope_uuid: UUID string of the scope that owns the registration.
+        name: Guardrail name previously used during registration.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     ...
 
 def nat_nexus_scope_register_tool_sanitize_response_guardrail(
-    scope_uuid: str, name: str, priority: int, guardrail: Callable[[str, Json], Json]
+    scope_uuid: str, name: str, priority: int, guardrail: ToolSanitizeGuardrail
 ) -> None:
     """Register a scope-local tool sanitize-response guardrail.
 
@@ -1306,11 +1505,19 @@ def nat_nexus_scope_register_tool_sanitize_response_guardrail(
     ...
 
 def nat_nexus_scope_deregister_tool_sanitize_response_guardrail(scope_uuid: str, name: str) -> bool:
-    """Remove a scope-local tool sanitize-response guardrail. Returns ``True`` if found."""
+    """Remove a scope-local tool sanitize-response guardrail.
+
+    Args:
+        scope_uuid: UUID string of the scope that owns the registration.
+        name: Guardrail name previously used during registration.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     ...
 
 def nat_nexus_scope_register_tool_conditional_execution_guardrail(
-    scope_uuid: str, name: str, priority: int, guardrail: Callable[[str, Json], Optional[str]]
+    scope_uuid: str, name: str, priority: int, guardrail: ToolConditionalExecutionGuardrail
 ) -> None:
     """Register a scope-local tool conditional-execution guardrail.
 
@@ -1323,7 +1530,15 @@ def nat_nexus_scope_register_tool_conditional_execution_guardrail(
     ...
 
 def nat_nexus_scope_deregister_tool_conditional_execution_guardrail(scope_uuid: str, name: str) -> bool:
-    """Remove a scope-local tool conditional-execution guardrail. Returns ``True`` if found."""
+    """Remove a scope-local tool conditional-execution guardrail.
+
+    Args:
+        scope_uuid: UUID string of the scope that owns the registration.
+        name: Guardrail name previously used during registration.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     ...
 
 # ---------------------------------------------------------------------------
@@ -1335,7 +1550,7 @@ def nat_nexus_scope_register_tool_request_intercept(
     name: str,
     priority: int,
     break_chain: bool,
-    callable: Callable[[str, Json], Json],
+    callable: ToolRequestIntercept,
 ) -> None:
     """Register a scope-local tool request intercept.
 
@@ -1349,14 +1564,22 @@ def nat_nexus_scope_register_tool_request_intercept(
     ...
 
 def nat_nexus_scope_deregister_tool_request_intercept(scope_uuid: str, name: str) -> bool:
-    """Remove a scope-local tool request intercept. Returns ``True`` if found."""
+    """Remove a scope-local tool request intercept.
+
+    Args:
+        scope_uuid: UUID string of the scope that owns the registration.
+        name: Intercept name previously used during registration.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     ...
 
 def nat_nexus_scope_register_tool_execution_intercept(
     scope_uuid: str,
     name: str,
     priority: int,
-    callable: Callable[[str, Json, Callable[[Json], Awaitable[Json]]], Awaitable[Json]],
+    callable: ToolExecutionIntercept,
 ) -> None:
     """Register a scope-local tool execution intercept (middleware chain pattern).
 
@@ -1369,7 +1592,15 @@ def nat_nexus_scope_register_tool_execution_intercept(
     ...
 
 def nat_nexus_scope_deregister_tool_execution_intercept(scope_uuid: str, name: str) -> bool:
-    """Remove a scope-local tool execution intercept. Returns ``True`` if found."""
+    """Remove a scope-local tool execution intercept.
+
+    Args:
+        scope_uuid: UUID string of the scope that owns the registration.
+        name: Intercept name previously used during registration.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     ...
 
 # ---------------------------------------------------------------------------
@@ -1377,7 +1608,7 @@ def nat_nexus_scope_deregister_tool_execution_intercept(scope_uuid: str, name: s
 # ---------------------------------------------------------------------------
 
 def nat_nexus_scope_register_llm_sanitize_request_guardrail(
-    scope_uuid: str, name: str, priority: int, guardrail: Callable[[LLMRequest], LLMRequest]
+    scope_uuid: str, name: str, priority: int, guardrail: LlmSanitizeRequestGuardrail
 ) -> None:
     """Register a scope-local LLM sanitize-request guardrail.
 
@@ -1393,11 +1624,19 @@ def nat_nexus_scope_register_llm_sanitize_request_guardrail(
     ...
 
 def nat_nexus_scope_deregister_llm_sanitize_request_guardrail(scope_uuid: str, name: str) -> bool:
-    """Remove a scope-local LLM sanitize-request guardrail. Returns ``True`` if found."""
+    """Remove a scope-local LLM sanitize-request guardrail.
+
+    Args:
+        scope_uuid: UUID string of the scope that owns the registration.
+        name: Guardrail name previously used during registration.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     ...
 
 def nat_nexus_scope_register_llm_sanitize_response_guardrail(
-    scope_uuid: str, name: str, priority: int, guardrail: Callable[[dict], dict]
+    scope_uuid: str, name: str, priority: int, guardrail: LlmSanitizeResponseGuardrail
 ) -> None:
     """Register a scope-local LLM sanitize-response guardrail.
 
@@ -1413,11 +1652,19 @@ def nat_nexus_scope_register_llm_sanitize_response_guardrail(
     ...
 
 def nat_nexus_scope_deregister_llm_sanitize_response_guardrail(scope_uuid: str, name: str) -> bool:
-    """Remove a scope-local LLM sanitize-response guardrail. Returns ``True`` if found."""
+    """Remove a scope-local LLM sanitize-response guardrail.
+
+    Args:
+        scope_uuid: UUID string of the scope that owns the registration.
+        name: Guardrail name previously used during registration.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     ...
 
 def nat_nexus_scope_register_llm_conditional_execution_guardrail(
-    scope_uuid: str, name: str, priority: int, guardrail: Callable[[LLMRequest], Optional[str]]
+    scope_uuid: str, name: str, priority: int, guardrail: LlmConditionalExecutionGuardrail
 ) -> None:
     """Register a scope-local LLM conditional-execution guardrail.
 
@@ -1430,7 +1677,15 @@ def nat_nexus_scope_register_llm_conditional_execution_guardrail(
     ...
 
 def nat_nexus_scope_deregister_llm_conditional_execution_guardrail(scope_uuid: str, name: str) -> bool:
-    """Remove a scope-local LLM conditional-execution guardrail. Returns ``True`` if found."""
+    """Remove a scope-local LLM conditional-execution guardrail.
+
+    Args:
+        scope_uuid: UUID string of the scope that owns the registration.
+        name: Guardrail name previously used during registration.
+
+    Returns:
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
+    """
     ...
 
 # ---------------------------------------------------------------------------
@@ -1442,7 +1697,7 @@ def nat_nexus_scope_register_llm_request_intercept(
     name: str,
     priority: int,
     break_chain: bool,
-    callable: Callable[[str, LLMRequest], LLMRequest],
+    callable: LlmRequestIntercept,
 ) -> None:
     """Register a scope-local LLM request intercept.
 
@@ -1456,14 +1711,22 @@ def nat_nexus_scope_register_llm_request_intercept(
     ...
 
 def nat_nexus_scope_deregister_llm_request_intercept(scope_uuid: str, name: str) -> bool:
-    """Remove a scope-local LLM request intercept. Returns ``True`` if found."""
+    """Remove a scope-local LLM request intercept.
+
+    Args:
+        scope_uuid: UUID string of the scope that owns the registration.
+        name: Intercept name previously used during registration.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     ...
 
 def nat_nexus_scope_register_llm_execution_intercept(
     scope_uuid: str,
     name: str,
     priority: int,
-    callable: Callable[[str, LLMRequest, Callable[[LLMRequest], Awaitable[Json]]], Awaitable[Json]],
+    callable: LlmExecutionIntercept,
 ) -> None:
     """Register a scope-local LLM execution intercept (middleware chain pattern).
 
@@ -1476,16 +1739,22 @@ def nat_nexus_scope_register_llm_execution_intercept(
     ...
 
 def nat_nexus_scope_deregister_llm_execution_intercept(scope_uuid: str, name: str) -> bool:
-    """Remove a scope-local LLM execution intercept. Returns ``True`` if found."""
+    """Remove a scope-local LLM execution intercept.
+
+    Args:
+        scope_uuid: UUID string of the scope that owns the registration.
+        name: Intercept name previously used during registration.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     ...
 
 def nat_nexus_scope_register_llm_stream_execution_intercept(
     scope_uuid: str,
     name: str,
     priority: int,
-    callable: Callable[
-        [LLMRequest, Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]]], Awaitable[AsyncIterator[Json]]
-    ],
+    callable: LlmStreamExecutionIntercept,
 ) -> None:
     """Register a scope-local LLM stream-execution intercept (middleware chain pattern).
 
@@ -1498,7 +1767,15 @@ def nat_nexus_scope_register_llm_stream_execution_intercept(
     ...
 
 def nat_nexus_scope_deregister_llm_stream_execution_intercept(scope_uuid: str, name: str) -> bool:
-    """Remove a scope-local LLM stream-execution intercept. Returns ``True`` if found."""
+    """Remove a scope-local LLM stream-execution intercept.
+
+    Args:
+        scope_uuid: UUID string of the scope that owns the registration.
+        name: Intercept name previously used during registration.
+
+    Returns:
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
+    """
     ...
 
 # ---------------------------------------------------------------------------
@@ -1516,5 +1793,13 @@ def nat_nexus_scope_register_subscriber(scope_uuid: str, name: str, callback: Ca
     ...
 
 def nat_nexus_scope_deregister_subscriber(scope_uuid: str, name: str) -> bool:
-    """Remove a scope-local event subscriber. Returns ``True`` if found."""
+    """Remove a scope-local event subscriber.
+
+    Args:
+        scope_uuid: UUID string of the scope that owns the registration.
+        name: Subscriber name previously used during registration.
+
+    Returns:
+        bool: ``True`` if a subscriber was removed, otherwise ``False``.
+    """
     ...

@@ -52,14 +52,15 @@ wasm-pack test --node crates/wasm
 
 ## Optimizer Runtime
 
-The WASM binding uses plain JavaScript objects for optimizer config and exports
-runtime helpers directly from the generated package.
+The WASM binding uses plain JavaScript objects for optimizer config and exposes
+the optimizer surface through `optimizer.js`.
 
 ```javascript
-import init, {
-  OptimizerRuntime,
-  validateOptimizerConfig,
-} from "./pkg/nvidia_nat_nexus_wasm.js";
+import init from "./pkg/nvidia_nat_nexus_wasm.js";
+import {
+  Runtime,
+  validateConfig,
+} from "./optimizer.js";
 
 await init();
 
@@ -71,8 +72,8 @@ const config = {
   ],
 };
 
-const validation = validateOptimizerConfig(config);
-const runtime = new OptimizerRuntime(config);
+const validation = validateConfig(config);
+const runtime = new Runtime(config);
 ```
 
 ## Hosted Optimizer Plugins
@@ -81,34 +82,29 @@ WASM hosted plugins register JavaScript handlers first, then enable themselves
 through `external_component` in the optimizer config.
 
 ```javascript
-import init, {
-  OptimizerRuntime,
-  registerOptimizerPlugin,
-} from "./pkg/nvidia_nat_nexus_wasm.js";
+import init from "./pkg/nvidia_nat_nexus_wasm.js";
+import {
+  Runtime,
+  registerPlugin,
+} from "./optimizer.js";
 
 await init();
 
-registerOptimizerPlugin("example.header_plugin", {
+registerPlugin("example.header_plugin", {
   validate(instanceId, pluginConfig) {
     return [];
   },
   register(instanceId, pluginConfig, context) {
-    context.registerLlmRequestIntercept(
-      `${instanceId}.header`,
+    context.registerToolRequestIntercept(
+      `${instanceId}.tool`,
       25,
       false,
-      (name, request, annotated) => [
-        {
-          headers: { ...request.headers, "x-plugin": instanceId },
-          content: request.content,
-        },
-        annotated,
-      ],
+      (_name, args) => ({ ...args, wasmPlugin: instanceId }),
     );
   },
 });
 
-const runtime = new OptimizerRuntime({
+const runtime = new Runtime({
   version: 1,
   components: [
     {

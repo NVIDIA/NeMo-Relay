@@ -6,20 +6,13 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
-const {
-  defaultOptimizerConfig,
-  optimizerInMemoryBackend,
-  externalComponent,
-  registerOptimizerPlugin,
-  deregisterOptimizerPlugin,
-} = require('../typed.js');
+const optimizer = require('../optimizer.js');
 
 describe('optimizer hosted plugins', () => {
   it('routes validation diagnostics through a registered JS plugin', () => {
     const pluginKind = `node.test.validate.${Date.now()}`;
 
-    registerOptimizerPlugin(pluginKind, {
+    optimizer.registerPlugin(pluginKind, {
       validate(instanceId, pluginConfig) {
         return [{
           level: 'warning',
@@ -33,10 +26,10 @@ describe('optimizer hosted plugins', () => {
     });
 
     try {
-      const report = lib.validateOptimizerConfig({
+      const report = optimizer.validateConfig({
         version: 1,
         components: [
-          externalComponent(pluginKind, 'node-plugin-validate', { threshold: 7 }),
+          optimizer.externalComponent(pluginKind, 'node-plugin-validate', { threshold: 7 }),
         ],
       });
 
@@ -44,7 +37,7 @@ describe('optimizer hosted plugins', () => {
       assert.equal(report.diagnostics[0].code, 'optimizer.node_plugin_validate');
       assert.equal(report.diagnostics[0].field, 'plugin_config.threshold');
     } finally {
-      assert.equal(deregisterOptimizerPlugin(pluginKind), true);
+      assert.equal(optimizer.deregisterPlugin(pluginKind), true);
     }
   });
 
@@ -53,7 +46,7 @@ describe('optimizer hosted plugins', () => {
     let registerCalls = 0;
     let registerContext = null;
 
-    registerOptimizerPlugin(pluginKind, {
+    optimizer.registerPlugin(pluginKind, {
       register(instanceId, pluginConfig, context) {
         registerCalls += 1;
         assert.equal(instanceId, 'node-plugin-register');
@@ -89,13 +82,13 @@ describe('optimizer hosted plugins', () => {
       },
     });
 
-    const config = defaultOptimizerConfig();
-    config.state = { backend: optimizerInMemoryBackend() };
+    const config = optimizer.defaultConfig();
+    config.state = { backend: optimizer.inMemoryBackend() };
     config.components = [
-      externalComponent(pluginKind, 'node-plugin-register', { priority: 17 }),
+      optimizer.externalComponent(pluginKind, 'node-plugin-register', { priority: 17 }),
     ];
 
-    const runtime = new lib.OptimizerRuntime(config);
+    const runtime = new optimizer.Runtime(config);
     try {
       assert.deepEqual((await runtime.report()).diagnostics, []);
       await runtime.register();
@@ -112,7 +105,7 @@ describe('optimizer hosted plugins', () => {
       await runtime.deregister();
       await runtime.shutdown();
     } finally {
-      deregisterOptimizerPlugin(pluginKind);
+      optimizer.deregisterPlugin(pluginKind);
     }
   });
 });

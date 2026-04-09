@@ -12,16 +12,10 @@ const {
   typedLlmExecute,
   typedLlmStreamExecute,
   JsonPassthrough,
-  defaultOptimizerConfig,
-  optimizerInMemoryBackend,
-  telemetryComponent,
-  dynamoHintsComponent,
-  toolParallelismComponent,
 } = require('../typed.js');
+const optimizer = require('../optimizer.js');
 
-const {
-  registerToolRequestIntercept, deregisterToolRequestIntercept, OptimizerRuntime, validateOptimizerConfig,
-} = lib;
+const { registerToolRequestIntercept, deregisterToolRequestIntercept } = lib;
 
 // ===========================================================================
 // Codec helpers for testing
@@ -66,27 +60,32 @@ describe('JsonPassthrough', () => {
 });
 
 describe('optimizer typed helpers', () => {
+  it('keeps optimizer helpers out of typed.js', () => {
+    assert.equal('defaultOptimizerConfig' in require('../typed.js'), false);
+    assert.equal(typeof optimizer.defaultConfig, 'function');
+  });
+
   it('build default optimizer config and components', () => {
-    const config = defaultOptimizerConfig();
-    config.state = { backend: optimizerInMemoryBackend() };
+    const config = optimizer.defaultConfig();
+    config.state = { backend: optimizer.inMemoryBackend() };
     config.components = [
-      telemetryComponent({ learners: ['latency_sensitivity'] }),
-      dynamoHintsComponent(),
-      toolParallelismComponent(),
+      optimizer.telemetryComponent({ learners: ['latency_sensitivity'] }),
+      optimizer.dynamoHintsComponent(),
+      optimizer.toolParallelismComponent(),
     ];
 
-    const report = validateOptimizerConfig(config);
+    const report = optimizer.validateConfig(config);
     assert.deepEqual(report.diagnostics, []);
   });
 
   it('runs optimizer runtime lifecycle from JS', async () => {
-    const runtime = new OptimizerRuntime({
+    const runtime = new optimizer.Runtime({
       version: 1,
-      state: { backend: optimizerInMemoryBackend() },
+      state: { backend: optimizer.inMemoryBackend() },
       components: [
-        telemetryComponent({ learners: ['latency_sensitivity'] }),
-        dynamoHintsComponent(),
-        toolParallelismComponent(),
+        optimizer.telemetryComponent({ learners: ['latency_sensitivity'] }),
+        optimizer.dynamoHintsComponent(),
+        optimizer.toolParallelismComponent(),
       ],
     });
 

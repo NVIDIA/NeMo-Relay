@@ -42,24 +42,23 @@ npm test
 
 ## Optimizer Runtime
 
-Node exposes optimizer helpers through `typed.js` and validation through the
-generated addon:
+Node exposes optimizer helpers through `optimizer.js`:
 
 ```javascript
-const { validateOptimizerConfig } = require("./index.js");
 const {
-  OptimizerRuntime,
-  defaultOptimizerConfig,
-  optimizerInMemoryBackend,
+  Runtime,
+  defaultConfig,
+  inMemoryBackend,
   telemetryComponent,
-} = require("./typed.js");
+  validateConfig,
+} = require("./optimizer.js");
 
-const config = defaultOptimizerConfig();
-config.state = { backend: optimizerInMemoryBackend() };
+const config = defaultConfig();
+config.state = { backend: inMemoryBackend() };
 config.components = [telemetryComponent({ learners: ["latency_sensitivity"] })];
 
-const validation = validateOptimizerConfig(config);
-const runtime = new OptimizerRuntime(config);
+const validation = validateConfig(config);
+const runtime = new Runtime(config);
 ```
 
 ## Hosted Optimizer Plugins
@@ -69,35 +68,29 @@ through `externalComponent(...)` in the optimizer config.
 
 ```javascript
 const {
-  OptimizerRuntime,
-  defaultOptimizerConfig,
+  Runtime,
+  defaultConfig,
   externalComponent,
-  registerOptimizerPlugin,
-} = require("./typed.js");
+  registerPlugin,
+} = require("./optimizer.js");
 
-registerOptimizerPlugin("example.header_plugin", {
+registerPlugin("example.header_plugin", {
   validate(instanceId, pluginConfig) {
     return [];
   },
   register(instanceId, pluginConfig, context) {
-    context.registerLlmRequestIntercept(
-      `${instanceId}.header`,
+    context.registerToolRequestIntercept(
+      `${instanceId}.tool`,
       25,
       false,
-      (name, request, annotated) => [
-        {
-          headers: { ...request.headers, "x-plugin": instanceId },
-          content: request.content,
-        },
-        annotated,
-      ],
+      (_name, args) => ({ ...args, nodePlugin: instanceId }),
     );
   },
 });
 
-const config = defaultOptimizerConfig();
+const config = defaultConfig();
 config.components = [externalComponent("example.header_plugin", "plugin-1", {})];
-const runtime = new OptimizerRuntime(config);
+const runtime = new Runtime(config);
 ```
 
 `context` exposes:

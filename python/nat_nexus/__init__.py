@@ -1,76 +1,67 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""NeMo Agent Toolkit Nexus - Agent Runtime with scope/handle management, guardrails, and intercepts.
+"""Python bindings for the Nexus runtime.
 
-NeMo Agent Toolkit Nexus provides execution scope management, lifecycle event tracking, and
-configurable middleware pipelines (guardrails and intercepts) for tool and LLM
-calls. The core is written in Rust; this package exposes the full API to Python.
+This package exposes the runtime's scope stack, lifecycle events, middleware
+registries, typed wrappers, and optimizer helpers from Python.
 
-**Quick start**::
+The main entry points are:
 
+- ``nat_nexus.scope`` for creating and nesting scopes
+- ``nat_nexus.tools`` for tool lifecycle management
+- ``nat_nexus.llm`` for non-streaming and streaming LLM lifecycle management
+- ``nat_nexus.guardrails`` and ``nat_nexus.intercepts`` for global middleware
+- ``nat_nexus.scope_local`` for middleware scoped to a specific ``ScopeHandle``
+- ``nat_nexus.typed`` for codec-based typed wrappers
+- ``nat_nexus.optimizer`` for optimizer configuration and plugin registration
+
+Example:
+    ```python
     import asyncio
 
     import nat_nexus
 
-    def sanitizer(tool_name, args):
-        # Sanitize PII from tool arguments
-        return {k: "***" if "ssn" in k else v for k, v in args.items()}
+    def redact_args(tool_name, args):
+        return {**args, "api_key": "***"}
 
-    def add_auth(request):
-        request.headers["Authorization"] = "Bearer XYZ"
-        return request
+    def add_header(name, request, annotated):
+        request.headers["Authorization"] = "Bearer test-token"
+        return request, annotated
 
-    async def amain():
-        # Define your tool and LLM functions
-        my_tool_fn = lambda args: {**args, "result": "ok"}
-        my_llm_fn = lambda request: {**request.content, "response": "ok"}
+    async def tool_impl(args):
+        return {"echo": args["query"]}
 
-        # Register guardrails and intercepts
-        nat_nexus.guardrails.register_tool_sanitize_request("pii-filter", 10, sanitizer)
-        nat_nexus.intercepts.register_llm_request("auth-header", 1, False, add_auth)
+    async def llm_impl(request):
+        return {"messages": request.content["messages"], "ok": True}
 
-        # Subscribe to lifecycle events
-        nat_nexus.subscribers.register("logger", lambda event: print(event.name))
+    async def main():
+        nat_nexus.guardrails.register_tool_sanitize_request("redact", 10, redact_args)
+        nat_nexus.intercepts.register_llm_request("auth", 10, False, add_header)
 
-        # Create a scope for your agent
-        with nat_nexus.scope.scope("my-agent", nat_nexus.ScopeType.Agent) as handle:
-            # Execute a tool through the middleware pipeline
-            result = await nat_nexus.tools.execute("search", {"q": "hello"}, my_tool_fn)
+        with nat_nexus.scope.scope("demo-agent", nat_nexus.ScopeType.Agent):
+            tool_result = await nat_nexus.tools.execute("search", {"query": "hello"}, tool_impl)
+            llm_result = await nat_nexus.llm.execute(
+                "demo-model",
+                nat_nexus.LLMRequest({}, {"messages": [{"role": "user", "content": "hi"}]}),
+                llm_impl,
+            )
 
-            # Execute an LLM call through the middleware pipeline
-            native = {"messages": [{"role": "user", "content": "hello"}]}
-            resp = await nat_nexus.llm.execute("gpt-4", nat_nexus.LLMRequest({}, native), my_llm_fn)
+            print(tool_result, llm_result)
 
-    asyncio.run(amain())
-
-
-Submodules:
-    scope       - Scope stack operations (push, pop, get_handle, event).
-    tools       - Tool call lifecycle (call, call_end, execute).
-    llm         - LLM call lifecycle (call, call_end, execute, stream_execute).
-    guardrails  - Guardrail registration for tools and LLMs.
-    intercepts  - Intercept registration for tools and LLMs.
-    subscribers - Event subscriber registration.
-    scope_local - Scope-local guardrail, intercept, and subscriber registration.
-    optimizer   - Optimizer config helpers, diagnostics, and runtime lifecycle API.
-
-Types (available at top level):
-    ScopeAttributes, ToolAttributes, LLMAttributes,
-    ScopeType,
-    ScopeHandle, ToolHandle, LLMHandle,
-    LLMRequest, Event, AtifExporter,
-    OpenTelemetryConfig, OpenTelemetrySubscriber
+    asyncio.run(main())
+    ```
 """
+
+from __future__ import annotations
 
 import contextvars
 import typing
+from typing import AsyncIterator, Awaitable, Callable, Literal, Optional, TypeAlias
 
-from nat_nexus import codecs, guardrails, intercepts, llm, optimizer, scope, scope_local, subscribers, tools, typed
 from nat_nexus._native import (
     AnnotatedLLMRequest,
     AnnotatedLLMResponse,
-    AnthropicMessagesCodec,
     # ATIF exporter
     AtifExporter,
     LLMAttributes,
@@ -79,8 +70,6 @@ from nat_nexus._native import (
     LLMRequest,
     LLMStartEvent,
     MarkEvent,
-    OpenAIChatCodec,
-    OpenAIResponsesCodec,
     OpenInferenceConfig,
     OpenInferenceSubscriber,
     OpenTelemetryConfig,
@@ -102,20 +91,75 @@ from nat_nexus._native import scope_stack_active as _native_scope_stack_active
 from nat_nexus._native import set_thread_scope_stack as _set_thread_scope_stack
 from nat_nexus._native import sync_thread_scope_stack as _sync_thread_scope_stack
 
+JsonPrimitive: TypeAlias = str | int | float | bool | None
+JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"]
+JsonObject: TypeAlias = dict[str, JsonValue]
+Json: TypeAlias = JsonValue
+UnsupportedBehavior: TypeAlias = Literal["ignore", "warn", "error"]
+
+ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json]
+ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str]]
+LlmSanitizeRequestGuardrail: TypeAlias = Callable[[LLMRequest], LLMRequest]
+LlmSanitizeResponseGuardrail: TypeAlias = Callable[[JsonObject], JsonObject]
+LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[str]]
+ToolRequestIntercept: TypeAlias = Callable[[str, Json], Json]
+ToolExecutionIntercept: TypeAlias = Callable[
+    [str, Json, Callable[[Json], Awaitable[Json]]],
+    Json | Awaitable[Json],
+]
+LlmRequestIntercept: TypeAlias = Callable[
+    [str, LLMRequest, AnnotatedLLMRequest | None],
+    tuple[LLMRequest, AnnotatedLLMRequest | None],
+]
+LlmExecutionIntercept: TypeAlias = Callable[
+    [str, LLMRequest, Callable[[LLMRequest], Awaitable[Json]]],
+    Json | Awaitable[Json],
+]
+LlmStreamExecutionIntercept: TypeAlias = Callable[
+    [LLMRequest, Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]]],
+    AsyncIterator[Json] | Awaitable[AsyncIterator[Json]],
+]
+
+from nat_nexus import (  # noqa: E402
+    codecs,
+    guardrails,
+    intercepts,
+    llm,
+    optimizer,
+    scope,
+    scope_local,
+    subscribers,
+    tools,
+    typed,
+)
+
 _scope_stack_var: contextvars.ContextVar[_ScopeStack] = contextvars.ContextVar("nat_nexus_scope_stack")
 
 
 def get_scope_stack() -> _ScopeStack:
-    """Get the current task's scope stack, creating one if needed.
+    """Return the current task's active scope stack.
 
-    Also syncs the scope stack to the Rust-side thread-local storage so that
-    native API calls on this thread use the same scope stack.
+    If the current async context does not yet own a scope stack, this function
+    creates one and synchronizes it into the Rust thread-local storage used by
+    the native runtime. Most callers do not need to invoke this directly
+    because higher-level helpers such as ``nat_nexus.scope.push()`` do it
+    automatically.
 
-    .. note::
-        This uses ``sync_thread_scope_stack`` (not ``set_thread_scope_stack``)
-        so the internal sync does not set the ``scope_stack_active()`` flag.
-        Only explicit user calls to ``set_thread_scope_stack()`` mark the
-        thread as having an active scope stack.
+    Returns:
+        ScopeStack: The scope stack associated with the current Python context.
+
+    Notes:
+        Calling this function synchronizes the Python ``ContextVar`` state into
+        the native thread-local slot so subsequent native runtime calls observe
+        the same scope hierarchy.
+
+    Example:
+        ```python
+        import nat_nexus
+
+        stack = nat_nexus.get_scope_stack()
+        assert stack is not None
+        ```
     """
     stack = _scope_stack_var.get(None)
     if stack is None:
@@ -129,18 +173,25 @@ def get_scope_stack() -> _ScopeStack:
 
 
 def scope_stack_active() -> bool:
-    """Return whether the current context has an explicitly-initialized scope stack.
+    """Report whether the current context already owns a scope stack.
 
-    Returns ``True`` when:
-    - The Python-side ``contextvars.ContextVar`` has been set (e.g. via
-      ``get_scope_stack()``), **or**
-    - The Rust-side thread-local has been explicitly set via
-      ``set_thread_scope_stack()``.
+    Returns:
+        bool: ``True`` when the current Python context already has an active
+        stack, either because it was created in this context or because a stack
+        was explicitly installed for the current thread.
 
-    Returns ``False`` when only the auto-created default is present.
+    Notes:
+        This function does not create a scope stack. It is a pure status check
+        used to decide whether scope propagation work is required.
 
-    This replaces the ``nat_nexus._scope_stack_var.get(None) is not None``
-    pattern used in integrations.
+    Example:
+        ```python
+        import nat_nexus
+
+        assert nat_nexus.scope_stack_active() is False
+        nat_nexus.get_scope_stack()
+        assert nat_nexus.scope_stack_active() is True
+        ```
     """
     if _scope_stack_var.get(None) is not None:
         return True
@@ -148,28 +199,45 @@ def scope_stack_active() -> bool:
 
 
 def propagate_scope_to_thread() -> _ScopeStack:
-    """Capture the current scope stack for propagation to a worker thread.
+    """Capture the active scope stack for use in another thread.
 
-    Returns the current ``ScopeStack`` handle. Call
-    ``set_thread_scope_stack()`` with the returned value inside the worker
-    thread before making any Nexus API calls.
+    The returned stack can be passed to ``set_thread_scope_stack()`` inside a
+    worker thread so that the worker emits events into the same scope hierarchy
+    as the parent context.
 
-    Example::
-
-        stack = nat_nexus.propagate_scope_to_thread()
-
-        def worker():
-            nat_nexus.set_thread_scope_stack(stack)
-            # All Nexus calls on this thread now use the captured stack
-            ...
-
-        with ThreadPoolExecutor() as pool:
-            pool.submit(worker).result()
+    Returns:
+        ScopeStack: The active stack from the current context.
 
     Raises:
-        RuntimeError: If no scope stack has been explicitly initialized in
-            the current context (i.e., ``scope_stack_active()`` returns
-            ``False``).
+        RuntimeError: If the current context does not yet have an active scope
+            stack to propagate.
+
+    Notes:
+        This function does not clone the scope hierarchy. It shares the current
+        stack reference with the target thread, which is appropriate when the
+        worker should contribute events to the same logical trace.
+
+    Example:
+        ```python
+        from concurrent.futures import ThreadPoolExecutor
+
+        import nat_nexus
+
+        with nat_nexus.scope.scope("parent", nat_nexus.ScopeType.Agent) as handle:
+            stack = nat_nexus.propagate_scope_to_thread()
+
+            def worker() -> None:
+                nat_nexus.set_thread_scope_stack(stack)
+                nat_nexus.scope.event(
+                    "worker-ran",
+                    handle=handle,
+                    data={"source": "thread"},
+                    metadata={"thread": "pool-1"},
+                )
+
+            with ThreadPoolExecutor() as pool:
+                pool.submit(worker).result()
+        ```
     """
     if not scope_stack_active():
         raise RuntimeError(
@@ -219,9 +287,6 @@ __all__ = [
     "propagate_scope_to_thread",
     "set_thread_scope_stack",
     # Types
-    "OpenAIChatCodec",
-    "OpenAIResponsesCodec",
-    "AnthropicMessagesCodec",
     "ScopeAttributes",
     "ToolAttributes",
     "LLMAttributes",
@@ -245,4 +310,19 @@ __all__ = [
     "OpenInferenceSubscriber",
     "OpenTelemetryConfig",
     "OpenTelemetrySubscriber",
+    "JsonPrimitive",
+    "JsonValue",
+    "JsonObject",
+    "Json",
+    "UnsupportedBehavior",
+    "ToolSanitizeGuardrail",
+    "ToolConditionalExecutionGuardrail",
+    "LlmSanitizeRequestGuardrail",
+    "LlmSanitizeResponseGuardrail",
+    "LlmConditionalExecutionGuardrail",
+    "ToolRequestIntercept",
+    "ToolExecutionIntercept",
+    "LlmRequestIntercept",
+    "LlmExecutionIntercept",
+    "LlmStreamExecutionIntercept",
 ]

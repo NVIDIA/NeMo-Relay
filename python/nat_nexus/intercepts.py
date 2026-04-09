@@ -1,58 +1,30 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Intercept registration for tools and LLMs.
+"""Global middleware intercept registration for tools and LLMs.
 
-Intercepts transform requests or replace execution functions entirely.
-They are priority-ordered (ascending) and registered by name. Request
-intercepts accept a ``break_chain`` flag — when ``True``, no
-lower-priority intercepts run after this one.
+Request intercepts transform inputs before execution. Execution intercepts wrap
+the downstream callable and can observe, modify, or replace the result.
 
-**Tool intercepts** — callback signatures:
-
-    register_tool_request(name, priority, break_chain, fn)
-        ``fn(tool_name: str, args: Json) -> Json`` — transform tool arguments.
-
-    register_tool_execution(name, priority, fn)
-        ``fn`` is ``async (tool_name: str, args: Json, next) -> Json`` —
-        middleware intercept. Call ``await next(args)`` to invoke the next
-        intercept or original implementation; skip calling ``next`` to
-        short-circuit.
-
-**LLM intercepts** — callback signatures:
-
-    register_llm_request(name, priority, break_chain, fn)
-        ``fn(name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None)
-        -> (LLMRequest, AnnotatedLLMRequest | None)`` — transform the LLM
-        request and optional annotated request.
-
-    register_llm_execution(name, priority, fn)
-        ``fn`` is ``async (name: str, request: LLMRequest, next) -> Json`` —
-        middleware intercept. Call ``await next(request)`` to continue the
-        chain.
-
-    register_llm_stream_execution(name, priority, fn)
-        ``fn`` is ``async (request: LLMRequest, next) -> AsyncIterator[Json]``
-        — middleware intercept. Call ``await next(request)`` to continue.
-
-Each ``register_*`` has a corresponding ``deregister_*`` that takes the name
-and returns ``True`` if an intercept was found and removed.
-
-Example::
-
+Example:
+    ```python
     import nat_nexus
-    from nat_nexus import LLMRequest
 
-    def add_header(name, request):
-        request.headers["X-Extra"] = "injected"
-        return request
+    def add_header(name, request, annotated):
+        request.headers["X-Trace"] = "demo"
+        return request, annotated
 
-    nat_nexus.intercepts.register_llm_request("extra", 1, False, add_header)
+    nat_nexus.intercepts.register_llm_request("trace-header", 10, False, add_header)
+    ```
 """
 
-from typing import Any, AsyncIterator, Awaitable, Callable
-
-from nat_nexus._native import AnnotatedLLMRequest, LLMRequest
+from nat_nexus import (
+    LlmExecutionIntercept,
+    LlmRequestIntercept,
+    LlmStreamExecutionIntercept,
+    ToolExecutionIntercept,
+    ToolRequestIntercept,
+)
 from nat_nexus._native import (
     nat_nexus_deregister_llm_execution_intercept as _native_deregister_llm_execution,
 )
@@ -84,87 +56,82 @@ from nat_nexus._native import (
     nat_nexus_register_tool_request_intercept as _native_register_tool_request,
 )
 
-Json = Any
-"""Type alias for JSON-serializable Python objects (dicts, lists, strings, numbers, etc.)."""
-
-ToolRequestIntercept = Callable[[str, Json], Json]
-ToolExecutionIntercept = Callable[[str, Json, Callable[[Json], Awaitable[Json]]], Json | Awaitable[Json]]
-LlmRequestIntercept = Callable[
-    [str, LLMRequest, "AnnotatedLLMRequest | None"],
-    tuple[LLMRequest, "AnnotatedLLMRequest | None"],
-]
-LlmExecutionIntercept = Callable[
-    [str, LLMRequest, Callable[[LLMRequest], Awaitable[Json]]],
-    Json | Awaitable[Json],
-]
-LlmStreamExecutionIntercept = Callable[
-    [LLMRequest, Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]]],
-    AsyncIterator[Json] | Awaitable[AsyncIterator[Json]],
-]
-
 # ---------------------------------------------------------------------------
 # Tool intercepts
 # ---------------------------------------------------------------------------
 
 
 def register_tool_request(name: str, priority: int, break_chain: bool, fn: ToolRequestIntercept) -> None:
-    """Register a tool request intercept.
-
-    The intercept callback receives the tool name and arguments and returns
-    transformed arguments that replace the originals in the pipeline.
+    """Register an intercept that rewrites tool arguments before execution.
 
     Args:
-        name: Unique intercept name.
-        priority: Priority (ascending order; lower runs first).
-        break_chain: If ``True``, no lower-priority intercepts run after this one.
-        fn: Callable ``(tool_name: str, args: Json) -> Json``.
+        name: Unique intercept name used for later replacement or removal.
+        priority: Execution order for the intercept. Lower values run first.
+        break_chain: Whether to stop applying lower-priority request intercepts
+            after this intercept runs.
+        fn: Callable invoked as ``fn(tool_name, args)`` that returns the
+            rewritten tool arguments.
 
-    Raises:
-        RuntimeError: If an intercept with this name already exists.
+    Notes:
+        Request intercepts run after conditional-execution guardrails and
+        before sanitize-request guardrails or execution intercepts.
+
+    Example:
+        ```python
+        import nat_nexus
+
+        def add_trace_id(tool_name, args):
+            return {**args, "trace_id": "req-123"}
+
+        nat_nexus.intercepts.register_tool_request(
+            "trace-id",
+            10,
+            False,
+            add_trace_id,
+        )
+        ```
     """
     return _native_register_tool_request(name, priority, break_chain, fn)
 
 
 def deregister_tool_request(name: str) -> bool:
-    """Remove a tool request intercept.
+    """Remove a previously registered tool request intercept.
 
     Args:
-        name: Name of the intercept to remove.
+        name: Intercept name previously passed to ``register_tool_request()``.
 
     Returns:
-        ``True`` if an intercept with the given name was found and removed,
-        ``False`` otherwise.
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
     """
     return _native_deregister_tool_request(name)
 
 
 def register_tool_execution(name: str, priority: int, fn: ToolExecutionIntercept) -> None:
-    """Register a tool execution intercept (middleware chain pattern).
-
-    The intercept receives the tool name, arguments, and a ``next`` function.
-    Call ``await next(args)`` to invoke the next intercept or original
-    implementation. Skip calling ``next`` to short-circuit the chain.
+    """Register middleware around tool execution.
 
     Args:
-        name: Unique intercept name.
-        priority: Priority (ascending order; lower runs first).
-        fn: Async callable ``(tool_name: str, args: Json, next: (Json) -> Awaitable[Json]) -> Awaitable[Json]``.
+        name: Unique intercept name used for later replacement or removal.
+        priority: Execution order for the intercept. Lower values run first.
+        fn: Callable invoked as ``fn(tool_name, args, next_call)``. The
+            callback may await or call ``next_call(args)`` to continue the
+            chain, modify the result, or bypass downstream execution entirely.
 
-    Raises:
-        RuntimeError: If an intercept with this name already exists.
+    Notes:
+        Execution intercepts wrap the downstream tool callback. They are the
+        right place for timing, retries, short-circuiting, or result shaping.
     """
     return _native_register_tool_execution(name, priority, fn)
 
 
 def deregister_tool_execution(name: str) -> bool:
-    """Remove a tool execution intercept.
+    """Remove a previously registered tool execution intercept.
 
     Args:
-        name: Name of the intercept to remove.
+        name: Intercept name previously passed to
+            ``register_tool_execution()``.
 
     Returns:
-        ``True`` if an intercept with the given name was found and removed,
-        ``False`` otherwise.
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
     """
     return _native_deregister_tool_execution(name)
 
@@ -175,66 +142,75 @@ def deregister_tool_execution(name: str) -> bool:
 
 
 def register_llm_request(name: str, priority: int, break_chain: bool, fn: LlmRequestIntercept) -> None:
-    """Register an LLM request intercept.
-
-    The intercept callback receives the intercept name, ``LLMRequest``, and an
-    optional ``AnnotatedLLMRequest`` (present when a Codec is active). It must
-    return a tuple of ``(LLMRequest, AnnotatedLLMRequest | None)``.
+    """Register an intercept that rewrites an ``LLMRequest`` before execution.
 
     Args:
-        name: Unique intercept name.
-        priority: Priority (ascending order; lower runs first).
-        break_chain: If ``True``, no lower-priority intercepts run after this one.
-        fn: Callable ``(name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None)
-            -> (LLMRequest, AnnotatedLLMRequest | None)``.
+        name: Unique intercept name used for later replacement or removal.
+        priority: Execution order for the intercept. Lower values run first.
+        break_chain: Whether to stop applying lower-priority request intercepts
+            after this intercept runs.
+        fn: Callable invoked as ``fn(name, request, annotated)`` that returns a
+            tuple of ``(request, annotated)`` for the next intercept or the
+            provider callback.
 
-    Raises:
-        RuntimeError: If an intercept with this name already exists.
+    Notes:
+        ``annotated`` is ``None`` unless a request codec was supplied to the
+        managed LLM call. Intercepts should preserve both values when they do
+        not need to mutate them.
+
+    Example:
+        ```python
+        import nat_nexus
+
+        def add_header(name, request, annotated):
+            request.headers["X-Trace"] = "req-123"
+            return request, annotated
+
+        nat_nexus.intercepts.register_llm_request(
+            "trace-header",
+            10,
+            False,
+            add_header,
+        )
+        ```
     """
     return _native_register_llm_request(name, priority, break_chain, fn)
 
 
 def deregister_llm_request(name: str) -> bool:
-    """Remove an LLM request intercept.
+    """Remove a previously registered LLM request intercept.
 
     Args:
-        name: Name of the intercept to remove.
+        name: Intercept name previously passed to ``register_llm_request()``.
 
     Returns:
-        ``True`` if an intercept with the given name was found and removed,
-        ``False`` otherwise.
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
     """
     return _native_deregister_llm_request(name)
 
 
 def register_llm_execution(name: str, priority: int, fn: LlmExecutionIntercept) -> None:
-    """Register an LLM execution intercept (middleware chain pattern).
-
-    The intercept receives the intercept name, ``LLMRequest``, and a ``next``
-    function. Call ``await next(request)`` to invoke the next intercept or
-    original implementation. Skip calling ``next`` to short-circuit the chain.
+    """Register middleware around non-streaming LLM execution.
 
     Args:
-        name: Unique intercept name.
-        priority: Priority (ascending order; lower runs first).
-        fn: Async callable
-            ``(name: str, request: LLMRequest, next: (LLMRequest) -> Awaitable[Json]) -> Awaitable[Json]``.
-
-    Raises:
-        RuntimeError: If an intercept with this name already exists.
+        name: Unique intercept name used for later replacement or removal.
+        priority: Execution order for the intercept. Lower values run first.
+        fn: Callable invoked as ``fn(name, request, next_call)``. The callback
+            may call ``next_call(request)`` to continue execution, modify the
+            result, or short-circuit the provider call.
     """
     return _native_register_llm_execution(name, priority, fn)
 
 
 def deregister_llm_execution(name: str) -> bool:
-    """Remove an LLM execution intercept.
+    """Remove a previously registered LLM execution intercept.
 
     Args:
-        name: Name of the intercept to remove.
+        name: Intercept name previously passed to
+            ``register_llm_execution()``.
 
     Returns:
-        ``True`` if an intercept with the given name was found and removed,
-        ``False`` otherwise.
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
     """
     return _native_deregister_llm_execution(name)
 
@@ -244,40 +220,32 @@ def register_llm_stream_execution(
     priority: int,
     fn: LlmStreamExecutionIntercept,
 ) -> None:
-    """Register an LLM stream-execution intercept (middleware chain pattern).
-
-    The intercept receives the ``LLMRequest`` and a ``next`` function. Call
-    ``await next(request)`` to invoke the next intercept or original streaming
-    implementation. Skip calling ``next`` to short-circuit the chain.
+    """Register middleware around streaming LLM execution.
 
     Args:
-        name: Unique intercept name.
-        priority: Priority (ascending order; lower runs first).
-        fn: Async callable
-            ``(request: LLMRequest, next: (LLMRequest) -> Awaitable[AsyncIterator[Json]])
-            -> Awaitable[AsyncIterator[Json]]``.
-
-    Raises:
-        RuntimeError: If an intercept with this name already exists.
+        name: Unique intercept name used for later replacement or removal.
+        priority: Execution order for the intercept. Lower values run first.
+        fn: Callable invoked as ``fn(request, next_call)`` that returns an
+            async iterator of JSON chunks, either by delegating to
+            ``next_call(request)`` or by replacing the stream entirely.
     """
     return _native_register_llm_stream_execution(name, priority, fn)
 
 
 def deregister_llm_stream_execution(name: str) -> bool:
-    """Remove an LLM stream-execution intercept.
+    """Remove a previously registered streaming LLM execution intercept.
 
     Args:
-        name: Name of the intercept to remove.
+        name: Intercept name previously passed to
+            ``register_llm_stream_execution()``.
 
     Returns:
-        ``True`` if an intercept with the given name was found and removed,
-        ``False`` otherwise.
+        bool: ``True`` if an intercept was removed, otherwise ``False``.
     """
     return _native_deregister_llm_stream_execution(name)
 
 
 __all__ = [
-    "Json",
     "ToolRequestIntercept",
     "ToolExecutionIntercept",
     "LlmRequestIntercept",

@@ -9,8 +9,11 @@ intercepts, and subscribers registered via ``nat_nexus.scope_local`` only
 take effect within their owning scope and do not leak to other scopes.
 """
 
+from typing import cast
+
 import pytest
 from nat_nexus import (
+    JsonObject,
     LLMEndEvent,
     LLMRequest,
     LLMStartEvent,
@@ -601,7 +604,7 @@ class TestScopeLocalLlmWrappers:
             scope_local.register_llm_stream_execution(handle, "sl_llm_stream_cov", 1, stream_intercept)
             assert scope_local.deregister_llm_stream_execution(handle, "sl_llm_stream_cov") is True
 
-            assert request.content["model"] == "scope-local"
+            assert cast(str, cast(JsonObject, request.content)["model"]) == "scope-local"
 
 
 class TestScopeLocalLlmBehavior:

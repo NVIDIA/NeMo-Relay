@@ -10,8 +10,11 @@ Covers:
 - Module import structure
 """
 
+from typing import cast
+
 from nat_nexus import (
     AnnotatedLLMRequest,
+    JsonObject,
     LLMRequest,
     intercepts,
     llm,
@@ -209,14 +212,15 @@ class TestCodecDecodeEncode:
 
         # Encode back
         encoded = codec.encode(annotated, request)
+        encoded_content = cast(JsonObject, encoded.content)
         assert encoded.headers == {"Authorization": "Bearer xyz"}
-        assert encoded.content["messages"] == [
+        assert cast(list[JsonObject], encoded_content["messages"]) == [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "hello!"},
         ]
-        assert encoded.content["model"] == "gpt-4"
+        assert cast(str, encoded_content["model"]) == "gpt-4"
         # Original fields are preserved
-        assert encoded.content["temperature"] == 0.5
+        assert cast(float, encoded_content["temperature"]) == 0.5
 
 
 # ---------------------------------------------------------------------------
