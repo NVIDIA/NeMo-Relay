@@ -29,11 +29,15 @@ fn test_rejection_message_prefers_string_then_object_then_unknown() {
 #[test]
 fn test_queue_status_and_closed_helpers_cover_error_paths() {
     assert!(queue_status_result(napi::Status::Ok).is_ok());
-    assert!(queue_status_result(napi::Status::GenericFailure)
-        .unwrap_err()
-        .to_string()
-        .contains("failed to queue threadsafe function call"));
-    assert!(closed_tsfn_error()
-        .to_string()
-        .contains("PromiseAwareFn threadsafe function closed"));
+    assert!(
+        queue_status_result(napi::Status::GenericFailure)
+            .unwrap_err()
+            .to_string()
+            .contains("failed to queue threadsafe function call")
+    );
+    assert!(
+        closed_tsfn_error()
+            .to_string()
+            .contains("PromiseAwareFn threadsafe function closed")
+    );
 }

@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! WebAssembly bindings for the Nexus agent runtime framework.
+//! WebAssembly bindings for the NeMo Flow agent runtime framework.
 //!
-//! This crate exposes the core Nexus API to JavaScript/TypeScript via
+//! This crate exposes the core NeMo Flow API to JavaScript/TypeScript via
 //! `wasm-bindgen`. It provides scope management, tool and LLM lifecycle
 //! operations, guardrail/intercept registration, event subscriptions, and
 //! streaming LLM responses.

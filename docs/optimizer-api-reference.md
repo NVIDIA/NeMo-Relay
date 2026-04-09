@@ -59,7 +59,7 @@ All hosted plugins are activated through `external_component`.
 
 ## Python
 
-Primary exports from `nat_nexus.optimizer`:
+Primary exports from `nemo_flow.optimizer`:
 
 - `OptimizerConfig`
 - `StateConfig`
@@ -79,7 +79,7 @@ Primary exports from `nat_nexus.optimizer`:
 Runtime lifecycle:
 
 ```python
-from nat_nexus.optimizer import (
+from nemo_flow.optimizer import (
     BackendSpec,
     OptimizerConfig,
     OptimizerRuntime,
@@ -155,7 +155,7 @@ Hosted plugin entry points:
 
 ## Go
 
-Primary exports from `go/nat_nexus/optimizer`:
+Primary exports from `go/nemo_flow/optimizer`:
 
 - `Config`
 - `StateConfig`
@@ -179,7 +179,7 @@ Primary exports from `go/nat_nexus/optimizer`:
 Runtime lifecycle:
 
 ```go
-import optimizer "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/optimizer"
+import optimizer "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/optimizer"
 
 config := optimizer.NewConfig()
 config.State = &optimizer.StateConfig{
@@ -243,7 +243,7 @@ hooks consumed by `optimizer.js`.
 Runtime lifecycle:
 
 ```javascript
-import init from "./pkg/nvidia_nat_nexus_wasm.js";
+import init from "./pkg/nemo_flow_wasm.js";
 import {
   Runtime,
   validateConfig,
@@ -282,7 +282,7 @@ Hosted plugin entry points:
 
 ## Rust
 
-Primary exports from `nvidia-nat-nexus-optimizer`:
+Primary exports from `nemo-flow-optimizer`:
 
 - `OptimizerConfig`
 - `StateConfig`
@@ -308,7 +308,7 @@ Primary exports from `nvidia-nat-nexus-optimizer`:
 Runtime lifecycle:
 
 ```rust
-use nvidia_nat_nexus_optimizer::{
+use nemo_flow_optimizer::{
     BackendSpec, OptimizerConfig, OptimizerRuntime, StateConfig, TelemetryComponentConfig,
 };
 

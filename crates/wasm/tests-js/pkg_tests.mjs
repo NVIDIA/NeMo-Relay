@@ -137,8 +137,8 @@ test('WASM package exposes OpenTelemetry config defaults and subscriber lifecycl
   const config = wasm.defaultOpenTelemetryConfig();
   assert.equal(config.transport, 'http_binary');
   assert.equal(config.endpoint, undefined);
-  assert.equal(config.service_name, 'nat-nexus');
-  assert.equal(config.instrumentation_scope, 'nvidia-nat-nexus-otel');
+  assert.equal(config.service_name, 'nemo-flow');
+  assert.equal(config.instrumentation_scope, 'nemo-flow-otel');
   assert.equal(config.timeout_millis, 3000);
   assert.equal(config.headers instanceof Map, true);
   assert.equal(config.headers.size, 0);
@@ -199,8 +199,8 @@ test('WASM package exposes OpenInference config defaults and subscriber lifecycl
   const config = wasm.defaultOpenInferenceConfig();
   assert.equal(config.transport, 'http_binary');
   assert.equal(config.endpoint, undefined);
-  assert.equal(config.service_name, 'nat-nexus');
-  assert.equal(config.instrumentation_scope, 'nvidia-nat-nexus-openinference');
+  assert.equal(config.service_name, 'nemo-flow');
+  assert.equal(config.instrumentation_scope, 'nemo-flow-openinference');
   assert.equal(config.timeout_millis, 3000);
   assert.equal(config.headers instanceof Map, true);
   assert.equal(config.headers.size, 0);

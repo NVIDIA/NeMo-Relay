@@ -13,4 +13,4 @@ pub use accumulator::{AccumulatorState, NodeAccumulators, RunningStats};
 pub use builder::{PredictionTrieBuilder, SensitivityConfig};
 pub use data_models::{LlmCallPrediction, PredictionMetrics, PredictionTrieNode};
 pub use lookup::PredictionTrieLookup;
-pub use serialization::{TrieEnvelope, CURRENT_VERSION};
+pub use serialization::{CURRENT_VERSION, TrieEnvelope};

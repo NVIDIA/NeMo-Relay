@@ -5,20 +5,20 @@
 
 import asyncio
 
-import nat_nexus
+import nemo_flow
 
 
 def test_create_scope_stack_returns_scope_stack():
     """create_scope_stack returns a ScopeStack instance."""
-    stack = nat_nexus.create_scope_stack()
-    assert isinstance(stack, nat_nexus.ScopeStack)
+    stack = nemo_flow.create_scope_stack()
+    assert isinstance(stack, nemo_flow.ScopeStack)
     assert repr(stack) == "<ScopeStack>"
 
 
 def test_get_scope_stack_returns_same_in_same_context():
     """get_scope_stack returns the same instance within the same context."""
-    s1 = nat_nexus.get_scope_stack()
-    s2 = nat_nexus.get_scope_stack()
+    s1 = nemo_flow.get_scope_stack()
+    s2 = nemo_flow.get_scope_stack()
     assert s1 is s2
 
 
@@ -31,8 +31,8 @@ def test_get_scope_stack_different_across_tasks():
         # But since the ContextVar hasn't been set yet at fork time,
         # each task creates its own when get_scope_stack is first called.
         # We need to reset the ContextVar in each task to test isolation.
-        nat_nexus._scope_stack_var.set(nat_nexus.create_scope_stack())
-        stack = nat_nexus.get_scope_stack()
+        nemo_flow._scope_stack_var.set(nemo_flow.create_scope_stack())
+        stack = nemo_flow.get_scope_stack()
         results[name] = id(stack)
 
     async def main():
@@ -47,7 +47,7 @@ def test_get_scope_stack_different_across_tasks():
 
 def test_scope_stack_repr():
     """ScopeStack has a meaningful repr."""
-    stack = nat_nexus.create_scope_stack()
+    stack = nemo_flow.create_scope_stack()
     assert "<ScopeStack>" in repr(stack)
 
 
@@ -59,7 +59,7 @@ def test_scope_stack_active_false_by_default():
 
     def worker():
         # Fresh thread, no ContextVar set
-        result["active"] = nat_nexus.scope_stack_active()
+        result["active"] = nemo_flow.scope_stack_active()
 
     t = threading.Thread(target=worker)
     t.start()
@@ -74,8 +74,8 @@ def test_scope_stack_active_true_after_get_scope_stack():
     result = {}
 
     def worker():
-        nat_nexus.get_scope_stack()
-        result["active"] = nat_nexus.scope_stack_active()
+        nemo_flow.get_scope_stack()
+        result["active"] = nemo_flow.scope_stack_active()
 
     t = threading.Thread(target=worker)
     t.start()
@@ -88,11 +88,11 @@ def test_scope_stack_active_true_after_set_thread():
     import threading
 
     result = {}
-    stack = nat_nexus.create_scope_stack()
+    stack = nemo_flow.create_scope_stack()
 
     def worker():
-        nat_nexus.set_thread_scope_stack(stack)
-        result["active"] = nat_nexus.scope_stack_active()
+        nemo_flow.set_thread_scope_stack(stack)
+        result["active"] = nemo_flow.scope_stack_active()
 
     t = threading.Thread(target=worker)
     t.start()
@@ -108,7 +108,7 @@ def test_propagate_scope_to_thread_fails_when_inactive():
 
     def worker():
         try:
-            nat_nexus.propagate_scope_to_thread()
+            nemo_flow.propagate_scope_to_thread()
             result["raised"] = False
         except RuntimeError:
             result["raised"] = True
@@ -121,9 +121,9 @@ def test_propagate_scope_to_thread_fails_when_inactive():
 
 def test_propagate_scope_to_thread_returns_scope_stack():
     """propagate_scope_to_thread returns the current ScopeStack."""
-    nat_nexus.get_scope_stack()
-    stack = nat_nexus.propagate_scope_to_thread()
-    assert isinstance(stack, nat_nexus.ScopeStack)
+    nemo_flow.get_scope_stack()
+    stack = nemo_flow.propagate_scope_to_thread()
+    assert isinstance(stack, nemo_flow.ScopeStack)
 
 
 def test_propagate_scope_to_thread_cross_thread():
@@ -131,15 +131,15 @@ def test_propagate_scope_to_thread_cross_thread():
     import threading
 
     # Initialize scope stack and push a scope
-    nat_nexus.get_scope_stack()
-    handle = nat_nexus.scope.push("parent_scope", nat_nexus.ScopeType.Agent)
+    nemo_flow.get_scope_stack()
+    handle = nemo_flow.scope.push("parent_scope", nemo_flow.ScopeType.Agent)
 
-    propagated = nat_nexus.propagate_scope_to_thread()
+    propagated = nemo_flow.propagate_scope_to_thread()
     result = {}
 
     def worker():
-        nat_nexus.set_thread_scope_stack(propagated)
-        h = nat_nexus.scope.get_handle()
+        nemo_flow.set_thread_scope_stack(propagated)
+        h = nemo_flow.scope.get_handle()
         result["name"] = h.name
 
     t = threading.Thread(target=worker)
@@ -147,7 +147,7 @@ def test_propagate_scope_to_thread_cross_thread():
     t.join()
 
     assert result["name"] == "parent_scope"
-    nat_nexus.scope.pop(handle)
+    nemo_flow.scope.pop(handle)
 
 
 def test_propagate_scope_to_thread_uses_native_active_stack_without_contextvar():
@@ -160,12 +160,12 @@ def test_propagate_scope_to_thread_uses_native_active_stack_without_contextvar()
     import threading
 
     result = {}
-    stack = nat_nexus.create_scope_stack()
+    stack = nemo_flow.create_scope_stack()
 
     def worker():
-        nat_nexus.set_thread_scope_stack(stack)
-        propagated = nat_nexus.propagate_scope_to_thread()
-        result["active"] = nat_nexus.scope_stack_active()
+        nemo_flow.set_thread_scope_stack(stack)
+        propagated = nemo_flow.propagate_scope_to_thread()
+        result["active"] = nemo_flow.scope_stack_active()
         result["repr"] = repr(propagated)
 
     t = threading.Thread(target=worker)

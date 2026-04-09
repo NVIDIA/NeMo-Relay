@@ -98,17 +98,17 @@ describe('index.js loader', () => {
   const binding = realLib;
 
   const localCases = [
-    ['android', 'arm64', 'nat-nexus.android-arm64.node', './nat-nexus.android-arm64.node'],
-    ['android', 'arm', 'nat-nexus.android-arm-eabi.node', './nat-nexus.android-arm-eabi.node'],
-    ['win32', 'x64', 'nat-nexus.win32-x64-msvc.node', './nat-nexus.win32-x64-msvc.node'],
-    ['win32', 'ia32', 'nat-nexus.win32-ia32-msvc.node', './nat-nexus.win32-ia32-msvc.node'],
-    ['win32', 'arm64', 'nat-nexus.win32-arm64-msvc.node', './nat-nexus.win32-arm64-msvc.node'],
-    ['freebsd', 'x64', 'nat-nexus.freebsd-x64.node', './nat-nexus.freebsd-x64.node'],
-    ['linux', 'x64', 'nat-nexus.linux-x64-gnu.node', './nat-nexus.linux-x64-gnu.node'],
-    ['linux', 'arm64', 'nat-nexus.linux-arm64-gnu.node', './nat-nexus.linux-arm64-gnu.node'],
-    ['linux', 'arm', 'nat-nexus.linux-arm-gnueabihf.node', './nat-nexus.linux-arm-gnueabihf.node'],
-    ['linux', 'riscv64', 'nat-nexus.linux-riscv64-gnu.node', './nat-nexus.linux-riscv64-gnu.node'],
-    ['linux', 's390x', 'nat-nexus.linux-s390x-gnu.node', './nat-nexus.linux-s390x-gnu.node'],
+    ['android', 'arm64', 'nemo-flow.android-arm64.node', './nemo-flow.android-arm64.node'],
+    ['android', 'arm', 'nemo-flow.android-arm-eabi.node', './nemo-flow.android-arm-eabi.node'],
+    ['win32', 'x64', 'nemo-flow.win32-x64-msvc.node', './nemo-flow.win32-x64-msvc.node'],
+    ['win32', 'ia32', 'nemo-flow.win32-ia32-msvc.node', './nemo-flow.win32-ia32-msvc.node'],
+    ['win32', 'arm64', 'nemo-flow.win32-arm64-msvc.node', './nemo-flow.win32-arm64-msvc.node'],
+    ['freebsd', 'x64', 'nemo-flow.freebsd-x64.node', './nemo-flow.freebsd-x64.node'],
+    ['linux', 'x64', 'nemo-flow.linux-x64-gnu.node', './nemo-flow.linux-x64-gnu.node'],
+    ['linux', 'arm64', 'nemo-flow.linux-arm64-gnu.node', './nemo-flow.linux-arm64-gnu.node'],
+    ['linux', 'arm', 'nemo-flow.linux-arm-gnueabihf.node', './nemo-flow.linux-arm-gnueabihf.node'],
+    ['linux', 'riscv64', 'nemo-flow.linux-riscv64-gnu.node', './nemo-flow.linux-riscv64-gnu.node'],
+    ['linux', 's390x', 'nemo-flow.linux-s390x-gnu.node', './nemo-flow.linux-s390x-gnu.node'],
   ];
 
   it('loads local binary branches for supported platforms', () => {
@@ -127,18 +127,18 @@ describe('index.js loader', () => {
 
   it('loads package branches for supported platforms', () => {
     const packageCases = [
-      ['android', 'arm64', '@nvidia/nat-nexus-node-android-arm64'],
-      ['android', 'arm', '@nvidia/nat-nexus-node-android-arm-eabi'],
-      ['win32', 'x64', '@nvidia/nat-nexus-node-win32-x64-msvc'],
-      ['win32', 'ia32', '@nvidia/nat-nexus-node-win32-ia32-msvc'],
-      ['win32', 'arm64', '@nvidia/nat-nexus-node-win32-arm64-msvc'],
-      ['darwin', 'x64', '@nvidia/nat-nexus-node-darwin-universal'],
-      ['freebsd', 'x64', '@nvidia/nat-nexus-node-freebsd-x64'],
-      ['linux', 'x64', '@nvidia/nat-nexus-node-linux-x64-gnu'],
-      ['linux', 'arm64', '@nvidia/nat-nexus-node-linux-arm64-gnu'],
-      ['linux', 'arm', '@nvidia/nat-nexus-node-linux-arm-gnueabihf'],
-      ['linux', 'riscv64', '@nvidia/nat-nexus-node-linux-riscv64-gnu'],
-      ['linux', 's390x', '@nvidia/nat-nexus-node-linux-s390x-gnu'],
+      ['android', 'arm64', '@nvidia/nemo-flow-node-android-arm64'],
+      ['android', 'arm', '@nvidia/nemo-flow-node-android-arm-eabi'],
+      ['win32', 'x64', '@nvidia/nemo-flow-node-win32-x64-msvc'],
+      ['win32', 'ia32', '@nvidia/nemo-flow-node-win32-ia32-msvc'],
+      ['win32', 'arm64', '@nvidia/nemo-flow-node-win32-arm64-msvc'],
+      ['darwin', 'x64', '@nvidia/nemo-flow-node-darwin-universal'],
+      ['freebsd', 'x64', '@nvidia/nemo-flow-node-freebsd-x64'],
+      ['linux', 'x64', '@nvidia/nemo-flow-node-linux-x64-gnu'],
+      ['linux', 'arm64', '@nvidia/nemo-flow-node-linux-arm64-gnu'],
+      ['linux', 'arm', '@nvidia/nemo-flow-node-linux-arm-gnueabihf'],
+      ['linux', 'riscv64', '@nvidia/nemo-flow-node-linux-riscv64-gnu'],
+      ['linux', 's390x', '@nvidia/nemo-flow-node-linux-s390x-gnu'],
     ];
 
     for (const [platformName, archName, specifier] of packageCases) {
@@ -158,57 +158,57 @@ describe('index.js loader', () => {
       platform: 'linux',
       arch: 'x64',
       processReport: { header: { glibcVersionRuntime: null } },
-      providedModules: { '@nvidia/nat-nexus-node-linux-x64-musl': binding },
+      providedModules: { '@nvidia/nemo-flow-node-linux-x64-musl': binding },
     });
     assert.equal(viaReport.exports.toolCall, binding.toolCall);
-    assert.ok(viaReport.calls.includes('@nvidia/nat-nexus-node-linux-x64-musl'));
+    assert.ok(viaReport.calls.includes('@nvidia/nemo-flow-node-linux-x64-musl'));
 
     const viaLdd = loadIndexForTest({
       platform: 'linux',
       arch: 'arm64',
       processReport: null,
       lddContent: 'musl libc',
-      providedModules: { '@nvidia/nat-nexus-node-linux-arm64-musl': binding },
+      providedModules: { '@nvidia/nemo-flow-node-linux-arm64-musl': binding },
     });
     assert.equal(viaLdd.exports.toolCall, binding.toolCall);
     assert.ok(viaLdd.calls.includes('child_process'));
-    assert.ok(viaLdd.calls.includes('@nvidia/nat-nexus-node-linux-arm64-musl'));
+    assert.ok(viaLdd.calls.includes('@nvidia/nemo-flow-node-linux-arm64-musl'));
 
     const viaLddFailure = loadIndexForTest({
       platform: 'linux',
       arch: 'arm',
       processReport: null,
       childProcessThrows: true,
-      providedModules: { '@nvidia/nat-nexus-node-linux-arm-musleabihf': binding },
+      providedModules: { '@nvidia/nemo-flow-node-linux-arm-musleabihf': binding },
     });
     assert.equal(viaLddFailure.exports.toolCall, binding.toolCall);
-    assert.ok(viaLddFailure.calls.includes('@nvidia/nat-nexus-node-linux-arm-musleabihf'));
+    assert.ok(viaLddFailure.calls.includes('@nvidia/nemo-flow-node-linux-arm-musleabihf'));
   });
 
   it('falls back from darwin universal to arch-specific binaries', () => {
     const x64 = loadIndexForTest({
       platform: 'darwin',
       arch: 'x64',
-      existingFiles: ['nat-nexus.darwin-x64.node'],
+      existingFiles: ['nemo-flow.darwin-x64.node'],
       providedModules: {
-        '@nvidia/nat-nexus-node-darwin-universal': new Error('universal missing'),
-        './nat-nexus.darwin-x64.node': binding,
+        '@nvidia/nemo-flow-node-darwin-universal': new Error('universal missing'),
+        './nemo-flow.darwin-x64.node': binding,
       },
     });
     assert.equal(x64.exports.toolCall, binding.toolCall);
-    assert.ok(x64.calls.includes('@nvidia/nat-nexus-node-darwin-universal'));
-    assert.ok(x64.calls.includes('./nat-nexus.darwin-x64.node'));
+    assert.ok(x64.calls.includes('@nvidia/nemo-flow-node-darwin-universal'));
+    assert.ok(x64.calls.includes('./nemo-flow.darwin-x64.node'));
 
     const arm64 = loadIndexForTest({
       platform: 'darwin',
       arch: 'arm64',
       providedModules: {
-        '@nvidia/nat-nexus-node-darwin-universal': new Error('universal missing'),
-        '@nvidia/nat-nexus-node-darwin-arm64': binding,
+        '@nvidia/nemo-flow-node-darwin-universal': new Error('universal missing'),
+        '@nvidia/nemo-flow-node-darwin-arm64': binding,
       },
     });
     assert.equal(arm64.exports.toolCall, binding.toolCall);
-    assert.ok(arm64.calls.includes('@nvidia/nat-nexus-node-darwin-arm64'));
+    assert.ok(arm64.calls.includes('@nvidia/nemo-flow-node-darwin-arm64'));
   });
 
   it('throws unsupported platform and architecture errors', () => {
@@ -225,7 +225,7 @@ describe('index.js loader', () => {
     assert.throws(() => loadIndexForTest({
       platform: 'freebsd',
       arch: 'x64',
-      providedModules: { '@nvidia/nat-nexus-node-freebsd-x64': failure },
+      providedModules: { '@nvidia/nemo-flow-node-freebsd-x64': failure },
     }), /package missing/);
   });
 
@@ -235,8 +235,8 @@ describe('index.js loader', () => {
       platform: 'linux',
       arch: 'arm',
       processReport: { header: { glibcVersionRuntime: null } },
-      existingFiles: ['nat-nexus.linux-arm-musleabihf.node'],
-      providedModules: { './nat-nexus.linux-arm-musleabihf.node': armMuslLocalFailure },
+      existingFiles: ['nemo-flow.linux-arm-musleabihf.node'],
+      providedModules: { './nemo-flow.linux-arm-musleabihf.node': armMuslLocalFailure },
     }), /arm musl local missing/);
 
     const riscvMuslFailure = new Error('riscv musl package missing');
@@ -244,21 +244,21 @@ describe('index.js loader', () => {
       platform: 'linux',
       arch: 'riscv64',
       processReport: { header: { glibcVersionRuntime: null } },
-      providedModules: { '@nvidia/nat-nexus-node-linux-riscv64-musl': riscvMuslFailure },
+      providedModules: { '@nvidia/nemo-flow-node-linux-riscv64-musl': riscvMuslFailure },
     }), /riscv musl package missing/);
 
     const riscvGnuFailure = new Error('riscv gnu package missing');
     assert.throws(() => loadIndexForTest({
       platform: 'linux',
       arch: 'riscv64',
-      providedModules: { '@nvidia/nat-nexus-node-linux-riscv64-gnu': riscvGnuFailure },
+      providedModules: { '@nvidia/nemo-flow-node-linux-riscv64-gnu': riscvGnuFailure },
     }), /riscv gnu package missing/);
 
     const s390xFailure = new Error('s390x package missing');
     assert.throws(() => loadIndexForTest({
       platform: 'linux',
       arch: 's390x',
-      providedModules: { '@nvidia/nat-nexus-node-linux-s390x-gnu': s390xFailure },
+      providedModules: { '@nvidia/nemo-flow-node-linux-s390x-gnu': s390xFailure },
     }), /s390x package missing/);
   });
 
@@ -266,7 +266,7 @@ describe('index.js loader', () => {
     assert.throws(() => loadIndexForTest({
       platform: 'freebsd',
       arch: 'x64',
-      providedModules: { '@nvidia/nat-nexus-node-freebsd-x64': null },
+      providedModules: { '@nvidia/nemo-flow-node-freebsd-x64': null },
     }), /Failed to load native binding/);
   });
 });

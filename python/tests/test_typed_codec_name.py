@@ -9,9 +9,9 @@ llm.execute() and llm.stream_execute() functions.
 
 from unittest.mock import AsyncMock, patch
 
-from nat_nexus import AnnotatedLLMRequest, LLMRequest
-from nat_nexus.codecs import LlmCodec
-from nat_nexus.typed import JsonPassthrough, llm_execute, llm_stream_execute
+from nemo_flow import AnnotatedLLMRequest, LLMRequest
+from nemo_flow.codecs import LlmCodec
+from nemo_flow.typed import JsonPassthrough, llm_execute, llm_stream_execute
 
 
 class SimpleCodec(LlmCodec):
@@ -71,7 +71,7 @@ class TestLlmExecuteCodec:
         codec_instance = SimpleCodec()
 
         # Patch llm.execute to capture the codec argument
-        with patch("nat_nexus.typed.llm.execute", new_callable=AsyncMock) as mock_execute:
+        with patch("nemo_flow.typed.llm.execute", new_callable=AsyncMock) as mock_execute:
             mock_execute.return_value = {"ok": True}
             await llm_execute(
                 "test-model",
@@ -128,7 +128,7 @@ class TestLlmStreamExecuteCodec:
 
         codec_instance = SimpleCodec()
 
-        with patch("nat_nexus.typed.llm.stream_execute", new_callable=AsyncMock) as mock_stream:
+        with patch("nemo_flow.typed.llm.stream_execute", new_callable=AsyncMock) as mock_stream:
             mock_stream.return_value = AsyncMock()
             await llm_stream_execute(
                 "test-model",

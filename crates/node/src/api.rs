@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Public NAPI API functions for the Nexus Node.js bindings.
+//! Public NAPI API functions for the NeMo Flow Node.js bindings.
 //!
 //! This module exposes the full agent runtime API to JavaScript/TypeScript:
 //! scope stack management, tool and LLM lifecycle operations, guardrail and
@@ -11,9 +11,9 @@
 
 use std::collections::HashMap;
 use std::ptr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
@@ -22,12 +22,12 @@ use napi_derive::napi;
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
-use nvidia_nat_nexus_core as core;
-use nvidia_nat_nexus_core::types as core_types;
-use nvidia_nat_nexus_optimizer::{
-    deregister_hosted_plugin_handler, register_hosted_plugin_handler, ComponentRegistration,
-    ConfigDiagnostic, ConfigReport, HostedPluginHandler, OptimizerConfig, OptimizerError,
-    OptimizerRuntime as NativeOptimizerRuntime,
+use nemo_flow_core as core;
+use nemo_flow_core::types as core_types;
+use nemo_flow_optimizer::{
+    ComponentRegistration, ConfigDiagnostic, ConfigReport, HostedPluginHandler, OptimizerConfig,
+    OptimizerError, OptimizerRuntime as NativeOptimizerRuntime, deregister_hosted_plugin_handler,
+    register_hosted_plugin_handler,
 };
 
 use crate::callable;
@@ -64,22 +64,22 @@ fn parse_string_map(
 
 fn build_otel_config(
     options: Option<OpenTelemetryConfig>,
-) -> napi::Result<nvidia_nat_nexus_otel::OpenTelemetryConfig> {
+) -> napi::Result<nemo_flow_otel::OpenTelemetryConfig> {
     let options = options.unwrap_or_default();
     let transport = options
         .transport
         .unwrap_or_else(|| "http_binary".to_string());
     let service_name = options
         .service_name
-        .unwrap_or_else(|| "nat-nexus".to_string());
+        .unwrap_or_else(|| "nemo-flow".to_string());
     let instrumentation_scope = options
         .instrumentation_scope
-        .unwrap_or_else(|| "nvidia-nat-nexus-otel".to_string());
+        .unwrap_or_else(|| "nemo-flow-otel".to_string());
     let timeout_millis = options.timeout_millis.unwrap_or(3_000);
 
     let mut config = match transport.as_str() {
-        "http_binary" => nvidia_nat_nexus_otel::OpenTelemetryConfig::http_binary(service_name),
-        "grpc" => nvidia_nat_nexus_otel::OpenTelemetryConfig::grpc(service_name),
+        "http_binary" => nemo_flow_otel::OpenTelemetryConfig::http_binary(service_name),
+        "grpc" => nemo_flow_otel::OpenTelemetryConfig::grpc(service_name),
         other => {
             return Err(napi::Error::from_reason(format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}",
@@ -110,22 +110,22 @@ fn build_otel_config(
 
 fn build_openinference_config(
     options: Option<OpenInferenceConfig>,
-) -> napi::Result<nvidia_nat_nexus_openinference::OpenInferenceConfig> {
+) -> napi::Result<nemo_flow_openinference::OpenInferenceConfig> {
     let options = options.unwrap_or_default();
     let transport = options
         .transport
         .unwrap_or_else(|| "http_binary".to_string());
     let service_name = options
         .service_name
-        .unwrap_or_else(|| "nat-nexus".to_string());
+        .unwrap_or_else(|| "nemo-flow".to_string());
     let instrumentation_scope = options
         .instrumentation_scope
-        .unwrap_or_else(|| "nvidia-nat-nexus-openinference".to_string());
+        .unwrap_or_else(|| "nemo-flow-openinference".to_string());
     let timeout_millis = options.timeout_millis.unwrap_or(3_000);
 
     let transport = match transport.as_str() {
-        "http_binary" => nvidia_nat_nexus_openinference::OtlpTransport::HttpBinary,
-        "grpc" => nvidia_nat_nexus_openinference::OtlpTransport::Grpc,
+        "http_binary" => nemo_flow_openinference::OtlpTransport::HttpBinary,
+        "grpc" => nemo_flow_openinference::OtlpTransport::Grpc,
         other => {
             return Err(napi::Error::from_reason(format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}",
@@ -133,7 +133,7 @@ fn build_openinference_config(
         }
     };
 
-    let mut config = nvidia_nat_nexus_openinference::OpenInferenceConfig::new()
+    let mut config = nemo_flow_openinference::OpenInferenceConfig::new()
         .with_transport(transport)
         .with_service_name(service_name)
         .with_instrumentation_scope(instrumentation_scope)
@@ -164,9 +164,9 @@ fn build_openinference_config(
 
 static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(0);
 
-type StreamSender = tokio::sync::mpsc::UnboundedSender<nvidia_nat_nexus_core::Result<Json>>;
+type StreamSender = tokio::sync::mpsc::UnboundedSender<nemo_flow_core::Result<Json>>;
 type RustJsonStream =
-    std::pin::Pin<Box<dyn tokio_stream::Stream<Item = nvidia_nat_nexus_core::Result<Json>> + Send>>;
+    std::pin::Pin<Box<dyn tokio_stream::Stream<Item = nemo_flow_core::Result<Json>> + Send>>;
 
 static STREAM_CHANNELS: std::sync::LazyLock<StdMutex<HashMap<u64, StreamSender>>> =
     std::sync::LazyLock::new(|| StdMutex::new(HashMap::new()));
@@ -179,23 +179,20 @@ fn remove_stream_channel(id: u64) {
     STREAM_CHANNELS.lock().unwrap().remove(&id);
 }
 
-fn ensure_stream_callback_queued(
-    id: u64,
-    status: napi::Status,
-) -> nvidia_nat_nexus_core::Result<()> {
+fn ensure_stream_callback_queued(id: u64, status: napi::Status) -> nemo_flow_core::Result<()> {
     if status == napi::Status::Ok {
         return Ok(());
     }
 
     remove_stream_channel(id);
-    Err(nvidia_nat_nexus_core::NexusError::Internal(format!(
+    Err(nemo_flow_core::FlowError::Internal(format!(
         "failed to queue JS stream producer callback: {status:?}",
     )))
 }
 
 async fn forward_stream_to_channel(
     mut stream: RustJsonStream,
-    tx: tokio::sync::mpsc::Sender<nvidia_nat_nexus_core::Result<Json>>,
+    tx: tokio::sync::mpsc::Sender<nemo_flow_core::Result<Json>>,
 ) {
     while let Some(item) = stream.next().await {
         if tx.send(item).await.is_err() {
@@ -280,7 +277,8 @@ fn forget_scope_local_promise_aware(scope_uuid: &str) {
         .collect::<Vec<_>>();
 
     for key in keys {
-        if let Some(pa_fn) = registrations.remove(&key) {
+        let registration = registrations.remove(&key);
+        if let Some(pa_fn) = registration {
             pa_fn.close();
         }
     }
@@ -314,12 +312,12 @@ fn build_optimizer_plugin_context(
 
     let subscriber_regs = registrations.clone();
     let register_subscriber = env.create_function_from_closure(
-        "__nat_nexus_optimizer_register_subscriber",
+        "__nemo_flow_optimizer_register_subscriber",
         move |ctx| {
             let name = ctx.get::<String>(0)?;
             let callback = ctx.get::<JsFunction>(1)?;
             let tsfn = json_callback_tsfn(ctx.env, &callback)?;
-            core::nat_nexus_register_subscriber(&name, callable::wrap_js_event_subscriber(tsfn))
+            core::nemo_flow_register_subscriber(&name, callable::wrap_js_event_subscriber(tsfn))
                 .map_err(to_napi_err)?;
 
             let name_clone = name.clone();
@@ -330,7 +328,7 @@ fn build_optimizer_plugin_context(
                     "external_component",
                     name_clone.clone(),
                     Box::new(move || {
-                        core::nat_nexus_deregister_subscriber(&name_clone)
+                        core::nemo_flow_deregister_subscriber(&name_clone)
                             .map(|_| ())
                             .map_err(|e| {
                                 OptimizerError::RegistrationFailed(format!(
@@ -346,14 +344,14 @@ fn build_optimizer_plugin_context(
 
     let llm_regs = registrations.clone();
     let register_llm_request_intercept = env.create_function_from_closure(
-        "__nat_nexus_optimizer_register_llm_request_intercept",
+        "__nemo_flow_optimizer_register_llm_request_intercept",
         move |ctx| {
             let name = ctx.get::<String>(0)?;
             let priority = ctx.get::<i32>(1)?;
             let break_chain = ctx.get::<bool>(2)?;
             let callback = ctx.get::<JsFunction>(3)?;
             let tsfn = json_callback_tsfn(ctx.env, &callback)?;
-            core::nat_nexus_register_llm_request_intercept(
+            core::nemo_flow_register_llm_request_intercept(
                 &name,
                 priority,
                 break_chain,
@@ -366,7 +364,7 @@ fn build_optimizer_plugin_context(
                 "external_component",
                 name_clone.clone(),
                 Box::new(move || {
-                    core::nat_nexus_deregister_llm_request_intercept(&name_clone)
+                    core::nemo_flow_deregister_llm_request_intercept(&name_clone)
                         .map(|_| ())
                         .map_err(|e| {
                             OptimizerError::RegistrationFailed(format!(
@@ -385,7 +383,7 @@ fn build_optimizer_plugin_context(
 
     let llm_exec_regs = registrations.clone();
     let register_llm_execution_intercept = env.create_function_from_closure(
-        "__nat_nexus_optimizer_register_llm_execution_intercept",
+        "__nemo_flow_optimizer_register_llm_execution_intercept",
         move |ctx| {
             let name = ctx.get::<String>(0)?;
             let priority = ctx.get::<i32>(1)?;
@@ -393,7 +391,7 @@ fn build_optimizer_plugin_context(
             let promise_fn = Arc::new(crate::promise_call::PromiseAwareFn::new(
                 ctx.env, &callback,
             )?);
-            core::nat_nexus_register_llm_execution_intercept(
+            core::nemo_flow_register_llm_execution_intercept(
                 &name,
                 priority,
                 callable::wrap_js_llm_exec_intercept_fn(promise_fn.clone()),
@@ -409,7 +407,7 @@ fn build_optimizer_plugin_context(
                     name_clone.clone(),
                     Box::new(move || {
                         let result =
-                            core::nat_nexus_deregister_llm_execution_intercept(&name_clone)
+                            core::nemo_flow_deregister_llm_execution_intercept(&name_clone)
                                 .map(|_| ())
                                 .map_err(|e| {
                                     OptimizerError::RegistrationFailed(format!(
@@ -430,7 +428,7 @@ fn build_optimizer_plugin_context(
 
     let llm_stream_exec_regs = registrations.clone();
     let register_llm_stream_execution_intercept = env.create_function_from_closure(
-        "__nat_nexus_optimizer_register_llm_stream_execution_intercept",
+        "__nemo_flow_optimizer_register_llm_stream_execution_intercept",
         move |ctx| {
             let name = ctx.get::<String>(0)?;
             let priority = ctx.get::<i32>(1)?;
@@ -438,7 +436,7 @@ fn build_optimizer_plugin_context(
             let promise_fn = Arc::new(crate::promise_call::PromiseAwareFn::new(
                 ctx.env, &callback,
             )?);
-            core::nat_nexus_register_llm_stream_execution_intercept(
+            core::nemo_flow_register_llm_stream_execution_intercept(
                 &name,
                 priority,
                 callable::wrap_js_llm_stream_exec_intercept_fn(promise_fn.clone()),
@@ -454,7 +452,7 @@ fn build_optimizer_plugin_context(
                     name_clone.clone(),
                     Box::new(move || {
                         let result =
-                            core::nat_nexus_deregister_llm_stream_execution_intercept(&name_clone)
+                            core::nemo_flow_deregister_llm_stream_execution_intercept(&name_clone)
                                 .map(|_| ())
                                 .map_err(|e| {
                                     OptimizerError::RegistrationFailed(format!(
@@ -475,14 +473,14 @@ fn build_optimizer_plugin_context(
 
     let tool_request_regs = registrations.clone();
     let register_tool_request_intercept = env.create_function_from_closure(
-        "__nat_nexus_optimizer_register_tool_request_intercept",
+        "__nemo_flow_optimizer_register_tool_request_intercept",
         move |ctx| {
             let name = ctx.get::<String>(0)?;
             let priority = ctx.get::<i32>(1)?;
             let break_chain = ctx.get::<bool>(2)?;
             let callback =
                 ctx.get::<ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>>(3)?;
-            core::nat_nexus_register_tool_request_intercept(
+            core::nemo_flow_register_tool_request_intercept(
                 &name,
                 priority,
                 break_chain,
@@ -498,7 +496,7 @@ fn build_optimizer_plugin_context(
                     "external_component",
                     name_clone.clone(),
                     Box::new(move || {
-                        core::nat_nexus_deregister_tool_request_intercept(&name_clone)
+                        core::nemo_flow_deregister_tool_request_intercept(&name_clone)
                             .map(|_| ())
                             .map_err(|e| {
                                 OptimizerError::RegistrationFailed(format!(
@@ -517,7 +515,7 @@ fn build_optimizer_plugin_context(
 
     let tool_regs = registrations.clone();
     let register_tool_execution_intercept = env.create_function_from_closure(
-        "__nat_nexus_optimizer_register_tool_execution_intercept",
+        "__nemo_flow_optimizer_register_tool_execution_intercept",
         move |ctx| {
             let name = ctx.get::<String>(0)?;
             let priority = ctx.get::<i32>(1)?;
@@ -525,7 +523,7 @@ fn build_optimizer_plugin_context(
             let promise_fn = Arc::new(crate::promise_call::PromiseAwareFn::new(
                 ctx.env, &callback,
             )?);
-            core::nat_nexus_register_tool_execution_intercept(
+            core::nemo_flow_register_tool_execution_intercept(
                 &name,
                 priority,
                 callable::wrap_js_tool_exec_intercept_fn(promise_fn.clone()),
@@ -537,7 +535,7 @@ fn build_optimizer_plugin_context(
                 "external_component",
                 name_clone.clone(),
                 Box::new(move || {
-                    let result = core::nat_nexus_deregister_tool_execution_intercept(&name_clone)
+                    let result = core::nemo_flow_deregister_tool_execution_intercept(&name_clone)
                         .map(|_| ())
                         .map_err(|e| {
                             OptimizerError::RegistrationFailed(format!(
@@ -675,7 +673,7 @@ impl HostedPluginHandler for NodeHostedPluginHandler {
             Ok(value) => {
                 serde_json::from_value::<Vec<ConfigDiagnostic>>(value).unwrap_or_else(|e| {
                     vec![ConfigDiagnostic {
-                        level: nvidia_nat_nexus_optimizer::DiagnosticLevel::Error,
+                        level: nemo_flow_optimizer::DiagnosticLevel::Error,
                         code: "optimizer.plugin_validate_failed".into(),
                         component: Some("external_component".into()),
                         field: None,
@@ -686,7 +684,7 @@ impl HostedPluginHandler for NodeHostedPluginHandler {
                 })
             }
             Err(e) => vec![ConfigDiagnostic {
-                level: nvidia_nat_nexus_optimizer::DiagnosticLevel::Error,
+                level: nemo_flow_optimizer::DiagnosticLevel::Error,
                 code: "optimizer.plugin_validate_failed".into(),
                 component: Some("external_component".into()),
                 field: None,
@@ -699,8 +697,8 @@ impl HostedPluginHandler for NodeHostedPluginHandler {
         &self,
         instance_id: &str,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &mut nvidia_nat_nexus_optimizer::HostedRegistrationContext,
-    ) -> nvidia_nat_nexus_optimizer::Result<()> {
+        ctx: &mut nemo_flow_optimizer::HostedRegistrationContext,
+    ) -> nemo_flow_optimizer::Result<()> {
         let registrations = Arc::new(StdMutex::new(Vec::<ComponentRegistration>::new()));
         let payload = NodePluginRegisterCall {
             instance_id: instance_id.to_string(),
@@ -747,7 +745,7 @@ impl HostedPluginHandler for NodeHostedPluginHandler {
 #[napi]
 pub fn create_scope_stack() -> JsScopeStack {
     JsScopeStack {
-        inner: nvidia_nat_nexus_core::create_scope_stack(),
+        inner: nemo_flow_core::create_scope_stack(),
     }
 }
 
@@ -755,14 +753,14 @@ pub fn create_scope_stack() -> JsScopeStack {
 #[napi]
 pub fn current_scope_stack() -> JsScopeStack {
     JsScopeStack {
-        inner: nvidia_nat_nexus_core::current_scope_stack(),
+        inner: nemo_flow_core::current_scope_stack(),
     }
 }
 
 /// Binds a scope stack to the current thread.
 #[napi]
 pub fn set_thread_scope_stack(stack: &JsScopeStack) {
-    nvidia_nat_nexus_core::set_thread_scope_stack(stack.inner.clone());
+    nemo_flow_core::set_thread_scope_stack(stack.inner.clone());
 }
 
 /// Returns whether the current execution context has an explicitly-initialized
@@ -773,7 +771,7 @@ pub fn set_thread_scope_stack(stack: &JsScopeStack) {
 /// only the auto-created default is present.
 #[napi]
 pub fn scope_stack_active() -> bool {
-    nvidia_nat_nexus_core::scope_stack_active()
+    nemo_flow_core::scope_stack_active()
 }
 
 /// Returns the most recent callback error that could not be surfaced through a direct exception.
@@ -801,7 +799,7 @@ pub fn clear_last_callback_error() {
 /// Throws if the scope stack is empty.
 #[napi]
 pub fn get_handle() -> Result<JsScopeHandle> {
-    core::nat_nexus_get_handle()
+    core::nemo_flow_get_handle()
         .map(JsScopeHandle::from)
         .map_err(to_napi_err)
 }
@@ -824,7 +822,7 @@ pub fn push_scope(
     metadata: Option<Json>,
 ) -> Result<JsScopeHandle> {
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    core::nat_nexus_push_scope(
+    core::nemo_flow_push_scope(
         &name,
         scope_type.into(),
         handle.map(|h| &h.inner),
@@ -842,7 +840,7 @@ pub fn push_scope(
 /// Throws if the handle does not match the current top scope.
 #[napi]
 pub fn pop_scope(handle: &JsScopeHandle) -> Result<()> {
-    core::nat_nexus_pop_scope(&handle.inner.uuid).map_err(to_napi_err)?;
+    core::nemo_flow_pop_scope(&handle.inner.uuid).map_err(to_napi_err)?;
     forget_scope_local_promise_aware(&handle.inner.uuid.to_string());
     Ok(())
 }
@@ -872,7 +870,7 @@ pub fn with_scope(
     metadata: Option<Json>,
 ) -> Result<JsObject> {
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    let scope_handle = core::nat_nexus_push_scope(
+    let scope_handle = core::nemo_flow_push_scope(
         &name,
         scope_type.into(),
         handle.map(|h| &h.inner),
@@ -883,7 +881,7 @@ pub fn with_scope(
     .map(JsScopeHandle::from)
     .map_err(to_napi_err)?;
 
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
     let scope_uuid = scope_handle.inner.uuid;
     let scope_name = scope_handle.inner.name.clone();
     let scope_type_int: u32 = ScopeType::from(scope_handle.inner.scope_type) as u32;
@@ -894,14 +892,14 @@ pub fn with_scope(
     let pa_fn = std::sync::Arc::new(
         crate::promise_call::PromiseAwareFn::new(&env, &callback).map_err(|e| {
             // Pop scope before propagating error
-            let _ = core::nat_nexus_pop_scope(&scope_uuid);
+            let _ = core::nemo_flow_pop_scope(&scope_uuid);
             napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
         })?,
     );
 
     env.execute_tokio_future(
         async move {
-            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+            nemo_flow_core::TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
                     let handle_json = serde_json::json!({
                         "uuid": scope_uuid.to_string(),
@@ -913,7 +911,7 @@ pub fn with_scope(
 
                     let result = pa_fn.call(handle_json).await;
                     // Always pop the scope, even on error.
-                    if core::nat_nexus_pop_scope(&scope_uuid).is_ok() {
+                    if core::nemo_flow_pop_scope(&scope_uuid).is_ok() {
                         forget_scope_local_promise_aware(&scope_uuid.to_string());
                     }
                     result.map_err(to_napi_err)
@@ -935,7 +933,7 @@ pub fn event(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
-    core::nat_nexus_event(
+    core::nemo_flow_event(
         &name,
         handle.map(|h| &h.inner),
         opt_json(data),
@@ -965,7 +963,7 @@ pub fn tool_call(
     tool_call_id: Option<String>,
 ) -> Result<JsToolHandle> {
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    core::nat_nexus_tool_call(
+    core::nemo_flow_tool_call(
         &name,
         args,
         handle.map(|h| &h.inner),
@@ -989,7 +987,7 @@ pub fn tool_call_end(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
-    core::nat_nexus_tool_call_end(&handle.inner, result, opt_json(data), opt_json(metadata))
+    core::nemo_flow_tool_call_end(&handle.inner, result, opt_json(data), opt_json(metadata))
         .map_err(to_napi_err)
 }
 
@@ -1018,15 +1016,15 @@ pub fn tool_call_execute(
         .map(|h| h.inner.clone())
         .unwrap_or_else(core::task_scope_top);
     let exec_fn = callable::wrap_js_tool_exec_fn(func);
-    let default_fn: nvidia_nat_nexus_core::ToolExecutionNextFn =
+    let default_fn: nemo_flow_core::ToolExecutionNextFn =
         std::sync::Arc::new(move |args| exec_fn(args));
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
 
     env.execute_tokio_future(
         async move {
-            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+            nemo_flow_core::TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
-                    core::nat_nexus_tool_call_execute(
+                    core::nemo_flow_tool_call_execute(
                         &name,
                         args,
                         default_fn,
@@ -1068,7 +1066,7 @@ pub fn tool_call_execute_async(
     let parent = handle
         .map(|h| h.inner.clone())
         .unwrap_or_else(core::task_scope_top);
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
 
     // Create promise-aware wrapper — this must happen on the JS thread (we have Env).
     let pa_fn = std::sync::Arc::new(
@@ -1077,16 +1075,16 @@ pub fn tool_call_execute_async(
         })?,
     );
 
-    let exec_fn: nvidia_nat_nexus_core::ToolExecutionNextFn = std::sync::Arc::new(move |args| {
+    let exec_fn: nemo_flow_core::ToolExecutionNextFn = std::sync::Arc::new(move |args| {
         let pa_fn = pa_fn.clone();
         Box::pin(async move { pa_fn.call(args).await })
     });
 
     env.execute_tokio_future(
         async move {
-            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+            nemo_flow_core::TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
-                    core::nat_nexus_tool_call_execute(
+                    core::nemo_flow_tool_call_execute(
                         &name,
                         args,
                         exec_fn,
@@ -1129,7 +1127,7 @@ pub fn llm_call(
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let llm_request: core_types::LLMRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
-    core::nat_nexus_llm_call(
+    core::nemo_flow_llm_call(
         &name,
         &llm_request,
         handle.map(|h| &h.inner),
@@ -1154,7 +1152,7 @@ pub fn llm_call_end(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
-    core::nat_nexus_llm_call_end(
+    core::nemo_flow_llm_call_end(
         &handle.inner,
         response,
         opt_json(data),
@@ -1197,20 +1195,20 @@ pub fn llm_call_execute(
     let llm_request: core_types::LLMRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
-    let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn =
+    let default_fn: nemo_flow_core::LlmExecutionNextFn =
         std::sync::Arc::new(move |req| exec_fn(req));
     let codec = match (codec_decode, codec_encode) {
         (Some(d), Some(e)) => Some(callable::wrap_js_codec(d, e)),
         _ => None,
     };
     let response_codec = response_codec_decode.map(callable::wrap_js_response_codec);
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
 
     env.execute_tokio_future(
         async move {
-            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+            nemo_flow_core::TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
-                    core::nat_nexus_llm_call_execute(
+                    core::nemo_flow_llm_call_execute(
                         &name,
                         llm_request,
                         default_fn,
@@ -1257,7 +1255,7 @@ pub fn llm_call_execute_async(
         .unwrap_or_else(core::task_scope_top);
     let llm_request: core_types::LLMRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
 
     let pa_fn = std::sync::Arc::new(
         crate::promise_call::PromiseAwareFn::new(&env, &func).map_err(|e| {
@@ -1265,7 +1263,7 @@ pub fn llm_call_execute_async(
         })?,
     );
 
-    let exec_fn: nvidia_nat_nexus_core::LlmExecutionNextFn = std::sync::Arc::new(move |req| {
+    let exec_fn: nemo_flow_core::LlmExecutionNextFn = std::sync::Arc::new(move |req| {
         let pa_fn = pa_fn.clone();
         let req_json = serde_json::to_value(&req).unwrap_or(Json::Null);
         Box::pin(async move { pa_fn.call(req_json).await })
@@ -1279,9 +1277,9 @@ pub fn llm_call_execute_async(
 
     env.execute_tokio_future(
         async move {
-            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+            nemo_flow_core::TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
-                    core::nat_nexus_llm_call_execute(
+                    core::nemo_flow_llm_call_execute(
                         &name,
                         llm_request,
                         exec_fn,
@@ -1342,7 +1340,7 @@ pub fn llm_stream_call_execute(
     let llm_request: core_types::LLMRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
 
-    let wrapped_collector: Box<dyn FnMut(Json) -> nvidia_nat_nexus_core::Result<()> + Send> =
+    let wrapped_collector: Box<dyn FnMut(Json) -> nemo_flow_core::Result<()> + Send> =
         match collector {
             Some(cb) => callable::wrap_js_collector_fn(cb),
             None => Box::new(|_: Json| Ok(())),
@@ -1358,7 +1356,7 @@ pub fn llm_stream_call_execute(
     // We create an unbounded channel here and pass the stream ID to JS
     // so it knows where to send chunks.
     let func = std::sync::Arc::new(func);
-    let default_fn: nvidia_nat_nexus_core::LlmStreamExecutionNextFn =
+    let default_fn: nemo_flow_core::LlmStreamExecutionNextFn =
         std::sync::Arc::new(move |req: core_types::LLMRequest| {
             let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1367,8 +1365,8 @@ pub fn llm_stream_call_execute(
             // Serialize the LLMRequest to JSON and wrap with streamId so JS can extract both
             let req_json = serde_json::to_value(&req).unwrap_or(Json::Null);
             let wrapper = serde_json::json!({
-                "__nat_nexus_native": req_json,
-                "__nat_nexus_stream_id": stream_id,
+                "__nemo_flow_native": req_json,
+                "__nemo_flow_stream_id": stream_id,
             });
 
             // NonBlocking: queue the call on the JS event loop and return immediately.
@@ -1381,10 +1379,7 @@ pub fn llm_stream_call_execute(
                 let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
                 Ok(Box::pin(stream)
                     as std::pin::Pin<
-                        Box<
-                            dyn tokio_stream::Stream<Item = nvidia_nat_nexus_core::Result<Json>>
-                                + Send,
-                        >,
+                        Box<dyn tokio_stream::Stream<Item = nemo_flow_core::Result<Json>> + Send>,
                     >)
             })
         });
@@ -1394,13 +1389,13 @@ pub fn llm_stream_call_execute(
         _ => None,
     };
     let response_codec = response_codec_decode.map(callable::wrap_js_response_codec);
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
 
     env.execute_tokio_future(
         async move {
-            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+            nemo_flow_core::TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
-                    let rust_stream = core::nat_nexus_llm_stream_call_execute(
+                    let rust_stream = core::nemo_flow_llm_stream_call_execute(
                         &name,
                         llm_request,
                         default_fn,
@@ -1439,8 +1434,8 @@ mod coverage_tests;
 // ---------------------------------------------------------------------------
 
 macro_rules! napi_guardrail_tool_api {
-    ($(#[doc = $reg_doc:expr])* $register_name:ident,
-     $(#[doc = $dereg_doc:expr])* $deregister_name:ident,
+    ($(#[doc = $reg_doc:expr_2021])* $register_name:ident,
+     $(#[doc = $dereg_doc:expr_2021])* $deregister_name:ident,
      $core_register:path, $core_deregister:path, $wrapper:path) => {
         $(#[doc = $reg_doc])*
         #[napi]
@@ -1470,8 +1465,8 @@ napi_guardrail_tool_api!(
     ///
     /// Returns `true` if a guardrail with that name was found and removed.
     deregister_tool_sanitize_request_guardrail,
-    core::nat_nexus_register_tool_sanitize_request_guardrail,
-    core::nat_nexus_deregister_tool_sanitize_request_guardrail,
+    core::nemo_flow_register_tool_sanitize_request_guardrail,
+    core::nemo_flow_deregister_tool_sanitize_request_guardrail,
     callable::wrap_js_tool_fn
 );
 
@@ -1485,8 +1480,8 @@ napi_guardrail_tool_api!(
     ///
     /// Returns `true` if a guardrail with that name was found and removed.
     deregister_tool_sanitize_response_guardrail,
-    core::nat_nexus_register_tool_sanitize_response_guardrail,
-    core::nat_nexus_deregister_tool_sanitize_response_guardrail,
+    core::nemo_flow_register_tool_sanitize_response_guardrail,
+    core::nemo_flow_deregister_tool_sanitize_response_guardrail,
     callable::wrap_js_tool_fn
 );
 
@@ -1500,7 +1495,7 @@ pub fn register_tool_conditional_execution_guardrail(
     priority: i32,
     guardrail: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nat_nexus_register_tool_conditional_execution_guardrail(
+    core::nemo_flow_register_tool_conditional_execution_guardrail(
         &name,
         priority,
         callable::wrap_js_tool_conditional_fn(guardrail),
@@ -1513,7 +1508,7 @@ pub fn register_tool_conditional_execution_guardrail(
 /// Returns `true` if a guardrail with that name was found and removed.
 #[napi]
 pub fn deregister_tool_conditional_execution_guardrail(name: String) -> Result<bool> {
-    core::nat_nexus_deregister_tool_conditional_execution_guardrail(&name).map_err(to_napi_err)
+    core::nemo_flow_deregister_tool_conditional_execution_guardrail(&name).map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1521,8 +1516,8 @@ pub fn deregister_tool_conditional_execution_guardrail(name: String) -> Result<b
 // ---------------------------------------------------------------------------
 
 macro_rules! napi_intercept_tool_api {
-    ($(#[doc = $reg_doc:expr])* $register_name:ident,
-     $(#[doc = $dereg_doc:expr])* $deregister_name:ident,
+    ($(#[doc = $reg_doc:expr_2021])* $register_name:ident,
+     $(#[doc = $dereg_doc:expr_2021])* $deregister_name:ident,
      $core_register:path, $core_deregister:path, $wrapper:path) => {
         $(#[doc = $reg_doc])*
         #[napi]
@@ -1553,8 +1548,8 @@ napi_intercept_tool_api!(
     ///
     /// Returns `true` if an intercept with that name was found and removed.
     deregister_tool_request_intercept,
-    core::nat_nexus_register_tool_request_intercept,
-    core::nat_nexus_deregister_tool_request_intercept,
+    core::nemo_flow_register_tool_request_intercept,
+    core::nemo_flow_deregister_tool_request_intercept,
     callable::wrap_js_tool_request_intercept_fn
 );
 
@@ -1576,7 +1571,7 @@ pub fn register_tool_execution_intercept(
             napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
         })?,
     );
-    core::nat_nexus_register_tool_execution_intercept(
+    core::nemo_flow_register_tool_execution_intercept(
         &name,
         priority,
         callable::wrap_js_tool_exec_intercept_fn(pa_fn.clone()),
@@ -1593,7 +1588,7 @@ pub fn register_tool_execution_intercept(
 pub fn deregister_tool_execution_intercept(name: String) -> Result<bool> {
     let key = PromiseAwareKey::GlobalToolExecution(name.clone());
     let removed =
-        core::nat_nexus_deregister_tool_execution_intercept(&name).map_err(to_napi_err)?;
+        core::nemo_flow_deregister_tool_execution_intercept(&name).map_err(to_napi_err)?;
     if removed {
         forget_promise_aware(&key);
     }
@@ -1614,7 +1609,7 @@ pub fn register_llm_sanitize_request_guardrail(
     priority: i32,
     guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nat_nexus_register_llm_sanitize_request_guardrail(
+    core::nemo_flow_register_llm_sanitize_request_guardrail(
         &name,
         priority,
         callable::wrap_js_llm_sanitize_request_fn(guardrail),
@@ -1627,7 +1622,7 @@ pub fn register_llm_sanitize_request_guardrail(
 /// Returns `true` if a guardrail with that name was found and removed.
 #[napi]
 pub fn deregister_llm_sanitize_request_guardrail(name: String) -> Result<bool> {
-    core::nat_nexus_deregister_llm_sanitize_request_guardrail(&name).map_err(to_napi_err)
+    core::nemo_flow_deregister_llm_sanitize_request_guardrail(&name).map_err(to_napi_err)
 }
 
 /// Register a guardrail that sanitizes LLM response data after execution.
@@ -1641,7 +1636,7 @@ pub fn register_llm_sanitize_response_guardrail(
     priority: i32,
     guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nat_nexus_register_llm_sanitize_response_guardrail(
+    core::nemo_flow_register_llm_sanitize_response_guardrail(
         &name,
         priority,
         callable::wrap_js_llm_response_fn(guardrail),
@@ -1654,7 +1649,7 @@ pub fn register_llm_sanitize_response_guardrail(
 /// Returns `true` if a guardrail with that name was found and removed.
 #[napi]
 pub fn deregister_llm_sanitize_response_guardrail(name: String) -> Result<bool> {
-    core::nat_nexus_deregister_llm_sanitize_response_guardrail(&name).map_err(to_napi_err)
+    core::nemo_flow_deregister_llm_sanitize_response_guardrail(&name).map_err(to_napi_err)
 }
 
 /// Register a guardrail that conditionally gates LLM execution.
@@ -1667,7 +1662,7 @@ pub fn register_llm_conditional_execution_guardrail(
     priority: i32,
     guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nat_nexus_register_llm_conditional_execution_guardrail(
+    core::nemo_flow_register_llm_conditional_execution_guardrail(
         &name,
         priority,
         callable::wrap_js_llm_conditional_fn(guardrail),
@@ -1680,7 +1675,7 @@ pub fn register_llm_conditional_execution_guardrail(
 /// Returns `true` if a guardrail with that name was found and removed.
 #[napi]
 pub fn deregister_llm_conditional_execution_guardrail(name: String) -> Result<bool> {
-    core::nat_nexus_deregister_llm_conditional_execution_guardrail(&name).map_err(to_napi_err)
+    core::nemo_flow_deregister_llm_conditional_execution_guardrail(&name).map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1699,7 +1694,7 @@ pub fn register_llm_request_intercept(
     break_chain: bool,
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nat_nexus_register_llm_request_intercept(
+    core::nemo_flow_register_llm_request_intercept(
         &name,
         priority,
         break_chain,
@@ -1713,7 +1708,7 @@ pub fn register_llm_request_intercept(
 /// Returns `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_llm_request_intercept(name: String) -> Result<bool> {
-    core::nat_nexus_deregister_llm_request_intercept(&name).map_err(to_napi_err)
+    core::nemo_flow_deregister_llm_request_intercept(&name).map_err(to_napi_err)
 }
 
 /// Register an LLM execution intercept following the middleware chain pattern.
@@ -1734,7 +1729,7 @@ pub fn register_llm_execution_intercept(
             napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
         })?,
     );
-    core::nat_nexus_register_llm_execution_intercept(
+    core::nemo_flow_register_llm_execution_intercept(
         &name,
         priority,
         callable::wrap_js_llm_exec_intercept_fn(pa_fn.clone()),
@@ -1750,7 +1745,7 @@ pub fn register_llm_execution_intercept(
 #[napi]
 pub fn deregister_llm_execution_intercept(name: String) -> Result<bool> {
     let key = PromiseAwareKey::GlobalLlmExecution(name.clone());
-    let removed = core::nat_nexus_deregister_llm_execution_intercept(&name).map_err(to_napi_err)?;
+    let removed = core::nemo_flow_deregister_llm_execution_intercept(&name).map_err(to_napi_err)?;
     if removed {
         forget_promise_aware(&key);
     }
@@ -1776,7 +1771,7 @@ pub fn register_llm_stream_execution_intercept(
             napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
         })?,
     );
-    core::nat_nexus_register_llm_stream_execution_intercept(
+    core::nemo_flow_register_llm_stream_execution_intercept(
         &name,
         priority,
         callable::wrap_js_llm_stream_exec_intercept_fn(pa_fn.clone()),
@@ -1793,7 +1788,7 @@ pub fn register_llm_stream_execution_intercept(
 pub fn deregister_llm_stream_execution_intercept(name: String) -> Result<bool> {
     let key = PromiseAwareKey::GlobalLlmStreamExecution(name.clone());
     let removed =
-        core::nat_nexus_deregister_llm_stream_execution_intercept(&name).map_err(to_napi_err)?;
+        core::nemo_flow_deregister_llm_stream_execution_intercept(&name).map_err(to_napi_err)?;
     if removed {
         forget_promise_aware(&key);
     }
@@ -1814,7 +1809,7 @@ pub fn register_subscriber(
     name: String,
     callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
-    core::nat_nexus_register_subscriber(&name, callable::wrap_js_event_subscriber(callback))
+    core::nemo_flow_register_subscriber(&name, callable::wrap_js_event_subscriber(callback))
         .map_err(to_napi_err)
 }
 
@@ -1823,7 +1818,7 @@ pub fn register_subscriber(
 /// Returns `true` if a subscriber with that name was found and removed.
 #[napi]
 pub fn deregister_subscriber(name: String) -> Result<bool> {
-    core::nat_nexus_deregister_subscriber(&name).map_err(to_napi_err)
+    core::nemo_flow_deregister_subscriber(&name).map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1831,8 +1826,8 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 // ---------------------------------------------------------------------------
 
 macro_rules! napi_scope_guardrail_tool_api {
-    ($(#[doc = $reg_doc:expr])* $register_name:ident,
-     $(#[doc = $dereg_doc:expr])* $deregister_name:ident,
+    ($(#[doc = $reg_doc:expr_2021])* $register_name:ident,
+     $(#[doc = $dereg_doc:expr_2021])* $deregister_name:ident,
      $core_register:path, $core_deregister:path, $wrapper:path) => {
         $(#[doc = $reg_doc])*
         #[napi]
@@ -1868,8 +1863,8 @@ napi_scope_guardrail_tool_api!(
     ///
     /// Returns `true` if a guardrail with that name was found and removed from the specified scope.
     scope_deregister_tool_sanitize_request_guardrail,
-    core::nat_nexus_scope_register_tool_sanitize_request_guardrail,
-    core::nat_nexus_scope_deregister_tool_sanitize_request_guardrail,
+    core::nemo_flow_scope_register_tool_sanitize_request_guardrail,
+    core::nemo_flow_scope_deregister_tool_sanitize_request_guardrail,
     callable::wrap_js_tool_fn
 );
 
@@ -1884,8 +1879,8 @@ napi_scope_guardrail_tool_api!(
     ///
     /// Returns `true` if a guardrail with that name was found and removed from the specified scope.
     scope_deregister_tool_sanitize_response_guardrail,
-    core::nat_nexus_scope_register_tool_sanitize_response_guardrail,
-    core::nat_nexus_scope_deregister_tool_sanitize_response_guardrail,
+    core::nemo_flow_scope_register_tool_sanitize_response_guardrail,
+    core::nemo_flow_scope_deregister_tool_sanitize_response_guardrail,
     callable::wrap_js_tool_fn
 );
 
@@ -1902,7 +1897,7 @@ pub fn scope_register_tool_conditional_execution_guardrail(
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_register_tool_conditional_execution_guardrail(
+    core::nemo_flow_scope_register_tool_conditional_execution_guardrail(
         &uuid,
         &name,
         priority,
@@ -1921,7 +1916,7 @@ pub fn scope_deregister_tool_conditional_execution_guardrail(
 ) -> Result<bool> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_deregister_tool_conditional_execution_guardrail(&uuid, &name)
+    core::nemo_flow_scope_deregister_tool_conditional_execution_guardrail(&uuid, &name)
         .map_err(to_napi_err)
 }
 
@@ -1930,8 +1925,8 @@ pub fn scope_deregister_tool_conditional_execution_guardrail(
 // ---------------------------------------------------------------------------
 
 macro_rules! napi_scope_intercept_tool_api {
-    ($(#[doc = $reg_doc:expr])* $register_name:ident,
-     $(#[doc = $dereg_doc:expr])* $deregister_name:ident,
+    ($(#[doc = $reg_doc:expr_2021])* $register_name:ident,
+     $(#[doc = $dereg_doc:expr_2021])* $deregister_name:ident,
      $core_register:path, $core_deregister:path, $wrapper:path) => {
         $(#[doc = $reg_doc])*
         #[napi]
@@ -1968,8 +1963,8 @@ napi_scope_intercept_tool_api!(
     ///
     /// Returns `true` if an intercept with that name was found and removed from the specified scope.
     scope_deregister_tool_request_intercept,
-    core::nat_nexus_scope_register_tool_request_intercept,
-    core::nat_nexus_scope_deregister_tool_request_intercept,
+    core::nemo_flow_scope_register_tool_request_intercept,
+    core::nemo_flow_scope_deregister_tool_request_intercept,
     callable::wrap_js_tool_request_intercept_fn
 );
 
@@ -1997,7 +1992,7 @@ pub fn scope_register_tool_execution_intercept(
             napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
         })?,
     );
-    core::nat_nexus_scope_register_tool_execution_intercept(
+    core::nemo_flow_scope_register_tool_execution_intercept(
         &uuid,
         &name,
         priority,
@@ -2019,7 +2014,7 @@ pub fn scope_deregister_tool_execution_intercept(scope_uuid: String, name: Strin
     };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    let removed = core::nat_nexus_scope_deregister_tool_execution_intercept(&uuid, &name)
+    let removed = core::nemo_flow_scope_deregister_tool_execution_intercept(&uuid, &name)
         .map_err(to_napi_err)?;
     if removed {
         forget_promise_aware(&key);
@@ -2045,7 +2040,7 @@ pub fn scope_register_llm_sanitize_request_guardrail(
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_register_llm_sanitize_request_guardrail(
+    core::nemo_flow_scope_register_llm_sanitize_request_guardrail(
         &uuid,
         &name,
         priority,
@@ -2064,7 +2059,7 @@ pub fn scope_deregister_llm_sanitize_request_guardrail(
 ) -> Result<bool> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_deregister_llm_sanitize_request_guardrail(&uuid, &name)
+    core::nemo_flow_scope_deregister_llm_sanitize_request_guardrail(&uuid, &name)
         .map_err(to_napi_err)
 }
 
@@ -2082,7 +2077,7 @@ pub fn scope_register_llm_sanitize_response_guardrail(
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_register_llm_sanitize_response_guardrail(
+    core::nemo_flow_scope_register_llm_sanitize_response_guardrail(
         &uuid,
         &name,
         priority,
@@ -2101,7 +2096,7 @@ pub fn scope_deregister_llm_sanitize_response_guardrail(
 ) -> Result<bool> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_deregister_llm_sanitize_response_guardrail(&uuid, &name)
+    core::nemo_flow_scope_deregister_llm_sanitize_response_guardrail(&uuid, &name)
         .map_err(to_napi_err)
 }
 
@@ -2118,7 +2113,7 @@ pub fn scope_register_llm_conditional_execution_guardrail(
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_register_llm_conditional_execution_guardrail(
+    core::nemo_flow_scope_register_llm_conditional_execution_guardrail(
         &uuid,
         &name,
         priority,
@@ -2137,7 +2132,7 @@ pub fn scope_deregister_llm_conditional_execution_guardrail(
 ) -> Result<bool> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_deregister_llm_conditional_execution_guardrail(&uuid, &name)
+    core::nemo_flow_scope_deregister_llm_conditional_execution_guardrail(&uuid, &name)
         .map_err(to_napi_err)
 }
 
@@ -2160,7 +2155,7 @@ pub fn scope_register_llm_request_intercept(
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_register_llm_request_intercept(
+    core::nemo_flow_scope_register_llm_request_intercept(
         &uuid,
         &name,
         priority,
@@ -2177,7 +2172,7 @@ pub fn scope_register_llm_request_intercept(
 pub fn scope_deregister_llm_request_intercept(scope_uuid: String, name: String) -> Result<bool> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_deregister_llm_request_intercept(&uuid, &name).map_err(to_napi_err)
+    core::nemo_flow_scope_deregister_llm_request_intercept(&uuid, &name).map_err(to_napi_err)
 }
 
 /// Register a scope-local LLM execution intercept following the middleware chain pattern.
@@ -2204,7 +2199,7 @@ pub fn scope_register_llm_execution_intercept(
             napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
         })?,
     );
-    core::nat_nexus_scope_register_llm_execution_intercept(
+    core::nemo_flow_scope_register_llm_execution_intercept(
         &uuid,
         &name,
         priority,
@@ -2226,7 +2221,7 @@ pub fn scope_deregister_llm_execution_intercept(scope_uuid: String, name: String
     };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    let removed = core::nat_nexus_scope_deregister_llm_execution_intercept(&uuid, &name)
+    let removed = core::nemo_flow_scope_deregister_llm_execution_intercept(&uuid, &name)
         .map_err(to_napi_err)?;
     if removed {
         forget_promise_aware(&key);
@@ -2259,7 +2254,7 @@ pub fn scope_register_llm_stream_execution_intercept(
             napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
         })?,
     );
-    core::nat_nexus_scope_register_llm_stream_execution_intercept(
+    core::nemo_flow_scope_register_llm_stream_execution_intercept(
         &uuid,
         &name,
         priority,
@@ -2284,7 +2279,7 @@ pub fn scope_deregister_llm_stream_execution_intercept(
     };
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    let removed = core::nat_nexus_scope_deregister_llm_stream_execution_intercept(&uuid, &name)
+    let removed = core::nemo_flow_scope_deregister_llm_stream_execution_intercept(&uuid, &name)
         .map_err(to_napi_err)?;
     if removed {
         forget_promise_aware(&key);
@@ -2310,7 +2305,7 @@ pub fn scope_register_subscriber(
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_register_subscriber(
+    core::nemo_flow_scope_register_subscriber(
         &uuid,
         &name,
         callable::wrap_js_event_subscriber(callback),
@@ -2325,7 +2320,7 @@ pub fn scope_register_subscriber(
 pub fn scope_deregister_subscriber(scope_uuid: String, name: String) -> Result<bool> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core::nat_nexus_scope_deregister_subscriber(&uuid, &name).map_err(to_napi_err)
+    core::nemo_flow_scope_deregister_subscriber(&uuid, &name).map_err(to_napi_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -2336,12 +2331,12 @@ pub fn scope_deregister_subscriber(scope_uuid: String, name: String) -> Result<b
 /// Returns the transformed arguments.
 #[napi(ts_return_type = "Promise<unknown>")]
 pub fn tool_request_intercepts(env: Env, name: String, args: Json) -> Result<JsObject> {
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
     env.execute_tokio_future(
         async move {
-            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+            nemo_flow_core::TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
-                    core::nat_nexus_tool_request_intercepts(&name, args).map_err(to_napi_err)
+                    core::nemo_flow_tool_request_intercepts(&name, args).map_err(to_napi_err)
                 })
                 .await
         },
@@ -2353,12 +2348,12 @@ pub fn tool_request_intercepts(env: Env, name: String, args: Json) -> Result<JsO
 /// Throws if any guardrail rejects.
 #[napi(ts_return_type = "Promise<void>")]
 pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<JsObject> {
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
     env.execute_tokio_future(
         async move {
-            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+            nemo_flow_core::TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
-                    core::nat_nexus_tool_conditional_execution(&name, &args).map_err(to_napi_err)
+                    core::nemo_flow_tool_conditional_execution(&name, &args).map_err(to_napi_err)
                 })
                 .await
         },
@@ -2373,12 +2368,12 @@ pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<
 pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<JsObject> {
     let llm_request: core_types::LLMRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
     env.execute_tokio_future(
         async move {
-            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+            nemo_flow_core::TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
-                    core::nat_nexus_llm_request_intercepts(&name, llm_request)
+                    core::nemo_flow_llm_request_intercepts(&name, llm_request)
                         .map(|r| serde_json::to_value(&r).unwrap_or(Json::Null))
                         .map_err(to_napi_err)
                 })
@@ -2395,12 +2390,12 @@ pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<J
 pub fn llm_conditional_execution(env: Env, request: Json) -> Result<JsObject> {
     let llm_request: core_types::LLMRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
     env.execute_tokio_future(
         async move {
-            nvidia_nat_nexus_core::TASK_SCOPE_STACK
+            nemo_flow_core::TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
-                    core::nat_nexus_llm_conditional_execution(&llm_request).map_err(to_napi_err)
+                    core::nemo_flow_llm_conditional_execution(&llm_request).map_err(to_napi_err)
                 })
                 .await
         },
@@ -2419,7 +2414,7 @@ pub fn llm_conditional_execution(env: Env, request: Json) -> Result<JsObject> {
 /// When ready, call `exportJson()` to serialize the collected trajectory.
 #[napi]
 pub struct JsAtifExporter {
-    inner: nvidia_nat_nexus_core::atif::AtifExporter,
+    inner: nemo_flow_core::atif::AtifExporter,
 }
 
 #[napi]
@@ -2435,7 +2430,7 @@ impl JsAtifExporter {
         agent_version: String,
         model_name: Option<String>,
     ) -> napi::Result<Self> {
-        let agent_info = nvidia_nat_nexus_core::atif::AtifAgentInfo {
+        let agent_info = nemo_flow_core::atif::AtifAgentInfo {
             name: agent_name,
             version: agent_version,
             model_name,
@@ -2443,7 +2438,7 @@ impl JsAtifExporter {
             extra: None,
         };
         Ok(Self {
-            inner: nvidia_nat_nexus_core::atif::AtifExporter::new(session_id, agent_info),
+            inner: nemo_flow_core::atif::AtifExporter::new(session_id, agent_info),
         })
     }
 
@@ -2453,7 +2448,7 @@ impl JsAtifExporter {
     #[napi]
     pub fn register(&self, name: String) -> napi::Result<()> {
         let subscriber = self.inner.subscriber();
-        nvidia_nat_nexus_core::nat_nexus_register_subscriber(&name, subscriber)
+        nemo_flow_core::nemo_flow_register_subscriber(&name, subscriber)
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
@@ -2462,7 +2457,7 @@ impl JsAtifExporter {
     /// Returns `true` if a subscriber with that name was found and removed.
     #[napi]
     pub fn deregister(&self, name: String) -> napi::Result<bool> {
-        nvidia_nat_nexus_core::nat_nexus_deregister_subscriber(&name)
+        nemo_flow_core::nemo_flow_deregister_subscriber(&name)
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
@@ -2494,13 +2489,13 @@ pub struct OpenTelemetryConfig {
     pub headers: Option<Json>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     pub resource_attributes: Option<Json>,
-    /// `service.name` resource attribute. Defaults to `"nat-nexus"`.
+    /// `service.name` resource attribute. Defaults to `"nemo-flow"`.
     pub service_name: Option<String>,
     /// Optional `service.namespace` resource attribute.
     pub service_namespace: Option<String>,
     /// Optional `service.version` resource attribute.
     pub service_version: Option<String>,
-    /// Instrumentation scope name. Defaults to `"nvidia-nat-nexus-otel"`.
+    /// Instrumentation scope name. Defaults to `"nemo-flow-otel"`.
     pub instrumentation_scope: Option<String>,
     /// Export timeout in milliseconds. Defaults to `3000`.
     pub timeout_millis: Option<u32>,
@@ -2518,13 +2513,13 @@ pub struct OpenInferenceConfig {
     pub headers: Option<Json>,
     /// Extra OpenInference resource attributes as string key/value pairs.
     pub resource_attributes: Option<Json>,
-    /// `service.name` resource attribute. Defaults to `"nat-nexus"`.
+    /// `service.name` resource attribute. Defaults to `"nemo-flow"`.
     pub service_name: Option<String>,
     /// Optional `service.namespace` resource attribute.
     pub service_namespace: Option<String>,
     /// Optional `service.version` resource attribute.
     pub service_version: Option<String>,
-    /// Instrumentation scope name. Defaults to `"nvidia-nat-nexus-openinference"`.
+    /// Instrumentation scope name. Defaults to `"nemo-flow-openinference"`.
     pub instrumentation_scope: Option<String>,
     /// Export timeout in milliseconds. Defaults to `3000`.
     pub timeout_millis: Option<u32>,
@@ -2533,7 +2528,7 @@ pub struct OpenInferenceConfig {
 /// OpenTelemetry-backed event subscriber.
 #[napi(js_name = "OpenTelemetrySubscriber")]
 pub struct JsOpenTelemetrySubscriber {
-    inner: nvidia_nat_nexus_otel::OpenTelemetrySubscriber,
+    inner: nemo_flow_otel::OpenTelemetrySubscriber,
 }
 
 #[napi]
@@ -2541,7 +2536,7 @@ impl JsOpenTelemetrySubscriber {
     /// Create a new OpenTelemetry subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: Option<OpenTelemetryConfig>) -> napi::Result<Self> {
-        let inner = nvidia_nat_nexus_otel::OpenTelemetrySubscriber::new(build_otel_config(config)?)
+        let inner = nemo_flow_otel::OpenTelemetrySubscriber::new(build_otel_config(config)?)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })
     }
@@ -2582,7 +2577,7 @@ impl JsOpenTelemetrySubscriber {
 /// OpenInference-backed event subscriber.
 #[napi(js_name = "OpenInferenceSubscriber")]
 pub struct JsOpenInferenceSubscriber {
-    inner: nvidia_nat_nexus_openinference::OpenInferenceSubscriber,
+    inner: nemo_flow_openinference::OpenInferenceSubscriber,
 }
 
 #[napi]
@@ -2590,7 +2585,7 @@ impl JsOpenInferenceSubscriber {
     /// Create a new OpenInference subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: Option<OpenInferenceConfig>) -> napi::Result<Self> {
-        let inner = nvidia_nat_nexus_openinference::OpenInferenceSubscriber::new(
+        let inner = nemo_flow_openinference::OpenInferenceSubscriber::new(
             build_openinference_config(config)?,
         )
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
@@ -2814,7 +2809,7 @@ fn validate_optimizer_config_or_err(config: &OptimizerConfig) -> napi::Result<Co
         let joined = report
             .diagnostics
             .iter()
-            .filter(|diag| diag.level == nvidia_nat_nexus_optimizer::DiagnosticLevel::Error)
+            .filter(|diag| diag.level == nemo_flow_optimizer::DiagnosticLevel::Error)
             .map(|diag| diag.message.as_str())
             .collect::<Vec<_>>()
             .join("; ");

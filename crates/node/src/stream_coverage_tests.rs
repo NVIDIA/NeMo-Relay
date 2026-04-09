@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use nvidia_nat_nexus_core::NexusError;
+use nemo_flow_core::FlowError;
 use serde_json::json;
 
 #[test]
@@ -27,7 +27,7 @@ fn test_next_converts_stream_errors() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        tx.send(Err(NexusError::Internal("stream failed".into())))
+        tx.send(Err(FlowError::Internal("stream failed".into())))
             .await
             .unwrap();
         drop(tx);

@@ -11,19 +11,19 @@ operations with language-appropriate naming.
 
 See also:
 
-- [Typed API Reference](typed-api-reference.md) for `nat_nexus.typed` helper
+- [Typed API Reference](typed-api-reference.md) for `nemo_flow.typed` helper
   functions and codec types.
 - [Optimizer API Reference](optimizer-api-reference.md) for the config-driven
-  `nat_nexus.optimizer` runtime and component helpers.
+  `nemo_flow.optimizer` runtime and component helpers.
 
 ## Scope Operations
 
 ```python
 # Get the current top-of-stack scope handle
-handle = nat_nexus.scope.get_handle() -> ScopeHandle
+handle = nemo_flow.scope.get_handle() -> ScopeHandle
 
 # Push a new scope onto the stack
-handle = nat_nexus.scope.push(
+handle = nemo_flow.scope.push(
     name: str,
     scope_type: ScopeType,
     *,
@@ -32,10 +32,10 @@ handle = nat_nexus.scope.push(
 ) -> ScopeHandle
 
 # Pop a scope from the stack
-nat_nexus.scope.pop(handle: ScopeHandle) -> None
+nemo_flow.scope.pop(handle: ScopeHandle) -> None
 
 # Emit a standalone Mark event
-nat_nexus.scope.event(
+nemo_flow.scope.event(
     name: str,
     *,
     handle: ScopeHandle | None = None,
@@ -50,11 +50,11 @@ nat_nexus.scope.event(
 
 These APIs are for advanced integrations that need to drive lifecycle start/end
 manually. For normal application code and all quickstarts, prefer
-`nat_nexus.tools.execute(...)` so the runtime manages the full lifecycle.
+`nemo_flow.tools.execute(...)` so the runtime manages the full lifecycle.
 
 ```python
 # Begin a tool call — emits Start event
-handle = nat_nexus.tools.call(
+handle = nemo_flow.tools.call(
     name: str,
     args: dict,
     *,
@@ -66,7 +66,7 @@ handle = nat_nexus.tools.call(
 ) -> ToolHandle
 
 # End a tool call — emits End event
-nat_nexus.tools.call_end(
+nemo_flow.tools.call_end(
     handle: ToolHandle,
     result: dict,
     *,
@@ -79,7 +79,7 @@ nat_nexus.tools.call_end(
 
 ```python
 # Execute a tool call through the full middleware pipeline
-result = await nat_nexus.tools.execute(
+result = await nemo_flow.tools.execute(
     name: str,
     args: dict,
     func: Callable[[dict], Awaitable[dict]] | Callable[[dict], dict],
@@ -100,10 +100,10 @@ still receive the raw execution result.
 
 ```python
 # Run request intercept chain only
-transformed_args = nat_nexus.intercepts.tool_request_intercepts(name: str, args: dict) -> dict
+transformed_args = nemo_flow.intercepts.tool_request_intercepts(name: str, args: dict) -> dict
 
 # Run conditional execution guardrails only (raises on rejection)
-nat_nexus.tools.conditional_execution(name: str, args: dict) -> None
+nemo_flow.tools.conditional_execution(name: str, args: dict) -> None
 ```
 
 ## LLM Lifecycle
@@ -112,11 +112,11 @@ nat_nexus.tools.conditional_execution(name: str, args: dict) -> None
 
 These APIs are for advanced integrations that need to drive lifecycle start/end
 manually. For normal application code and all quickstarts, prefer
-`nat_nexus.llm.execute(...)` or `nat_nexus.llm.stream_execute(...)`.
+`nemo_flow.llm.execute(...)` or `nemo_flow.llm.stream_execute(...)`.
 
 ```python
 # Begin an LLM call — emits Start event
-handle = nat_nexus.llm.call(
+handle = nemo_flow.llm.call(
     name: str,
     request: LLMRequest,
     *,
@@ -128,7 +128,7 @@ handle = nat_nexus.llm.call(
 ) -> LLMHandle
 
 # End an LLM call — emits End event
-nat_nexus.llm.call_end(
+nemo_flow.llm.call_end(
     handle: LLMHandle,
     response: dict,
     *,
@@ -141,7 +141,7 @@ nat_nexus.llm.call_end(
 
 ```python
 # Execute an LLM call through the full middleware pipeline
-result = await nat_nexus.llm.execute(
+result = await nemo_flow.llm.execute(
     name: str,
     request: LLMRequest,
     func: Callable[[LLMRequest], Awaitable[dict]] | Callable[[LLMRequest], dict],
@@ -156,7 +156,7 @@ result = await nat_nexus.llm.execute(
 ) -> dict
 
 # Execute a streaming LLM call
-stream = await nat_nexus.llm.stream_execute(
+stream = await nemo_flow.llm.stream_execute(
     name: str,
     request: LLMRequest,
     func: Callable[[LLMRequest], AsyncIterator[dict]],
@@ -188,10 +188,10 @@ rewrite execution inputs.
 
 ```python
 # Run LLM request intercept chain only
-transformed = nat_nexus.llm.request_intercepts(name: str, request: LLMRequest) -> LLMRequest
+transformed = nemo_flow.llm.request_intercepts(name: str, request: LLMRequest) -> LLMRequest
 
 # Run conditional execution guardrails only (raises on rejection)
-nat_nexus.llm.conditional_execution(request: LLMRequest) -> None
+nemo_flow.llm.conditional_execution(request: LLMRequest) -> None
 ```
 
 ## Guardrail Registration
@@ -212,16 +212,16 @@ surfaces:
 | Surface | Contract | Normal Return | Callback Failure |
 |---------|----------|---------------|------------------|
 | Tool/LLM sanitize guardrails | Infallible | Return sanitized value | Handle failures internally; there is no error channel |
-| Tool/LLM conditional execution guardrails | Fallible | Return `None` to allow or a rejection reason to block | Raising/throwing fails the originating Nexus API call |
-| Tool/LLM request intercepts | Fallible | Return transformed request | Raising/throwing fails the originating Nexus API call |
-| Tool/LLM execution intercepts | Fallible | Return/await transformed result | Raising/throwing fails the originating Nexus API call |
+| Tool/LLM conditional execution guardrails | Fallible | Return `None` to allow or a rejection reason to block | Raising/throwing fails the originating NeMo Flow API call |
+| Tool/LLM request intercepts | Fallible | Return transformed request | Raising/throwing fails the originating NeMo Flow API call |
+| Tool/LLM execution intercepts | Fallible | Return/await transformed result | Raising/throwing fails the originating NeMo Flow API call |
 | Stream collector | Fallible | Return normally for each chunk | Raising/throwing aborts the stream |
 | Stream finalizer | Infallible | Return the aggregated response | Handle failures internally; there is no error channel |
 | Event subscribers | Infallible | Return `None` | Handle failures internally; there is no error channel |
 
 For direct Rust users, the fallible rows above are expressed as `Result<...>`.
 In Python, Node.js, and WASM, they keep natural callback return types, but
-exceptions thrown from those callbacks propagate to the originating Nexus API
+exceptions thrown from those callbacks propagate to the originating NeMo Flow API
 call. There are not separate "fallible variants" of these callback surfaces:
 conditional guardrails and request/execution intercepts are the canonical
 fallible contract in every binding.
@@ -230,54 +230,54 @@ fallible contract in every binding.
 
 ```python
 # Sanitize tool request arguments
-nat_nexus.guardrails.register_tool_sanitize_request(
+nemo_flow.guardrails.register_tool_sanitize_request(
     name: str, priority: int,
     fn: Callable[[str, dict], dict],               # (tool_name, args) -> args
 ) -> None
 
 # Sanitize tool response
-nat_nexus.guardrails.register_tool_sanitize_response(
+nemo_flow.guardrails.register_tool_sanitize_response(
     name: str, priority: int,
     fn: Callable[[str, dict], dict],               # (tool_name, result) -> result
 ) -> None
 
 # Conditionally block tool execution
-nat_nexus.guardrails.register_tool_conditional_execution(
+nemo_flow.guardrails.register_tool_conditional_execution(
     name: str, priority: int,
     fn: Callable[[str, dict], str | None],         # (tool_name, args) -> None or reason
 ) -> None
 
 # Deregister (returns True if found)
-nat_nexus.guardrails.deregister_tool_sanitize_request(name: str) -> bool
-nat_nexus.guardrails.deregister_tool_sanitize_response(name: str) -> bool
-nat_nexus.guardrails.deregister_tool_conditional_execution(name: str) -> bool
+nemo_flow.guardrails.deregister_tool_sanitize_request(name: str) -> bool
+nemo_flow.guardrails.deregister_tool_sanitize_response(name: str) -> bool
+nemo_flow.guardrails.deregister_tool_conditional_execution(name: str) -> bool
 ```
 
 ### LLM Guardrails
 
 ```python
 # Sanitize LLM request
-nat_nexus.guardrails.register_llm_sanitize_request(
+nemo_flow.guardrails.register_llm_sanitize_request(
     name: str, priority: int,
     fn: Callable[[LLMRequest], LLMRequest],
 ) -> None
 
 # Sanitize LLM response
-nat_nexus.guardrails.register_llm_sanitize_response(
+nemo_flow.guardrails.register_llm_sanitize_response(
     name: str, priority: int,
     fn: Callable[[dict], dict],
 ) -> None
 
 # Conditionally block LLM execution
-nat_nexus.guardrails.register_llm_conditional_execution(
+nemo_flow.guardrails.register_llm_conditional_execution(
     name: str, priority: int,
     fn: Callable[[LLMRequest], str | None],
 ) -> None
 
 # Deregister (returns True if found)
-nat_nexus.guardrails.deregister_llm_sanitize_request(name: str) -> bool
-nat_nexus.guardrails.deregister_llm_sanitize_response(name: str) -> bool
-nat_nexus.guardrails.deregister_llm_conditional_execution(name: str) -> bool
+nemo_flow.guardrails.deregister_llm_sanitize_request(name: str) -> bool
+nemo_flow.guardrails.deregister_llm_sanitize_response(name: str) -> bool
+nemo_flow.guardrails.deregister_llm_conditional_execution(name: str) -> bool
 ```
 
 ## Intercept Registration
@@ -288,65 +288,65 @@ Intercepts are priority-ordered (ascending). Names must be unique.
 
 ```python
 # Transform tool request arguments
-nat_nexus.intercepts.register_tool_request(
+nemo_flow.intercepts.register_tool_request(
     name: str, priority: int, break_chain: bool,
     fn: Callable[[str, dict], dict],               # (tool_name, args) -> args
 ) -> None
 
 # Execution middleware chain
-nat_nexus.intercepts.register_tool_execution(
+nemo_flow.intercepts.register_tool_execution(
     name: str, priority: int,
     fn: Callable[[str, dict, Callable], Awaitable[dict]],  # (tool_name, args, next) -> result
 ) -> None
 
 # Deregister
-nat_nexus.intercepts.deregister_tool_request(name: str) -> bool
-nat_nexus.intercepts.deregister_tool_execution(name: str) -> bool
+nemo_flow.intercepts.deregister_tool_request(name: str) -> bool
+nemo_flow.intercepts.deregister_tool_execution(name: str) -> bool
 ```
 
 ### LLM Intercepts
 
 ```python
 # Transform LLM request
-nat_nexus.intercepts.register_llm_request(
+nemo_flow.intercepts.register_llm_request(
     name: str, priority: int, break_chain: bool,
     fn: Callable[[str, LLMRequest], LLMRequest],         # (llm_name, request) -> request
 ) -> None
 
 # Execution middleware chain
-nat_nexus.intercepts.register_llm_execution(
+nemo_flow.intercepts.register_llm_execution(
     name: str, priority: int,
     fn: Callable[[str, LLMRequest, Callable], Awaitable[dict]],  # (llm_name, request, next) -> result
 ) -> None
 
 # Stream execution middleware chain
-nat_nexus.intercepts.register_llm_stream_execution(
+nemo_flow.intercepts.register_llm_stream_execution(
     name: str, priority: int,
     fn: Callable[[str, LLMRequest, Callable], Awaitable[AsyncIterator[dict]]],  # (llm_name, request, next) -> stream
 ) -> None
 
 # Deregister
-nat_nexus.intercepts.deregister_llm_request(name: str) -> bool
-nat_nexus.intercepts.deregister_llm_execution(name: str) -> bool
-nat_nexus.intercepts.deregister_llm_stream_execution(name: str) -> bool
+nemo_flow.intercepts.deregister_llm_request(name: str) -> bool
+nemo_flow.intercepts.deregister_llm_execution(name: str) -> bool
+nemo_flow.intercepts.deregister_llm_stream_execution(name: str) -> bool
 ```
 
 ## Event Subscribers
 
 ```python
 # Register an event subscriber
-nat_nexus.subscribers.register(
+nemo_flow.subscribers.register(
     name: str,
     fn: Callable[[Event], None],
 ) -> None
 
 # Deregister (returns True if found)
-nat_nexus.subscribers.deregister(name: str) -> bool
+nemo_flow.subscribers.deregister(name: str) -> bool
 ```
 
-Subscriber callbacks run synchronously on the calling thread, after Nexus has
+Subscriber callbacks run synchronously on the calling thread, after NeMo Flow has
 snapshotted the subscriber list and released its runtime locks. Subscribers may
-call other Nexus APIs, but should remain lightweight because they are still on
+call other NeMo Flow APIs, but should remain lightweight because they are still on
 the request path. Subscribers are infallible callbacks: they do not have an
 error return channel.
 
@@ -354,20 +354,20 @@ error return channel.
 
 ```python
 # Get or create the current task/thread scope stack
-stack = nat_nexus.get_scope_stack() -> ScopeStack
+stack = nemo_flow.get_scope_stack() -> ScopeStack
 
 # Create a new isolated scope stack
-stack = nat_nexus.create_scope_stack() -> ScopeStack
+stack = nemo_flow.create_scope_stack() -> ScopeStack
 
 # Bind a scope stack to the current thread (for worker threads)
-nat_nexus.set_thread_scope_stack(stack: ScopeStack) -> None
+nemo_flow.set_thread_scope_stack(stack: ScopeStack) -> None
 
 # Check if a scope stack has been explicitly initialized
-nat_nexus.scope_stack_active() -> bool
+nemo_flow.scope_stack_active() -> bool
 
 # Capture current scope stack for propagation to a worker thread
 # Raises RuntimeError if no scope stack is active
-stack = nat_nexus.propagate_scope_to_thread() -> ScopeStack
+stack = nemo_flow.propagate_scope_to_thread() -> ScopeStack
 ```
 
 ## Types
@@ -436,33 +436,33 @@ arguments passed to `func(...)` or the value returned to the caller.
 
 ```python
 # Tool guardrails (scope-local)
-nat_nexus.scope_local.register_tool_sanitize_request(
+nemo_flow.scope_local.register_tool_sanitize_request(
     handle: ScopeHandle, name: str, priority: int,
     fn: Callable[[str, dict], dict],
 ) -> None
 
-nat_nexus.scope_local.register_tool_sanitize_response(
+nemo_flow.scope_local.register_tool_sanitize_response(
     handle: ScopeHandle, name: str, priority: int,
     fn: Callable[[str, dict], dict],
 ) -> None
 
-nat_nexus.scope_local.register_tool_conditional_execution(
+nemo_flow.scope_local.register_tool_conditional_execution(
     handle: ScopeHandle, name: str, priority: int,
     fn: Callable[[str, dict], str | None],
 ) -> None
 
 # LLM guardrails (scope-local)
-nat_nexus.scope_local.register_llm_sanitize_request(
+nemo_flow.scope_local.register_llm_sanitize_request(
     handle: ScopeHandle, name: str, priority: int,
     fn: Callable[[LLMRequest], LLMRequest],
 ) -> None
 
-nat_nexus.scope_local.register_llm_sanitize_response(
+nemo_flow.scope_local.register_llm_sanitize_response(
     handle: ScopeHandle, name: str, priority: int,
     fn: Callable[[dict], dict],
 ) -> None
 
-nat_nexus.scope_local.register_llm_conditional_execution(
+nemo_flow.scope_local.register_llm_conditional_execution(
     handle: ScopeHandle, name: str, priority: int,
     fn: Callable[[LLMRequest], str | None],
 ) -> None
@@ -472,28 +472,28 @@ nat_nexus.scope_local.register_llm_conditional_execution(
 
 ```python
 # Tool intercepts (scope-local)
-nat_nexus.scope_local.register_tool_request_intercept(
+nemo_flow.scope_local.register_tool_request_intercept(
     handle: ScopeHandle, name: str, priority: int, break_chain: bool,
     fn: Callable[[str, dict], dict],
 ) -> None
 
-nat_nexus.scope_local.register_tool_execution_intercept(
+nemo_flow.scope_local.register_tool_execution_intercept(
     handle: ScopeHandle, name: str, priority: int,
     fn: Callable[[str, dict, Callable], Awaitable[dict]],  # (tool_name, args, next) -> result
 ) -> None
 
 # LLM intercepts (scope-local)
-nat_nexus.scope_local.register_llm_request_intercept(
+nemo_flow.scope_local.register_llm_request_intercept(
     handle: ScopeHandle, name: str, priority: int, break_chain: bool,
     fn: Callable[[str, LLMRequest], LLMRequest],           # (llm_name, request) -> request
 ) -> None
 
-nat_nexus.scope_local.register_llm_execution_intercept(
+nemo_flow.scope_local.register_llm_execution_intercept(
     handle: ScopeHandle, name: str, priority: int,
     fn: Callable[[str, LLMRequest, Callable], Awaitable[dict]],  # (llm_name, request, next) -> result
 ) -> None
 
-nat_nexus.scope_local.register_llm_stream_execution_intercept(
+nemo_flow.scope_local.register_llm_stream_execution_intercept(
     handle: ScopeHandle, name: str, priority: int,
     fn: Callable[[str, LLMRequest, Callable], Awaitable[AsyncIterator[dict]]],  # (llm_name, request, next) -> stream
 ) -> None
@@ -502,7 +502,7 @@ nat_nexus.scope_local.register_llm_stream_execution_intercept(
 ### Scope-Local Subscribers
 
 ```python
-nat_nexus.scope_local.register_subscriber(
+nemo_flow.scope_local.register_subscriber(
     handle: ScopeHandle, name: str,
     fn: Callable[[Event], None],
 ) -> None
@@ -517,19 +517,19 @@ stream collectors are fallible.
 
 | Python | Go | Node.js | WASM | FFI/C |
 |--------|----|---------|------|-------|
-| `scope_local.register_tool_conditional_execution` | `ScopeRegisterToolConditionalExecution` | `scopeRegisterToolConditionalExecution` | `scope_register_tool_conditional_execution` | `nat_nexus_scope_register_tool_conditional_execution` |
-| `scope_local.register_subscriber` | `ScopeRegisterSubscriber` | `scopeRegisterSubscriber` | `scope_register_subscriber` | `nat_nexus_scope_register_subscriber` |
+| `scope_local.register_tool_conditional_execution` | `ScopeRegisterToolConditionalExecution` | `scopeRegisterToolConditionalExecution` | `scope_register_tool_conditional_execution` | `nemo_flow_scope_register_tool_conditional_execution` |
+| `scope_local.register_subscriber` | `ScopeRegisterSubscriber` | `scopeRegisterSubscriber` | `scope_register_subscriber` | `nemo_flow_scope_register_subscriber` |
 
 All scope-local registration functions follow the same naming pattern: prefix the global registration name with `scope_register_` (FFI/WASM), `scopeRegister` (Node.js), `ScopeRegister` (Go), or place it in the `scope_local` module (Python).
 
 ## Built-In Codec Types
 
-Nexus ships three built-in codecs that implement both request codec
+NeMo Flow ships three built-in codecs that implement both request codec
 (`LlmCodec`) and response codec (`LlmResponseCodec`). Each can be used
 for both `codec=` and `response_codec=` parameters.
 
 ```python
-from nat_nexus.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
+from nemo_flow.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 # Each codec instance exposes decode(), encode(), and decode_response()
 codec = OpenAIChatCodec()
@@ -559,7 +559,7 @@ See [LLM Codecs](llm-codecs.md) for the full codec system documentation.
 ## ATIF Export
 
 ```python
-from nat_nexus import AtifExporter
+from nemo_flow import AtifExporter
 
 exporter = AtifExporter()
 # ... run operations ...

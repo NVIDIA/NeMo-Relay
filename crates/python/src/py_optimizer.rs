@@ -8,18 +8,18 @@ use std::sync::{Arc, Mutex};
 use pyo3::prelude::*;
 use serde_json::{Map, Value as Json};
 
-use nvidia_nat_nexus_core::{
-    nat_nexus_deregister_llm_execution_intercept, nat_nexus_deregister_llm_request_intercept,
-    nat_nexus_deregister_llm_stream_execution_intercept, nat_nexus_deregister_subscriber,
-    nat_nexus_deregister_tool_execution_intercept, nat_nexus_deregister_tool_request_intercept,
-    nat_nexus_register_llm_execution_intercept, nat_nexus_register_llm_request_intercept,
-    nat_nexus_register_llm_stream_execution_intercept, nat_nexus_register_subscriber,
-    nat_nexus_register_tool_execution_intercept, nat_nexus_register_tool_request_intercept,
+use nemo_flow_core::{
+    nemo_flow_deregister_llm_execution_intercept, nemo_flow_deregister_llm_request_intercept,
+    nemo_flow_deregister_llm_stream_execution_intercept, nemo_flow_deregister_subscriber,
+    nemo_flow_deregister_tool_execution_intercept, nemo_flow_deregister_tool_request_intercept,
+    nemo_flow_register_llm_execution_intercept, nemo_flow_register_llm_request_intercept,
+    nemo_flow_register_llm_stream_execution_intercept, nemo_flow_register_subscriber,
+    nemo_flow_register_tool_execution_intercept, nemo_flow_register_tool_request_intercept,
 };
-use nvidia_nat_nexus_optimizer::{
-    deregister_hosted_plugin_handler, register_hosted_plugin_handler, ComponentRegistration,
-    ConfigDiagnostic, ConfigReport, DiagnosticLevel, HostedPluginHandler, OptimizerConfig,
-    OptimizerRuntime,
+use nemo_flow_optimizer::{
+    ComponentRegistration, ConfigDiagnostic, ConfigReport, DiagnosticLevel, HostedPluginHandler,
+    OptimizerConfig, OptimizerRuntime, deregister_hosted_plugin_handler,
+    register_hosted_plugin_handler,
 };
 
 use crate::convert::{json_to_py, py_to_json};
@@ -65,7 +65,7 @@ impl PyOptimizerPluginContext {
         text_signature = "(name: str, callback: object) -> None"
     )]
     fn register_subscriber(&self, name: &str, callback: Py<PyAny>) -> PyResult<()> {
-        nat_nexus_register_subscriber(name, wrap_py_event_subscriber(callback))
+        nemo_flow_register_subscriber(name, wrap_py_event_subscriber(callback))
             .map_err(to_py_err)?;
 
         let name_owned = name.to_string();
@@ -78,10 +78,10 @@ impl PyOptimizerPluginContext {
             "external_component",
             name_owned.clone(),
             Box::new(move || {
-                nat_nexus_deregister_subscriber(&name_owned)
+                nemo_flow_deregister_subscriber(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
-                        nvidia_nat_nexus_optimizer::OptimizerError::RegistrationFailed(format!(
+                        nemo_flow_optimizer::OptimizerError::RegistrationFailed(format!(
                             "subscriber deregistration failed: {e}"
                         ))
                     })
@@ -103,7 +103,7 @@ impl PyOptimizerPluginContext {
         break_chain: bool,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        nat_nexus_register_llm_request_intercept(
+        nemo_flow_register_llm_request_intercept(
             name,
             priority,
             break_chain,
@@ -121,10 +121,10 @@ impl PyOptimizerPluginContext {
             "external_component",
             name_owned.clone(),
             Box::new(move || {
-                nat_nexus_deregister_llm_request_intercept(&name_owned)
+                nemo_flow_deregister_llm_request_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
-                        nvidia_nat_nexus_optimizer::OptimizerError::RegistrationFailed(format!(
+                        nemo_flow_optimizer::OptimizerError::RegistrationFailed(format!(
                             "llm request intercept deregistration failed: {e}"
                         ))
                     })
@@ -140,7 +140,7 @@ impl PyOptimizerPluginContext {
         priority: i32,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        nat_nexus_register_llm_execution_intercept(
+        nemo_flow_register_llm_execution_intercept(
             name,
             priority,
             wrap_py_llm_exec_intercept_fn(callback),
@@ -157,10 +157,10 @@ impl PyOptimizerPluginContext {
             "external_component",
             name_owned.clone(),
             Box::new(move || {
-                nat_nexus_deregister_llm_execution_intercept(&name_owned)
+                nemo_flow_deregister_llm_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
-                        nvidia_nat_nexus_optimizer::OptimizerError::RegistrationFailed(format!(
+                        nemo_flow_optimizer::OptimizerError::RegistrationFailed(format!(
                             "llm execution intercept deregistration failed: {e}"
                         ))
                     })
@@ -176,7 +176,7 @@ impl PyOptimizerPluginContext {
         priority: i32,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        nat_nexus_register_llm_stream_execution_intercept(
+        nemo_flow_register_llm_stream_execution_intercept(
             name,
             priority,
             wrap_py_llm_stream_exec_intercept_fn(callback),
@@ -193,10 +193,10 @@ impl PyOptimizerPluginContext {
             "external_component",
             name_owned.clone(),
             Box::new(move || {
-                nat_nexus_deregister_llm_stream_execution_intercept(&name_owned)
+                nemo_flow_deregister_llm_stream_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
-                        nvidia_nat_nexus_optimizer::OptimizerError::RegistrationFailed(format!(
+                        nemo_flow_optimizer::OptimizerError::RegistrationFailed(format!(
                             "llm stream execution intercept deregistration failed: {e}"
                         ))
                     })
@@ -218,7 +218,7 @@ impl PyOptimizerPluginContext {
         break_chain: bool,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        nat_nexus_register_tool_request_intercept(
+        nemo_flow_register_tool_request_intercept(
             name,
             priority,
             break_chain,
@@ -236,10 +236,10 @@ impl PyOptimizerPluginContext {
             "external_component",
             name_owned.clone(),
             Box::new(move || {
-                nat_nexus_deregister_tool_request_intercept(&name_owned)
+                nemo_flow_deregister_tool_request_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
-                        nvidia_nat_nexus_optimizer::OptimizerError::RegistrationFailed(format!(
+                        nemo_flow_optimizer::OptimizerError::RegistrationFailed(format!(
                             "tool request intercept deregistration failed: {e}"
                         ))
                     })
@@ -255,7 +255,7 @@ impl PyOptimizerPluginContext {
         priority: i32,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        nat_nexus_register_tool_execution_intercept(
+        nemo_flow_register_tool_execution_intercept(
             name,
             priority,
             wrap_py_tool_exec_intercept_fn(callback),
@@ -272,10 +272,10 @@ impl PyOptimizerPluginContext {
             "external_component",
             name_owned.clone(),
             Box::new(move || {
-                nat_nexus_deregister_tool_execution_intercept(&name_owned)
+                nemo_flow_deregister_tool_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
-                        nvidia_nat_nexus_optimizer::OptimizerError::RegistrationFailed(format!(
+                        nemo_flow_optimizer::OptimizerError::RegistrationFailed(format!(
                             "tool execution intercept deregistration failed: {e}"
                         ))
                     })
@@ -370,8 +370,8 @@ impl HostedPluginHandler for PyHostedPluginHandler {
         &self,
         instance_id: &str,
         plugin_config: &Map<String, Json>,
-        ctx: &mut nvidia_nat_nexus_optimizer::HostedRegistrationContext,
-    ) -> nvidia_nat_nexus_optimizer::Result<()> {
+        ctx: &mut nemo_flow_optimizer::HostedRegistrationContext,
+    ) -> nemo_flow_optimizer::Result<()> {
         let registrations = Python::attach(|py| -> PyResult<Vec<ComponentRegistration>> {
             let py_ctx = Py::new(
                 py,
@@ -385,11 +385,12 @@ impl HostedPluginHandler for PyHostedPluginHandler {
                 "register",
                 (instance_id, plugin_config_py, py_ctx.clone_ref(py)),
             )?;
-            py_ctx.bind(py).borrow().drain_registrations()
+            {
+                let py_ctx_ref = py_ctx.bind(py).borrow();
+                py_ctx_ref.drain_registrations()
+            }
         })
-        .map_err(|err| {
-            nvidia_nat_nexus_optimizer::OptimizerError::RegistrationFailed(err.to_string())
-        })?;
+        .map_err(|err| nemo_flow_optimizer::OptimizerError::RegistrationFailed(err.to_string()))?;
 
         ctx.extend_registrations(registrations);
 
@@ -529,7 +530,7 @@ fn validate_optimizer_config(py: Python<'_>, config: &Bound<'_, PyAny>) -> PyRes
     let config_json = py_to_json(config)?;
     let config: OptimizerConfig = serde_json::from_value(config_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-    let report = nvidia_nat_nexus_optimizer::OptimizerRuntime::validate_config(&config);
+    let report = nemo_flow_optimizer::OptimizerRuntime::validate_config(&config);
     let report = serde_json::to_value(&report)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
     json_to_py(py, &report)
@@ -559,7 +560,7 @@ fn set_latency_sensitivity(value: u32) -> PyResult<()> {
             "sensitivity must be positive (> 0)",
         ));
     }
-    nvidia_nat_nexus_optimizer::set_latency_sensitivity(value).map_err(to_py_err)
+    nemo_flow_optimizer::set_latency_sensitivity(value).map_err(to_py_err)
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -574,7 +575,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 fn plugin_callback_diag(code: &str, message: String) -> ConfigDiagnostic {
     ConfigDiagnostic {
-        level: nvidia_nat_nexus_optimizer::DiagnosticLevel::Error,
+        level: nemo_flow_optimizer::DiagnosticLevel::Error,
         code: code.to_string(),
         component: Some("external_component".to_string()),
         field: None,

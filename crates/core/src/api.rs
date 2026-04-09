@@ -1,26 +1,26 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Public API for the Nexus runtime.
+//! Public API for the NeMo Flow runtime.
 //!
 //! This module contains all top-level functions that language bindings and
 //! application code call. The API is organized into several groups:
 //!
-//! - **Scope operations** — [`nat_nexus_get_handle`], [`nat_nexus_push_scope`],
-//!   [`nat_nexus_pop_scope`], [`nat_nexus_event`]
-//! - **Tool lifecycle** — [`nat_nexus_tool_call`], [`nat_nexus_tool_call_end`],
-//!   [`nat_nexus_tool_call_execute`]
-//! - **LLM lifecycle** — [`nat_nexus_llm_call`], [`nat_nexus_llm_call_end`],
-//!   [`nat_nexus_llm_call_execute`], [`nat_nexus_llm_stream_call_execute`]
-//! - **Guardrail registration** — `nat_nexus_register_*_guardrail` /
-//!   `nat_nexus_deregister_*_guardrail` for tool and LLM sanitize/conditional guardrails
-//! - **Intercept registration** — `nat_nexus_register_*_intercept` /
-//!   `nat_nexus_deregister_*_intercept` for tool and LLM request/execution intercepts
-//! - **Subscriber registration** — [`nat_nexus_register_subscriber`],
-//!   [`nat_nexus_deregister_subscriber`]
-//! - **Standalone middleware chains** — [`nat_nexus_tool_request_intercepts`],
-//!   [`nat_nexus_tool_conditional_execution`],
-//!   [`nat_nexus_llm_request_intercepts`], [`nat_nexus_llm_conditional_execution`]
+//! - **Scope operations** — [`nemo_flow_get_handle`], [`nemo_flow_push_scope`],
+//!   [`nemo_flow_pop_scope`], [`nemo_flow_event`]
+//! - **Tool lifecycle** — [`nemo_flow_tool_call`], [`nemo_flow_tool_call_end`],
+//!   [`nemo_flow_tool_call_execute`]
+//! - **LLM lifecycle** — [`nemo_flow_llm_call`], [`nemo_flow_llm_call_end`],
+//!   [`nemo_flow_llm_call_execute`], [`nemo_flow_llm_stream_call_execute`]
+//! - **Guardrail registration** — `nemo_flow_register_*_guardrail` /
+//!   `nemo_flow_deregister_*_guardrail` for tool and LLM sanitize/conditional guardrails
+//! - **Intercept registration** — `nemo_flow_register_*_intercept` /
+//!   `nemo_flow_deregister_*_intercept` for tool and LLM request/execution intercepts
+//! - **Subscriber registration** — [`nemo_flow_register_subscriber`],
+//!   [`nemo_flow_deregister_subscriber`]
+//! - **Standalone middleware chains** — [`nemo_flow_tool_request_intercepts`],
+//!   [`nemo_flow_tool_conditional_execution`],
+//!   [`nemo_flow_llm_request_intercepts`], [`nemo_flow_llm_conditional_execution`]
 //!
 //! All functions operate on the global context singleton returned by
 //! [`global_context`].
@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 use crate::codec::{AnnotatedLLMRequest, AnnotatedLLMResponse, LlmCodec, LlmResponseCodec};
 use crate::context::*;
-use crate::error::{NexusError, Result};
+use crate::error::{FlowError, Result};
 use crate::json::Json;
 use crate::stream::LlmStreamWrapper;
 use crate::types::*;
@@ -53,9 +53,7 @@ fn snapshot_event_subscribers(
     scope_local_subscribers: Vec<EventSubscriberFn>,
 ) -> Result<Vec<EventSubscriberFn>> {
     let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
+    let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
     Ok(state.collect_event_subscribers(&scope_local_subscribers))
 }
 
@@ -70,7 +68,7 @@ macro_rules! guardrail_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| NexusError::Internal(e.to_string()))?;
+                .map_err(|e| FlowError::Internal(e.to_string()))?;
             state
                 .$field
                 .register(
@@ -80,7 +78,7 @@ macro_rules! guardrail_registry_api {
                         guardrail,
                     },
                 )
-                .map_err(|e| NexusError::AlreadyExists(e))
+                .map_err(|e| FlowError::AlreadyExists(e))
         }
 
         /// Deregister the guardrail by name. Returns `true` if it existed.
@@ -88,7 +86,7 @@ macro_rules! guardrail_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| NexusError::Internal(e.to_string()))?;
+                .map_err(|e| FlowError::Internal(e.to_string()))?;
             Ok(state.$field.deregister(name))
         }
     };
@@ -106,7 +104,7 @@ macro_rules! intercept_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| NexusError::Internal(e.to_string()))?;
+                .map_err(|e| FlowError::Internal(e.to_string()))?;
             state
                 .$field
                 .register(
@@ -117,7 +115,7 @@ macro_rules! intercept_registry_api {
                         callable,
                     },
                 )
-                .map_err(|e| NexusError::AlreadyExists(e))
+                .map_err(|e| FlowError::AlreadyExists(e))
         }
 
         /// Deregister the intercept by name. Returns `true` if it existed.
@@ -125,7 +123,7 @@ macro_rules! intercept_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| NexusError::Internal(e.to_string()))?;
+                .map_err(|e| FlowError::Internal(e.to_string()))?;
             Ok(state.$field.deregister(name))
         }
     };
@@ -138,11 +136,11 @@ macro_rules! execution_intercept_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| NexusError::Internal(e.to_string()))?;
+                .map_err(|e| FlowError::Internal(e.to_string()))?;
             state
                 .$field
                 .register(name.to_string(), ExecutionIntercept { priority, callable })
-                .map_err(|e| NexusError::AlreadyExists(e))
+                .map_err(|e| FlowError::AlreadyExists(e))
         }
 
         /// Deregister the execution intercept by name. Returns `true` if it existed.
@@ -150,7 +148,7 @@ macro_rules! execution_intercept_registry_api {
             let ctx = global_context();
             let mut state = ctx
                 .write()
-                .map_err(|e| NexusError::Internal(e.to_string()))?;
+                .map_err(|e| FlowError::Internal(e.to_string()))?;
             Ok(state.$field.deregister(name))
         }
     };
@@ -160,9 +158,9 @@ macro_rules! execution_intercept_registry_api {
 // Tool guardrail registrations
 //
 // Each pair generates:
-//   - `nat_nexus_register_*`: registers a named guardrail with a priority.
+//   - `nemo_flow_register_*`: registers a named guardrail with a priority.
 //     Returns AlreadyExists if the name is taken.
-//   - `nat_nexus_deregister_*`: removes a guardrail by name.
+//   - `nemo_flow_deregister_*`: removes a guardrail by name.
 //     Returns Ok(true) if it existed, Ok(false) otherwise.
 // ---------------------------------------------------------------------------
 
@@ -179,9 +177,9 @@ guardrail_registry_api!(
     ///
     /// # Errors
     ///
-    /// Returns [`NexusError::AlreadyExists`] if a guardrail with the given name is already registered.
-    nat_nexus_register_tool_sanitize_request_guardrail,
-    nat_nexus_deregister_tool_sanitize_request_guardrail,
+    /// Returns [`FlowError::AlreadyExists`] if a guardrail with the given name is already registered.
+    nemo_flow_register_tool_sanitize_request_guardrail,
+    nemo_flow_deregister_tool_sanitize_request_guardrail,
     tool_sanitize_request_guardrails,
     ToolSanitizeFn
 );
@@ -195,8 +193,8 @@ guardrail_registry_api!(
     /// not the value returned to the caller.
     ///
     /// This callback is infallible. Handle failures inside the callback itself.
-    nat_nexus_register_tool_sanitize_response_guardrail,
-    nat_nexus_deregister_tool_sanitize_response_guardrail,
+    nemo_flow_register_tool_sanitize_response_guardrail,
+    nemo_flow_deregister_tool_sanitize_response_guardrail,
     tool_sanitize_response_guardrails,
     ToolSanitizeFn
 );
@@ -206,9 +204,9 @@ guardrail_registry_api!(
     ///
     /// Callback signature: `(tool_name: &str, args: &Json) -> Result<Option<String>>`.
     /// Return `Ok(None)` to allow execution, `Ok(Some(reason))` to reject it.
-    /// Returning `Err(...)` aborts the originating Nexus call.
-    nat_nexus_register_tool_conditional_execution_guardrail,
-    nat_nexus_deregister_tool_conditional_execution_guardrail,
+    /// Returning `Err(...)` aborts the originating NeMo Flow call.
+    nemo_flow_register_tool_conditional_execution_guardrail,
+    nemo_flow_deregister_tool_conditional_execution_guardrail,
     tool_conditional_execution_guardrails,
     ToolConditionalFn
 );
@@ -225,9 +223,9 @@ intercept_registry_api!(
     ///
     /// Callback signature: `(tool_name: &str, args: Json) -> Result<Json>`.
     /// Set `break_chain = true` to prevent lower-priority intercepts from running.
-    /// Returning `Err(...)` aborts the originating Nexus call.
-    nat_nexus_register_tool_request_intercept,
-    nat_nexus_deregister_tool_request_intercept,
+    /// Returning `Err(...)` aborts the originating NeMo Flow call.
+    nemo_flow_register_tool_request_intercept,
+    nemo_flow_deregister_tool_request_intercept,
     tool_request_intercepts,
     ToolInterceptFn
 );
@@ -237,8 +235,8 @@ execution_intercept_registry_api!(
     ///
     /// Callback signature: `(args: Json, next: ToolExecutionNextFn) -> Future<Result<Json>>`.
     /// Call `next(args)` to continue the chain, or skip it to short-circuit.
-    nat_nexus_register_tool_execution_intercept,
-    nat_nexus_deregister_tool_execution_intercept,
+    nemo_flow_register_tool_execution_intercept,
+    nemo_flow_deregister_tool_execution_intercept,
     tool_execution_intercepts,
     ToolExecutionFn
 );
@@ -256,8 +254,8 @@ guardrail_registry_api!(
     /// while request intercepts still control the request passed into execution.
     ///
     /// This callback is infallible. Handle failures inside the callback itself.
-    nat_nexus_register_llm_sanitize_request_guardrail,
-    nat_nexus_deregister_llm_sanitize_request_guardrail,
+    nemo_flow_register_llm_sanitize_request_guardrail,
+    nemo_flow_deregister_llm_sanitize_request_guardrail,
     llm_sanitize_request_guardrails,
     LlmSanitizeRequestFn
 );
@@ -271,8 +269,8 @@ guardrail_registry_api!(
     /// not the value returned to the caller.
     ///
     /// This callback is infallible. Handle failures inside the callback itself.
-    nat_nexus_register_llm_sanitize_response_guardrail,
-    nat_nexus_deregister_llm_sanitize_response_guardrail,
+    nemo_flow_register_llm_sanitize_response_guardrail,
+    nemo_flow_deregister_llm_sanitize_response_guardrail,
     llm_sanitize_response_guardrails,
     LlmSanitizeResponseFn
 );
@@ -282,9 +280,9 @@ guardrail_registry_api!(
     ///
     /// Callback signature: `(request: &LLMRequest) -> Result<Option<String>>`.
     /// Return `Ok(None)` to allow execution, `Ok(Some(reason))` to reject it.
-    /// Returning `Err(...)` aborts the originating Nexus call.
-    nat_nexus_register_llm_conditional_execution_guardrail,
-    nat_nexus_deregister_llm_conditional_execution_guardrail,
+    /// Returning `Err(...)` aborts the originating NeMo Flow call.
+    nemo_flow_register_llm_conditional_execution_guardrail,
+    nemo_flow_deregister_llm_conditional_execution_guardrail,
     llm_conditional_execution_guardrails,
     LlmConditionalFn
 );
@@ -298,9 +296,9 @@ intercept_registry_api!(
     ///
     /// Callback signature: `(request: LLMRequest) -> Result<LLMRequest>`.
     /// Set `break_chain = true` to prevent lower-priority intercepts from running.
-    /// Returning `Err(...)` aborts the originating Nexus call.
-    nat_nexus_register_llm_request_intercept,
-    nat_nexus_deregister_llm_request_intercept,
+    /// Returning `Err(...)` aborts the originating NeMo Flow call.
+    nemo_flow_register_llm_request_intercept,
+    nemo_flow_deregister_llm_request_intercept,
     llm_request_intercepts,
     LlmRequestInterceptFn
 );
@@ -310,8 +308,8 @@ execution_intercept_registry_api!(
     ///
     /// Callback signature: `(request: LLMRequest, next: LlmExecutionNextFn) -> Future<Result<Json>>`.
     /// Call `next(request)` to continue the chain, or skip it to short-circuit.
-    nat_nexus_register_llm_execution_intercept,
-    nat_nexus_deregister_llm_execution_intercept,
+    nemo_flow_register_llm_execution_intercept,
+    nemo_flow_deregister_llm_execution_intercept,
     llm_execution_intercepts,
     LlmExecutionFn
 );
@@ -321,8 +319,8 @@ execution_intercept_registry_api!(
     ///
     /// Callback signature: `(request: LLMRequest, next: LlmStreamExecutionNextFn) -> Future<Result<Stream>>`.
     /// Call `next(request)` to continue the chain, or skip it to short-circuit.
-    nat_nexus_register_llm_stream_execution_intercept,
-    nat_nexus_deregister_llm_stream_execution_intercept,
+    nemo_flow_register_llm_stream_execution_intercept,
+    nemo_flow_deregister_llm_stream_execution_intercept,
     llm_stream_execution_intercepts,
     LlmStreamExecutionFn
 );
@@ -337,15 +335,15 @@ execution_intercept_registry_api!(
 /// runtime snapshots the subscriber list and releases its locks before
 /// invoking them.
 ///
-/// Returns [`NexusError::AlreadyExists`] if a subscriber with the given name
+/// Returns [`FlowError::AlreadyExists`] if a subscriber with the given name
 /// is already registered.
-pub fn nat_nexus_register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()> {
+pub fn nemo_flow_register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()> {
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
+        .map_err(|e| FlowError::Internal(e.to_string()))?;
     if state.event_subscribers.contains_key(name) {
-        return Err(NexusError::AlreadyExists(format!(
+        return Err(FlowError::AlreadyExists(format!(
             "{name} subscriber already exists"
         )));
     }
@@ -354,12 +352,13 @@ pub fn nat_nexus_register_subscriber(name: &str, callback: EventSubscriberFn) ->
 }
 
 /// Deregisters an event subscriber by name. Returns `true` if it existed, `false` otherwise.
-pub fn nat_nexus_deregister_subscriber(name: &str) -> Result<bool> {
+pub fn nemo_flow_deregister_subscriber(name: &str) -> Result<bool> {
     let ctx = global_context();
     let mut state = ctx
         .write()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
-    Ok(state.event_subscribers.remove(name).is_some())
+        .map_err(|e| FlowError::Internal(e.to_string()))?;
+    let removed = state.event_subscribers.remove(name).is_some();
+    Ok(removed)
 }
 
 // ---------------------------------------------------------------------------
@@ -373,7 +372,7 @@ pub fn nat_nexus_deregister_subscriber(name: &str) -> Result<bool> {
 /// 3. If Codec provided and annotated was produced: encode back to LLMRequest,
 ///    preserving headers from the post-intercept request
 ///
-/// Used by both [`nat_nexus_llm_call_execute`] and [`nat_nexus_llm_stream_call_execute`].
+/// Used by both [`nemo_flow_llm_call_execute`] and [`nemo_flow_llm_stream_call_execute`].
 fn run_request_intercepts_with_codec(
     name: &str,
     request: LLMRequest,
@@ -384,9 +383,7 @@ fn run_request_intercepts_with_codec(
     let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_request_intercepts);
 
     let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
+    let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
 
     // Clone original for encode step (merge-not-replace needs pre-intercept content)
     let original = request.clone();
@@ -425,7 +422,7 @@ macro_rules! scope_local_guardrail_registry_api {
             let mut guard = ss.write().expect("scope stack lock poisoned");
             let regs = guard
                 .local_registries_mut(scope_uuid)
-                .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+                .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
             regs.$field
                 .register(
                     name.to_string(),
@@ -434,7 +431,7 @@ macro_rules! scope_local_guardrail_registry_api {
                         guardrail,
                     },
                 )
-                .map_err(|e| NexusError::AlreadyExists(e))
+                .map_err(|e| FlowError::AlreadyExists(e))
         }
 
         /// Deregister a scope-local guardrail by name. Returns `true` if it existed.
@@ -443,7 +440,7 @@ macro_rules! scope_local_guardrail_registry_api {
             let mut guard = ss.write().expect("scope stack lock poisoned");
             let regs = guard
                 .local_registries_mut(scope_uuid)
-                .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+                .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
             Ok(regs.$field.deregister(name))
         }
     };
@@ -463,7 +460,7 @@ macro_rules! scope_local_intercept_registry_api {
             let mut guard = ss.write().expect("scope stack lock poisoned");
             let regs = guard
                 .local_registries_mut(scope_uuid)
-                .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+                .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
             regs.$field
                 .register(
                     name.to_string(),
@@ -473,7 +470,7 @@ macro_rules! scope_local_intercept_registry_api {
                         callable,
                     },
                 )
-                .map_err(|e| NexusError::AlreadyExists(e))
+                .map_err(|e| FlowError::AlreadyExists(e))
         }
 
         /// Deregister a scope-local intercept by name. Returns `true` if it existed.
@@ -482,7 +479,7 @@ macro_rules! scope_local_intercept_registry_api {
             let mut guard = ss.write().expect("scope stack lock poisoned");
             let regs = guard
                 .local_registries_mut(scope_uuid)
-                .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+                .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
             Ok(regs.$field.deregister(name))
         }
     };
@@ -496,10 +493,10 @@ macro_rules! scope_local_execution_intercept_registry_api {
             let mut guard = ss.write().expect("scope stack lock poisoned");
             let regs = guard
                 .local_registries_mut(scope_uuid)
-                .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+                .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
             regs.$field
                 .register(name.to_string(), ExecutionIntercept { priority, callable })
-                .map_err(|e| NexusError::AlreadyExists(e))
+                .map_err(|e| FlowError::AlreadyExists(e))
         }
 
         /// Deregister a scope-local execution intercept by name. Returns `true` if it existed.
@@ -508,7 +505,7 @@ macro_rules! scope_local_execution_intercept_registry_api {
             let mut guard = ss.write().expect("scope stack lock poisoned");
             let regs = guard
                 .local_registries_mut(scope_uuid)
-                .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+                .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
             Ok(regs.$field.deregister(name))
         }
     };
@@ -517,22 +514,22 @@ macro_rules! scope_local_execution_intercept_registry_api {
 // Tool guardrails — scope-local
 scope_local_guardrail_registry_api!(
     /// Register a scope-local tool request sanitize guardrail.
-    nat_nexus_scope_register_tool_sanitize_request_guardrail,
-    nat_nexus_scope_deregister_tool_sanitize_request_guardrail,
+    nemo_flow_scope_register_tool_sanitize_request_guardrail,
+    nemo_flow_scope_deregister_tool_sanitize_request_guardrail,
     tool_sanitize_request_guardrails,
     ToolSanitizeFn
 );
 scope_local_guardrail_registry_api!(
     /// Register a scope-local tool response sanitize guardrail.
-    nat_nexus_scope_register_tool_sanitize_response_guardrail,
-    nat_nexus_scope_deregister_tool_sanitize_response_guardrail,
+    nemo_flow_scope_register_tool_sanitize_response_guardrail,
+    nemo_flow_scope_deregister_tool_sanitize_response_guardrail,
     tool_sanitize_response_guardrails,
     ToolSanitizeFn
 );
 scope_local_guardrail_registry_api!(
     /// Register a scope-local tool conditional execution guardrail.
-    nat_nexus_scope_register_tool_conditional_execution_guardrail,
-    nat_nexus_scope_deregister_tool_conditional_execution_guardrail,
+    nemo_flow_scope_register_tool_conditional_execution_guardrail,
+    nemo_flow_scope_deregister_tool_conditional_execution_guardrail,
     tool_conditional_execution_guardrails,
     ToolConditionalFn
 );
@@ -540,15 +537,15 @@ scope_local_guardrail_registry_api!(
 // Tool intercepts — scope-local
 scope_local_intercept_registry_api!(
     /// Register a scope-local tool request intercept.
-    nat_nexus_scope_register_tool_request_intercept,
-    nat_nexus_scope_deregister_tool_request_intercept,
+    nemo_flow_scope_register_tool_request_intercept,
+    nemo_flow_scope_deregister_tool_request_intercept,
     tool_request_intercepts,
     ToolInterceptFn
 );
 scope_local_execution_intercept_registry_api!(
     /// Register a scope-local tool execution intercept.
-    nat_nexus_scope_register_tool_execution_intercept,
-    nat_nexus_scope_deregister_tool_execution_intercept,
+    nemo_flow_scope_register_tool_execution_intercept,
+    nemo_flow_scope_deregister_tool_execution_intercept,
     tool_execution_intercepts,
     ToolExecutionFn
 );
@@ -556,22 +553,22 @@ scope_local_execution_intercept_registry_api!(
 // LLM guardrails — scope-local
 scope_local_guardrail_registry_api!(
     /// Register a scope-local LLM request sanitize guardrail.
-    nat_nexus_scope_register_llm_sanitize_request_guardrail,
-    nat_nexus_scope_deregister_llm_sanitize_request_guardrail,
+    nemo_flow_scope_register_llm_sanitize_request_guardrail,
+    nemo_flow_scope_deregister_llm_sanitize_request_guardrail,
     llm_sanitize_request_guardrails,
     LlmSanitizeRequestFn
 );
 scope_local_guardrail_registry_api!(
     /// Register a scope-local LLM response sanitize guardrail.
-    nat_nexus_scope_register_llm_sanitize_response_guardrail,
-    nat_nexus_scope_deregister_llm_sanitize_response_guardrail,
+    nemo_flow_scope_register_llm_sanitize_response_guardrail,
+    nemo_flow_scope_deregister_llm_sanitize_response_guardrail,
     llm_sanitize_response_guardrails,
     LlmSanitizeResponseFn
 );
 scope_local_guardrail_registry_api!(
     /// Register a scope-local LLM conditional execution guardrail.
-    nat_nexus_scope_register_llm_conditional_execution_guardrail,
-    nat_nexus_scope_deregister_llm_conditional_execution_guardrail,
+    nemo_flow_scope_register_llm_conditional_execution_guardrail,
+    nemo_flow_scope_deregister_llm_conditional_execution_guardrail,
     llm_conditional_execution_guardrails,
     LlmConditionalFn
 );
@@ -579,22 +576,22 @@ scope_local_guardrail_registry_api!(
 // LLM intercepts — scope-local
 scope_local_intercept_registry_api!(
     /// Register a scope-local LLM request intercept.
-    nat_nexus_scope_register_llm_request_intercept,
-    nat_nexus_scope_deregister_llm_request_intercept,
+    nemo_flow_scope_register_llm_request_intercept,
+    nemo_flow_scope_deregister_llm_request_intercept,
     llm_request_intercepts,
     LlmRequestInterceptFn
 );
 scope_local_execution_intercept_registry_api!(
     /// Register a scope-local LLM execution intercept.
-    nat_nexus_scope_register_llm_execution_intercept,
-    nat_nexus_scope_deregister_llm_execution_intercept,
+    nemo_flow_scope_register_llm_execution_intercept,
+    nemo_flow_scope_deregister_llm_execution_intercept,
     llm_execution_intercepts,
     LlmExecutionFn
 );
 scope_local_execution_intercept_registry_api!(
     /// Register a scope-local LLM streaming execution intercept.
-    nat_nexus_scope_register_llm_stream_execution_intercept,
-    nat_nexus_scope_deregister_llm_stream_execution_intercept,
+    nemo_flow_scope_register_llm_stream_execution_intercept,
+    nemo_flow_scope_deregister_llm_stream_execution_intercept,
     llm_stream_execution_intercepts,
     LlmStreamExecutionFn
 );
@@ -602,7 +599,7 @@ scope_local_execution_intercept_registry_api!(
 // Scope-local subscriber registration
 
 /// Registers a scope-local event subscriber.
-pub fn nat_nexus_scope_register_subscriber(
+pub fn nemo_flow_scope_register_subscriber(
     scope_uuid: &Uuid,
     name: &str,
     callback: EventSubscriberFn,
@@ -611,9 +608,9 @@ pub fn nat_nexus_scope_register_subscriber(
     let mut guard = ss.write().expect("scope stack lock poisoned");
     let regs = guard
         .local_registries_mut(scope_uuid)
-        .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+        .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
     if regs.event_subscribers.contains_key(name) {
-        return Err(NexusError::AlreadyExists(format!(
+        return Err(FlowError::AlreadyExists(format!(
             "{name} subscriber already exists"
         )));
     }
@@ -622,12 +619,12 @@ pub fn nat_nexus_scope_register_subscriber(
 }
 
 /// Deregisters a scope-local event subscriber. Returns `true` if it existed.
-pub fn nat_nexus_scope_deregister_subscriber(scope_uuid: &Uuid, name: &str) -> Result<bool> {
+pub fn nemo_flow_scope_deregister_subscriber(scope_uuid: &Uuid, name: &str) -> Result<bool> {
     let ss = current_scope_stack();
     let mut guard = ss.write().expect("scope stack lock poisoned");
     let regs = guard
         .local_registries_mut(scope_uuid)
-        .ok_or_else(|| NexusError::NotFound(format!("scope {scope_uuid} not found")))?;
+        .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
     Ok(regs.event_subscribers.remove(name).is_some())
 }
 
@@ -638,7 +635,7 @@ pub fn nat_nexus_scope_deregister_subscriber(scope_uuid: &Uuid, name: &str) -> R
 /// Returns a clone of the current top scope handle from the scope stack.
 ///
 /// Always succeeds because the root scope is always present.
-pub fn nat_nexus_get_handle() -> Result<ScopeHandle> {
+pub fn nemo_flow_get_handle() -> Result<ScopeHandle> {
     Ok(task_scope_top())
 }
 
@@ -650,7 +647,7 @@ pub fn nat_nexus_get_handle() -> Result<ScopeHandle> {
 /// scope handle.
 ///
 /// Returns the new [`ScopeHandle`].
-pub fn nat_nexus_push_scope(
+pub fn nemo_flow_push_scope(
     name: &str,
     scope_type: ScopeType,
     parent: Option<&ScopeHandle>,
@@ -665,51 +662,47 @@ pub fn nat_nexus_push_scope(
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
         let handle =
             state.create_scope_handle(name, parent_uuid, scope_type, attributes, data, metadata);
         let event = state.build_scope_start_event(&handle);
         (handle, event, subscribers)
     };
     task_scope_push(handle.clone());
-    NatNexusContextState::emit_event(&event, &subscribers);
+    NemoFlowContextState::emit_event(&event, &subscribers);
     Ok(handle)
 }
 
 /// Removes a scope from the scope stack by UUID and emits an `End` event after
 /// the scope has been removed.
 ///
-/// Returns [`NexusError::NotFound`] if the UUID is not in the stack, or
-/// [`NexusError::InvalidArgument`] if it does not identify the current top
+/// Returns [`FlowError::NotFound`] if the UUID is not in the stack, or
+/// [`FlowError::InvalidArgument`] if it does not identify the current top
 /// scope.
-pub fn nat_nexus_pop_scope(handle_uuid: &Uuid) -> Result<()> {
+pub fn nemo_flow_pop_scope(handle_uuid: &Uuid) -> Result<()> {
     let ss = current_scope_stack();
     let (scope, event, subscribers) = {
         let ss_guard = ss.read().expect("scope stack lock poisoned");
         let top = ss_guard.top();
         if top.uuid != *handle_uuid {
             if ss_guard.find(handle_uuid).is_some() {
-                return Err(NexusError::InvalidArgument(
+                return Err(FlowError::InvalidArgument(
                     "scope handle is not at the top of the stack".into(),
                 ));
             }
-            return Err(NexusError::NotFound("scope handle not found".into()));
+            return Err(FlowError::NotFound("scope handle not found".into()));
         }
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
         let scope = top.clone();
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
         let event = state.end_scope_handle(&scope);
         (scope, event, subscribers)
     };
     let removed = task_scope_remove(handle_uuid)?;
     debug_assert_eq!(removed.uuid, scope.uuid);
-    NatNexusContextState::emit_event(&event, &subscribers);
+    NemoFlowContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -717,7 +710,7 @@ pub fn nat_nexus_pop_scope(handle_uuid: &Uuid) -> Result<()> {
 ///
 /// This is a lightweight way to record application-specific events (e.g.,
 /// checkpoints, metrics) without creating a scope or handle.
-pub fn nat_nexus_event(
+pub fn nemo_flow_event(
     name: &str,
     parent: Option<&ScopeHandle>,
     data: Option<Json>,
@@ -730,13 +723,11 @@ pub fn nat_nexus_event(
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
         let event = state.create_event(name, parent_uuid, data, metadata);
         (event, subscribers)
     };
-    NatNexusContextState::emit_event(&event, &subscribers);
+    NemoFlowContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -748,8 +739,8 @@ pub fn nat_nexus_event(
 /// and emits a `Start` event.
 ///
 /// The sanitized arguments are stored in the event's `input` field.
-/// Call [`nat_nexus_tool_call_end`] when the tool completes.
-pub fn nat_nexus_tool_call(
+/// Call [`nemo_flow_tool_call_end`] when the tool completes.
+pub fn nemo_flow_tool_call(
     name: &str,
     args: Json,
     parent: Option<&ScopeHandle>,
@@ -766,9 +757,7 @@ pub fn nat_nexus_tool_call(
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
 
         let sanitized_args = state.tool_sanitize_request_chain(name, args, &sl);
         let handle =
@@ -776,14 +765,14 @@ pub fn nat_nexus_tool_call(
         let event = state.build_tool_start_event(&handle, Some(sanitized_args));
         (handle, event, subscribers)
     };
-    NatNexusContextState::emit_event(&event, &subscribers);
+    NemoFlowContextState::emit_event(&event, &subscribers);
     Ok(handle)
 }
 
 /// Ends a tool call: runs response sanitize guardrails and emits an `End` event.
 ///
 /// The sanitized result is stored in the event's `output` field.
-pub fn nat_nexus_tool_call_end(
+pub fn nemo_flow_tool_call_end(
     handle: &ToolHandle,
     result: Json,
     data: Option<Json>,
@@ -796,15 +785,13 @@ pub fn nat_nexus_tool_call_end(
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
 
         let sanitized_result = state.tool_sanitize_response_chain(&handle.name, result, &sl);
         let event = state.end_tool_handle(handle, data, metadata, Some(sanitized_result));
         (event, subscribers)
     };
-    NatNexusContextState::emit_event(&event, &subscribers);
+    NemoFlowContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -819,13 +806,11 @@ fn emit_tool_end_without_output(
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
         let event = state.end_tool_handle(handle, data, metadata, None);
         (event, subscribers)
     };
-    NatNexusContextState::emit_event(&event, &subscribers);
+    NemoFlowContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -839,8 +824,8 @@ fn emit_tool_end_without_output(
 /// event is emitted (no `Start`/`End` pair).
 ///
 /// This is the high-level function that orchestrates the full middleware pipeline.
-/// Returns [`NexusError::GuardrailRejected`] if a conditional guardrail rejects the call.
-pub async fn nat_nexus_tool_call_execute(
+/// Returns [`FlowError::GuardrailRejected`] if a conditional guardrail rejects the call.
+pub async fn nemo_flow_tool_call_execute(
     name: &str,
     args: Json,
     func: ToolExecutionNextFn,
@@ -856,9 +841,7 @@ pub async fn nat_nexus_tool_call_execute(
         let sl =
             ss_guard.collect_scope_local_registries(|r| &r.tool_conditional_execution_guardrails);
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
         if let Some(err) = state.tool_conditional_execution_chain(name, &args, &sl)? {
             drop(state);
             drop(ss_guard);
@@ -867,8 +850,8 @@ pub async fn nat_nexus_tool_call_execute(
                 obj.insert("rejected".into(), json!(true));
                 obj.insert("rejection_reason".into(), json!(&err));
             }
-            let _ = nat_nexus_event(name, parent.as_ref(), Some(rejection_data), metadata);
-            return Err(NexusError::GuardrailRejected(err));
+            let _ = nemo_flow_event(name, parent.as_ref(), Some(rejection_data), metadata);
+            return Err(FlowError::GuardrailRejected(err));
         }
     }
 
@@ -878,14 +861,12 @@ pub async fn nat_nexus_tool_call_execute(
         let ss_guard = ss.read().expect("scope stack lock poisoned");
         let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_request_intercepts);
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
         state.tool_request_intercepts_chain(name, args, &sl)?
     };
 
-    // Tool call start (scope-local sanitize request guardrails are picked up inside nat_nexus_tool_call)
-    let handle = nat_nexus_tool_call(
+    // Tool call start (scope-local sanitize request guardrails are picked up inside nemo_flow_tool_call)
+    let handle = nemo_flow_tool_call(
         name,
         intercepted_args.clone(),
         parent.as_ref(),
@@ -901,15 +882,15 @@ pub async fn nat_nexus_tool_call_execute(
         let ss_guard = ss.read().expect("scope stack lock poisoned");
         let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_execution_intercepts);
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
         state.tool_build_execution_chain(name, func, &sl)
     };
-    match exec_future(intercepted_args).await {
+    let exec_result = exec_future(intercepted_args).await;
+    drop(exec_future);
+    match exec_result {
         Ok(result) => {
-            // Tool call end (scope-local sanitize response guardrails are picked up inside nat_nexus_tool_call_end)
-            nat_nexus_tool_call_end(&handle, result.clone(), data, metadata)?;
+            // Tool call end (scope-local sanitize response guardrails are picked up inside nemo_flow_tool_call_end)
+            nemo_flow_tool_call_end(&handle, result.clone(), data, metadata)?;
             Ok(result)
         }
         Err(err) => {
@@ -927,9 +908,9 @@ pub async fn nat_nexus_tool_call_execute(
 /// creates an LLM handle, and emits a `Start` event.
 ///
 /// The sanitized request is stored in the event's `input` field.
-/// Call [`nat_nexus_llm_call_end`] when the LLM call completes.
+/// Call [`nemo_flow_llm_call_end`] when the LLM call completes.
 #[allow(clippy::too_many_arguments)]
-pub fn nat_nexus_llm_call(
+pub fn nemo_flow_llm_call(
     name: &str,
     request: &LLMRequest,
     parent: Option<&ScopeHandle>,
@@ -947,9 +928,7 @@ pub fn nat_nexus_llm_call(
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
 
         let sanitized_request = state.llm_sanitize_request_chain(request.clone(), &sl);
         let input = serde_json::to_value(&sanitized_request).unwrap_or(Json::Null);
@@ -958,14 +937,14 @@ pub fn nat_nexus_llm_call(
         let event = state.build_llm_start_event(&handle, Some(input), annotated_request);
         (handle, event, subscribers)
     };
-    NatNexusContextState::emit_event(&event, &subscribers);
+    NemoFlowContextState::emit_event(&event, &subscribers);
     Ok(handle)
 }
 
 /// Ends an LLM call: runs response sanitize guardrails and emits an `End` event.
 ///
 /// The sanitized response data is stored in the event's `output` field.
-pub fn nat_nexus_llm_call_end(
+pub fn nemo_flow_llm_call_end(
     handle: &LLMHandle,
     response: Json,
     data: Option<Json>,
@@ -979,9 +958,7 @@ pub fn nat_nexus_llm_call_end(
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
 
         let sanitized_response = state.llm_sanitize_response_chain(response, &sl);
         let event = state.end_llm_handle(
@@ -993,7 +970,7 @@ pub fn nat_nexus_llm_call_end(
         );
         (event, subscribers)
     };
-    NatNexusContextState::emit_event(&event, &subscribers);
+    NemoFlowContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -1008,14 +985,12 @@ fn emit_llm_end_without_output(
         let sl_subs = ss_guard.collect_scope_local_subscribers();
         let subscribers = snapshot_event_subscribers(sl_subs)?;
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
 
         let event = state.end_llm_handle(handle, data, metadata, None, None);
         (event, subscribers)
     };
-    NatNexusContextState::emit_event(&event, &subscribers);
+    NemoFlowContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -1029,9 +1004,9 @@ fn emit_llm_end_without_output(
 /// unmodified input. On rejection, only a standalone `Mark` event is emitted
 /// (no `Start`/`End` pair).
 ///
-/// Returns [`NexusError::GuardrailRejected`] if a conditional guardrail rejects the call.
+/// Returns [`FlowError::GuardrailRejected`] if a conditional guardrail rejects the call.
 #[allow(clippy::too_many_arguments)]
-pub async fn nat_nexus_llm_call_execute(
+pub async fn nemo_flow_llm_call_execute(
     name: &str,
     request: LLMRequest,
     func: LlmExecutionNextFn,
@@ -1050,9 +1025,7 @@ pub async fn nat_nexus_llm_call_execute(
         let sl =
             ss_guard.collect_scope_local_registries(|r| &r.llm_conditional_execution_guardrails);
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
         if let Some(err) = state.llm_conditional_execution_chain(&request, &sl)? {
             drop(state);
             drop(ss_guard);
@@ -1061,8 +1034,8 @@ pub async fn nat_nexus_llm_call_execute(
                 obj.insert("rejected".into(), json!(true));
                 obj.insert("rejection_reason".into(), json!(&err));
             }
-            let _ = nat_nexus_event(name, parent.as_ref(), Some(rejection_data), metadata);
-            return Err(NexusError::GuardrailRejected(err));
+            let _ = nemo_flow_event(name, parent.as_ref(), Some(rejection_data), metadata);
+            return Err(FlowError::GuardrailRejected(err));
         }
     }
 
@@ -1070,8 +1043,8 @@ pub async fn nat_nexus_llm_call_execute(
     let (intercepted_request, annotated_request) =
         run_request_intercepts_with_codec(name, request, codec)?;
 
-    // LLM call start (sanitize guardrails happen inside nat_nexus_llm_call)
-    let handle = nat_nexus_llm_call(
+    // LLM call start (sanitize guardrails happen inside nemo_flow_llm_call)
+    let handle = nemo_flow_llm_call(
         name,
         &intercepted_request,
         parent.as_ref(),
@@ -1088,20 +1061,20 @@ pub async fn nat_nexus_llm_call_execute(
         let ss_guard = ss.read().expect("scope stack lock poisoned");
         let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_execution_intercepts);
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
         state.llm_build_execution_chain(name, func, &sl)
     };
-    match exec_future(intercepted_request).await {
+    let exec_result = exec_future(intercepted_request).await;
+    drop(exec_future);
+    match exec_result {
         Ok(response) => {
             // Decode response before sanitize (annotated reflects raw API response)
             let annotated_response = response_codec
                 .as_ref()
                 .and_then(|c| c.decode_response(&response).ok())
                 .map(Arc::new);
-            // LLM call end (sanitize response guardrails happen inside nat_nexus_llm_call_end)
-            nat_nexus_llm_call_end(
+            // LLM call end (sanitize response guardrails happen inside nemo_flow_llm_call_end)
+            nemo_flow_llm_call_end(
                 &handle,
                 response.clone(),
                 data,
@@ -1119,7 +1092,7 @@ pub async fn nat_nexus_llm_call_execute(
 
 /// Executes a complete streaming LLM call lifecycle.
 ///
-/// Similar to [`nat_nexus_llm_call_execute`] but returns a
+/// Similar to [`nemo_flow_llm_call_execute`] but returns a
 /// [`Stream`] of Json chunks. Conditional execution guardrails run
 /// **before** request intercepts so that they gate on the unmodified
 /// input. On rejection, only a standalone `Mark` event is emitted
@@ -1133,14 +1106,14 @@ pub async fn nat_nexus_llm_call_execute(
 ///
 /// - `collector` — called with each chunk (Json); use this to accumulate
 ///   streaming tokens or forward them to another sink. This callback is
-///   fallible: return `Ok(())` to continue or `Err(NexusError)` to terminate
+///   fallible: return `Ok(())` to continue or `Err(FlowError)` to terminate
 ///   the stream.
 /// - `finalizer` — called once when the stream is exhausted; returns the
 ///   aggregated response as [`Json`]. This callback is infallible.
 ///
-/// Returns [`NexusError::GuardrailRejected`] if a conditional guardrail rejects the call.
+/// Returns [`FlowError::GuardrailRejected`] if a conditional guardrail rejects the call.
 #[allow(clippy::too_many_arguments)]
-pub async fn nat_nexus_llm_stream_call_execute(
+pub async fn nemo_flow_llm_stream_call_execute(
     name: &str,
     request: LLMRequest,
     func: LlmStreamExecutionNextFn,
@@ -1161,9 +1134,7 @@ pub async fn nat_nexus_llm_stream_call_execute(
         let sl =
             ss_guard.collect_scope_local_registries(|r| &r.llm_conditional_execution_guardrails);
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
         if let Some(err) = state.llm_conditional_execution_chain(&request, &sl)? {
             drop(state);
             drop(ss_guard);
@@ -1172,8 +1143,8 @@ pub async fn nat_nexus_llm_stream_call_execute(
                 obj.insert("rejected".into(), json!(true));
                 obj.insert("rejection_reason".into(), json!(&err));
             }
-            let _ = nat_nexus_event(name, parent.as_ref(), Some(rejection_data), metadata);
-            return Err(NexusError::GuardrailRejected(err));
+            let _ = nemo_flow_event(name, parent.as_ref(), Some(rejection_data), metadata);
+            return Err(FlowError::GuardrailRejected(err));
         }
     }
 
@@ -1181,8 +1152,8 @@ pub async fn nat_nexus_llm_stream_call_execute(
     let (intercepted_request, annotated_request) =
         run_request_intercepts_with_codec(name, request, codec)?;
 
-    // LLM call start (sanitize guardrails happen inside nat_nexus_llm_call)
-    let handle = nat_nexus_llm_call(
+    // LLM call start (sanitize guardrails happen inside nemo_flow_llm_call)
+    let handle = nemo_flow_llm_call(
         name,
         &intercepted_request,
         parent.as_ref(),
@@ -1199,12 +1170,12 @@ pub async fn nat_nexus_llm_stream_call_execute(
         let ss_guard = ss.read().expect("scope stack lock poisoned");
         let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_stream_execution_intercepts);
         let ctx = global_context();
-        let state = ctx
-            .read()
-            .map_err(|e| NexusError::Internal(e.to_string()))?;
+        let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
         state.llm_stream_build_execution_chain(name, func, &sl)
     };
-    match exec_future(intercepted_request).await {
+    let exec_result = exec_future(intercepted_request).await;
+    drop(exec_future);
+    match exec_result {
         Ok(raw_stream) => {
             // Wrap in LlmStreamWrapper which handles collector/finalizer and END event
             let wrapper = LlmStreamWrapper::new(
@@ -1216,7 +1187,9 @@ pub async fn nat_nexus_llm_stream_call_execute(
                 metadata,
                 response_codec,
             );
-            Ok(Box::pin(wrapper))
+            let wrapped_stream =
+                Box::pin(wrapper) as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>;
+            Ok(wrapped_stream)
         }
         Err(err) => {
             let _ = emit_llm_end_without_output(&handle, data, metadata);
@@ -1233,33 +1206,29 @@ pub async fn nat_nexus_llm_stream_call_execute(
 ///
 /// Returns the transformed arguments after all intercepts have been applied.
 /// This allows invoking request intercepts independently of the full
-/// [`nat_nexus_tool_call_execute`] pipeline.
-pub fn nat_nexus_tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
+/// [`nemo_flow_tool_call_execute`] pipeline.
+pub fn nemo_flow_tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
     let ss = current_scope_stack();
     let ss_guard = ss.read().expect("scope stack lock poisoned");
     let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_request_intercepts);
     let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
+    let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
     state.tool_request_intercepts_chain(name, args, &sl)
 }
 
 /// Runs the registered tool conditional execution guardrail chain.
 ///
 /// Returns `Ok(())` if all guardrails pass, or
-/// [`Err(NexusError::GuardrailRejected(reason))`](NexusError::GuardrailRejected)
+/// [`Err(FlowError::GuardrailRejected(reason))`](FlowError::GuardrailRejected)
 /// if any guardrail rejects the call.
-pub fn nat_nexus_tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
+pub fn nemo_flow_tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
     let ss = current_scope_stack();
     let ss_guard = ss.read().expect("scope stack lock poisoned");
     let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_conditional_execution_guardrails);
     let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
+    let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
     if let Some(err) = state.tool_conditional_execution_chain(name, args, &sl)? {
-        return Err(NexusError::GuardrailRejected(err));
+        return Err(FlowError::GuardrailRejected(err));
     }
     Ok(())
 }
@@ -1268,15 +1237,13 @@ pub fn nat_nexus_tool_conditional_execution(name: &str, args: &Json) -> Result<(
 ///
 /// Returns the transformed [`LLMRequest`] after all intercepts have been applied.
 /// This allows invoking request intercepts independently of the full
-/// [`nat_nexus_llm_call_execute`] pipeline.
-pub fn nat_nexus_llm_request_intercepts(name: &str, request: LLMRequest) -> Result<LLMRequest> {
+/// [`nemo_flow_llm_call_execute`] pipeline.
+pub fn nemo_flow_llm_request_intercepts(name: &str, request: LLMRequest) -> Result<LLMRequest> {
     let ss = current_scope_stack();
     let ss_guard = ss.read().expect("scope stack lock poisoned");
     let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_request_intercepts);
     let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
+    let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
     let (req, _ann) = state.llm_request_intercepts_chain(name, request, None, &sl)?;
     Ok(req)
 }
@@ -1284,18 +1251,16 @@ pub fn nat_nexus_llm_request_intercepts(name: &str, request: LLMRequest) -> Resu
 /// Runs the registered LLM conditional execution guardrail chain.
 ///
 /// Returns `Ok(())` if all guardrails pass, or
-/// [`Err(NexusError::GuardrailRejected(reason))`](NexusError::GuardrailRejected)
+/// [`Err(FlowError::GuardrailRejected(reason))`](FlowError::GuardrailRejected)
 /// if any guardrail rejects the call.
-pub fn nat_nexus_llm_conditional_execution(request: &LLMRequest) -> Result<()> {
+pub fn nemo_flow_llm_conditional_execution(request: &LLMRequest) -> Result<()> {
     let ss = current_scope_stack();
     let ss_guard = ss.read().expect("scope stack lock poisoned");
     let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_conditional_execution_guardrails);
     let ctx = global_context();
-    let state = ctx
-        .read()
-        .map_err(|e| NexusError::Internal(e.to_string()))?;
+    let state = ctx.read().map_err(|e| FlowError::Internal(e.to_string()))?;
     if let Some(err) = state.llm_conditional_execution_chain(request, &sl)? {
-        return Err(NexusError::GuardrailRejected(err));
+        return Err(FlowError::GuardrailRejected(err));
     }
     Ok(())
 }
@@ -1315,7 +1280,7 @@ mod tests {
     fn reset_global() {
         let ctx = global_context();
         let mut state = ctx.write().unwrap();
-        *state = NatNexusContextState::new();
+        *state = NemoFlowContextState::new();
     }
 
     #[test]
@@ -1324,10 +1289,10 @@ mod tests {
         reset_global();
 
         // Root scope is always present
-        let root = nat_nexus_get_handle().unwrap();
+        let root = nemo_flow_get_handle().unwrap();
         assert_eq!(root.name, "root");
 
-        let handle = nat_nexus_push_scope(
+        let handle = nemo_flow_push_scope(
             "test_scope",
             ScopeType::Agent,
             None,
@@ -1336,11 +1301,11 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(nat_nexus_get_handle().unwrap().name, "test_scope");
-        nat_nexus_pop_scope(&handle.uuid).unwrap();
+        assert_eq!(nemo_flow_get_handle().unwrap().name, "test_scope");
+        nemo_flow_pop_scope(&handle.uuid).unwrap();
 
         // After pop, root scope is on top again
-        assert_eq!(nat_nexus_get_handle().unwrap().name, "root");
+        assert_eq!(nemo_flow_get_handle().unwrap().name, "root");
     }
 
     #[test]
@@ -1350,7 +1315,7 @@ mod tests {
 
         let lock_checks = Arc::new(Mutex::new(Vec::new()));
         let captured = lock_checks.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "lock_probe",
             Arc::new(move |_| {
                 let scope_stack_writable =
@@ -1364,7 +1329,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nat_nexus_push_scope(
+        let handle = nemo_flow_push_scope(
             "probe",
             ScopeType::Agent,
             None,
@@ -1373,16 +1338,18 @@ mod tests {
             None,
         )
         .unwrap();
-        nat_nexus_pop_scope(&handle.uuid).unwrap();
+        nemo_flow_pop_scope(&handle.uuid).unwrap();
 
         let checks = lock_checks.lock().unwrap();
         assert_eq!(checks.len(), 2);
-        assert!(checks
-            .iter()
-            .all(|(scope_ok, global_ok)| *scope_ok && *global_ok));
+        assert!(
+            checks
+                .iter()
+                .all(|(scope_ok, global_ok)| *scope_ok && *global_ok)
+        );
 
         drop(checks);
-        nat_nexus_deregister_subscriber("lock_probe").unwrap();
+        nemo_flow_deregister_subscriber("lock_probe").unwrap();
     }
 
     #[test]
@@ -1392,7 +1359,7 @@ mod tests {
 
         let observations = Arc::new(Mutex::new(Vec::new()));
         let captured = observations.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "scope_visibility",
             Arc::new(move |event: &crate::types::Event| {
                 if event.scope_type() != Some(ScopeType::Agent) {
@@ -1401,7 +1368,7 @@ mod tests {
                 if event.name() != "visible_scope" {
                     return;
                 }
-                let active_uuid = nat_nexus_get_handle().unwrap().uuid;
+                let active_uuid = nemo_flow_get_handle().unwrap().uuid;
                 captured
                     .lock()
                     .unwrap()
@@ -1410,7 +1377,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nat_nexus_push_scope(
+        let handle = nemo_flow_push_scope(
             "visible_scope",
             ScopeType::Agent,
             None,
@@ -1420,7 +1387,7 @@ mod tests {
         )
         .unwrap();
         let parent_uuid = handle.parent_uuid.unwrap();
-        nat_nexus_pop_scope(&handle.uuid).unwrap();
+        nemo_flow_pop_scope(&handle.uuid).unwrap();
 
         let observations = observations.lock().unwrap();
         assert_eq!(observations.len(), 2);
@@ -1428,7 +1395,7 @@ mod tests {
         assert_eq!(observations[1], ("ScopeEnd".to_string(), parent_uuid));
 
         drop(observations);
-        nat_nexus_deregister_subscriber("scope_visibility").unwrap();
+        nemo_flow_deregister_subscriber("scope_visibility").unwrap();
     }
 
     #[test]
@@ -1437,7 +1404,7 @@ mod tests {
         reset_global();
         let count = Arc::new(AtomicU32::new(0));
         let c = count.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "test_sub",
             Arc::new(move |_| {
                 c.fetch_add(1, Ordering::SeqCst);
@@ -1446,10 +1413,10 @@ mod tests {
         .unwrap();
 
         // Duplicate should fail
-        assert!(nat_nexus_register_subscriber("test_sub", Arc::new(|_| {}),).is_err());
+        assert!(nemo_flow_register_subscriber("test_sub", Arc::new(|_| {}),).is_err());
 
         // Push scope emits event
-        let handle = nat_nexus_push_scope(
+        let handle = nemo_flow_push_scope(
             "s",
             ScopeType::Function,
             None,
@@ -1460,30 +1427,32 @@ mod tests {
         .unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 1);
 
-        nat_nexus_pop_scope(&handle.uuid).unwrap();
+        nemo_flow_pop_scope(&handle.uuid).unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 2);
 
         // Deregister
-        assert!(nat_nexus_deregister_subscriber("test_sub").unwrap());
-        assert!(!nat_nexus_deregister_subscriber("test_sub").unwrap());
+        assert!(nemo_flow_deregister_subscriber("test_sub").unwrap());
+        assert!(!nemo_flow_deregister_subscriber("test_sub").unwrap());
     }
 
     #[test]
     fn test_tool_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_tool_sanitize_request_guardrail("g1", 10, Box::new(|_name, args| args))
+        nemo_flow_register_tool_sanitize_request_guardrail("g1", 10, Box::new(|_name, args| args))
             .unwrap();
 
         // Duplicate fails
-        assert!(nat_nexus_register_tool_sanitize_request_guardrail(
-            "g1",
-            10,
-            Box::new(|_name, args| args),
-        )
-        .is_err());
+        assert!(
+            nemo_flow_register_tool_sanitize_request_guardrail(
+                "g1",
+                10,
+                Box::new(|_name, args| args),
+            )
+            .is_err()
+        );
 
-        assert!(nat_nexus_deregister_tool_sanitize_request_guardrail("g1").unwrap());
+        assert!(nemo_flow_deregister_tool_sanitize_request_guardrail("g1").unwrap());
     }
 
     // -- Scope hierarchy --
@@ -1493,7 +1462,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let s1 = nat_nexus_push_scope(
+        let s1 = nemo_flow_push_scope(
             "level1",
             ScopeType::Agent,
             None,
@@ -1502,9 +1471,9 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(nat_nexus_get_handle().unwrap().name, "level1");
+        assert_eq!(nemo_flow_get_handle().unwrap().name, "level1");
 
-        let s2 = nat_nexus_push_scope(
+        let s2 = nemo_flow_push_scope(
             "level2",
             ScopeType::Function,
             Some(&s1),
@@ -1513,21 +1482,21 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(nat_nexus_get_handle().unwrap().name, "level2");
+        assert_eq!(nemo_flow_get_handle().unwrap().name, "level2");
         assert_eq!(s2.parent_uuid, Some(s1.uuid));
 
-        nat_nexus_pop_scope(&s2.uuid).unwrap();
-        assert_eq!(nat_nexus_get_handle().unwrap().name, "level1");
+        nemo_flow_pop_scope(&s2.uuid).unwrap();
+        assert_eq!(nemo_flow_get_handle().unwrap().name, "level1");
 
-        nat_nexus_pop_scope(&s1.uuid).unwrap();
-        assert_eq!(nat_nexus_get_handle().unwrap().name, "root");
+        nemo_flow_pop_scope(&s1.uuid).unwrap();
+        assert_eq!(nemo_flow_get_handle().unwrap().name, "root");
     }
 
     #[test]
     fn test_pop_nonexistent_scope() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        let result = nat_nexus_pop_scope(&Uuid::new_v4());
+        let result = nemo_flow_pop_scope(&Uuid::new_v4());
         assert!(result.is_err());
     }
 
@@ -1538,7 +1507,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = events.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "capture_scope_events",
             Arc::new(move |event: &crate::types::Event| {
                 captured
@@ -1549,7 +1518,7 @@ mod tests {
         )
         .unwrap();
 
-        let parent = nat_nexus_push_scope(
+        let parent = nemo_flow_push_scope(
             "parent",
             ScopeType::Agent,
             None,
@@ -1558,7 +1527,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let child = nat_nexus_push_scope(
+        let child = nemo_flow_push_scope(
             "child",
             ScopeType::Function,
             Some(&parent),
@@ -1568,9 +1537,9 @@ mod tests {
         )
         .unwrap();
 
-        let err = nat_nexus_pop_scope(&parent.uuid).unwrap_err();
-        assert!(matches!(err, NexusError::InvalidArgument(_)));
-        assert_eq!(nat_nexus_get_handle().unwrap().uuid, child.uuid);
+        let err = nemo_flow_pop_scope(&parent.uuid).unwrap_err();
+        assert!(matches!(err, FlowError::InvalidArgument(_)));
+        assert_eq!(nemo_flow_get_handle().unwrap().uuid, child.uuid);
 
         let events = events.lock().unwrap();
         let parent_end_count = events
@@ -1580,16 +1549,16 @@ mod tests {
         assert_eq!(parent_end_count, 0);
 
         drop(events);
-        nat_nexus_pop_scope(&child.uuid).unwrap();
-        nat_nexus_pop_scope(&parent.uuid).unwrap();
-        nat_nexus_deregister_subscriber("capture_scope_events").unwrap();
+        nemo_flow_pop_scope(&child.uuid).unwrap();
+        nemo_flow_pop_scope(&parent.uuid).unwrap();
+        nemo_flow_deregister_subscriber("capture_scope_events").unwrap();
     }
 
     #[test]
     fn test_scope_attributes_propagated() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        let handle = nat_nexus_push_scope(
+        let handle = nemo_flow_push_scope(
             "parallel_scope",
             ScopeType::Agent,
             None,
@@ -1600,7 +1569,7 @@ mod tests {
         .unwrap();
         assert!(handle.attributes.contains(ScopeAttributes::PARALLEL));
         assert!(handle.attributes.contains(ScopeAttributes::RELOCATABLE));
-        nat_nexus_pop_scope(&handle.uuid).unwrap();
+        nemo_flow_pop_scope(&handle.uuid).unwrap();
     }
 
     // -- Event emission --
@@ -1612,7 +1581,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "evt_test",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock()
@@ -1622,7 +1591,7 @@ mod tests {
         )
         .unwrap();
 
-        nat_nexus_event("my_mark", None, Some(json!({"x": 1})), None).unwrap();
+        nemo_flow_event("my_mark", None, Some(json!({"x": 1})), None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1630,7 +1599,7 @@ mod tests {
         assert_eq!(captured[0].1, "Mark");
 
         drop(captured);
-        nat_nexus_deregister_subscriber("evt_test").unwrap();
+        nemo_flow_deregister_subscriber("evt_test").unwrap();
     }
 
     // -- Tool lifecycle --
@@ -1642,7 +1611,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "tool_test",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.kind().to_string());
@@ -1650,7 +1619,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nat_nexus_tool_call(
+        let handle = nemo_flow_tool_call(
             "my_tool",
             json!({"input": "data"}),
             None,
@@ -1662,7 +1631,7 @@ mod tests {
         .unwrap();
         assert_eq!(handle.name, "my_tool");
 
-        nat_nexus_tool_call_end(&handle, json!({"output": "result"}), None, None).unwrap();
+        nemo_flow_tool_call_end(&handle, json!({"output": "result"}), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -1670,7 +1639,7 @@ mod tests {
         assert_eq!(captured[1], "ToolEnd");
 
         drop(captured);
-        nat_nexus_deregister_subscriber("tool_test").unwrap();
+        nemo_flow_deregister_subscriber("tool_test").unwrap();
     }
 
     #[test]
@@ -1679,7 +1648,7 @@ mod tests {
         reset_global();
 
         // Register a sanitizer that adds a field
-        nat_nexus_register_tool_sanitize_request_guardrail(
+        nemo_flow_register_tool_sanitize_request_guardrail(
             "sanitizer",
             1,
             Box::new(|_name, mut args| {
@@ -1693,7 +1662,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "tool_san_test",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1701,7 +1670,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nat_nexus_tool_call(
+        let handle = nemo_flow_tool_call(
             "my_tool",
             json!({"input": "data"}),
             None,
@@ -1720,9 +1689,9 @@ mod tests {
         assert_eq!(input["input"], "data");
 
         drop(captured);
-        nat_nexus_tool_call_end(&handle, json!("ok"), None, None).unwrap();
-        nat_nexus_deregister_subscriber("tool_san_test").unwrap();
-        nat_nexus_deregister_tool_sanitize_request_guardrail("sanitizer").unwrap();
+        nemo_flow_tool_call_end(&handle, json!("ok"), None, None).unwrap();
+        nemo_flow_deregister_subscriber("tool_san_test").unwrap();
+        nemo_flow_deregister_tool_sanitize_request_guardrail("sanitizer").unwrap();
     }
 
     #[test]
@@ -1730,7 +1699,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nat_nexus_register_tool_sanitize_response_guardrail(
+        nemo_flow_register_tool_sanitize_response_guardrail(
             "resp_sanitizer",
             1,
             Box::new(|_name, mut result| {
@@ -1745,7 +1714,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "tool_resp_test",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1753,7 +1722,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nat_nexus_tool_call(
+        let handle = nemo_flow_tool_call(
             "tool",
             json!({}),
             None,
@@ -1763,7 +1732,7 @@ mod tests {
             None,
         )
         .unwrap();
-        nat_nexus_tool_call_end(&handle, json!({"output": "raw"}), None, None).unwrap();
+        nemo_flow_tool_call_end(&handle, json!({"output": "raw"}), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];
@@ -1772,8 +1741,8 @@ mod tests {
         assert_eq!(output["output"], "raw");
 
         drop(captured);
-        nat_nexus_deregister_subscriber("tool_resp_test").unwrap();
-        nat_nexus_deregister_tool_sanitize_response_guardrail("resp_sanitizer").unwrap();
+        nemo_flow_deregister_subscriber("tool_resp_test").unwrap();
+        nemo_flow_deregister_tool_sanitize_response_guardrail("resp_sanitizer").unwrap();
     }
 
     // -- Tool call execute (async) --
@@ -1786,7 +1755,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Arc::new(|args| Box::pin(async move { Ok(json!({"result": args["input"]})) }));
 
-        let result = nat_nexus_tool_call_execute(
+        let result = nemo_flow_tool_call_execute(
             "exec_tool",
             json!({"input": "hello"}),
             func,
@@ -1808,7 +1777,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = events.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "tool_exec_failure_sub",
             Arc::new(move |e: &crate::types::Event| {
                 captured.lock().unwrap().push(e.clone());
@@ -1817,9 +1786,9 @@ mod tests {
         .unwrap();
 
         let func: ToolExecutionNextFn =
-            Arc::new(|_args| Box::pin(async move { Err(NexusError::Internal("boom".into())) }));
+            Arc::new(|_args| Box::pin(async move { Err(FlowError::Internal("boom".into())) }));
 
-        let err = nat_nexus_tool_call_execute(
+        let err = nemo_flow_tool_call_execute(
             "failing_tool",
             json!({"input": true}),
             func,
@@ -1831,7 +1800,7 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert!(matches!(err, NexusError::Internal(_)));
+        assert!(matches!(err, FlowError::Internal(_)));
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -1841,7 +1810,7 @@ mod tests {
         assert!(captured[1].output().is_none());
 
         drop(captured);
-        nat_nexus_deregister_subscriber("tool_exec_failure_sub").unwrap();
+        nemo_flow_deregister_subscriber("tool_exec_failure_sub").unwrap();
     }
 
     #[tokio::test]
@@ -1849,7 +1818,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nat_nexus_register_tool_request_intercept(
+        nemo_flow_register_tool_request_intercept(
             "req_intercept",
             1,
             false,
@@ -1864,7 +1833,7 @@ mod tests {
 
         let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
-        let result = nat_nexus_tool_call_execute(
+        let result = nemo_flow_tool_call_execute(
             "tool",
             json!({"original": true}),
             func,
@@ -1879,7 +1848,7 @@ mod tests {
         assert_eq!(result["original"], true);
         assert_eq!(result["added_by_intercept"], true);
 
-        nat_nexus_deregister_tool_request_intercept("req_intercept").unwrap();
+        nemo_flow_deregister_tool_request_intercept("req_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -1889,7 +1858,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "tool_reject_sub",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1897,7 +1866,7 @@ mod tests {
         )
         .unwrap();
 
-        nat_nexus_register_tool_conditional_execution_guardrail(
+        nemo_flow_register_tool_conditional_execution_guardrail(
             "blocker",
             1,
             Box::new(|_name, _args| Ok(Some("forbidden tool".into()))),
@@ -1907,7 +1876,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Arc::new(|_args| Box::pin(async move { Ok(json!({"should_not_reach": true})) }));
 
-        let result = nat_nexus_tool_call_execute(
+        let result = nemo_flow_tool_call_execute(
             "tool",
             json!({}),
             func,
@@ -1920,7 +1889,7 @@ mod tests {
 
         assert!(result.is_err());
         match result.unwrap_err() {
-            NexusError::GuardrailRejected(msg) => assert_eq!(msg, "forbidden tool"),
+            FlowError::GuardrailRejected(msg) => assert_eq!(msg, "forbidden tool"),
             e => panic!("expected GuardrailRejected, got {e:?}"),
         }
 
@@ -1933,8 +1902,8 @@ mod tests {
         assert_eq!(mark_data["rejection_reason"], "forbidden tool");
 
         drop(captured);
-        nat_nexus_deregister_subscriber("tool_reject_sub").unwrap();
-        nat_nexus_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
+        nemo_flow_deregister_subscriber("tool_reject_sub").unwrap();
+        nemo_flow_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
     }
 
     #[tokio::test]
@@ -1942,7 +1911,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nat_nexus_register_tool_execution_intercept(
+        nemo_flow_register_tool_execution_intercept(
             "exec_intercept",
             1,
             Arc::new(|_name: &str, _args: Json, _next: ToolExecutionNextFn| {
@@ -1955,7 +1924,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Arc::new(|_args| Box::pin(async move { Ok(json!({"from_original": true})) }));
 
-        let result = nat_nexus_tool_call_execute(
+        let result = nemo_flow_tool_call_execute(
             "tool",
             json!({}),
             func,
@@ -1971,7 +1940,7 @@ mod tests {
         assert_eq!(result["from_intercept"], true);
         assert!(result.get("from_original").is_none());
 
-        nat_nexus_deregister_tool_execution_intercept("exec_intercept").unwrap();
+        nemo_flow_deregister_tool_execution_intercept("exec_intercept").unwrap();
     }
 
     // -- LLM lifecycle --
@@ -1983,7 +1952,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "llm_test",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.kind().to_string());
@@ -1995,7 +1964,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        let handle = nat_nexus_llm_call(
+        let handle = nemo_flow_llm_call(
             "my_llm",
             &request,
             None,
@@ -2008,7 +1977,7 @@ mod tests {
         .unwrap();
         assert_eq!(handle.name, "my_llm");
 
-        nat_nexus_llm_call_end(&handle, json!({"response": "ok"}), None, None, None).unwrap();
+        nemo_flow_llm_call_end(&handle, json!({"response": "ok"}), None, None, None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -2016,7 +1985,7 @@ mod tests {
         assert_eq!(captured[1], "LLMEnd");
 
         drop(captured);
-        nat_nexus_deregister_subscriber("llm_test").unwrap();
+        nemo_flow_deregister_subscriber("llm_test").unwrap();
     }
 
     #[test]
@@ -2024,7 +1993,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nat_nexus_register_llm_sanitize_request_guardrail(
+        nemo_flow_register_llm_sanitize_request_guardrail(
             "llm_sanitizer",
             1,
             Box::new(|mut req: LLMRequest| {
@@ -2036,7 +2005,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "llm_san_test",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -2048,7 +2017,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        let handle = nat_nexus_llm_call(
+        let handle = nemo_flow_llm_call(
             "llm",
             &request,
             None,
@@ -2067,9 +2036,9 @@ mod tests {
         assert_eq!(input["headers"]["X-Sanitized"], "true");
 
         drop(captured);
-        nat_nexus_llm_call_end(&handle, json!("ok"), None, None, None).unwrap();
-        nat_nexus_deregister_subscriber("llm_san_test").unwrap();
-        nat_nexus_deregister_llm_sanitize_request_guardrail("llm_sanitizer").unwrap();
+        nemo_flow_llm_call_end(&handle, json!("ok"), None, None, None).unwrap();
+        nemo_flow_deregister_subscriber("llm_san_test").unwrap();
+        nemo_flow_deregister_llm_sanitize_request_guardrail("llm_sanitizer").unwrap();
     }
 
     #[tokio::test]
@@ -2086,7 +2055,7 @@ mod tests {
         };
         let content = request.content.clone();
 
-        let result = nat_nexus_llm_call_execute(
+        let result = nemo_flow_llm_call_execute(
             "llm",
             request,
             func,
@@ -2111,7 +2080,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = events.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "llm_exec_failure_sub",
             Arc::new(move |e: &crate::types::Event| {
                 captured.lock().unwrap().push(e.clone());
@@ -2124,9 +2093,9 @@ mod tests {
             content: json!({"messages": []}),
         };
         let func: LlmExecutionNextFn =
-            Arc::new(|_req| Box::pin(async move { Err(NexusError::Internal("boom".into())) }));
+            Arc::new(|_req| Box::pin(async move { Err(FlowError::Internal("boom".into())) }));
 
-        let err = nat_nexus_llm_call_execute(
+        let err = nemo_flow_llm_call_execute(
             "failing_llm",
             request,
             func,
@@ -2141,7 +2110,7 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert!(matches!(err, NexusError::Internal(_)));
+        assert!(matches!(err, FlowError::Internal(_)));
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -2151,7 +2120,7 @@ mod tests {
         assert!(captured[1].output().is_none());
 
         drop(captured);
-        nat_nexus_deregister_subscriber("llm_exec_failure_sub").unwrap();
+        nemo_flow_deregister_subscriber("llm_exec_failure_sub").unwrap();
     }
 
     #[tokio::test]
@@ -2161,7 +2130,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "llm_reject_sub",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -2169,7 +2138,7 @@ mod tests {
         )
         .unwrap();
 
-        nat_nexus_register_llm_conditional_execution_guardrail(
+        nemo_flow_register_llm_conditional_execution_guardrail(
             "llm_blocker",
             1,
             Box::new(|_req: &LLMRequest| Ok(Some("blocked by policy".into()))),
@@ -2183,7 +2152,7 @@ mod tests {
             content: json!({"messages": []}),
         };
 
-        let result = nat_nexus_llm_call_execute(
+        let result = nemo_flow_llm_call_execute(
             "llm",
             request,
             func,
@@ -2199,7 +2168,7 @@ mod tests {
 
         assert!(result.is_err());
         match result.unwrap_err() {
-            NexusError::GuardrailRejected(msg) => assert_eq!(msg, "blocked by policy"),
+            FlowError::GuardrailRejected(msg) => assert_eq!(msg, "blocked by policy"),
             e => panic!("expected GuardrailRejected, got {e:?}"),
         }
 
@@ -2212,8 +2181,8 @@ mod tests {
         assert_eq!(mark_data["rejection_reason"], "blocked by policy");
 
         drop(captured);
-        nat_nexus_deregister_subscriber("llm_reject_sub").unwrap();
-        nat_nexus_deregister_llm_conditional_execution_guardrail("llm_blocker").unwrap();
+        nemo_flow_deregister_subscriber("llm_reject_sub").unwrap();
+        nemo_flow_deregister_llm_conditional_execution_guardrail("llm_blocker").unwrap();
     }
 
     #[tokio::test]
@@ -2221,7 +2190,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nat_nexus_register_llm_request_intercept(
+        nemo_flow_register_llm_request_intercept(
             "llm_req_intercept",
             1,
             false,
@@ -2246,7 +2215,7 @@ mod tests {
             content: json!({"messages": []}),
         };
 
-        let result = nat_nexus_llm_call_execute(
+        let result = nemo_flow_llm_call_execute(
             "llm",
             request,
             func,
@@ -2263,7 +2232,7 @@ mod tests {
 
         assert_eq!(result["saw_intercepted"], true);
 
-        nat_nexus_deregister_llm_request_intercept("llm_req_intercept").unwrap();
+        nemo_flow_deregister_llm_request_intercept("llm_req_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -2271,7 +2240,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nat_nexus_register_llm_execution_intercept(
+        nemo_flow_register_llm_execution_intercept(
             "llm_exec_intercept",
             1,
             Arc::new(|_name: &str, _req: LLMRequest, _next: LlmExecutionNextFn| {
@@ -2289,7 +2258,7 @@ mod tests {
             content: json!({"messages": []}),
         };
 
-        let result = nat_nexus_llm_call_execute(
+        let result = nemo_flow_llm_call_execute(
             "llm",
             request,
             func,
@@ -2307,7 +2276,7 @@ mod tests {
         assert_eq!(result["from_intercept"], true);
         assert!(result.get("from_original").is_none());
 
-        nat_nexus_deregister_llm_execution_intercept("llm_exec_intercept").unwrap();
+        nemo_flow_deregister_llm_execution_intercept("llm_exec_intercept").unwrap();
     }
 
     // -- All guardrail/intercept registration pairs --
@@ -2316,51 +2285,53 @@ mod tests {
     fn test_tool_sanitize_response_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r)).unwrap();
+        nemo_flow_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r)).unwrap();
         assert!(
-            nat_nexus_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r))
+            nemo_flow_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r))
                 .is_err()
         );
-        assert!(nat_nexus_deregister_tool_sanitize_response_guardrail("g1").unwrap());
-        assert!(!nat_nexus_deregister_tool_sanitize_response_guardrail("g1").unwrap());
+        assert!(nemo_flow_deregister_tool_sanitize_response_guardrail("g1").unwrap());
+        assert!(!nemo_flow_deregister_tool_sanitize_response_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_tool_conditional_execution_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_tool_conditional_execution_guardrail(
+        nemo_flow_register_tool_conditional_execution_guardrail(
             "g1",
             1,
             Box::new(|_n, _a| Ok(None)),
         )
         .unwrap();
-        assert!(nat_nexus_register_tool_conditional_execution_guardrail(
-            "g1",
-            1,
-            Box::new(|_n, _a| Ok(None))
-        )
-        .is_err());
-        assert!(nat_nexus_deregister_tool_conditional_execution_guardrail("g1").unwrap());
+        assert!(
+            nemo_flow_register_tool_conditional_execution_guardrail(
+                "g1",
+                1,
+                Box::new(|_n, _a| Ok(None))
+            )
+            .is_err()
+        );
+        assert!(nemo_flow_deregister_tool_conditional_execution_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_tool_request_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| Ok(a))).unwrap();
+        nemo_flow_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| Ok(a))).unwrap();
         assert!(
-            nat_nexus_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| Ok(a)))
+            nemo_flow_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| Ok(a)))
                 .is_err()
         );
-        assert!(nat_nexus_deregister_tool_request_intercept("i1").unwrap());
+        assert!(nemo_flow_deregister_tool_request_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_tool_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_tool_execution_intercept(
+        nemo_flow_register_tool_execution_intercept(
             "i1",
             1,
             Arc::new(|_name: &str, a: Json, _next: ToolExecutionNextFn| {
@@ -2369,81 +2340,93 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(nat_nexus_register_tool_execution_intercept(
-            "i1",
-            1,
-            Arc::new(|_name: &str, a: Json, _next: ToolExecutionNextFn| Box::pin(
-                async move { Ok(a) }
+        assert!(
+            nemo_flow_register_tool_execution_intercept(
+                "i1",
+                1,
+                Arc::new(
+                    |_name: &str, a: Json, _next: ToolExecutionNextFn| Box::pin(
+                        async move { Ok(a) }
+                    )
+                        as Pin<
+                            Box<
+                                dyn std::future::Future<Output = crate::error::Result<Json>> + Send,
+                            >,
+                        >
+                ),
             )
-                as Pin<Box<dyn std::future::Future<Output = crate::error::Result<Json>> + Send>>),
-        )
-        .is_err());
-        assert!(nat_nexus_deregister_tool_execution_intercept("i1").unwrap());
+            .is_err()
+        );
+        assert!(nemo_flow_deregister_tool_execution_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_sanitize_request_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).unwrap();
+        nemo_flow_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).unwrap();
         assert!(
-            nat_nexus_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).is_err()
+            nemo_flow_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).is_err()
         );
-        assert!(nat_nexus_deregister_llm_sanitize_request_guardrail("g1").unwrap());
+        assert!(nemo_flow_deregister_llm_sanitize_request_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_sanitize_response_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).unwrap();
+        nemo_flow_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).unwrap();
         assert!(
-            nat_nexus_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).is_err()
+            nemo_flow_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).is_err()
         );
-        assert!(nat_nexus_deregister_llm_sanitize_response_guardrail("g1").unwrap());
+        assert!(nemo_flow_deregister_llm_sanitize_response_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_conditional_execution_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| Ok(None)))
+        nemo_flow_register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| Ok(None)))
             .unwrap();
-        assert!(nat_nexus_register_llm_conditional_execution_guardrail(
-            "g1",
-            1,
-            Box::new(|_r| Ok(None))
-        )
-        .is_err());
-        assert!(nat_nexus_deregister_llm_conditional_execution_guardrail("g1").unwrap());
+        assert!(
+            nemo_flow_register_llm_conditional_execution_guardrail(
+                "g1",
+                1,
+                Box::new(|_r| Ok(None))
+            )
+            .is_err()
+        );
+        assert!(nemo_flow_deregister_llm_conditional_execution_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_request_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_llm_request_intercept(
+        nemo_flow_register_llm_request_intercept(
             "i1",
             1,
             false,
             Box::new(|_name: &str, r, a| Ok((r, a))),
         )
         .unwrap();
-        assert!(nat_nexus_register_llm_request_intercept(
-            "i1",
-            1,
-            false,
-            Box::new(|_name: &str, r, a| Ok((r, a)))
-        )
-        .is_err());
-        assert!(nat_nexus_deregister_llm_request_intercept("i1").unwrap());
+        assert!(
+            nemo_flow_register_llm_request_intercept(
+                "i1",
+                1,
+                false,
+                Box::new(|_name: &str, r, a| Ok((r, a)))
+            )
+            .is_err()
+        );
+        assert!(nemo_flow_deregister_llm_request_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_llm_execution_intercept(
+        nemo_flow_register_llm_execution_intercept(
             "i1",
             1,
             Arc::new(
@@ -2458,14 +2441,14 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(nat_nexus_deregister_llm_execution_intercept("i1").unwrap());
+        assert!(nemo_flow_deregister_llm_execution_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_stream_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nat_nexus_register_llm_stream_execution_intercept(
+        nemo_flow_register_llm_stream_execution_intercept(
             "i1",
             1,
             Arc::new(
@@ -2493,7 +2476,7 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(nat_nexus_deregister_llm_stream_execution_intercept("i1").unwrap());
+        assert!(nemo_flow_deregister_llm_stream_execution_intercept("i1").unwrap());
     }
 
     // -- Deregister non-existent returns false --
@@ -2502,30 +2485,30 @@ mod tests {
     fn test_deregister_nonexistent_subscriber() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nat_nexus_deregister_subscriber("nonexistent").unwrap());
+        assert!(!nemo_flow_deregister_subscriber("nonexistent").unwrap());
     }
 
     #[test]
     fn test_deregister_nonexistent_guardrails() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nat_nexus_deregister_tool_sanitize_request_guardrail("nope").unwrap());
-        assert!(!nat_nexus_deregister_tool_sanitize_response_guardrail("nope").unwrap());
-        assert!(!nat_nexus_deregister_tool_conditional_execution_guardrail("nope").unwrap());
-        assert!(!nat_nexus_deregister_llm_sanitize_request_guardrail("nope").unwrap());
-        assert!(!nat_nexus_deregister_llm_sanitize_response_guardrail("nope").unwrap());
-        assert!(!nat_nexus_deregister_llm_conditional_execution_guardrail("nope").unwrap());
+        assert!(!nemo_flow_deregister_tool_sanitize_request_guardrail("nope").unwrap());
+        assert!(!nemo_flow_deregister_tool_sanitize_response_guardrail("nope").unwrap());
+        assert!(!nemo_flow_deregister_tool_conditional_execution_guardrail("nope").unwrap());
+        assert!(!nemo_flow_deregister_llm_sanitize_request_guardrail("nope").unwrap());
+        assert!(!nemo_flow_deregister_llm_sanitize_response_guardrail("nope").unwrap());
+        assert!(!nemo_flow_deregister_llm_conditional_execution_guardrail("nope").unwrap());
     }
 
     #[test]
     fn test_deregister_nonexistent_intercepts() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nat_nexus_deregister_tool_request_intercept("nope").unwrap());
-        assert!(!nat_nexus_deregister_tool_execution_intercept("nope").unwrap());
-        assert!(!nat_nexus_deregister_llm_request_intercept("nope").unwrap());
-        assert!(!nat_nexus_deregister_llm_execution_intercept("nope").unwrap());
-        assert!(!nat_nexus_deregister_llm_stream_execution_intercept("nope").unwrap());
+        assert!(!nemo_flow_deregister_tool_request_intercept("nope").unwrap());
+        assert!(!nemo_flow_deregister_tool_execution_intercept("nope").unwrap());
+        assert!(!nemo_flow_deregister_llm_request_intercept("nope").unwrap());
+        assert!(!nemo_flow_deregister_llm_execution_intercept("nope").unwrap());
+        assert!(!nemo_flow_deregister_llm_stream_execution_intercept("nope").unwrap());
     }
 
     // -- LLM stream call execute --
@@ -2572,7 +2555,7 @@ mod tests {
             Json::Array(chunks.clone())
         });
 
-        let mut stream = nat_nexus_llm_stream_call_execute(
+        let mut stream = nemo_flow_llm_stream_call_execute(
             "llm",
             request,
             func,
@@ -2607,7 +2590,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = events.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "llm_stream_exec_failure_sub",
             Arc::new(move |e: &crate::types::Event| {
                 captured.lock().unwrap().push(e.clone());
@@ -2620,9 +2603,9 @@ mod tests {
             content: json!({"messages": []}),
         };
         let func: LlmStreamExecutionNextFn =
-            Arc::new(|_req| Box::pin(async move { Err(NexusError::Internal("boom".into())) }));
+            Arc::new(|_req| Box::pin(async move { Err(FlowError::Internal("boom".into())) }));
 
-        let result = nat_nexus_llm_stream_call_execute(
+        let result = nemo_flow_llm_stream_call_execute(
             "failing_stream_llm",
             request,
             func,
@@ -2638,7 +2621,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(result, Err(NexusError::Internal(_))));
+        assert!(matches!(result, Err(FlowError::Internal(_))));
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -2648,7 +2631,7 @@ mod tests {
         assert!(captured[1].output().is_none());
 
         drop(captured);
-        nat_nexus_deregister_subscriber("llm_stream_exec_failure_sub").unwrap();
+        nemo_flow_deregister_subscriber("llm_stream_exec_failure_sub").unwrap();
     }
 
     #[tokio::test]
@@ -2658,7 +2641,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nat_nexus_register_subscriber(
+        nemo_flow_register_subscriber(
             "stream_reject_sub",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -2666,7 +2649,7 @@ mod tests {
         )
         .unwrap();
 
-        nat_nexus_register_llm_conditional_execution_guardrail(
+        nemo_flow_register_llm_conditional_execution_guardrail(
             "stream_blocker",
             1,
             Box::new(|_req: &LLMRequest| Ok(Some("stream blocked".into()))),
@@ -2698,7 +2681,7 @@ mod tests {
         let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(|_| Ok(()));
         let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| Json::Null);
 
-        let result = nat_nexus_llm_stream_call_execute(
+        let result = nemo_flow_llm_stream_call_execute(
             "llm",
             request,
             func,
@@ -2715,7 +2698,7 @@ mod tests {
         .await;
 
         match result {
-            Err(NexusError::GuardrailRejected(msg)) => assert_eq!(msg, "stream blocked"),
+            Err(FlowError::GuardrailRejected(msg)) => assert_eq!(msg, "stream blocked"),
             Err(e) => panic!("expected GuardrailRejected, got {e:?}"),
             Ok(_) => panic!("expected error, got Ok"),
         }
@@ -2729,8 +2712,8 @@ mod tests {
         assert_eq!(mark_data["rejection_reason"], "stream blocked");
 
         drop(captured);
-        nat_nexus_deregister_subscriber("stream_reject_sub").unwrap();
-        nat_nexus_deregister_llm_conditional_execution_guardrail("stream_blocker").unwrap();
+        nemo_flow_deregister_subscriber("stream_reject_sub").unwrap();
+        nemo_flow_deregister_llm_conditional_execution_guardrail("stream_blocker").unwrap();
     }
 
     // -- Tool call with explicit parent --
@@ -2740,7 +2723,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let scope = nat_nexus_push_scope(
+        let scope = nemo_flow_push_scope(
             "parent",
             ScopeType::Agent,
             None,
@@ -2749,7 +2732,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let handle = nat_nexus_tool_call(
+        let handle = nemo_flow_tool_call(
             "tool",
             json!({}),
             Some(&scope),
@@ -2761,8 +2744,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(handle.parent_uuid, Some(scope.uuid));
-        nat_nexus_tool_call_end(&handle, json!({}), None, None).unwrap();
-        nat_nexus_pop_scope(&scope.uuid).unwrap();
+        nemo_flow_tool_call_end(&handle, json!({}), None, None).unwrap();
+        nemo_flow_pop_scope(&scope.uuid).unwrap();
     }
 
     // -- LLM call with attributes --
@@ -2776,7 +2759,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        let handle = nat_nexus_llm_call(
+        let handle = nemo_flow_llm_call(
             "llm",
             &request,
             None,
@@ -2790,7 +2773,7 @@ mod tests {
 
         assert!(handle.attributes.contains(LLMAttributes::STATELESS));
         assert!(handle.attributes.contains(LLMAttributes::STREAMING));
-        nat_nexus_llm_call_end(&handle, json!({}), None, None, None).unwrap();
+        nemo_flow_llm_call_end(&handle, json!({}), None, None, None).unwrap();
     }
 
     // -- Standalone middleware chain tests --
@@ -2800,7 +2783,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nat_nexus_register_tool_request_intercept(
+        nemo_flow_register_tool_request_intercept(
             "add_field",
             10,
             false,
@@ -2813,11 +2796,11 @@ mod tests {
         )
         .unwrap();
 
-        let result = nat_nexus_tool_request_intercepts("tool", json!({"key": "value"})).unwrap();
+        let result = nemo_flow_tool_request_intercepts("tool", json!({"key": "value"})).unwrap();
         assert_eq!(result["key"], "value");
         assert_eq!(result["injected"], true);
 
-        nat_nexus_deregister_tool_request_intercept("add_field").unwrap();
+        nemo_flow_deregister_tool_request_intercept("add_field").unwrap();
     }
 
     #[test]
@@ -2826,7 +2809,7 @@ mod tests {
         reset_global();
 
         // No guardrails registered — should pass
-        assert!(nat_nexus_tool_conditional_execution("tool", &json!({})).is_ok());
+        assert!(nemo_flow_tool_conditional_execution("tool", &json!({})).is_ok());
     }
 
     #[test]
@@ -2834,19 +2817,19 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nat_nexus_register_tool_conditional_execution_guardrail(
+        nemo_flow_register_tool_conditional_execution_guardrail(
             "blocker",
             1,
             Box::new(|_name, _args| Ok(Some("blocked".into()))),
         )
         .unwrap();
 
-        match nat_nexus_tool_conditional_execution("tool", &json!({})) {
-            Err(NexusError::GuardrailRejected(msg)) => assert_eq!(msg, "blocked"),
+        match nemo_flow_tool_conditional_execution("tool", &json!({})) {
+            Err(FlowError::GuardrailRejected(msg)) => assert_eq!(msg, "blocked"),
             other => panic!("expected GuardrailRejected, got {other:?}"),
         }
 
-        nat_nexus_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
+        nemo_flow_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
     }
 
     #[test]
@@ -2854,20 +2837,20 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nat_nexus_register_tool_request_intercept(
+        nemo_flow_register_tool_request_intercept(
             "broken",
             1,
             false,
-            Box::new(|_name, _args| Err(NexusError::Internal("tool intercept failed".into()))),
+            Box::new(|_name, _args| Err(FlowError::Internal("tool intercept failed".into()))),
         )
         .unwrap();
 
-        match nat_nexus_tool_request_intercepts("tool", json!({})) {
-            Err(NexusError::Internal(msg)) => assert_eq!(msg, "tool intercept failed"),
+        match nemo_flow_tool_request_intercepts("tool", json!({})) {
+            Err(FlowError::Internal(msg)) => assert_eq!(msg, "tool intercept failed"),
             other => panic!("expected Internal error, got {other:?}"),
         }
 
-        nat_nexus_deregister_tool_request_intercept("broken").unwrap();
+        nemo_flow_deregister_tool_request_intercept("broken").unwrap();
     }
 
     #[test]
@@ -2875,19 +2858,19 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nat_nexus_register_tool_conditional_execution_guardrail(
+        nemo_flow_register_tool_conditional_execution_guardrail(
             "broken",
             1,
-            Box::new(|_name, _args| Err(NexusError::Internal("tool conditional failed".into()))),
+            Box::new(|_name, _args| Err(FlowError::Internal("tool conditional failed".into()))),
         )
         .unwrap();
 
-        match nat_nexus_tool_conditional_execution("tool", &json!({})) {
-            Err(NexusError::Internal(msg)) => assert_eq!(msg, "tool conditional failed"),
+        match nemo_flow_tool_conditional_execution("tool", &json!({})) {
+            Err(FlowError::Internal(msg)) => assert_eq!(msg, "tool conditional failed"),
             other => panic!("expected Internal error, got {other:?}"),
         }
 
-        nat_nexus_deregister_tool_conditional_execution_guardrail("broken").unwrap();
+        nemo_flow_deregister_tool_conditional_execution_guardrail("broken").unwrap();
     }
 
     #[test]
@@ -2895,7 +2878,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nat_nexus_register_llm_request_intercept(
+        nemo_flow_register_llm_request_intercept(
             "add_field",
             10,
             false,
@@ -2914,11 +2897,11 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        let result = nat_nexus_llm_request_intercepts("test_llm", request).unwrap();
+        let result = nemo_flow_llm_request_intercepts("test_llm", request).unwrap();
         assert_eq!(result.content["intercepted"], true);
         assert_eq!(result.content["messages"], json!([]));
 
-        nat_nexus_deregister_llm_request_intercept("add_field").unwrap();
+        nemo_flow_deregister_llm_request_intercept("add_field").unwrap();
     }
 
     #[test]
@@ -2930,7 +2913,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        assert!(nat_nexus_llm_conditional_execution(&request).is_ok());
+        assert!(nemo_flow_llm_conditional_execution(&request).is_ok());
     }
 
     #[test]
@@ -2938,7 +2921,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nat_nexus_register_llm_conditional_execution_guardrail(
+        nemo_flow_register_llm_conditional_execution_guardrail(
             "blocker",
             1,
             Box::new(|_req| Ok(Some("llm blocked".into()))),
@@ -2949,12 +2932,12 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        match nat_nexus_llm_conditional_execution(&request) {
-            Err(NexusError::GuardrailRejected(msg)) => assert_eq!(msg, "llm blocked"),
+        match nemo_flow_llm_conditional_execution(&request) {
+            Err(FlowError::GuardrailRejected(msg)) => assert_eq!(msg, "llm blocked"),
             other => panic!("expected GuardrailRejected, got {other:?}"),
         }
 
-        nat_nexus_deregister_llm_conditional_execution_guardrail("blocker").unwrap();
+        nemo_flow_deregister_llm_conditional_execution_guardrail("blocker").unwrap();
     }
 
     #[test]
@@ -2962,12 +2945,12 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nat_nexus_register_llm_request_intercept(
+        nemo_flow_register_llm_request_intercept(
             "broken",
             1,
             false,
             Box::new(|_name, _request, _annotated| {
-                Err(NexusError::Internal("llm request intercept failed".into()))
+                Err(FlowError::Internal("llm request intercept failed".into()))
             }),
         )
         .unwrap();
@@ -2977,12 +2960,12 @@ mod tests {
             content: json!({"messages": []}),
         };
 
-        match nat_nexus_llm_request_intercepts("test_llm", request) {
-            Err(NexusError::Internal(msg)) => assert_eq!(msg, "llm request intercept failed"),
+        match nemo_flow_llm_request_intercepts("test_llm", request) {
+            Err(FlowError::Internal(msg)) => assert_eq!(msg, "llm request intercept failed"),
             other => panic!("expected Internal error, got {other:?}"),
         }
 
-        nat_nexus_deregister_llm_request_intercept("broken").unwrap();
+        nemo_flow_deregister_llm_request_intercept("broken").unwrap();
     }
 
     #[test]
@@ -2990,10 +2973,10 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nat_nexus_register_llm_conditional_execution_guardrail(
+        nemo_flow_register_llm_conditional_execution_guardrail(
             "broken",
             1,
-            Box::new(|_request| Err(NexusError::Internal("llm conditional failed".into()))),
+            Box::new(|_request| Err(FlowError::Internal("llm conditional failed".into()))),
         )
         .unwrap();
 
@@ -3002,11 +2985,11 @@ mod tests {
             content: json!({"messages": []}),
         };
 
-        match nat_nexus_llm_conditional_execution(&request) {
-            Err(NexusError::Internal(msg)) => assert_eq!(msg, "llm conditional failed"),
+        match nemo_flow_llm_conditional_execution(&request) {
+            Err(FlowError::Internal(msg)) => assert_eq!(msg, "llm conditional failed"),
             other => panic!("expected Internal error, got {other:?}"),
         }
 
-        nat_nexus_deregister_llm_conditional_execution_guardrail("broken").unwrap();
+        nemo_flow_deregister_llm_conditional_execution_guardrail("broken").unwrap();
     }
 }

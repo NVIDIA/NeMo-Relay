@@ -17,7 +17,7 @@
 
 use serde::Deserialize;
 
-use crate::error::{NexusError, Result};
+use crate::error::{FlowError, Result};
 use crate::json::Json;
 use crate::types::LLMRequest;
 
@@ -124,7 +124,7 @@ fn json_f64(v: f64) -> Json {
 impl LlmResponseCodec for OpenAIResponsesCodec {
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLLMResponse> {
         let raw: RawResponsesResponse = serde_json::from_value(response.clone())
-            .map_err(|e| NexusError::Internal(format!("OpenAI Responses response decode: {e}")))?;
+            .map_err(|e| FlowError::Internal(format!("OpenAI Responses response decode: {e}")))?;
 
         // Process heterogeneous output items.
         let mut text_parts: Vec<String> = Vec::new();
@@ -141,10 +141,10 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
                             for block in content {
                                 let block_type =
                                     block.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                                if block_type == "output_text" {
-                                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                                        text_parts.push(text.to_string());
-                                    }
+                                if block_type == "output_text"
+                                    && let Some(text) = block.get("text").and_then(|t| t.as_str())
+                                {
+                                    text_parts.push(text.to_string());
                                 }
                             }
                         }
@@ -236,7 +236,7 @@ impl LlmCodec for OpenAIResponsesCodec {
         let obj = request
             .content
             .as_object()
-            .ok_or_else(|| NexusError::Internal("request content is not an object".into()))?;
+            .ok_or_else(|| FlowError::Internal("request content is not an object".into()))?;
 
         let mut messages: Vec<Message> = Vec::new();
 
@@ -289,7 +289,7 @@ impl LlmCodec for OpenAIResponsesCodec {
             .get("tools")
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()
-            .map_err(|e| NexusError::Internal(format!("OpenAI Responses tools decode: {e}")))?;
+            .map_err(|e| FlowError::Internal(format!("OpenAI Responses tools decode: {e}")))?;
 
         // Extract tool_choice.
         let tool_choice: Option<ToolChoice> = obj
@@ -297,7 +297,7 @@ impl LlmCodec for OpenAIResponsesCodec {
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()
             .map_err(|e| {
-                NexusError::Internal(format!("OpenAI Responses tool_choice decode: {e}"))
+                FlowError::Internal(format!("OpenAI Responses tool_choice decode: {e}"))
             })?;
 
         // Collect extra fields (keys not in MODELED_REQUEST_KEYS).
@@ -321,7 +321,7 @@ impl LlmCodec for OpenAIResponsesCodec {
         let mut content = original.content.clone();
         let obj = content
             .as_object_mut()
-            .ok_or_else(|| NexusError::Internal("original content is not an object".into()))?;
+            .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
 
         // Extract system message -> write as instructions (top-level string).
         // Remaining messages -> write as input array.
@@ -349,7 +349,7 @@ impl LlmCodec for OpenAIResponsesCodec {
 
         // Write input from non-system messages.
         let input_val = serde_json::to_value(&input_messages)
-            .map_err(|e| NexusError::Internal(format!("OpenAI Responses input encode: {e}")))?;
+            .map_err(|e| FlowError::Internal(format!("OpenAI Responses input encode: {e}")))?;
         obj.insert("input".into(), input_val);
 
         // Overlay model if present.
@@ -377,7 +377,7 @@ impl LlmCodec for OpenAIResponsesCodec {
             obj.insert(
                 "tools".into(),
                 serde_json::to_value(tools).map_err(|e| {
-                    NexusError::Internal(format!("OpenAI Responses tools encode: {e}"))
+                    FlowError::Internal(format!("OpenAI Responses tools encode: {e}"))
                 })?,
             );
         }
@@ -387,7 +387,7 @@ impl LlmCodec for OpenAIResponsesCodec {
             obj.insert(
                 "tool_choice".into(),
                 serde_json::to_value(tool_choice).map_err(|e| {
-                    NexusError::Internal(format!("OpenAI Responses tool_choice encode: {e}"))
+                    FlowError::Internal(format!("OpenAI Responses tool_choice encode: {e}"))
                 })?,
             );
         }

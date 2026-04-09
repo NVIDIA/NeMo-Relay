@@ -10,7 +10,7 @@ call, and LLM call using the WebAssembly binding.
 
 All examples in this guide use:
 
-- an active Nexus scope
+- an active NeMo Flow scope
 - the managed execution APIs (`toolCallExecute(...)` and `llmCallExecute(...)`)
 
 This guide intentionally does not use the low-level manual lifecycle APIs such
@@ -35,10 +35,10 @@ This produces a `pkg/` directory under `crates/wasm/`.
 ## Minimal Scope and Tool Execution
 
 Create a JavaScript file next to the generated package and import from
-`./pkg/nvidia_nat_nexus_wasm.js`:
+`./pkg/nemo_flow_wasm.js`:
 
 ```javascript
-const wasm = require("./pkg/nvidia_nat_nexus_wasm.js");
+const wasm = require("./pkg/nemo_flow_wasm.js");
 const init = wasm.default;
 const { pushScope, popScope, toolCallExecute, SCOPE_TYPE_AGENT } = wasm;
 
@@ -70,7 +70,7 @@ main().catch((error) => {
 ## Minimal LLM Execution
 
 ```javascript
-const wasm = require("./pkg/nvidia_nat_nexus_wasm.js");
+const wasm = require("./pkg/nemo_flow_wasm.js");
 const init = wasm.default;
 const { pushScope, popScope, llmCallExecute, SCOPE_TYPE_AGENT } = wasm;
 

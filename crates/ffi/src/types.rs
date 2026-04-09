@@ -7,13 +7,13 @@
 //! and free functions for all types that cross the C FFI boundary. Each opaque
 //! struct wraps a corresponding core type and is heap-allocated; the C consumer
 //! sees only an opaque pointer. All returned C strings must be freed with
-//! [`crate::convert::nat_nexus_string_free`], and all handles must be freed
-//! with their corresponding `nat_nexus_*_free` function.
+//! [`crate::convert::nemo_flow_string_free`], and all handles must be freed
+//! with their corresponding `nemo_flow_*_free` function.
 
 use libc::c_char;
 use serde_json::Value as Json;
 
-use nvidia_nat_nexus_core::types as core_types;
+use nemo_flow_core::types as core_types;
 
 use crate::convert::{json_to_c_string, str_to_c_string};
 
@@ -33,39 +33,37 @@ pub struct FfiLLMRequest(pub core_types::LLMRequest);
 /// Opaque wrapper around a lifecycle event emitted by the runtime.
 pub struct FfiEvent(pub core_types::Event);
 /// Opaque handle to an isolated scope stack for per-request/per-task isolation.
-pub struct FfiScopeStack(pub nvidia_nat_nexus_core::ScopeStackHandle);
+pub struct FfiScopeStack(pub nemo_flow_core::ScopeStackHandle);
 /// Opaque ATIF exporter handle.
-pub struct FfiAtifExporter(pub nvidia_nat_nexus_core::atif::AtifExporter);
+pub struct FfiAtifExporter(pub nemo_flow_core::atif::AtifExporter);
 /// Opaque OpenTelemetry subscriber handle.
-pub struct FfiOpenTelemetrySubscriber(pub nvidia_nat_nexus_otel::OpenTelemetrySubscriber);
+pub struct FfiOpenTelemetrySubscriber(pub nemo_flow_otel::OpenTelemetrySubscriber);
 /// Opaque OpenInference subscriber handle.
-pub struct FfiOpenInferenceSubscriber(pub nvidia_nat_nexus_openinference::OpenInferenceSubscriber);
+pub struct FfiOpenInferenceSubscriber(pub nemo_flow_openinference::OpenInferenceSubscriber);
 /// Opaque optimizer runtime handle.
-pub struct FfiOptimizerRuntime(pub nvidia_nat_nexus_optimizer::OptimizerRuntime);
+pub struct FfiOptimizerRuntime(pub nemo_flow_optimizer::OptimizerRuntime);
 /// Opaque optimizer hosted plugin context.
 ///
 /// This wrapper contains a borrowed raw pointer to an
-/// `nvidia_nat_nexus_optimizer::HostedRegistrationContext`, not an owned heap allocation.
+/// `nemo_flow_optimizer::HostedRegistrationContext`, not an owned heap allocation.
 /// It is only valid for the duration of the hosted plugin registration callback that receives
 /// it. C callers must not store the pointer, use it after the callback returns, or attempt to
 /// free or drop it.
 ///
-/// There is intentionally no `nat_nexus_optimizer_plugin_context_free` function because this FFI
+/// There is intentionally no `nemo_flow_optimizer_plugin_context_free` function because this FFI
 /// wrapper does not own the underlying registration context.
-pub struct FfiOptimizerPluginContext(
-    pub *mut nvidia_nat_nexus_optimizer::HostedRegistrationContext,
-);
+pub struct FfiOptimizerPluginContext(pub *mut nemo_flow_optimizer::HostedRegistrationContext);
 
 /// Opaque handle carrying both request and response codec trait objects.
 ///
-/// Created by `nat_nexus_openai_chat_codec_new` (and similar constructors).
-/// Freed by `nat_nexus_codec_free`. The handle carries two `Arc`s pointing
+/// Created by `nemo_flow_openai_chat_codec_new` (and similar constructors).
+/// Freed by `nemo_flow_codec_free`. The handle carries two `Arc`s pointing
 /// to the same underlying codec instance: one for the `LlmCodec` trait and
 /// one for the `LlmResponseCodec` trait.
 pub struct FfiCodecHandle {
     #[allow(dead_code)]
-    pub(crate) codec: std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>,
-    pub(crate) response_codec: std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>,
+    pub(crate) codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmCodec>,
+    pub(crate) response_codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmResponseCodec>,
 }
 
 // ---------------------------------------------------------------------------
@@ -75,7 +73,7 @@ pub struct FfiCodecHandle {
 /// The type of scope in the agent execution hierarchy.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy)]
-pub enum NatNexusScopeType {
+pub enum NemoFlowScopeType {
     /// Top-level agent scope.
     Agent = 0,
     /// Generic function scope.
@@ -100,38 +98,38 @@ pub enum NatNexusScopeType {
     Unknown = 10,
 }
 
-impl From<NatNexusScopeType> for core_types::ScopeType {
-    fn from(v: NatNexusScopeType) -> Self {
+impl From<NemoFlowScopeType> for core_types::ScopeType {
+    fn from(v: NemoFlowScopeType) -> Self {
         match v {
-            NatNexusScopeType::Agent => core_types::ScopeType::Agent,
-            NatNexusScopeType::Function => core_types::ScopeType::Function,
-            NatNexusScopeType::Tool => core_types::ScopeType::Tool,
-            NatNexusScopeType::Llm => core_types::ScopeType::Llm,
-            NatNexusScopeType::Retriever => core_types::ScopeType::Retriever,
-            NatNexusScopeType::Embedder => core_types::ScopeType::Embedder,
-            NatNexusScopeType::Reranker => core_types::ScopeType::Reranker,
-            NatNexusScopeType::Guardrail => core_types::ScopeType::Guardrail,
-            NatNexusScopeType::Evaluator => core_types::ScopeType::Evaluator,
-            NatNexusScopeType::Custom => core_types::ScopeType::Custom,
-            NatNexusScopeType::Unknown => core_types::ScopeType::Unknown,
+            NemoFlowScopeType::Agent => core_types::ScopeType::Agent,
+            NemoFlowScopeType::Function => core_types::ScopeType::Function,
+            NemoFlowScopeType::Tool => core_types::ScopeType::Tool,
+            NemoFlowScopeType::Llm => core_types::ScopeType::Llm,
+            NemoFlowScopeType::Retriever => core_types::ScopeType::Retriever,
+            NemoFlowScopeType::Embedder => core_types::ScopeType::Embedder,
+            NemoFlowScopeType::Reranker => core_types::ScopeType::Reranker,
+            NemoFlowScopeType::Guardrail => core_types::ScopeType::Guardrail,
+            NemoFlowScopeType::Evaluator => core_types::ScopeType::Evaluator,
+            NemoFlowScopeType::Custom => core_types::ScopeType::Custom,
+            NemoFlowScopeType::Unknown => core_types::ScopeType::Unknown,
         }
     }
 }
 
-impl From<core_types::ScopeType> for NatNexusScopeType {
+impl From<core_types::ScopeType> for NemoFlowScopeType {
     fn from(v: core_types::ScopeType) -> Self {
         match v {
-            core_types::ScopeType::Agent => NatNexusScopeType::Agent,
-            core_types::ScopeType::Function => NatNexusScopeType::Function,
-            core_types::ScopeType::Tool => NatNexusScopeType::Tool,
-            core_types::ScopeType::Llm => NatNexusScopeType::Llm,
-            core_types::ScopeType::Retriever => NatNexusScopeType::Retriever,
-            core_types::ScopeType::Embedder => NatNexusScopeType::Embedder,
-            core_types::ScopeType::Reranker => NatNexusScopeType::Reranker,
-            core_types::ScopeType::Guardrail => NatNexusScopeType::Guardrail,
-            core_types::ScopeType::Evaluator => NatNexusScopeType::Evaluator,
-            core_types::ScopeType::Custom => NatNexusScopeType::Custom,
-            core_types::ScopeType::Unknown => NatNexusScopeType::Unknown,
+            core_types::ScopeType::Agent => NemoFlowScopeType::Agent,
+            core_types::ScopeType::Function => NemoFlowScopeType::Function,
+            core_types::ScopeType::Tool => NemoFlowScopeType::Tool,
+            core_types::ScopeType::Llm => NemoFlowScopeType::Llm,
+            core_types::ScopeType::Retriever => NemoFlowScopeType::Retriever,
+            core_types::ScopeType::Embedder => NemoFlowScopeType::Embedder,
+            core_types::ScopeType::Reranker => NemoFlowScopeType::Reranker,
+            core_types::ScopeType::Guardrail => NemoFlowScopeType::Guardrail,
+            core_types::ScopeType::Evaluator => NemoFlowScopeType::Evaluator,
+            core_types::ScopeType::Custom => NemoFlowScopeType::Custom,
+            core_types::ScopeType::Unknown => NemoFlowScopeType::Unknown,
         }
     }
 }
@@ -143,9 +141,9 @@ impl From<core_types::ScopeType> for NatNexusScopeType {
 /// Free a scope handle previously returned by the runtime.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nat_nexus_*` function, or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_handle_free(ptr: *mut FfiScopeHandle) {
+/// `ptr` must be a valid pointer returned by an `nemo_flow_*` function, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_handle_free(ptr: *mut FfiScopeHandle) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -154,9 +152,9 @@ pub unsafe extern "C" fn nat_nexus_scope_handle_free(ptr: *mut FfiScopeHandle) {
 /// Free a tool handle previously returned by the runtime.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nat_nexus_*` function, or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_tool_handle_free(ptr: *mut FfiToolHandle) {
+/// `ptr` must be a valid pointer returned by an `nemo_flow_*` function, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_tool_handle_free(ptr: *mut FfiToolHandle) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -165,9 +163,9 @@ pub unsafe extern "C" fn nat_nexus_tool_handle_free(ptr: *mut FfiToolHandle) {
 /// Free an LLM handle previously returned by the runtime.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nat_nexus_*` function, or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_handle_free(ptr: *mut FfiLLMHandle) {
+/// `ptr` must be a valid pointer returned by an `nemo_flow_*` function, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_handle_free(ptr: *mut FfiLLMHandle) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -176,9 +174,9 @@ pub unsafe extern "C" fn nat_nexus_llm_handle_free(ptr: *mut FfiLLMHandle) {
 /// Free an LLM request object.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nat_nexus_*` function, or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_request_free(ptr: *mut FfiLLMRequest) {
+/// `ptr` must be a valid pointer returned by an `nemo_flow_*` function, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_request_free(ptr: *mut FfiLLMRequest) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -187,56 +185,56 @@ pub unsafe extern "C" fn nat_nexus_llm_request_free(ptr: *mut FfiLLMRequest) {
 /// Free an event object.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nat_nexus_*` function, or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_free(ptr: *mut FfiEvent) {
+/// `ptr` must be a valid pointer returned by an `nemo_flow_*` function, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_free(ptr: *mut FfiEvent) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
 }
 
-/// Free a scope stack handle previously returned by `nat_nexus_scope_stack_create`.
+/// Free a scope stack handle previously returned by `nemo_flow_scope_stack_create`.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by `nat_nexus_scope_stack_create`, or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_stack_free(ptr: *mut FfiScopeStack) {
+/// `ptr` must be a valid pointer returned by `nemo_flow_scope_stack_create`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_stack_free(ptr: *mut FfiScopeStack) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
 }
 
-/// Free an ATIF exporter handle previously returned by `nat_nexus_atif_exporter_create`.
+/// Free an ATIF exporter handle previously returned by `nemo_flow_atif_exporter_create`.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by `nat_nexus_atif_exporter_create`, or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_atif_exporter_free(ptr: *mut FfiAtifExporter) {
+/// `ptr` must be a valid pointer returned by `nemo_flow_atif_exporter_create`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_atif_exporter_free(ptr: *mut FfiAtifExporter) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
 }
 
 /// Free an OpenTelemetry subscriber handle previously returned by
-/// `nat_nexus_otel_subscriber_create`.
+/// `nemo_flow_otel_subscriber_create`.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by `nat_nexus_otel_subscriber_create`, or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_otel_subscriber_free(ptr: *mut FfiOpenTelemetrySubscriber) {
+/// `ptr` must be a valid pointer returned by `nemo_flow_otel_subscriber_create`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_otel_subscriber_free(ptr: *mut FfiOpenTelemetrySubscriber) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
 }
 
 /// Free an OpenInference subscriber handle previously returned by
-/// `nat_nexus_openinference_subscriber_create`.
+/// `nemo_flow_openinference_subscriber_create`.
 ///
 /// # Safety
 /// `ptr` must be a valid pointer returned by
-/// `nat_nexus_openinference_subscriber_create`, or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_openinference_subscriber_free(
+/// `nemo_flow_openinference_subscriber_create`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_openinference_subscriber_free(
     ptr: *mut FfiOpenInferenceSubscriber,
 ) {
     if !ptr.is_null() {
@@ -245,24 +243,24 @@ pub unsafe extern "C" fn nat_nexus_openinference_subscriber_free(
 }
 
 /// Free a codec handle previously returned by one of the codec constructor
-/// functions (`nat_nexus_openai_chat_codec_new`, etc.).
+/// functions (`nemo_flow_openai_chat_codec_new`, etc.).
 ///
 /// # Safety
 /// `handle` must be a valid pointer returned by one of the codec constructor
 /// functions, or null. Double-free is undefined behavior.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_codec_free(handle: *mut FfiCodecHandle) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_codec_free(handle: *mut FfiCodecHandle) {
     if !handle.is_null() {
         drop(unsafe { Box::from_raw(handle) });
     }
 }
 
-/// Free an optimizer runtime handle previously returned by `nat_nexus_optimizer_runtime_create`.
+/// Free an optimizer runtime handle previously returned by `nemo_flow_optimizer_runtime_create`.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by `nat_nexus_optimizer_runtime_create`, or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_optimizer_runtime_free(ptr: *mut FfiOptimizerRuntime) {
+/// `ptr` must be a valid pointer returned by `nemo_flow_optimizer_runtime_create`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_optimizer_runtime_free(ptr: *mut FfiOptimizerRuntime) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -273,12 +271,12 @@ pub unsafe extern "C" fn nat_nexus_optimizer_runtime_free(ptr: *mut FfiOptimizer
 // ---------------------------------------------------------------------------
 
 /// Return the UUID of a scope handle as a C string. Caller must free the result
-/// with `nat_nexus_string_free`. Returns null if `ptr` is null.
+/// with `nemo_flow_string_free`. Returns null if `ptr` is null.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_handle_uuid(ptr: *const FfiScopeHandle) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_handle_uuid(ptr: *const FfiScopeHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -290,8 +288,8 @@ pub unsafe extern "C" fn nat_nexus_scope_handle_uuid(ptr: *const FfiScopeHandle)
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_handle_name(ptr: *const FfiScopeHandle) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_handle_name(ptr: *const FfiScopeHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -302,12 +300,12 @@ pub unsafe extern "C" fn nat_nexus_scope_handle_name(ptr: *const FfiScopeHandle)
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_handle_scope_type(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_handle_scope_type(
     ptr: *const FfiScopeHandle,
-) -> NatNexusScopeType {
+) -> NemoFlowScopeType {
     if ptr.is_null() {
-        return NatNexusScopeType::Unknown;
+        return NemoFlowScopeType::Unknown;
     }
     unsafe { &*ptr }.0.scope_type.into()
 }
@@ -316,8 +314,8 @@ pub unsafe extern "C" fn nat_nexus_scope_handle_scope_type(
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_handle_attributes(ptr: *const FfiScopeHandle) -> u32 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_handle_attributes(ptr: *const FfiScopeHandle) -> u32 {
     if ptr.is_null() {
         return 0;
     }
@@ -325,12 +323,12 @@ pub unsafe extern "C" fn nat_nexus_scope_handle_attributes(ptr: *const FfiScopeH
 }
 
 /// Return the parent scope UUID as a C string, or null if there is no parent.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_handle_parent_uuid(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_handle_parent_uuid(
     ptr: *const FfiScopeHandle,
 ) -> *mut c_char {
     if ptr.is_null() {
@@ -343,12 +341,12 @@ pub unsafe extern "C" fn nat_nexus_scope_handle_parent_uuid(
 }
 
 /// Return the scope data as a JSON C string, or null if no data is set.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_handle_data(ptr: *const FfiScopeHandle) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_handle_data(ptr: *const FfiScopeHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -359,12 +357,12 @@ pub unsafe extern "C" fn nat_nexus_scope_handle_data(ptr: *const FfiScopeHandle)
 }
 
 /// Return the scope metadata as a JSON C string, or null if no metadata is set.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_scope_handle_metadata(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_handle_metadata(
     ptr: *const FfiScopeHandle,
 ) -> *mut c_char {
     if ptr.is_null() {
@@ -384,8 +382,8 @@ pub unsafe extern "C" fn nat_nexus_scope_handle_metadata(
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiToolHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_tool_handle_uuid(ptr: *const FfiToolHandle) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_tool_handle_uuid(ptr: *const FfiToolHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -396,8 +394,8 @@ pub unsafe extern "C" fn nat_nexus_tool_handle_uuid(ptr: *const FfiToolHandle) -
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiToolHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_tool_handle_name(ptr: *const FfiToolHandle) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_tool_handle_name(ptr: *const FfiToolHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -408,8 +406,8 @@ pub unsafe extern "C" fn nat_nexus_tool_handle_name(ptr: *const FfiToolHandle) -
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiToolHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_tool_handle_attributes(ptr: *const FfiToolHandle) -> u32 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_tool_handle_attributes(ptr: *const FfiToolHandle) -> u32 {
     if ptr.is_null() {
         return 0;
     }
@@ -417,12 +415,12 @@ pub unsafe extern "C" fn nat_nexus_tool_handle_attributes(ptr: *const FfiToolHan
 }
 
 /// Return the parent scope UUID of a tool handle, or null if none.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiToolHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_tool_handle_parent_uuid(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_tool_handle_parent_uuid(
     ptr: *const FfiToolHandle,
 ) -> *mut c_char {
     if ptr.is_null() {
@@ -442,8 +440,8 @@ pub unsafe extern "C" fn nat_nexus_tool_handle_parent_uuid(
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiLLMHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_handle_uuid(ptr: *const FfiLLMHandle) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_handle_uuid(ptr: *const FfiLLMHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -454,8 +452,8 @@ pub unsafe extern "C" fn nat_nexus_llm_handle_uuid(ptr: *const FfiLLMHandle) -> 
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiLLMHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_handle_name(ptr: *const FfiLLMHandle) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_handle_name(ptr: *const FfiLLMHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -466,8 +464,8 @@ pub unsafe extern "C" fn nat_nexus_llm_handle_name(ptr: *const FfiLLMHandle) -> 
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiLLMHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_handle_attributes(ptr: *const FfiLLMHandle) -> u32 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_handle_attributes(ptr: *const FfiLLMHandle) -> u32 {
     if ptr.is_null() {
         return 0;
     }
@@ -475,12 +473,12 @@ pub unsafe extern "C" fn nat_nexus_llm_handle_attributes(ptr: *const FfiLLMHandl
 }
 
 /// Return the parent scope UUID of an LLM handle, or null if none.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiLLMHandle` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_handle_parent_uuid(ptr: *const FfiLLMHandle) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_handle_parent_uuid(ptr: *const FfiLLMHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -495,7 +493,7 @@ pub unsafe extern "C" fn nat_nexus_llm_handle_parent_uuid(ptr: *const FfiLLMHand
 // ---------------------------------------------------------------------------
 
 /// Create a new LLM request object. Returns a heap-allocated `FfiLLMRequest`
-/// that must be freed with `nat_nexus_llm_request_free`. Returns null on
+/// that must be freed with `nemo_flow_llm_request_free`. Returns null on
 /// invalid input.
 ///
 /// # Parameters
@@ -504,8 +502,8 @@ pub unsafe extern "C" fn nat_nexus_llm_handle_parent_uuid(ptr: *const FfiLLMHand
 ///
 /// # Safety
 /// All string arguments must be valid null-terminated C strings or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_request_new(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_request_new(
     headers_json: *const c_char,
     content_json: *const c_char,
 ) -> *mut FfiLLMRequest {
@@ -525,8 +523,8 @@ pub unsafe extern "C" fn nat_nexus_llm_request_new(
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiLLMRequest` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_request_headers(ptr: *const FfiLLMRequest) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_request_headers(ptr: *const FfiLLMRequest) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -537,8 +535,8 @@ pub unsafe extern "C" fn nat_nexus_llm_request_headers(ptr: *const FfiLLMRequest
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiLLMRequest` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_llm_request_content(ptr: *const FfiLLMRequest) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_llm_request_content(ptr: *const FfiLLMRequest) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -553,8 +551,8 @@ pub unsafe extern "C" fn nat_nexus_llm_request_content(ptr: *const FfiLLMRequest
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_uuid(ptr: *const FfiEvent) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_uuid(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -562,12 +560,12 @@ pub unsafe extern "C" fn nat_nexus_event_uuid(ptr: *const FfiEvent) -> *mut c_ch
 }
 
 /// Return the name of an event as a C string, or null if unnamed.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_name(ptr: *const FfiEvent) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_name(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -575,12 +573,12 @@ pub unsafe extern "C" fn nat_nexus_event_name(ptr: *const FfiEvent) -> *mut c_ch
 }
 
 /// Return the event discriminator as a C string.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_kind(ptr: *const FfiEvent) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_kind(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -591,8 +589,8 @@ pub unsafe extern "C" fn nat_nexus_event_kind(ptr: *const FfiEvent) -> *mut c_ch
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_attributes(ptr: *const FfiEvent) -> u32 {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_attributes(ptr: *const FfiEvent) -> u32 {
     if ptr.is_null() {
         return 0;
     }
@@ -605,12 +603,12 @@ pub unsafe extern "C" fn nat_nexus_event_attributes(ptr: *const FfiEvent) -> u32
 }
 
 /// Return the event data as a JSON C string, or null if no data is set.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_data(ptr: *const FfiEvent) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_data(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -621,12 +619,12 @@ pub unsafe extern "C" fn nat_nexus_event_data(ptr: *const FfiEvent) -> *mut c_ch
 }
 
 /// Return the event metadata as a JSON C string, or null if no metadata is set.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_metadata(ptr: *const FfiEvent) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_metadata(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -640,8 +638,8 @@ pub unsafe extern "C" fn nat_nexus_event_metadata(ptr: *const FfiEvent) -> *mut 
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_timestamp(ptr: *const FfiEvent) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_timestamp(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -649,12 +647,12 @@ pub unsafe extern "C" fn nat_nexus_event_timestamp(ptr: *const FfiEvent) -> *mut
 }
 
 /// Return the event input as a JSON C string, or null if no input is set.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_input(ptr: *const FfiEvent) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_input(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -665,12 +663,12 @@ pub unsafe extern "C" fn nat_nexus_event_input(ptr: *const FfiEvent) -> *mut c_c
 }
 
 /// Return the event output as a JSON C string, or null if no output is set.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_output(ptr: *const FfiEvent) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_output(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -681,12 +679,12 @@ pub unsafe extern "C" fn nat_nexus_event_output(ptr: *const FfiEvent) -> *mut c_
 }
 
 /// Return the event model name as a C string, or null if no model name is set.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_model_name(ptr: *const FfiEvent) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_model_name(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -697,12 +695,12 @@ pub unsafe extern "C" fn nat_nexus_event_model_name(ptr: *const FfiEvent) -> *mu
 }
 
 /// Return the event tool call ID as a C string, or null if no tool call ID is set.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_tool_call_id(ptr: *const FfiEvent) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_tool_call_id(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -713,12 +711,12 @@ pub unsafe extern "C" fn nat_nexus_event_tool_call_id(ptr: *const FfiEvent) -> *
 }
 
 /// Return the event parent UUID as a C string, or null if no parent UUID is set.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_parent_uuid(ptr: *const FfiEvent) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_parent_uuid(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -729,12 +727,12 @@ pub unsafe extern "C" fn nat_nexus_event_parent_uuid(ptr: *const FfiEvent) -> *m
 }
 
 /// Return the event scope type as a C string, or null if no scope type is set.
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_scope_type(ptr: *const FfiEvent) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_scope_type(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -746,12 +744,12 @@ pub unsafe extern "C" fn nat_nexus_event_scope_type(ptr: *const FfiEvent) -> *mu
 
 /// Return the annotated request from an LLM start event as a JSON C string,
 /// or null if not available (non-LLM events, or no codec was active).
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_annotated_request(ptr: *const FfiEvent) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_annotated_request(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -769,12 +767,12 @@ pub unsafe extern "C" fn nat_nexus_event_annotated_request(ptr: *const FfiEvent)
 
 /// Return the annotated response from an LLM end event as a JSON C string,
 /// or null if not available (non-LLM events, or no response codec was active).
-/// Caller must free the result with `nat_nexus_string_free`.
+/// Caller must free the result with `nemo_flow_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
-#[no_mangle]
-pub unsafe extern "C" fn nat_nexus_event_annotated_response(ptr: *const FfiEvent) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_annotated_response(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -803,13 +801,13 @@ mod tests {
             return None;
         }
         let value = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap().to_string();
-        unsafe { crate::convert::nat_nexus_string_free(ptr) };
+        unsafe { crate::convert::nemo_flow_string_free(ptr) };
         Some(value)
     }
 
     #[test]
     fn test_scope_handle_accessors_and_null_metadata_guard() {
-        assert!(unsafe { nat_nexus_scope_handle_metadata(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_scope_handle_metadata(std::ptr::null()) }.is_null());
 
         let parent_uuid = Uuid::new_v4();
         let handle = FfiScopeHandle(core_types::ScopeHandle::new(
@@ -822,27 +820,27 @@ mod tests {
         ));
 
         assert_eq!(
-            take_string(unsafe { nat_nexus_scope_handle_name(&handle) }),
+            take_string(unsafe { nemo_flow_scope_handle_name(&handle) }),
             Some("scope".into())
         );
         assert_eq!(
-            unsafe { nat_nexus_scope_handle_scope_type(&handle) } as i32,
-            NatNexusScopeType::Tool as i32
+            unsafe { nemo_flow_scope_handle_scope_type(&handle) } as i32,
+            NemoFlowScopeType::Tool as i32
         );
         assert_eq!(
-            unsafe { nat_nexus_scope_handle_attributes(&handle) },
+            unsafe { nemo_flow_scope_handle_attributes(&handle) },
             core_types::ScopeAttributes::PARALLEL.bits()
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_scope_handle_parent_uuid(&handle) }),
+            take_string(unsafe { nemo_flow_scope_handle_parent_uuid(&handle) }),
             Some(parent_uuid.to_string())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_scope_handle_data(&handle) }),
+            take_string(unsafe { nemo_flow_scope_handle_data(&handle) }),
             Some(r#"{"data":true}"#.into())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_scope_handle_metadata(&handle) }),
+            take_string(unsafe { nemo_flow_scope_handle_metadata(&handle) }),
             Some(r#"{"meta":true}"#.into())
         );
     }
@@ -850,48 +848,48 @@ mod tests {
     #[test]
     fn test_scope_type_conversions_and_handle_null_guards() {
         let scope_types = [
-            (NatNexusScopeType::Agent, core_types::ScopeType::Agent),
-            (NatNexusScopeType::Function, core_types::ScopeType::Function),
-            (NatNexusScopeType::Tool, core_types::ScopeType::Tool),
-            (NatNexusScopeType::Llm, core_types::ScopeType::Llm),
+            (NemoFlowScopeType::Agent, core_types::ScopeType::Agent),
+            (NemoFlowScopeType::Function, core_types::ScopeType::Function),
+            (NemoFlowScopeType::Tool, core_types::ScopeType::Tool),
+            (NemoFlowScopeType::Llm, core_types::ScopeType::Llm),
             (
-                NatNexusScopeType::Retriever,
+                NemoFlowScopeType::Retriever,
                 core_types::ScopeType::Retriever,
             ),
-            (NatNexusScopeType::Embedder, core_types::ScopeType::Embedder),
-            (NatNexusScopeType::Reranker, core_types::ScopeType::Reranker),
+            (NemoFlowScopeType::Embedder, core_types::ScopeType::Embedder),
+            (NemoFlowScopeType::Reranker, core_types::ScopeType::Reranker),
             (
-                NatNexusScopeType::Guardrail,
+                NemoFlowScopeType::Guardrail,
                 core_types::ScopeType::Guardrail,
             ),
             (
-                NatNexusScopeType::Evaluator,
+                NemoFlowScopeType::Evaluator,
                 core_types::ScopeType::Evaluator,
             ),
-            (NatNexusScopeType::Custom, core_types::ScopeType::Custom),
-            (NatNexusScopeType::Unknown, core_types::ScopeType::Unknown),
+            (NemoFlowScopeType::Custom, core_types::ScopeType::Custom),
+            (NemoFlowScopeType::Unknown, core_types::ScopeType::Unknown),
         ];
 
         for (ffi, core) in scope_types {
-            let round_trip: NatNexusScopeType = core.into();
+            let round_trip: NemoFlowScopeType = core.into();
             assert_eq!(round_trip as i32, ffi as i32);
             let back: core_types::ScopeType = ffi.into();
             assert_eq!(back, core);
         }
 
-        assert!(unsafe { nat_nexus_scope_handle_uuid(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_scope_handle_name(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_scope_handle_uuid(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_scope_handle_name(std::ptr::null()) }.is_null());
         assert_eq!(
-            unsafe { nat_nexus_scope_handle_scope_type(std::ptr::null()) } as i32,
-            NatNexusScopeType::Unknown as i32
+            unsafe { nemo_flow_scope_handle_scope_type(std::ptr::null()) } as i32,
+            NemoFlowScopeType::Unknown as i32
         );
         assert_eq!(
-            unsafe { nat_nexus_scope_handle_attributes(std::ptr::null()) },
+            unsafe { nemo_flow_scope_handle_attributes(std::ptr::null()) },
             0
         );
-        assert!(unsafe { nat_nexus_scope_handle_parent_uuid(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_scope_handle_data(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_scope_handle_metadata(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_scope_handle_parent_uuid(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_scope_handle_data(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_scope_handle_metadata(std::ptr::null()) }.is_null());
     }
 
     #[test]
@@ -905,19 +903,19 @@ mod tests {
             None,
         ));
         assert_eq!(
-            take_string(unsafe { nat_nexus_tool_handle_uuid(&tool) }),
+            take_string(unsafe { nemo_flow_tool_handle_uuid(&tool) }),
             Some(tool.0.uuid.to_string())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_tool_handle_name(&tool) }),
+            take_string(unsafe { nemo_flow_tool_handle_name(&tool) }),
             Some("tool".into())
         );
         assert_eq!(
-            unsafe { nat_nexus_tool_handle_attributes(&tool) },
+            unsafe { nemo_flow_tool_handle_attributes(&tool) },
             core_types::ToolAttributes::LOCAL.bits()
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_tool_handle_parent_uuid(&tool) }),
+            take_string(unsafe { nemo_flow_tool_handle_parent_uuid(&tool) }),
             Some(parent_uuid.to_string())
         );
 
@@ -929,80 +927,80 @@ mod tests {
             None,
         ));
         assert_eq!(
-            take_string(unsafe { nat_nexus_llm_handle_uuid(&llm) }),
+            take_string(unsafe { nemo_flow_llm_handle_uuid(&llm) }),
             Some(llm.0.uuid.to_string())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_llm_handle_name(&llm) }),
+            take_string(unsafe { nemo_flow_llm_handle_name(&llm) }),
             Some("llm".into())
         );
         assert_eq!(
-            unsafe { nat_nexus_llm_handle_attributes(&llm) },
+            unsafe { nemo_flow_llm_handle_attributes(&llm) },
             (core_types::LLMAttributes::STATELESS | core_types::LLMAttributes::STREAMING).bits()
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_llm_handle_parent_uuid(&llm) }),
+            take_string(unsafe { nemo_flow_llm_handle_parent_uuid(&llm) }),
             Some(parent_uuid.to_string())
         );
 
-        assert!(unsafe { nat_nexus_tool_handle_uuid(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_tool_handle_name(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_tool_handle_uuid(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_tool_handle_name(std::ptr::null()) }.is_null());
         assert_eq!(
-            unsafe { nat_nexus_tool_handle_attributes(std::ptr::null()) },
+            unsafe { nemo_flow_tool_handle_attributes(std::ptr::null()) },
             0
         );
-        assert!(unsafe { nat_nexus_tool_handle_parent_uuid(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_tool_handle_parent_uuid(std::ptr::null()) }.is_null());
 
-        assert!(unsafe { nat_nexus_llm_handle_uuid(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_llm_handle_name(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_llm_handle_uuid(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_llm_handle_name(std::ptr::null()) }.is_null());
         assert_eq!(
-            unsafe { nat_nexus_llm_handle_attributes(std::ptr::null()) },
+            unsafe { nemo_flow_llm_handle_attributes(std::ptr::null()) },
             0
         );
-        assert!(unsafe { nat_nexus_llm_handle_parent_uuid(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_llm_handle_parent_uuid(std::ptr::null()) }.is_null());
     }
 
     #[test]
     fn test_llm_request_null_inputs_event_null_guards_and_free_nulls() {
-        let request_ptr = unsafe { nat_nexus_llm_request_new(std::ptr::null(), std::ptr::null()) };
+        let request_ptr = unsafe { nemo_flow_llm_request_new(std::ptr::null(), std::ptr::null()) };
         assert!(!request_ptr.is_null());
         assert_eq!(
-            take_string(unsafe { nat_nexus_llm_request_headers(request_ptr) }),
+            take_string(unsafe { nemo_flow_llm_request_headers(request_ptr) }),
             Some("{}".into())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_llm_request_content(request_ptr) }),
+            take_string(unsafe { nemo_flow_llm_request_content(request_ptr) }),
             Some("null".into())
         );
-        unsafe { nat_nexus_llm_request_free(request_ptr) };
+        unsafe { nemo_flow_llm_request_free(request_ptr) };
 
-        assert!(unsafe { nat_nexus_llm_request_headers(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_llm_request_content(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_event_uuid(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_event_name(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_event_kind(std::ptr::null()) }.is_null());
-        assert_eq!(unsafe { nat_nexus_event_attributes(std::ptr::null()) }, 0);
-        assert!(unsafe { nat_nexus_event_data(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_event_metadata(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_event_timestamp(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_event_input(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_event_output(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_event_model_name(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_event_tool_call_id(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_event_parent_uuid(std::ptr::null()) }.is_null());
-        assert!(unsafe { nat_nexus_event_scope_type(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_llm_request_headers(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_llm_request_content(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_event_uuid(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_event_name(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_event_kind(std::ptr::null()) }.is_null());
+        assert_eq!(unsafe { nemo_flow_event_attributes(std::ptr::null()) }, 0);
+        assert!(unsafe { nemo_flow_event_data(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_event_metadata(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_event_timestamp(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_event_input(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_event_output(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_event_model_name(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_event_tool_call_id(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_event_parent_uuid(std::ptr::null()) }.is_null());
+        assert!(unsafe { nemo_flow_event_scope_type(std::ptr::null()) }.is_null());
 
         unsafe {
-            nat_nexus_scope_handle_free(std::ptr::null_mut());
-            nat_nexus_tool_handle_free(std::ptr::null_mut());
-            nat_nexus_llm_handle_free(std::ptr::null_mut());
-            nat_nexus_llm_request_free(std::ptr::null_mut());
-            nat_nexus_event_free(std::ptr::null_mut());
-            nat_nexus_scope_stack_free(std::ptr::null_mut());
-            nat_nexus_atif_exporter_free(std::ptr::null_mut());
-            nat_nexus_otel_subscriber_free(std::ptr::null_mut());
-            nat_nexus_openinference_subscriber_free(std::ptr::null_mut());
-            nat_nexus_optimizer_runtime_free(std::ptr::null_mut());
+            nemo_flow_scope_handle_free(std::ptr::null_mut());
+            nemo_flow_tool_handle_free(std::ptr::null_mut());
+            nemo_flow_llm_handle_free(std::ptr::null_mut());
+            nemo_flow_llm_request_free(std::ptr::null_mut());
+            nemo_flow_event_free(std::ptr::null_mut());
+            nemo_flow_scope_stack_free(std::ptr::null_mut());
+            nemo_flow_atif_exporter_free(std::ptr::null_mut());
+            nemo_flow_otel_subscriber_free(std::ptr::null_mut());
+            nemo_flow_openinference_subscriber_free(std::ptr::null_mut());
+            nemo_flow_optimizer_runtime_free(std::ptr::null_mut());
         }
     }
 
@@ -1010,17 +1008,17 @@ mod tests {
     fn test_llm_request_and_event_accessors() {
         let headers = CString::new(r#"{"header":"value"}"#).unwrap();
         let content = CString::new(r#"{"prompt":"hi"}"#).unwrap();
-        let request_ptr = unsafe { nat_nexus_llm_request_new(headers.as_ptr(), content.as_ptr()) };
+        let request_ptr = unsafe { nemo_flow_llm_request_new(headers.as_ptr(), content.as_ptr()) };
         assert!(!request_ptr.is_null());
         assert_eq!(
-            take_string(unsafe { nat_nexus_llm_request_headers(request_ptr) }),
+            take_string(unsafe { nemo_flow_llm_request_headers(request_ptr) }),
             Some(r#"{"header":"value"}"#.into())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_llm_request_content(request_ptr) }),
+            take_string(unsafe { nemo_flow_llm_request_content(request_ptr) }),
             Some(r#"{"prompt":"hi"}"#.into())
         );
-        unsafe { nat_nexus_llm_request_free(request_ptr) };
+        unsafe { nemo_flow_llm_request_free(request_ptr) };
 
         let parent_uuid = Uuid::new_v4();
         let scope_event = core_types::Event::scope_start(
@@ -1035,49 +1033,49 @@ mod tests {
         let ffi_event = FfiEvent(scope_event.clone());
 
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_kind(&ffi_event) }),
+            take_string(unsafe { nemo_flow_event_kind(&ffi_event) }),
             Some("ScopeStart".into())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_name(&ffi_event) }),
+            take_string(unsafe { nemo_flow_event_name(&ffi_event) }),
             Some("ffi-event".into())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_data(&ffi_event) }),
+            take_string(unsafe { nemo_flow_event_data(&ffi_event) }),
             Some(r#"{"data":1}"#.into())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_metadata(&ffi_event) }),
+            take_string(unsafe { nemo_flow_event_metadata(&ffi_event) }),
             Some(r#"{"meta":2}"#.into())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_scope_type(&ffi_event) }),
+            take_string(unsafe { nemo_flow_event_scope_type(&ffi_event) }),
             Some("Guardrail".into())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_parent_uuid(&ffi_event) }),
+            take_string(unsafe { nemo_flow_event_parent_uuid(&ffi_event) }),
             scope_event.parent_uuid().map(|uuid| uuid.to_string())
         );
         assert!(
-            take_string(unsafe { nat_nexus_event_timestamp(&ffi_event) })
+            take_string(unsafe { nemo_flow_event_timestamp(&ffi_event) })
                 .unwrap()
                 .contains('T')
         );
 
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_input(&ffi_event) }),
+            take_string(unsafe { nemo_flow_event_input(&ffi_event) }),
             None
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_output(&ffi_event) }),
+            take_string(unsafe { nemo_flow_event_output(&ffi_event) }),
             None
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_model_name(&ffi_event) }),
+            take_string(unsafe { nemo_flow_event_model_name(&ffi_event) }),
             None
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_tool_call_id(&ffi_event) }),
+            take_string(unsafe { nemo_flow_event_tool_call_id(&ffi_event) }),
             None
         );
 
@@ -1094,15 +1092,15 @@ mod tests {
         );
         let ffi_llm_event = FfiEvent(llm_event);
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_input(&ffi_llm_event) }),
+            take_string(unsafe { nemo_flow_event_input(&ffi_llm_event) }),
             Some(r#"{"input":true}"#.into())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_model_name(&ffi_llm_event) }),
+            take_string(unsafe { nemo_flow_event_model_name(&ffi_llm_event) }),
             Some("model".into())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_scope_type(&ffi_llm_event) }),
+            take_string(unsafe { nemo_flow_event_scope_type(&ffi_llm_event) }),
             None
         );
 
@@ -1118,15 +1116,15 @@ mod tests {
         );
         let ffi_tool_event = FfiEvent(tool_event);
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_output(&ffi_tool_event) }),
+            take_string(unsafe { nemo_flow_event_output(&ffi_tool_event) }),
             Some(r#"{"output":true}"#.into())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_tool_call_id(&ffi_tool_event) }),
+            take_string(unsafe { nemo_flow_event_tool_call_id(&ffi_tool_event) }),
             Some("tool-call-id".into())
         );
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_scope_type(&ffi_tool_event) }),
+            take_string(unsafe { nemo_flow_event_scope_type(&ffi_tool_event) }),
             None
         );
 
@@ -1134,7 +1132,7 @@ mod tests {
             core_types::Event::mark(Some(parent_uuid), Uuid::new_v4(), "ffi-mark", None, None);
         let ffi_mark_event = FfiEvent(mark_event);
         assert_eq!(
-            take_string(unsafe { nat_nexus_event_scope_type(&ffi_mark_event) }),
+            take_string(unsafe { nemo_flow_event_scope_type(&ffi_mark_event) }),
             None
         );
     }

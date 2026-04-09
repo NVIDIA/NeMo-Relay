@@ -1,17 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python-facing API functions for the Nexus runtime.
+//! Python-facing API functions for the NeMo Flow runtime.
 //!
 //! Each `#[pyfunction]` here is registered into the `_native` module and
-//! delegates to the corresponding function in [`nvidia_nat_nexus_core::api`].
-//! The Python wrapper modules (`nat_nexus.scope`, `nat_nexus.tools`, etc.)
+//! delegates to the corresponding function in [`nemo_flow_core::api`].
+//! The Python wrapper modules (`nemo_flow.scope`, `nemo_flow.tools`, etc.)
 //! re-export these under shorter, idiomatic names.
 
 use std::sync::Arc;
 
-use nvidia_nat_nexus_core as core;
-use nvidia_nat_nexus_core::types as core_types;
+use nemo_flow_core as core;
+use nemo_flow_core::types as core_types;
 use pyo3::prelude::*;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
@@ -21,17 +21,17 @@ use crate::py_callable;
 use crate::py_types::*;
 
 pub(crate) type RustJsonStream = std::pin::Pin<
-    Box<dyn tokio_stream::Stream<Item = nvidia_nat_nexus_core::Result<serde_json::Value>> + Send>,
+    Box<dyn tokio_stream::Stream<Item = nemo_flow_core::Result<serde_json::Value>> + Send>,
 >;
 
-/// Convert an [`NexusError`] into a Python `RuntimeError`.
-fn to_py_err(e: core::NexusError) -> PyErr {
+/// Convert an [`FlowError`] into a Python `RuntimeError`.
+fn to_py_err(e: core::FlowError) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
 }
 
 pub(crate) async fn forward_stream_to_channel(
     mut stream: RustJsonStream,
-    tx: tokio::sync::mpsc::Sender<nvidia_nat_nexus_core::Result<serde_json::Value>>,
+    tx: tokio::sync::mpsc::Sender<nemo_flow_core::Result<serde_json::Value>>,
 ) {
     while let Some(item) = stream.next().await {
         if tx.send(item).await.is_err() {
@@ -50,12 +50,12 @@ pub(crate) async fn forward_stream_to_channel(
 ///     A ``ScopeStack`` that can be used for per-request or per-task isolation.
 #[pyfunction]
 pub fn create_scope_stack() -> PyScopeStack {
-    PyScopeStack(nvidia_nat_nexus_core::create_scope_stack())
+    PyScopeStack(nemo_flow_core::create_scope_stack())
 }
 
 /// Bind a ``ScopeStack`` to the current thread's thread-local storage.
 ///
-/// This ensures that subsequent Nexus API calls on this thread use the given
+/// This ensures that subsequent NeMo Flow API calls on this thread use the given
 /// scope stack rather than a default one. Primarily useful when propagating
 /// scope context into worker threads (e.g. ``ThreadPoolExecutor``).
 ///
@@ -63,18 +63,18 @@ pub fn create_scope_stack() -> PyScopeStack {
 ///     stack: The ``ScopeStack`` to bind to the current thread.
 #[pyfunction]
 pub fn set_thread_scope_stack(stack: &PyScopeStack) {
-    nvidia_nat_nexus_core::set_thread_scope_stack(stack.0.clone());
+    nemo_flow_core::set_thread_scope_stack(stack.0.clone());
 }
 
 /// Sync a ``ScopeStack`` to the current thread's Rust thread-local storage
 /// **without** marking it as explicitly set.
 ///
-/// This is used internally by ``nat_nexus.get_scope_stack()`` to keep the Rust
+/// This is used internally by ``nemo_flow.get_scope_stack()`` to keep the Rust
 /// thread-local in sync with the Python ``contextvars.ContextVar`` without
 /// affecting ``scope_stack_active()``.
 #[pyfunction]
 pub fn sync_thread_scope_stack(stack: &PyScopeStack) {
-    nvidia_nat_nexus_core::sync_thread_scope_stack(stack.0.clone());
+    nemo_flow_core::sync_thread_scope_stack(stack.0.clone());
 }
 
 /// Return whether the current execution context has an explicitly-initialized
@@ -86,14 +86,14 @@ pub fn sync_thread_scope_stack(stack: &PyScopeStack) {
 /// present.
 ///
 /// .. note::
-///     The Python-level ``nat_nexus.scope_stack_active()`` wrapper also
+///     The Python-level ``nemo_flow.scope_stack_active()`` wrapper also
 ///     checks the ``contextvars.ContextVar`` and should be preferred in
 ///     Python code. This native function is useful for non-async contexts
 ///     where ``contextvars`` are not involved.
 #[pyfunction]
 #[pyo3(name = "scope_stack_active")]
 pub fn py_scope_stack_active() -> bool {
-    nvidia_nat_nexus_core::scope_stack_active()
+    nemo_flow_core::scope_stack_active()
 }
 
 // ---------------------------------------------------------------------------
@@ -106,8 +106,8 @@ pub fn py_scope_stack_active() -> bool {
 /// scope stack is empty.
 #[pyfunction]
 #[pyo3(signature = () -> "ScopeHandle", text_signature = "() -> ScopeHandle")]
-fn nat_nexus_get_handle() -> PyResult<PyScopeHandle> {
-    core::nat_nexus_get_handle()
+fn nemo_flow_get_handle() -> PyResult<PyScopeHandle> {
+    core::nemo_flow_get_handle()
         .map(PyScopeHandle::from)
         .map_err(to_py_err)
 }
@@ -136,7 +136,7 @@ fn nat_nexus_get_handle() -> PyResult<PyScopeHandle> {
     data: "object | None"=None,
     metadata: "object | None"=None
 ) -> "ScopeHandle", text_signature = "(name: str, scope_type: ScopeType, *, handle: ScopeHandle | None = None, attributes: ScopeAttributes | None = None, data: object | None = None, metadata: object | None = None) -> ScopeHandle")]
-fn nat_nexus_push_scope(
+fn nemo_flow_push_scope(
     name: &str,
     scope_type: PyScopeType,
     handle: Option<PyScopeHandle>,
@@ -149,7 +149,7 @@ fn nat_nexus_push_scope(
         .unwrap_or(core_types::ScopeAttributes::empty());
     let d = opt_py_to_json(data)?;
     let meta = opt_py_to_json(metadata)?;
-    core::nat_nexus_push_scope(
+    core::nemo_flow_push_scope(
         name,
         scope_type.into(),
         handle.as_ref().map(|h| &h.inner),
@@ -171,8 +171,8 @@ fn nat_nexus_push_scope(
 ///         on the stack.
 #[pyfunction]
 #[pyo3(signature = (handle: "ScopeHandle") -> "None", text_signature = "(handle: ScopeHandle) -> None")]
-fn nat_nexus_pop_scope(handle: &PyScopeHandle) -> PyResult<()> {
-    core::nat_nexus_pop_scope(&handle.inner.uuid).map_err(to_py_err)
+fn nemo_flow_pop_scope(handle: &PyScopeHandle) -> PyResult<()> {
+    core::nemo_flow_pop_scope(&handle.inner.uuid).map_err(to_py_err)
 }
 
 /// Emit a ``Mark`` event under the current or specified scope.
@@ -190,7 +190,7 @@ fn nat_nexus_pop_scope(handle: &PyScopeHandle) -> PyResult<()> {
     data: "object | None"=None,
     metadata: "object | None"=None
 ) -> "None", text_signature = "(name: str, *, handle: ScopeHandle | None = None, data: object | None = None, metadata: object | None = None) -> None")]
-fn nat_nexus_event(
+fn nemo_flow_event(
     name: &str,
     handle: Option<PyScopeHandle>,
     data: Option<&Bound<'_, PyAny>>,
@@ -198,7 +198,7 @@ fn nat_nexus_event(
 ) -> PyResult<()> {
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
-    core::nat_nexus_event(name, handle.as_ref().map(|h| &h.inner), data, metadata)
+    core::nemo_flow_event(name, handle.as_ref().map(|h| &h.inner), data, metadata)
         .map_err(to_py_err)
 }
 
@@ -232,7 +232,7 @@ fn nat_nexus_event(
     metadata: "object | None"=None,
     tool_call_id: "str | None"=None
 ) -> "ToolHandle", text_signature = "(name: str, args: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None, tool_call_id: str | None = None) -> ToolHandle")]
-fn nat_nexus_tool_call(
+fn nemo_flow_tool_call(
     name: &str,
     args: &Bound<'_, PyAny>,
     handle: Option<PyScopeHandle>,
@@ -247,7 +247,7 @@ fn nat_nexus_tool_call(
         .unwrap_or(core_types::ToolAttributes::empty());
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
-    core::nat_nexus_tool_call(
+    core::nemo_flow_tool_call(
         name,
         args_json,
         handle.as_ref().map(|h| &h.inner),
@@ -275,7 +275,7 @@ fn nat_nexus_tool_call(
     data: "object | None"=None,
     metadata: "object | None"=None
 ) -> "None", text_signature = "(handle: ToolHandle, result: object, *, data: object | None = None, metadata: object | None = None) -> None")]
-fn nat_nexus_tool_call_end(
+fn nemo_flow_tool_call_end(
     handle: &PyToolHandle,
     result: &Bound<'_, PyAny>,
     data: Option<&Bound<'_, PyAny>>,
@@ -284,7 +284,7 @@ fn nat_nexus_tool_call_end(
     let result_json = py_to_json(result)?;
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
-    core::nat_nexus_tool_call_end(&handle.inner, result_json, data, metadata).map_err(to_py_err)
+    core::nemo_flow_tool_call_end(&handle.inner, result_json, data, metadata).map_err(to_py_err)
 }
 
 /// Execute a tool call through the full middleware pipeline.
@@ -321,7 +321,7 @@ fn nat_nexus_tool_call_end(
     metadata: "object | None"=None
 ) -> "object", text_signature = "(name: str, args: object, func: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
-fn nat_nexus_tool_call_execute<'py>(
+fn nemo_flow_tool_call_execute<'py>(
     py: Python<'py>,
     name: String,
     args: &Bound<'py, PyAny>,
@@ -338,15 +338,14 @@ fn nat_nexus_tool_call_execute<'py>(
     let data_json = opt_py_to_json(data)?;
     let metadata_json = opt_py_to_json(metadata)?;
     let exec_fn = py_callable::wrap_py_tool_exec_fn(func);
-    let default_fn: nvidia_nat_nexus_core::ToolExecutionNextFn =
-        Arc::new(move |args| exec_fn(args));
+    let default_fn: nemo_flow_core::ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
 
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        nvidia_nat_nexus_core::TASK_SCOPE_STACK
+        nemo_flow_core::TASK_SCOPE_STACK
             .scope(scope_stack, async move {
-                let result = core::nat_nexus_tool_call_execute(
+                let result = core::nemo_flow_tool_call_execute(
                     &name,
                     args_json,
                     default_fn,
@@ -394,7 +393,7 @@ fn nat_nexus_tool_call_execute<'py>(
     metadata: "object | None"=None,
     model_name: "str | None"=None
 ) -> "LLMHandle", text_signature = "(name: str, request: LLMRequest, *, handle: ScopeHandle | None = None, attributes: LLMAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None) -> LLMHandle")]
-fn nat_nexus_llm_call(
+fn nemo_flow_llm_call(
     name: &str,
     request: PyLLMRequest,
     handle: Option<PyScopeHandle>,
@@ -408,7 +407,7 @@ fn nat_nexus_llm_call(
         .unwrap_or(core_types::LLMAttributes::empty());
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
-    core::nat_nexus_llm_call(
+    core::nemo_flow_llm_call(
         name,
         &request.inner,
         handle.as_ref().map(|h| &h.inner),
@@ -437,7 +436,7 @@ fn nat_nexus_llm_call(
     data: "object | None"=None,
     metadata: "object | None"=None
 ) -> "None", text_signature = "(handle: LLMHandle, response: object, *, data: object | None = None, metadata: object | None = None) -> None")]
-fn nat_nexus_llm_call_end(
+fn nemo_flow_llm_call_end(
     handle: &PyLLMHandle,
     response: &Bound<'_, PyAny>,
     data: Option<&Bound<'_, PyAny>>,
@@ -446,7 +445,7 @@ fn nat_nexus_llm_call_end(
     let response_json = py_to_json(response)?;
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
-    core::nat_nexus_llm_call_end(&handle.inner, response_json, data, metadata, None)
+    core::nemo_flow_llm_call_end(&handle.inner, response_json, data, metadata, None)
         .map_err(to_py_err)
 }
 
@@ -487,7 +486,7 @@ fn nat_nexus_llm_call_end(
     response_codec: "object | None"=None
 ) -> "object", text_signature = "(name: str, request: LLMRequest, func: object, *, handle: ScopeHandle | None = None, attributes: LLMAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, codec: object | None = None, response_codec: object | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
-fn nat_nexus_llm_call_execute<'py>(
+fn nemo_flow_llm_call_execute<'py>(
     py: Python<'py>,
     name: String,
     request: PyLLMRequest,
@@ -506,38 +505,36 @@ fn nat_nexus_llm_call_execute<'py>(
     let data_json = opt_py_to_json(data)?;
     let metadata_json = opt_py_to_json(metadata)?;
     let exec_fn = py_callable::wrap_py_llm_exec_fn(func);
-    let default_fn: nvidia_nat_nexus_core::LlmExecutionNextFn = Arc::new(move |req| exec_fn(req));
+    let default_fn: nemo_flow_core::LlmExecutionNextFn = Arc::new(move |req| exec_fn(req));
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
-    let codec_arc: Option<Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>> = codec.map(|c| {
+    let codec_arc: Option<Arc<dyn nemo_flow_core::codec::LlmCodec>> = codec.map(|c| {
         Arc::new(py_callable::PyLlmCodecWrapper {
             py_codec: c.clone().unbind(),
-        }) as Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>
+        }) as Arc<dyn nemo_flow_core::codec::LlmCodec>
     });
-    let response_codec_arc: Option<Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>> =
-        response_codec.map(
-            |c| -> Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec> {
-                // Try to extract as a built-in codec first (avoids Python method dispatch overhead)
-                if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIChatCodec>>() {
-                    return builtin.inner_response_codec.clone();
-                }
-                if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIResponsesCodec>>() {
-                    return builtin.inner_response_codec.clone();
-                }
-                if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
-                    return builtin.inner_response_codec.clone();
-                }
-                // Fall back to wrapping the Python object as a custom response codec
-                Arc::new(py_callable::PyLlmResponseCodecWrapper {
-                    py_codec: c.clone().unbind(),
-                })
-            },
-        );
+    let response_codec_arc: Option<Arc<dyn nemo_flow_core::codec::LlmResponseCodec>> =
+        response_codec.map(|c| -> Arc<dyn nemo_flow_core::codec::LlmResponseCodec> {
+            // Try to extract as a built-in codec first (avoids Python method dispatch overhead)
+            if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIChatCodec>>() {
+                return builtin.inner_response_codec.clone();
+            }
+            if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIResponsesCodec>>() {
+                return builtin.inner_response_codec.clone();
+            }
+            if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
+                return builtin.inner_response_codec.clone();
+            }
+            // Fall back to wrapping the Python object as a custom response codec
+            Arc::new(py_callable::PyLlmResponseCodecWrapper {
+                py_codec: c.clone().unbind(),
+            })
+        });
 
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        nvidia_nat_nexus_core::TASK_SCOPE_STACK
+        nemo_flow_core::TASK_SCOPE_STACK
             .scope(scope_stack, async move {
-                let result = core::nat_nexus_llm_call_execute(
+                let result = core::nemo_flow_llm_call_execute(
                     &name,
                     request.inner,
                     default_fn,
@@ -597,7 +594,7 @@ fn nat_nexus_llm_call_execute<'py>(
     response_codec: "object | None"=None
 ) -> "object", text_signature = "(name: str, request: LLMRequest, func: object, collector: object, finalizer: object, *, handle: ScopeHandle | None = None, attributes: LLMAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, codec: object | None = None, response_codec: object | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
-fn nat_nexus_llm_stream_call_execute<'py>(
+fn nemo_flow_llm_stream_call_execute<'py>(
     py: Python<'py>,
     name: String,
     request: PyLLMRequest,
@@ -618,39 +615,36 @@ fn nat_nexus_llm_stream_call_execute<'py>(
     let data_json = opt_py_to_json(data)?;
     let metadata_json = opt_py_to_json(metadata)?;
     let exec_fn = py_callable::wrap_py_llm_stream_exec_fn(func);
-    let default_fn: nvidia_nat_nexus_core::LlmStreamExecutionNextFn =
-        Arc::new(move |req| exec_fn(req));
+    let default_fn: nemo_flow_core::LlmStreamExecutionNextFn = Arc::new(move |req| exec_fn(req));
     let collector_fn = py_callable::wrap_py_collector_fn(collector);
     let finalizer_fn = py_callable::wrap_py_finalizer_fn(finalizer);
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(core::task_scope_top);
-    let codec_arc: Option<Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>> = codec.map(|c| {
+    let codec_arc: Option<Arc<dyn nemo_flow_core::codec::LlmCodec>> = codec.map(|c| {
         Arc::new(py_callable::PyLlmCodecWrapper {
             py_codec: c.clone().unbind(),
-        }) as Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>
+        }) as Arc<dyn nemo_flow_core::codec::LlmCodec>
     });
-    let response_codec_arc: Option<Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>> =
-        response_codec.map(
-            |c| -> Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec> {
-                if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIChatCodec>>() {
-                    return builtin.inner_response_codec.clone();
-                }
-                if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIResponsesCodec>>() {
-                    return builtin.inner_response_codec.clone();
-                }
-                if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
-                    return builtin.inner_response_codec.clone();
-                }
-                Arc::new(py_callable::PyLlmResponseCodecWrapper {
-                    py_codec: c.clone().unbind(),
-                })
-            },
-        );
+    let response_codec_arc: Option<Arc<dyn nemo_flow_core::codec::LlmResponseCodec>> =
+        response_codec.map(|c| -> Arc<dyn nemo_flow_core::codec::LlmResponseCodec> {
+            if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIChatCodec>>() {
+                return builtin.inner_response_codec.clone();
+            }
+            if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIResponsesCodec>>() {
+                return builtin.inner_response_codec.clone();
+            }
+            if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
+                return builtin.inner_response_codec.clone();
+            }
+            Arc::new(py_callable::PyLlmResponseCodecWrapper {
+                py_codec: c.clone().unbind(),
+            })
+        });
 
-    let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
+    let scope_stack = nemo_flow_core::current_scope_stack();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        nvidia_nat_nexus_core::TASK_SCOPE_STACK
+        nemo_flow_core::TASK_SCOPE_STACK
             .scope(scope_stack, async move {
-                let rust_stream = core::nat_nexus_llm_stream_call_execute(
+                let rust_stream = core::nemo_flow_llm_stream_call_execute(
                     &name,
                     request.inner,
                     default_fn,
@@ -668,9 +662,8 @@ fn nat_nexus_llm_stream_call_execute<'py>(
                 .map_err(to_py_err)?;
 
                 // Spawn a tokio task that drains the Rust stream into an mpsc channel
-                let (tx, rx) = tokio::sync::mpsc::channel::<
-                    nvidia_nat_nexus_core::Result<serde_json::Value>,
-                >(32);
+                let (tx, rx) =
+                    tokio::sync::mpsc::channel::<nemo_flow_core::Result<serde_json::Value>>(32);
                 tokio::spawn(forward_stream_to_channel(rust_stream, tx));
 
                 Ok(PyLlmStream {
@@ -707,10 +700,10 @@ py_guardrail_tool_api!(
     /// Register a tool sanitize-request guardrail.
     ///
     /// Callback: ``(tool_name: str, args: Any) -> Any`` — returns sanitized args.
-    nat_nexus_register_tool_sanitize_request_guardrail,
-    nat_nexus_deregister_tool_sanitize_request_guardrail,
-    core::nat_nexus_register_tool_sanitize_request_guardrail,
-    core::nat_nexus_deregister_tool_sanitize_request_guardrail,
+    nemo_flow_register_tool_sanitize_request_guardrail,
+    nemo_flow_deregister_tool_sanitize_request_guardrail,
+    core::nemo_flow_register_tool_sanitize_request_guardrail,
+    core::nemo_flow_deregister_tool_sanitize_request_guardrail,
     py_callable::wrap_py_tool_fn
 );
 
@@ -718,10 +711,10 @@ py_guardrail_tool_api!(
     /// Register a tool sanitize-response guardrail.
     ///
     /// Callback: ``(tool_name: str, result: Any) -> Any`` — returns sanitized result.
-    nat_nexus_register_tool_sanitize_response_guardrail,
-    nat_nexus_deregister_tool_sanitize_response_guardrail,
-    core::nat_nexus_register_tool_sanitize_response_guardrail,
-    core::nat_nexus_deregister_tool_sanitize_response_guardrail,
+    nemo_flow_register_tool_sanitize_response_guardrail,
+    nemo_flow_deregister_tool_sanitize_response_guardrail,
+    core::nemo_flow_register_tool_sanitize_response_guardrail,
+    core::nemo_flow_deregister_tool_sanitize_response_guardrail,
     py_callable::wrap_py_tool_fn
 );
 
@@ -730,12 +723,12 @@ py_guardrail_tool_api!(
 /// Callback: ``(tool_name: str, args: Any) -> Optional[str]``.
 /// Return ``None`` to allow execution, or a rejection reason string to block it.
 #[pyfunction]
-fn nat_nexus_register_tool_conditional_execution_guardrail(
+fn nemo_flow_register_tool_conditional_execution_guardrail(
     name: &str,
     priority: i32,
     guardrail: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nat_nexus_register_tool_conditional_execution_guardrail(
+    core::nemo_flow_register_tool_conditional_execution_guardrail(
         name,
         priority,
         py_callable::wrap_py_tool_conditional_fn(guardrail),
@@ -745,8 +738,8 @@ fn nat_nexus_register_tool_conditional_execution_guardrail(
 
 /// Remove a previously registered tool conditional-execution guardrail.
 #[pyfunction]
-fn nat_nexus_deregister_tool_conditional_execution_guardrail(name: &str) -> PyResult<bool> {
-    core::nat_nexus_deregister_tool_conditional_execution_guardrail(name).map_err(to_py_err)
+fn nemo_flow_deregister_tool_conditional_execution_guardrail(name: &str) -> PyResult<bool> {
+    core::nemo_flow_deregister_tool_conditional_execution_guardrail(name).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -781,10 +774,10 @@ py_intercept_tool_api!(
     ///
     /// Callback: ``(tool_name: str, args: Any) -> Any`` — transforms tool arguments.
     /// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
-    nat_nexus_register_tool_request_intercept,
-    nat_nexus_deregister_tool_request_intercept,
-    core::nat_nexus_register_tool_request_intercept,
-    core::nat_nexus_deregister_tool_request_intercept,
+    nemo_flow_register_tool_request_intercept,
+    nemo_flow_deregister_tool_request_intercept,
+    core::nemo_flow_register_tool_request_intercept,
+    core::nemo_flow_deregister_tool_request_intercept,
     py_callable::wrap_py_tool_request_intercept_fn
 );
 
@@ -794,12 +787,12 @@ py_intercept_tool_api!(
 /// Call ``await next(args)`` to invoke the next intercept or original
 /// implementation; skip calling ``next`` to short-circuit.
 #[pyfunction]
-fn nat_nexus_register_tool_execution_intercept(
+fn nemo_flow_register_tool_execution_intercept(
     name: &str,
     priority: i32,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nat_nexus_register_tool_execution_intercept(
+    core::nemo_flow_register_tool_execution_intercept(
         name,
         priority,
         py_callable::wrap_py_tool_exec_intercept_fn(callable),
@@ -809,8 +802,8 @@ fn nat_nexus_register_tool_execution_intercept(
 
 /// Remove a previously registered tool execution intercept.
 #[pyfunction]
-fn nat_nexus_deregister_tool_execution_intercept(name: &str) -> PyResult<bool> {
-    core::nat_nexus_deregister_tool_execution_intercept(name).map_err(to_py_err)
+fn nemo_flow_deregister_tool_execution_intercept(name: &str) -> PyResult<bool> {
+    core::nemo_flow_deregister_tool_execution_intercept(name).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -821,12 +814,12 @@ fn nat_nexus_deregister_tool_execution_intercept(name: &str) -> PyResult<bool> {
 ///
 /// Callback: ``(request: LLMRequest) -> LLMRequest`` — returns a sanitized request.
 #[pyfunction]
-fn nat_nexus_register_llm_sanitize_request_guardrail(
+fn nemo_flow_register_llm_sanitize_request_guardrail(
     name: &str,
     priority: i32,
     guardrail: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nat_nexus_register_llm_sanitize_request_guardrail(
+    core::nemo_flow_register_llm_sanitize_request_guardrail(
         name,
         priority,
         py_callable::wrap_py_llm_sanitize_request_fn(guardrail),
@@ -836,20 +829,20 @@ fn nat_nexus_register_llm_sanitize_request_guardrail(
 
 /// Remove a previously registered LLM sanitize-request guardrail.
 #[pyfunction]
-fn nat_nexus_deregister_llm_sanitize_request_guardrail(name: &str) -> PyResult<bool> {
-    core::nat_nexus_deregister_llm_sanitize_request_guardrail(name).map_err(to_py_err)
+fn nemo_flow_deregister_llm_sanitize_request_guardrail(name: &str) -> PyResult<bool> {
+    core::nemo_flow_deregister_llm_sanitize_request_guardrail(name).map_err(to_py_err)
 }
 
 /// Register an LLM sanitize-response guardrail.
 ///
 /// Callback: ``(response: dict) -> dict`` — returns a sanitized response.
 #[pyfunction]
-fn nat_nexus_register_llm_sanitize_response_guardrail(
+fn nemo_flow_register_llm_sanitize_response_guardrail(
     name: &str,
     priority: i32,
     guardrail: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nat_nexus_register_llm_sanitize_response_guardrail(
+    core::nemo_flow_register_llm_sanitize_response_guardrail(
         name,
         priority,
         py_callable::wrap_py_llm_sanitize_response_fn(guardrail),
@@ -859,8 +852,8 @@ fn nat_nexus_register_llm_sanitize_response_guardrail(
 
 /// Remove a previously registered LLM sanitize-response guardrail.
 #[pyfunction]
-fn nat_nexus_deregister_llm_sanitize_response_guardrail(name: &str) -> PyResult<bool> {
-    core::nat_nexus_deregister_llm_sanitize_response_guardrail(name).map_err(to_py_err)
+fn nemo_flow_deregister_llm_sanitize_response_guardrail(name: &str) -> PyResult<bool> {
+    core::nemo_flow_deregister_llm_sanitize_response_guardrail(name).map_err(to_py_err)
 }
 
 /// Register an LLM conditional-execution guardrail.
@@ -868,12 +861,12 @@ fn nat_nexus_deregister_llm_sanitize_response_guardrail(name: &str) -> PyResult<
 /// Callback: ``(request: LLMRequest) -> Optional[str]``.
 /// Return ``None`` to allow execution, or a rejection reason string to block it.
 #[pyfunction]
-fn nat_nexus_register_llm_conditional_execution_guardrail(
+fn nemo_flow_register_llm_conditional_execution_guardrail(
     name: &str,
     priority: i32,
     guardrail: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nat_nexus_register_llm_conditional_execution_guardrail(
+    core::nemo_flow_register_llm_conditional_execution_guardrail(
         name,
         priority,
         py_callable::wrap_py_llm_conditional_fn(guardrail),
@@ -883,8 +876,8 @@ fn nat_nexus_register_llm_conditional_execution_guardrail(
 
 /// Remove a previously registered LLM conditional-execution guardrail.
 #[pyfunction]
-fn nat_nexus_deregister_llm_conditional_execution_guardrail(name: &str) -> PyResult<bool> {
-    core::nat_nexus_deregister_llm_conditional_execution_guardrail(name).map_err(to_py_err)
+fn nemo_flow_deregister_llm_conditional_execution_guardrail(name: &str) -> PyResult<bool> {
+    core::nemo_flow_deregister_llm_conditional_execution_guardrail(name).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -897,13 +890,13 @@ fn nat_nexus_deregister_llm_conditional_execution_guardrail(name: &str) -> PyRes
 /// — transforms the LLM request and optional annotated request.
 /// If ``break_chain`` is ``True``, no lower-priority intercepts run after this one.
 #[pyfunction]
-fn nat_nexus_register_llm_request_intercept(
+fn nemo_flow_register_llm_request_intercept(
     name: &str,
     priority: i32,
     break_chain: bool,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nat_nexus_register_llm_request_intercept(
+    core::nemo_flow_register_llm_request_intercept(
         name,
         priority,
         break_chain,
@@ -914,8 +907,8 @@ fn nat_nexus_register_llm_request_intercept(
 
 /// Remove a previously registered LLM request intercept.
 #[pyfunction]
-fn nat_nexus_deregister_llm_request_intercept(name: &str) -> PyResult<bool> {
-    core::nat_nexus_deregister_llm_request_intercept(name).map_err(to_py_err)
+fn nemo_flow_deregister_llm_request_intercept(name: &str) -> PyResult<bool> {
+    core::nemo_flow_deregister_llm_request_intercept(name).map_err(to_py_err)
 }
 
 /// Register an LLM execution intercept that can replace the LLM call.
@@ -924,12 +917,12 @@ fn nat_nexus_deregister_llm_request_intercept(name: &str) -> PyResult<bool> {
 /// Call ``await next(native)`` to invoke the next intercept or original
 /// implementation; skip calling ``next`` to short-circuit.
 #[pyfunction]
-fn nat_nexus_register_llm_execution_intercept(
+fn nemo_flow_register_llm_execution_intercept(
     name: &str,
     priority: i32,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nat_nexus_register_llm_execution_intercept(
+    core::nemo_flow_register_llm_execution_intercept(
         name,
         priority,
         py_callable::wrap_py_llm_exec_intercept_fn(callable),
@@ -939,8 +932,8 @@ fn nat_nexus_register_llm_execution_intercept(
 
 /// Remove a previously registered LLM execution intercept.
 #[pyfunction]
-fn nat_nexus_deregister_llm_execution_intercept(name: &str) -> PyResult<bool> {
-    core::nat_nexus_deregister_llm_execution_intercept(name).map_err(to_py_err)
+fn nemo_flow_deregister_llm_execution_intercept(name: &str) -> PyResult<bool> {
+    core::nemo_flow_deregister_llm_execution_intercept(name).map_err(to_py_err)
 }
 
 /// Register an LLM stream-execution intercept that can replace the streaming LLM call.
@@ -950,12 +943,12 @@ fn nat_nexus_deregister_llm_execution_intercept(name: &str) -> PyResult<bool> {
 /// Call ``await next(native)`` to invoke the next intercept or original
 /// streaming implementation; skip calling ``next`` to short-circuit.
 #[pyfunction]
-fn nat_nexus_register_llm_stream_execution_intercept(
+fn nemo_flow_register_llm_stream_execution_intercept(
     name: &str,
     priority: i32,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
-    core::nat_nexus_register_llm_stream_execution_intercept(
+    core::nemo_flow_register_llm_stream_execution_intercept(
         name,
         priority,
         py_callable::wrap_py_llm_stream_exec_intercept_fn(callable),
@@ -965,8 +958,8 @@ fn nat_nexus_register_llm_stream_execution_intercept(
 
 /// Remove a previously registered LLM stream-execution intercept.
 #[pyfunction]
-fn nat_nexus_deregister_llm_stream_execution_intercept(name: &str) -> PyResult<bool> {
-    core::nat_nexus_deregister_llm_stream_execution_intercept(name).map_err(to_py_err)
+fn nemo_flow_deregister_llm_stream_execution_intercept(name: &str) -> PyResult<bool> {
+    core::nemo_flow_deregister_llm_stream_execution_intercept(name).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -984,13 +977,13 @@ fn nat_nexus_deregister_llm_stream_execution_intercept(name: &str) -> PyResult<b
 /// Returns:
 ///     The (possibly transformed) arguments.
 #[pyfunction]
-fn nat_nexus_tool_request_intercepts<'py>(
+fn nemo_flow_tool_request_intercepts<'py>(
     py: Python<'py>,
     name: &str,
     args: &Bound<'py, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     let args_json = py_to_json(args)?;
-    let result = core::nat_nexus_tool_request_intercepts(name, args_json).map_err(to_py_err)?;
+    let result = core::nemo_flow_tool_request_intercepts(name, args_json).map_err(to_py_err)?;
     json_to_py(py, &result)
 }
 
@@ -1002,9 +995,9 @@ fn nat_nexus_tool_request_intercepts<'py>(
 ///     name: Tool name.
 ///     args: Tool arguments (any JSON-serializable object).
 #[pyfunction]
-fn nat_nexus_tool_conditional_execution(name: &str, args: &Bound<'_, PyAny>) -> PyResult<()> {
+fn nemo_flow_tool_conditional_execution(name: &str, args: &Bound<'_, PyAny>) -> PyResult<()> {
     let args_json = py_to_json(args)?;
-    core::nat_nexus_tool_conditional_execution(name, &args_json).map_err(to_py_err)
+    core::nemo_flow_tool_conditional_execution(name, &args_json).map_err(to_py_err)
 }
 
 /// Run the registered LLM request intercept chain on the given request.
@@ -1017,8 +1010,8 @@ fn nat_nexus_tool_conditional_execution(name: &str, args: &Bound<'_, PyAny>) -> 
 /// Returns:
 ///     The (possibly transformed) ``LLMRequest``.
 #[pyfunction]
-fn nat_nexus_llm_request_intercepts(name: &str, request: PyLLMRequest) -> PyResult<PyLLMRequest> {
-    let result = core::nat_nexus_llm_request_intercepts(name, request.inner).map_err(to_py_err)?;
+fn nemo_flow_llm_request_intercepts(name: &str, request: PyLLMRequest) -> PyResult<PyLLMRequest> {
+    let result = core::nemo_flow_llm_request_intercepts(name, request.inner).map_err(to_py_err)?;
     Ok(PyLLMRequest { inner: result })
 }
 
@@ -1029,8 +1022,8 @@ fn nat_nexus_llm_request_intercepts(name: &str, request: PyLLMRequest) -> PyResu
 /// Args:
 ///     request: An ``LLMRequest`` object.
 #[pyfunction]
-fn nat_nexus_llm_conditional_execution(request: PyLLMRequest) -> PyResult<()> {
-    core::nat_nexus_llm_conditional_execution(&request.inner).map_err(to_py_err)
+fn nemo_flow_llm_conditional_execution(request: PyLLMRequest) -> PyResult<()> {
+    core::nemo_flow_llm_conditional_execution(&request.inner).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1049,8 +1042,8 @@ fn nat_nexus_llm_conditional_execution(request: PyLLMRequest) -> PyResult<()> {
 /// Raises:
 ///     RuntimeError: If a subscriber with this name already exists.
 #[pyfunction]
-fn nat_nexus_register_subscriber(name: &str, callback: Py<PyAny>) -> PyResult<()> {
-    core::nat_nexus_register_subscriber(name, py_callable::wrap_py_event_subscriber(callback))
+fn nemo_flow_register_subscriber(name: &str, callback: Py<PyAny>) -> PyResult<()> {
+    core::nemo_flow_register_subscriber(name, py_callable::wrap_py_event_subscriber(callback))
         .map_err(to_py_err)
 }
 
@@ -1058,8 +1051,8 @@ fn nat_nexus_register_subscriber(name: &str, callback: Py<PyAny>) -> PyResult<()
 ///
 /// Returns ``True`` if a subscriber with that name was found and removed.
 #[pyfunction]
-fn nat_nexus_deregister_subscriber(name: &str) -> PyResult<bool> {
-    core::nat_nexus_deregister_subscriber(name).map_err(to_py_err)
+fn nemo_flow_deregister_subscriber(name: &str) -> PyResult<bool> {
+    core::nemo_flow_deregister_subscriber(name).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1094,32 +1087,32 @@ macro_rules! py_scope_local_guardrail_tool_api {
 
 py_scope_local_guardrail_tool_api!(
     /// Register a scope-local tool sanitize-request guardrail.
-    nat_nexus_scope_register_tool_sanitize_request_guardrail,
-    nat_nexus_scope_deregister_tool_sanitize_request_guardrail,
-    core::nat_nexus_scope_register_tool_sanitize_request_guardrail,
-    core::nat_nexus_scope_deregister_tool_sanitize_request_guardrail,
+    nemo_flow_scope_register_tool_sanitize_request_guardrail,
+    nemo_flow_scope_deregister_tool_sanitize_request_guardrail,
+    core::nemo_flow_scope_register_tool_sanitize_request_guardrail,
+    core::nemo_flow_scope_deregister_tool_sanitize_request_guardrail,
     py_callable::wrap_py_tool_fn
 );
 
 py_scope_local_guardrail_tool_api!(
     /// Register a scope-local tool sanitize-response guardrail.
-    nat_nexus_scope_register_tool_sanitize_response_guardrail,
-    nat_nexus_scope_deregister_tool_sanitize_response_guardrail,
-    core::nat_nexus_scope_register_tool_sanitize_response_guardrail,
-    core::nat_nexus_scope_deregister_tool_sanitize_response_guardrail,
+    nemo_flow_scope_register_tool_sanitize_response_guardrail,
+    nemo_flow_scope_deregister_tool_sanitize_response_guardrail,
+    core::nemo_flow_scope_register_tool_sanitize_response_guardrail,
+    core::nemo_flow_scope_deregister_tool_sanitize_response_guardrail,
     py_callable::wrap_py_tool_fn
 );
 
 /// Register a scope-local tool conditional-execution guardrail.
 #[pyfunction]
-fn nat_nexus_scope_register_tool_conditional_execution_guardrail(
+fn nemo_flow_scope_register_tool_conditional_execution_guardrail(
     scope_uuid: &str,
     name: &str,
     priority: i32,
     guardrail: Py<PyAny>,
 ) -> PyResult<()> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_register_tool_conditional_execution_guardrail(
+    core::nemo_flow_scope_register_tool_conditional_execution_guardrail(
         &uuid,
         name,
         priority,
@@ -1130,12 +1123,12 @@ fn nat_nexus_scope_register_tool_conditional_execution_guardrail(
 
 /// Remove a previously registered scope-local tool conditional-execution guardrail.
 #[pyfunction]
-fn nat_nexus_scope_deregister_tool_conditional_execution_guardrail(
+fn nemo_flow_scope_deregister_tool_conditional_execution_guardrail(
     scope_uuid: &str,
     name: &str,
 ) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_deregister_tool_conditional_execution_guardrail(&uuid, name)
+    core::nemo_flow_scope_deregister_tool_conditional_execution_guardrail(&uuid, name)
         .map_err(to_py_err)
 }
 
@@ -1171,23 +1164,23 @@ macro_rules! py_scope_local_intercept_tool_api {
 
 py_scope_local_intercept_tool_api!(
     /// Register a scope-local tool request intercept.
-    nat_nexus_scope_register_tool_request_intercept,
-    nat_nexus_scope_deregister_tool_request_intercept,
-    core::nat_nexus_scope_register_tool_request_intercept,
-    core::nat_nexus_scope_deregister_tool_request_intercept,
+    nemo_flow_scope_register_tool_request_intercept,
+    nemo_flow_scope_deregister_tool_request_intercept,
+    core::nemo_flow_scope_register_tool_request_intercept,
+    core::nemo_flow_scope_deregister_tool_request_intercept,
     py_callable::wrap_py_tool_request_intercept_fn
 );
 
 /// Register a scope-local tool execution intercept.
 #[pyfunction]
-fn nat_nexus_scope_register_tool_execution_intercept(
+fn nemo_flow_scope_register_tool_execution_intercept(
     scope_uuid: &str,
     name: &str,
     priority: i32,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_register_tool_execution_intercept(
+    core::nemo_flow_scope_register_tool_execution_intercept(
         &uuid,
         name,
         priority,
@@ -1198,12 +1191,12 @@ fn nat_nexus_scope_register_tool_execution_intercept(
 
 /// Remove a previously registered scope-local tool execution intercept.
 #[pyfunction]
-fn nat_nexus_scope_deregister_tool_execution_intercept(
+fn nemo_flow_scope_deregister_tool_execution_intercept(
     scope_uuid: &str,
     name: &str,
 ) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_deregister_tool_execution_intercept(&uuid, name).map_err(to_py_err)
+    core::nemo_flow_scope_deregister_tool_execution_intercept(&uuid, name).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1212,14 +1205,14 @@ fn nat_nexus_scope_deregister_tool_execution_intercept(
 
 /// Register a scope-local LLM sanitize-request guardrail.
 #[pyfunction]
-fn nat_nexus_scope_register_llm_sanitize_request_guardrail(
+fn nemo_flow_scope_register_llm_sanitize_request_guardrail(
     scope_uuid: &str,
     name: &str,
     priority: i32,
     guardrail: Py<PyAny>,
 ) -> PyResult<()> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_register_llm_sanitize_request_guardrail(
+    core::nemo_flow_scope_register_llm_sanitize_request_guardrail(
         &uuid,
         name,
         priority,
@@ -1230,24 +1223,24 @@ fn nat_nexus_scope_register_llm_sanitize_request_guardrail(
 
 /// Remove a previously registered scope-local LLM sanitize-request guardrail.
 #[pyfunction]
-fn nat_nexus_scope_deregister_llm_sanitize_request_guardrail(
+fn nemo_flow_scope_deregister_llm_sanitize_request_guardrail(
     scope_uuid: &str,
     name: &str,
 ) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_deregister_llm_sanitize_request_guardrail(&uuid, name).map_err(to_py_err)
+    core::nemo_flow_scope_deregister_llm_sanitize_request_guardrail(&uuid, name).map_err(to_py_err)
 }
 
 /// Register a scope-local LLM sanitize-response guardrail.
 #[pyfunction]
-fn nat_nexus_scope_register_llm_sanitize_response_guardrail(
+fn nemo_flow_scope_register_llm_sanitize_response_guardrail(
     scope_uuid: &str,
     name: &str,
     priority: i32,
     guardrail: Py<PyAny>,
 ) -> PyResult<()> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_register_llm_sanitize_response_guardrail(
+    core::nemo_flow_scope_register_llm_sanitize_response_guardrail(
         &uuid,
         name,
         priority,
@@ -1258,24 +1251,24 @@ fn nat_nexus_scope_register_llm_sanitize_response_guardrail(
 
 /// Remove a previously registered scope-local LLM sanitize-response guardrail.
 #[pyfunction]
-fn nat_nexus_scope_deregister_llm_sanitize_response_guardrail(
+fn nemo_flow_scope_deregister_llm_sanitize_response_guardrail(
     scope_uuid: &str,
     name: &str,
 ) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_deregister_llm_sanitize_response_guardrail(&uuid, name).map_err(to_py_err)
+    core::nemo_flow_scope_deregister_llm_sanitize_response_guardrail(&uuid, name).map_err(to_py_err)
 }
 
 /// Register a scope-local LLM conditional-execution guardrail.
 #[pyfunction]
-fn nat_nexus_scope_register_llm_conditional_execution_guardrail(
+fn nemo_flow_scope_register_llm_conditional_execution_guardrail(
     scope_uuid: &str,
     name: &str,
     priority: i32,
     guardrail: Py<PyAny>,
 ) -> PyResult<()> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_register_llm_conditional_execution_guardrail(
+    core::nemo_flow_scope_register_llm_conditional_execution_guardrail(
         &uuid,
         name,
         priority,
@@ -1286,12 +1279,12 @@ fn nat_nexus_scope_register_llm_conditional_execution_guardrail(
 
 /// Remove a previously registered scope-local LLM conditional-execution guardrail.
 #[pyfunction]
-fn nat_nexus_scope_deregister_llm_conditional_execution_guardrail(
+fn nemo_flow_scope_deregister_llm_conditional_execution_guardrail(
     scope_uuid: &str,
     name: &str,
 ) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_deregister_llm_conditional_execution_guardrail(&uuid, name)
+    core::nemo_flow_scope_deregister_llm_conditional_execution_guardrail(&uuid, name)
         .map_err(to_py_err)
 }
 
@@ -1301,7 +1294,7 @@ fn nat_nexus_scope_deregister_llm_conditional_execution_guardrail(
 
 /// Register a scope-local LLM request intercept.
 #[pyfunction]
-fn nat_nexus_scope_register_llm_request_intercept(
+fn nemo_flow_scope_register_llm_request_intercept(
     scope_uuid: &str,
     name: &str,
     priority: i32,
@@ -1309,7 +1302,7 @@ fn nat_nexus_scope_register_llm_request_intercept(
     callable: Py<PyAny>,
 ) -> PyResult<()> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_register_llm_request_intercept(
+    core::nemo_flow_scope_register_llm_request_intercept(
         &uuid,
         name,
         priority,
@@ -1321,24 +1314,24 @@ fn nat_nexus_scope_register_llm_request_intercept(
 
 /// Remove a previously registered scope-local LLM request intercept.
 #[pyfunction]
-fn nat_nexus_scope_deregister_llm_request_intercept(
+fn nemo_flow_scope_deregister_llm_request_intercept(
     scope_uuid: &str,
     name: &str,
 ) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_deregister_llm_request_intercept(&uuid, name).map_err(to_py_err)
+    core::nemo_flow_scope_deregister_llm_request_intercept(&uuid, name).map_err(to_py_err)
 }
 
 /// Register a scope-local LLM execution intercept.
 #[pyfunction]
-fn nat_nexus_scope_register_llm_execution_intercept(
+fn nemo_flow_scope_register_llm_execution_intercept(
     scope_uuid: &str,
     name: &str,
     priority: i32,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_register_llm_execution_intercept(
+    core::nemo_flow_scope_register_llm_execution_intercept(
         &uuid,
         name,
         priority,
@@ -1349,24 +1342,24 @@ fn nat_nexus_scope_register_llm_execution_intercept(
 
 /// Remove a previously registered scope-local LLM execution intercept.
 #[pyfunction]
-fn nat_nexus_scope_deregister_llm_execution_intercept(
+fn nemo_flow_scope_deregister_llm_execution_intercept(
     scope_uuid: &str,
     name: &str,
 ) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_deregister_llm_execution_intercept(&uuid, name).map_err(to_py_err)
+    core::nemo_flow_scope_deregister_llm_execution_intercept(&uuid, name).map_err(to_py_err)
 }
 
 /// Register a scope-local LLM stream-execution intercept.
 #[pyfunction]
-fn nat_nexus_scope_register_llm_stream_execution_intercept(
+fn nemo_flow_scope_register_llm_stream_execution_intercept(
     scope_uuid: &str,
     name: &str,
     priority: i32,
     callable: Py<PyAny>,
 ) -> PyResult<()> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_register_llm_stream_execution_intercept(
+    core::nemo_flow_scope_register_llm_stream_execution_intercept(
         &uuid,
         name,
         priority,
@@ -1377,12 +1370,12 @@ fn nat_nexus_scope_register_llm_stream_execution_intercept(
 
 /// Remove a previously registered scope-local LLM stream-execution intercept.
 #[pyfunction]
-fn nat_nexus_scope_deregister_llm_stream_execution_intercept(
+fn nemo_flow_scope_deregister_llm_stream_execution_intercept(
     scope_uuid: &str,
     name: &str,
 ) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_deregister_llm_stream_execution_intercept(&uuid, name).map_err(to_py_err)
+    core::nemo_flow_scope_deregister_llm_stream_execution_intercept(&uuid, name).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1391,13 +1384,13 @@ fn nat_nexus_scope_deregister_llm_stream_execution_intercept(
 
 /// Register a scope-local event subscriber.
 #[pyfunction]
-fn nat_nexus_scope_register_subscriber(
+fn nemo_flow_scope_register_subscriber(
     scope_uuid: &str,
     name: &str,
     callback: Py<PyAny>,
 ) -> PyResult<()> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_register_subscriber(
+    core::nemo_flow_scope_register_subscriber(
         &uuid,
         name,
         py_callable::wrap_py_event_subscriber(callback),
@@ -1407,9 +1400,9 @@ fn nat_nexus_scope_register_subscriber(
 
 /// Remove a previously registered scope-local event subscriber.
 #[pyfunction]
-fn nat_nexus_scope_deregister_subscriber(scope_uuid: &str, name: &str) -> PyResult<bool> {
+fn nemo_flow_scope_deregister_subscriber(scope_uuid: &str, name: &str) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
-    core::nat_nexus_scope_deregister_subscriber(&uuid, name).map_err(to_py_err)
+    core::nemo_flow_scope_deregister_subscriber(&uuid, name).map_err(to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1425,227 +1418,227 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_scope_stack_active, m)?)?;
 
     // Scope/handle ops
-    m.add_function(wrap_pyfunction!(nat_nexus_get_handle, m)?)?;
-    m.add_function(wrap_pyfunction!(nat_nexus_push_scope, m)?)?;
-    m.add_function(wrap_pyfunction!(nat_nexus_pop_scope, m)?)?;
-    m.add_function(wrap_pyfunction!(nat_nexus_event, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_get_handle, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_push_scope, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_pop_scope, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_event, m)?)?;
 
     // Tool lifecycle
-    m.add_function(wrap_pyfunction!(nat_nexus_tool_call, m)?)?;
-    m.add_function(wrap_pyfunction!(nat_nexus_tool_call_end, m)?)?;
-    m.add_function(wrap_pyfunction!(nat_nexus_tool_call_execute, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_tool_call, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_tool_call_end, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_tool_call_execute, m)?)?;
 
     // LLM lifecycle
-    m.add_function(wrap_pyfunction!(nat_nexus_llm_call, m)?)?;
-    m.add_function(wrap_pyfunction!(nat_nexus_llm_call_end, m)?)?;
-    m.add_function(wrap_pyfunction!(nat_nexus_llm_call_execute, m)?)?;
-    m.add_function(wrap_pyfunction!(nat_nexus_llm_stream_call_execute, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_llm_call, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_llm_call_end, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_llm_call_execute, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_llm_stream_call_execute, m)?)?;
 
     // Tool guardrails
     m.add_function(wrap_pyfunction!(
-        nat_nexus_register_tool_sanitize_request_guardrail,
+        nemo_flow_register_tool_sanitize_request_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_deregister_tool_sanitize_request_guardrail,
+        nemo_flow_deregister_tool_sanitize_request_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_register_tool_sanitize_response_guardrail,
+        nemo_flow_register_tool_sanitize_response_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_deregister_tool_sanitize_response_guardrail,
+        nemo_flow_deregister_tool_sanitize_response_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_register_tool_conditional_execution_guardrail,
+        nemo_flow_register_tool_conditional_execution_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_deregister_tool_conditional_execution_guardrail,
+        nemo_flow_deregister_tool_conditional_execution_guardrail,
         m
     )?)?;
 
     // Tool intercepts
     m.add_function(wrap_pyfunction!(
-        nat_nexus_register_tool_request_intercept,
+        nemo_flow_register_tool_request_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_deregister_tool_request_intercept,
+        nemo_flow_deregister_tool_request_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_register_tool_execution_intercept,
+        nemo_flow_register_tool_execution_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_deregister_tool_execution_intercept,
+        nemo_flow_deregister_tool_execution_intercept,
         m
     )?)?;
 
     // LLM guardrails
     m.add_function(wrap_pyfunction!(
-        nat_nexus_register_llm_sanitize_request_guardrail,
+        nemo_flow_register_llm_sanitize_request_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_deregister_llm_sanitize_request_guardrail,
+        nemo_flow_deregister_llm_sanitize_request_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_register_llm_sanitize_response_guardrail,
+        nemo_flow_register_llm_sanitize_response_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_deregister_llm_sanitize_response_guardrail,
+        nemo_flow_deregister_llm_sanitize_response_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_register_llm_conditional_execution_guardrail,
+        nemo_flow_register_llm_conditional_execution_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_deregister_llm_conditional_execution_guardrail,
+        nemo_flow_deregister_llm_conditional_execution_guardrail,
         m
     )?)?;
 
     // LLM intercepts
     m.add_function(wrap_pyfunction!(
-        nat_nexus_register_llm_request_intercept,
+        nemo_flow_register_llm_request_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_deregister_llm_request_intercept,
+        nemo_flow_deregister_llm_request_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_register_llm_execution_intercept,
+        nemo_flow_register_llm_execution_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_deregister_llm_execution_intercept,
+        nemo_flow_deregister_llm_execution_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_register_llm_stream_execution_intercept,
+        nemo_flow_register_llm_stream_execution_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_deregister_llm_stream_execution_intercept,
+        nemo_flow_deregister_llm_stream_execution_intercept,
         m
     )?)?;
 
     // Subscribers
-    m.add_function(wrap_pyfunction!(nat_nexus_register_subscriber, m)?)?;
-    m.add_function(wrap_pyfunction!(nat_nexus_deregister_subscriber, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_register_subscriber, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_deregister_subscriber, m)?)?;
 
     // Scope-local tool guardrails
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_register_tool_sanitize_request_guardrail,
+        nemo_flow_scope_register_tool_sanitize_request_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_deregister_tool_sanitize_request_guardrail,
+        nemo_flow_scope_deregister_tool_sanitize_request_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_register_tool_sanitize_response_guardrail,
+        nemo_flow_scope_register_tool_sanitize_response_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_deregister_tool_sanitize_response_guardrail,
+        nemo_flow_scope_deregister_tool_sanitize_response_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_register_tool_conditional_execution_guardrail,
+        nemo_flow_scope_register_tool_conditional_execution_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_deregister_tool_conditional_execution_guardrail,
+        nemo_flow_scope_deregister_tool_conditional_execution_guardrail,
         m
     )?)?;
 
     // Scope-local tool intercepts
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_register_tool_request_intercept,
+        nemo_flow_scope_register_tool_request_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_deregister_tool_request_intercept,
+        nemo_flow_scope_deregister_tool_request_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_register_tool_execution_intercept,
+        nemo_flow_scope_register_tool_execution_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_deregister_tool_execution_intercept,
+        nemo_flow_scope_deregister_tool_execution_intercept,
         m
     )?)?;
 
     // Scope-local LLM guardrails
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_register_llm_sanitize_request_guardrail,
+        nemo_flow_scope_register_llm_sanitize_request_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_deregister_llm_sanitize_request_guardrail,
+        nemo_flow_scope_deregister_llm_sanitize_request_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_register_llm_sanitize_response_guardrail,
+        nemo_flow_scope_register_llm_sanitize_response_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_deregister_llm_sanitize_response_guardrail,
+        nemo_flow_scope_deregister_llm_sanitize_response_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_register_llm_conditional_execution_guardrail,
+        nemo_flow_scope_register_llm_conditional_execution_guardrail,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_deregister_llm_conditional_execution_guardrail,
+        nemo_flow_scope_deregister_llm_conditional_execution_guardrail,
         m
     )?)?;
 
     // Scope-local LLM intercepts
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_register_llm_request_intercept,
+        nemo_flow_scope_register_llm_request_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_deregister_llm_request_intercept,
+        nemo_flow_scope_deregister_llm_request_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_register_llm_execution_intercept,
+        nemo_flow_scope_register_llm_execution_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_deregister_llm_execution_intercept,
+        nemo_flow_scope_deregister_llm_execution_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_register_llm_stream_execution_intercept,
+        nemo_flow_scope_register_llm_stream_execution_intercept,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        nat_nexus_scope_deregister_llm_stream_execution_intercept,
+        nemo_flow_scope_deregister_llm_stream_execution_intercept,
         m
     )?)?;
 
     // Scope-local subscribers
-    m.add_function(wrap_pyfunction!(nat_nexus_scope_register_subscriber, m)?)?;
-    m.add_function(wrap_pyfunction!(nat_nexus_scope_deregister_subscriber, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_scope_register_subscriber, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_scope_deregister_subscriber, m)?)?;
 
     // Standalone middleware chains
-    m.add_function(wrap_pyfunction!(nat_nexus_tool_request_intercepts, m)?)?;
-    m.add_function(wrap_pyfunction!(nat_nexus_tool_conditional_execution, m)?)?;
-    m.add_function(wrap_pyfunction!(nat_nexus_llm_request_intercepts, m)?)?;
-    m.add_function(wrap_pyfunction!(nat_nexus_llm_conditional_execution, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_tool_request_intercepts, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_tool_conditional_execution, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_llm_request_intercepts, m)?)?;
+    m.add_function(wrap_pyfunction!(nemo_flow_llm_conditional_execution, m)?)?;
 
     Ok(())
 }

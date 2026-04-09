@@ -18,7 +18,7 @@ use serde_json::Value as Json;
 #[napi]
 pub struct LlmStream {
     pub(crate) receiver:
-        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nvidia_nat_nexus_core::Result<Json>>>,
+        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nemo_flow_core::Result<Json>>>,
 }
 
 #[napi]
@@ -30,7 +30,8 @@ impl LlmStream {
     #[napi]
     pub async fn next(&self) -> Result<Option<Json>> {
         let mut guard = self.receiver.lock().await;
-        match guard.recv().await {
+        let next_item = guard.recv().await;
+        match next_item {
             None => Ok(None),
             Some(Ok(value)) => Ok(Some(value)),
             Some(Err(e)) => Err(napi::Error::from_reason(e.to_string())),

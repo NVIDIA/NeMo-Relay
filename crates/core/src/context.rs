@@ -11,7 +11,7 @@
 //!   an immovable root scope.
 //! - **Task-local and thread-local scope storage** — [`TASK_SCOPE_STACK`] for async
 //!   contexts, with a thread-local fallback for synchronous code.
-//! - **[`NatNexusContextState`]** — the central state object holding all registered
+//! - **[`NemoFlowContextState`]** — the central state object holding all registered
 //!   middleware and subscribers, plus methods for chain execution and handle lifecycle.
 //! - **[`global_context`]** — returns the process-wide singleton context, lazily
 //!   initialized on first access.
@@ -27,8 +27,8 @@ use tokio_stream::Stream;
 use uuid::Uuid;
 
 use crate::codec::{AnnotatedLLMRequest, AnnotatedLLMResponse};
-use crate::error::{NexusError, Result};
-use crate::json::{merge_json, Json};
+use crate::error::{FlowError, Result};
+use crate::json::{Json, merge_json};
 use crate::registry::SortedRegistry;
 use crate::types::*;
 
@@ -199,7 +199,7 @@ impl ScopeStack {
 
     /// Removes the current top scope by UUID and returns it.
     ///
-    /// Returns [`NexusError::InvalidArgument`] if the UUID exists in the stack
+    /// Returns [`FlowError::InvalidArgument`] if the UUID exists in the stack
     /// but does not belong to the current top scope, or if it refers to the
     /// immovable root scope.
     ///
@@ -212,7 +212,7 @@ impl ScopeStack {
 
         if top.uuid == *uuid {
             if self.stack.len() == 1 {
-                return Err(NexusError::InvalidArgument(
+                return Err(FlowError::InvalidArgument(
                     "root scope cannot be removed".into(),
                 ));
             }
@@ -224,12 +224,12 @@ impl ScopeStack {
         }
 
         if self.stack.iter().any(|h| h.uuid == *uuid) {
-            return Err(NexusError::InvalidArgument(
+            return Err(FlowError::InvalidArgument(
                 "scope handle is not at the top of the stack".into(),
             ));
         }
 
-        Err(NexusError::NotFound("scope handle not found".into()))
+        Err(FlowError::NotFound("scope handle not found".into()))
     }
 
     /// Returns a mutable reference to the scope-local registries for the given
@@ -384,7 +384,7 @@ pub fn scope_stack_active() -> bool {
 /// [`scope_stack_active`] returns `false`).
 pub fn propagate_scope_to_thread() -> Result<ScopeStackHandle> {
     if !scope_stack_active() {
-        return Err(NexusError::Internal(
+        return Err(FlowError::Internal(
             "no active scope stack in current context; \
              call create_scope_stack() and set_thread_scope_stack() first"
                 .into(),
@@ -414,8 +414,8 @@ pub fn task_scope_push(handle: ScopeHandle) {
 
 /// Removes a scope handle by UUID from the current execution context's scope stack.
 ///
-/// Returns the removed handle on success, [`NexusError::NotFound`] if the UUID
-/// is not in the stack, or [`NexusError::InvalidArgument`] if it is not the
+/// Returns the removed handle on success, [`FlowError::NotFound`] if the UUID
+/// is not in the stack, or [`FlowError::InvalidArgument`] if it is not the
 /// current top scope or refers to the immovable root scope.
 pub fn task_scope_remove(uuid: &Uuid) -> Result<ScopeHandle> {
     let stack = current_scope_stack();
@@ -428,7 +428,7 @@ pub fn task_scope_remove(uuid: &Uuid) -> Result<ScopeHandle> {
 // ---------------------------------------------------------------------------
 
 /// Per-scope middleware registries. Mirrors the 11 sorted registries plus
-/// event subscribers from [`NatNexusContextState`], but scoped to a single
+/// event subscribers from [`NemoFlowContextState`], but scoped to a single
 /// scope in the stack. Created lazily on first scope-local registration and
 /// dropped automatically when the scope is popped.
 pub struct ScopeLocalRegistries {
@@ -548,8 +548,8 @@ pub fn merge_execution_intercept_callables<F: Clone>(
 /// lifecycle events.
 ///
 /// In production use, a single instance is held behind the [`global_context`]
-/// singleton (`Arc<RwLock<NatNexusContextState>>`).
-pub struct NatNexusContextState {
+/// singleton (`Arc<RwLock<NemoFlowContextState>>`).
+pub struct NemoFlowContextState {
     /// Registry of tool request sanitize guardrails.
     pub tool_sanitize_request_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
     /// Registry of tool response sanitize guardrails.
@@ -585,7 +585,7 @@ pub struct NatNexusContextState {
     pub extensions: HashMap<String, Box<dyn Any + Send + Sync>>,
 }
 
-impl NatNexusContextState {
+impl NemoFlowContextState {
     /// Creates a new context state with empty registries and no subscribers.
     pub fn new() -> Self {
         Self {
@@ -1111,7 +1111,7 @@ impl NatNexusContextState {
     }
 }
 
-impl Default for NatNexusContextState {
+impl Default for NemoFlowContextState {
     fn default() -> Self {
         Self::new()
     }
@@ -1121,16 +1121,16 @@ impl Default for NatNexusContextState {
 // Global singleton
 // ---------------------------------------------------------------------------
 
-static GLOBAL_CONTEXT: std::sync::OnceLock<Arc<RwLock<NatNexusContextState>>> =
+static GLOBAL_CONTEXT: std::sync::OnceLock<Arc<RwLock<NemoFlowContextState>>> =
     std::sync::OnceLock::new();
 
-/// Returns the process-wide singleton [`NatNexusContextState`], lazily initialized.
+/// Returns the process-wide singleton [`NemoFlowContextState`], lazily initialized.
 ///
 /// The returned `Arc<RwLock<...>>` can be cloned cheaply and shared across threads.
 /// All public API functions in [`crate::api`] use this internally.
-pub fn global_context() -> Arc<RwLock<NatNexusContextState>> {
+pub fn global_context() -> Arc<RwLock<NemoFlowContextState>> {
     GLOBAL_CONTEXT
-        .get_or_init(|| Arc::new(RwLock::new(NatNexusContextState::new())))
+        .get_or_init(|| Arc::new(RwLock::new(NemoFlowContextState::new())))
         .clone()
 }
 
@@ -1145,7 +1145,7 @@ mod tests {
         // Root scope is always present
         assert_eq!(task_scope_top().name, "root");
 
-        let ctx = NatNexusContextState::new();
+        let ctx = NemoFlowContextState::new();
         let handle = ctx.create_scope_handle(
             "test",
             None,
@@ -1169,7 +1169,7 @@ mod tests {
     fn test_event_subscriber() {
         use std::sync::atomic::{AtomicU32, Ordering};
 
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         let count = Arc::new(AtomicU32::new(0));
         let count_clone = count.clone();
 
@@ -1190,11 +1190,11 @@ mod tests {
         );
         let start = ctx.build_scope_start_event(&handle);
         let subscribers = ctx.collect_event_subscribers(&[]);
-        NatNexusContextState::emit_event(&start, &subscribers);
+        NemoFlowContextState::emit_event(&start, &subscribers);
         assert_eq!(count.load(Ordering::SeqCst), 1);
 
         let end = ctx.end_scope_handle(&handle);
-        NatNexusContextState::emit_event(&end, &subscribers);
+        NemoFlowContextState::emit_event(&end, &subscribers);
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 
@@ -1254,7 +1254,7 @@ mod tests {
         let mut stack = ScopeStack::new();
         let root_uuid = stack.top().uuid;
         let err = stack.remove(&root_uuid).unwrap_err();
-        assert!(matches!(err, NexusError::InvalidArgument(_)));
+        assert!(matches!(err, FlowError::InvalidArgument(_)));
         assert_eq!(stack.top().name, "root");
     }
 
@@ -1263,7 +1263,7 @@ mod tests {
         let mut stack = ScopeStack::new();
         let random_uuid = Uuid::new_v4();
         let err = stack.remove(&random_uuid).unwrap_err();
-        assert!(matches!(err, NexusError::NotFound(_)));
+        assert!(matches!(err, FlowError::NotFound(_)));
     }
 
     #[test]
@@ -1335,7 +1335,7 @@ mod tests {
         stack.push(h1);
         stack.push(h2);
         let err = stack.remove(&u1).unwrap_err();
-        assert!(matches!(err, NexusError::InvalidArgument(_)));
+        assert!(matches!(err, FlowError::InvalidArgument(_)));
         assert_eq!(stack.top().name, "b");
     }
 
@@ -1364,22 +1364,22 @@ mod tests {
         let result = task_scope_remove(&Uuid::new_v4());
         assert!(result.is_err());
         match result.unwrap_err() {
-            NexusError::NotFound(msg) => assert!(msg.contains("not found")),
+            FlowError::NotFound(msg) => assert!(msg.contains("not found")),
             e => panic!("expected NotFound, got {e:?}"),
         }
     }
 
-    // -- NatNexusContextState tests --
+    // -- NemoFlowContextState tests --
 
     #[test]
     fn test_context_state_new_empty() {
-        let ctx = NatNexusContextState::new();
+        let ctx = NemoFlowContextState::new();
         assert!(ctx.event_subscribers.is_empty());
     }
 
     #[test]
     fn test_context_state_default() {
-        let ctx = NatNexusContextState::default();
+        let ctx = NemoFlowContextState::default();
         assert!(ctx.event_subscribers.is_empty());
     }
 
@@ -1389,7 +1389,7 @@ mod tests {
     fn test_emit_event_multiple_subscribers() {
         use std::sync::atomic::{AtomicU32, Ordering};
 
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         let c1 = Arc::new(AtomicU32::new(0));
         let c2 = Arc::new(AtomicU32::new(0));
         let c1c = c1.clone();
@@ -1410,7 +1410,7 @@ mod tests {
 
         let event = Event::mark(None, Uuid::new_v4(), "", None, None);
         let subscribers = ctx.collect_event_subscribers(&[]);
-        NatNexusContextState::emit_event(&event, &subscribers);
+        NemoFlowContextState::emit_event(&event, &subscribers);
 
         assert_eq!(c1.load(Ordering::SeqCst), 1);
         assert_eq!(c2.load(Ordering::SeqCst), 1);
@@ -1420,7 +1420,7 @@ mod tests {
     fn test_emit_event_no_subscribers() {
         // Should not panic with no subscribers
         let event = Event::mark(None, Uuid::new_v4(), "", None, None);
-        NatNexusContextState::emit_event(&event, &[]);
+        NemoFlowContextState::emit_event(&event, &[]);
     }
 
     // -- create_event tests --
@@ -1429,7 +1429,7 @@ mod tests {
     fn test_create_event_emits_mark() {
         use std::sync::Mutex;
 
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let events_clone = events.clone();
 
@@ -1447,7 +1447,7 @@ mod tests {
             None,
         );
         let subscribers = ctx.collect_event_subscribers(&[]);
-        NatNexusContextState::emit_event(&event, &subscribers);
+        NemoFlowContextState::emit_event(&event, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1461,7 +1461,7 @@ mod tests {
     fn test_create_scope_handle_emits_start() {
         use std::sync::Mutex;
 
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1481,7 +1481,7 @@ mod tests {
         );
         let event = ctx.build_scope_start_event(&handle);
         let subscribers = ctx.collect_event_subscribers(&[]);
-        NatNexusContextState::emit_event(&event, &subscribers);
+        NemoFlowContextState::emit_event(&event, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1498,7 +1498,7 @@ mod tests {
     fn test_end_scope_handle_emits_end() {
         use std::sync::Mutex;
 
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1518,9 +1518,9 @@ mod tests {
         );
         let subscribers = ctx.collect_event_subscribers(&[]);
         let start = ctx.build_scope_start_event(&handle);
-        NatNexusContextState::emit_event(&start, &subscribers);
+        NemoFlowContextState::emit_event(&start, &subscribers);
         let end = ctx.end_scope_handle(&handle);
-        NatNexusContextState::emit_event(&end, &subscribers);
+        NemoFlowContextState::emit_event(&end, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -1533,7 +1533,7 @@ mod tests {
     fn test_create_tool_handle_emits_start() {
         use std::sync::Mutex;
 
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1553,7 +1553,7 @@ mod tests {
         );
         let subscribers = ctx.collect_event_subscribers(&[]);
         let event = ctx.build_tool_start_event(&handle, None);
-        NatNexusContextState::emit_event(&event, &subscribers);
+        NemoFlowContextState::emit_event(&event, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1570,7 +1570,7 @@ mod tests {
     fn test_end_tool_handle_merges_data() {
         use std::sync::Mutex;
 
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1590,9 +1590,9 @@ mod tests {
         );
         let subscribers = ctx.collect_event_subscribers(&[]);
         let start = ctx.build_tool_start_event(&handle, None);
-        NatNexusContextState::emit_event(&start, &subscribers);
+        NemoFlowContextState::emit_event(&start, &subscribers);
         let end = ctx.end_tool_handle(&handle, Some(serde_json::json!({"b": 2})), None, None);
-        NatNexusContextState::emit_event(&end, &subscribers);
+        NemoFlowContextState::emit_event(&end, &subscribers);
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];
@@ -1607,7 +1607,7 @@ mod tests {
     fn test_create_llm_handle_emits_start() {
         use std::sync::Mutex;
 
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1620,7 +1620,7 @@ mod tests {
         let handle = ctx.create_llm_handle("llm", None, LLMAttributes::STREAMING, None, None, None);
         let subscribers = ctx.collect_event_subscribers(&[]);
         let event = ctx.build_llm_start_event(&handle, None, None);
-        NatNexusContextState::emit_event(&event, &subscribers);
+        NemoFlowContextState::emit_event(&event, &subscribers);
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1635,7 +1635,7 @@ mod tests {
     fn test_end_llm_handle_merges_metadata() {
         use std::sync::Mutex;
 
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
         ctx.event_subscribers.insert(
@@ -1655,7 +1655,7 @@ mod tests {
         );
         let subscribers = ctx.collect_event_subscribers(&[]);
         let start = ctx.build_llm_start_event(&handle, None, None);
-        NatNexusContextState::emit_event(&start, &subscribers);
+        NemoFlowContextState::emit_event(&start, &subscribers);
         let end = ctx.end_llm_handle(
             &handle,
             None,
@@ -1663,7 +1663,7 @@ mod tests {
             None,
             None,
         );
-        NatNexusContextState::emit_event(&end, &subscribers);
+        NemoFlowContextState::emit_event(&end, &subscribers);
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];
@@ -1676,7 +1676,7 @@ mod tests {
 
     #[test]
     fn test_tool_sanitize_request_chain() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.tool_sanitize_request_guardrails
             .register(
                 "g1".into(),
@@ -1700,7 +1700,7 @@ mod tests {
 
     #[test]
     fn test_tool_sanitize_request_chain_multiple_priority_order() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.tool_sanitize_request_guardrails
             .register(
                 "g2".into(),
@@ -1737,7 +1737,7 @@ mod tests {
 
     #[test]
     fn test_tool_sanitize_response_chain() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.tool_sanitize_response_guardrails
             .register(
                 "g1".into(),
@@ -1762,7 +1762,7 @@ mod tests {
 
     #[test]
     fn test_tool_conditional_execution_chain_passes() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.tool_conditional_execution_guardrails
             .register(
                 "g1".into(),
@@ -1779,7 +1779,7 @@ mod tests {
 
     #[test]
     fn test_tool_conditional_execution_chain_rejects() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.tool_conditional_execution_guardrails
             .register(
                 "blocker".into(),
@@ -1796,7 +1796,7 @@ mod tests {
 
     #[test]
     fn test_tool_conditional_first_rejection_wins() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.tool_conditional_execution_guardrails
             .register(
                 "g1".into(),
@@ -1822,7 +1822,7 @@ mod tests {
 
     #[test]
     fn test_tool_request_intercepts_chain() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.tool_request_intercepts
             .register(
                 "i1".into(),
@@ -1848,7 +1848,7 @@ mod tests {
 
     #[test]
     fn test_tool_request_intercepts_chain_break() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.tool_request_intercepts
             .register(
                 "i1".into(),
@@ -1889,7 +1889,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_no_intercepts() {
-        let ctx = NatNexusContextState::new();
+        let ctx = NemoFlowContextState::new();
         let default_fn: ToolExecutionNextFn =
             Arc::new(|_args| Box::pin(async { Ok(serde_json::json!({"default": true})) }));
         let chain = ctx.tool_build_execution_chain("test_tool", default_fn, &[]);
@@ -1899,7 +1899,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_passthrough() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         // An intercept that simply passes through to next (equivalent to old conditional=false)
         ctx.tool_execution_intercepts
             .register(
@@ -1925,7 +1925,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_short_circuit() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.tool_execution_intercepts
             .register(
                 "ei1".into(),
@@ -1950,7 +1950,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_calls_next() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.tool_execution_intercepts
             .register(
                 "ei1".into(),
@@ -1983,7 +1983,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_build_execution_chain_multiple_intercepts() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         // Lower priority = outermost wrapper
         ctx.tool_execution_intercepts
             .register(
@@ -2041,7 +2041,7 @@ mod tests {
 
     #[test]
     fn test_llm_sanitize_request_chain() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.llm_sanitize_request_guardrails
             .register(
                 "g1".into(),
@@ -2067,7 +2067,7 @@ mod tests {
 
     #[test]
     fn test_llm_sanitize_response_chain() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.llm_sanitize_response_guardrails
             .register(
                 "g1".into(),
@@ -2089,7 +2089,7 @@ mod tests {
 
     #[test]
     fn test_llm_conditional_execution_chain_passes() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.llm_conditional_execution_guardrails
             .register(
                 "g1".into(),
@@ -2104,15 +2104,16 @@ mod tests {
             headers: serde_json::Map::new(),
             content: serde_json::json!({}),
         };
-        assert!(ctx
-            .llm_conditional_execution_chain(&req, &[])
-            .unwrap()
-            .is_none());
+        assert!(
+            ctx.llm_conditional_execution_chain(&req, &[])
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn test_llm_conditional_execution_chain_rejects() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.llm_conditional_execution_guardrails
             .register(
                 "blocker".into(),
@@ -2135,7 +2136,7 @@ mod tests {
 
     #[test]
     fn test_llm_request_intercepts_chain() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.llm_request_intercepts
             .register(
                 "i1".into(),
@@ -2164,7 +2165,7 @@ mod tests {
 
     #[test]
     fn test_llm_request_intercepts_break_chain() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.llm_request_intercepts
             .register(
                 "i1".into(),
@@ -2207,7 +2208,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_llm_build_execution_chain_no_intercepts() {
-        let ctx = NatNexusContextState::new();
+        let ctx = NemoFlowContextState::new();
         let request = LLMRequest {
             headers: serde_json::Map::new(),
             content: serde_json::json!({"messages": []}),
@@ -2222,7 +2223,7 @@ mod tests {
     #[tokio::test]
     async fn test_llm_stream_build_execution_chain_no_intercepts() {
         use futures::StreamExt;
-        let ctx = NatNexusContextState::new();
+        let ctx = NemoFlowContextState::new();
         let request = LLMRequest {
             headers: serde_json::Map::new(),
             content: serde_json::json!({"messages": []}),
@@ -2252,7 +2253,7 @@ mod tests {
     fn test_run_sanitize_chain_empty() {
         let reg: SortedRegistry<GuardrailEntry<Box<dyn Fn(i32) -> i32>>> =
             SortedRegistry::new(|e| e.priority);
-        let result = NatNexusContextState::run_sanitize_chain(&reg, 42);
+        let result = NemoFlowContextState::run_sanitize_chain(&reg, 42);
         assert_eq!(result, 42);
     }
 
@@ -2276,7 +2277,7 @@ mod tests {
             },
         )
         .unwrap();
-        let result = NatNexusContextState::run_sanitize_chain(&reg, 5);
+        let result = NemoFlowContextState::run_sanitize_chain(&reg, 5);
         // (5 + 1) * 2 = 12
         assert_eq!(result, 12);
     }
@@ -2301,7 +2302,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(NatNexusContextState::run_conditional_chain(&reg, &42).is_none());
+        assert!(NemoFlowContextState::run_conditional_chain(&reg, &42).is_none());
     }
 
     #[test]
@@ -2325,7 +2326,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            NatNexusContextState::run_conditional_chain(&reg, &42),
+            NemoFlowContextState::run_conditional_chain(&reg, &42),
             Some("err".into())
         );
     }
@@ -2352,7 +2353,7 @@ mod tests {
             },
         )
         .unwrap();
-        let result = NatNexusContextState::run_intercept_chain(&reg, 0);
+        let result = NemoFlowContextState::run_intercept_chain(&reg, 0);
         assert_eq!(result, 110);
     }
 
@@ -2378,7 +2379,7 @@ mod tests {
             },
         )
         .unwrap();
-        let result = NatNexusContextState::run_intercept_chain(&reg, 0);
+        let result = NemoFlowContextState::run_intercept_chain(&reg, 0);
         // Only 'a' runs, 'b' is skipped
         assert_eq!(result, 10);
     }
@@ -2387,7 +2388,7 @@ mod tests {
     fn test_run_intercept_chain_empty() {
         let reg: SortedRegistry<Intercept<Box<dyn Fn(i32) -> i32>>> =
             SortedRegistry::new(|e| e.priority);
-        let result = NatNexusContextState::run_intercept_chain(&reg, 42);
+        let result = NemoFlowContextState::run_intercept_chain(&reg, 42);
         assert_eq!(result, 42);
     }
 
@@ -2395,7 +2396,7 @@ mod tests {
 
     #[test]
     fn test_extension_set_and_get() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.set_extension("greeting", "hello".to_string());
         let val = ctx.get_extension::<String>("greeting");
         assert_eq!(val, Some(&"hello".to_string()));
@@ -2403,7 +2404,7 @@ mod tests {
 
     #[test]
     fn test_extension_type_mismatch_returns_none() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.set_extension("greeting", "hello".to_string());
         // Try to retrieve as wrong type — should return None, not panic
         let val = ctx.get_extension::<u32>("greeting");
@@ -2417,7 +2418,7 @@ mod tests {
             count: u32,
         }
 
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.set_extension("counter", Counter { count: 0 });
 
         // Mutate in-place via get_extension_mut
@@ -2431,7 +2432,7 @@ mod tests {
 
     #[test]
     fn test_extension_remove() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.set_extension("temp", 42u64);
 
         // First remove returns true (key existed)
@@ -2444,7 +2445,7 @@ mod tests {
 
     #[test]
     fn test_extension_overwrite() {
-        let mut ctx = NatNexusContextState::new();
+        let mut ctx = NemoFlowContextState::new();
         ctx.set_extension("version", 1u32);
         ctx.set_extension("version", 2u32);
         assert_eq!(ctx.get_extension::<u32>("version"), Some(&2u32));
@@ -2452,7 +2453,7 @@ mod tests {
 
     #[test]
     fn test_extension_missing_key() {
-        let ctx = NatNexusContextState::new();
+        let ctx = NemoFlowContextState::new();
         let val = ctx.get_extension::<String>("nonexistent");
         assert!(val.is_none());
     }

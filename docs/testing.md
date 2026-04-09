@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Testing Guide
 
-Nexus maintains test coverage across the core runtime, all language bindings,
+NeMo Flow maintains test coverage across the core runtime, all language bindings,
 and the optimizer layer. Every binding mirrors the same major test domains so that
 behavioral parity is verified at each layer.
 
@@ -34,16 +34,16 @@ wasm-pack test --node crates/wasm
 cargo test --workspace
 
 # Core only
-cargo test -p nvidia-nat-nexus-core
+cargo test -p nemo-flow-core
 
 # Optimizer only (in-memory backend)
-cargo test -p nvidia-nat-nexus-optimizer
+cargo test -p nemo-flow-optimizer
 
 # Optimizer with Redis backend enabled
-cargo test -p nvidia-nat-nexus-optimizer --features redis-backend redis_tests
+cargo test -p nemo-flow-optimizer --features redis-backend redis_tests
 
 # WASM unit tests
-cargo test -p nat-nexus-wasm
+cargo test -p nemo-flow-wasm
 
 # WASM integration tests (wasm-bindgen-test)
 wasm-pack test --node crates/wasm
@@ -54,8 +54,8 @@ uv run pytest                    # run all Python tests
 uv run pytest -k test_typed      # run a single module
 
 # ── Go (requires FFI shared lib) ───────────────────────────
-cargo build --release -p nvidia-nat-nexus-ffi
-cd go/nat_nexus && \
+cargo build --release -p nemo-flow-ffi
+cd go/nemo_flow && \
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" \
 go test -race -v ./...
 cd -
@@ -68,11 +68,11 @@ cd -
 cargo test --workspace && uv run pytest
 
 # Optional Redis-backed optimizer validation
-cargo test -p nvidia-nat-nexus-optimizer --features redis-backend redis_tests
+cargo test -p nemo-flow-optimizer --features redis-backend redis_tests
 
 # ── Coverage artifacts ────────────────────────────────────
 # Python wrapper coverage
-uv run pytest --cov=nat_nexus --cov-report=xml:target/coverage/pytest_coverage_report.xml
+uv run pytest --cov=nemo_flow --cov-report=xml:target/coverage/pytest_coverage_report.xml
 
 # Node wrapper coverage
 cd crates/node && npm install && npm run coverage && cd -
@@ -81,9 +81,9 @@ cd crates/node && npm install && npm run coverage && cd -
 eval "$(cargo llvm-cov show-env --sh)"
 cargo llvm-cov clean --workspace
 cargo nextest run --workspace \
-  --exclude nvidia-nat-nexus-node \
-  --exclude nvidia-nat-nexus-python \
-  --exclude nat-nexus-wasm \
+  --exclude nemo-flow-node \
+  --exclude nemo-flow-python \
+  --exclude nemo-flow-wasm \
   --release --profile ci
 cargo llvm-cov report --release \
   --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/src/(coverage_tests|.*_tests)\.rs$)' \
@@ -94,13 +94,13 @@ cargo llvm-cov report --release \
 
 | Surface | Primary Command | Notes |
 |---------|-----------------|-------|
-| Core runtime | `cargo test -p nvidia-nat-nexus-core` | Shared middleware, scopes, events, and ATIF behavior |
+| Core runtime | `cargo test -p nemo-flow-core` | Shared middleware, scopes, events, and ATIF behavior |
 | Python binding | `uv run pytest` | Rebuild native extension if Rust-backed Python code changed |
-| Go binding | `go test -race -v ./...` | Run from `go/nat_nexus` after building the FFI shared library |
+| Go binding | `go test -race -v ./...` | Run from `go/nemo_flow` after building the FFI shared library |
 | Node binding | `cd crates/node && npm install && npm test` | Runs JS integration tests against the native addon |
 | WASM binding | `wasm-pack test --node crates/wasm` | Verifies the generated `wasm-bindgen` behavior path |
-| Optimizer crate | `cargo test -p nvidia-nat-nexus-optimizer` | Covers in-memory backend and end-to-end optimizer registration |
-| Optimizer crate with Redis | `cargo test -p nvidia-nat-nexus-optimizer --features redis-backend redis_tests` | Requires a local Redis instance at `redis://127.0.0.1/` |
+| Optimizer crate | `cargo test -p nemo-flow-optimizer` | Covers in-memory backend and end-to-end optimizer registration |
+| Optimizer crate with Redis | `cargo test -p nemo-flow-optimizer --features redis-backend redis_tests` | Requires a local Redis instance at `redis://127.0.0.1/` |
 
 ## Test Helpers & Utilities
 
@@ -115,13 +115,13 @@ cargo llvm-cov report --release \
 > serial execution:
 >
 > ```bash
-> cargo test -p nvidia-nat-nexus-core -- --test-threads=1
+> cargo test -p nemo-flow-core -- --test-threads=1
 > ```
 >
 > CI already serializes via `TEST_MUTEX`, but single-threaded mode eliminates
 > any residual timing sensitivity.
 
-- **`reset_global()`**: Resets `NatNexusContextState` to a clean default.
+- **`reset_global()`**: Resets `NemoFlowContextState` to a clean default.
 - **`make_llm_handle()`**: Creates an `LLMHandle` with defaults for stream tests.
 - **`make_stream()`**: Builds a `tokio_stream` from `Vec<Result<Json>>`.
 - **`make_collector_finalizer()`**: Returns a collector/finalizer pair backed by
@@ -190,7 +190,7 @@ The pipeline now uses five runtime test jobs plus one aggregate coverage job:
   as the primary GitLab coverage report, and `target/coverage/node-rust.xml`
   as an additional artifact for the Rust binding layer
 - `test:go`: `go_junit_report.xml` plus `target/coverage/go_coverage_report.xml`
-- `test:wasm`: native `cargo test -p nat-nexus-wasm --lib`, `wasm-pack`
+- `test:wasm`: native `cargo test -p nemo-flow-wasm --lib`, `wasm-pack`
   behavior tests, plus `target/coverage/wasm-rust.xml` and
   `target/coverage/wasm-js.xml`
   from a Node.js coverage harness over the generated WASM package
@@ -206,7 +206,7 @@ Python tests use `pytest-cov` for coverage measurement:
 
 ```bash
 uv run maturin develop
-uv run pytest --cov=nat_nexus --cov-report=term-missing --cov-report=xml:target/coverage/pytest_coverage_report.xml
+uv run pytest --cov=nemo_flow --cov-report=term-missing --cov-report=xml:target/coverage/pytest_coverage_report.xml
 ```
 
 > **Important:** If you changed Rust code that backs the Python extension,
@@ -226,9 +226,9 @@ cargo install cargo-llvm-cov
 eval "$(cargo llvm-cov show-env --sh)"
 cargo llvm-cov clean --workspace
 cargo nextest run --workspace \
-  --exclude nvidia-nat-nexus-node \
-  --exclude nvidia-nat-nexus-python \
-  --exclude nat-nexus-wasm \
+  --exclude nemo-flow-node \
+  --exclude nemo-flow-python \
+  --exclude nemo-flow-wasm \
   --release --profile ci
 cargo llvm-cov report --release \
   --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/src/(coverage_tests|.*_tests)\.rs$)' \
@@ -248,9 +248,9 @@ run those external test suites under the `cargo-llvm-cov` environment:
 # Node binding Rust coverage
 cargo llvm-cov clean --workspace
 source <(cargo llvm-cov show-env --sh)
-cargo test -p nvidia-nat-nexus-node --lib
+cargo test -p nemo-flow-node --lib
 cd crates/node && npm install && npm run build-debug && npm test && cd ../..
-cargo llvm-cov report -p nvidia-nat-nexus-node \
+cargo llvm-cov report -p nemo-flow-node \
   --ignore-filename-regex '.*/src/(coverage_tests|.*_tests)\.rs$' \
   --cobertura --output-path target/coverage/node-rust.xml
 
@@ -274,10 +274,10 @@ PY
 )"
 export PYTHONPATH="${PYTHON_STDLIB}:${PYTHON_PLATSTDLIB}"
 export LD_LIBRARY_PATH="${PYTHON_LIBDIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-cargo test -p nvidia-nat-nexus-python --lib
+cargo test -p nemo-flow-python --lib
 uv run maturin develop
 uv run pytest python/tests
-cargo llvm-cov report -p nvidia-nat-nexus-python \
+cargo llvm-cov report -p nemo-flow-python \
   --ignore-filename-regex '.*/src/(coverage_tests|.*_tests)\.rs$' \
   --cobertura --output-path target/coverage/python-rust.xml
 ```
@@ -287,8 +287,8 @@ cargo llvm-cov report -p nvidia-nat-nexus-python \
 Go coverage should include the race detector and all packages:
 
 ```bash
-cargo build --release -p nvidia-nat-nexus-ffi
-cd go/nat_nexus && \
+cargo build --release -p nemo-flow-ffi
+cd go/nemo_flow && \
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" \
 go test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
 # Convert to Cobertura format for CI
@@ -312,13 +312,13 @@ Optimizer tests live under `crates/optimizer/tests/` and are split by backend:
 Run the in-memory optimizer suite with:
 
 ```bash
-cargo test -p nvidia-nat-nexus-optimizer
+cargo test -p nemo-flow-optimizer
 ```
 
 Run the Redis-backed suite with:
 
 ```bash
-cargo test -p nvidia-nat-nexus-optimizer --features redis-backend redis_tests
+cargo test -p nemo-flow-optimizer --features redis-backend redis_tests
 ```
 
 Redis requirements:
@@ -361,13 +361,13 @@ uv run pytest python/tests/test_optimizer.py python/tests/test_optimizer_config.
 
 Go hosted optimizer plugin coverage lives in:
 
-- `go/nat_nexus/optimizer_plugin_test.go`
+- `go/nemo_flow/optimizer_plugin_test.go`
 
 Run it with the normal Go suite after building the FFI library:
 
 ```bash
-cargo build --release -p nvidia-nat-nexus-ffi
-cd go/nat_nexus
+cargo build --release -p nemo-flow-ffi
+cd go/nemo_flow
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" go test ./...
 ```
 
@@ -387,7 +387,7 @@ wasm-pack test --node crates/wasm
 
 WASM coverage is collected in three parts:
 
-1. `cargo llvm-cov` + `cargo test -p nat-nexus-wasm --lib` emits
+1. `cargo llvm-cov` + `cargo test -p nemo-flow-wasm --lib` emits
    `target/coverage/wasm-rust.xml` for the native Rust crate surface.
 2. `wasm-pack test --node crates/wasm` validates the actual `wasm-bindgen`
    behavior path.
@@ -417,7 +417,7 @@ implementation details.
    and call `reset_global()` before touching the default context.
 5. **Async by default** (Python): Use `async def test_*` — `pytest-asyncio`
    handles the event loop.
-6. **WASM has three test modes**: Unit tests run via `cargo test -p nat-nexus-wasm`
+6. **WASM has three test modes**: Unit tests run via `cargo test -p nemo-flow-wasm`
    (standard Rust test harness). Integration tests that exercise the full
    `wasm-bindgen` JavaScript interop require `wasm-pack test --node crates/wasm`,
    which compiles to WebAssembly and runs under Node.js. Coverage for the
@@ -450,13 +450,13 @@ mod tests {
 ```python
 # python/tests/test_<domain>.py
 import pytest
-import nat_nexus
+import nemo_flow
 
 class TestNewFeature:
     async def test_basic_behavior(self):
-        handle = nat_nexus.scope.push("test", nat_nexus.ScopeType.Agent)
+        handle = nemo_flow.scope.push("test", nemo_flow.ScopeType.Agent)
         assert handle.name == "test"
-        nat_nexus.scope.pop(handle)
+        nemo_flow.scope.pop(handle)
 ```
 
 ### Adding a Node.js Test
@@ -479,19 +479,19 @@ describe('New feature', () => {
 ### Adding a Go Test
 
 ```go
-// go/nat_nexus/<domain>_test.go
+// go/nemo_flow/<domain>_test.go
 func TestNewFeature(t *testing.T) {
-    stack, err := nat_nexus.NewScopeStack()
+    stack, err := nemo_flow.NewScopeStack()
     if err != nil {
         t.Fatalf("NewScopeStack failed: %v", err)
     }
     defer stack.Close()
     stack.Run(func() {
-        handle, err := nat_nexus.PushScope("test", nat_nexus.ScopeTypeAgent)
+        handle, err := nemo_flow.PushScope("test", nemo_flow.ScopeTypeAgent)
         if err != nil {
             t.Fatalf("PushScope failed: %v", err)
         }
-        nat_nexus.PopScope(handle)
+        nemo_flow.PopScope(handle)
     })
 }
 ```

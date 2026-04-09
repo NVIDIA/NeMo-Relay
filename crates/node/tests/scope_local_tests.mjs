@@ -433,10 +433,10 @@ describe('Scope-local auto-cleanup on scope pop', () => {
       'sl_cleanup_llm_stream_exec_call',
       makeNative(),
       (wrapper) => {
-        lib.pushStreamChunk(wrapper.__nat_nexus_stream_id, {
-          sawIntercept: wrapper.__nat_nexus_native.content.fromPoppedScope || false,
+        lib.pushStreamChunk(wrapper.__nemo_flow_stream_id, {
+          sawIntercept: wrapper.__nemo_flow_native.content.fromPoppedScope || false,
         });
-        lib.endStream(wrapper.__nat_nexus_stream_id);
+        lib.endStream(wrapper.__nemo_flow_stream_id);
       },
       null,
       null,
@@ -816,8 +816,8 @@ describe('Scope-local LLM intercepts', () => {
         'sl_llm_stream_compose_call',
         makeNative(),
         (wrapper) => {
-          lib.pushStreamChunk(wrapper.__nat_nexus_stream_id, { downstream: wrapper.__nat_nexus_native.content.touchedByScopeStream });
-          lib.endStream(wrapper.__nat_nexus_stream_id);
+          lib.pushStreamChunk(wrapper.__nemo_flow_stream_id, { downstream: wrapper.__nemo_flow_native.content.touchedByScopeStream });
+          lib.endStream(wrapper.__nemo_flow_stream_id);
         },
         null,
         null,
@@ -859,8 +859,8 @@ describe('Scope-local LLM intercepts', () => {
           'sl_llm_stream_invalid_call',
           makeNative(),
           (wrapper) => {
-            lib.pushStreamChunk(wrapper.__nat_nexus_stream_id, { shouldNotRun: true });
-            lib.endStream(wrapper.__nat_nexus_stream_id);
+            lib.pushStreamChunk(wrapper.__nemo_flow_stream_id, { shouldNotRun: true });
+            lib.endStream(wrapper.__nemo_flow_stream_id);
           },
           null,
           null,

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "nvidia-nat-nexus-python"
+name = "nemo-flow-python"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,10 +12,10 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-nvidia-nat-nexus-core = { path = "../core" }
-nvidia-nat-nexus-openinference = { path = "../openinference" }
-nvidia-nat-nexus-otel = { path = "../otel" }
-nvidia-nat-nexus-optimizer = { path = "../optimizer", features = ["redis-backend"] }
+nemo-flow-core = { path = "../core" }
+nemo-flow-openinference = { path = "../openinference" }
+nemo-flow-otel = { path = "../otel" }
+nemo-flow-optimizer = { path = "../optimizer", features = ["redis-backend"] }
 pyo3 = { version = "0.28.2", features = ["abi3", "abi3-py311", "experimental-inspect", "macros"] }
 pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }
 pythonize = "0.28.0"

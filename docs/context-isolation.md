@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Context Isolation
 
-Nexus supports per-request and per-task context isolation through hierarchical scope stacks. Each scope stack has its own root UUID, enabling safe concurrent and multi-tenant agent execution in a single process.
+NeMo Flow supports per-request and per-task context isolation through hierarchical scope stacks. Each scope stack has its own root UUID, enabling safe concurrent and multi-tenant agent execution in a single process.
 
 ## Scope Stack
 
@@ -28,7 +28,7 @@ A `ScopeStack` is a vector of `ScopeHandle`s with an immovable root scope at ind
 
 ## Storage: Two-Tier Lookup
 
-Nexus uses a two-tier storage pattern for context isolation:
+NeMo Flow uses a two-tier storage pattern for context isolation:
 
 ```
 current_scope_stack()
@@ -83,33 +83,33 @@ set_thread_scope_stack(custom);
 **Python** — uses `contextvars.ContextVar` for async-safe isolation:
 
 ```python
-import nat_nexus
+import nemo_flow
 
 async def handle_request():
     # Each asyncio task gets its own scope stack via get_scope_stack()
     # (lazily created, stored in a contextvars.ContextVar)
-    nat_nexus.get_scope_stack()
+    nemo_flow.get_scope_stack()
 
-    handle = nat_nexus.scope.push("agent", nat_nexus.ScopeType.Agent)
+    handle = nemo_flow.scope.push("agent", nemo_flow.ScopeType.Agent)
     # ... process request ...
-    nat_nexus.scope.pop(handle)
+    nemo_flow.scope.pop(handle)
 ```
 
 Lazy initialization: `get_scope_stack()` creates a new stack on first access in a task.
 
 Check whether a scope stack has been explicitly initialized (useful for integrations
-that should only activate when the caller has set up Nexus):
+that should only activate when the caller has set up NeMo Flow):
 
 ```python
-if nat_nexus.scope_stack_active():
-    # Nexus is active — use the middleware pipeline
+if nemo_flow.scope_stack_active():
+    # NeMo Flow is active — use the middleware pipeline
     ...
 ```
 
 **Go** — uses `ScopeStack.Run()` which locks the goroutine to an OS thread:
 
 ```go
-stack, _ := nat_nexus.NewScopeStack()
+stack, _ := nemo_flow.NewScopeStack()
 defer stack.Close()
 
 go func() {
@@ -192,22 +192,22 @@ In this setup:
 
 ```python
 async def handle_agent(agent_id: str, guardrail_fn):
-    stack = nat_nexus.create_scope_stack()
-    nat_nexus._scope_stack_var.set(stack)
+    stack = nemo_flow.create_scope_stack()
+    nemo_flow._scope_stack_var.set(stack)
 
-    handle = nat_nexus.scope.push(f"agent-{agent_id}", nat_nexus.ScopeType.Agent)
+    handle = nemo_flow.scope.push(f"agent-{agent_id}", nemo_flow.ScopeType.Agent)
 
     # Register middleware only for this agent's scope
-    nat_nexus.scope_local.register_tool_conditional_execution(
+    nemo_flow.scope_local.register_tool_conditional_execution(
         handle, f"{agent_id}_guard", 10, guardrail_fn,
     )
 
-    response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
-    nat_nexus.scope.pop(handle)  # guardrail automatically removed
+    response = await nemo_flow.llm.execute("gpt-4", request, llm_func)
+    nemo_flow.scope.pop(handle)  # guardrail automatically removed
 
 async def main():
     # Global: applies to all agents
-    nat_nexus.guardrails.register_llm_conditional_execution(
+    nemo_flow.guardrails.register_llm_conditional_execution(
         "compliance", 1, compliance_check,
     )
 
@@ -224,11 +224,11 @@ See [Core Concepts: Scope-Local Middleware](concepts.md#scope-local-middleware) 
 ```python
 async def handle_agent(agent_id: str):
     # Isolated stack for this agent — get_scope_stack() creates one per task
-    nat_nexus.get_scope_stack()
+    nemo_flow.get_scope_stack()
 
-    handle = nat_nexus.scope.push(f"agent-{agent_id}", nat_nexus.ScopeType.Agent)
-    response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
-    nat_nexus.scope.pop(handle)
+    handle = nemo_flow.scope.push(f"agent-{agent_id}", nemo_flow.ScopeType.Agent)
+    response = await nemo_flow.llm.execute("gpt-4", request, llm_func)
+    nemo_flow.scope.pop(handle)
 
 # Concurrent agents — fully isolated
 async def main():
@@ -247,7 +247,7 @@ for _, agentID := range agents {
     wg.Add(1)
     go func(id string) {
         defer wg.Done()
-        stack, _ := nat_nexus.NewScopeStack()
+        stack, _ := nemo_flow.NewScopeStack()
         defer stack.Close()
 
         stack.Run(func() {

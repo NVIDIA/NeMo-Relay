@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 
 The online learning engine observes agent executions in real-time, builds statistical models of each node's behavior, and produces predictions for future calls. It operates entirely within the optimizer runtime's telemetry pipeline -- no separate service or batch job is required.
 
-The implementation lives in the `nvidia-nat-nexus-optimizer` crate. Redis-backed
+The implementation lives in the `nemo-flow-optimizer` crate. Redis-backed
 persistence is optional and depends on enabling the optimizer crate's
 `redis-backend` feature.
 
@@ -24,7 +24,7 @@ The engine learns from the agent's actual execution patterns, not from static co
 ## Architecture and Data Flow
 
 ```
-  Nexus Events
+  NeMo Flow Events
        │
        ▼
   ┌──────────┐     tx      ┌─────────────────────────────────┐
@@ -172,7 +172,7 @@ The engine computes a latency sensitivity score for each node using a 4-signal m
 ### SensitivityConfig
 
 ```python
-config = nat_nexus.SensitivityConfig(
+config = nemo_flow.SensitivityConfig(
     sensitivity_scale=5,   # Output range: 1..5
     w_critical=0.35,       # Default: 0.35
     w_fanout=0.15,         # Default: 0.15
@@ -182,7 +182,7 @@ config = nat_nexus.SensitivityConfig(
 ```
 
 ```rust
-use nvidia_nat_nexus_optimizer::trie::SensitivityConfig;
+use nemo_flow_optimizer::trie::SensitivityConfig;
 
 let config = SensitivityConfig {
     sensitivity_scale: 5,
@@ -230,7 +230,7 @@ After 4-8 observed runs, the sensitivity scores converge to stable values that r
 The builder takes accumulated stats, computes sensitivity scores, and builds the `PredictionTrieNode` tree:
 
 ```rust
-use nvidia_nat_nexus_optimizer::trie::PredictionTrieBuilder;
+use nemo_flow_optimizer::trie::PredictionTrieBuilder;
 
 // From scratch
 let mut builder = PredictionTrieBuilder::new(Some(SensitivityConfig::default()));
@@ -260,7 +260,7 @@ The lookup provides a three-level fallback chain for fast hot-path reads:
 5. `None` if the trie has no predictions at all
 
 ```rust
-use nvidia_nat_nexus_optimizer::trie::lookup::PredictionTrieLookup;
+use nemo_flow_optimizer::trie::lookup::PredictionTrieLookup;
 
 let lookup = PredictionTrieLookup::new(&trie_root);
 let path = vec!["classify".to_string()];
@@ -293,13 +293,13 @@ The default backend. Zero-config, single-process only.
 - **Thread safety:** Uses `std::sync::RwLock` internally (fast for in-memory operations)
 
 ```python
-state = nat_nexus.optimizer.StateConfig(
-    backend=nat_nexus.optimizer.BackendSpec.in_memory()
+state = nemo_flow.optimizer.StateConfig(
+    backend=nemo_flow.optimizer.BackendSpec.in_memory()
 )
 ```
 
 ```rust
-use nvidia_nat_nexus_optimizer::{BackendSpec, StateConfig};
+use nemo_flow_optimizer::{BackendSpec, StateConfig};
 
 let state = StateConfig {
     backend: BackendSpec::in_memory(),
@@ -316,22 +316,22 @@ Cross-process shared state with automatic reconnection.
 - **Feature gate:** Requires `redis-backend` Cargo feature
 
 ```python
-state = nat_nexus.optimizer.StateConfig(
-    backend=nat_nexus.optimizer.BackendSpec.redis("redis://localhost:6379", "nexus:")
+state = nemo_flow.optimizer.StateConfig(
+    backend=nemo_flow.optimizer.BackendSpec.redis("redis://localhost:6379", "nemo_flow:")
 )
 ```
 
 ```rust
-use nvidia_nat_nexus_optimizer::{BackendSpec, StateConfig};
+use nemo_flow_optimizer::{BackendSpec, StateConfig};
 
 let state = StateConfig {
-    backend: BackendSpec::redis("redis://localhost:6379", "nexus:"),
+    backend: BackendSpec::redis("redis://localhost:6379", "nemo_flow:"),
 };
 ```
 
 ### Redis Key Layout
 
-All keys are prefixed with the configurable `key_prefix` (e.g., `"nexus:"`):
+All keys are prefixed with the configurable `key_prefix` (e.g., `"nemo_flow:"`):
 
 | Kind | Key Pattern | Value |
 |------|-------------|-------|
@@ -348,10 +348,10 @@ Run records are stored individually and indexed via a Redis LIST for ordered ret
 The `Learner` trait is object-safe and designed for pipeline composition:
 
 ```rust
-use nvidia_nat_nexus_optimizer::learner::Learner;
-use nvidia_nat_nexus_optimizer::storage::StorageBackendDyn;
-use nvidia_nat_nexus_optimizer::types::{HotCache, RunRecord};
-use nvidia_nat_nexus_optimizer::error::Result;
+use nemo_flow_optimizer::learner::Learner;
+use nemo_flow_optimizer::storage::StorageBackendDyn;
+use nemo_flow_optimizer::types::{HotCache, RunRecord};
+use nemo_flow_optimizer::error::Result;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};

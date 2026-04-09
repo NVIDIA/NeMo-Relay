@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python-facing type wrappers for Nexus core types.
+//! Python-facing type wrappers for NeMo Flow core types.
 //!
-//! Each type wraps its corresponding `nvidia_nat_nexus_core::types` struct and exposes
+//! Each type wraps its corresponding `nemo_flow_core::types` struct and exposes
 //! properties via `#[getter]`. Doc comments on `#[pyclass]` and `#[pymethods]`
 //! become Python `help()` output.
 
@@ -14,8 +14,8 @@ use std::time::Duration;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use nvidia_nat_nexus_core::codec;
-use nvidia_nat_nexus_core::types as core_types;
+use nemo_flow_core::codec;
+use nemo_flow_core::types as core_types;
 
 use crate::convert::{json_to_py, opt_json_to_py, py_to_json};
 
@@ -50,9 +50,8 @@ fn py_string_map(obj: &Bound<'_, PyAny>, field_name: &str) -> PyResult<HashMap<S
 /// End lifecycle event when exhausted.
 #[pyclass(name = "LlmStream")]
 pub struct PyLlmStream {
-    pub receiver: tokio::sync::Mutex<
-        tokio::sync::mpsc::Receiver<nvidia_nat_nexus_core::Result<serde_json::Value>>,
-    >,
+    pub receiver:
+        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nemo_flow_core::Result<serde_json::Value>>>,
 }
 
 #[pymethods]
@@ -66,7 +65,7 @@ impl PyLlmStream {
         // Since PyLlmStream is behind a PyRef (shared), we use tokio::sync::Mutex.
         let receiver_ptr = &self.receiver
             as *const tokio::sync::Mutex<
-                tokio::sync::mpsc::Receiver<nvidia_nat_nexus_core::Result<serde_json::Value>>,
+                tokio::sync::mpsc::Receiver<nemo_flow_core::Result<serde_json::Value>>,
             >;
         // SAFETY: The PyLlmStream outlives this future because Python holds a reference to it.
         // The tokio Mutex ensures exclusive access to the receiver.
@@ -74,7 +73,8 @@ impl PyLlmStream {
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mut guard = receiver_ref.lock().await;
-            match guard.recv().await {
+            let next_item = guard.recv().await;
+            match next_item {
                 None => Err(PyErr::new::<pyo3::exceptions::PyStopAsyncIteration, _>(
                     "stream exhausted",
                 )),
@@ -96,7 +96,7 @@ impl PyLlmStream {
 /// Each ``ScopeStack`` wraps an independent scope stack with its own root
 /// scope. Use ``create_scope_stack()`` to obtain one.
 #[pyclass(name = "ScopeStack")]
-pub struct PyScopeStack(pub nvidia_nat_nexus_core::ScopeStackHandle);
+pub struct PyScopeStack(pub nemo_flow_core::ScopeStackHandle);
 
 #[pymethods]
 impl PyScopeStack {
@@ -603,7 +603,7 @@ impl PyLLMRequest {
             _ => {
                 return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
                     "headers must be a dict",
-                ))
+                ));
             }
         };
         let content_json = py_to_json(content)?;
@@ -1024,7 +1024,7 @@ impl PyMarkEvent {
 ///     exporter.deregister("atif")
 #[pyclass(name = "AtifExporter")]
 pub struct PyAtifExporter {
-    inner: nvidia_nat_nexus_core::atif::AtifExporter,
+    inner: nemo_flow_core::atif::AtifExporter,
 }
 
 #[pymethods]
@@ -1053,7 +1053,7 @@ impl PyAtifExporter {
             Some(obj) if !obj.is_none() => Some(py_to_json(obj)?),
             _ => None,
         };
-        let agent_info = nvidia_nat_nexus_core::atif::AtifAgentInfo {
+        let agent_info = nemo_flow_core::atif::AtifAgentInfo {
             name: agent_name,
             version: agent_version,
             model_name,
@@ -1061,14 +1061,14 @@ impl PyAtifExporter {
             extra: extra_json,
         };
         Ok(Self {
-            inner: nvidia_nat_nexus_core::atif::AtifExporter::new(session_id, agent_info),
+            inner: nemo_flow_core::atif::AtifExporter::new(session_id, agent_info),
         })
     }
 
     /// Register this exporter as an event subscriber with the given name.
     fn register(&self, name: String) -> PyResult<()> {
         let subscriber = self.inner.subscriber();
-        nvidia_nat_nexus_core::nat_nexus_register_subscriber(&name, subscriber)
+        nemo_flow_core::nemo_flow_register_subscriber(&name, subscriber)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -1076,7 +1076,7 @@ impl PyAtifExporter {
     ///
     /// Returns ``True`` if a subscriber with that name was found and removed.
     fn deregister(&self, name: String) -> PyResult<bool> {
-        nvidia_nat_nexus_core::nat_nexus_deregister_subscriber(&name)
+        nemo_flow_core::nemo_flow_deregister_subscriber(&name)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -1149,12 +1149,12 @@ pub struct PyOpenTelemetryConfig {
 }
 
 impl PyOpenTelemetryConfig {
-    fn to_rust_config(&self) -> PyResult<nvidia_nat_nexus_otel::OpenTelemetryConfig> {
+    fn to_rust_config(&self) -> PyResult<nemo_flow_otel::OpenTelemetryConfig> {
         let mut config = match self.transport.as_str() {
             "http_binary" => {
-                nvidia_nat_nexus_otel::OpenTelemetryConfig::http_binary(self.service_name.clone())
+                nemo_flow_otel::OpenTelemetryConfig::http_binary(self.service_name.clone())
             }
-            "grpc" => nvidia_nat_nexus_otel::OpenTelemetryConfig::grpc(self.service_name.clone()),
+            "grpc" => nemo_flow_otel::OpenTelemetryConfig::grpc(self.service_name.clone()),
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "transport must be 'http_binary' or 'grpc', got {other:?}"
@@ -1190,10 +1190,10 @@ impl PyOpenTelemetryConfig {
         Self {
             transport: "http_binary".to_string(),
             endpoint: None,
-            service_name: "nat-nexus".to_string(),
+            service_name: "nemo-flow".to_string(),
             service_namespace: None,
             service_version: None,
-            instrumentation_scope: "nvidia-nat-nexus-otel".to_string(),
+            instrumentation_scope: "nemo-flow-otel".to_string(),
             timeout_millis: 3_000,
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
@@ -1247,14 +1247,14 @@ impl PyOpenTelemetryConfig {
 /// name, then call ``force_flush()`` or ``shutdown()`` when appropriate.
 #[pyclass(name = "OpenTelemetrySubscriber")]
 pub struct PyOpenTelemetrySubscriber {
-    inner: nvidia_nat_nexus_otel::OpenTelemetrySubscriber,
+    inner: nemo_flow_otel::OpenTelemetrySubscriber,
 }
 
 #[pymethods]
 impl PyOpenTelemetrySubscriber {
     #[new]
     fn new(config: PyRef<'_, PyOpenTelemetryConfig>) -> PyResult<Self> {
-        let inner = nvidia_nat_nexus_otel::OpenTelemetrySubscriber::new(config.to_rust_config()?)
+        let inner = nemo_flow_otel::OpenTelemetrySubscriber::new(config.to_rust_config()?)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
@@ -1321,10 +1321,10 @@ pub struct PyOpenInferenceConfig {
 }
 
 impl PyOpenInferenceConfig {
-    fn to_rust_config(&self) -> PyResult<nvidia_nat_nexus_openinference::OpenInferenceConfig> {
+    fn to_rust_config(&self) -> PyResult<nemo_flow_openinference::OpenInferenceConfig> {
         let transport = match self.transport.as_str() {
-            "http_binary" => nvidia_nat_nexus_openinference::OtlpTransport::HttpBinary,
-            "grpc" => nvidia_nat_nexus_openinference::OtlpTransport::Grpc,
+            "http_binary" => nemo_flow_openinference::OtlpTransport::HttpBinary,
+            "grpc" => nemo_flow_openinference::OtlpTransport::Grpc,
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "transport must be 'http_binary' or 'grpc', got {other:?}"
@@ -1332,7 +1332,7 @@ impl PyOpenInferenceConfig {
             }
         };
 
-        let mut config = nvidia_nat_nexus_openinference::OpenInferenceConfig::new()
+        let mut config = nemo_flow_openinference::OpenInferenceConfig::new()
             .with_transport(transport)
             .with_service_name(self.service_name.clone())
             .with_instrumentation_scope(self.instrumentation_scope.clone())
@@ -1364,10 +1364,10 @@ impl PyOpenInferenceConfig {
         Self {
             transport: "http_binary".to_string(),
             endpoint: None,
-            service_name: "nat-nexus".to_string(),
+            service_name: "nemo-flow".to_string(),
             service_namespace: None,
             service_version: None,
-            instrumentation_scope: "nvidia-nat-nexus-openinference".to_string(),
+            instrumentation_scope: "nemo-flow-openinference".to_string(),
             timeout_millis: 3_000,
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
@@ -1418,16 +1418,15 @@ impl PyOpenInferenceConfig {
 /// OpenInference-backed event subscriber.
 #[pyclass(name = "OpenInferenceSubscriber")]
 pub struct PyOpenInferenceSubscriber {
-    inner: nvidia_nat_nexus_openinference::OpenInferenceSubscriber,
+    inner: nemo_flow_openinference::OpenInferenceSubscriber,
 }
 
 #[pymethods]
 impl PyOpenInferenceSubscriber {
     #[new]
     fn new(config: PyRef<'_, PyOpenInferenceConfig>) -> PyResult<Self> {
-        let inner =
-            nvidia_nat_nexus_openinference::OpenInferenceSubscriber::new(config.to_rust_config()?)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let inner = nemo_flow_openinference::OpenInferenceSubscriber::new(config.to_rust_config()?)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
 
@@ -1826,14 +1825,14 @@ impl PyAnnotatedLLMResponse {
 ///
 /// Example::
 ///
-///     from nat_nexus.codecs import OpenAIChatCodec
+///     from nemo_flow.codecs import OpenAIChatCodec
 ///     codec = OpenAIChatCodec()
 ///     annotated_req = codec.decode(request)
 ///     annotated_resp = codec.decode_response(response)
 #[pyclass(name = "OpenAIChatCodec")]
 pub struct PyOpenAIChatCodec {
-    pub(crate) inner_codec: Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>,
-    pub(crate) inner_response_codec: Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>,
+    pub(crate) inner_codec: Arc<dyn nemo_flow_core::codec::LlmCodec>,
+    pub(crate) inner_response_codec: Arc<dyn nemo_flow_core::codec::LlmResponseCodec>,
 }
 
 #[pymethods]
@@ -1841,8 +1840,8 @@ impl PyOpenAIChatCodec {
     #[new]
     fn new() -> Self {
         Self {
-            inner_codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIChatCodec),
-            inner_response_codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIChatCodec),
+            inner_codec: Arc::new(nemo_flow_core::codec::OpenAIChatCodec),
+            inner_response_codec: Arc::new(nemo_flow_core::codec::OpenAIChatCodec),
         }
     }
 
@@ -1887,14 +1886,14 @@ impl PyOpenAIChatCodec {
 ///
 /// Example::
 ///
-///     from nat_nexus.codecs import OpenAIResponsesCodec
+///     from nemo_flow.codecs import OpenAIResponsesCodec
 ///     codec = OpenAIResponsesCodec()
 ///     annotated_req = codec.decode(request)
 ///     annotated_resp = codec.decode_response(response)
 #[pyclass(name = "OpenAIResponsesCodec")]
 pub struct PyOpenAIResponsesCodec {
-    pub(crate) inner_codec: Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>,
-    pub(crate) inner_response_codec: Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>,
+    pub(crate) inner_codec: Arc<dyn nemo_flow_core::codec::LlmCodec>,
+    pub(crate) inner_response_codec: Arc<dyn nemo_flow_core::codec::LlmResponseCodec>,
 }
 
 #[pymethods]
@@ -1902,8 +1901,8 @@ impl PyOpenAIResponsesCodec {
     #[new]
     fn new() -> Self {
         Self {
-            inner_codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIResponsesCodec),
-            inner_response_codec: Arc::new(nvidia_nat_nexus_core::codec::OpenAIResponsesCodec),
+            inner_codec: Arc::new(nemo_flow_core::codec::OpenAIResponsesCodec),
+            inner_response_codec: Arc::new(nemo_flow_core::codec::OpenAIResponsesCodec),
         }
     }
 
@@ -1948,14 +1947,14 @@ impl PyOpenAIResponsesCodec {
 ///
 /// Example::
 ///
-///     from nat_nexus.codecs import AnthropicMessagesCodec
+///     from nemo_flow.codecs import AnthropicMessagesCodec
 ///     codec = AnthropicMessagesCodec()
 ///     annotated_req = codec.decode(request)
 ///     annotated_resp = codec.decode_response(response)
 #[pyclass(name = "AnthropicMessagesCodec")]
 pub struct PyAnthropicMessagesCodec {
-    pub(crate) inner_codec: Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>,
-    pub(crate) inner_response_codec: Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>,
+    pub(crate) inner_codec: Arc<dyn nemo_flow_core::codec::LlmCodec>,
+    pub(crate) inner_response_codec: Arc<dyn nemo_flow_core::codec::LlmResponseCodec>,
 }
 
 #[pymethods]
@@ -1963,8 +1962,8 @@ impl PyAnthropicMessagesCodec {
     #[new]
     fn new() -> Self {
         Self {
-            inner_codec: Arc::new(nvidia_nat_nexus_core::codec::AnthropicMessagesCodec),
-            inner_response_codec: Arc::new(nvidia_nat_nexus_core::codec::AnthropicMessagesCodec),
+            inner_codec: Arc::new(nemo_flow_core::codec::AnthropicMessagesCodec),
+            inner_response_codec: Arc::new(nemo_flow_core::codec::AnthropicMessagesCodec),
         }
     }
 

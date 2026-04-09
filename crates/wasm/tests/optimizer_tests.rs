@@ -4,9 +4,9 @@
 use serde_json::json;
 use wasm_bindgen_test::*;
 
-use nvidia_nat_nexus_wasm::api::{
-    deregister_optimizer_plugin, register_optimizer_plugin, validate_optimizer_config,
-    WasmOptimizerRuntime,
+use nemo_flow_wasm::api::{
+    WasmOptimizerRuntime, deregister_optimizer_plugin, register_optimizer_plugin,
+    validate_optimizer_config,
 };
 
 #[wasm_bindgen_test]

@@ -6,7 +6,7 @@ import {
   validateOptimizerConfig as validateConfig,
   registerOptimizerPlugin,
   deregisterOptimizerPlugin,
-} from './pkg/nvidia_nat_nexus_wasm.js';
+} from './pkg/nemo_flow_wasm.js';
 
 export { Runtime, validateConfig };
 
@@ -18,7 +18,7 @@ export function inMemoryBackend() {
   return { kind: 'in_memory', config: {} };
 }
 
-export function redisBackend(url, keyPrefix = 'nexus:') {
+export function redisBackend(url, keyPrefix = 'nemo_flow:') {
   return {
     kind: 'redis',
     config: { url, key_prefix: keyPrefix },

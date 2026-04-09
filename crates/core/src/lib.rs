@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! # NeMo Agent Toolkit Nexus Core
+//! # NeMo Flow Core
 //!
-//! The core runtime library for the NeMo Agent Toolkit Nexus multi-language agent framework. This crate
+//! The core runtime library for the NeMo Flow multi-language agent framework. This crate
 //! provides execution scope management, lifecycle event tracking, and middleware pipelines
 //! (guardrails and intercepts) for tool and LLM calls.
 //!
 //! ## Architecture
 //!
-//! The runtime is organized around a **global context** ([`NatNexusContextState`]) that holds
+//! The runtime is organized around a **global context** ([`NemoFlowContextState`]) that holds
 //! all registered middleware (guardrails, intercepts, subscribers) and a **scope stack**
 //! ([`ScopeStack`]) that tracks the hierarchical execution context via task-local or
 //! thread-local storage.
@@ -26,7 +26,7 @@
 //!   [`AtifObservation`](atif::AtifObservation), and [`AtifMetrics`](atif::AtifMetrics).
 //! - [`context`] — Global context singleton, scope stack, task-local/thread-local storage,
 //!   callable type aliases, and middleware chain execution logic.
-//! - [`error`] — Error types ([`NexusError`]) and the [`Result`] type alias.
+//! - [`error`] — Error types ([`FlowError`]) and the [`Result`] type alias.
 //! - [`json`] — JSON type alias ([`Json`]) and the [`merge_json`] utility.
 //! - [`registry`] — [`SortedRegistry`](registry::SortedRegistry) — a priority-sorted, named collection used for
 //!   all guardrail and intercept registries.
@@ -63,16 +63,16 @@ pub mod types;
 pub use api::*;
 pub use codec::*;
 pub use context::{
+    EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
+    NemoFlowContextState, ScopeLocalRegistries, ScopeStack, ScopeStackHandle, TASK_SCOPE_STACK,
+    ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
     create_scope_stack, current_scope_stack, global_context, merge_execution_intercept_callables,
     merge_guardrail_entries, merge_intercept_entries, propagate_scope_to_thread,
     scope_stack_active, set_thread_scope_stack, sync_thread_scope_stack, task_scope_push,
-    task_scope_remove, task_scope_top, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn,
-    LlmExecutionNextFn, LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
-    LlmStreamExecutionFn, LlmStreamExecutionNextFn, NatNexusContextState, ScopeLocalRegistries,
-    ScopeStack, ScopeStackHandle, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn, TASK_SCOPE_STACK,
+    task_scope_remove, task_scope_top,
 };
-pub use error::{NexusError, Result};
-pub use json::{merge_json, Json};
+pub use error::{FlowError, Result};
+pub use json::{Json, merge_json};
 pub use stream::LlmStreamWrapper;
 pub use types::*;

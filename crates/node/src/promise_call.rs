@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Promise-aware JS function calling for Nexus NAPI bindings.
+//! Promise-aware JS function calling for NeMo Flow NAPI bindings.
 //!
 //! This module wraps JS middleware callbacks so Rust can call them from any thread
 //! and await either synchronous return values or Promise-returning callbacks.
@@ -20,12 +20,12 @@ use napi::threadsafe_function::{ThreadSafeCallContext, ThreadsafeFunction};
 use napi::{Env, JsFunction, JsUnknown, NapiRaw, NapiValue};
 use serde_json::Value as Json;
 
-use nvidia_nat_nexus_core::{NexusError, Result as NexusResult};
+use nemo_flow_core::{FlowError, Result as FlowResult};
 
 pub type JsonNextFn =
-    Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = NexusResult<Json>> + Send>> + Send + Sync>;
+    Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>;
 pub type JsonStreamNextFn =
-    Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = NexusResult<Vec<Json>>> + Send>> + Send + Sync>;
+    Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Vec<Json>>> + Send>> + Send + Sync>;
 
 #[derive(Clone)]
 enum NextFn {
@@ -41,17 +41,17 @@ struct CallArgs {
 
 #[derive(Clone)]
 struct CallCompletion {
-    sender: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<NexusResult<Json>>>>>,
+    sender: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<Json>>>>>,
 }
 
 impl CallCompletion {
-    fn new(sender: tokio::sync::oneshot::Sender<NexusResult<Json>>) -> Self {
+    fn new(sender: tokio::sync::oneshot::Sender<FlowResult<Json>>) -> Self {
         Self {
             sender: Arc::new(std::sync::Mutex::new(Some(sender))),
         }
     }
 
-    fn send(&self, value: NexusResult<Json>) {
+    fn send(&self, value: FlowResult<Json>) {
         if let Some(sender) = self.sender.lock().unwrap().take() {
             let _ = sender.send(value);
         }
@@ -71,15 +71,15 @@ fn rejection_message(
     }
 }
 
-fn closed_tsfn_error() -> NexusError {
-    NexusError::Internal("PromiseAwareFn threadsafe function closed".into())
+fn closed_tsfn_error() -> FlowError {
+    FlowError::Internal("PromiseAwareFn threadsafe function closed".into())
 }
 
-fn queue_status_result(status: napi::Status) -> NexusResult<()> {
+fn queue_status_result(status: napi::Status) -> FlowResult<()> {
     if status == napi::Status::Ok {
         Ok(())
     } else {
-        Err(NexusError::Internal(format!(
+        Err(FlowError::Internal(format!(
             "failed to queue threadsafe function call: {status:?}",
         )))
     }
@@ -101,7 +101,7 @@ fn undefined_to_unknown(env: &Env) -> napi::Result<JsUnknown> {
 
 fn build_next_unknown(env: &Env, next: NextFn) -> napi::Result<JsUnknown> {
     let next_fn = match next {
-        NextFn::Json(next) => env.create_function_from_closure("__nat_nexus_next", move |ctx| {
+        NextFn::Json(next) => env.create_function_from_closure("__nemo_flow_next", move |ctx| {
             let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
             let next = next.clone();
             ctx.env.execute_tokio_future(
@@ -114,7 +114,7 @@ fn build_next_unknown(env: &Env, next: NextFn) -> napi::Result<JsUnknown> {
             )
         })?,
         NextFn::Stream(next) => {
-            env.create_function_from_closure("__nat_nexus_next", move |ctx| {
+            env.create_function_from_closure("__nemo_flow_next", move |ctx| {
                 let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
                 let next = next.clone();
                 ctx.env.execute_tokio_future(
@@ -137,20 +137,20 @@ fn build_completion_unknowns(
     completion: CallCompletion,
 ) -> napi::Result<(JsUnknown, JsUnknown)> {
     let resolve_completion = completion.clone();
-    let resolve = env.create_function_from_closure("__nat_nexus_resolve", move |ctx| {
+    let resolve = env.create_function_from_closure("__nemo_flow_resolve", move |ctx| {
         let value = ctx.get::<Json>(0).unwrap_or(Json::Null);
         resolve_completion.send(Ok(value));
         ctx.env.get_undefined()
     })?;
 
-    let reject = env.create_function_from_closure("__nat_nexus_reject", move |ctx| {
+    let reject = env.create_function_from_closure("__nemo_flow_reject", move |ctx| {
         let message = rejection_message(
             ctx.get::<String>(0),
             ctx.get::<napi::JsObject>(0)
                 .ok()
                 .map(|value| value.get_named_property::<String>("message")),
         );
-        completion.send(Err(NexusError::Internal(message)));
+        completion.send(Err(FlowError::Internal(message)));
         ctx.env.get_undefined()
     })?;
 
@@ -162,7 +162,7 @@ fn build_completion_unknowns(
 
 fn create_promise_wrapper(env: &Env, callable: &JsFunction) -> napi::Result<JsFunction> {
     let factory: JsFunction = env.run_script(
-        r#"((fn) => function __nat_nexus_promise_wrapper(error, arg0, next, resolve, reject) {
+        r#"((fn) => function __nemo_flow_promise_wrapper(error, arg0, next, resolve, reject) {
   if (error != null) {
     reject(error);
     return;
@@ -214,13 +214,13 @@ impl PromiseAwareFn {
     }
 
     /// Call the JS function with the given args and await the result.
-    pub async fn call(&self, args: Json) -> NexusResult<Json> {
+    pub async fn call(&self, args: Json) -> FlowResult<Json> {
         self.call_inner(args, None).await
     }
 
     /// Call the JS function with a middleware-style `next(arg)` callback that
     /// resolves to a JSON result.
-    pub async fn call_with_json_next(&self, args: Json, next: JsonNextFn) -> NexusResult<Json> {
+    pub async fn call_with_json_next(&self, args: Json, next: JsonNextFn) -> FlowResult<Json> {
         self.call_inner(args, Some(NextFn::Json(next))).await
     }
 
@@ -230,7 +230,7 @@ impl PromiseAwareFn {
         &self,
         args: Json,
         next: JsonStreamNextFn,
-    ) -> NexusResult<Json> {
+    ) -> FlowResult<Json> {
         self.call_inner(args, Some(NextFn::Stream(next))).await
     }
 
@@ -241,7 +241,7 @@ impl PromiseAwareFn {
         }
     }
 
-    async fn call_inner(&self, args: Json, next: Option<NextFn>) -> NexusResult<Json> {
+    async fn call_inner(&self, args: Json, next: Option<NextFn>) -> FlowResult<Json> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let tsfn = self
             .tsfn
@@ -262,7 +262,7 @@ impl PromiseAwareFn {
 
         receiver
             .await
-            .map_err(|e| NexusError::Internal(e.to_string()))?
+            .map_err(|e| FlowError::Internal(e.to_string()))?
     }
 }
 

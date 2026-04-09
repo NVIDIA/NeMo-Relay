@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # ATIF Export
 
-Nexus exports agent execution trajectories in **ATIF v1.6** (Agent Trajectory Interchange Format), a standardized JSON schema for recording lifecycle events as structured steps.
+NeMo Flow exports agent execution trajectories in **ATIF v1.6** (Agent Trajectory Interchange Format), a standardized JSON schema for recording lifecycle events as structured steps.
 
 ## Overview
 
@@ -18,14 +18,14 @@ The `AtifExporter`:
 ## Quick Start
 
 ```python
-import nat_nexus
+import nemo_flow
 
 # Replace with your actual tool and LLM functions
 llm_func = lambda request: {**request.content, "response": "ok"}
 search_func = lambda args: {"results": ["result1", "result2"]}
 
 # Create and register
-exporter = nat_nexus.AtifExporter(
+exporter = nemo_flow.AtifExporter(
     session_id="session-001",
     agent_name="my_agent",
     agent_version="1.0",
@@ -34,10 +34,10 @@ exporter = nat_nexus.AtifExporter(
 exporter.register("atif_logger")
 
 # Run operations
-with nat_nexus.scope.scope("agent", nat_nexus.ScopeType.Agent) as handle:
-    request = nat_nexus.LLMRequest({}, {"messages": [{"role": "user", "content": "Hello"}]})
-    response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
-    result = await nat_nexus.tools.execute("search", {"q": "test"}, search_func)
+with nemo_flow.scope.scope("agent", nemo_flow.ScopeType.Agent) as handle:
+    request = nemo_flow.LLMRequest({}, {"messages": [{"role": "user", "content": "Hello"}]})
+    response = await nemo_flow.llm.execute("gpt-4", request, llm_func)
+    result = await nemo_flow.tools.execute("search", {"q": "test"}, search_func)
 
 # Export trajectory
 trajectory = exporter.export()       # Returns dict
@@ -150,7 +150,7 @@ flowchart LR
         {
             "tool_call_id": "call_abc123",
             "function_name": "search",
-            "arguments": {"query": "Nexus docs"}
+            "arguments": {"query": "NeMo Flow docs"}
         }
     ],
     "metrics": {
@@ -176,7 +176,7 @@ flowchart LR
             },
             {
                 "source_call_id": "call_def456",
-                "content": {"summary": "Nexus is a runtime framework"}
+                "content": {"summary": "NeMo Flow is a runtime framework"}
             }
         ]
     }
@@ -225,7 +225,7 @@ exporter between runs.
 | Node.js | `JsAtifExporter` | Same API surface |
 | WASM | `WasmAtifExporter` | Same API surface |
 | Go | `AtifExporter` | `Register(name)`, `Deregister(name)`, `ExportJSON()`, `Clear()` |
-| FFI | `nat_nexus_atif_exporter_*` | C functions: `_create`, `_register`, `_export`, `_clear`, `_free` |
+| FFI | `nemo_flow_atif_exporter_*` | C functions: `_create`, `_register`, `_export`, `_clear`, `_free` |
 
 ## Design Notes
 

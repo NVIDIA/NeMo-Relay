@@ -3,7 +3,7 @@
 
 use wasm_bindgen_test::*;
 
-use nvidia_nat_nexus_wasm::api::*;
+use nemo_flow_wasm::api::*;
 
 // ===========================================================================
 // Deregister nonexistent

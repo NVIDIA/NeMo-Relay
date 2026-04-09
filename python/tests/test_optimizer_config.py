@@ -3,7 +3,7 @@
 
 """Compatibility-oriented tests for the dynamic optimizer config contract."""
 
-from nat_nexus.optimizer import (
+from nemo_flow.optimizer import (
     BackendSpec,
     ComponentSpec,
     ConfigPolicy,

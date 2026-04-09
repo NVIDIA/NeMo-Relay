@@ -6,13 +6,13 @@
 
 use serde_json::json;
 
-use nvidia_nat_nexus_core::codec::{
+use nemo_flow_core::codec::{
     AnnotatedLLMRequest, ContentPart, FunctionCall, FunctionDefinition, GenerationParams, LlmCodec,
     Message, MessageContent, ToolCall, ToolChoice, ToolChoiceFunction, ToolChoiceFunctionName,
     ToolDefinition,
 };
-use nvidia_nat_nexus_core::error::Result;
-use nvidia_nat_nexus_core::types::LLMRequest;
+use nemo_flow_core::error::Result;
+use nemo_flow_core::types::LLMRequest;
 
 // ---------------------------------------------------------------------------
 // Mock Codec for registry and resolution tests

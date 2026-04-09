@@ -4,65 +4,79 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 ---
-description: Add a new third-party framework integration (e.g., LangChain, CrewAI, AutoGen)
+description: Add a new third-party framework integration maintained as a NeMo Flow patch set
 ---
 
-# Adding a Framework Integration
+# Add a Framework Integration
 
-Nexus integrations with upstream projects are maintained as git submodules
+NeMo Flow integrations with upstream projects are maintained as git submodules
 under `third_party/` with corresponding patch files in `patches/`.
 
-## Overview
+Use this skill for a new framework integration. If the upstream checkout already
+exists and you are refreshing an existing patch set, use
+`maintain-integration-patches` instead.
 
-See `docs/integration-best-practices.md` for the full guide (649 lines covering
-10 sections with code examples).
+## Required Patterns
 
-## Quick Reference
+- `nemo_flow` stays an optional dependency
+- framework behavior must fall back cleanly when NeMo Flow is unavailable
+- tool calls and LLM calls should use NeMo Flow managed execution where possible
+- scope creation should mirror the framework's natural agent, graph, or function
+  boundaries
+- scope stack propagation must be explicit across worker threads or async
+  boundaries
 
-### Structure
+See `docs/integration-best-practices.md` for the full guide and reference
+patterns.
 
-```
-third_party/<name>/     # git submodule pointing to upstream repo
-patches/<name>/         # Nexus integration patches
-  0001-add-nat-nexus-integration.patch
-```
+## Workflow
 
-### Key Patterns (from the integration guide)
-
-1. **Lazy import** — `nat_nexus` is optional; use try/except import
-2. **Transparent fallback** — If nat_nexus unavailable, framework works normally
-3. **Wrap LLM calls** — Use `nat_nexus.llm.execute()` around provider calls
-4. **Wrap tool calls** — Use `nat_nexus.tools.execute()` around tool invocations
-5. **Create scopes** — Push agent/function scopes at appropriate boundaries
-6. **Thread/async safety** — Propagate scope stacks across thread boundaries
-
-### Applying patches
+1. Bootstrap or refresh the local upstream checkout:
 
 ```bash
-cd third_party/<name>
-git checkout .                          # Reset to upstream HEAD
-git apply ../../patches/<name>/*.patch  # Apply Nexus patches
+./scripts/bootstrap-third-party.sh
 ```
 
-### Regenerating patches
+2. Implement the integration inside `third_party/<name>/`.
+
+3. Validate patch applicability against clean upstream HEAD:
 
 ```bash
-cd third_party/<name>
-git diff HEAD -- . > ../../patches/<name>/0001-add-nat-nexus-integration.patch
+./scripts/apply-patches.sh --check
 ```
 
-### Updating upstream
+4. Regenerate the patch artifact:
 
 ```bash
-cd third_party/<name>
-git fetch origin
-git checkout <new-tag-or-commit>
-cd ../..
-git add third_party/<name>
-# Re-apply and resolve any conflicts in the patch, then regenerate
+./scripts/generate-patches.sh
 ```
 
-## Full Guide
+5. Re-run patch validation and the relevant integration tests.
 
-See `docs/integration-best-practices.md` for complete patterns, code examples,
-and the 10-item integration checklist.
+## Expected Outputs
+
+```
+third_party/<name>/     # local upstream checkout pinned by third_party/sources.lock
+patches/<name>/         # tracked NeMo Flow integration patch set
+  0001-add-nemo-flow-integration.patch
+```
+
+## Checklist
+
+- [ ] Upstream checkout exists under `third_party/`
+- [ ] Optional import / activation guard is in place
+- [ ] Tool calls are wrapped through NeMo Flow where appropriate
+- [ ] LLM calls are wrapped through NeMo Flow where appropriate
+- [ ] Scope boundaries match the framework's execution model
+- [ ] Context propagation is correct across async or thread boundaries
+- [ ] Integration patch regenerates cleanly into `patches/<name>/`
+- [ ] `./scripts/apply-patches.sh --check` passes
+- [ ] Relevant tests or smoke coverage exist for the integration path
+- [ ] Integration docs or notes are updated when user behavior changed
+
+## Key References
+
+- Integration guide: `docs/integration-best-practices.md`
+- Patch apply helper: `scripts/apply-patches.sh`
+- Patch generation helper: `scripts/generate-patches.sh`
+- Third-party bootstrap helper: `scripts/bootstrap-third-party.sh`

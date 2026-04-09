@@ -255,7 +255,7 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
 
         let subscriber_name = format!("py_types_atif_{}", Uuid::new_v4());
         exporter.register(subscriber_name.clone()).unwrap();
-        let scope = nvidia_nat_nexus_core::nat_nexus_push_scope(
+        let scope = nemo_flow_core::nemo_flow_push_scope(
             "atif_root",
             core_types::ScopeType::Agent,
             None,
@@ -269,7 +269,7 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
             content: json!({"messages": [{"role": "user", "content": "hello"}], "model": "typed-model"}),
         };
 
-        let handle = nvidia_nat_nexus_core::nat_nexus_llm_call(
+        let handle = nemo_flow_core::nemo_flow_llm_call(
             "atif_llm",
             &request,
             Some(&scope),
@@ -280,7 +280,7 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
             None,
         )
         .unwrap();
-        nvidia_nat_nexus_core::nat_nexus_llm_call_end(
+        nemo_flow_core::nemo_flow_llm_call_end(
             &handle,
             json!({"content": "world"}),
             None,
@@ -306,7 +306,7 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
         let cleared = py_to_json(exporter.export(py).unwrap().bind(py)).unwrap();
         assert_eq!(cleared["steps"], json!([]));
 
-        nvidia_nat_nexus_core::nat_nexus_pop_scope(&scope.uuid).unwrap();
+        nemo_flow_core::nemo_flow_pop_scope(&scope.uuid).unwrap();
         assert!(exporter.deregister(subscriber_name.clone()).unwrap());
         assert!(!exporter.deregister(subscriber_name).unwrap());
         assert_eq!(exporter.__repr__(), "<AtifExporter>");

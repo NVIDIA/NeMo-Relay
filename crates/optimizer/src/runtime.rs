@@ -9,15 +9,15 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock, RwLock};
 
-use nvidia_nat_nexus_core::{
-    nat_nexus_deregister_llm_execution_intercept, nat_nexus_deregister_llm_request_intercept,
-    nat_nexus_deregister_llm_stream_execution_intercept, nat_nexus_deregister_subscriber,
-    nat_nexus_deregister_tool_execution_intercept, nat_nexus_deregister_tool_request_intercept,
-    nat_nexus_register_llm_execution_intercept, nat_nexus_register_llm_request_intercept,
-    nat_nexus_register_llm_stream_execution_intercept, nat_nexus_register_subscriber,
-    nat_nexus_register_tool_execution_intercept, nat_nexus_register_tool_request_intercept, Event,
-    EventSubscriberFn, LlmExecutionFn, LlmRequestInterceptFn, LlmStreamExecutionFn,
-    ToolExecutionFn, ToolInterceptFn,
+use nemo_flow_core::{
+    Event, EventSubscriberFn, LlmExecutionFn, LlmRequestInterceptFn, LlmStreamExecutionFn,
+    ToolExecutionFn, ToolInterceptFn, nemo_flow_deregister_llm_execution_intercept,
+    nemo_flow_deregister_llm_request_intercept,
+    nemo_flow_deregister_llm_stream_execution_intercept, nemo_flow_deregister_subscriber,
+    nemo_flow_deregister_tool_execution_intercept, nemo_flow_deregister_tool_request_intercept,
+    nemo_flow_register_llm_execution_intercept, nemo_flow_register_llm_request_intercept,
+    nemo_flow_register_llm_stream_execution_intercept, nemo_flow_register_subscriber,
+    nemo_flow_register_tool_execution_intercept, nemo_flow_register_tool_request_intercept,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value as Json};
@@ -570,7 +570,7 @@ impl OptimizerRuntime {
                         guard.plan = plan;
                     }
                 }
-                Err(e) => eprintln!("nexus-optimizer: hot cache seeding failed: {e}"),
+                Err(e) => eprintln!("nemo-flow-optimizer: hot cache seeding failed: {e}"),
             }
         }
 
@@ -590,7 +590,8 @@ impl OptimizerRuntime {
             if factory.requires_state(spec) && self.backend.is_none() {
                 continue;
             }
-            match factory.build(spec, &build_ctx) {
+            let build_result = factory.build(spec, &build_ctx);
+            match build_result {
                 Ok(component) => pending.push(component),
                 Err(OptimizerError::NotFound(_)) => continue,
                 Err(err) => return Err(err),
@@ -690,7 +691,7 @@ impl OptimizerComponentFactory for TelemetryFactory {
         let config = parse_component_config::<TelemetryComponentConfig>(&spec.config, self.kind())?;
         let subscriber_name = config
             .subscriber_name
-            .unwrap_or_else(|| format!("nexus_optimizer_{}_subscriber", ctx.runtime_id));
+            .unwrap_or_else(|| format!("nemo_flow_optimizer_{}_subscriber", ctx.runtime_id));
         Ok(Box::new(TelemetryComponent {
             agent_id: ctx.agent_id.clone(),
             subscriber_name,
@@ -770,7 +771,7 @@ impl OptimizerComponentFactory for DynamoHintsFactory {
         let config =
             parse_component_config::<DynamoHintsComponentConfig>(&spec.config, self.kind())?;
         Ok(Box::new(DynamoHintsComponent {
-            name: format!("nexus_optimizer_{}_dynamo_request", ctx.runtime_id),
+            name: format!("nemo_flow_optimizer_{}_dynamo_request", ctx.runtime_id),
             priority: config.priority,
             break_chain: config.break_chain,
             hot_cache: ctx.hot_cache.clone(),
@@ -829,19 +830,21 @@ impl OptimizerComponentFactory for ToolParallelismFactory {
             &spec.config,
             &["priority", "mode"],
         );
-        if let Some(mode) = spec.config.get("mode").and_then(|v| v.as_str()) {
-            if mode != "observe_only" && mode != "inject_hints" && mode != "schedule" {
-                push_policy_diag(
-                    &mut diagnostics,
-                    policy.unsupported_value,
-                    "optimizer.unsupported_value",
-                    Some(spec.kind.clone()),
-                    Some("mode".to_string()),
-                    format!(
-                        "tool_parallelism mode '{mode}' is unsupported; expected observe_only, inject_hints, or schedule"
-                    ),
-                );
-            }
+        if let Some(mode) = spec.config.get("mode").and_then(|v| v.as_str())
+            && mode != "observe_only"
+            && mode != "inject_hints"
+            && mode != "schedule"
+        {
+            push_policy_diag(
+                &mut diagnostics,
+                policy.unsupported_value,
+                "optimizer.unsupported_value",
+                Some(spec.kind.clone()),
+                Some("mode".to_string()),
+                format!(
+                    "tool_parallelism mode '{mode}' is unsupported; expected observe_only, inject_hints, or schedule"
+                ),
+            );
         }
         diagnostics
     }
@@ -854,7 +857,7 @@ impl OptimizerComponentFactory for ToolParallelismFactory {
         let config =
             parse_component_config::<ToolParallelismComponentConfig>(&spec.config, self.kind())?;
         Ok(Box::new(ToolParallelismComponent {
-            name: format!("nexus_optimizer_{}_tool_execution", ctx.runtime_id),
+            name: format!("nemo_flow_optimizer_{}_tool_execution", ctx.runtime_id),
             priority: config.priority,
             hot_cache: ctx.hot_cache.clone(),
         }))
@@ -1172,7 +1175,7 @@ async fn build_backend(spec: &BackendSpec) -> Result<Arc<dyn StorageBackendDyn +
                 .config
                 .get("key_prefix")
                 .and_then(|v| v.as_str())
-                .unwrap_or("nexus:");
+                .unwrap_or("nemo_flow:");
             let backend = RedisBackend::new(url, key_prefix.to_string()).await?;
             Ok(Arc::new(backend))
         }
@@ -1188,7 +1191,7 @@ fn register_subscriber_impl(
     name: &str,
     callback: EventSubscriberFn,
 ) -> Result<()> {
-    nat_nexus_register_subscriber(name, callback)
+    nemo_flow_register_subscriber(name, callback)
         .map_err(|e| OptimizerError::RegistrationFailed(format!("subscriber: {e}")))?;
 
     let name_owned = name.to_string();
@@ -1196,7 +1199,7 @@ fn register_subscriber_impl(
         kind.to_string(),
         name_owned.clone(),
         Box::new(move || {
-            nat_nexus_deregister_subscriber(&name_owned)
+            nemo_flow_deregister_subscriber(&name_owned)
                 .map(|_| ())
                 .map_err(|e| {
                     OptimizerError::RegistrationFailed(format!(
@@ -1216,7 +1219,7 @@ fn register_llm_request_intercept_impl(
     break_chain: bool,
     callback: LlmRequestInterceptFn,
 ) -> Result<()> {
-    nat_nexus_register_llm_request_intercept(name, priority, break_chain, callback).map_err(
+    nemo_flow_register_llm_request_intercept(name, priority, break_chain, callback).map_err(
         |e| OptimizerError::RegistrationFailed(format!("dynamo request intercept: {e}")),
     )?;
 
@@ -1225,7 +1228,7 @@ fn register_llm_request_intercept_impl(
         kind.to_string(),
         name_owned.clone(),
         Box::new(move || {
-            nat_nexus_deregister_llm_request_intercept(&name_owned)
+            nemo_flow_deregister_llm_request_intercept(&name_owned)
                 .map(|_| ())
                 .map_err(|e| {
                     OptimizerError::RegistrationFailed(format!(
@@ -1244,7 +1247,7 @@ fn register_llm_execution_intercept_impl(
     priority: i32,
     callback: LlmExecutionFn,
 ) -> Result<()> {
-    nat_nexus_register_llm_execution_intercept(name, priority, callback)
+    nemo_flow_register_llm_execution_intercept(name, priority, callback)
         .map_err(|e| OptimizerError::RegistrationFailed(format!("llm execution intercept: {e}")))?;
 
     let name_owned = name.to_string();
@@ -1252,7 +1255,7 @@ fn register_llm_execution_intercept_impl(
         kind.to_string(),
         name_owned.clone(),
         Box::new(move || {
-            nat_nexus_deregister_llm_execution_intercept(&name_owned)
+            nemo_flow_deregister_llm_execution_intercept(&name_owned)
                 .map(|_| ())
                 .map_err(|e| {
                     OptimizerError::RegistrationFailed(format!(
@@ -1271,7 +1274,7 @@ fn register_llm_stream_execution_intercept_impl(
     priority: i32,
     callback: LlmStreamExecutionFn,
 ) -> Result<()> {
-    nat_nexus_register_llm_stream_execution_intercept(name, priority, callback).map_err(|e| {
+    nemo_flow_register_llm_stream_execution_intercept(name, priority, callback).map_err(|e| {
         OptimizerError::RegistrationFailed(format!("llm stream execution intercept: {e}"))
     })?;
 
@@ -1280,7 +1283,7 @@ fn register_llm_stream_execution_intercept_impl(
         kind.to_string(),
         name_owned.clone(),
         Box::new(move || {
-            nat_nexus_deregister_llm_stream_execution_intercept(&name_owned)
+            nemo_flow_deregister_llm_stream_execution_intercept(&name_owned)
                 .map(|_| ())
                 .map_err(|e| {
                     OptimizerError::RegistrationFailed(format!(
@@ -1300,7 +1303,7 @@ fn register_tool_request_intercept_impl(
     break_chain: bool,
     callback: ToolInterceptFn,
 ) -> Result<()> {
-    nat_nexus_register_tool_request_intercept(name, priority, break_chain, callback)
+    nemo_flow_register_tool_request_intercept(name, priority, break_chain, callback)
         .map_err(|e| OptimizerError::RegistrationFailed(format!("tool request intercept: {e}")))?;
 
     let name_owned = name.to_string();
@@ -1308,7 +1311,7 @@ fn register_tool_request_intercept_impl(
         kind.to_string(),
         name_owned.clone(),
         Box::new(move || {
-            nat_nexus_deregister_tool_request_intercept(&name_owned)
+            nemo_flow_deregister_tool_request_intercept(&name_owned)
                 .map(|_| ())
                 .map_err(|e| {
                     OptimizerError::RegistrationFailed(format!(
@@ -1327,7 +1330,7 @@ fn register_tool_execution_intercept_impl(
     priority: i32,
     callback: ToolExecutionFn,
 ) -> Result<()> {
-    nat_nexus_register_tool_execution_intercept(name, priority, callback)
+    nemo_flow_register_tool_execution_intercept(name, priority, callback)
         .map_err(|e| OptimizerError::RegistrationFailed(format!("tool intercept: {e}")))?;
 
     let name_owned = name.to_string();
@@ -1335,7 +1338,7 @@ fn register_tool_execution_intercept_impl(
         kind.to_string(),
         name_owned.clone(),
         Box::new(move || {
-            nat_nexus_deregister_tool_execution_intercept(&name_owned)
+            nemo_flow_deregister_tool_execution_intercept(&name_owned)
                 .map(|_| ())
                 .map_err(|e| {
                     OptimizerError::RegistrationFailed(format!(

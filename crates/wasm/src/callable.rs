@@ -26,11 +26,11 @@ use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::JsFuture;
 
-use nvidia_nat_nexus_core::codec::{AnnotatedLLMRequest, LlmCodec};
-use nvidia_nat_nexus_core::types::LLMRequest;
-use nvidia_nat_nexus_core::{
-    LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionNextFn,
-    NexusError, Result, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
+use nemo_flow_core::codec::{AnnotatedLLMRequest, LlmCodec};
+use nemo_flow_core::types::LLMRequest;
+use nemo_flow_core::{
+    FlowError, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
+    LlmStreamExecutionNextFn, Result, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -49,8 +49,8 @@ fn js_error_message(e: &JsValue) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn wasm_only_error() -> NexusError {
-    NexusError::Internal("WASM callback wrappers are only supported on wasm32 targets".to_string())
+fn wasm_only_error() -> FlowError {
+    FlowError::Internal("WASM callback wrappers are only supported on wasm32 targets".to_string())
 }
 
 /// Wrap a JS function `(name, args) => result` for tool sanitize/intercept.
@@ -70,22 +70,22 @@ pub fn wrap_js_tool_fn(func: Function) -> Box<dyn Fn(&str, Json) -> Json + Send 
             // errors through the type system. Log errors so failures are not silent.
             Ok(result) => js_to_json(&result).unwrap_or_else(|e| {
                 record_callback_error(format!(
-                    "nat_nexus: JS tool callback result conversion failed: {}",
+                    "nemo_flow: JS tool callback result conversion failed: {}",
                     js_error_message(&e)
                 ));
                 eprintln!(
-                    "nat_nexus: JS tool callback result conversion failed: {}",
+                    "nemo_flow: JS tool callback result conversion failed: {}",
                     js_error_message(&e)
                 );
                 Json::Null
             }),
             Err(e) => {
                 record_callback_error(format!(
-                    "nat_nexus: JS tool callback threw: {}",
+                    "nemo_flow: JS tool callback threw: {}",
                     js_error_message(&e)
                 ));
                 eprintln!(
-                    "nat_nexus: JS tool callback threw: {}",
+                    "nemo_flow: JS tool callback threw: {}",
                     js_error_message(&e)
                 );
                 Json::Null
@@ -108,13 +108,13 @@ pub fn wrap_js_tool_conditional_fn(func: Function) -> ToolConditionalFn {
         let js_args = json_to_js(args);
         let result = func
             .call2(&JsValue::NULL, &js_name, &js_args)
-            .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+            .map_err(|e| FlowError::Internal(js_error_message(&e)))?;
 
         if result.is_null() || result.is_undefined() {
             Ok(None)
         } else {
             result.as_string().map(Some).ok_or_else(|| {
-                NexusError::Internal(
+                FlowError::Internal(
                     "JS tool conditional callback returned unexpected type (expected string or null)"
                         .to_string(),
                 )
@@ -137,8 +137,8 @@ pub fn wrap_js_tool_request_intercept_fn(func: Function) -> ToolInterceptFn {
         let js_args = json_to_js(&args);
         let result = func
             .call2(&JsValue::NULL, &js_name, &js_args)
-            .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
-        js_to_json(&result).map_err(|e| NexusError::Internal(js_error_message(&e)))
+            .map_err(|e| FlowError::Internal(js_error_message(&e)))?;
+        js_to_json(&result).map_err(|e| FlowError::Internal(js_error_message(&e)))
     })
 }
 
@@ -165,14 +165,14 @@ pub fn wrap_js_tool_exec_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| NexusError::Internal(js_error_message(&e))),
-                            Err(e) => Err(NexusError::Internal(js_error_message(&e))),
+                                .map_err(|e| FlowError::Internal(js_error_message(&e))),
+                            Err(e) => Err(FlowError::Internal(js_error_message(&e))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| NexusError::Internal(js_error_message(&e)))
+                        js_to_json(&val).map_err(|e| FlowError::Internal(js_error_message(&e)))
                     }
                 }
-                Err(e) => Err(NexusError::Internal(js_error_message(&e))),
+                Err(e) => Err(FlowError::Internal(js_error_message(&e))),
             }
         }))
     })
@@ -196,7 +196,7 @@ pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn
         move |name: &str,
               request: LLMRequest,
               annotated: Option<AnnotatedLLMRequest>|
-              -> nvidia_nat_nexus_core::Result<(LLMRequest, Option<AnnotatedLLMRequest>)> {
+              -> nemo_flow_core::Result<(LLMRequest, Option<AnnotatedLLMRequest>)> {
             let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             let js_name = JsValue::from_str(name);
             let js_req = json_to_js(&req_json);
@@ -209,26 +209,26 @@ pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn
             };
             let result = func
                 .call3(&JsValue::NULL, &js_name, &js_req, &js_annotated)
-                .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+                .map_err(|e| FlowError::Internal(js_error_message(&e)))?;
 
             // Extract "request" property from result
             let js_new_req =
                 js_sys::Reflect::get(&result, &JsValue::from_str("request")).map_err(|e| {
-                    NexusError::Internal(format!(
+                    FlowError::Internal(format!(
                         "failed to get 'request' from intercept result: {}",
                         js_error_message(&e)
                     ))
                 })?;
             let new_req_json =
-                js_to_json(&js_new_req).map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+                js_to_json(&js_new_req).map_err(|e| FlowError::Internal(js_error_message(&e)))?;
             let new_request: LLMRequest = serde_json::from_value(new_req_json).map_err(|e| {
-                NexusError::Internal(format!("failed to deserialize LLMRequest: {e}"))
+                FlowError::Internal(format!("failed to deserialize LLMRequest: {e}"))
             })?;
 
             // Extract "annotated" property from result
             let js_new_annotated = js_sys::Reflect::get(&result, &JsValue::from_str("annotated"))
                 .map_err(|e| {
-                NexusError::Internal(format!(
+                FlowError::Internal(format!(
                     "failed to get 'annotated' from intercept result: {}",
                     js_error_message(&e)
                 ))
@@ -237,10 +237,10 @@ pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn
                 None
             } else {
                 let ann_json = js_to_json(&js_new_annotated)
-                    .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+                    .map_err(|e| FlowError::Internal(js_error_message(&e)))?;
                 Some(
                     serde_json::from_value::<AnnotatedLLMRequest>(ann_json).map_err(|e| {
-                        NexusError::Internal(format!(
+                        FlowError::Internal(format!(
                             "failed to deserialize AnnotatedLLMRequest: {e}"
                         ))
                     })?,
@@ -274,11 +274,11 @@ pub fn wrap_js_llm_sanitize_request_fn(
             Ok(result) => {
                 let result_json = js_to_json(&result).unwrap_or_else(|e| {
                     record_callback_error(format!(
-                        "nat_nexus: JS LLM sanitize request result conversion failed: {}",
+                        "nemo_flow: JS LLM sanitize request result conversion failed: {}",
                         js_error_message(&e)
                     ));
                     eprintln!(
-                        "nat_nexus: JS LLM sanitize request result conversion failed: {}",
+                        "nemo_flow: JS LLM sanitize request result conversion failed: {}",
                         js_error_message(&e)
                     );
                     Json::Null
@@ -287,11 +287,11 @@ pub fn wrap_js_llm_sanitize_request_fn(
             }
             Err(e) => {
                 record_callback_error(format!(
-                    "nat_nexus: JS LLM sanitize request callback threw: {}",
+                    "nemo_flow: JS LLM sanitize request callback threw: {}",
                     js_error_message(&e)
                 ));
                 eprintln!(
-                    "nat_nexus: JS LLM sanitize request callback threw: {}",
+                    "nemo_flow: JS LLM sanitize request callback threw: {}",
                     js_error_message(&e)
                 );
                 request
@@ -314,13 +314,13 @@ pub fn wrap_js_llm_conditional_fn(func: Function) -> LlmConditionalFn {
         let js_req = json_to_js(&req_json);
         let result = func
             .call1(&JsValue::NULL, &js_req)
-            .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+            .map_err(|e| FlowError::Internal(js_error_message(&e)))?;
 
         if result.is_null() || result.is_undefined() {
             Ok(None)
         } else {
             result.as_string().map(Some).ok_or_else(|| {
-                NexusError::Internal(
+                FlowError::Internal(
                     "JS LLM conditional callback returned unexpected type (expected string or null)"
                         .to_string(),
                 )
@@ -354,14 +354,14 @@ pub fn wrap_js_llm_exec_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| NexusError::Internal(js_error_message(&e))),
-                            Err(e) => Err(NexusError::Internal(js_error_message(&e))),
+                                .map_err(|e| FlowError::Internal(js_error_message(&e))),
+                            Err(e) => Err(FlowError::Internal(js_error_message(&e))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| NexusError::Internal(js_error_message(&e)))
+                        js_to_json(&val).map_err(|e| FlowError::Internal(js_error_message(&e)))
                     }
                 }
-                Err(e) => Err(NexusError::Internal(js_error_message(&e))),
+                Err(e) => Err(FlowError::Internal(js_error_message(&e))),
             }
         }))
     })
@@ -371,7 +371,7 @@ pub fn wrap_js_llm_exec_fn(
 ///
 /// The collector is called with each intercepted Json chunk during a streaming LLM response.
 /// It is used to accumulate chunks on the JavaScript side for aggregation.
-/// If the JS function throws, the exception is converted to a `NexusError::Internal`
+/// If the JS function throws, the exception is converted to a `FlowError::Internal`
 /// and returned as `Err`, which terminates the stream.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn wrap_js_collector_fn(_func: Function) -> Box<dyn FnMut(Json) -> Result<()> + Send> {
@@ -389,8 +389,8 @@ pub fn wrap_js_collector_fn(func: Function) -> Box<dyn FnMut(Json) -> Result<()>
                 let msg = e
                     .as_string()
                     .unwrap_or_else(|| "JS collector threw an exception".to_string());
-                record_callback_error(format!("nat_nexus: {msg}"));
-                Err(NexusError::Internal(msg))
+                record_callback_error(format!("nemo_flow: {msg}"));
+                Err(FlowError::Internal(msg))
             }
         }
     })
@@ -414,22 +414,22 @@ pub fn wrap_js_finalizer_fn(func: Function) -> Box<dyn FnOnce() -> Json + Send> 
         // errors through the type system. Log errors so failures are not silent.
         Ok(result) => js_to_json(&result).unwrap_or_else(|e| {
             record_callback_error(format!(
-                "nat_nexus: JS finalizer result conversion failed: {}",
+                "nemo_flow: JS finalizer result conversion failed: {}",
                 js_error_message(&e)
             ));
             eprintln!(
-                "nat_nexus: JS finalizer result conversion failed: {}",
+                "nemo_flow: JS finalizer result conversion failed: {}",
                 js_error_message(&e)
             );
             Json::Null
         }),
         Err(e) => {
             record_callback_error(format!(
-                "nat_nexus: JS finalizer callback threw: {}",
+                "nemo_flow: JS finalizer callback threw: {}",
                 js_error_message(&e)
             ));
             eprintln!(
-                "nat_nexus: JS finalizer callback threw: {}",
+                "nemo_flow: JS finalizer callback threw: {}",
                 js_error_message(&e)
             );
             Json::Null
@@ -439,25 +439,25 @@ pub fn wrap_js_finalizer_fn(func: Function) -> Box<dyn FnOnce() -> Json + Send> 
 
 /// Wrap a JS function for event subscriber: `(event) => void`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn wrap_js_event_subscriber(_func: Function) -> nvidia_nat_nexus_core::EventSubscriberFn {
-    std::sync::Arc::new(move |_event: &nvidia_nat_nexus_core::Event| {})
+pub fn wrap_js_event_subscriber(_func: Function) -> nemo_flow_core::EventSubscriberFn {
+    std::sync::Arc::new(move |_event: &nemo_flow_core::Event| {})
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn wrap_js_event_subscriber(func: Function) -> nvidia_nat_nexus_core::EventSubscriberFn {
+pub fn wrap_js_event_subscriber(func: Function) -> nemo_flow_core::EventSubscriberFn {
     let func = SendWrapper::new(func);
-    std::sync::Arc::new(move |event: &nvidia_nat_nexus_core::Event| {
+    std::sync::Arc::new(move |event: &nemo_flow_core::Event| {
         let wasm_event = WasmEvent::from(event);
         let js_event = wasm_event
             .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
             .unwrap_or(JsValue::NULL);
         if let Err(e) = func.call1(&JsValue::NULL, &js_event) {
             record_callback_error(format!(
-                "nat_nexus: JS event subscriber callback threw: {}",
+                "nemo_flow: JS event subscriber callback threw: {}",
                 js_error_message(&e)
             ));
             eprintln!(
-                "nat_nexus: JS event subscriber callback threw: {}",
+                "nemo_flow: JS event subscriber callback threw: {}",
                 js_error_message(&e)
             );
         }
@@ -515,14 +515,14 @@ pub fn wrap_js_tool_exec_intercept_fn(
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
                             Ok(resolved) => js_to_json(&resolved)
-                                .map_err(|e| NexusError::Internal(js_error_message(&e))),
-                            Err(e) => Err(NexusError::Internal(js_error_message(&e))),
+                                .map_err(|e| FlowError::Internal(js_error_message(&e))),
+                            Err(e) => Err(FlowError::Internal(js_error_message(&e))),
                         }
                     } else {
-                        js_to_json(&val).map_err(|e| NexusError::Internal(js_error_message(&e)))
+                        js_to_json(&val).map_err(|e| FlowError::Internal(js_error_message(&e)))
                     }
                 }
-                Err(e) => Err(NexusError::Internal(js_error_message(&e))),
+                Err(e) => Err(FlowError::Internal(js_error_message(&e))),
             }
         }))
     })
@@ -592,14 +592,14 @@ pub fn wrap_js_llm_exec_intercept_fn(
                         if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                             match JsFuture::from(promise.clone()).await {
                                 Ok(resolved) => js_to_json(&resolved)
-                                    .map_err(|e| NexusError::Internal(js_error_message(&e))),
-                                Err(e) => Err(NexusError::Internal(js_error_message(&e))),
+                                    .map_err(|e| FlowError::Internal(js_error_message(&e))),
+                                Err(e) => Err(FlowError::Internal(js_error_message(&e))),
                             }
                         } else {
-                            js_to_json(&val).map_err(|e| NexusError::Internal(js_error_message(&e)))
+                            js_to_json(&val).map_err(|e| FlowError::Internal(js_error_message(&e)))
                         }
                     }
-                    Err(e) => Err(NexusError::Internal(js_error_message(&e))),
+                    Err(e) => Err(FlowError::Internal(js_error_message(&e))),
                 }
             }))
         },
@@ -666,15 +666,15 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
                         if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                             match JsFuture::from(promise.clone()).await {
                                 Ok(resolved) => js_to_json(&resolved)
-                                    .map_err(|e| NexusError::Internal(js_error_message(&e)))?,
-                                Err(e) => return Err(NexusError::Internal(js_error_message(&e))),
+                                    .map_err(|e| FlowError::Internal(js_error_message(&e)))?,
+                                Err(e) => return Err(FlowError::Internal(js_error_message(&e))),
                             }
                         } else {
                             js_to_json(&val)
-                                .map_err(|e| NexusError::Internal(js_error_message(&e)))?
+                                .map_err(|e| FlowError::Internal(js_error_message(&e)))?
                         }
                     }
-                    Err(e) => return Err(NexusError::Internal(js_error_message(&e))),
+                    Err(e) => return Err(FlowError::Internal(js_error_message(&e))),
                 };
                 let stream = tokio_stream::once(Ok(val));
                 Ok(Box::pin(stream)
@@ -712,17 +712,17 @@ unsafe impl Sync for WasmCodec {}
 
 #[cfg(target_arch = "wasm32")]
 impl LlmCodec for WasmCodec {
-    fn decode(&self, request: &LLMRequest) -> nvidia_nat_nexus_core::Result<AnnotatedLLMRequest> {
+    fn decode(&self, request: &LLMRequest) -> nemo_flow_core::Result<AnnotatedLLMRequest> {
         let req_json = serde_json::to_value(request).unwrap_or(Json::Null);
         let js_req = json_to_js(&req_json);
         let result = self
             .decode_fn
             .call1(&JsValue::NULL, &js_req)
-            .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+            .map_err(|e| FlowError::Internal(js_error_message(&e)))?;
         let result_json =
-            js_to_json(&result).map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+            js_to_json(&result).map_err(|e| FlowError::Internal(js_error_message(&e)))?;
         serde_json::from_value(result_json).map_err(|e| {
-            NexusError::Internal(format!("failed to deserialize AnnotatedLLMRequest: {e}"))
+            FlowError::Internal(format!("failed to deserialize AnnotatedLLMRequest: {e}"))
         })
     }
 
@@ -730,7 +730,7 @@ impl LlmCodec for WasmCodec {
         &self,
         annotated: &AnnotatedLLMRequest,
         original: &LLMRequest,
-    ) -> nvidia_nat_nexus_core::Result<LLMRequest> {
+    ) -> nemo_flow_core::Result<LLMRequest> {
         let annotated_json = serde_json::to_value(annotated).unwrap_or(Json::Null);
         let js_annotated = json_to_js(&annotated_json);
         let original_json = serde_json::to_value(original).unwrap_or(Json::Null);
@@ -738,11 +738,11 @@ impl LlmCodec for WasmCodec {
         let result = self
             .encode_fn
             .call2(&JsValue::NULL, &js_annotated, &js_original)
-            .map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+            .map_err(|e| FlowError::Internal(js_error_message(&e)))?;
         let result_json =
-            js_to_json(&result).map_err(|e| NexusError::Internal(js_error_message(&e)))?;
+            js_to_json(&result).map_err(|e| FlowError::Internal(js_error_message(&e)))?;
         serde_json::from_value(result_json)
-            .map_err(|e| NexusError::Internal(format!("failed to deserialize LLMRequest: {e}")))
+            .map_err(|e| FlowError::Internal(format!("failed to deserialize LLMRequest: {e}")))
     }
 }
 
@@ -753,10 +753,7 @@ pub fn wrap_js_codec(_decode_fn: Function, _encode_fn: Function) -> Arc<dyn LlmC
     struct UnsupportedCodec;
 
     impl LlmCodec for UnsupportedCodec {
-        fn decode(
-            &self,
-            _request: &LLMRequest,
-        ) -> nvidia_nat_nexus_core::Result<AnnotatedLLMRequest> {
+        fn decode(&self, _request: &LLMRequest) -> nemo_flow_core::Result<AnnotatedLLMRequest> {
             Err(wasm_only_error())
         }
 
@@ -764,7 +761,7 @@ pub fn wrap_js_codec(_decode_fn: Function, _encode_fn: Function) -> Arc<dyn LlmC
             &self,
             _annotated: &AnnotatedLLMRequest,
             _original: &LLMRequest,
-        ) -> nvidia_nat_nexus_core::Result<LLMRequest> {
+        ) -> nemo_flow_core::Result<LLMRequest> {
             Err(wasm_only_error())
         }
     }
@@ -802,27 +799,25 @@ unsafe impl Send for WasmResponseCodec {}
 unsafe impl Sync for WasmResponseCodec {}
 
 #[cfg(target_arch = "wasm32")]
-impl nvidia_nat_nexus_core::codec::LlmResponseCodec for WasmResponseCodec {
+impl nemo_flow_core::codec::LlmResponseCodec for WasmResponseCodec {
     fn decode_response(
         &self,
         response: &Json,
-    ) -> nvidia_nat_nexus_core::Result<nvidia_nat_nexus_core::codec::AnnotatedLLMResponse> {
+    ) -> nemo_flow_core::Result<nemo_flow_core::codec::AnnotatedLLMResponse> {
         let js_resp = json_to_js(response);
         let result = self
             .decode_response_fn
             .call1(&JsValue::NULL, &js_resp)
             .map_err(|e| {
-                nvidia_nat_nexus_core::NexusError::Internal(format!(
-                    "decode_response() failed: {e:?}"
-                ))
+                nemo_flow_core::FlowError::Internal(format!("decode_response() failed: {e:?}"))
             })?;
         let result_json = js_to_json(&result).map_err(|e| {
-            nvidia_nat_nexus_core::NexusError::Internal(format!(
+            nemo_flow_core::FlowError::Internal(format!(
                 "decode_response() returned invalid JSON: {e:?}"
             ))
         })?;
         serde_json::from_value(result_json).map_err(|e| {
-            nvidia_nat_nexus_core::NexusError::Internal(format!(
+            nemo_flow_core::FlowError::Internal(format!(
                 "decode_response() returned unexpected type: {e}"
             ))
         })
@@ -833,7 +828,7 @@ impl nvidia_nat_nexus_core::codec::LlmResponseCodec for WasmResponseCodec {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn wrap_js_response_codec(
     _decode_response_fn: Function,
-) -> Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec> {
+) -> Arc<dyn nemo_flow_core::codec::LlmResponseCodec> {
     panic!("wrap_js_response_codec is only available on wasm32")
 }
 
@@ -841,7 +836,7 @@ pub fn wrap_js_response_codec(
 #[cfg(target_arch = "wasm32")]
 pub fn wrap_js_response_codec(
     decode_response_fn: Function,
-) -> Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec> {
+) -> Arc<dyn nemo_flow_core::codec::LlmResponseCodec> {
     Arc::new(WasmResponseCodec {
         decode_response_fn: SendWrapper::new(decode_response_fn),
     })
@@ -866,22 +861,22 @@ pub fn wrap_js_llm_response_fn(func: Function) -> Box<dyn Fn(Json) -> Json + Sen
             // errors through the type system. Log errors and fall back to original response.
             Ok(result) => js_to_json(&result).unwrap_or_else(|e| {
                 record_callback_error(format!(
-                    "nat_nexus: JS LLM response callback result conversion failed: {}",
+                    "nemo_flow: JS LLM response callback result conversion failed: {}",
                     js_error_message(&e)
                 ));
                 eprintln!(
-                    "nat_nexus: JS LLM response callback result conversion failed: {}",
+                    "nemo_flow: JS LLM response callback result conversion failed: {}",
                     js_error_message(&e)
                 );
                 response.clone()
             }),
             Err(e) => {
                 record_callback_error(format!(
-                    "nat_nexus: JS LLM response callback threw: {}",
+                    "nemo_flow: JS LLM response callback threw: {}",
                     js_error_message(&e)
                 ));
                 eprintln!(
-                    "nat_nexus: JS LLM response callback threw: {}",
+                    "nemo_flow: JS LLM response callback threw: {}",
                     js_error_message(&e)
                 );
                 response

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use tokio_stream::Stream;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
@@ -20,8 +20,8 @@ use crate::py_callable::{
     wrap_py_llm_stream_exec_intercept_fn, wrap_py_tool_conditional_fn, wrap_py_tool_exec_fn,
     wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn, wrap_py_tool_request_intercept_fn,
 };
-use nvidia_nat_nexus_core::types::{Event, LLMRequest, ToolAttributes};
-use nvidia_nat_nexus_core::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_flow_core::types::{Event, LLMRequest, ToolAttributes};
+use nemo_flow_core::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
 
 fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     let code = CString::new(code).unwrap();
@@ -61,7 +61,7 @@ fn test_native_module_registers_types_and_api_functions() {
         assert!(module.getattr("ScopeStack").is_ok());
         assert!(module.getattr("AtifExporter").is_ok());
         assert!(module.getattr("create_scope_stack").is_ok());
-        assert!(module.getattr("nat_nexus_llm_stream_call_execute").is_ok());
+        assert!(module.getattr("nemo_flow_llm_stream_call_execute").is_ok());
     });
 }
 
@@ -145,69 +145,69 @@ fn test_register_exposes_all_native_api_functions() {
             "set_thread_scope_stack",
             "sync_thread_scope_stack",
             "scope_stack_active",
-            "nat_nexus_get_handle",
-            "nat_nexus_push_scope",
-            "nat_nexus_pop_scope",
-            "nat_nexus_event",
-            "nat_nexus_tool_call",
-            "nat_nexus_tool_call_end",
-            "nat_nexus_tool_call_execute",
-            "nat_nexus_llm_call",
-            "nat_nexus_llm_call_end",
-            "nat_nexus_llm_call_execute",
-            "nat_nexus_llm_stream_call_execute",
-            "nat_nexus_register_tool_sanitize_request_guardrail",
-            "nat_nexus_deregister_tool_sanitize_request_guardrail",
-            "nat_nexus_register_tool_sanitize_response_guardrail",
-            "nat_nexus_deregister_tool_sanitize_response_guardrail",
-            "nat_nexus_register_tool_conditional_execution_guardrail",
-            "nat_nexus_deregister_tool_conditional_execution_guardrail",
-            "nat_nexus_register_tool_request_intercept",
-            "nat_nexus_deregister_tool_request_intercept",
-            "nat_nexus_register_tool_execution_intercept",
-            "nat_nexus_deregister_tool_execution_intercept",
-            "nat_nexus_register_llm_sanitize_request_guardrail",
-            "nat_nexus_deregister_llm_sanitize_request_guardrail",
-            "nat_nexus_register_llm_sanitize_response_guardrail",
-            "nat_nexus_deregister_llm_sanitize_response_guardrail",
-            "nat_nexus_register_llm_conditional_execution_guardrail",
-            "nat_nexus_deregister_llm_conditional_execution_guardrail",
-            "nat_nexus_register_llm_request_intercept",
-            "nat_nexus_deregister_llm_request_intercept",
-            "nat_nexus_register_llm_execution_intercept",
-            "nat_nexus_deregister_llm_execution_intercept",
-            "nat_nexus_register_llm_stream_execution_intercept",
-            "nat_nexus_deregister_llm_stream_execution_intercept",
-            "nat_nexus_register_subscriber",
-            "nat_nexus_deregister_subscriber",
-            "nat_nexus_scope_register_tool_sanitize_request_guardrail",
-            "nat_nexus_scope_deregister_tool_sanitize_request_guardrail",
-            "nat_nexus_scope_register_tool_sanitize_response_guardrail",
-            "nat_nexus_scope_deregister_tool_sanitize_response_guardrail",
-            "nat_nexus_scope_register_tool_conditional_execution_guardrail",
-            "nat_nexus_scope_deregister_tool_conditional_execution_guardrail",
-            "nat_nexus_scope_register_tool_request_intercept",
-            "nat_nexus_scope_deregister_tool_request_intercept",
-            "nat_nexus_scope_register_tool_execution_intercept",
-            "nat_nexus_scope_deregister_tool_execution_intercept",
-            "nat_nexus_scope_register_llm_sanitize_request_guardrail",
-            "nat_nexus_scope_deregister_llm_sanitize_request_guardrail",
-            "nat_nexus_scope_register_llm_sanitize_response_guardrail",
-            "nat_nexus_scope_deregister_llm_sanitize_response_guardrail",
-            "nat_nexus_scope_register_llm_conditional_execution_guardrail",
-            "nat_nexus_scope_deregister_llm_conditional_execution_guardrail",
-            "nat_nexus_scope_register_llm_request_intercept",
-            "nat_nexus_scope_deregister_llm_request_intercept",
-            "nat_nexus_scope_register_llm_execution_intercept",
-            "nat_nexus_scope_deregister_llm_execution_intercept",
-            "nat_nexus_scope_register_llm_stream_execution_intercept",
-            "nat_nexus_scope_deregister_llm_stream_execution_intercept",
-            "nat_nexus_scope_register_subscriber",
-            "nat_nexus_scope_deregister_subscriber",
-            "nat_nexus_tool_request_intercepts",
-            "nat_nexus_tool_conditional_execution",
-            "nat_nexus_llm_request_intercepts",
-            "nat_nexus_llm_conditional_execution",
+            "nemo_flow_get_handle",
+            "nemo_flow_push_scope",
+            "nemo_flow_pop_scope",
+            "nemo_flow_event",
+            "nemo_flow_tool_call",
+            "nemo_flow_tool_call_end",
+            "nemo_flow_tool_call_execute",
+            "nemo_flow_llm_call",
+            "nemo_flow_llm_call_end",
+            "nemo_flow_llm_call_execute",
+            "nemo_flow_llm_stream_call_execute",
+            "nemo_flow_register_tool_sanitize_request_guardrail",
+            "nemo_flow_deregister_tool_sanitize_request_guardrail",
+            "nemo_flow_register_tool_sanitize_response_guardrail",
+            "nemo_flow_deregister_tool_sanitize_response_guardrail",
+            "nemo_flow_register_tool_conditional_execution_guardrail",
+            "nemo_flow_deregister_tool_conditional_execution_guardrail",
+            "nemo_flow_register_tool_request_intercept",
+            "nemo_flow_deregister_tool_request_intercept",
+            "nemo_flow_register_tool_execution_intercept",
+            "nemo_flow_deregister_tool_execution_intercept",
+            "nemo_flow_register_llm_sanitize_request_guardrail",
+            "nemo_flow_deregister_llm_sanitize_request_guardrail",
+            "nemo_flow_register_llm_sanitize_response_guardrail",
+            "nemo_flow_deregister_llm_sanitize_response_guardrail",
+            "nemo_flow_register_llm_conditional_execution_guardrail",
+            "nemo_flow_deregister_llm_conditional_execution_guardrail",
+            "nemo_flow_register_llm_request_intercept",
+            "nemo_flow_deregister_llm_request_intercept",
+            "nemo_flow_register_llm_execution_intercept",
+            "nemo_flow_deregister_llm_execution_intercept",
+            "nemo_flow_register_llm_stream_execution_intercept",
+            "nemo_flow_deregister_llm_stream_execution_intercept",
+            "nemo_flow_register_subscriber",
+            "nemo_flow_deregister_subscriber",
+            "nemo_flow_scope_register_tool_sanitize_request_guardrail",
+            "nemo_flow_scope_deregister_tool_sanitize_request_guardrail",
+            "nemo_flow_scope_register_tool_sanitize_response_guardrail",
+            "nemo_flow_scope_deregister_tool_sanitize_response_guardrail",
+            "nemo_flow_scope_register_tool_conditional_execution_guardrail",
+            "nemo_flow_scope_deregister_tool_conditional_execution_guardrail",
+            "nemo_flow_scope_register_tool_request_intercept",
+            "nemo_flow_scope_deregister_tool_request_intercept",
+            "nemo_flow_scope_register_tool_execution_intercept",
+            "nemo_flow_scope_deregister_tool_execution_intercept",
+            "nemo_flow_scope_register_llm_sanitize_request_guardrail",
+            "nemo_flow_scope_deregister_llm_sanitize_request_guardrail",
+            "nemo_flow_scope_register_llm_sanitize_response_guardrail",
+            "nemo_flow_scope_deregister_llm_sanitize_response_guardrail",
+            "nemo_flow_scope_register_llm_conditional_execution_guardrail",
+            "nemo_flow_scope_deregister_llm_conditional_execution_guardrail",
+            "nemo_flow_scope_register_llm_request_intercept",
+            "nemo_flow_scope_deregister_llm_request_intercept",
+            "nemo_flow_scope_register_llm_execution_intercept",
+            "nemo_flow_scope_deregister_llm_execution_intercept",
+            "nemo_flow_scope_register_llm_stream_execution_intercept",
+            "nemo_flow_scope_deregister_llm_stream_execution_intercept",
+            "nemo_flow_scope_register_subscriber",
+            "nemo_flow_scope_deregister_subscriber",
+            "nemo_flow_tool_request_intercepts",
+            "nemo_flow_tool_conditional_execution",
+            "nemo_flow_llm_request_intercepts",
+            "nemo_flow_llm_conditional_execution",
         ];
 
         for name in expected {
@@ -248,11 +248,13 @@ fn test_optimizer_runtime_bindings_validate_register_and_shutdown() {
             .call1((report_config.bind(py),))
             .unwrap();
         let report_json = crate::convert::py_to_json(&report).unwrap();
-        assert!(report_json["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|diag| diag["code"] == "optimizer.unknown_component"));
+        assert!(
+            report_json["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diag| diag["code"] == "optimizer.unknown_component")
+        );
 
         let plugin_helpers = load_module(
             py,
@@ -306,11 +308,13 @@ class CoveragePlugin:
             .call1((plugin_report_config.bind(py),))
             .unwrap();
         let plugin_report_json = crate::convert::py_to_json(&plugin_report).unwrap();
-        assert!(plugin_report_json["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|diag| diag["code"] == "optimizer.coverage_plugin_validate"));
+        assert!(
+            plugin_report_json["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diag| diag["code"] == "optimizer.coverage_plugin_validate")
+        );
 
         let runtime_config = crate::convert::json_to_py(
             py,
@@ -358,11 +362,13 @@ class CoveragePlugin:
 
         let report = runtime.call_method0("report").unwrap();
         let report_json = crate::convert::py_to_json(&report).unwrap();
-        assert!(report_json["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|diag| diag["code"] == "optimizer.coverage_plugin_validate"));
+        assert!(
+            report_json["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diag| diag["code"] == "optimizer.coverage_plugin_validate")
+        );
 
         let helpers = load_module(
             py,
@@ -450,10 +456,12 @@ def event_fail(event):
 
         let tool_cond =
             wrap_py_tool_conditional_fn(module.getattr("tool_cond_bad").unwrap().unbind());
-        assert!(tool_cond("demo", &json!({"x": 1}))
-            .unwrap_err()
-            .to_string()
-            .contains("expected str or None"));
+        assert!(
+            tool_cond("demo", &json!({"x": 1}))
+                .unwrap_err()
+                .to_string()
+                .contains("expected str or None")
+        );
 
         let request = make_request();
         let llm_sanitize =
@@ -461,27 +469,33 @@ def event_fail(event):
         assert_eq!(llm_sanitize(request.clone()).content, request.content);
 
         let llm_cond = wrap_py_llm_conditional_fn(module.getattr("llm_cond_bad").unwrap().unbind());
-        assert!(llm_cond(&request)
-            .unwrap_err()
-            .to_string()
-            .contains("expected str or None"));
+        assert!(
+            llm_cond(&request)
+                .unwrap_err()
+                .to_string()
+                .contains("expected str or None")
+        );
         let llm_cond_none =
             wrap_py_llm_conditional_fn(module.getattr("llm_cond_none").unwrap().unbind());
         assert_eq!(llm_cond_none(&request).unwrap(), None);
 
         let llm_req =
             wrap_py_llm_request_intercept_fn(module.getattr("llm_req_bad").unwrap().unbind());
-        assert!(llm_req("demo", request.clone(), None)
-            .unwrap_err()
-            .to_string()
-            .contains("intercept callable failed"));
+        assert!(
+            llm_req("demo", request.clone(), None)
+                .unwrap_err()
+                .to_string()
+                .contains("intercept callable failed")
+        );
 
         let tool_req =
             wrap_py_tool_request_intercept_fn(module.getattr("tool_fail").unwrap().unbind());
-        assert!(tool_req("demo", json!({"x": 1}))
-            .unwrap_err()
-            .to_string()
-            .contains("Python tool callable failed"));
+        assert!(
+            tool_req("demo", json!({"x": 1}))
+                .unwrap_err()
+                .to_string()
+                .contains("Python tool callable failed")
+        );
 
         let llm_resp =
             wrap_py_llm_sanitize_response_fn(module.getattr("llm_resp_fail").unwrap().unbind());
@@ -489,10 +503,12 @@ def event_fail(event):
 
         let mut collector =
             wrap_py_collector_fn(module.getattr("collector_fail").unwrap().unbind());
-        assert!(collector(json!({"chunk": 1}))
-            .unwrap_err()
-            .to_string()
-            .contains("collector"));
+        assert!(
+            collector(json!({"chunk": 1}))
+                .unwrap_err()
+                .to_string()
+                .contains("collector")
+        );
 
         let finalizer = wrap_py_finalizer_fn(module.getattr("finalizer_fail").unwrap().unbind());
         assert_eq!(finalizer(), Json::Null);
@@ -619,7 +635,7 @@ async def llm_stream_intercept(request, next):
                         let chunks = vec![Ok(json!({"chunk": "a"})), Ok(json!({"chunk": "b"}))];
                         Ok(Box::pin(tokio_stream::iter(chunks))
                             as Pin<
-                                Box<dyn Stream<Item = nvidia_nat_nexus_core::Result<Json>> + Send>,
+                                Box<dyn Stream<Item = nemo_flow_core::Result<Json>> + Send>,
                             >)
                     })
                 });
@@ -700,47 +716,57 @@ async def llm_stream_intercept_fail(request, next):
         with_event_loop(py, |event_loop| {
             pyo3_async_runtimes::tokio::run_until_complete(event_loop, async move {
                 let tool_exec = wrap_py_tool_exec_fn(tool_exec_fail_py);
-                assert!(tool_exec(json!({"x": 1}))
-                    .await
-                    .unwrap_err()
-                    .to_string()
-                    .contains("tool exec boom"));
+                assert!(
+                    tool_exec(json!({"x": 1}))
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("tool exec boom")
+                );
 
                 let tool_intercept = wrap_py_tool_exec_intercept_fn(tool_intercept_fail_py);
                 let tool_next: ToolExecutionNextFn =
                     Arc::new(|args| Box::pin(async move { Ok(args) }));
-                assert!(tool_intercept("tool", json!({"x": 1}), tool_next)
-                    .await
-                    .unwrap_err()
-                    .to_string()
-                    .contains("tool intercept boom"));
+                assert!(
+                    tool_intercept("tool", json!({"x": 1}), tool_next)
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("tool intercept boom")
+                );
 
                 let llm_exec = wrap_py_llm_exec_fn(llm_exec_fail_py);
-                assert!(llm_exec(make_request())
-                    .await
-                    .unwrap_err()
-                    .to_string()
-                    .contains("llm exec boom"));
+                assert!(
+                    llm_exec(make_request())
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("llm exec boom")
+                );
 
                 let llm_intercept = wrap_py_llm_exec_intercept_fn(llm_intercept_fail_py);
                 let llm_next: LlmExecutionNextFn = Arc::new(|request| {
                     Box::pin(async move { Ok(json!({"model": request.content["model"]})) })
                 });
-                assert!(llm_intercept("llm", make_request(), llm_next)
-                    .await
-                    .unwrap_err()
-                    .to_string()
-                    .contains("llm intercept boom"));
+                assert!(
+                    llm_intercept("llm", make_request(), llm_next)
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("llm intercept boom")
+                );
 
                 let stream_exec = wrap_py_llm_stream_exec_fn(llm_stream_fail_py);
                 let mut stream = stream_exec(make_request()).await.unwrap();
-                assert!(stream
-                    .next()
-                    .await
-                    .unwrap()
-                    .unwrap_err()
-                    .to_string()
-                    .contains("stream fail"));
+                assert!(
+                    stream
+                        .next()
+                        .await
+                        .unwrap()
+                        .unwrap_err()
+                        .to_string()
+                        .contains("stream fail")
+                );
 
                 let stream_intercept =
                     wrap_py_llm_stream_exec_intercept_fn(llm_stream_intercept_sync_py);
@@ -749,7 +775,7 @@ async def llm_stream_intercept_fail(request, next):
                         let chunks = vec![Ok(json!({"chunk": "downstream"}))];
                         Ok(Box::pin(tokio_stream::iter(chunks))
                             as Pin<
-                                Box<dyn Stream<Item = nvidia_nat_nexus_core::Result<Json>> + Send>,
+                                Box<dyn Stream<Item = nemo_flow_core::Result<Json>> + Send>,
                             >)
                     })
                 });
@@ -768,7 +794,7 @@ async def llm_stream_intercept_fail(request, next):
                     Box::pin(async move {
                         Ok(Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": 1}))]))
                             as Pin<
-                                Box<dyn Stream<Item = nvidia_nat_nexus_core::Result<Json>> + Send>,
+                                Box<dyn Stream<Item = nemo_flow_core::Result<Json>> + Send>,
                             >)
                     })
                 });

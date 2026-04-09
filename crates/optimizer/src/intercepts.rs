@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Intercept factories for the nexus-optimizer crate.
+//! Intercept factories for the nemo-flow-optimizer crate.
 //!
 //! Provides [`create_tool_execution_intercept`], which builds a middleware-chain
 //! intercept that reads the hot cache for [`ParallelHint`](crate::types::ParallelHint)
@@ -20,12 +20,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-use nvidia_nat_nexus_core::{Json, ToolExecutionFn, ToolExecutionNextFn};
+use nemo_flow_core::{Json, ToolExecutionFn, ToolExecutionNextFn};
 
 use crate::types::HotCache;
 
 /// Header key used to inject agent hints into LLM requests.
-pub const AGENT_HINTS_HEADER_KEY: &str = "x-nexus-optimizer-agent-hints";
+pub const AGENT_HINTS_HEADER_KEY: &str = "x-nemo-flow-optimizer-agent-hints";
 
 /// Creates a tool execution intercept that reads the hot cache for
 /// [`ParallelHint`](crate::types::ParallelHint) annotations.
@@ -45,29 +45,29 @@ pub const AGENT_HINTS_HEADER_KEY: &str = "x-nexus-optimizer-agent-hints";
 /// # Returns
 ///
 /// An [`Arc`]-wrapped closure matching [`ToolExecutionFn`] that can be registered
-/// with the Nexus runtime via
-/// [`nat_nexus_register_tool_execution_intercept`](nvidia_nat_nexus_core::nat_nexus_register_tool_execution_intercept).
+/// with the NeMo Flow runtime via
+/// [`nemo_flow_register_tool_execution_intercept`](nemo_flow_core::nemo_flow_register_tool_execution_intercept).
 pub(crate) fn create_tool_execution_intercept(hot_cache: Arc<RwLock<HotCache>>) -> ToolExecutionFn {
     Arc::new(move |_name: &str, args: Json, next: ToolExecutionNextFn| {
         let cache = hot_cache.clone();
         Box::pin(async move {
             // Read hot cache for parallel hints (non-blocking read lock).
             // Gracefully degrade if lock poisoned -- just skip hint checking.
-            if let Ok(guard) = cache.read() {
-                if let Some(ref plan) = guard.plan {
-                    // v1: verify hints are accessible without panic.
-                    // v2: actual parallel scheduling logic goes here.
-                    for _hint in &plan.metadata_template.parallel_hints {
-                        // ParallelHint { tool_name, group_id, explicit } accessible
-                    }
-                    for _group in &plan.parallel_groups {
-                        // ParallelGroup { group_id, tool_names } accessible
-                    }
+            if let Ok(guard) = cache.read()
+                && let Some(ref plan) = guard.plan
+            {
+                // v1: verify hints are accessible without panic.
+                // v2: actual parallel scheduling logic goes here.
+                for _hint in &plan.metadata_template.parallel_hints {
+                    // ParallelHint { tool_name, group_id, explicit } accessible
+                }
+                for _group in &plan.parallel_groups {
+                    // ParallelGroup { group_id, tool_names } accessible
                 }
             }
             // Always continue the middleware chain in v1
             next(args).await
-        }) as Pin<Box<dyn Future<Output = nvidia_nat_nexus_core::Result<Json>> + Send>>
+        }) as Pin<Box<dyn Future<Output = nemo_flow_core::Result<Json>> + Send>>
     })
 }
 

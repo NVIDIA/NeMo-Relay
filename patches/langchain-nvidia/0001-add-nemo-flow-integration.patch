@@ -1,0 +1,288 @@
+diff --git a/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nemo_flow.py b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nemo_flow.py
+new file mode 100644
+index 0000000..e08e1bc
+--- /dev/null
++++ b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nemo_flow.py
+@@ -0,0 +1,123 @@
++"""Thin bridge module for optional NeMo Flow integration.
++
++When nemo_flow is installed and a scope stack has been initialized by the
++caller, the helpers in this module route LLM calls through the full
++NeMo Flow middleware pipeline (guardrails, intercepts, execution intercepts).
++If nemo_flow is not installed or no scope stack is active, ``available()``
++returns ``False`` and ChatNVIDIA falls back to its vanilla code path.
++
++LLM calls use the standard NeMo Flow API (``nemo_flow.llm.execute`` /
++``nemo_flow.llm.stream_execute``) with ``response_codec=nemo_flow.OpenAIChatCodec()``
++to get structured ``AnnotatedLLMResponse`` on LLM end events via the
++built-in OpenAI Chat codec (NIM uses OpenAI-compatible format).
++"""
++
++from __future__ import annotations
++
++import asyncio
++import contextvars
++from concurrent.futures import ThreadPoolExecutor
++from typing import Any, Callable
++
++try:
++    import nemo_flow
++    from nemo_flow import LLMRequest
++
++    _HAS_NEMO_FLOW = True
++except ImportError:
++    _HAS_NEMO_FLOW = False
++
++
++def available() -> bool:
++    """Return True when nemo_flow is importable *and* a scope stack is active."""
++    if not _HAS_NEMO_FLOW:
++        return False
++    try:
++        # Only consider nemo_flow available if the caller has explicitly
++        # initialised a scope stack (we don't want to auto-create one).
++        return nemo_flow.scope_stack_active()
++    except Exception:
++        return False
++
++
++def make_request(payload: dict, extra_headers: dict | None = None) -> "LLMRequest":
++    """Wrap a payload dict and optional extra headers into an LLMRequest."""
++    return LLMRequest(extra_headers or {}, payload)
++
++
++# ---------------------------------------------------------------------------
++# Sync-to-async bridge
++# ---------------------------------------------------------------------------
++
++
++def run_sync(coro: Any) -> Any:
++    """Run *coro* synchronously, handling the case where an event loop is
++    already running (e.g. Jupyter notebooks).
++
++    PATCH-01: When offloading to a ThreadPoolExecutor worker, propagate
++    both Python contextvars and the Rust thread-local scope stack so that
++    NeMo Flow telemetry is preserved on the worker thread.
++    """
++    try:
++        asyncio.get_running_loop()
++    except RuntimeError:
++        # No loop running -- we can just use asyncio.run.
++        return asyncio.run(coro)
++    # Loop already running -- offload to a worker thread so we don't block.
++    # Propagate contextvars and scope stack to the worker thread.
++    ctx = contextvars.copy_context()
++    if _HAS_NEMO_FLOW:
++        try:
++            scope_stack = nemo_flow.get_scope_stack()
++
++            def _run_with_scope_stack() -> Any:
++                nemo_flow.set_thread_scope_stack(scope_stack)
++                return asyncio.run(coro)
++
++            with ThreadPoolExecutor(max_workers=1) as pool:
++                return pool.submit(
++                    ctx.run, _run_with_scope_stack
++                ).result()
++        except Exception:
++            pass  # Fall through to vanilla path
++    with ThreadPoolExecutor(max_workers=1) as pool:
++        return pool.submit(asyncio.run, coro).result()
++
++
++# ---------------------------------------------------------------------------
++# LLM pipeline wrappers
++# ---------------------------------------------------------------------------
++
++
++async def llm_execute(
++    model_name: str,
++    request: "LLMRequest",
++    func: Callable[..., Any],
++) -> Any:
++    """Execute a non-streaming LLM call through the NeMo Flow pipeline."""
++    return await nemo_flow.llm.execute(
++        model_name,
++        request,
++        func,
++        model_name=model_name,
++        response_codec=nemo_flow.OpenAIChatCodec(),
++    )
++
++
++async def llm_stream_execute(
++    model_name: str,
++    request: "LLMRequest",
++    func: Callable[..., Any],
++    collector: Callable[[Any], None],
++    finalizer: Callable[[], Any],
++) -> Any:
++    """Execute a streaming LLM call through the NeMo Flow pipeline."""
++    return await nemo_flow.llm.stream_execute(
++        model_name,
++        request,
++        func,
++        collector,
++        finalizer,
++        model_name=model_name,
++        response_codec=nemo_flow.OpenAIChatCodec(),
++    )
+diff --git a/libs/ai-endpoints/langchain_nvidia_ai_endpoints/chat_models.py b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/chat_models.py
+index 07df9ab..48441a4 100644
+--- a/libs/ai-endpoints/langchain_nvidia_ai_endpoints/chat_models.py
++++ b/libs/ai-endpoints/langchain_nvidia_ai_endpoints/chat_models.py
+@@ -56,6 +56,7 @@ from langchain_core.utils.pydantic import is_basemodel_subclass
+ from langchain_core.utils.utils import _build_model_kwargs
+ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+
++from langchain_nvidia_ai_endpoints import _nemo_flow
+ from langchain_nvidia_ai_endpoints._common import _NVIDIAClient
+ from langchain_nvidia_ai_endpoints._statics import Model
+ from langchain_nvidia_ai_endpoints._utils import convert_message_to_dict
+@@ -725,9 +726,32 @@ class ChatNVIDIA(BaseChatModel):
+         _, payload, extra_headers = self._prepare_inputs_and_payload(
+             messages, stop, stream=False, **kwargs
+         )
++        structured_output = _is_structured_output(payload)
++
++        if _nemo_flow.available():
++            request = _nemo_flow.make_request(payload, extra_headers)
++
++            async def _call(req: Any) -> dict:
++                raw = await self._client.aget_req(
++                    payload=req.content, extra_headers=dict(req.headers)
++                )
++                resp, _ = self._client.postprocess(raw)
++                return resp
++
++            resp_dict = _nemo_flow.run_sync(
++                _nemo_flow.llm_execute(self.model, request, _call)
++            )
++            self._set_callback_out(resp_dict, run_manager)
++            parsed = self._custom_postprocess(
++                resp_dict, streaming=False, structured_output=structured_output
++            )
++            parsed.update({"role": "assistant"})
++            generation = ChatGeneration(message=AIMessage(**parsed))
++            return ChatResult(generations=[generation], llm_output=resp_dict)
++
+         response = self._client.get_req(payload=payload, extra_headers=extra_headers)
+         return self._process_generate_response(
+-            response, run_manager, _is_structured_output(payload)
++            response, run_manager, structured_output
+         )
+
+     def _stream(
+@@ -742,6 +766,42 @@ class ChatNVIDIA(BaseChatModel):
+             messages, stop, stream=True, **kwargs
+         )
+         structured_output = _is_structured_output(payload)
++
++        if _nemo_flow.available():
++            request = _nemo_flow.make_request(payload, extra_headers)
++            collected: list[dict] = []
++
++            async def _call(req: Any) -> Any:
++                async for chunk in self._client.aget_req_stream(
++                    payload=req.content, extra_headers=dict(req.headers)
++                ):
++                    yield chunk
++
++            def _collector(chunk: Any) -> None:
++                collected.append(chunk)
++
++            def _finalizer() -> dict:
++                return collected[-1] if collected else {}
++
++            async def _run() -> list[dict]:
++                stream = await _nemo_flow.llm_stream_execute(
++                    self.model, request, _call, _collector, _finalizer
++                )
++                chunks: list[dict] = []
++                async for chunk_dict in stream:
++                    chunks.append(chunk_dict)
++                return chunks
++
++            chunk_dicts = _nemo_flow.run_sync(_run())
++            for chunk_dict in chunk_dicts:
++                lc_chunk = self._process_stream_chunk(
++                    chunk_dict, run_manager, structured_output
++                )
++                if run_manager:
++                    run_manager.on_llm_new_token(lc_chunk.text, chunk=lc_chunk)
++                yield lc_chunk
++            return
++
+         for response in self._client.get_req_stream(
+             payload=payload, extra_headers=extra_headers
+         ):
+@@ -761,11 +821,32 @@ class ChatNVIDIA(BaseChatModel):
+         _, payload, extra_headers = self._prepare_inputs_and_payload(
+             messages, stop, stream=False, **kwargs
+         )
++        structured_output = _is_structured_output(payload)
++
++        if _nemo_flow.available():
++            request = _nemo_flow.make_request(payload, extra_headers)
++
++            async def _call(req: Any) -> dict:
++                raw = await self._client.aget_req(
++                    payload=req.content, extra_headers=dict(req.headers)
++                )
++                resp, _ = self._client.postprocess(raw)
++                return resp
++
++            resp_dict = await _nemo_flow.llm_execute(self.model, request, _call)
++            self._set_callback_out(resp_dict, run_manager)
++            parsed = self._custom_postprocess(
++                resp_dict, streaming=False, structured_output=structured_output
++            )
++            parsed.update({"role": "assistant"})
++            generation = ChatGeneration(message=AIMessage(**parsed))
++            return ChatResult(generations=[generation], llm_output=resp_dict)
++
+         response = await self._client.aget_req(
+             payload=payload, extra_headers=extra_headers
+         )
+         return self._process_generate_response(
+-            response, run_manager, _is_structured_output(payload)
++            response, run_manager, structured_output
+         )
+
+     async def _astream(
+@@ -780,6 +861,35 @@ class ChatNVIDIA(BaseChatModel):
+             messages, stop, stream=True, **kwargs
+         )
+         structured_output = _is_structured_output(payload)
++
++        if _nemo_flow.available():
++            request = _nemo_flow.make_request(payload, extra_headers)
++            collected: list[dict] = []
++
++            async def _call(req: Any) -> Any:
++                async for chunk in self._client.aget_req_stream(
++                    payload=req.content, extra_headers=dict(req.headers)
++                ):
++                    yield chunk
++
++            def _collector(chunk: Any) -> None:
++                collected.append(chunk)
++
++            def _finalizer() -> dict:
++                return collected[-1] if collected else {}
++
++            stream = await _nemo_flow.llm_stream_execute(
++                self.model, request, _call, _collector, _finalizer
++            )
++            async for chunk_dict in stream:
++                lc_chunk = self._process_stream_chunk(
++                    chunk_dict, run_manager, structured_output
++                )
++                if run_manager:
++                    await run_manager.on_llm_new_token(lc_chunk.text, chunk=lc_chunk)
++                yield lc_chunk
++            return
++
+         async for response in self._client.aget_req_stream(
+             payload=payload, extra_headers=extra_headers
+         ):

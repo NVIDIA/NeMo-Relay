@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# nvidia-nat-nexus-optimizer
+# nemo-flow-optimizer
 
-Optimizer layer for NeMo Agent Toolkit Nexus. This crate wires Nexus lifecycle
+Optimizer layer for NeMo Flow. This crate wires NeMo Flow lifecycle
 events into an online learning pipeline and can inject scheduling hints into
 LLM requests for downstream engines such as NVIDIA Dynamo.
 
@@ -43,20 +43,20 @@ in-memory backend and the rest of the optimizer pipeline.
 
 ```bash
 # Default build (in-memory backend only)
-cargo build -p nvidia-nat-nexus-optimizer
+cargo build -p nemo-flow-optimizer
 
 # Build with Redis backend support
-cargo build -p nvidia-nat-nexus-optimizer --features redis-backend
+cargo build -p nemo-flow-optimizer --features redis-backend
 ```
 
 ## Test
 
 ```bash
 # In-memory optimizer tests
-cargo test -p nvidia-nat-nexus-optimizer
+cargo test -p nemo-flow-optimizer
 
 # Redis-backed optimizer tests
-cargo test -p nvidia-nat-nexus-optimizer --features redis-backend redis_tests
+cargo test -p nemo-flow-optimizer --features redis-backend redis_tests
 ```
 
 For a broader test matrix across bindings, see [docs/testing.md](../../docs/testing.md).

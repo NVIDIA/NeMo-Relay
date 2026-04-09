@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# nvidia-nat-nexus-core
+# nemo-flow-core
 
-Rust core runtime library for the NeMo Agent Toolkit Nexus (Nexus) framework.
+Rust core runtime library for the NeMo Flow framework.
 
 ## Overview
 
@@ -31,14 +31,14 @@ This crate provides the foundational runtime that all language bindings build up
 | `src/registry.rs` | `SortedRegistry<T>` for priority-based middleware |
 | `src/stream.rs` | `LlmStreamWrapper` for SSE stream processing |
 | `src/atif.rs` | ATIF v1.6 trajectory exporter |
-| `src/error.rs` | `NexusError` enum (AlreadyExists, NotFound, etc.) |
+| `src/error.rs` | `FlowError` enum (AlreadyExists, NotFound, etc.) |
 | `src/json.rs` | JSON type alias and utilities |
 
 ## Build
 
 ```bash
-cargo build -p nvidia-nat-nexus-core
-cargo test -p nvidia-nat-nexus-core
+cargo build -p nemo-flow-core
+cargo test -p nemo-flow-core
 ```
 
 ## Documentation

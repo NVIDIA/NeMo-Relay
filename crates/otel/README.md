@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# nvidia-nat-nexus-otel
+# nemo-flow-otel
 
-OpenTelemetry OTLP subscriber support for NeMo Agent Toolkit Nexus.
+OpenTelemetry OTLP subscriber support for NeMo Flow.
 
 For the repository-level guide covering event mapping, binding-specific config
 objects, and runtime constraints, see
@@ -14,17 +14,17 @@ objects, and runtime constraints, see
 ## Overview
 
 This crate keeps OpenTelemetry support out of the core runtime while still
-integrating cleanly with Nexus's existing event subscriber model.
+integrating cleanly with NeMo Flow's existing event subscriber model.
 
-- Nexus `Start` events become OpenTelemetry spans
-- Nexus `End` events close those spans
-- Nexus `Mark` events become span events when a parent span is active
+- NeMo Flow `Start` events become OpenTelemetry spans
+- NeMo Flow `End` events close those spans
+- NeMo Flow `Mark` events become span events when a parent span is active
 - OTLP/HTTP and OTLP/gRPC exporters are supported
 
 ## Example
 
 ```rust
-use nvidia_nat_nexus_otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+use nemo_flow_otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let subscriber = OpenTelemetrySubscriber::new(config)?;
     subscriber.register("otel")?;
 
-    // ... run Nexus-instrumented work here ...
+    // ... run NeMo Flow-instrumented work here ...
 
     subscriber.deregister("otel")?;
     subscriber.force_flush()?;
@@ -47,6 +47,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Build
 
 ```bash
-cargo build -p nvidia-nat-nexus-otel
-cargo test -p nvidia-nat-nexus-otel
+cargo build -p nemo-flow-otel
+cargo test -p nemo-flow-otel
 ```

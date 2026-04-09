@@ -8,7 +8,7 @@
 
 use serde::Deserialize;
 
-use crate::error::{NexusError, Result};
+use crate::error::{FlowError, Result};
 use crate::json::Json;
 use crate::types::LLMRequest;
 
@@ -121,7 +121,7 @@ const MODELED_REQUEST_KEYS: &[&str] = &[
 impl LlmResponseCodec for OpenAIChatCodec {
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLLMResponse> {
         let raw: RawChatCompletion = serde_json::from_value(response.clone())
-            .map_err(|e| NexusError::Internal(format!("OpenAI Chat response decode: {e}")))?;
+            .map_err(|e| FlowError::Internal(format!("OpenAI Chat response decode: {e}")))?;
 
         // Extract first choice (if any).
         let choice = raw.choices.as_ref().and_then(|c| c.first());
@@ -190,7 +190,7 @@ impl LlmCodec for OpenAIChatCodec {
         let obj = request
             .content
             .as_object()
-            .ok_or_else(|| NexusError::Internal("request content is not an object".into()))?;
+            .ok_or_else(|| FlowError::Internal("request content is not an object".into()))?;
 
         // Extract messages (default to empty vec if absent).
         let messages: Vec<Message> = obj
@@ -231,14 +231,14 @@ impl LlmCodec for OpenAIChatCodec {
             .get("tools")
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()
-            .map_err(|e| NexusError::Internal(format!("OpenAI Chat tools decode: {e}")))?;
+            .map_err(|e| FlowError::Internal(format!("OpenAI Chat tools decode: {e}")))?;
 
         // Extract tool_choice.
         let tool_choice: Option<ToolChoice> = obj
             .get("tool_choice")
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()
-            .map_err(|e| NexusError::Internal(format!("OpenAI Chat tool_choice decode: {e}")))?;
+            .map_err(|e| FlowError::Internal(format!("OpenAI Chat tool_choice decode: {e}")))?;
 
         // Collect extra fields (keys not in MODELED_REQUEST_KEYS).
         let extra: serde_json::Map<String, Json> = obj
@@ -261,13 +261,13 @@ impl LlmCodec for OpenAIChatCodec {
         let mut content = original.content.clone();
         let obj = content
             .as_object_mut()
-            .ok_or_else(|| NexusError::Internal("original content is not an object".into()))?;
+            .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
 
         // Overlay messages.
         obj.insert(
             "messages".into(),
             serde_json::to_value(&annotated.messages)
-                .map_err(|e| NexusError::Internal(format!("OpenAI Chat messages encode: {e}")))?,
+                .map_err(|e| FlowError::Internal(format!("OpenAI Chat messages encode: {e}")))?,
         );
 
         // Overlay model if present.
@@ -287,7 +287,7 @@ impl LlmCodec for OpenAIChatCodec {
                 obj.insert(
                     "stop".into(),
                     serde_json::to_value(stop).map_err(|e| {
-                        NexusError::Internal(format!("OpenAI Chat stop encode: {e}"))
+                        FlowError::Internal(format!("OpenAI Chat stop encode: {e}"))
                     })?,
                 );
             }
@@ -306,7 +306,7 @@ impl LlmCodec for OpenAIChatCodec {
             obj.insert(
                 "tools".into(),
                 serde_json::to_value(tools)
-                    .map_err(|e| NexusError::Internal(format!("OpenAI Chat tools encode: {e}")))?,
+                    .map_err(|e| FlowError::Internal(format!("OpenAI Chat tools encode: {e}")))?,
             );
         }
 
@@ -315,7 +315,7 @@ impl LlmCodec for OpenAIChatCodec {
             obj.insert(
                 "tool_choice".into(),
                 serde_json::to_value(tool_choice).map_err(|e| {
-                    NexusError::Internal(format!("OpenAI Chat tool_choice encode: {e}"))
+                    FlowError::Internal(format!("OpenAI Chat tool_choice encode: {e}"))
                 })?,
             );
         }

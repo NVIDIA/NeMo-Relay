@@ -5,25 +5,25 @@ SPDX-License-Identifier: Apache-2.0
 
 # Observability with OpenInference
 
-Nexus can export scope, tool, LLM, and mark events as OTLP traces annotated
+NeMo Flow can export scope, tool, LLM, and mark events as OTLP traces annotated
 with OpenInference semantic conventions. The exporter implementation lives in
-the separate Rust crate `nvidia-nat-nexus-openinference`, and the Python,
+the separate Rust crate `nemo-flow-openinference`, and the Python,
 Node.js, Go, and WASM bindings expose language-native config objects on top of
 the same subscriber.
 
-Use this when you want Nexus activity to show up in Arize Phoenix or another
+Use this when you want NeMo Flow activity to show up in Arize Phoenix or another
 backend that understands OpenInference-style semantic attributes over OTLP.
 
 ## What Gets Emitted
 
-The subscriber maps Nexus lifecycle events like this:
+The subscriber maps NeMo Flow lifecycle events like this:
 
-- Nexus `Start` events open spans.
-- Nexus `End` events close spans.
-- Nexus `Mark` events become span events when a parent span is active.
+- NeMo Flow `Start` events open spans.
+- NeMo Flow `End` events close spans.
+- NeMo Flow `Mark` events become span events when a parent span is active.
 - Orphan `Mark` events fall back to zero-duration spans so they still export.
 
-In addition to the base Nexus JSON attributes, spans are annotated with
+In addition to the base NeMo Flow JSON attributes, spans are annotated with
 OpenInference fields such as:
 
 - `openinference.span.kind`
@@ -33,7 +33,7 @@ OpenInference fields such as:
 - `llm.model_name`
 - `tool.name`, `tool.parameters`, `tool_call.id`
 
-For LLM spans, `input.value` is derived from the request content only. Nexus
+For LLM spans, `input.value` is derived from the request content only. NeMo Flow
 does not copy request headers into that OpenInference field.
 
 Span kind mapping:
@@ -86,7 +86,7 @@ key headers.
 ```rust
 use std::time::Duration;
 
-use nvidia_nat_nexus_openinference::{OpenInferenceConfig, OtlpTransport};
+use nemo_flow_openinference::{OpenInferenceConfig, OtlpTransport};
 
 let config = OpenInferenceConfig::new()
     .with_transport(OtlpTransport::Grpc)
@@ -100,7 +100,7 @@ let config = OpenInferenceConfig::new()
 ### Python
 
 ```python
-config = nat_nexus.OpenInferenceConfig()
+config = nemo_flow.OpenInferenceConfig()
 config.transport = "grpc"
 config.endpoint = "http://127.0.0.1:4317"
 config.headers = {
@@ -125,8 +125,8 @@ const config = {
 ### Go
 
 ```go
-config := nat_nexus.NewOpenInferenceConfig()
-config.Transport = nat_nexus.OpenInferenceTransportGrpc
+config := nemo_flow.NewOpenInferenceConfig()
+config.Transport = nemo_flow.OpenInferenceTransportGrpc
 config.Endpoint = "http://127.0.0.1:4317"
 config.Headers["authorization"] = "Bearer <token>"
 config.Headers["x-tenant-id"] = "tenant-a"
@@ -152,7 +152,7 @@ The intended lifecycle is the same across languages:
 1. Create and populate the config object.
 2. Construct the `OpenInferenceSubscriber`.
 3. Register it with a unique name.
-4. Run Nexus-instrumented work.
+4. Run NeMo Flow-instrumented work.
 5. Deregister it.
 6. `force_flush()` / `forceFlush()` if you need deterministic delivery before exit.
 7. `shutdown()` when the exporter is no longer needed.
@@ -162,8 +162,8 @@ The intended lifecycle is the same across languages:
 ```rust
 use std::time::Duration;
 
-use nvidia_nat_nexus_core::{ScopeAttributes, ScopeType, nat_nexus_event, nat_nexus_pop_scope, nat_nexus_push_scope};
-use nvidia_nat_nexus_openinference::{OpenInferenceConfig, OpenInferenceSubscriber, OtlpTransport};
+use nemo_flow_core::{ScopeAttributes, ScopeType, nemo_flow_event, nemo_flow_pop_scope, nemo_flow_push_scope};
+use nemo_flow_openinference::{OpenInferenceConfig, OpenInferenceSubscriber, OtlpTransport};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = OpenInferenceConfig::new()
@@ -179,7 +179,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let subscriber = OpenInferenceSubscriber::new(config)?;
     subscriber.register("openinference")?;
 
-    let handle = nat_nexus_push_scope(
+    let handle = nemo_flow_push_scope(
         "agent-turn",
         ScopeType::Agent,
         None,
@@ -188,13 +188,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(serde_json::json!({"phase": "start"})),
     )?;
 
-    nat_nexus_event(
+    nemo_flow_event(
         "tool-selection",
         Some(&handle),
         Some(serde_json::json!({"tool": "search"})),
         Some(serde_json::json!({"source": "rust"})),
     )?;
-    nat_nexus_pop_scope(&handle.uuid)?;
+    nemo_flow_pop_scope(&handle.uuid)?;
 
     subscriber.deregister("openinference")?;
     subscriber.force_flush()?;
@@ -209,9 +209,9 @@ For direct Rust integration, the crate-specific overview also lives in
 ## Python
 
 ```python
-import nat_nexus
+import nemo_flow
 
-config = nat_nexus.OpenInferenceConfig()
+config = nemo_flow.OpenInferenceConfig()
 config.endpoint = "http://127.0.0.1:4318/v1/traces"
 config.service_name = "demo-agent"
 config.service_namespace = "agents"
@@ -219,12 +219,12 @@ config.service_version = "0.1.0"
 config.instrumentation_scope = "demo-openinference"
 config.resource_attributes = {"deployment.environment": "dev"}
 
-subscriber = nat_nexus.OpenInferenceSubscriber(config)
+subscriber = nemo_flow.OpenInferenceSubscriber(config)
 subscriber.register("openinference")
 
 try:
-    with nat_nexus.scope.scope("agent-turn", nat_nexus.ScopeType.Agent) as handle:
-        nat_nexus.scope.event(
+    with nemo_flow.scope.scope("agent-turn", nemo_flow.ScopeType.Agent) as handle:
+        nemo_flow.scope.event(
             "tool-selection",
             handle=handle,
             data={"tool": "search"},
@@ -245,7 +245,7 @@ import {
   event,
   popScope,
   pushScope,
-} from "@nvidia/nat-nexus-node";
+} from "@nvidia/nemo-flow-node";
 
 const config = {
   endpoint: "http://127.0.0.1:4318/v1/traces",
@@ -275,7 +275,7 @@ try {
 ## Go
 
 ```go
-config := nat_nexus.NewOpenInferenceConfig()
+config := nemo_flow.NewOpenInferenceConfig()
 config.Endpoint = "http://127.0.0.1:4318/v1/traces"
 config.ServiceName = "demo-agent"
 config.ServiceNamespace = "agents"
@@ -283,7 +283,7 @@ config.ServiceVersion = "0.1.0"
 config.InstrumentationScope = "demo-openinference"
 config.ResourceAttributes["deployment.environment"] = "dev"
 
-subscriber, err := nat_nexus.NewOpenInferenceSubscriber(config)
+subscriber, err := nemo_flow.NewOpenInferenceSubscriber(config)
 if err != nil {
     panic(err)
 }
@@ -306,7 +306,7 @@ import init, {
   event,
   popScope,
   pushScope,
-} from "./pkg/nvidia_nat_nexus_wasm.js";
+} from "./pkg/nemo_flow_wasm.js";
 
 await init();
 

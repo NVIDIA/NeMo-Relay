@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! OpenInference subscriber support for Nexus.
+//! OpenInference subscriber support for NeMo Flow.
 //!
-//! This crate adapts Nexus lifecycle events into OpenInference trace spans:
+//! This crate adapts NeMo Flow lifecycle events into OpenInference trace spans:
 //!
 //! - scope/tool/LLM `Start` events open spans
 //! - matching `End` events close spans
@@ -13,7 +13,7 @@
 //! The public API is intentionally small:
 //!
 //! - [`OpenInferenceConfig`] configures the OTLP exporter and OpenInference metadata
-//! - [`OpenInferenceSubscriber`] exposes a Nexus [`EventSubscriberFn`] and
+//! - [`OpenInferenceSubscriber`] exposes a NeMo Flow [`EventSubscriberFn`] and
 //!   convenience `register` / `deregister` / `force_flush` / `shutdown` methods
 
 use std::collections::HashMap;
@@ -21,19 +21,19 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
-use nvidia_nat_nexus_core::{
-    nat_nexus_deregister_subscriber, nat_nexus_register_subscriber, Event, EventSubscriberFn,
-    HandleAttributes, NexusError, ScopeType, ToolAttributes,
+use nemo_flow_core::{
+    Event, EventSubscriberFn, FlowError, HandleAttributes, ScopeType, ToolAttributes,
+    nemo_flow_deregister_subscriber, nemo_flow_register_subscriber,
 };
-use openinference_semantic_conventions::attributes as oi;
 use openinference_semantic_conventions::SpanKind as OpenInferenceSpanKind;
+use openinference_semantic_conventions::attributes as oi;
 use opentelemetry::trace::{
     Span as _, SpanContext, SpanKind, TraceContextExt, Tracer, TracerProvider as _,
 };
 use opentelemetry::{Context, KeyValue};
 use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
-use opentelemetry_sdk::trace::{SdkTracer, SdkTracerProvider, Span};
 use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::trace::{SdkTracer, SdkTracerProvider, Span};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -52,7 +52,7 @@ use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::{JsCast, JsValue};
 #[cfg(target_arch = "wasm32")]
-use wasm_bindgen_futures::{spawn_local, JsFuture};
+use wasm_bindgen_futures::{JsFuture, spawn_local};
 #[cfg(target_arch = "wasm32")]
 use web_sys::{Request as WebRequest, RequestInit};
 
@@ -77,9 +77,9 @@ pub enum OpenInferenceError {
     /// The underlying tracer provider returned an error.
     #[error("OpenInference tracer provider error: {0}")]
     Provider(String),
-    /// Registration errors from Nexus core.
+    /// Registration errors from the core runtime.
     #[error(transparent)]
-    Nexus(#[from] NexusError),
+    Core(#[from] FlowError),
 }
 
 /// Supported OTLP trace transports.
@@ -112,10 +112,10 @@ impl Default for OpenInferenceConfig {
             endpoint: None,
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
-            service_name: "nat-nexus".to_string(),
+            service_name: "nemo-flow".to_string(),
             service_namespace: None,
             service_version: None,
-            instrumentation_scope: "nvidia-nat-nexus-openinference".to_string(),
+            instrumentation_scope: "nemo-flow-openinference".to_string(),
             timeout: Duration::from_secs(3),
             transport: OtlpTransport::HttpBinary,
         }
@@ -187,7 +187,7 @@ impl OpenInferenceConfig {
     }
 }
 
-/// OpenInference-backed Nexus subscriber.
+/// OpenInference-backed NeMo Flow subscriber.
 #[derive(Clone)]
 pub struct OpenInferenceSubscriber {
     inner: Arc<Inner>,
@@ -252,19 +252,19 @@ impl OpenInferenceSubscriber {
         }
     }
 
-    /// Returns the raw Nexus subscriber callback for custom registration flows.
+    /// Returns the raw NeMo Flow subscriber callback for custom registration flows.
     pub fn subscriber(&self) -> EventSubscriberFn {
         Arc::clone(&self.inner.subscriber)
     }
 
-    /// Registers this subscriber globally with the Nexus runtime.
+    /// Registers this subscriber globally with the NeMo Flow runtime.
     pub fn register(&self, name: &str) -> Result<()> {
-        nat_nexus_register_subscriber(name, self.subscriber()).map_err(Into::into)
+        nemo_flow_register_subscriber(name, self.subscriber()).map_err(Into::into)
     }
 
     /// Deregisters a previously-registered global subscriber by name.
     pub fn deregister(&self, name: &str) -> Result<bool> {
-        nat_nexus_deregister_subscriber(name).map_err(Into::into)
+        nemo_flow_deregister_subscriber(name).map_err(Into::into)
     }
 
     /// Flushes finished spans through the underlying tracer provider.
@@ -277,7 +277,7 @@ impl OpenInferenceSubscriber {
 
     /// Shuts down the underlying tracer provider.
     ///
-    /// Call `deregister(...)` first if the subscriber is still registered with Nexus.
+    /// Call `deregister(...)` first if the subscriber is still registered with NeMo Flow.
     pub fn shutdown(&self) -> Result<()> {
         let guard = self.inner.processor.lock().map_err(|_| {
             OpenInferenceError::Provider("the subscriber state lock was poisoned".to_string())
@@ -550,7 +550,7 @@ impl OpenInferenceEventProcessor {
             oi::OPENINFERENCE_SPAN_KIND,
             OpenInferenceSpanKind::Chain,
         ));
-        span_attributes.push(KeyValue::new("nexus.mark.orphan", true));
+        span_attributes.push(KeyValue::new("nemo_flow.mark.orphan", true));
         span.set_attributes(span_attributes);
         span.end_with_timestamp(timestamp);
     }
@@ -633,16 +633,16 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
     let handle_attributes = event.attributes();
     push_serialized(
         &mut attributes,
-        "nexus.handle_attributes_json",
+        "nemo_flow.handle_attributes_json",
         handle_attributes.as_ref(),
     );
-    push_serialized(&mut attributes, "nexus.start.data_json", event.data());
+    push_serialized(&mut attributes, "nemo_flow.start.data_json", event.data());
     push_serialized(
         &mut attributes,
-        "nexus.start.metadata_json",
+        "nemo_flow.start.metadata_json",
         event.metadata(),
     );
-    push_serialized(&mut attributes, "nexus.start.input_json", event.input());
+    push_serialized(&mut attributes, "nemo_flow.start.input_json", event.input());
     if matches!(event, Event::ToolStart(_)) {
         attributes.push(KeyValue::new(oi::tool::NAME, event.name().to_string()));
         attributes.push(KeyValue::new(
@@ -665,9 +665,13 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
 
 fn end_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = Vec::new();
-    push_serialized(&mut attributes, "nexus.end.data_json", event.data());
-    push_serialized(&mut attributes, "nexus.end.metadata_json", event.metadata());
-    push_serialized(&mut attributes, "nexus.end.output_json", event.output());
+    push_serialized(&mut attributes, "nemo_flow.end.data_json", event.data());
+    push_serialized(
+        &mut attributes,
+        "nemo_flow.end.metadata_json",
+        event.metadata(),
+    );
+    push_serialized(&mut attributes, "nemo_flow.end.output_json", event.output());
     if let Some(output) = event.output().and_then(to_json_string) {
         attributes.push(KeyValue::new(oi::output::VALUE, output));
         attributes.push(KeyValue::new(oi::output::MIME_TYPE, "application/json"));
@@ -678,9 +682,9 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
 fn mark_attributes(event: &Event) -> Vec<KeyValue> {
     let handle_attributes = event.attributes();
     let mut attributes = vec![
-        KeyValue::new("nexus.mark.uuid", event.uuid().to_string()),
+        KeyValue::new("nemo_flow.mark.uuid", event.uuid().to_string()),
         KeyValue::new(
-            "nexus.mark.parent_uuid",
+            "nemo_flow.mark.parent_uuid",
             event
                 .parent_uuid()
                 .map(|uuid| uuid.to_string())
@@ -689,13 +693,13 @@ fn mark_attributes(event: &Event) -> Vec<KeyValue> {
     ];
     push_serialized(
         &mut attributes,
-        "nexus.mark.attributes_json",
+        "nemo_flow.mark.attributes_json",
         handle_attributes.as_ref(),
     );
-    push_serialized(&mut attributes, "nexus.mark.data_json", event.data());
+    push_serialized(&mut attributes, "nemo_flow.mark.data_json", event.data());
     push_serialized(
         &mut attributes,
-        "nexus.mark.metadata_json",
+        "nemo_flow.mark.metadata_json",
         event.metadata(),
     );
     attributes
@@ -707,27 +711,30 @@ fn common_attributes(event: &Event) -> Vec<KeyValue> {
             oi::OPENINFERENCE_SPAN_KIND,
             openinference_span_kind(semantic_scope_type(event)),
         ),
-        KeyValue::new("nexus.uuid", event.uuid().to_string()),
+        KeyValue::new("nemo_flow.uuid", event.uuid().to_string()),
         KeyValue::new(
-            "nexus.parent_uuid",
+            "nemo_flow.parent_uuid",
             event
                 .parent_uuid()
                 .map(|uuid| uuid.to_string())
                 .unwrap_or_default(),
         ),
         KeyValue::new(
-            "nexus.scope_type",
+            "nemo_flow.scope_type",
             scope_type_name(semantic_scope_type(event)),
         ),
     ];
 
     if let Some(model_name) = event.model_name() {
-        attributes.push(KeyValue::new("nexus.model_name", model_name.to_string()));
+        attributes.push(KeyValue::new(
+            "nemo_flow.model_name",
+            model_name.to_string(),
+        ));
         attributes.push(KeyValue::new(oi::llm::MODEL_NAME, model_name.to_string()));
     }
     if let Some(tool_call_id) = event.tool_call_id() {
         attributes.push(KeyValue::new(
-            "nexus.tool_call_id",
+            "nemo_flow.tool_call_id",
             tool_call_id.to_string(),
         ));
         attributes.push(KeyValue::new(oi::tool_call::ID, tool_call_id.to_string()));
@@ -760,10 +767,10 @@ fn push_serialized<T: Serialize>(
     key: &'static str,
     value: Option<&T>,
 ) {
-    if let Some(value) = value {
-        if let Ok(json) = serde_json::to_string(value) {
-            attributes.push(KeyValue::new(key, json));
-        }
+    if let Some(value) = value
+        && let Ok(json) = serde_json::to_string(value)
+    {
+        attributes.push(KeyValue::new(key, json));
     }
 }
 
@@ -817,7 +824,7 @@ fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nvidia_nat_nexus_core::{Json, ScopeType};
+    use nemo_flow_core::{Json, ScopeType};
     use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
     use serde_json::json;
     use std::collections::HashMap;
@@ -835,8 +842,8 @@ mod tests {
     }
 
     fn reset_global() {
-        let context = nvidia_nat_nexus_core::global_context();
-        *context.write().unwrap() = nvidia_nat_nexus_core::NatNexusContextState::new();
+        let context = nemo_flow_core::global_context();
+        *context.write().unwrap() = nemo_flow_core::NemoFlowContextState::new();
     }
 
     fn make_provider() -> (
@@ -876,7 +883,7 @@ mod tests {
                 name,
                 None,
                 None,
-                nvidia_nat_nexus_core::ToolAttributes::empty(),
+                nemo_flow_core::ToolAttributes::empty(),
                 input,
                 None,
             ),
@@ -886,7 +893,7 @@ mod tests {
                 name,
                 None,
                 None,
-                nvidia_nat_nexus_core::LLMAttributes::empty(),
+                nemo_flow_core::LLMAttributes::empty(),
                 input,
                 None,
                 None,
@@ -897,7 +904,7 @@ mod tests {
                 name,
                 None,
                 None,
-                nvidia_nat_nexus_core::ScopeAttributes::empty(),
+                nemo_flow_core::ScopeAttributes::empty(),
                 scope_type,
             ),
         }
@@ -936,11 +943,8 @@ mod tests {
 
         let defaults = OpenInferenceConfig::default();
         assert_eq!(defaults.transport, OtlpTransport::HttpBinary);
-        assert_eq!(defaults.service_name, "nat-nexus");
-        assert_eq!(
-            defaults.instrumentation_scope,
-            "nvidia-nat-nexus-openinference"
-        );
+        assert_eq!(defaults.service_name, "nemo-flow");
+        assert_eq!(defaults.instrumentation_scope, "nemo-flow-openinference");
         assert_eq!(defaults.timeout, Duration::from_secs(3));
         assert!(defaults.headers.is_empty());
         assert!(defaults.resource_attributes.is_empty());
@@ -994,23 +998,23 @@ mod tests {
         let name = format!("otel_e2e_{}", Uuid::new_v4().simple());
 
         subscriber.register(&name).unwrap();
-        let handle = nvidia_nat_nexus_core::nat_nexus_push_scope(
+        let handle = nemo_flow_core::nemo_flow_push_scope(
             "otel_scope",
             ScopeType::Agent,
             None,
-            nvidia_nat_nexus_core::ScopeAttributes::empty(),
+            nemo_flow_core::ScopeAttributes::empty(),
             Some(json!({"scope": true})),
             Some(json!({"phase": "start"})),
         )
         .unwrap();
-        nvidia_nat_nexus_core::nat_nexus_event(
+        nemo_flow_core::nemo_flow_event(
             "otel_mark",
             Some(&handle),
             Some(json!({"step": 1})),
             Some(json!({"source": "rust-test"})),
         )
         .unwrap();
-        nvidia_nat_nexus_core::nat_nexus_pop_scope(&handle.uuid).unwrap();
+        nemo_flow_core::nemo_flow_pop_scope(&handle.uuid).unwrap();
 
         assert!(subscriber.deregister(&name).unwrap());
         subscriber.force_flush().unwrap();
@@ -1029,11 +1033,11 @@ mod tests {
             Some(&"AGENT".to_string())
         );
         assert_eq!(
-            attributes.get("nexus.start.data_json"),
+            attributes.get("nemo_flow.start.data_json"),
             Some(&"{\"scope\":true}".to_string())
         );
         assert_eq!(
-            attributes.get("nexus.start.metadata_json"),
+            attributes.get("nemo_flow.start.metadata_json"),
             Some(&"{\"phase\":\"start\"}".to_string())
         );
         assert_eq!(
@@ -1043,11 +1047,11 @@ mod tests {
 
         let event_attributes = attr_map(&span.events.events[0].attributes);
         assert_eq!(
-            event_attributes.get("nexus.mark.data_json"),
+            event_attributes.get("nemo_flow.mark.data_json"),
             Some(&"{\"step\":1}".to_string())
         );
         assert_eq!(
-            event_attributes.get("nexus.mark.metadata_json"),
+            event_attributes.get("nemo_flow.mark.metadata_json"),
             Some(&"{\"source\":\"rust-test\"}".to_string())
         );
     }
@@ -1130,23 +1134,23 @@ mod tests {
         let name = format!("otel_http_{}", Uuid::new_v4().simple());
 
         subscriber.register(&name).unwrap();
-        let handle = nvidia_nat_nexus_core::nat_nexus_push_scope(
+        let handle = nemo_flow_core::nemo_flow_push_scope(
             "otel_scope",
             ScopeType::Agent,
             None,
-            nvidia_nat_nexus_core::ScopeAttributes::empty(),
+            nemo_flow_core::ScopeAttributes::empty(),
             Some(json!({"scope": true})),
             None,
         )
         .unwrap();
-        nvidia_nat_nexus_core::nat_nexus_event(
+        nemo_flow_core::nemo_flow_event(
             "otel_mark",
             Some(&handle),
             Some(json!({"step": 1})),
             Some(json!({"source": "rust-http"})),
         )
         .unwrap();
-        nvidia_nat_nexus_core::nat_nexus_pop_scope(&handle.uuid).unwrap();
+        nemo_flow_core::nemo_flow_pop_scope(&handle.uuid).unwrap();
 
         assert!(subscriber.deregister(&name).unwrap());
         subscriber.force_flush().unwrap();
@@ -1190,7 +1194,7 @@ mod tests {
             "search",
             None,
             None,
-            nvidia_nat_nexus_core::ToolAttributes::empty(),
+            nemo_flow_core::ToolAttributes::empty(),
             Some(json!({"result": "ok"})),
             None,
         );
@@ -1206,13 +1210,16 @@ mod tests {
         assert_eq!(span.events.events[0].name.as_ref(), "checkpoint");
 
         let attributes = attr_map(&span.attributes);
-        assert_eq!(attributes.get("nexus.uuid"), Some(&root_uuid.to_string()));
         assert_eq!(
-            attributes.get("nexus.start.input_json"),
+            attributes.get("nemo_flow.uuid"),
+            Some(&root_uuid.to_string())
+        );
+        assert_eq!(
+            attributes.get("nemo_flow.start.input_json"),
             Some(&"{\"query\":\"hello\"}".to_string())
         );
         assert_eq!(
-            attributes.get("nexus.end.output_json"),
+            attributes.get("nemo_flow.end.output_json"),
             Some(&"{\"result\":\"ok\"}".to_string())
         );
     }
@@ -1240,7 +1247,7 @@ mod tests {
             "chat",
             None,
             None,
-            nvidia_nat_nexus_core::LLMAttributes::empty(),
+            nemo_flow_core::LLMAttributes::empty(),
             Some(json!({"message": "hello"})),
             None,
             None,
@@ -1282,7 +1289,7 @@ mod tests {
             "ping",
             None,
             None,
-            nvidia_nat_nexus_core::ToolAttributes::empty(),
+            nemo_flow_core::ToolAttributes::empty(),
             Some(json!({"ok": true})),
             None,
         ));
@@ -1330,7 +1337,7 @@ mod tests {
             "model-call",
             None,
             None,
-            nvidia_nat_nexus_core::LLMAttributes::empty(),
+            nemo_flow_core::LLMAttributes::empty(),
             None,
             None,
             None,
@@ -1341,7 +1348,7 @@ mod tests {
             "agent",
             None,
             None,
-            nvidia_nat_nexus_core::ScopeAttributes::empty(),
+            nemo_flow_core::ScopeAttributes::empty(),
             ScopeType::Agent,
         ));
 
@@ -1390,7 +1397,7 @@ mod tests {
 
         let attributes = attr_map(&span.attributes);
         assert_eq!(
-            attributes.get("nexus.mark.orphan"),
+            attributes.get("nemo_flow.mark.orphan"),
             Some(&"true".to_string())
         );
         assert_eq!(
@@ -1407,7 +1414,7 @@ mod tests {
             "model-call",
             None,
             None,
-            nvidia_nat_nexus_core::LLMAttributes::empty(),
+            nemo_flow_core::LLMAttributes::empty(),
             Some(json!({
                 "headers": {"authorization": "Bearer token"},
                 "content": {"messages": [{"role": "user", "content": "hello"}]},
@@ -1431,7 +1438,7 @@ mod tests {
             "model-call",
             None,
             None,
-            nvidia_nat_nexus_core::LLMAttributes::empty(),
+            nemo_flow_core::LLMAttributes::empty(),
             Some(json!({
                 "headers": {"authorization": "Bearer token"},
                 "prompt": "hello",
@@ -1453,7 +1460,7 @@ mod tests {
             "search",
             None,
             None,
-            nvidia_nat_nexus_core::ToolAttributes::LOCAL,
+            nemo_flow_core::ToolAttributes::LOCAL,
             Some(json!({"query": "hello"})),
             None,
         );

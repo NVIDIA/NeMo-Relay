@@ -10,7 +10,7 @@ payloads. Request codecs translate opaque `LLMRequest` payloads into
 `AnnotatedLLMRequest` objects for intercepts. Response codecs parse raw
 API responses into `AnnotatedLLMResponse` objects for event subscribers.
 
-Nexus ships three built-in codecs that implement both request and
+NeMo Flow ships three built-in codecs that implement both request and
 response decoding: **OpenAI Chat Completions**, **OpenAI Responses**, and
 **Anthropic Messages**.
 
@@ -222,7 +222,7 @@ annotated_response.has_tool_calls()  # True if tool_calls is non-empty
 
 ## Built-In Codecs
 
-Nexus ships three built-in codecs. Each implements **both** `LlmCodec`
+NeMo Flow ships three built-in codecs. Each implements **both** `LlmCodec`
 (request decode/encode) and `LlmResponseCodec` (response decode), so a
 single codec instance can be passed as both `codec=` and
 `response_codec=`.
@@ -304,7 +304,7 @@ Internally they are `Arc`-wrapped for zero-copy sharing across subscribers.
 ### Accessing Annotated Data in Subscribers
 
 ```python
-import nat_nexus
+import nemo_flow
 
 
 def my_subscriber(event):
@@ -323,7 +323,7 @@ def my_subscriber(event):
                 print(f"Tool call: {tc['name']}({tc['arguments']})")
 
 
-nat_nexus.subscribers.register("annotated_logger", my_subscriber)
+nemo_flow.subscribers.register("annotated_logger", my_subscriber)
 ```
 
 ## Using Codecs
@@ -334,13 +334,13 @@ Pass codec instances directly to the execute call. Both `codec` (request)
 and `response_codec` (response) are optional and independent:
 
 ```python
-import nat_nexus
-from nat_nexus.codecs import OpenAIChatCodec
+import nemo_flow
+from nemo_flow.codecs import OpenAIChatCodec
 
 codec = OpenAIChatCodec()
 
 # Use the same codec for both request and response
-result = await nat_nexus.llm.execute(
+result = await nemo_flow.llm.execute(
     "gpt-4",
     request,
     call_openai,
@@ -349,7 +349,7 @@ result = await nat_nexus.llm.execute(
 )
 
 # Or use only response codec (no request annotation)
-result = await nat_nexus.llm.execute(
+result = await nemo_flow.llm.execute(
     "gpt-4",
     request,
     call_openai,
@@ -372,20 +372,20 @@ string-based codec resolution -- you always pass an instance directly.
 ### Python
 
 ```python
-import nat_nexus
-from nat_nexus.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
+import nemo_flow
+from nemo_flow.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 # Built-in codecs implement both request and response decoding
 codec = OpenAIChatCodec()
 
-result = await nat_nexus.llm.execute(
+result = await nemo_flow.llm.execute(
     "gpt-4", request, call_openai,
     codec=codec,
     response_codec=codec,
 )
 
 # Streaming also supports both codecs
-stream = await nat_nexus.llm.stream_execute(
+stream = await nemo_flow.llm.stream_execute(
     "gpt-4", request, stream_openai, collector, finalizer,
     codec=codec,
     response_codec=codec,
@@ -400,20 +400,20 @@ annotated_resp = codec.decode_response(raw_response)
 
 ```go
 import (
-    "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus"
+    "github.com/NVIDIA/NeMo-Flow/go/nemo_flow"
 )
 
 // Create a codec handle (carries both request and response codec)
-codec := nat_nexus.NewOpenAIChatCodec()
-// Also: nat_nexus.NewOpenAIResponsesCodec()
-// Also: nat_nexus.NewAnthropicMessagesCodec()
+codec := nemo_flow.NewOpenAIChatCodec()
+// Also: nemo_flow.NewOpenAIResponsesCodec()
+// Also: nemo_flow.NewAnthropicMessagesCodec()
 
 // Pass request codec via WithLLMCodec, response codec via WithLLMResponseCodec
-response, err := nat_nexus.LlmCallExecute(
+response, err := nemo_flow.LlmCallExecute(
     "gpt-4", request, llmFunc,
-    nat_nexus.WithLLMCodec(myCodecFunc),
-    nat_nexus.WithLLMResponseCodec(codec),
-    nat_nexus.WithLLMModelName("gpt-4"),
+    nemo_flow.WithLLMCodec(myCodecFunc),
+    nemo_flow.WithLLMResponseCodec(codec),
+    nemo_flow.WithLLMModelName("gpt-4"),
 )
 ```
 
@@ -460,7 +460,7 @@ import init, {
     WasmOpenAIResponsesCodec,
     WasmAnthropicMessagesCodec,
     llmCallExecute,
-} from './pkg/nvidia_nat_nexus_wasm.js';
+} from './pkg/nemo_flow_wasm.js';
 
 await init();
 
@@ -500,8 +500,8 @@ const response = await llmCallExecute(
 Subclass `LlmCodec` and implement `decode` and `encode`:
 
 ```python
-from nat_nexus import LLMRequest, AnnotatedLLMRequest
-from nat_nexus.codecs import LlmCodec
+from nemo_flow import LLMRequest, AnnotatedLLMRequest
+from nemo_flow.codecs import LlmCodec
 
 
 class MyCodec(LlmCodec):
@@ -558,12 +558,12 @@ Implement the `LlmResponseCodec` protocol with a single
 `decode_response` method:
 
 ```python
-from nat_nexus.codecs import LlmResponseCodec
+from nemo_flow.codecs import LlmResponseCodec
 
 
 class MyResponseCodec(LlmResponseCodec):
     def decode_response(self, response: object) -> "AnnotatedLLMResponse":
-        from nat_nexus import AnnotatedLLMResponse
+        from nemo_flow import AnnotatedLLMResponse
 
         # Parse your custom API format into the normalized structure.
         # Return an AnnotatedLLMResponse with whichever fields are available.
@@ -598,7 +598,7 @@ class MyFullCodec(LlmCodec, LlmResponseCodec):
         ...
 
 codec = MyFullCodec()
-result = await nat_nexus.llm.execute(
+result = await nemo_flow.llm.execute(
     "my-llm", request, func,
     codec=codec,
     response_codec=codec,
@@ -612,8 +612,8 @@ All LLM request intercepts receive the raw `LLMRequest` and the optional
 registration function -- no legacy/annotated split.
 
 ```python
-from nat_nexus import LLMRequest, AnnotatedLLMRequest
-from nat_nexus.intercepts import register_llm_request
+from nemo_flow import LLMRequest, AnnotatedLLMRequest
+from nemo_flow.intercepts import register_llm_request
 
 
 def inject_system_prompt(name, request, annotated):
@@ -680,8 +680,8 @@ whichever is appropriate:
 
 ```python
 import re
-from nat_nexus import AnnotatedLLMRequest
-from nat_nexus.intercepts import register_llm_request
+from nemo_flow import AnnotatedLLMRequest
+from nemo_flow.intercepts import register_llm_request
 
 EMAIL_PATTERN = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b")
 
@@ -714,7 +714,7 @@ register_llm_request("pii-redactor", 5, False, redact_pii)
 ### Token Budget Enforcer
 
 ```python
-from nat_nexus.intercepts import register_llm_request
+from nemo_flow.intercepts import register_llm_request
 
 
 def enforce_token_budget(name, request, annotated):
@@ -743,7 +743,7 @@ register_llm_request("token-budget", 20, False, enforce_token_budget)
 ### Usage Tracking Subscriber
 
 ```python
-import nat_nexus
+import nemo_flow
 
 
 def track_usage(event):
@@ -763,7 +763,7 @@ def track_usage(event):
         )
 
 
-nat_nexus.subscribers.register("usage-tracker", track_usage)
+nemo_flow.subscribers.register("usage-tracker", track_usage)
 ```
 
 ### Adding Extra Body Parameters

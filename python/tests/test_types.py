@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for NeMo Agent Toolkit Nexus Python type bindings."""
+"""Tests for NeMo Flow Python type bindings."""
 
 import http.server
 import json
@@ -10,7 +10,7 @@ from typing import TypedDict, cast
 from uuid import uuid4
 
 import pytest
-from nat_nexus import (
+from nemo_flow import (
     AtifExporter,
     JsonObject,
     LLMAttributes,
@@ -445,8 +445,8 @@ class TestOpenTelemetryTypes:
 
         assert config.transport == "http_binary"
         assert config.endpoint is None
-        assert config.service_name == "nat-nexus"
-        assert config.instrumentation_scope == "nvidia-nat-nexus-otel"
+        assert config.service_name == "nemo-flow"
+        assert config.instrumentation_scope == "nemo-flow-otel"
         assert config.timeout_millis == 3000
         assert config.headers == {}
         assert config.resource_attributes == {}
@@ -534,8 +534,8 @@ class TestOpenInferenceTypes:
 
         assert config.transport == "http_binary"
         assert config.endpoint is None
-        assert config.service_name == "nat-nexus"
-        assert config.instrumentation_scope == "nvidia-nat-nexus-openinference"
+        assert config.service_name == "nemo-flow"
+        assert config.instrumentation_scope == "nemo-flow-openinference"
         assert config.timeout_millis == 3000
         assert config.headers == {}
         assert config.resource_attributes == {}

@@ -4,8 +4,8 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
 
-use nvidia_nat_nexus_wasm::api::*;
-use nvidia_nat_nexus_wasm::types::*;
+use nemo_flow_wasm::api::*;
+use nemo_flow_wasm::types::*;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -28,7 +28,7 @@ fn parse_json(s: &str) -> JsValue {
 
 #[wasm_bindgen_test]
 fn test_scope_local_register_deregister_tool_sanitize_request_guardrail() {
-    let scope = nat_nexus_push_scope(
+    let scope = nemo_flow_push_scope(
         "sl_guard_req",
         SCOPE_TYPE_AGENT,
         None,
@@ -45,12 +45,12 @@ fn test_scope_local_register_deregister_tool_sanitize_request_guardrail() {
     let removed = scope_deregister_tool_sanitize_request_guardrail(&uuid, "sl_san_req_1").unwrap();
     assert!(removed);
 
-    nat_nexus_pop_scope(&scope).unwrap();
+    nemo_flow_pop_scope(&scope).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_scope_local_register_deregister_tool_sanitize_response_guardrail() {
-    let scope = nat_nexus_push_scope(
+    let scope = nemo_flow_push_scope(
         "sl_guard_resp",
         SCOPE_TYPE_AGENT,
         None,
@@ -68,12 +68,12 @@ fn test_scope_local_register_deregister_tool_sanitize_response_guardrail() {
         scope_deregister_tool_sanitize_response_guardrail(&uuid, "sl_san_resp_1").unwrap();
     assert!(removed);
 
-    nat_nexus_pop_scope(&scope).unwrap();
+    nemo_flow_pop_scope(&scope).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_scope_local_register_deregister_tool_conditional_guardrail() {
-    let scope = nat_nexus_push_scope(
+    let scope = nemo_flow_push_scope(
         "sl_guard_cond",
         SCOPE_TYPE_AGENT,
         None,
@@ -91,7 +91,7 @@ fn test_scope_local_register_deregister_tool_conditional_guardrail() {
         scope_deregister_tool_conditional_execution_guardrail(&uuid, "sl_cond_1").unwrap();
     assert!(removed);
 
-    nat_nexus_pop_scope(&scope).unwrap();
+    nemo_flow_pop_scope(&scope).unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -100,7 +100,7 @@ async fn test_scope_local_sanitize_request_guardrail_modifies_args() {
     let sub = js_fn1("event", "globalThis.__wasm_sl_san_req_events.push(event)");
     register_subscriber("sl_san_exec_sub", sub).unwrap();
 
-    let scope = nat_nexus_push_scope(
+    let scope = nemo_flow_push_scope(
         "sl_guard_exec",
         SCOPE_TYPE_AGENT,
         None,
@@ -116,7 +116,7 @@ async fn test_scope_local_sanitize_request_guardrail_modifies_args() {
 
     let exec = js_fn1("args", "return args");
     let args = parse_json(r#"{"original": true}"#);
-    let result = nat_nexus_tool_call_execute(
+    let result = nemo_flow_tool_call_execute(
         "sl_guarded_tool",
         args,
         exec,
@@ -151,7 +151,7 @@ async fn test_scope_local_sanitize_request_guardrail_modifies_args() {
 
     js_sys::eval("delete globalThis.__wasm_sl_san_req_events").unwrap();
     scope_deregister_tool_sanitize_request_guardrail(&uuid, "sl_san_exec_1").unwrap();
-    nat_nexus_pop_scope(&scope).unwrap();
+    nemo_flow_pop_scope(&scope).unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -160,7 +160,7 @@ async fn test_scope_local_sanitize_response_guardrail_modifies_result() {
     let sub = js_fn1("event", "globalThis.__wasm_sl_san_resp_events.push(event)");
     register_subscriber("sl_resp_exec_sub", sub).unwrap();
 
-    let scope = nat_nexus_push_scope(
+    let scope = nemo_flow_push_scope(
         "sl_guard_resp_exec",
         SCOPE_TYPE_AGENT,
         None,
@@ -177,7 +177,7 @@ async fn test_scope_local_sanitize_response_guardrail_modifies_result() {
 
     let exec = js_fn1("args", "return {value: 99}");
     let args = parse_json(r#"{}"#);
-    let result = nat_nexus_tool_call_execute(
+    let result = nemo_flow_tool_call_execute(
         "sl_resp_tool",
         args,
         exec,
@@ -213,12 +213,12 @@ async fn test_scope_local_sanitize_response_guardrail_modifies_result() {
 
     js_sys::eval("delete globalThis.__wasm_sl_san_resp_events").unwrap();
     scope_deregister_tool_sanitize_response_guardrail(&uuid, "sl_resp_exec_1").unwrap();
-    nat_nexus_pop_scope(&scope).unwrap();
+    nemo_flow_pop_scope(&scope).unwrap();
 }
 
 #[wasm_bindgen_test]
 async fn test_scope_local_conditional_guardrail_blocks_execution() {
-    let scope = nat_nexus_push_scope(
+    let scope = nemo_flow_push_scope(
         "sl_guard_block",
         SCOPE_TYPE_AGENT,
         None,
@@ -235,7 +235,7 @@ async fn test_scope_local_conditional_guardrail_blocks_execution() {
 
     let exec = js_fn1("args", "return {should_not: 'run'}");
     let args = parse_json(r#"{}"#);
-    let result = nat_nexus_tool_call_execute(
+    let result = nemo_flow_tool_call_execute(
         "sl_blocked_tool",
         args,
         exec,
@@ -249,12 +249,12 @@ async fn test_scope_local_conditional_guardrail_blocks_execution() {
     assert!(result.is_err(), "Expected execution to be blocked");
 
     scope_deregister_tool_conditional_execution_guardrail(&uuid, "sl_block_1").unwrap();
-    nat_nexus_pop_scope(&scope).unwrap();
+    nemo_flow_pop_scope(&scope).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_scope_local_duplicate_guardrail_fails() {
-    let scope = nat_nexus_push_scope(
+    let scope = nemo_flow_push_scope(
         "sl_guard_dup",
         SCOPE_TYPE_AGENT,
         None,
@@ -272,12 +272,12 @@ fn test_scope_local_duplicate_guardrail_fails() {
     assert!(result.is_err());
 
     scope_deregister_tool_sanitize_request_guardrail(&uuid, "sl_dup_guard").unwrap();
-    nat_nexus_pop_scope(&scope).unwrap();
+    nemo_flow_pop_scope(&scope).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_scope_local_deregister_nonexistent_guardrail() {
-    let scope = nat_nexus_push_scope(
+    let scope = nemo_flow_push_scope(
         "sl_guard_nx",
         SCOPE_TYPE_AGENT,
         None,
@@ -292,7 +292,7 @@ fn test_scope_local_deregister_nonexistent_guardrail() {
         scope_deregister_tool_sanitize_request_guardrail(&uuid, "nonexistent_guard").unwrap();
     assert!(!removed);
 
-    nat_nexus_pop_scope(&scope).unwrap();
+    nemo_flow_pop_scope(&scope).unwrap();
 }
 
 // ===========================================================================
@@ -301,7 +301,7 @@ fn test_scope_local_deregister_nonexistent_guardrail() {
 
 #[wasm_bindgen_test]
 async fn test_scope_local_guardrail_cleaned_up_on_pop() {
-    let scope = nat_nexus_push_scope(
+    let scope = nemo_flow_push_scope(
         "sl_cleanup_guard",
         SCOPE_TYPE_AGENT,
         None,
@@ -315,12 +315,12 @@ async fn test_scope_local_guardrail_cleaned_up_on_pop() {
     let guardrail = js_fn2("name, args", "args.from_popped_scope = true; return args");
     scope_register_tool_sanitize_request_guardrail(&uuid, "sl_cleanup_san", 10, guardrail).unwrap();
 
-    nat_nexus_pop_scope(&scope).unwrap();
+    nemo_flow_pop_scope(&scope).unwrap();
 
     // After popping, the scope-local guardrail should no longer affect tool calls.
     let exec = js_fn1("args", "return args");
     let args = parse_json(r#"{"original": true}"#);
-    let result = nat_nexus_tool_call_execute(
+    let result = nemo_flow_tool_call_execute(
         "sl_cleanup_tool",
         args,
         exec,
@@ -343,7 +343,7 @@ async fn test_scope_local_guardrail_cleaned_up_on_pop() {
 
 #[wasm_bindgen_test]
 async fn test_scope_local_intercept_cleaned_up_on_pop() {
-    let scope = nat_nexus_push_scope(
+    let scope = nemo_flow_push_scope(
         "sl_cleanup_int",
         SCOPE_TYPE_AGENT,
         None,
@@ -360,11 +360,11 @@ async fn test_scope_local_intercept_cleaned_up_on_pop() {
     );
     scope_register_tool_request_intercept(&uuid, "sl_cleanup_req_int", 10, false, func).unwrap();
 
-    nat_nexus_pop_scope(&scope).unwrap();
+    nemo_flow_pop_scope(&scope).unwrap();
 
     let exec = js_fn1("args", "return args");
     let args = parse_json(r#"{"original": true}"#);
-    let result = nat_nexus_tool_call_execute(
+    let result = nemo_flow_tool_call_execute(
         "sl_cleanup_int_tool",
         args,
         exec,
@@ -387,7 +387,7 @@ async fn test_scope_local_intercept_cleaned_up_on_pop() {
 
 #[wasm_bindgen_test]
 async fn test_nested_scope_cleanup_preserves_parent() {
-    let parent = nat_nexus_push_scope(
+    let parent = nemo_flow_push_scope(
         "sl_parent",
         SCOPE_TYPE_AGENT,
         None,
@@ -409,7 +409,7 @@ async fn test_nested_scope_cleanup_preserves_parent() {
     )
     .unwrap();
 
-    let child = nat_nexus_push_scope(
+    let child = nemo_flow_push_scope(
         "sl_child",
         SCOPE_TYPE_FUNCTION,
         None,
@@ -425,12 +425,12 @@ async fn test_nested_scope_cleanup_preserves_parent() {
     scope_register_tool_sanitize_request_guardrail(&child_uuid, "sl_child_guard", 20, child_guard)
         .unwrap();
 
-    nat_nexus_pop_scope(&child).unwrap();
+    nemo_flow_pop_scope(&child).unwrap();
 
     // After child pop, parent intercept should still be active
     let exec = js_fn1("args", "return args");
     let args = parse_json(r#"{}"#);
-    let result = nat_nexus_tool_call_execute(
+    let result = nemo_flow_tool_call_execute(
         "sl_nested_tool",
         args,
         exec,
@@ -456,8 +456,8 @@ async fn test_nested_scope_cleanup_preserves_parent() {
 
     scope_deregister_tool_request_intercept(&parent_uuid, "sl_parent_guard").unwrap();
     // Pop the parent (now current) scope
-    let current = nat_nexus_get_handle().unwrap();
-    nat_nexus_pop_scope(&current).unwrap();
+    let current = nemo_flow_get_handle().unwrap();
+    nemo_flow_pop_scope(&current).unwrap();
 }
 
 // ===========================================================================
@@ -473,7 +473,7 @@ async fn test_global_and_scope_local_guardrails_both_run() {
     let global_guard = js_fn2("name, args", "args.global_ran = true; return args");
     register_tool_sanitize_request_guardrail("sl_merge_global", 5, global_guard).unwrap();
 
-    let scope = nat_nexus_push_scope(
+    let scope = nemo_flow_push_scope(
         "sl_merge_scope",
         SCOPE_TYPE_AGENT,
         None,
@@ -490,7 +490,7 @@ async fn test_global_and_scope_local_guardrails_both_run() {
 
     let exec = js_fn1("args", "return args");
     let args = parse_json(r#"{}"#);
-    nat_nexus_tool_call_execute(
+    nemo_flow_tool_call_execute(
         "sl_merged_tool",
         args,
         exec,
@@ -523,7 +523,7 @@ async fn test_global_and_scope_local_guardrails_both_run() {
 
     js_sys::eval("delete globalThis.__wasm_sl_merge_events").unwrap();
     scope_deregister_tool_sanitize_request_guardrail(&uuid, "sl_merge_local").unwrap();
-    nat_nexus_pop_scope(&scope).unwrap();
+    nemo_flow_pop_scope(&scope).unwrap();
     deregister_tool_sanitize_request_guardrail("sl_merge_global").unwrap();
 }
 
@@ -532,7 +532,7 @@ async fn test_global_and_scope_local_request_intercepts_both_run() {
     let global_int = js_fn2("name, args", "args.global_intercepted = true; return args");
     register_tool_request_intercept("sl_merge_global_int", 5, false, global_int).unwrap();
 
-    let scope = nat_nexus_push_scope(
+    let scope = nemo_flow_push_scope(
         "sl_merge_int_scope",
         SCOPE_TYPE_AGENT,
         None,
@@ -549,7 +549,7 @@ async fn test_global_and_scope_local_request_intercepts_both_run() {
 
     let exec = js_fn1("args", "return args");
     let args = parse_json(r#"{}"#);
-    let result = nat_nexus_tool_call_execute(
+    let result = nemo_flow_tool_call_execute(
         "sl_merge_int_tool",
         args,
         exec,
@@ -567,7 +567,7 @@ async fn test_global_and_scope_local_request_intercepts_both_run() {
     assert!(scope_intercepted.as_bool().unwrap());
 
     scope_deregister_tool_request_intercept(&uuid, "sl_merge_local_int").unwrap();
-    nat_nexus_pop_scope(&scope).unwrap();
+    nemo_flow_pop_scope(&scope).unwrap();
     deregister_tool_request_intercept("sl_merge_global_int").unwrap();
 }
 
@@ -576,7 +576,7 @@ async fn test_scope_local_and_global_execution_intercepts_merge() {
     let global_exec = js_fn1("args", "args.global_exec = true; return args");
     register_tool_execution_intercept("sl_merge_global_exec", 5, global_exec).unwrap();
 
-    let scope = nat_nexus_push_scope(
+    let scope = nemo_flow_push_scope(
         "sl_merge_exec_scope",
         SCOPE_TYPE_AGENT,
         None,
@@ -592,7 +592,7 @@ async fn test_scope_local_and_global_execution_intercepts_merge() {
 
     let original = js_fn1("args", "return args");
     let args = parse_json(r#"{"base": true}"#);
-    let result = nat_nexus_tool_call_execute(
+    let result = nemo_flow_tool_call_execute(
         "sl_merge_exec_tool",
         args,
         original,
@@ -613,6 +613,6 @@ async fn test_scope_local_and_global_execution_intercepts_merge() {
     );
 
     scope_deregister_tool_execution_intercept(&uuid, "sl_merge_local_exec").unwrap();
-    nat_nexus_pop_scope(&scope).unwrap();
+    nemo_flow_pop_scope(&scope).unwrap();
     deregister_tool_execution_intercept("sl_merge_global_exec").unwrap();
 }

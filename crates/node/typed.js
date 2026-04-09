@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Typed wrappers for Nexus Node.js execute APIs.
+ * Typed wrappers for NeMo Flow Node.js execute APIs.
  *
  * Provides generic typed versions of `toolCallExecute` and `llmCallExecute`
  * that use explicit `Codec<T>` objects to serialize/deserialize at the API
@@ -154,8 +154,8 @@ async function typedLlmStreamExecute(name, request, func, collector, finalizer, 
   // and pushes each chunk into Rust via the exported pushStreamChunk function.
   // The request and stream ID are passed as a wrapper object.
   const jsonFunc = (wrapper) => {
-    const req = wrapper.__nat_nexus_native;
-    const streamId = wrapper.__nat_nexus_stream_id;
+    const req = wrapper.__nemo_flow_native;
+    const streamId = wrapper.__nemo_flow_stream_id;
     (async () => {
       try {
         for await (const typedChunk of func(req)) {

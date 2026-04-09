@@ -981,14 +981,147 @@ dependencies = [
 ]
 
 [[package]]
-name = "nat-nexus-wasm"
+name = "nemo-flow-core"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "chrono",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "uuid",
+]
+
+[[package]]
+name = "nemo-flow-ffi"
+version = "0.1.0"
+dependencies = [
+ "cbindgen",
+ "libc",
+ "nemo-flow-core",
+ "nemo-flow-openinference",
+ "nemo-flow-optimizer",
+ "nemo-flow-otel",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "uuid",
+]
+
+[[package]]
+name = "nemo-flow-node"
+version = "0.1.0"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "nemo-flow-core",
+ "nemo-flow-openinference",
+ "nemo-flow-optimizer",
+ "nemo-flow-otel",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "uuid",
+]
+
+[[package]]
+name = "nemo-flow-openinference"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "getrandom 0.3.4",
+ "js-sys",
+ "nemo-flow-core",
+ "openinference-semantic-conventions",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "nemo-flow-optimizer"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "nemo-flow-core",
+ "redis",
+ "serde",
+ "serde_json",
+ "tdigest",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "uuid",
+]
+
+[[package]]
+name = "nemo-flow-otel"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "getrandom 0.3.4",
+ "js-sys",
+ "nemo-flow-core",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "nemo-flow-python"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "nemo-flow-core",
+ "nemo-flow-openinference",
+ "nemo-flow-optimizer",
+ "nemo-flow-otel",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "pythonize",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "uuid",
+]
+
+[[package]]
+name = "nemo-flow-wasm"
 version = "0.1.0"
 dependencies = [
  "js-sys",
- "nvidia-nat-nexus-core",
- "nvidia-nat-nexus-openinference",
- "nvidia-nat-nexus-optimizer",
- "nvidia-nat-nexus-otel",
+ "nemo-flow-core",
+ "nemo-flow-openinference",
+ "nemo-flow-optimizer",
+ "nemo-flow-otel",
  "send_wrapper",
  "serde",
  "serde-wasm-bindgen",
@@ -1037,139 +1170,6 @@ checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
  "libm",
-]
-
-[[package]]
-name = "nvidia-nat-nexus-core"
-version = "0.1.0"
-dependencies = [
- "bitflags",
- "chrono",
- "futures",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tokio-stream",
- "uuid",
-]
-
-[[package]]
-name = "nvidia-nat-nexus-ffi"
-version = "0.1.0"
-dependencies = [
- "cbindgen",
- "libc",
- "nvidia-nat-nexus-core",
- "nvidia-nat-nexus-openinference",
- "nvidia-nat-nexus-optimizer",
- "nvidia-nat-nexus-otel",
- "serde_json",
- "tokio",
- "tokio-stream",
- "uuid",
-]
-
-[[package]]
-name = "nvidia-nat-nexus-node"
-version = "0.1.0"
-dependencies = [
- "napi",
- "napi-build",
- "napi-derive",
- "nvidia-nat-nexus-core",
- "nvidia-nat-nexus-openinference",
- "nvidia-nat-nexus-optimizer",
- "nvidia-nat-nexus-otel",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "uuid",
-]
-
-[[package]]
-name = "nvidia-nat-nexus-openinference"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "getrandom 0.3.4",
- "js-sys",
- "nvidia-nat-nexus-core",
- "openinference-semantic-conventions",
- "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tonic",
- "uuid",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "nvidia-nat-nexus-optimizer"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "nvidia-nat-nexus-core",
- "redis",
- "serde",
- "serde_json",
- "tdigest",
- "thiserror",
- "tokio",
- "tokio-stream",
- "uuid",
-]
-
-[[package]]
-name = "nvidia-nat-nexus-otel"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "getrandom 0.3.4",
- "js-sys",
- "nvidia-nat-nexus-core",
- "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tonic",
- "uuid",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "nvidia-nat-nexus-python"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "nvidia-nat-nexus-core",
- "nvidia-nat-nexus-openinference",
- "nvidia-nat-nexus-optimizer",
- "nvidia-nat-nexus-otel",
- "pyo3",
- "pyo3-async-runtimes",
- "pythonize",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "uuid",
 ]
 
 [[package]]

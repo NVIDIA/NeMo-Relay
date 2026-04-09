@@ -10,7 +10,7 @@ call using the Python binding.
 
 All examples in this guide use:
 
-- an active Nexus scope
+- an active NeMo Flow scope
 - the managed execution APIs (`tools.execute(...)` and `llm.execute(...)`)
 
 This guide intentionally does not use the low-level manual lifecycle APIs such
@@ -41,11 +41,11 @@ Save the following as a Python script and run it with `uv run python ...`:
 ```python
 import asyncio
 
-import nat_nexus
+import nemo_flow
 
 
 async def main() -> None:
-    nat_nexus.subscribers.register(
+    nemo_flow.subscribers.register(
         "logger",
         lambda event: print(f"[{event.kind}] {event.name}"),
     )
@@ -53,8 +53,8 @@ async def main() -> None:
     async def search_tool(args: dict) -> dict:
         return {"results": [f"echo:{args['query']}"]}
 
-    with nat_nexus.scope.scope("quickstart-agent", nat_nexus.ScopeType.Agent):
-        result = await nat_nexus.tools.execute(
+    with nemo_flow.scope.scope("quickstart-agent", nemo_flow.ScopeType.Agent):
+        result = await nemo_flow.tools.execute(
             "search",
             {"query": "hello"},
             search_tool,
@@ -70,25 +70,25 @@ asyncio.run(main())
 ```python
 import asyncio
 
-import nat_nexus
+import nemo_flow
 
 
 async def main() -> None:
-    async def llm_func(request: nat_nexus.LLMRequest) -> dict:
+    async def llm_func(request: nemo_flow.LLMRequest) -> dict:
         return {
             "messages": request.content["messages"],
             "response": "ok",
         }
 
-    with nat_nexus.scope.scope("quickstart-agent", nat_nexus.ScopeType.Agent):
-        request = nat_nexus.LLMRequest(
+    with nemo_flow.scope.scope("quickstart-agent", nemo_flow.ScopeType.Agent):
+        request = nemo_flow.LLMRequest(
             headers={},
             content={
                 "model": "gpt-4",
                 "messages": [{"role": "user", "content": "Hello"}],
             },
         )
-        response = await nat_nexus.llm.execute("gpt-4", request, llm_func)
+        response = await nemo_flow.llm.execute("gpt-4", request, llm_func)
         print(response)
 
 
@@ -97,20 +97,20 @@ asyncio.run(main())
 
 ## Add Logging or Export
 
-- Use `nat_nexus.subscribers.register(...)` for console logging
-- Use `nat_nexus.AtifExporter(...)` when you want to export trajectories
-- Use `nat_nexus.OpenTelemetryConfig()` plus `nat_nexus.OpenTelemetrySubscriber(...)`
+- Use `nemo_flow.subscribers.register(...)` for console logging
+- Use `nemo_flow.AtifExporter(...)` when you want to export trajectories
+- Use `nemo_flow.OpenTelemetryConfig()` plus `nemo_flow.OpenTelemetrySubscriber(...)`
   when you want OTLP/OpenTelemetry traces
-- Use `nat_nexus.OpenInferenceConfig()` plus `nat_nexus.OpenInferenceSubscriber(...)`
+- Use `nemo_flow.OpenInferenceConfig()` plus `nemo_flow.OpenInferenceSubscriber(...)`
   when you want OTLP export with OpenInference semantics
 
 ## Common Errors
 
-- `ModuleNotFoundError: nat_nexus._native`
+- `ModuleNotFoundError: nemo_flow._native`
   Re-run `uv sync` so the native extension is built.
 - `RuntimeError` around scope handling
   Make sure `tools.execute(...)` and `llm.execute(...)` run inside an active
-  `nat_nexus.scope.scope(...)` block or after an explicit `scope.push(...)`.
+  `nemo_flow.scope.scope(...)` block or after an explicit `scope.push(...)`.
 
 ## Next Docs
 

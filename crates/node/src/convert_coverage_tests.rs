@@ -6,7 +6,7 @@ use serde_json::json;
 
 #[test]
 fn test_to_napi_err_preserves_message() {
-    let err = to_napi_err(NexusError::Internal("node binding failure".into()));
+    let err = to_napi_err(FlowError::Internal("node binding failure".into()));
     assert!(err.to_string().contains("node binding failure"));
 }
 

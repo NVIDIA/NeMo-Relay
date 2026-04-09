@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for NeMo Agent Toolkit Nexus LLM lifecycle, guardrails, intercepts, and streaming."""
+"""Tests for NeMo Flow LLM lifecycle, guardrails, intercepts, and streaming."""
 
 from typing import cast
 
 import pytest
-from nat_nexus import (
+from nemo_flow import (
     LLMAttributes,
     LLMEndEvent,
     LLMHandle,

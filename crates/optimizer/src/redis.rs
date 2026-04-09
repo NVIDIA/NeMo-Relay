@@ -25,8 +25,8 @@ use redis::aio::ConnectionManager;
 
 use crate::error::{OptimizerError, Result};
 use crate::storage::{StorageBackend, StorageBackendDyn};
-use crate::trie::serialization::TrieEnvelope;
 use crate::trie::AccumulatorState;
+use crate::trie::serialization::TrieEnvelope;
 use crate::types::{ExecutionPlan, RunRecord};
 
 /// A Redis-backed storage backend for cross-process shared state.
@@ -45,7 +45,7 @@ impl RedisBackend {
     /// # Arguments
     ///
     /// * `url` — Redis connection URL (e.g. `redis://127.0.0.1:6379`).
-    /// * `key_prefix` — String prepended to every Redis key (e.g. `"nexus:"`).
+    /// * `key_prefix` — String prepended to every Redis key (e.g. `"nemo_flow:"`).
     ///
     /// # Errors
     ///

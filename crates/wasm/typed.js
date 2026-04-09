@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Typed wrappers for Nexus WASM execute APIs.
+ * Typed wrappers for NeMo Flow WASM execute APIs.
  *
  * Provides generic typed versions of `toolCallExecute`, `llmCallExecute`,
  * and `llmStreamCallExecute` that use explicit `Codec<T>` objects to
@@ -22,7 +22,7 @@ import {
   toolCallExecute,
   llmCallExecute,
   llmStreamCallExecute,
-} from './pkg/nvidia_nat_nexus_wasm.js';
+} from './pkg/nemo_flow_wasm.js';
 
 /**
  * A passthrough codec that performs no conversion (identity).

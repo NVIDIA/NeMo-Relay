@@ -12,8 +12,8 @@ Covers:
 
 from typing import cast
 
-import nat_nexus
-from nat_nexus import (
+import nemo_flow
+from nemo_flow import (
     AnnotatedLLMRequest,
     AnnotatedLLMResponse,
     JsonObject,
@@ -21,7 +21,7 @@ from nat_nexus import (
     llm,
     subscribers,
 )
-from nat_nexus.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
+from nemo_flow.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 # ---------------------------------------------------------------------------
 # 1. Built-in codec construction
@@ -166,13 +166,13 @@ class TestBuiltinCodecDecodeResponse:
 class TestLlmResponseCodecProtocol:
     def test_protocol_importable(self):
         """LlmResponseCodec protocol is importable from codecs module."""
-        from nat_nexus.codecs import LlmResponseCodec
+        from nemo_flow.codecs import LlmResponseCodec
 
         assert LlmResponseCodec is not None
 
     def test_builtin_codecs_satisfy_protocol(self):
         """Built-in codecs satisfy LlmResponseCodec protocol."""
-        from nat_nexus.codecs import LlmResponseCodec
+        from nemo_flow.codecs import LlmResponseCodec
 
         assert isinstance(OpenAIChatCodec(), LlmResponseCodec)
         assert isinstance(OpenAIResponsesCodec(), LlmResponseCodec)
@@ -272,7 +272,7 @@ class TestResponseCodecObjectParam:
 class TestBuiltinCodecsTupleRemoved:
     def test_no_builtin_codecs_tuple(self):
         """BUILTIN_CODECS tuple is no longer in codecs module."""
-        from nat_nexus import codecs as codecs_mod
+        from nemo_flow import codecs as codecs_mod
 
         assert not hasattr(codecs_mod, "BUILTIN_CODECS")
 
@@ -284,15 +284,15 @@ class TestBuiltinCodecsTupleRemoved:
 
 class TestBuiltinCodecImports:
     def test_importable_from_codecs_module(self):
-        """Built-in codecs are importable from nat_nexus.codecs."""
-        from nat_nexus.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
+        """Built-in codecs are importable from nemo_flow.codecs."""
+        from nemo_flow.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
         assert OpenAIChatCodec is not None
         assert OpenAIResponsesCodec is not None
         assert AnthropicMessagesCodec is not None
 
     def test_not_reexported_from_top_level(self):
-        """Built-in codecs are not re-exported from nat_nexus."""
-        assert not hasattr(nat_nexus, "OpenAIChatCodec")
-        assert not hasattr(nat_nexus, "OpenAIResponsesCodec")
-        assert not hasattr(nat_nexus, "AnthropicMessagesCodec")
+        """Built-in codecs are not re-exported from nemo_flow."""
+        assert not hasattr(nemo_flow, "OpenAIChatCodec")
+        assert not hasattr(nemo_flow, "OpenAIResponsesCodec")
+        assert not hasattr(nemo_flow, "AnthropicMessagesCodec")

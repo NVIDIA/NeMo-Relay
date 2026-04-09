@@ -118,7 +118,7 @@ unknown fields yield diagnostics according to `ConfigPolicy`.
 ### Python
 
 ```python
-from nat_nexus.optimizer import (
+from nemo_flow.optimizer import (
     BackendSpec,
     DynamoHintsComponent,
     OptimizerConfig,
@@ -175,7 +175,7 @@ await runtime.shutdown();
 ### Go
 
 ```go
-import optimizer "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/optimizer"
+import optimizer "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/optimizer"
 
 config := optimizer.NewConfig()
 config.State = &optimizer.StateConfig{
@@ -215,7 +215,7 @@ if err := runtime.Shutdown(); err != nil {
 ### WebAssembly
 
 ```javascript
-import init from "./pkg/nvidia_nat_nexus_wasm.js";
+import init from "./pkg/nemo_flow_wasm.js";
 import {
   Runtime,
   validateConfig,
@@ -245,7 +245,7 @@ await runtime.shutdown();
 ### Rust
 
 ```rust
-use nvidia_nat_nexus_optimizer::{
+use nemo_flow_optimizer::{
     BackendSpec, DynamoHintsComponentConfig, OptimizerConfig, OptimizerRuntime, StateConfig,
     TelemetryComponentConfig, ToolParallelismComponentConfig,
 };
@@ -290,7 +290,7 @@ backends or hot-cache state.
 ### Python
 
 ```python
-from nat_nexus.optimizer import (
+from nemo_flow.optimizer import (
     ExternalComponent,
     OptimizerConfig,
     OptimizerRuntime,
@@ -361,7 +361,7 @@ const runtime = new Runtime(config);
 import (
     "encoding/json"
 
-    optimizer "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/optimizer"
+    optimizer "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/optimizer"
 )
 
 pluginKind := "example.header_plugin"
@@ -401,7 +401,7 @@ config.Components = []optimizer.ComponentSpec{
 ### WebAssembly
 
 ```javascript
-import init from "./pkg/nvidia_nat_nexus_wasm.js";
+import init from "./pkg/nemo_flow_wasm.js";
 import {
   Runtime,
   registerPlugin,
@@ -443,7 +443,7 @@ const runtime = new Runtime({
 ```rust
 use std::sync::Arc;
 
-use nvidia_nat_nexus_optimizer::{
+use nemo_flow_optimizer::{
     register_hosted_plugin_handler, ConfigDiagnostic, HostedPluginHandler,
     HostedRegistrationContext, Result,
 };

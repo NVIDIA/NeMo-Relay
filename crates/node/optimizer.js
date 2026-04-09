@@ -17,7 +17,7 @@ function inMemoryBackend() {
   return { kind: 'in_memory', config: {} };
 }
 
-function redisBackend(url, keyPrefix = 'nexus:') {
+function redisBackend(url, keyPrefix = 'nemo_flow:') {
   return {
     kind: 'redis',
     config: { url, key_prefix: keyPrefix },
