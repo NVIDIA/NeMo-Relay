@@ -122,13 +122,15 @@ async def llm_execute(
     name: str,
     request: LLMRequest,
     func: Callable[[LLMRequest], TResponse] | Callable[[LLMRequest], Awaitable[TResponse]],
-    response_codec: Codec[TResponse],
+    response_json_codec: Codec[TResponse],
     *,
     handle: ScopeHandle | None = None,
     attributes: int | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
     model_name: str | None = None,
+    codec: LlmCodec | None = None,
+    response_codec: LlmResponseCodec | None = None,
 ) -> TResponse
 ```
 
@@ -136,7 +138,9 @@ Behavior:
 
 - `request` stays as an `LLMRequest`; it is not codec-encoded
 - `func(...)` returns a typed response
-- `response_codec` serializes that response into JSON for the middleware path
+- `response_json_codec` serializes that response into JSON for the middleware path
+- optional `codec` enables annotated request intercepts
+- optional `response_codec` adds an `AnnotatedLLMResponse` to emitted end events
 - The final JSON response is decoded back into `TResponse`
 
 ## `llm_stream_execute`
@@ -148,25 +152,29 @@ async def llm_stream_execute(
     func: Callable[[LLMRequest], AsyncIterator[TResponseChunk]],
     collector: Callable[[TResponseChunk], None],
     finalizer: Callable[[], TResponse],
-    chunk_codec: Codec[TResponseChunk],
-    response_codec: Codec[TResponse],
+    chunk_json_codec: Codec[TResponseChunk],
+    response_json_codec: Codec[TResponse],
     *,
     handle: ScopeHandle | None = None,
     attributes: int | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
     model_name: str | None = None,
+    codec: LlmCodec | None = None,
+    response_codec: LlmResponseCodec | None = None,
 ) -> LlmStream
 ```
 
 Behavior:
 
-- Each yielded typed chunk is encoded with `chunk_codec`
+- Each yielded typed chunk is encoded with `chunk_json_codec`
 - Streaming middleware sees JSON chunks
 - The user-supplied `collector(...)` receives typed chunks after JSON is
-  decoded back through `chunk_codec`
+  decoded back through `chunk_json_codec`
 - `finalizer()` returns a typed aggregated response, encoded with
-  `response_codec` before sanitize-response guardrails and end-event emission
+  `response_json_codec` before sanitize-response guardrails and end-event emission
+- optional `codec` enables annotated request intercepts
+- optional `response_codec` adds an `AnnotatedLLMResponse` to emitted end events
 
 ## Notes and Limits
 

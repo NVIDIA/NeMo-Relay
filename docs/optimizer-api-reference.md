@@ -109,37 +109,37 @@ Hosted plugin entry points:
 
 ## Node.js
 
-Primary optimizer exports are split across the generated addon and `typed.js`:
+Primary optimizer exports are available from `optimizer.js`:
 
-- `OptimizerRuntime`
-- `validateOptimizerConfig`
-- `defaultOptimizerConfig`
-- `optimizerInMemoryBackend`
-- `optimizerRedisBackend`
+- `Runtime`
+- `validateConfig`
+- `defaultConfig`
+- `inMemoryBackend`
+- `redisBackend`
 - `telemetryComponent`
 - `dynamoHintsComponent`
 - `toolParallelismComponent`
 - `externalComponent`
-- `registerOptimizerPlugin`
-- `deregisterOptimizerPlugin`
+- `registerPlugin`
+- `deregisterPlugin`
 
 Runtime lifecycle:
 
 ```javascript
-import { validateOptimizerConfig } from "./index.js";
 import {
-  OptimizerRuntime,
-  defaultOptimizerConfig,
-  optimizerInMemoryBackend,
+  Runtime,
+  defaultConfig,
+  inMemoryBackend,
   telemetryComponent,
-} from "./typed.js";
+  validateConfig,
+} from "./optimizer.js";
 
-const config = defaultOptimizerConfig();
-config.state = { backend: optimizerInMemoryBackend() };
+const config = defaultConfig();
+config.state = { backend: inMemoryBackend() };
 config.components = [telemetryComponent({ learners: ["latency_sensitivity"] })];
 
-const validation = validateOptimizerConfig(config);
-const runtime = new OptimizerRuntime(config);
+const validation = validateConfig(config);
+const runtime = new Runtime(config);
 const report = await runtime.report();
 await runtime.register();
 await runtime.deregister();
@@ -148,54 +148,56 @@ await runtime.shutdown();
 
 Hosted plugin entry points:
 
-- `registerOptimizerPlugin(pluginKind, handler)`
-- `deregisterOptimizerPlugin(pluginKind)`
+- `registerPlugin(pluginKind, handler)`
+- `deregisterPlugin(pluginKind)`
 - optional `handler.validate(instanceId, pluginConfig)`
 - required `handler.register(instanceId, pluginConfig, context)`
 
 ## Go
 
-Primary exports from `go/nat_nexus`:
+Primary exports from `go/nat_nexus/optimizer`:
 
-- `OptimizerConfig`
-- `OptimizerStateConfig`
-- `OptimizerBackendSpec`
-- `OptimizerComponentSpec`
-- `OptimizerConfigPolicy`
-- `OptimizerConfigReport`
-- `OptimizerConfigDiagnostic`
-- `OptimizerRuntime`
-- `NewOptimizerConfig`
-- `NewInMemoryOptimizerBackend`
-- `NewRedisOptimizerBackend`
+- `Config`
+- `StateConfig`
+- `BackendSpec`
+- `ComponentSpec`
+- `ConfigPolicy`
+- `ConfigReport`
+- `ConfigDiagnostic`
+- `Runtime`
+- `NewConfig`
+- `NewInMemoryBackend`
+- `NewRedisBackend`
 - `TelemetryComponent`
 - `DynamoHintsComponent`
 - `ToolParallelismComponent`
 - `ExternalComponent`
-- `ValidateOptimizerConfig`
-- `RegisterOptimizerPlugin`
-- `DeregisterOptimizerPlugin`
+- `ValidateConfig`
+- `RegisterPlugin`
+- `DeregisterPlugin`
 
 Runtime lifecycle:
 
 ```go
-config := nat_nexus.NewOptimizerConfig()
-config.State = &nat_nexus.OptimizerStateConfig{
-    Backend: nat_nexus.NewInMemoryOptimizerBackend(),
+import optimizer "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/optimizer"
+
+config := optimizer.NewConfig()
+config.State = &optimizer.StateConfig{
+    Backend: optimizer.NewInMemoryBackend(),
 }
-config.Components = []nat_nexus.OptimizerComponentSpec{
-    nat_nexus.TelemetryComponent(nat_nexus.TelemetryComponentConfig{
+config.Components = []optimizer.ComponentSpec{
+    optimizer.TelemetryComponent(optimizer.TelemetryComponentConfig{
         Learners: []string{"latency_sensitivity"},
     }),
 }
 
-report, err := nat_nexus.ValidateOptimizerConfig(config)
+report, err := optimizer.ValidateConfig(config)
 if err != nil {
     panic(err)
 }
 _ = report
 
-runtime, err := nat_nexus.NewOptimizerRuntime(config)
+runtime, err := optimizer.NewRuntime(config)
 if err != nil {
     panic(err)
 }
@@ -214,30 +216,38 @@ if err := runtime.Shutdown(); err != nil {
 
 Hosted plugin entry points:
 
-- `RegisterOptimizerPlugin(pluginKind, handler)`
-- `DeregisterOptimizerPlugin(pluginKind)`
+- `RegisterPlugin(pluginKind, handler)`
+- `DeregisterPlugin(pluginKind)`
 - optional `handler.Validate(instanceID, pluginConfig)`
 - required `handler.Register(instanceID, pluginConfig, ctx)`
 
 ## WebAssembly
 
-Primary exports from the generated WASM package:
+Primary optimizer exports are available from `optimizer.js`:
 
-- `OptimizerRuntime`
-- `validateOptimizerConfig`
-- `registerOptimizerPlugin`
-- `deregisterOptimizerPlugin`
+- `Runtime`
+- `validateConfig`
+- `defaultConfig`
+- `inMemoryBackend`
+- `redisBackend`
+- `telemetryComponent`
+- `dynamoHintsComponent`
+- `toolParallelismComponent`
+- `externalComponent`
+- `registerPlugin`
+- `deregisterPlugin`
 
-WASM uses plain JavaScript objects for config and component specs rather than a
-separate typed helper module.
+The generated WASM package still provides the low-level runtime and registration
+hooks consumed by `optimizer.js`.
 
 Runtime lifecycle:
 
 ```javascript
-import init, {
-  OptimizerRuntime,
-  validateOptimizerConfig,
-} from "./pkg/nvidia_nat_nexus_wasm.js";
+import init from "./pkg/nvidia_nat_nexus_wasm.js";
+import {
+  Runtime,
+  validateConfig,
+} from "./optimizer.js";
 
 await init();
 
@@ -255,8 +265,8 @@ const config = {
   ],
 };
 
-const validation = validateOptimizerConfig(config);
-const runtime = new OptimizerRuntime(config);
+const validation = validateConfig(config);
+const runtime = new Runtime(config);
 runtime.report();
 await runtime.register();
 runtime.deregister();
@@ -265,8 +275,8 @@ await runtime.shutdown();
 
 Hosted plugin entry points:
 
-- `registerOptimizerPlugin(pluginKind, handler)`
-- `deregisterOptimizerPlugin(pluginKind)`
+- `registerPlugin(pluginKind, handler)`
+- `deregisterPlugin(pluginKind)`
 - optional `handler.validate(instanceId, pluginConfig)`
 - required `handler.register(instanceId, pluginConfig, context)`
 

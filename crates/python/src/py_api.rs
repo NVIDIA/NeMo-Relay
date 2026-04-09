@@ -105,7 +105,7 @@ pub fn py_scope_stack_active() -> bool {
 /// Returns the topmost `ScopeHandle` or raises `RuntimeError` if the
 /// scope stack is empty.
 #[pyfunction]
-#[pyo3(signature = ())]
+#[pyo3(signature = () -> "ScopeHandle", text_signature = "() -> ScopeHandle")]
 fn nat_nexus_get_handle() -> PyResult<PyScopeHandle> {
     core::nat_nexus_get_handle()
         .map(PyScopeHandle::from)
@@ -127,7 +127,15 @@ fn nat_nexus_get_handle() -> PyResult<PyScopeHandle> {
 /// Raises:
 ///     RuntimeError: If the scope stack is empty and no parent handle is given.
 #[pyfunction]
-#[pyo3(signature = (name, scope_type, *, handle=None, attributes=None, data=None, metadata=None))]
+#[pyo3(signature = (
+    name: "str",
+    scope_type: "ScopeType",
+    *,
+    handle: "ScopeHandle | None"=None,
+    attributes: "ScopeAttributes | None"=None,
+    data: "object | None"=None,
+    metadata: "object | None"=None
+) -> "ScopeHandle", text_signature = "(name: str, scope_type: ScopeType, *, handle: ScopeHandle | None = None, attributes: ScopeAttributes | None = None, data: object | None = None, metadata: object | None = None) -> ScopeHandle")]
 fn nat_nexus_push_scope(
     name: &str,
     scope_type: PyScopeType,
@@ -162,6 +170,7 @@ fn nat_nexus_push_scope(
 ///     RuntimeError: If the scope is not the current top scope or is not found
 ///         on the stack.
 #[pyfunction]
+#[pyo3(signature = (handle: "ScopeHandle") -> "None", text_signature = "(handle: ScopeHandle) -> None")]
 fn nat_nexus_pop_scope(handle: &PyScopeHandle) -> PyResult<()> {
     core::nat_nexus_pop_scope(&handle.inner.uuid).map_err(to_py_err)
 }
@@ -174,7 +183,13 @@ fn nat_nexus_pop_scope(handle: &PyScopeHandle) -> PyResult<()> {
 ///     data: Optional JSON-serializable application data.
 ///     metadata: Optional JSON-serializable metadata.
 #[pyfunction]
-#[pyo3(signature = (name, *, handle=None, data=None, metadata=None))]
+#[pyo3(signature = (
+    name: "str",
+    *,
+    handle: "ScopeHandle | None"=None,
+    data: "object | None"=None,
+    metadata: "object | None"=None
+) -> "None", text_signature = "(name: str, *, handle: ScopeHandle | None = None, data: object | None = None, metadata: object | None = None) -> None")]
 fn nat_nexus_event(
     name: &str,
     handle: Option<PyScopeHandle>,
@@ -207,7 +222,16 @@ fn nat_nexus_event(
 /// Returns:
 ///     A ``ToolHandle`` that must be passed to ``tool_call_end``.
 #[pyfunction]
-#[pyo3(signature = (name, args, *, handle=None, attributes=None, data=None, metadata=None, tool_call_id=None))]
+#[pyo3(signature = (
+    name: "str",
+    args: "object",
+    *,
+    handle: "ScopeHandle | None"=None,
+    attributes: "ToolAttributes | None"=None,
+    data: "object | None"=None,
+    metadata: "object | None"=None,
+    tool_call_id: "str | None"=None
+) -> "ToolHandle", text_signature = "(name: str, args: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None, tool_call_id: str | None = None) -> ToolHandle")]
 fn nat_nexus_tool_call(
     name: &str,
     args: &Bound<'_, PyAny>,
@@ -244,7 +268,13 @@ fn nat_nexus_tool_call(
 ///     data: Optional JSON-serializable application data.
 ///     metadata: Optional JSON-serializable metadata.
 #[pyfunction]
-#[pyo3(signature = (handle, result, *, data=None, metadata=None))]
+#[pyo3(signature = (
+    handle: "ToolHandle",
+    result: "object",
+    *,
+    data: "object | None"=None,
+    metadata: "object | None"=None
+) -> "None", text_signature = "(handle: ToolHandle, result: object, *, data: object | None = None, metadata: object | None = None) -> None")]
 fn nat_nexus_tool_call_end(
     handle: &PyToolHandle,
     result: &Bound<'_, PyAny>,
@@ -280,7 +310,16 @@ fn nat_nexus_tool_call_end(
 ///     intercepts. Sanitize guardrails do not rewrite the value returned to
 ///     the caller.
 #[pyfunction]
-#[pyo3(signature = (name, args, func, *, handle=None, attributes=None, data=None, metadata=None))]
+#[pyo3(signature = (
+    name: "str",
+    args: "object",
+    func: "object",
+    *,
+    handle: "ScopeHandle | None"=None,
+    attributes: "ToolAttributes | None"=None,
+    data: "object | None"=None,
+    metadata: "object | None"=None
+) -> "object", text_signature = "(name: str, args: object, func: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
 fn nat_nexus_tool_call_execute<'py>(
     py: Python<'py>,
@@ -345,7 +384,16 @@ fn nat_nexus_tool_call_execute<'py>(
 ///     An ``LLMHandle`` that must be passed to ``llm_call_end``.
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (name, request, *, handle=None, attributes=None, data=None, metadata=None, model_name=None))]
+#[pyo3(signature = (
+    name: "str",
+    request: "LLMRequest",
+    *,
+    handle: "ScopeHandle | None"=None,
+    attributes: "LLMAttributes | None"=None,
+    data: "object | None"=None,
+    metadata: "object | None"=None,
+    model_name: "str | None"=None
+) -> "LLMHandle", text_signature = "(name: str, request: LLMRequest, *, handle: ScopeHandle | None = None, attributes: LLMAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None) -> LLMHandle")]
 fn nat_nexus_llm_call(
     name: &str,
     request: PyLLMRequest,
@@ -382,7 +430,13 @@ fn nat_nexus_llm_call(
 ///     data: Optional JSON-serializable application data.
 ///     metadata: Optional JSON-serializable metadata.
 #[pyfunction]
-#[pyo3(signature = (handle, response, *, data=None, metadata=None))]
+#[pyo3(signature = (
+    handle: "LLMHandle",
+    response: "object",
+    *,
+    data: "object | None"=None,
+    metadata: "object | None"=None
+) -> "None", text_signature = "(handle: LLMHandle, response: object, *, data: object | None = None, metadata: object | None = None) -> None")]
 fn nat_nexus_llm_call_end(
     handle: &PyLLMHandle,
     response: &Bound<'_, PyAny>,
@@ -419,7 +473,19 @@ fn nat_nexus_llm_call_end(
 ///     intercepts. Sanitize guardrails do not rewrite the value returned to
 ///     the caller.
 #[pyfunction]
-#[pyo3(signature = (name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None, codec=None, response_codec=None))]
+#[pyo3(signature = (
+    name: "str",
+    request: "LLMRequest",
+    func: "object",
+    *,
+    handle: "ScopeHandle | None"=None,
+    attributes: "LLMAttributes | None"=None,
+    data: "object | None"=None,
+    metadata: "object | None"=None,
+    model_name: "str | None"=None,
+    codec: "object | None"=None,
+    response_codec: "object | None"=None
+) -> "object", text_signature = "(name: str, request: LLMRequest, func: object, *, handle: ScopeHandle | None = None, attributes: LLMAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, codec: object | None = None, response_codec: object | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
 fn nat_nexus_llm_call_execute<'py>(
     py: Python<'py>,
@@ -515,7 +581,21 @@ fn nat_nexus_llm_call_execute<'py>(
 /// Returns:
 ///     An awaitable that resolves to an ``LlmStream`` async iterator of JSON chunks.
 #[pyfunction]
-#[pyo3(signature = (name, request, func, collector, finalizer, *, handle=None, attributes=None, data=None, metadata=None, model_name=None, codec=None, response_codec=None))]
+#[pyo3(signature = (
+    name: "str",
+    request: "LLMRequest",
+    func: "object",
+    collector: "object",
+    finalizer: "object",
+    *,
+    handle: "ScopeHandle | None"=None,
+    attributes: "LLMAttributes | None"=None,
+    data: "object | None"=None,
+    metadata: "object | None"=None,
+    model_name: "str | None"=None,
+    codec: "object | None"=None,
+    response_codec: "object | None"=None
+) -> "object", text_signature = "(name: str, request: LLMRequest, func: object, collector: object, finalizer: object, *, handle: ScopeHandle | None = None, attributes: LLMAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, codec: object | None = None, response_codec: object | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
 fn nat_nexus_llm_stream_call_execute<'py>(
     py: Python<'py>,

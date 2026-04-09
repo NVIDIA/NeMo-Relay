@@ -128,7 +128,7 @@ args: TArgs
   ├─ args_codec.to_json() ──→  json_args
   │                               │
   │                         request intercepts
-  │                         sanitize request guards
+  │                               │
   │                         execution intercepts
   │                               │
   │                         json_args_inner ──→ args_codec.from_json()
@@ -137,9 +137,7 @@ args: TArgs
   │                                                    │
   │                         result_codec.to_json() ←───┘
   │                               │
-  │                         sanitize response guards
-  │                               │
-  ├─ result_codec.from_json() ←──┘
+  ├─ result_codec.from_json() ←───┘
   │
 result: TResult
 ```
@@ -150,8 +148,9 @@ result: TResult
 
 ```python
 result = await typed.llm_execute(
-    name, request, func, response_codec,
+    name, request, func, response_json_codec,
     *, handle=None, attributes=None, data=None, metadata=None, model_name=None,
+    codec=None, response_codec=None,
 )
 ```
 
@@ -160,11 +159,9 @@ The `LLMRequest` passes through unchanged (not encoded via a codec). Only the **
 ```
 request (LLMRequest) ──→ middleware pipeline ──→ func(request) → typed_response
                                                       │
-                                              response_codec.to_json()
+                                         response_json_codec.to_json()
                                                       │
-                                              middleware (sanitize response)
-                                                      │
-                                              response_codec.from_json() → TResponse
+                                       response_json_codec.from_json() → TResponse
 ```
 
 ## LLM Stream Execute Flow
@@ -172,8 +169,9 @@ request (LLMRequest) ──→ middleware pipeline ──→ func(request) → t
 ```python
 stream = await typed.llm_stream_execute(
     name, request, func, collector, finalizer,
-    chunk_codec, response_codec,
+    chunk_json_codec, response_json_codec,
     *, handle=None, attributes=None, data=None, metadata=None, model_name=None,
+    codec=None, response_codec=None,
 )
 ```
 
@@ -182,9 +180,9 @@ Two codecs are needed — one for per-chunk encoding, one for the final aggregat
 ```
 func(request) yields TResponseChunk instances
   │
-  ├─ chunk_codec.to_json(chunk) ──→ JSON chunks flow through middleware
+  ├─ chunk_json_codec.to_json(chunk) ──→ JSON chunks flow through middleware
   │                                      │
-  │                                 chunk_codec.from_json(json_chunk)
+  │                            chunk_json_codec.from_json(json_chunk)
   │                                      │
   │                                 collector(typed_chunk)  ← user accumulates
   │
@@ -192,7 +190,7 @@ func(request) yields TResponseChunk instances
        │
        finalizer() → TResponse
        │
-       response_codec.to_json() ──→ sanitize response guardrails
+       response_json_codec.to_json() ──→ sanitize response guardrails
                                           │
                                      emit End event
 ```

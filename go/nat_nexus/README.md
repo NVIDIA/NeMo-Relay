@@ -19,8 +19,8 @@ This package wraps the Nexus C FFI layer via CGo, providing a Go-idiomatic API w
 - **Stream support** -- Go-native stream handling for LLM streaming responses.
 - **Scope-local middleware** -- `ScopeRegister*` functions for registering middleware scoped to a specific execution scope.
 - **Context isolation** -- `CreateScopeStack`/`CurrentScopeStack`/`SetThreadScopeStack` for per-request isolation in concurrent servers.
-- **Optimizer runtime** -- `OptimizerConfig`, `OptimizerRuntime`, validation helpers, and typed component builders.
-- **Hosted optimizer plugins** -- `RegisterOptimizerPlugin`, `DeregisterOptimizerPlugin`, `ExternalComponent`, and `OptimizerPluginContext` for callback-backed optimizer extensions.
+- **Optimizer runtime** -- the `optimizer` subpackage exposes `Config`, `Runtime`, validation helpers, and typed component builders.
+- **Hosted optimizer plugins** -- the `optimizer` subpackage exposes `RegisterPlugin`, `DeregisterPlugin`, `ExternalComponent`, and `PluginContext` for callback-backed optimizer extensions.
 
 ## Key Files
 
@@ -58,20 +58,23 @@ go test -race -v ./...
 
 ## Optimizer Runtime
 
-Go exposes typed optimizer config builders and a synchronous runtime wrapper.
+Go exposes typed optimizer config builders and a synchronous runtime wrapper
+through the `optimizer` subpackage.
 
 ```go
-config := nat_nexus.NewOptimizerConfig()
-config.State = &nat_nexus.OptimizerStateConfig{
-    Backend: nat_nexus.NewInMemoryOptimizerBackend(),
+import optimizer "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/optimizer"
+
+config := optimizer.NewConfig()
+config.State = &optimizer.StateConfig{
+    Backend: optimizer.NewInMemoryBackend(),
 }
-config.Components = []nat_nexus.OptimizerComponentSpec{
-    nat_nexus.TelemetryComponent(nat_nexus.TelemetryComponentConfig{
+config.Components = []optimizer.ComponentSpec{
+    optimizer.TelemetryComponent(optimizer.TelemetryComponentConfig{
         Learners: []string{"latency_sensitivity"},
     }),
 }
 
-runtime, err := nat_nexus.NewOptimizerRuntime(config)
+runtime, err := optimizer.NewRuntime(config)
 if err != nil {
     panic(err)
 }
@@ -84,24 +87,29 @@ Go plugins register callback handlers up front, then enable themselves through
 the optimizer config via `ExternalComponent(...)`.
 
 ```go
+import (
+    "encoding/json"
+
+    optimizer "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/optimizer"
+)
+
 pluginKind := "example.header_plugin"
-err := nat_nexus.RegisterOptimizerPlugin(pluginKind, nat_nexus.OptimizerPluginHandlerFuncs{
-    ValidateFunc: func(instanceID string, pluginConfig map[string]any) ([]nat_nexus.OptimizerConfigDiagnostic, error) {
+err := optimizer.RegisterPlugin(pluginKind, optimizer.PluginHandlerFuncs{
+    ValidateFunc: func(instanceID string, pluginConfig map[string]any) ([]optimizer.ConfigDiagnostic, error) {
         return nil, nil
     },
-    RegisterFunc: func(instanceID string, pluginConfig map[string]any, ctx *nat_nexus.OptimizerPluginContext) error {
-        return ctx.RegisterLlmRequestIntercept(
-            instanceID+".header",
+    RegisterFunc: func(instanceID string, pluginConfig map[string]any, ctx *optimizer.PluginContext) error {
+        return ctx.RegisterToolRequestIntercept(
+            instanceID+".tool",
             25,
             false,
-            func(name string, request map[string]any, annotated map[string]any) (map[string]any, map[string]any, error) {
-                headers, _ := request["headers"].(map[string]any)
-                if headers == nil {
-                    headers = map[string]any{}
-                }
-                headers["x-plugin"] = instanceID
-                request["headers"] = headers
-                return request, annotated, nil
+            func(name string, args json.RawMessage) json.RawMessage {
+                var payload map[string]any
+                _ = json.Unmarshal(args, &payload)
+                payload["goPlugin"] = instanceID
+                payload["tool"] = name
+                out, _ := json.Marshal(payload)
+                return out
             },
         )
     },
@@ -109,10 +117,10 @@ err := nat_nexus.RegisterOptimizerPlugin(pluginKind, nat_nexus.OptimizerPluginHa
 if err != nil {
     panic(err)
 }
-defer func() { _ = nat_nexus.DeregisterOptimizerPlugin(pluginKind) }()
+defer func() { _ = optimizer.DeregisterPlugin(pluginKind) }()
 ```
 
-`OptimizerPluginContext` exposes:
+`PluginContext` exposes:
 
 - `RegisterSubscriber(...)`
 - `RegisterLlmRequestIntercept(...)`

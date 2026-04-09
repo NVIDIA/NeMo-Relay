@@ -149,23 +149,23 @@ await runtime.shutdown()
 
 ```javascript
 import {
-  OptimizerRuntime,
-  defaultOptimizerConfig,
-  optimizerInMemoryBackend,
+  Runtime,
+  defaultConfig,
+  inMemoryBackend,
   telemetryComponent,
   dynamoHintsComponent,
   toolParallelismComponent,
-} from "./typed.js";
+} from "./optimizer.js";
 
-const config = defaultOptimizerConfig();
-config.state = { backend: optimizerInMemoryBackend() };
+const config = defaultConfig();
+config.state = { backend: inMemoryBackend() };
 config.components = [
   telemetryComponent({ learners: ["latency_sensitivity"] }),
   dynamoHintsComponent(),
   toolParallelismComponent(),
 ];
 
-const runtime = new OptimizerRuntime(config);
+const runtime = new Runtime(config);
 const report = await runtime.report();
 await runtime.register();
 await runtime.deregister();
@@ -175,19 +175,21 @@ await runtime.shutdown();
 ### Go
 
 ```go
-config := nat_nexus.NewOptimizerConfig()
-config.State = &nat_nexus.OptimizerStateConfig{
-    Backend: nat_nexus.NewInMemoryOptimizerBackend(),
+import optimizer "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/optimizer"
+
+config := optimizer.NewConfig()
+config.State = &optimizer.StateConfig{
+    Backend: optimizer.NewInMemoryBackend(),
 }
-config.Components = []nat_nexus.OptimizerComponentSpec{
-    nat_nexus.TelemetryComponent(nat_nexus.TelemetryComponentConfig{
+config.Components = []optimizer.ComponentSpec{
+    optimizer.TelemetryComponent(optimizer.TelemetryComponentConfig{
         Learners: []string{"latency_sensitivity"},
     }),
-    nat_nexus.DynamoHintsComponent(nat_nexus.NewDynamoHintsComponentConfig()),
-    nat_nexus.ToolParallelismComponent(nat_nexus.NewToolParallelismComponentConfig()),
+    optimizer.DynamoHintsComponent(optimizer.NewDynamoHintsComponentConfig()),
+    optimizer.ToolParallelismComponent(optimizer.NewToolParallelismComponentConfig()),
 }
 
-runtime, err := nat_nexus.NewOptimizerRuntime(config)
+runtime, err := optimizer.NewRuntime(config)
 if err != nil {
     panic(err)
 }
@@ -213,10 +215,11 @@ if err := runtime.Shutdown(); err != nil {
 ### WebAssembly
 
 ```javascript
-import init, {
-  OptimizerRuntime,
-  validateOptimizerConfig,
-} from "./pkg/nvidia_nat_nexus_wasm.js";
+import init from "./pkg/nvidia_nat_nexus_wasm.js";
+import {
+  Runtime,
+  validateConfig,
+} from "./optimizer.js";
 
 await init();
 
@@ -232,8 +235,8 @@ const config = {
   ],
 };
 
-const report = validateOptimizerConfig(config);
-const runtime = new OptimizerRuntime(config);
+const report = validateConfig(config);
+const runtime = new Runtime(config);
 await runtime.register();
 runtime.deregister();
 await runtime.shutdown();
@@ -287,7 +290,6 @@ backends or hot-cache state.
 ### Python
 
 ```python
-from nat_nexus import LLMRequest
 from nat_nexus.optimizer import (
     ExternalComponent,
     OptimizerConfig,
@@ -300,13 +302,11 @@ class HeaderPlugin:
         return []
 
     def register(self, instance_id, plugin_config, context):
-        def intercept(_name, request, annotated):
-            headers = dict(request.headers)
-            headers["x-plugin"] = instance_id
-            return LLMRequest(headers, request.content), annotated
+        def intercept(tool_name, args):
+            return {**args, "x_plugin": instance_id, "tool": tool_name}
 
-        context.register_llm_request_intercept(
-            f"{instance_id}.header",
+        context.register_tool_request_intercept(
+            f"{instance_id}.tool",
             25,
             False,
             intercept,
@@ -330,58 +330,57 @@ runtime = OptimizerRuntime(
 
 ```javascript
 import {
-  OptimizerRuntime,
-  defaultOptimizerConfig,
+  Runtime,
+  defaultConfig,
   externalComponent,
-  registerOptimizerPlugin,
-} from "./typed.js";
+  registerPlugin,
+} from "./optimizer.js";
 
-registerOptimizerPlugin("example.header_plugin", {
+registerPlugin("example.header_plugin", {
   validate(instanceId, pluginConfig) {
     return [];
   },
   register(instanceId, pluginConfig, context) {
-    context.registerLlmRequestIntercept(
-      `${instanceId}.header`,
+    context.registerToolRequestIntercept(
+      `${instanceId}.tool`,
       25,
       false,
-      (name, request, annotated) => [
-        {
-          headers: { ...request.headers, "x-plugin": instanceId },
-          content: request.content,
-        },
-        annotated,
-      ],
+      (_name, args) => ({ ...args, nodePlugin: instanceId }),
     );
   },
 });
 
-const config = defaultOptimizerConfig();
+const config = defaultConfig();
 config.components = [externalComponent("example.header_plugin", "plugin-1", {})];
-const runtime = new OptimizerRuntime(config);
+const runtime = new Runtime(config);
 ```
 
 ### Go
 
 ```go
+import (
+    "encoding/json"
+
+    optimizer "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/optimizer"
+)
+
 pluginKind := "example.header_plugin"
-err := nat_nexus.RegisterOptimizerPlugin(pluginKind, nat_nexus.OptimizerPluginHandlerFuncs{
-    ValidateFunc: func(instanceID string, pluginConfig map[string]any) ([]nat_nexus.OptimizerConfigDiagnostic, error) {
+err := optimizer.RegisterPlugin(pluginKind, optimizer.PluginHandlerFuncs{
+    ValidateFunc: func(instanceID string, pluginConfig map[string]any) ([]optimizer.ConfigDiagnostic, error) {
         return nil, nil
     },
-    RegisterFunc: func(instanceID string, pluginConfig map[string]any, ctx *nat_nexus.OptimizerPluginContext) error {
-        return ctx.RegisterLlmRequestIntercept(
-            instanceID+".header",
+    RegisterFunc: func(instanceID string, pluginConfig map[string]any, ctx *optimizer.PluginContext) error {
+        return ctx.RegisterToolRequestIntercept(
+            instanceID+".tool",
             25,
             false,
-            func(name string, request map[string]any, annotated map[string]any) (map[string]any, map[string]any, error) {
-                headers, _ := request["headers"].(map[string]any)
-                if headers == nil {
-                    headers = map[string]any{}
-                }
-                headers["x-plugin"] = instanceID
-                request["headers"] = headers
-                return request, annotated, nil
+            func(name string, args json.RawMessage) json.RawMessage {
+                var payload map[string]any
+                _ = json.Unmarshal(args, &payload)
+                payload["goPlugin"] = instanceID
+                payload["tool"] = name
+                out, _ := json.Marshal(payload)
+                return out
             },
         )
     },
@@ -390,9 +389,9 @@ if err != nil {
     panic(err)
 }
 
-config := nat_nexus.NewOptimizerConfig()
-config.Components = []nat_nexus.OptimizerComponentSpec{
-    nat_nexus.ExternalComponent(nat_nexus.ExternalComponentConfig{
+config := optimizer.NewConfig()
+config.Components = []optimizer.ComponentSpec{
+    optimizer.ExternalComponent(optimizer.ExternalComponentConfig{
         PluginKind: pluginKind,
         InstanceID: "plugin-1",
     }),
@@ -402,34 +401,29 @@ config.Components = []nat_nexus.OptimizerComponentSpec{
 ### WebAssembly
 
 ```javascript
-import init, {
-  OptimizerRuntime,
-  registerOptimizerPlugin,
-} from "./pkg/nvidia_nat_nexus_wasm.js";
+import init from "./pkg/nvidia_nat_nexus_wasm.js";
+import {
+  Runtime,
+  registerPlugin,
+} from "./optimizer.js";
 
 await init();
 
-registerOptimizerPlugin("example.header_plugin", {
+registerPlugin("example.header_plugin", {
   validate(instanceId, pluginConfig) {
     return [];
   },
   register(instanceId, pluginConfig, context) {
-    context.registerLlmRequestIntercept(
-      `${instanceId}.header`,
+    context.registerToolRequestIntercept(
+      `${instanceId}.tool`,
       25,
       false,
-      (name, request, annotated) => [
-        {
-          headers: { ...request.headers, "x-plugin": instanceId },
-          content: request.content,
-        },
-        annotated,
-      ],
+      (_name, args) => ({ ...args, wasmPlugin: instanceId }),
     );
   },
 });
 
-const runtime = new OptimizerRuntime({
+const runtime = new Runtime({
   version: 1,
   components: [
     {
@@ -491,9 +485,9 @@ Use validation before registration when you want compatibility warnings without
 constructing a running optimizer:
 
 - Python: `validate_optimizer_config(config)`
-- Node.js: `validateOptimizerConfig(config)`
-- Go: `ValidateOptimizerConfig(config)`
-- WebAssembly: `validateOptimizerConfig(config)`
+- Node.js: `validateConfig(config)` from `optimizer.js`
+- Go: `optimizer.ValidateConfig(config)`
+- WebAssembly: `validateConfig(config)` from `optimizer.js`
 - Rust: `OptimizerRuntime::validate_config(&config)`
 
 Unknown component kinds and unknown fields are expected to remain forward

@@ -10,14 +10,18 @@ Covers:
 - response_codec parameter accepts object (not string)
 """
 
+from typing import cast
+
 import nat_nexus
 from nat_nexus import (
     AnnotatedLLMRequest,
     AnnotatedLLMResponse,
+    JsonObject,
     LLMRequest,
     llm,
     subscribers,
 )
+from nat_nexus.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 # ---------------------------------------------------------------------------
 # 1. Built-in codec construction
@@ -27,36 +31,36 @@ from nat_nexus import (
 class TestBuiltinCodecConstruction:
     def test_openai_chat_codec_constructable(self):
         """OpenAIChatCodec() is constructable."""
-        codec = nat_nexus.OpenAIChatCodec()
+        codec = OpenAIChatCodec()
         assert codec is not None
 
     def test_openai_responses_codec_constructable(self):
         """OpenAIResponsesCodec() is constructable."""
-        codec = nat_nexus.OpenAIResponsesCodec()
+        codec = OpenAIResponsesCodec()
         assert codec is not None
 
     def test_anthropic_messages_codec_constructable(self):
         """AnthropicMessagesCodec() is constructable."""
-        codec = nat_nexus.AnthropicMessagesCodec()
+        codec = AnthropicMessagesCodec()
         assert codec is not None
 
     def test_openai_chat_codec_has_methods(self):
         """OpenAIChatCodec has decode, encode, decode_response methods."""
-        codec = nat_nexus.OpenAIChatCodec()
+        codec = OpenAIChatCodec()
         assert hasattr(codec, "decode")
         assert hasattr(codec, "encode")
         assert hasattr(codec, "decode_response")
 
     def test_openai_responses_codec_has_methods(self):
         """OpenAIResponsesCodec has decode, encode, decode_response methods."""
-        codec = nat_nexus.OpenAIResponsesCodec()
+        codec = OpenAIResponsesCodec()
         assert hasattr(codec, "decode")
         assert hasattr(codec, "encode")
         assert hasattr(codec, "decode_response")
 
     def test_anthropic_messages_codec_has_methods(self):
         """AnthropicMessagesCodec has decode, encode, decode_response methods."""
-        codec = nat_nexus.AnthropicMessagesCodec()
+        codec = AnthropicMessagesCodec()
         assert hasattr(codec, "decode")
         assert hasattr(codec, "encode")
         assert hasattr(codec, "decode_response")
@@ -70,7 +74,7 @@ class TestBuiltinCodecConstruction:
 class TestBuiltinCodecDecodeEncode:
     def test_openai_chat_decode(self):
         """OpenAIChatCodec.decode() returns AnnotatedLLMRequest."""
-        codec = nat_nexus.OpenAIChatCodec()
+        codec = OpenAIChatCodec()
         request = LLMRequest(
             {},
             {
@@ -86,7 +90,7 @@ class TestBuiltinCodecDecodeEncode:
 
     def test_openai_chat_encode(self):
         """OpenAIChatCodec.encode() returns LLMRequest preserving unmodeled fields."""
-        codec = nat_nexus.OpenAIChatCodec()
+        codec = OpenAIChatCodec()
         original = LLMRequest(
             {"Authorization": "Bearer test"},
             {
@@ -102,10 +106,11 @@ class TestBuiltinCodecDecodeEncode:
             {"role": "assistant", "content": "hello"},
         ]
         encoded = codec.encode(annotated, original)
+        encoded_content = cast(JsonObject, encoded.content)
         assert isinstance(encoded, LLMRequest)
         assert encoded.headers == {"Authorization": "Bearer test"}
-        assert encoded.content["temperature"] == 0.7
-        assert len(encoded.content["messages"]) == 2
+        assert cast(float, encoded_content["temperature"]) == 0.7
+        assert len(cast(list[JsonObject], encoded_content["messages"])) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +121,7 @@ class TestBuiltinCodecDecodeEncode:
 class TestBuiltinCodecDecodeResponse:
     def test_openai_chat_decode_response(self):
         """OpenAIChatCodec.decode_response() returns AnnotatedLLMResponse."""
-        codec = nat_nexus.OpenAIChatCodec()
+        codec = OpenAIChatCodec()
         response = {
             "id": "chatcmpl-123",
             "model": "gpt-4",
@@ -137,7 +142,7 @@ class TestBuiltinCodecDecodeResponse:
 
     def test_anthropic_messages_decode_response(self):
         """AnthropicMessagesCodec.decode_response() returns AnnotatedLLMResponse."""
-        codec = nat_nexus.AnthropicMessagesCodec()
+        codec = AnthropicMessagesCodec()
         response = {
             "id": "msg_123",
             "type": "message",
@@ -169,9 +174,9 @@ class TestLlmResponseCodecProtocol:
         """Built-in codecs satisfy LlmResponseCodec protocol."""
         from nat_nexus.codecs import LlmResponseCodec
 
-        assert isinstance(nat_nexus.OpenAIChatCodec(), LlmResponseCodec)
-        assert isinstance(nat_nexus.OpenAIResponsesCodec(), LlmResponseCodec)
-        assert isinstance(nat_nexus.AnthropicMessagesCodec(), LlmResponseCodec)
+        assert isinstance(OpenAIChatCodec(), LlmResponseCodec)
+        assert isinstance(OpenAIResponsesCodec(), LlmResponseCodec)
+        assert isinstance(AnthropicMessagesCodec(), LlmResponseCodec)
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +195,7 @@ class TestResponseCodecObjectParam:
         subscribers.register("test-builtin-codec-obj", capture)
 
         try:
-            codec = nat_nexus.OpenAIChatCodec()
+            codec = OpenAIChatCodec()
             request = LLMRequest(
                 {},
                 {
@@ -278,10 +283,16 @@ class TestBuiltinCodecsTupleRemoved:
 
 
 class TestBuiltinCodecImports:
-    def test_importable_from_top_level(self):
-        """Built-in codecs are importable from nat_nexus top level."""
-        from nat_nexus import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
+    def test_importable_from_codecs_module(self):
+        """Built-in codecs are importable from nat_nexus.codecs."""
+        from nat_nexus.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
         assert OpenAIChatCodec is not None
         assert OpenAIResponsesCodec is not None
         assert AnthropicMessagesCodec is not None
+
+    def test_not_reexported_from_top_level(self):
+        """Built-in codecs are not re-exported from nat_nexus."""
+        assert not hasattr(nat_nexus, "OpenAIChatCodec")
+        assert not hasattr(nat_nexus, "OpenAIResponsesCodec")
+        assert not hasattr(nat_nexus, "AnthropicMessagesCodec")

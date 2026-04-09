@@ -12,6 +12,10 @@
     "./typed": {
       "types": "./typed.d.ts",
       "default": "./typed.js"
+    },
+    "./optimizer": {
+      "types": "./optimizer.d.ts",
+      "default": "./optimizer.js"
     }
   },
   "napi": {

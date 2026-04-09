@@ -1,47 +1,24 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tool lifecycle operations.
+"""Tool lifecycle helpers.
 
-Provides both manual and managed tool-call workflows.
+Use this module when you want Nexus to emit tool start and end events around a
+piece of application logic.
 
-Functions:
-    call(name, args, *, handle=None, attributes=None, data=None, metadata=None, tool_call_id=None)
-        Begin a tool call manually. Returns a ``ToolHandle`` that must later
-        be passed to ``call_end``. Emits a ``Start`` event. The optional
-        ``tool_call_id`` is an external correlation ID propagated to events
-        for ATIF trajectory linking.
+``execute()`` is the usual entry point and runs the full middleware pipeline.
+``call()`` and ``call_end()`` are the lower-level manual lifecycle APIs.
 
-    call_end(handle, result, *, data=None, metadata=None)
-        End a manual tool call. Records the result and emits an ``End`` event.
-
-    execute(name, args, func, *, handle=None, attributes=None, data=None, metadata=None)
-        Execute a tool call through the full middleware pipeline (conditional-
-        execution guardrails on raw args → request intercepts →
-        sanitize-request guardrails for event payloads → execution intercepts → *func* →
-        sanitize-response guardrails for event payloads). On rejection,
-        only a standalone Mark event is emitted and ``GuardrailRejected`` is
-        raised. Returns an awaitable of the final result.
-
-    request_intercepts(name, args)
-        Run the registered tool request intercept chain on the given arguments.
-        Returns the transformed arguments.
-
-    conditional_execution(name, args)
-        Run the registered tool conditional execution guardrail chain.
-        Raises ``RuntimeError`` if any guardrail rejects.
-
-Example::
-
+Example:
+    ```python
     import nat_nexus
 
-    # Managed execution (recommended)
-    result = await nat_nexus.tools.execute("search", {"q": "hello"}, my_search)
+    async def search(args):
+        return {"result": args["query"].upper()}
 
-    # Manual lifecycle
-    handle = nat_nexus.tools.call("search", {"q": "hello"})
-    result = my_search({"q": "hello"})
-    nat_nexus.tools.call_end(handle, result)
+    result = await nat_nexus.tools.execute("search", {"query": "hello"}, search)
+    assert result == {"result": "HELLO"}
+    ```
 """
 
 from nat_nexus._native import (
@@ -62,22 +39,42 @@ from nat_nexus._native import (
 
 
 def call(name, args, *, handle=None, attributes=None, data=None, metadata=None, tool_call_id=None):
-    """Begin a tool call manually.
-
-    Emits a ``Start`` event and returns a ``ToolHandle`` that must later be
-    passed to ``call_end()`` to complete the tool call lifecycle.
+    """Start a manual tool span and return its ``ToolHandle``.
 
     Args:
-        name: Tool name identifier.
-        args: JSON-serializable tool arguments.
-        handle: Optional parent scope handle. Defaults to the current top of stack.
-        attributes: Optional ``ToolAttributes`` bitflags.
-        data: Optional JSON-serializable application data payload.
-        metadata: Optional JSON-serializable metadata payload.
-        tool_call_id: Optional external correlation ID for ATIF trajectory linking.
+        name: Tool name recorded on emitted lifecycle events.
+        args: JSON-compatible tool arguments to associate with the call.
+        handle: Optional parent scope handle. When omitted, the current scope
+            becomes the parent.
+        attributes: Optional native tool attributes attached to the start event.
+        data: Optional JSON payload recorded on the emitted start event.
+        metadata: Optional JSON metadata recorded on the emitted start event.
+        tool_call_id: Optional provider-specific tool call identifier to attach
+            to the emitted events.
 
     Returns:
-        A ``ToolHandle`` for use with ``call_end()``.
+        ToolHandle: Handle used to finish the manual span with ``call_end()``.
+
+    Example:
+        ```python
+        import nat_nexus
+
+        handle = nat_nexus.tools.call(
+            "search",
+            {"query": "hello"},
+            handle=None,
+            attributes=None,
+            data={"attempt": 1},
+            metadata={"path": "manual"},
+            tool_call_id="tool-call-1",
+        )
+        nat_nexus.tools.call_end(
+            handle,
+            {"result": "ok"},
+            data={"cached": False},
+            metadata={"status": "success"},
+        )
+        ```
     """
     return _native_tool_call(
         name, args, handle=handle, attributes=attributes, data=data, metadata=metadata, tool_call_id=tool_call_id
@@ -85,43 +82,66 @@ def call(name, args, *, handle=None, attributes=None, data=None, metadata=None, 
 
 
 def call_end(handle, result, *, data=None, metadata=None):
-    """End a manual tool call.
-
-    Records the result and emits an ``End`` event.
+    """Finish a manual tool span started by ``call()``.
 
     Args:
-        handle: The ``ToolHandle`` returned by ``call()``.
-        result: JSON-serializable tool result.
-        data: Optional JSON-serializable application data payload.
-        metadata: Optional JSON-serializable metadata payload.
+        handle: Tool handle returned by ``call()``.
+        result: JSON-compatible tool result to record on the end event.
+        data: Optional JSON payload recorded on the emitted end event.
+        metadata: Optional JSON metadata recorded on the emitted end event.
     """
     return _native_tool_call_end(handle, result, data=data, metadata=metadata)
 
 
 def execute(name, args, func, *, handle=None, attributes=None, data=None, metadata=None):
-    """Execute a tool call through the full middleware pipeline.
+    """Run a tool through the managed middleware pipeline.
 
-    Runs conditional-execution guardrails (on raw args) -> request intercepts ->
-    sanitize-request guardrails for the emitted ``Start`` event ->
-    execution intercepts -> *func* -> sanitize-response guardrails for the
-    emitted ``End`` event. On rejection, only a standalone ``Mark`` event is
-    emitted (no ``Start``/``End`` pair) and ``GuardrailRejected`` is raised.
+    Pipeline order:
+
+    1. tool conditional-execution guardrails
+    2. tool request intercepts
+    3. tool sanitize-request guardrails for emitted start events
+    4. tool execution intercepts
+    5. ``func(args)``
+    6. tool sanitize-response guardrails for emitted end events
 
     Args:
-        name: Tool name identifier.
-        args: JSON-serializable tool arguments.
-        func: Async callable ``(args) -> result`` that performs the tool work.
-        handle: Optional parent scope handle. Defaults to the current top of stack.
-        attributes: Optional ``ToolAttributes`` bitflags.
-        data: Optional JSON-serializable application data payload.
-        metadata: Optional JSON-serializable metadata payload.
+        name: Tool name recorded on emitted lifecycle events.
+        args: JSON-compatible arguments passed through the middleware pipeline.
+        func: Tool implementation invoked as ``func(args)`` after guardrails and
+            intercepts run.
+        handle: Optional parent scope handle. When omitted, the current scope
+            becomes the parent.
+        attributes: Optional native tool attributes attached to the start event.
+        data: Optional JSON payload recorded on the emitted start event.
+        metadata: Optional JSON metadata recorded on the emitted start event.
 
     Returns:
-        An awaitable that resolves to the execution result after intercepts.
-        Sanitize guardrails only affect recorded event payloads.
+        Json: The raw result returned by ``func`` or by an execution intercept.
 
-    Raises:
-        GuardrailRejected: If a conditional-execution guardrail rejects the call.
+    Notes:
+        Sanitize guardrails affect emitted event payloads only. They do not
+        mutate the arguments passed to ``func`` or the value returned to the
+        caller.
+
+    Example:
+        ```python
+        import nat_nexus
+
+        async def local_tool(args):
+            return {"count": len(args["items"])}
+
+        result = await nat_nexus.tools.execute(
+            "count",
+            {"items": [1, 2, 3]},
+            local_tool,
+            handle=None,
+            attributes=None,
+            data={"source": "example"},
+            metadata={"request_id": "req-1"},
+        )
+        assert result["count"] == 3
+        ```
     """
     return _native_tool_call_execute(
         name, args, func, handle=handle, attributes=attributes, data=data, metadata=metadata
@@ -129,33 +149,28 @@ def execute(name, args, func, *, handle=None, attributes=None, data=None, metada
 
 
 def request_intercepts(name, args):
-    """Run the registered tool request intercept chain.
-
-    Applies all registered tool request intercepts in priority order to
-    the given arguments.
+    """Apply global tool request intercepts to ``args``.
 
     Args:
-        name: Tool name identifier.
-        args: JSON-serializable tool arguments to transform.
+        name: Tool name used when evaluating the registered intercept chain.
+        args: JSON-compatible tool arguments to pass through the intercepts.
 
     Returns:
-        The transformed arguments after all intercepts have been applied.
+        Json: The arguments produced by the final request intercept.
     """
     return _native_tool_request_intercepts(name, args)
 
 
 def conditional_execution(name, args):
-    """Run the registered tool conditional-execution guardrail chain.
-
-    Evaluates all registered conditional-execution guardrails in priority
-    order against the given arguments.
+    """Run tool conditional-execution guardrails for ``args``.
 
     Args:
-        name: Tool name identifier.
-        args: JSON-serializable tool arguments to evaluate.
+        name: Tool name used when evaluating registered guardrails.
+        args: JSON-compatible tool arguments to validate.
 
-    Raises:
-        RuntimeError: If any guardrail rejects the tool call.
+    Returns:
+        str | None: A rejection message if execution should be blocked,
+        otherwise ``None``.
     """
     return _native_tool_conditional_execution(name, args)
 

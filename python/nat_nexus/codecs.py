@@ -1,38 +1,25 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""LLM Codec protocol for bidirectional request translation.
+"""Protocol definitions for request and response codecs used by ``nat_nexus.llm``.
 
-Codecs translate opaque ``LLMRequest`` payloads into structured
-``AnnotatedLLMRequest`` objects, enabling typed intercept development.
+``LlmCodec`` is used for request-side translation. It lets intercepts work
+against ``AnnotatedLLMRequest`` instead of provider-specific raw payloads.
 
-Pass a codec instance directly to ``llm.execute()`` or
-``llm.stream_execute()`` via the ``codec=`` parameter.
+``LlmResponseCodec`` is used for response-side translation. It lets Nexus attach
+an ``AnnotatedLLMResponse`` to emitted ``LLMEnd`` events without changing the
+return value of ``llm.execute()`` or ``llm.stream_execute()``.
 
-.. note::
-    This module is distinct from ``nat_nexus.typed.Codec``, which provides
-    generic JSON serialization for typed tool execute wrappers. ``LlmCodec``
-    here is specifically for bidirectional LLM request translation.
+Example:
+    ```python
+    from nat_nexus import AnnotatedLLMRequest, LLMRequest, llm
+    from nat_nexus.codecs import LlmCodec, OpenAIChatCodec
 
-Classes:
-    LlmCodec
-        Protocol for LLM request codecs. Implement ``decode()`` and
-        ``encode()`` to satisfy the protocol.
-    LlmResponseCodec
-        Protocol for LLM response codecs. Implement ``decode_response()``
-        to satisfy the protocol.
-
-Example::
-
-    from nat_nexus.codecs import LlmCodec
-    from nat_nexus import LLMRequest, AnnotatedLLMRequest, llm
-
-    class MyCodec(LlmCodec):
+    class DemoCodec(LlmCodec):
         def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
-            content = request.content
             return AnnotatedLLMRequest(
-                content.get("messages", []),
-                model=content.get("model"),
+                request.content.get("messages", []),
+                model=request.content.get("model"),
             )
 
         def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
@@ -41,13 +28,30 @@ Example::
                 content["model"] = annotated.model
             return LLMRequest(original.headers, content)
 
-    # Pass codec instance directly to execute:
-    result = await llm.execute("gpt-4", request, my_fn, codec=MyCodec())
+    async def impl(request: LLMRequest):
+        return {"id": "r1", "choices": [{"message": {"role": "assistant", "content": "hi"}}]}
+
+    # Request-side codec for intercepts, response-side codec for event annotation.
+    result = await llm.execute(
+        "demo-model",
+        LLMRequest({}, {"messages": [{"role": "user", "content": "hello"}]}),
+        impl,
+        codec=DemoCodec(),
+        response_codec=OpenAIChatCodec(),
+    )
+    ```
 """
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from nat_nexus._native import AnnotatedLLMRequest, LLMRequest
+from nat_nexus import Json
+from nat_nexus._native import (
+    AnnotatedLLMRequest,
+    AnthropicMessagesCodec,
+    LLMRequest,
+    OpenAIChatCodec,
+    OpenAIResponsesCodec,
+)
 
 if TYPE_CHECKING:
     from nat_nexus._native import AnnotatedLLMResponse
@@ -55,68 +59,113 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class LlmCodec(Protocol):
-    """Protocol for LLM request codecs.
+    """Protocol for request codecs used by annotated LLM intercepts.
 
-    Implement ``decode()`` and ``encode()`` to provide bidirectional
-    translation between opaque ``LLMRequest`` payloads and structured
-    ``AnnotatedLLMRequest`` objects.
+    ``decode()`` converts a provider-specific ``LLMRequest`` into an
+    ``AnnotatedLLMRequest`` so request intercepts can work with a normalized
+    structure. ``encode()`` merges any annotated edits back into the original
+    raw payload before the provider callback is invoked.
 
-    ``decode()`` parses the opaque request content into typed fields.
-    ``encode()`` merges structured changes back into the opaque request
-    using merge-not-replace semantics (overlay changes, preserve unmodeled fields).
+    Notes:
+        ``encode()`` should preserve unknown provider-specific fields whenever
+        possible instead of rebuilding the payload from scratch. That keeps
+        transport-specific settings intact even when an intercept edits the
+        normalized representation.
+
+    Example:
+        ```python
+        from nat_nexus import AnnotatedLLMRequest, LLMRequest
+        from nat_nexus.codecs import LlmCodec
+
+        class DemoCodec(LlmCodec):
+            def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+                return AnnotatedLLMRequest(
+                    request.content.get("messages", []),
+                    model=request.content.get("model"),
+                )
+
+            def encode(
+                self,
+                annotated: AnnotatedLLMRequest,
+                original: LLMRequest,
+            ) -> LLMRequest:
+                content = {**original.content, "messages": annotated.messages}
+                if annotated.model is not None:
+                    content["model"] = annotated.model
+                return LLMRequest(original.headers, content)
+        ```
     """
 
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
-        """Parse an opaque LLMRequest into a structured AnnotatedLLMRequest.
+        """Decode a raw provider request into ``AnnotatedLLMRequest``.
 
         Args:
-            request: The opaque LLM request to decode.
+            request: The provider-specific request payload received by
+                ``nat_nexus.llm.execute()`` or ``nat_nexus.llm.stream_execute()``.
 
         Returns:
-            A structured AnnotatedLLMRequest with typed fields.
+            AnnotatedLLMRequest: The normalized request consumed by annotated
+            intercepts.
         """
         ...
 
     def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
-        """Merge structured changes back into the opaque request.
-
-        Must use merge-not-replace semantics: overlay structured changes
-        onto the original content, preserving unmodeled fields.
+        """Merge annotated edits back into the original raw request.
 
         Args:
-            annotated: The structured request (potentially modified by intercepts).
-            original: The pre-intercept opaque request (for preserving unmodeled fields).
+            annotated: The normalized request after intercepts have applied any
+                edits.
+            original: The original provider-specific request passed into the
+                runtime before normalization.
 
         Returns:
-            A new LLMRequest with the merged content.
+            LLMRequest: The provider-specific request that should be forwarded
+            to the provider callback.
         """
         ...
 
 
 @runtime_checkable
 class LlmResponseCodec(Protocol):
-    """Protocol for LLM response codecs.
+    """Protocol for codecs that normalize raw LLM responses.
 
-    Implement ``decode_response()`` to provide response introspection.
-    Built-in codecs (``OpenAIChatCodec``, ``OpenAIResponsesCodec``,
-    ``AnthropicMessagesCodec``) implement both ``LlmCodec`` and
-    ``LlmResponseCodec``.
+    A response codec is used only for observability. The value returned from
+    ``llm.execute()`` or ``llm.stream_execute()`` stays unchanged; the decoded
+    response is attached to the emitted ``LLMEnd`` event as
+    ``annotated_response``.
+
+    Example:
+        ```python
+        import nat_nexus
+
+        result = await nat_nexus.llm.execute(
+            "demo-provider",
+            nat_nexus.LLMRequest({}, {"messages": [{"role": "user", "content": "hi"}]}),
+            impl,
+            response_codec=nat_nexus.codecs.OpenAIChatCodec(),
+        )
+        ```
     """
 
-    def decode_response(self, response: object) -> "AnnotatedLLMResponse":
-        """Parse a raw JSON response into a structured AnnotatedLLMResponse.
+    def decode_response(self, response: Json) -> "AnnotatedLLMResponse":
+        """Decode a raw provider response into ``AnnotatedLLMResponse``.
 
         Args:
-            response: The raw LLM response as a JSON-serializable object.
+            response: The raw JSON-compatible value returned by the provider
+                callback.
 
         Returns:
-            A structured AnnotatedLLMResponse with normalized fields.
+            AnnotatedLLMResponse: The normalized response attached to the
+            ``LLMEnd`` event for downstream subscribers.
         """
         ...
 
 
 __all__ = [
     "AnnotatedLLMRequest",
+    "AnthropicMessagesCodec",
     "LlmCodec",
     "LlmResponseCodec",
+    "OpenAIChatCodec",
+    "OpenAIResponsesCodec",
 ]

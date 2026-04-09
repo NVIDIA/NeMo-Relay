@@ -3,7 +3,9 @@
 
 """Tests for the dynamic optimizer config/runtime API."""
 
-from nat_nexus import LLMRequest, llm, tools
+from typing import cast
+
+from nat_nexus import JsonObject, LLMRequest, llm, tools
 from nat_nexus.optimizer import (
     BackendSpec,
     ComponentSpec,
@@ -31,16 +33,19 @@ class TestOptimizerConfigHelpers:
 
     def test_component_helpers(self):
         telemetry = TelemetryComponent(learners=["latency_sensitivity"]).to_component().to_dict()
+        telemetry_config = cast(JsonObject, telemetry["config"])
         assert telemetry["kind"] == "telemetry"
-        assert telemetry["config"]["learners"] == ["latency_sensitivity"]
+        assert cast(list[str], telemetry_config["learners"]) == ["latency_sensitivity"]
 
         dynamo = DynamoHintsComponent().to_component().to_dict()
+        dynamo_config = cast(JsonObject, dynamo["config"])
         assert dynamo["kind"] == "dynamo_hints"
-        assert dynamo["config"]["priority"] == 100
+        assert cast(int, dynamo_config["priority"]) == 100
 
         tool = ToolParallelismComponent().to_component().to_dict()
+        tool_config = cast(JsonObject, tool["config"])
         assert tool["kind"] == "tool_parallelism"
-        assert tool["config"]["mode"] == "observe_only"
+        assert cast(str, tool_config["mode"]) == "observe_only"
 
         external = (
             ExternalComponent(
@@ -51,8 +56,9 @@ class TestOptimizerConfigHelpers:
             .to_component()
             .to_dict()
         )
+        external_config = cast(JsonObject, external["config"])
         assert external["kind"] == "external_component"
-        assert external["config"]["plugin_kind"] == "python.test_plugin"
+        assert cast(str, external_config["plugin_kind"]) == "python.test_plugin"
 
     def test_validate_optimizer_config_warns_unknown_component(self):
         report = validate_optimizer_config(OptimizerConfig(components=[ComponentSpec(kind="future_component")]))

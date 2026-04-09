@@ -1,57 +1,33 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Guardrail registration for tools and LLMs.
+"""Global guardrail registration for tools and LLMs.
 
-Guardrails run inside the middleware pipeline and can sanitize or gate requests
-and responses. They are priority-ordered (ascending) and registered by name.
+Guardrails can either sanitize data recorded on lifecycle events or reject a
+call before it runs.
 
-Sanitize guardrails are currently observability-oriented in the managed
-``execute`` APIs: they affect the payload captured on lifecycle events, but
-they do not rewrite the values passed to the user callable or returned to the
-caller.
+In managed ``tools.execute()`` and ``llm.execute()`` flows, sanitize
+guardrails are observability-only: they change the payload written to emitted
+events, not the value passed to the user callback or returned to the caller.
 
-**Tool guardrails** — callback signatures:
-
-    register_tool_sanitize_request(name, priority, fn)
-        ``fn(tool_name: str, args: Any) -> Any`` — sanitize tool arguments.
-
-    register_tool_sanitize_response(name, priority, fn)
-        ``fn(tool_name: str, result: Any) -> Any`` — sanitize tool result.
-
-    register_tool_conditional_execution(name, priority, fn)
-        ``fn(tool_name: str, args: Any) -> Optional[str]`` — return ``None``
-        to allow, or a rejection reason to block.
-
-**LLM guardrails** — callback signatures:
-
-    register_llm_sanitize_request(name, priority, fn)
-        ``fn(request: LLMRequest) -> LLMRequest`` — sanitize the LLM request.
-
-    register_llm_sanitize_response(name, priority, fn)
-        ``fn(response: dict) -> dict`` — sanitize the LLM response.
-
-    register_llm_conditional_execution(name, priority, fn)
-        ``fn(request: LLMRequest) -> Optional[str]`` — return ``None``
-        to allow, or a rejection reason to block.
-
-Each ``register_*`` has a corresponding ``deregister_*`` that takes the name
-and returns ``True`` if a guardrail was found and removed.
-
-Example::
-
+Example:
+    ```python
     import nat_nexus
 
-    def redact_pii(tool_name, args):
-        # Sanitize PII from tool arguments
-        return {k: "***" if "ssn" in k else v for k, v in args.items()}
+    def redact(tool_name, args):
+        return {**args, "api_key": "***"}
 
-    nat_nexus.guardrails.register_tool_sanitize_request("pii-filter", 10, redact_pii)
+    nat_nexus.guardrails.register_tool_sanitize_request("redact", 10, redact)
+    ```
 """
 
-from typing import Any, Callable, Optional
-
-from nat_nexus._native import LLMRequest
+from nat_nexus import (
+    LlmConditionalExecutionGuardrail,
+    LlmSanitizeRequestGuardrail,
+    LlmSanitizeResponseGuardrail,
+    ToolConditionalExecutionGuardrail,
+    ToolSanitizeGuardrail,
+)
 from nat_nexus._native import (
     nat_nexus_deregister_llm_conditional_execution_guardrail as _native_deregister_llm_conditional_execution,
 )
@@ -93,99 +69,101 @@ from nat_nexus._native import (
 # Tool guardrails
 # ---------------------------------------------------------------------------
 
-ToolSanitizeGuardrail = Callable[[str, Any], Any]
-ToolConditionalExecutionGuardrail = Callable[[str, Any], Optional[str]]
-LlmSanitizeRequestGuardrail = Callable[[LLMRequest], LLMRequest]
-LlmSanitizeResponseGuardrail = Callable[[dict], dict]
-LlmConditionalExecutionGuardrail = Callable[[LLMRequest], Optional[str]]
-
 
 def register_tool_sanitize_request(name: str, priority: int, guardrail: ToolSanitizeGuardrail) -> None:
-    """Register a tool sanitize-request guardrail.
-
-    The guardrail callback receives the tool name and arguments and returns
-    sanitized arguments for the emitted ``Start`` event payload.
+    """Register a guardrail that sanitizes tool inputs for emitted start events.
 
     Args:
-        name: Unique guardrail name.
-        priority: Priority (ascending order; lower runs first).
-        guardrail: Callable ``(tool_name: str, args: Any) -> Any``.
+        name: Unique guardrail name used for later replacement or removal.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callable invoked as ``guardrail(tool_name, args)`` that must
+            return the sanitized payload to record on the emitted start event.
 
-    Raises:
-        RuntimeError: If a guardrail with this name already exists.
+    Notes:
+        In managed ``nat_nexus.tools.execute()`` flows, sanitize guardrails are
+        observability-only. They change the payload written to events, not the
+        arguments passed to the tool callback.
+
+    Example:
+        ```python
+        import nat_nexus
+
+        def redact(tool_name, args):
+            return {**args, "api_key": "***"}
+
+        nat_nexus.guardrails.register_tool_sanitize_request("redact", 10, redact)
+        ```
     """
     return _native_register_tool_sanitize_request(name, priority, guardrail)
 
 
 def deregister_tool_sanitize_request(name: str) -> bool:
-    """Remove a tool sanitize-request guardrail.
+    """Remove a previously registered tool sanitize-request guardrail.
 
     Args:
-        name: Name of the guardrail to remove.
+        name: Guardrail name previously passed to
+            ``register_tool_sanitize_request()``.
 
     Returns:
-        ``True`` if a guardrail with the given name was found and removed,
-        ``False`` otherwise.
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
     """
     return _native_deregister_tool_sanitize_request(name)
 
 
 def register_tool_sanitize_response(name: str, priority: int, guardrail: ToolSanitizeGuardrail) -> None:
-    """Register a tool sanitize-response guardrail.
-
-    The guardrail callback receives the tool name and result and returns
-    a sanitized result for the emitted ``End`` event payload.
+    """Register a guardrail that sanitizes tool outputs for emitted end events.
 
     Args:
-        name: Unique guardrail name.
-        priority: Priority (ascending order; lower runs first).
-        guardrail: Callable ``(tool_name: str, result: Any) -> Any``.
+        name: Unique guardrail name used for later replacement or removal.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callable invoked as ``guardrail(tool_name, result)`` that
+            must return the sanitized payload to record on emitted end events.
 
-    Raises:
-        RuntimeError: If a guardrail with this name already exists.
+    Notes:
+        This guardrail affects event payloads only. The caller still receives
+        the original tool result.
     """
     return _native_register_tool_sanitize_response(name, priority, guardrail)
 
 
 def deregister_tool_sanitize_response(name: str) -> bool:
-    """Remove a tool sanitize-response guardrail.
+    """Remove a previously registered tool sanitize-response guardrail.
 
     Args:
-        name: Name of the guardrail to remove.
+        name: Guardrail name previously passed to
+            ``register_tool_sanitize_response()``.
 
     Returns:
-        ``True`` if a guardrail with the given name was found and removed,
-        ``False`` otherwise.
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
     """
     return _native_deregister_tool_sanitize_response(name)
 
 
 def register_tool_conditional_execution(name: str, priority: int, guardrail: ToolConditionalExecutionGuardrail) -> None:
-    """Register a tool conditional-execution guardrail.
-
-    The guardrail callback receives the tool name and arguments and returns
-    ``None`` to allow execution or a rejection reason string to block it.
+    """Register a guardrail that can reject a tool call before execution.
 
     Args:
-        name: Unique guardrail name.
-        priority: Priority (ascending order; lower runs first).
-        guardrail: Callable ``(tool_name: str, args: Any) -> Optional[str]``.
+        name: Unique guardrail name used for later replacement or removal.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callable invoked as ``guardrail(tool_name, args)``. Return
+            ``None`` to allow execution or a rejection message to block it.
 
-    Raises:
-        RuntimeError: If a guardrail with this name already exists.
+    Notes:
+        Conditional-execution guardrails run before request intercepts and
+        before the tool callback is invoked.
     """
     return _native_register_tool_conditional_execution(name, priority, guardrail)
 
 
 def deregister_tool_conditional_execution(name: str) -> bool:
-    """Remove a tool conditional-execution guardrail.
+    """Remove a previously registered tool conditional-execution guardrail.
 
     Args:
-        name: Name of the guardrail to remove.
+        name: Guardrail name previously passed to
+            ``register_tool_conditional_execution()``.
 
     Returns:
-        ``True`` if a guardrail with the given name was found and removed,
-        ``False`` otherwise.
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
     """
     return _native_deregister_tool_conditional_execution(name)
 
@@ -196,91 +174,100 @@ def deregister_tool_conditional_execution(name: str) -> bool:
 
 
 def register_llm_sanitize_request(name: str, priority: int, guardrail: LlmSanitizeRequestGuardrail) -> None:
-    """Register an LLM sanitize-request guardrail.
-
-    The guardrail callback receives the LLM request and returns a sanitized
-    ``LLMRequest`` for the emitted ``Start`` event payload.
+    """Register a guardrail that sanitizes LLM requests for emitted start events.
 
     Args:
-        name: Unique guardrail name.
-        priority: Priority (ascending order; lower runs first).
-        guardrail: Callable ``(request: LLMRequest) -> LLMRequest``.
+        name: Unique guardrail name used for later replacement or removal.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callable invoked as ``guardrail(request)`` that must return
+            the sanitized request recorded on the emitted start event.
 
-    Raises:
-        RuntimeError: If a guardrail with this name already exists.
+    Notes:
+        In managed ``nat_nexus.llm.execute()`` and
+        ``nat_nexus.llm.stream_execute()`` flows, this is observability-only
+        and does not mutate the request forwarded to the provider callback.
+
+    Example:
+        ```python
+        import nat_nexus
+
+        def strip_auth(request):
+            headers = {k: v for k, v in request.headers.items() if k.lower() != "authorization"}
+            return nat_nexus.LLMRequest(headers, request.content)
+
+        nat_nexus.guardrails.register_llm_sanitize_request("strip-auth", 10, strip_auth)
+        ```
     """
     return _native_register_llm_sanitize_request(name, priority, guardrail)
 
 
 def deregister_llm_sanitize_request(name: str) -> bool:
-    """Remove an LLM sanitize-request guardrail.
+    """Remove a previously registered LLM sanitize-request guardrail.
 
     Args:
-        name: Name of the guardrail to remove.
+        name: Guardrail name previously passed to
+            ``register_llm_sanitize_request()``.
 
     Returns:
-        ``True`` if a guardrail with the given name was found and removed,
-        ``False`` otherwise.
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
     """
     return _native_deregister_llm_sanitize_request(name)
 
 
 def register_llm_sanitize_response(name: str, priority: int, guardrail: LlmSanitizeResponseGuardrail) -> None:
-    """Register an LLM sanitize-response guardrail.
-
-    The guardrail callback receives the LLM response dict and returns a
-    sanitized dict for the emitted ``End`` event payload.
+    """Register a guardrail that sanitizes LLM outputs for emitted end events.
 
     Args:
-        name: Unique guardrail name.
-        priority: Priority (ascending order; lower runs first).
-        guardrail: Callable ``(response: dict) -> dict``.
+        name: Unique guardrail name used for later replacement or removal.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callable invoked as ``guardrail(response)`` that must return
+            the sanitized payload recorded on the emitted end event.
 
-    Raises:
-        RuntimeError: If a guardrail with this name already exists.
+    Notes:
+        This guardrail changes only event payloads. The raw provider response
+        returned to the caller is left unchanged.
     """
     return _native_register_llm_sanitize_response(name, priority, guardrail)
 
 
 def deregister_llm_sanitize_response(name: str) -> bool:
-    """Remove an LLM sanitize-response guardrail.
+    """Remove a previously registered LLM sanitize-response guardrail.
 
     Args:
-        name: Name of the guardrail to remove.
+        name: Guardrail name previously passed to
+            ``register_llm_sanitize_response()``.
 
     Returns:
-        ``True`` if a guardrail with the given name was found and removed,
-        ``False`` otherwise.
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
     """
     return _native_deregister_llm_sanitize_response(name)
 
 
 def register_llm_conditional_execution(name: str, priority: int, guardrail: LlmConditionalExecutionGuardrail) -> None:
-    """Register an LLM conditional-execution guardrail.
-
-    The guardrail callback receives the LLM request and returns ``None``
-    to allow execution or a rejection reason string to block it.
+    """Register a guardrail that can reject an LLM call before execution.
 
     Args:
-        name: Unique guardrail name.
-        priority: Priority (ascending order; lower runs first).
-        guardrail: Callable ``(request: LLMRequest) -> Optional[str]``.
+        name: Unique guardrail name used for later replacement or removal.
+        priority: Execution order for the guardrail. Lower values run first.
+        guardrail: Callable invoked as ``guardrail(request)``. Return ``None``
+            to allow execution or a rejection message to block the call.
 
-    Raises:
-        RuntimeError: If a guardrail with this name already exists.
+    Notes:
+        Conditional-execution guardrails run before request intercepts, codecs,
+        and provider execution.
     """
     return _native_register_llm_conditional_execution(name, priority, guardrail)
 
 
 def deregister_llm_conditional_execution(name: str) -> bool:
-    """Remove an LLM conditional-execution guardrail.
+    """Remove a previously registered LLM conditional-execution guardrail.
 
     Args:
-        name: Name of the guardrail to remove.
+        name: Guardrail name previously passed to
+            ``register_llm_conditional_execution()``.
 
     Returns:
-        ``True`` if a guardrail with the given name was found and removed,
-        ``False`` otherwise.
+        bool: ``True`` if a guardrail was removed, otherwise ``False``.
     """
     return _native_deregister_llm_conditional_execution(name)
 

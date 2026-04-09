@@ -245,16 +245,15 @@ python/nat_nexus/
   intercepts.py     # Intercept registration
   subscribers.py    # Event subscriber registration
   scope_local.py    # Scope-local middleware registration
-  codecs.py         # LlmCodec and LlmResponseCodec protocols
+  codecs.py         # LlmCodec/LlmResponseCodec protocols and built-in codec classes
   optimizer.py      # Config-driven optimizer runtime helpers
   typed.py          # Codec-based typed wrappers
 ```
 
-Built-in codec classes are exported from `nat_nexus` directly:
+Built-in codec classes live in `nat_nexus.codecs`:
 `OpenAIChatCodec`, `OpenAIResponsesCodec`, `AnthropicMessagesCodec`.
 Each implements both `LlmCodec` (request decode/encode) and
-`LlmResponseCodec` (response decode). The protocol classes `LlmCodec`
-and `LlmResponseCodec` are in `nat_nexus.codecs`.
+`LlmResponseCodec` (response decode).
 
 The Python package wraps a PyO3 native extension (`_native`) built with the stable ABI (abi3), producing a single `.so` compatible with Python 3.11+.
 
@@ -290,7 +289,6 @@ Python can register hosted optimizer plugins that the Rust optimizer runtime
 calls during validation and registration.
 
 ```python
-from nat_nexus import LLMRequest
 from nat_nexus.optimizer import (
     ExternalComponent,
     OptimizerConfig,
@@ -303,13 +301,11 @@ class HeaderPlugin:
         return []
 
     def register(self, instance_id, plugin_config, context):
-        def intercept(_name, request, annotated):
-            headers = dict(request.headers)
-            headers["x-plugin"] = instance_id
-            return LLMRequest(headers, request.content), annotated
+        def intercept(tool_name, args):
+            return {**args, "x_plugin": instance_id, "tool": tool_name}
 
-        context.register_llm_request_intercept(
-            f"{instance_id}.header",
+        context.register_tool_request_intercept(
+            f"{instance_id}.tool",
             25,
             False,
             intercept,
@@ -529,24 +525,23 @@ Node.js uses a push-based stream bridge for LLM streaming. JavaScript drives asy
 
 ### Optimizer Runtime
 
-Node exposes optimizer helpers through `typed.js` and validation through the
-generated addon:
+Node exposes optimizer helpers through `optimizer.js`:
 
 ```javascript
-import { validateOptimizerConfig } from "./index.js";
 import {
-  OptimizerRuntime,
-  defaultOptimizerConfig,
-  optimizerInMemoryBackend,
+  Runtime,
+  defaultConfig,
+  inMemoryBackend,
   telemetryComponent,
-} from "./typed.js";
+  validateConfig,
+} from "./optimizer.js";
 
-const config = defaultOptimizerConfig();
-config.state = { backend: optimizerInMemoryBackend() };
+const config = defaultConfig();
+config.state = { backend: inMemoryBackend() };
 config.components = [telemetryComponent({ learners: ["latency_sensitivity"] })];
 
-const validation = validateOptimizerConfig(config);
-const runtime = new OptimizerRuntime(config);
+const validation = validateConfig(config);
+const runtime = new Runtime(config);
 const report = await runtime.report();
 await runtime.register();
 await runtime.deregister();
@@ -555,40 +550,34 @@ await runtime.shutdown();
 
 ### Optimizer Hosted Plugins
 
-Node exposes hosted optimizer plugins through `registerOptimizerPlugin(...)`
-and the `externalComponent(...)` helper in `typed.js`:
+Node exposes hosted optimizer plugins through `registerPlugin(...)`
+and the `externalComponent(...)` helper in `optimizer.js`:
 
 ```javascript
 import {
-  OptimizerRuntime,
-  defaultOptimizerConfig,
+  Runtime,
+  defaultConfig,
   externalComponent,
-  registerOptimizerPlugin,
-} from "./typed.js";
+  registerPlugin,
+} from "./optimizer.js";
 
-registerOptimizerPlugin("example.header_plugin", {
+registerPlugin("example.header_plugin", {
   validate(instanceId, pluginConfig) {
     return [];
   },
   register(instanceId, pluginConfig, context) {
-    context.registerLlmRequestIntercept(
-      `${instanceId}.header`,
+    context.registerToolRequestIntercept(
+      `${instanceId}.tool`,
       25,
       false,
-      (name, request, annotated) => [
-        {
-          headers: { ...request.headers, "x-plugin": instanceId },
-          content: request.content,
-        },
-        annotated,
-      ],
+      (_name, args) => ({ ...args, nodePlugin: instanceId }),
     );
   },
 });
 
-const config = defaultOptimizerConfig();
+const config = defaultConfig();
 config.components = [externalComponent("example.header_plugin", "plugin-1", {})];
-const runtime = new OptimizerRuntime(config);
+const runtime = new Runtime(config);
 ```
 
 Node hosted plugin contexts expose:
@@ -720,21 +709,24 @@ Memory management requires explicit `Free()` calls on handles and scope stacks.
 
 ### Optimizer Runtime
 
-Go exposes typed optimizer config builders and a synchronous runtime wrapper:
+Go exposes typed optimizer config builders and a synchronous runtime wrapper
+through the `optimizer` subpackage:
 
 ```go
-config := nat_nexus.NewOptimizerConfig()
-config.State = &nat_nexus.OptimizerStateConfig{
-    Backend: nat_nexus.NewInMemoryOptimizerBackend(),
+import optimizer "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/optimizer"
+
+config := optimizer.NewConfig()
+config.State = &optimizer.StateConfig{
+    Backend: optimizer.NewInMemoryBackend(),
 }
-config.Components = []nat_nexus.OptimizerComponentSpec{
-    nat_nexus.TelemetryComponent(nat_nexus.TelemetryComponentConfig{
+config.Components = []optimizer.ComponentSpec{
+    optimizer.TelemetryComponent(optimizer.TelemetryComponentConfig{
         Learners: []string{"latency_sensitivity"},
     }),
 }
 
-report, err := nat_nexus.ValidateOptimizerConfig(config)
-runtime, err := nat_nexus.NewOptimizerRuntime(config)
+report, err := optimizer.ValidateConfig(config)
+runtime, err := optimizer.NewRuntime(config)
 if err != nil {
     panic(err)
 }
@@ -752,24 +744,29 @@ The Go binding exposes hosted plugin registration plus a temporary registration
 context for adding subscribers and intercepts:
 
 ```go
+import (
+    "encoding/json"
+
+    optimizer "gitlab-master.nvidia.com/nemo-agent-toolkit/dev/Project-NAT-Nexus/go/nat_nexus/optimizer"
+)
+
 pluginKind := "example.header_plugin"
-err := nat_nexus.RegisterOptimizerPlugin(pluginKind, nat_nexus.OptimizerPluginHandlerFuncs{
-    ValidateFunc: func(instanceID string, pluginConfig map[string]any) ([]nat_nexus.OptimizerConfigDiagnostic, error) {
+err := optimizer.RegisterPlugin(pluginKind, optimizer.PluginHandlerFuncs{
+    ValidateFunc: func(instanceID string, pluginConfig map[string]any) ([]optimizer.ConfigDiagnostic, error) {
         return nil, nil
     },
-    RegisterFunc: func(instanceID string, pluginConfig map[string]any, ctx *nat_nexus.OptimizerPluginContext) error {
-        return ctx.RegisterLlmRequestIntercept(
-            instanceID+".header",
+    RegisterFunc: func(instanceID string, pluginConfig map[string]any, ctx *optimizer.PluginContext) error {
+        return ctx.RegisterToolRequestIntercept(
+            instanceID+".tool",
             25,
             false,
-            func(name string, request map[string]any, annotated map[string]any) (map[string]any, map[string]any, error) {
-                headers, _ := request["headers"].(map[string]any)
-                if headers == nil {
-                    headers = map[string]any{}
-                }
-                headers["x-plugin"] = instanceID
-                request["headers"] = headers
-                return request, annotated, nil
+            func(name string, args json.RawMessage) json.RawMessage {
+                var payload map[string]any
+                _ = json.Unmarshal(args, &payload)
+                payload["goPlugin"] = instanceID
+                payload["tool"] = name
+                out, _ := json.Marshal(payload)
+                return out
             },
         )
     },
@@ -778,16 +775,16 @@ if err != nil {
     panic(err)
 }
 
-config := nat_nexus.NewOptimizerConfig()
-config.Components = []nat_nexus.OptimizerComponentSpec{
-    nat_nexus.ExternalComponent(nat_nexus.ExternalComponentConfig{
+config := optimizer.NewConfig()
+config.Components = []optimizer.ComponentSpec{
+    optimizer.ExternalComponent(optimizer.ExternalComponentConfig{
         PluginKind: pluginKind,
         InstanceID: "plugin-1",
     }),
 }
 ```
 
-`OptimizerPluginContext` exposes:
+`PluginContext` exposes:
 
 - `RegisterSubscriber(...)`
 - `RegisterLlmRequestIntercept(...)`
@@ -946,13 +943,15 @@ popScope(handle);  // auto-cleanup
 
 ### Optimizer Runtime
 
-The WASM binding uses plain JavaScript objects for optimizer config:
+The WASM binding uses plain JavaScript objects for optimizer config and exposes
+the optimizer surface through `optimizer.js`:
 
 ```javascript
-import init, {
-  OptimizerRuntime,
-  validateOptimizerConfig,
-} from "./pkg/nvidia_nat_nexus_wasm.js";
+import init from "./pkg/nvidia_nat_nexus_wasm.js";
+import {
+  Runtime,
+  validateConfig,
+} from "./optimizer.js";
 
 await init();
 
@@ -964,8 +963,8 @@ const config = {
   ],
 };
 
-const validation = validateOptimizerConfig(config);
-const runtime = new OptimizerRuntime(config);
+const validation = validateConfig(config);
+const runtime = new Runtime(config);
 runtime.report();
 await runtime.register();
 runtime.deregister();
@@ -979,31 +978,26 @@ JavaScript, then activate it through `external_component` in the optimizer
 config:
 
 ```javascript
-import init, {
-    OptimizerRuntime,
-    registerOptimizerPlugin,
-    deregisterOptimizerPlugin,
-    validateOptimizerConfig,
-} from './pkg/nvidia_nat_nexus_wasm.js';
+import init from './pkg/nvidia_nat_nexus_wasm.js';
+import {
+    Runtime,
+    registerPlugin,
+    deregisterPlugin,
+    validateConfig,
+} from './optimizer.js';
 
 await init();
 
-registerOptimizerPlugin("example.header_plugin", {
+registerPlugin("example.header_plugin", {
     validate(instanceId, pluginConfig) {
         return [];
     },
     register(instanceId, pluginConfig, context) {
-        context.registerLlmRequestIntercept(
-            `${instanceId}.header`,
+        context.registerToolRequestIntercept(
+            `${instanceId}.tool`,
             25,
             false,
-            (name, request, annotated) => [
-                {
-                    headers: { ...request.headers, "x-plugin": instanceId },
-                    content: request.content,
-                },
-                annotated,
-            ],
+            (_name, args) => ({ ...args, wasmPlugin: instanceId }),
         );
     },
 });
@@ -1022,12 +1016,12 @@ const config = {
     ],
 };
 
-console.log(validateOptimizerConfig(config));
-const runtime = new OptimizerRuntime(config);
+console.log(validateConfig(config));
+const runtime = new Runtime(config);
 await runtime.register();
 runtime.deregister();
 await runtime.shutdown();
-deregisterOptimizerPlugin("example.header_plugin");
+deregisterPlugin("example.header_plugin");
 ```
 
 WASM hosted plugin contexts expose:
@@ -1172,7 +1166,7 @@ opt into threaded builds (e.g., with `wasm-bindgen-rayon`).
 | Callback pattern | `PyAny` → closure | C trampolines | `ThreadsafeFunction` | `js_sys::Function` |
 | Stream support | AsyncIterator | Channel-based | Push-based bridge | Async iterator |
 | Typed wrappers | `nat_nexus.typed` | — | `typed.js` | — |
-| Built-in codecs | `OpenAIChatCodec`, `OpenAIResponsesCodec`, `AnthropicMessagesCodec` | `NewOpenAIChatCodec()`, `NewOpenAIResponsesCodec()`, `NewAnthropicMessagesCodec()` | `OpenAIChatCodec`, `OpenAIResponsesCodec`, `AnthropicMessagesCodec` | `WasmOpenAIChatCodec`, `WasmOpenAIResponsesCodec`, `WasmAnthropicMessagesCodec` |
+| Built-in codecs | `nat_nexus.codecs.OpenAIChatCodec`, `nat_nexus.codecs.OpenAIResponsesCodec`, `nat_nexus.codecs.AnthropicMessagesCodec` | `NewOpenAIChatCodec()`, `NewOpenAIResponsesCodec()`, `NewAnthropicMessagesCodec()` | `OpenAIChatCodec`, `OpenAIResponsesCodec`, `AnthropicMessagesCodec` | `WasmOpenAIChatCodec`, `WasmOpenAIResponsesCodec`, `WasmAnthropicMessagesCodec` |
 | Response codec param | `response_codec=` on execute/stream_execute | `WithLLMResponseCodec(codec)` | `responseCodecDecode` param | `response_codec_decode` param |
 | Memory management | GC | Manual (`Free`/`Close`) | GC | GC |
 

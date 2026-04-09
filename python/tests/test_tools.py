@@ -199,7 +199,11 @@ class TestToolGuardrails:
     def test_sanitize_response_invalid_return_falls_back_to_original_output(self):
         events = []
         subscribers.register("py_tool_sanitize_resp_sub", lambda event: events.append(event))
-        guardrails.register_tool_sanitize_response("py_tool_sanitize_resp_bad", 1, lambda name, result: object())
+        guardrails.register_tool_sanitize_response(
+            "py_tool_sanitize_resp_bad",
+            1,
+            cast(guardrails.ToolSanitizeGuardrail, lambda name, result: object()),
+        )
         try:
             handle = tools.call("tool_sanitize_resp_bad", {"value": 1})
             tools.call_end(handle, {"ok": True})
@@ -273,7 +277,12 @@ class TestToolIntercepts:
             intercepts.deregister_tool_request("py_req_raise")
 
     def test_request_intercept_raises_on_unserializable_return(self):
-        intercepts.register_tool_request("py_req_bad_return", 1, False, lambda n, a: object())
+        intercepts.register_tool_request(
+            "py_req_bad_return",
+            1,
+            False,
+            cast(intercepts.ToolRequestIntercept, lambda n, a: object()),
+        )
         try:
             with pytest.raises(RuntimeError, match="py_to_json failed"):
                 tools.request_intercepts("bad_return_tool", {"value": 1})

@@ -160,7 +160,11 @@ class TestLLMGuardrails:
     def test_sanitize_request_invalid_return_falls_back_to_original_input(self):
         events = []
         subscribers.register("py_llm_sanitize_req_bad_sub", lambda event: events.append(event))
-        guardrails.register_llm_sanitize_request("py_llm_sanitize_req_bad", 1, lambda request: object())
+        guardrails.register_llm_sanitize_request(
+            "py_llm_sanitize_req_bad",
+            1,
+            cast(guardrails.LlmSanitizeRequestGuardrail, lambda request: object()),
+        )
         try:
             request = make_request()
             handle = llm.call("llm_sanitize_req_bad", request)
