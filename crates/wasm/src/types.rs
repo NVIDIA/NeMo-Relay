@@ -446,6 +446,8 @@ pub enum WasmEvent {
         attributes: u32,
         input: Option<serde_json::Value>,
         model_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        annotated_request: Option<serde_json::Value>,
     },
     LLMEnd {
         parent_uuid: Option<String>,
@@ -457,6 +459,8 @@ pub enum WasmEvent {
         attributes: u32,
         output: Option<serde_json::Value>,
         model_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        annotated_response: Option<serde_json::Value>,
     },
     Mark {
         parent_uuid: Option<String>,
@@ -523,6 +527,10 @@ impl From<&core_types::Event> for WasmEvent {
                 attributes: event.attributes.bits(),
                 input: event.input.clone(),
                 model_name: event.model_name.clone(),
+                annotated_request: event
+                    .annotated_request
+                    .as_ref()
+                    .and_then(|a| serde_json::to_value(a.as_ref()).ok()),
             },
             core_types::Event::LLMEnd(event) => Self::LLMEnd {
                 parent_uuid: event.parent_uuid.map(|u| u.to_string()),
@@ -534,6 +542,10 @@ impl From<&core_types::Event> for WasmEvent {
                 attributes: event.attributes.bits(),
                 output: event.output.clone(),
                 model_name: event.model_name.clone(),
+                annotated_response: event
+                    .annotated_response
+                    .as_ref()
+                    .and_then(|a| serde_json::to_value(a.as_ref()).ok()),
             },
             core_types::Event::Mark(event) => Self::Mark {
                 parent_uuid: event.parent_uuid.map(|u| u.to_string()),
@@ -544,6 +556,274 @@ impl From<&core_types::Event> for WasmEvent {
                 metadata: event.metadata.clone(),
             },
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Built-in codec classes
+// ---------------------------------------------------------------------------
+
+/// Built-in codec for the OpenAI Chat Completions API.
+///
+/// Implements both request codec (decode/encode) and response codec
+/// (decode_response). Construct with `new WasmOpenAIChatCodec()`.
+#[wasm_bindgen]
+pub struct WasmOpenAIChatCodec {
+    pub(crate) inner_codec: std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>,
+    pub(crate) inner_response_codec:
+        std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>,
+}
+
+impl Default for WasmOpenAIChatCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[wasm_bindgen]
+impl WasmOpenAIChatCodec {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner_codec: std::sync::Arc::new(nvidia_nat_nexus_core::codec::OpenAIChatCodec),
+            inner_response_codec: std::sync::Arc::new(
+                nvidia_nat_nexus_core::codec::OpenAIChatCodec,
+            ),
+        }
+    }
+
+    /// Decode an opaque LLM request into structured form.
+    pub fn decode(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let req_json = crate::convert::js_to_json(&request)?;
+        let llm_req: nvidia_nat_nexus_core::types::LLMRequest = serde_json::from_value(req_json)
+            .map_err(|e| {
+                crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(
+                    e.to_string(),
+                ))
+            })?;
+        let annotated = self
+            .inner_codec
+            .decode(&llm_req)
+            .map_err(crate::convert::to_js_err)?;
+        let json = serde_json::to_value(&annotated).map_err(|e| {
+            crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string()))
+        })?;
+        Ok(crate::convert::json_to_js(&json))
+    }
+
+    /// Encode structured changes back into an opaque LLM request.
+    pub fn encode(&self, annotated: JsValue, original: JsValue) -> Result<JsValue, JsValue> {
+        let ann_json = crate::convert::js_to_json(&annotated)?;
+        let orig_json = crate::convert::js_to_json(&original)?;
+        let ann: nvidia_nat_nexus_core::codec::AnnotatedLLMRequest =
+            serde_json::from_value(ann_json).map_err(|e| {
+                crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(
+                    e.to_string(),
+                ))
+            })?;
+        let orig: nvidia_nat_nexus_core::types::LLMRequest = serde_json::from_value(orig_json)
+            .map_err(|e| {
+                crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(
+                    e.to_string(),
+                ))
+            })?;
+        let result = self
+            .inner_codec
+            .encode(&ann, &orig)
+            .map_err(crate::convert::to_js_err)?;
+        let json = serde_json::to_value(&result).map_err(|e| {
+            crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string()))
+        })?;
+        Ok(crate::convert::json_to_js(&json))
+    }
+
+    /// Decode a raw LLM response into structured form.
+    pub fn decode_response(&self, response: JsValue) -> Result<JsValue, JsValue> {
+        let resp_json = crate::convert::js_to_json(&response)?;
+        let annotated = self
+            .inner_response_codec
+            .decode_response(&resp_json)
+            .map_err(crate::convert::to_js_err)?;
+        let json = serde_json::to_value(&annotated).map_err(|e| {
+            crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string()))
+        })?;
+        Ok(crate::convert::json_to_js(&json))
+    }
+}
+
+/// Built-in codec for the OpenAI Responses API.
+///
+/// Implements both request codec (decode/encode) and response codec
+/// (decode_response). Construct with `new WasmOpenAIResponsesCodec()`.
+#[wasm_bindgen]
+pub struct WasmOpenAIResponsesCodec {
+    pub(crate) inner_codec: std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>,
+    pub(crate) inner_response_codec:
+        std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>,
+}
+
+impl Default for WasmOpenAIResponsesCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[wasm_bindgen]
+impl WasmOpenAIResponsesCodec {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner_codec: std::sync::Arc::new(nvidia_nat_nexus_core::codec::OpenAIResponsesCodec),
+            inner_response_codec: std::sync::Arc::new(
+                nvidia_nat_nexus_core::codec::OpenAIResponsesCodec,
+            ),
+        }
+    }
+
+    /// Decode an opaque LLM request into structured form.
+    pub fn decode(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let req_json = crate::convert::js_to_json(&request)?;
+        let llm_req: nvidia_nat_nexus_core::types::LLMRequest = serde_json::from_value(req_json)
+            .map_err(|e| {
+                crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(
+                    e.to_string(),
+                ))
+            })?;
+        let annotated = self
+            .inner_codec
+            .decode(&llm_req)
+            .map_err(crate::convert::to_js_err)?;
+        let json = serde_json::to_value(&annotated).map_err(|e| {
+            crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string()))
+        })?;
+        Ok(crate::convert::json_to_js(&json))
+    }
+
+    /// Encode structured changes back into an opaque LLM request.
+    pub fn encode(&self, annotated: JsValue, original: JsValue) -> Result<JsValue, JsValue> {
+        let ann_json = crate::convert::js_to_json(&annotated)?;
+        let orig_json = crate::convert::js_to_json(&original)?;
+        let ann: nvidia_nat_nexus_core::codec::AnnotatedLLMRequest =
+            serde_json::from_value(ann_json).map_err(|e| {
+                crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(
+                    e.to_string(),
+                ))
+            })?;
+        let orig: nvidia_nat_nexus_core::types::LLMRequest = serde_json::from_value(orig_json)
+            .map_err(|e| {
+                crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(
+                    e.to_string(),
+                ))
+            })?;
+        let result = self
+            .inner_codec
+            .encode(&ann, &orig)
+            .map_err(crate::convert::to_js_err)?;
+        let json = serde_json::to_value(&result).map_err(|e| {
+            crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string()))
+        })?;
+        Ok(crate::convert::json_to_js(&json))
+    }
+
+    /// Decode a raw LLM response into structured form.
+    pub fn decode_response(&self, response: JsValue) -> Result<JsValue, JsValue> {
+        let resp_json = crate::convert::js_to_json(&response)?;
+        let annotated = self
+            .inner_response_codec
+            .decode_response(&resp_json)
+            .map_err(crate::convert::to_js_err)?;
+        let json = serde_json::to_value(&annotated).map_err(|e| {
+            crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string()))
+        })?;
+        Ok(crate::convert::json_to_js(&json))
+    }
+}
+
+/// Built-in codec for the Anthropic Messages API.
+///
+/// Implements both request codec (decode/encode) and response codec
+/// (decode_response). Construct with `new WasmAnthropicMessagesCodec()`.
+#[wasm_bindgen]
+pub struct WasmAnthropicMessagesCodec {
+    pub(crate) inner_codec: std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>,
+    pub(crate) inner_response_codec:
+        std::sync::Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>,
+}
+
+impl Default for WasmAnthropicMessagesCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[wasm_bindgen]
+impl WasmAnthropicMessagesCodec {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner_codec: std::sync::Arc::new(nvidia_nat_nexus_core::codec::AnthropicMessagesCodec),
+            inner_response_codec: std::sync::Arc::new(
+                nvidia_nat_nexus_core::codec::AnthropicMessagesCodec,
+            ),
+        }
+    }
+
+    /// Decode an opaque LLM request into structured form.
+    pub fn decode(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let req_json = crate::convert::js_to_json(&request)?;
+        let llm_req: nvidia_nat_nexus_core::types::LLMRequest = serde_json::from_value(req_json)
+            .map_err(|e| {
+                crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(
+                    e.to_string(),
+                ))
+            })?;
+        let annotated = self
+            .inner_codec
+            .decode(&llm_req)
+            .map_err(crate::convert::to_js_err)?;
+        let json = serde_json::to_value(&annotated).map_err(|e| {
+            crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string()))
+        })?;
+        Ok(crate::convert::json_to_js(&json))
+    }
+
+    /// Encode structured changes back into an opaque LLM request.
+    pub fn encode(&self, annotated: JsValue, original: JsValue) -> Result<JsValue, JsValue> {
+        let ann_json = crate::convert::js_to_json(&annotated)?;
+        let orig_json = crate::convert::js_to_json(&original)?;
+        let ann: nvidia_nat_nexus_core::codec::AnnotatedLLMRequest =
+            serde_json::from_value(ann_json).map_err(|e| {
+                crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(
+                    e.to_string(),
+                ))
+            })?;
+        let orig: nvidia_nat_nexus_core::types::LLMRequest = serde_json::from_value(orig_json)
+            .map_err(|e| {
+                crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(
+                    e.to_string(),
+                ))
+            })?;
+        let result = self
+            .inner_codec
+            .encode(&ann, &orig)
+            .map_err(crate::convert::to_js_err)?;
+        let json = serde_json::to_value(&result).map_err(|e| {
+            crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string()))
+        })?;
+        Ok(crate::convert::json_to_js(&json))
+    }
+
+    /// Decode a raw LLM response into structured form.
+    pub fn decode_response(&self, response: JsValue) -> Result<JsValue, JsValue> {
+        let resp_json = crate::convert::js_to_json(&response)?;
+        let annotated = self
+            .inner_response_codec
+            .decode_response(&resp_json)
+            .map_err(crate::convert::to_js_err)?;
+        let json = serde_json::to_value(&annotated).map_err(|e| {
+            crate::convert::to_js_err(nvidia_nat_nexus_core::NexusError::Internal(e.to_string()))
+        })?;
+        Ok(crate::convert::json_to_js(&json))
     }
 }
 
@@ -693,6 +973,7 @@ mod tests {
             None,
             None,
             core_types::LLMAttributes::empty(),
+            None,
             None,
             None,
         );

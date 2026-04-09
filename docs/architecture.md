@@ -79,21 +79,34 @@ crates/
       api.rs          # All API functions
       types.rs        # LLMRequest, handles, attributes, events
       context.rs      # Global state, scope stacks, callable type aliases
+      codec/          # LLM codec system (request + response)
+        mod.rs            # Re-exports all codec submodules
+        traits.rs         # LlmCodec and LlmResponseCodec traits
+        request.rs        # AnnotatedLLMRequest type hierarchy
+        response.rs       # AnnotatedLLMResponse type hierarchy
+        openai_chat.rs    # Built-in OpenAI Chat Completions codec
+        openai_responses.rs # Built-in OpenAI Responses API codec
+        anthropic.rs      # Built-in Anthropic Messages API codec
       registry.rs     # SortedRegistry<T> for priority-ordered middleware
       stream.rs       # LlmStreamWrapper for streaming LLM responses
       error.rs        # NexusError enum
       json.rs         # Json type alias, merge_json helper
       atif.rs         # ATIF trajectory exporter
     tests/
+      codec_tests.rs
       context_isolation_tests.rs
-      stream_tests.rs
-      scope_local_tests.rs
       middleware_tests.rs
+      pipeline_tests.rs
+      scope_local_tests.rs
+      stream_tests.rs
 
+  optimizer/       # Dynamic optimizer runtime
   python/          # PyO3 bindings
   ffi/             # C FFI (used by Go via CGo)
   node/            # NAPI Node.js bindings
   wasm/            # wasm-bindgen WebAssembly bindings
+  otel/            # OpenTelemetry trace subscriber
+  openinference/   # OpenInference trace subscriber
 
 python/            # Python wrapper package (nat_nexus/)
   nat_nexus/
@@ -106,7 +119,9 @@ python/            # Python wrapper package (nat_nexus/)
     intercepts.py      # Intercept registration
     subscribers.py     # Event subscriber registration
     scope_local.py     # Scope-local middleware registration
+    codecs.py          # LLM codec protocol definitions
     typed.py           # Codec-based typed wrappers
+    optimizer.py       # Optimizer config helpers and runtime lifecycle
 
 go/nat_nexus/        # Go CGo bindings
 ```
@@ -151,7 +166,7 @@ graph TD
         ROOT --> AGENT
 
         subgraph "scope_registries"
-            SL_B["uuid-B → ScopeLocalRegistries<br/>(same 13 registry types as global)"]
+            SL_B["uuid-B → ScopeLocalRegistries<br/>(11 sorted registries + event subscribers)"]
         end
     end
 ```

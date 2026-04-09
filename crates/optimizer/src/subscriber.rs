@@ -68,6 +68,10 @@ pub(crate) fn event_to_call_record(event: &Event) -> Option<CallRecord> {
         ended_at: None,
         metadata_snapshot: None,
         output_tokens: None,
+        prompt_tokens: None,
+        total_tokens: None,
+        model_name: None,
+        tool_call_count: None,
     })
 }
 
@@ -113,6 +117,7 @@ mod tests {
                 nvidia_nat_nexus_core::LLMAttributes::empty(),
                 None,
                 None,
+                None,
             ),
             (EventType::Start, Some(ScopeType::Tool)) => Event::tool_start(
                 None,
@@ -140,6 +145,7 @@ mod tests {
                 None,
                 None,
                 nvidia_nat_nexus_core::LLMAttributes::empty(),
+                None,
                 None,
                 None,
             ),

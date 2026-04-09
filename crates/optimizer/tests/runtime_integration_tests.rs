@@ -71,6 +71,7 @@ async fn test_runtime_registers_and_passes_calls_through() {
         None,
         Some("gpt-4".into()),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -375,6 +376,7 @@ async fn test_hosted_plugin_registers_request_and_execution_intercepts() {
         None,
         Some("gpt-4".into()),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -410,6 +412,7 @@ async fn test_hosted_plugin_registers_request_and_execution_intercepts() {
         None,
         None,
         Some("gpt-4".into()),
+        None,
         None,
     )
     .await

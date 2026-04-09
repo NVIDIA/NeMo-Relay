@@ -889,6 +889,7 @@ mod tests {
                 nvidia_nat_nexus_core::LLMAttributes::empty(),
                 input,
                 None,
+                None,
             ),
             _ => Event::scope_start(
                 parent_uuid,
@@ -1242,6 +1243,7 @@ mod tests {
             nvidia_nat_nexus_core::LLMAttributes::empty(),
             Some(json!({"message": "hello"})),
             None,
+            None,
         ));
 
         processor.force_flush().unwrap();
@@ -1331,6 +1333,7 @@ mod tests {
             nvidia_nat_nexus_core::LLMAttributes::empty(),
             None,
             None,
+            None,
         ));
         processor.process(&Event::scope_end(
             None,
@@ -1410,6 +1413,7 @@ mod tests {
                 "content": {"messages": [{"role": "user", "content": "hello"}]},
             })),
             None,
+            None,
         );
         assert_eq!(semantic_scope_type(&llm_with_content), Some(ScopeType::Llm));
         assert_eq!(span_kind(&llm_with_content), SpanKind::Client);
@@ -1432,6 +1436,7 @@ mod tests {
                 "headers": {"authorization": "Bearer token"},
                 "prompt": "hello",
             })),
+            None,
             None,
         );
         assert_eq!(

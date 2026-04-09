@@ -17,6 +17,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use std::sync::Arc;
+
+use crate::codec::{AnnotatedLLMRequest, AnnotatedLLMResponse};
 use crate::json::Json;
 
 // ---------------------------------------------------------------------------
@@ -820,6 +823,9 @@ pub struct LLMStartEvent {
     pub attributes: LLMAttributes,
     pub input: Option<Json>,
     pub model_name: Option<String>,
+    /// Structured view of the request, populated when a request codec is active.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub annotated_request: Option<Arc<AnnotatedLLMRequest>>,
 }
 
 /// An LLM end event emitted when an LLM handle is completed.
@@ -834,6 +840,9 @@ pub struct LLMEndEvent {
     pub attributes: LLMAttributes,
     pub output: Option<Json>,
     pub model_name: Option<String>,
+    /// Structured view of the response, populated when a response codec is active.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub annotated_response: Option<Arc<AnnotatedLLMResponse>>,
 }
 
 /// A standalone mark event emitted via [`nat_nexus_event`](crate::api::nat_nexus_event).
@@ -972,6 +981,7 @@ impl Event {
         attributes: LLMAttributes,
         input: Option<Json>,
         model_name: Option<String>,
+        annotated_request: Option<Arc<AnnotatedLLMRequest>>,
     ) -> Self {
         Self::LLMStart(LLMStartEvent {
             parent_uuid,
@@ -983,6 +993,7 @@ impl Event {
             attributes,
             input,
             model_name,
+            annotated_request,
         })
     }
 
@@ -996,6 +1007,7 @@ impl Event {
         attributes: LLMAttributes,
         output: Option<Json>,
         model_name: Option<String>,
+        annotated_response: Option<Arc<AnnotatedLLMResponse>>,
     ) -> Self {
         Self::LLMEnd(LLMEndEvent {
             parent_uuid,
@@ -1007,6 +1019,7 @@ impl Event {
             attributes,
             output,
             model_name,
+            annotated_response,
         })
     }
 
@@ -1165,5 +1178,172 @@ impl Event {
             Event::ToolEnd(event) => event.tool_call_id.as_deref(),
             _ => None,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — annotated event serde
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod annotated_event_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use crate::codec::{
+        AnnotatedLLMRequest, AnnotatedLLMResponse, FinishReason, MessageContent, Usage,
+    };
+
+    /// Helper: build a minimal LLMStartEvent with deterministic timestamp.
+    fn make_llm_start_event(annotated_request: Option<Arc<AnnotatedLLMRequest>>) -> LLMStartEvent {
+        LLMStartEvent {
+            parent_uuid: None,
+            uuid: Uuid::nil(),
+            timestamp: chrono::DateTime::UNIX_EPOCH,
+            name: "test-llm".into(),
+            data: None,
+            metadata: None,
+            attributes: LLMAttributes::empty(),
+            input: Some(serde_json::json!({"messages": []})),
+            model_name: Some("gpt-4".into()),
+            annotated_request,
+        }
+    }
+
+    /// Helper: build a minimal LLMEndEvent with deterministic timestamp.
+    fn make_llm_end_event(annotated_response: Option<Arc<AnnotatedLLMResponse>>) -> LLMEndEvent {
+        LLMEndEvent {
+            parent_uuid: None,
+            uuid: Uuid::nil(),
+            timestamp: chrono::DateTime::UNIX_EPOCH,
+            name: "test-llm".into(),
+            data: None,
+            metadata: None,
+            attributes: LLMAttributes::empty(),
+            output: Some(serde_json::json!({"choices": []})),
+            model_name: Some("gpt-4".into()),
+            annotated_response,
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // LLMStartEvent serde round-trip tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_llm_start_event_none_annotated_request_serde_round_trip() {
+        let event = make_llm_start_event(None);
+        let json_val = serde_json::to_value(&event).unwrap();
+
+        // With skip_serializing_if, None should NOT produce an annotated_request key
+        assert!(
+            json_val.get("annotated_request").is_none(),
+            "annotated_request key should be absent when None"
+        );
+
+        let deserialized: LLMStartEvent = serde_json::from_value(json_val).unwrap();
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_llm_start_event_with_annotated_request_serde_round_trip() {
+        let annotated = AnnotatedLLMRequest {
+            messages: vec![],
+            model: Some("gpt-4".into()),
+            params: None,
+            tools: None,
+            tool_choice: None,
+            extra: serde_json::Map::new(),
+        };
+        let event = make_llm_start_event(Some(Arc::new(annotated)));
+        let json_val = serde_json::to_value(&event).unwrap();
+
+        // The annotated_request key should be present with model "gpt-4"
+        let ar = json_val
+            .get("annotated_request")
+            .expect("annotated_request key should be present");
+        assert_eq!(ar.get("model").and_then(|v| v.as_str()), Some("gpt-4"));
+
+        let deserialized: LLMStartEvent = serde_json::from_value(json_val).unwrap();
+        assert_eq!(event, deserialized);
+    }
+
+    // -------------------------------------------------------------------
+    // LLMEndEvent serde round-trip tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_llm_end_event_none_annotated_response_serde_round_trip() {
+        let event = make_llm_end_event(None);
+        let json_val = serde_json::to_value(&event).unwrap();
+
+        // With skip_serializing_if, None should NOT produce an annotated_response key
+        assert!(
+            json_val.get("annotated_response").is_none(),
+            "annotated_response key should be absent when None"
+        );
+
+        let deserialized: LLMEndEvent = serde_json::from_value(json_val).unwrap();
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_llm_end_event_with_annotated_response_serde_round_trip() {
+        let annotated = AnnotatedLLMResponse {
+            id: Some("chatcmpl-123".into()),
+            model: Some("gpt-4".into()),
+            message: Some(MessageContent::Text("Hello".into())),
+            finish_reason: Some(FinishReason::Complete),
+            usage: Some(Usage {
+                prompt_tokens: Some(10),
+                completion_tokens: Some(20),
+                total_tokens: Some(30),
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+            }),
+            tool_calls: None,
+            api_specific: None,
+            extra: serde_json::Map::new(),
+        };
+        let event = make_llm_end_event(Some(Arc::new(annotated)));
+        let json_val = serde_json::to_value(&event).unwrap();
+
+        // The annotated_response key should be present
+        let ar = json_val
+            .get("annotated_response")
+            .expect("annotated_response key should be present");
+        assert_eq!(ar.get("id").and_then(|v| v.as_str()), Some("chatcmpl-123"));
+        assert_eq!(ar.get("model").and_then(|v| v.as_str()), Some("gpt-4"));
+
+        let deserialized: LLMEndEvent = serde_json::from_value(json_val).unwrap();
+        assert_eq!(event, deserialized);
+    }
+
+    // -------------------------------------------------------------------
+    // Arc clone semantics
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_arc_wrapped_event_clone_preserves_equality() {
+        let annotated = Arc::new(AnnotatedLLMResponse {
+            id: Some("chatcmpl-456".into()),
+            model: Some("gpt-4".into()),
+            message: Some(MessageContent::Text("World".into())),
+            finish_reason: Some(FinishReason::Complete),
+            usage: None,
+            tool_calls: None,
+            api_specific: None,
+            extra: serde_json::Map::new(),
+        });
+
+        let event = make_llm_end_event(Some(Arc::clone(&annotated)));
+        let cloned = event.clone();
+
+        // Value equality
+        assert_eq!(event, cloned);
+
+        // Arc sharing: original annotated + event + cloned event = 3 strong refs
+        // (annotated local var + event.annotated_response + cloned.annotated_response)
+        assert_eq!(Arc::strong_count(&annotated), 3);
     }
 }

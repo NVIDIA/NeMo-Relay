@@ -69,6 +69,8 @@ import typing
 from nat_nexus import codecs, guardrails, intercepts, llm, optimizer, scope, scope_local, subscribers, tools, typed
 from nat_nexus._native import (
     AnnotatedLLMRequest,
+    AnnotatedLLMResponse,
+    AnthropicMessagesCodec,
     # ATIF exporter
     AtifExporter,
     LLMAttributes,
@@ -77,6 +79,8 @@ from nat_nexus._native import (
     LLMRequest,
     LLMStartEvent,
     MarkEvent,
+    OpenAIChatCodec,
+    OpenAIResponsesCodec,
     OpenInferenceConfig,
     OpenInferenceSubscriber,
     OpenTelemetryConfig,
@@ -215,6 +219,9 @@ __all__ = [
     "propagate_scope_to_thread",
     "set_thread_scope_stack",
     # Types
+    "OpenAIChatCodec",
+    "OpenAIResponsesCodec",
+    "AnthropicMessagesCodec",
     "ScopeAttributes",
     "ToolAttributes",
     "LLMAttributes",
@@ -232,6 +239,7 @@ __all__ = [
     "LLMRequest",
     "Event",
     "AnnotatedLLMRequest",
+    "AnnotatedLLMResponse",
     "AtifExporter",
     "OpenInferenceConfig",
     "OpenInferenceSubscriber",

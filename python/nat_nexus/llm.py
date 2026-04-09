@@ -144,6 +144,7 @@ def execute(
     metadata=None,
     model_name=None,
     codec=None,
+    response_codec=None,
 ):
     """Execute an LLM call through the full middleware pipeline.
 
@@ -165,6 +166,11 @@ def execute(
         codec: Optional ``LlmCodec`` instance to decode the request into an
             ``AnnotatedLLMRequest`` for annotated intercepts. If ``None``,
             no codec decoding is performed.
+        response_codec: Optional response codec instance implementing
+            ``decode_response()``. Use a built-in codec (e.g.,
+            ``OpenAIChatCodec()``) or a custom ``LlmResponseCodec``
+            implementation. Enables structured ``AnnotatedLLMResponse``
+            on LLM end events.
 
     Returns:
         An awaitable that resolves to the execution response after intercepts.
@@ -183,6 +189,7 @@ def execute(
         metadata=metadata,
         model_name=model_name,
         codec=codec,
+        response_codec=response_codec,
     )
 
 
@@ -199,6 +206,7 @@ def stream_execute(
     metadata=None,
     model_name=None,
     codec=None,
+    response_codec=None,
 ):
     """Execute a streaming LLM call through the full middleware pipeline.
 
@@ -223,6 +231,11 @@ def stream_execute(
         codec: Optional ``LlmCodec`` instance to decode the request into an
             ``AnnotatedLLMRequest`` for annotated intercepts. If ``None``,
             no codec decoding is performed.
+        response_codec: Optional response codec instance implementing
+            ``decode_response()``. Use a built-in codec (e.g.,
+            ``OpenAIChatCodec()``) or a custom ``LlmResponseCodec``
+            implementation. Enables structured ``AnnotatedLLMResponse``
+            on LLM end events.
 
     Returns:
         An awaitable ``LlmStream`` async iterator of Json chunks.
@@ -242,6 +255,7 @@ def stream_execute(
         metadata=metadata,
         model_name=model_name,
         codec=codec,
+        response_codec=response_codec,
     )
 
 

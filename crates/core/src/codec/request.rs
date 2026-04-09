@@ -9,9 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
 use crate::json::Json;
-use crate::types::LLMRequest;
 
 // ---------------------------------------------------------------------------
 // AnnotatedLLMRequest type hierarchy
@@ -199,40 +197,6 @@ pub struct GenerationParams {
     /// Stop sequences.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<String>>,
-}
-
-// ---------------------------------------------------------------------------
-// LlmCodec trait
-// ---------------------------------------------------------------------------
-
-/// A bidirectional translator between opaque [`LLMRequest`] content and
-/// structured [`AnnotatedLLMRequest`].
-///
-/// Codecs are implemented by integration patches (LangChain, LangChain-NVIDIA,
-/// LangGraph, etc.) since each SDK has its own request format. They are
-/// registered by name in the global codec registry.
-///
-/// # Design
-///
-/// - **Synchronous**: `decode`/`encode` are pure data transforms (JSON
-///   restructuring), not I/O operations. This matches existing guardrails
-///   and request intercepts.
-/// - **`Send + Sync`**: Required because [`NatNexusContextState`](crate::context::NatNexusContextState)
-///   is behind `Arc<RwLock<>>` and accessed from async contexts.
-/// - **Trait object**: Codecs are registered at runtime (e.g., by Python
-///   patches), so the Rust core cannot know concrete types at compile time.
-///   Store as `Arc<dyn LlmCodec>`.
-pub trait LlmCodec: Send + Sync {
-    /// Parse opaque request content into structured form.
-    fn decode(&self, request: &LLMRequest) -> Result<AnnotatedLLMRequest>;
-
-    /// Merge structured changes back into the opaque request.
-    ///
-    /// The `original` parameter is the pre-intercept [`LLMRequest`], used to
-    /// preserve fields that the Codec does not structurally model. Implementations
-    /// MUST use merge-not-replace semantics: overlay structured changes onto
-    /// the original content, do not construct a fresh content object.
-    fn encode(&self, annotated: &AnnotatedLLMRequest, original: &LLMRequest) -> Result<LLMRequest>;
 }
 
 // ---------------------------------------------------------------------------

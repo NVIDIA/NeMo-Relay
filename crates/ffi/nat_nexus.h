@@ -115,6 +115,16 @@ typedef int32_t NatNexusStatus;
 typedef struct FfiAtifExporter FfiAtifExporter;
 
 /**
+ * Opaque handle carrying both request and response codec trait objects.
+ *
+ * Created by `nat_nexus_openai_chat_codec_new` (and similar constructors).
+ * Freed by `nat_nexus_codec_free`. The handle carries two `Arc`s pointing
+ * to the same underlying codec instance: one for the `LlmCodec` trait and
+ * one for the `LlmResponseCodec` trait.
+ */
+typedef struct FfiCodecHandle FfiCodecHandle;
+
+/**
  * Opaque wrapper around a lifecycle event emitted by the runtime.
  */
 typedef struct FfiEvent FfiEvent;
@@ -654,6 +664,39 @@ NatNexusStatus nat_nexus_llm_call_end(const struct FfiLLMHandle *handle,
                                       const char *metadata_json);
 
 /**
+ * Create a new OpenAI Chat Completions codec handle.
+ *
+ * The returned handle implements both request codec (decode/encode) and
+ * response codec (decode_response). Free with `nat_nexus_codec_free`.
+ *
+ * # Safety
+ * Caller must free the returned handle via `nat_nexus_codec_free`.
+ */
+struct FfiCodecHandle *nat_nexus_openai_chat_codec_new(void);
+
+/**
+ * Create a new OpenAI Responses API codec handle.
+ *
+ * The returned handle implements both request codec (decode/encode) and
+ * response codec (decode_response). Free with `nat_nexus_codec_free`.
+ *
+ * # Safety
+ * Caller must free the returned handle via `nat_nexus_codec_free`.
+ */
+struct FfiCodecHandle *nat_nexus_openai_responses_codec_new(void);
+
+/**
+ * Create a new Anthropic Messages API codec handle.
+ *
+ * The returned handle implements both request codec (decode/encode) and
+ * response codec (decode_response). Free with `nat_nexus_codec_free`.
+ *
+ * # Safety
+ * Caller must free the returned handle via `nat_nexus_codec_free`.
+ */
+struct FfiCodecHandle *nat_nexus_anthropic_messages_codec_new(void);
+
+/**
  * Execute an LLM call end-to-end: run conditional-execution guardrails (on raw
  * request), then request intercepts, sanitize-request guardrails, execution
  * intercepts, the callback, and sanitize-response
@@ -693,6 +736,7 @@ NatNexusStatus nat_nexus_llm_call_execute(const char *name,
                                           NatNexusCodecEncodeFn codec_encode,
                                           void *codec_user_data,
                                           NatNexusFreeFn codec_free_fn,
+                                          const struct FfiCodecHandle *response_codec,
                                           char **out);
 
 /**
@@ -739,6 +783,7 @@ NatNexusStatus nat_nexus_llm_stream_call_execute(const char *name,
                                                  NatNexusCodecEncodeFn codec_encode,
                                                  void *codec_user_data,
                                                  NatNexusFreeFn codec_free_fn,
+                                                 const struct FfiCodecHandle *response_codec,
                                                  struct FfiStream **out);
 
 /**
@@ -1704,6 +1749,16 @@ void nat_nexus_otel_subscriber_free(struct FfiOpenTelemetrySubscriber *ptr);
 void nat_nexus_openinference_subscriber_free(struct FfiOpenInferenceSubscriber *ptr);
 
 /**
+ * Free a codec handle previously returned by one of the codec constructor
+ * functions (`nat_nexus_openai_chat_codec_new`, etc.).
+ *
+ * # Safety
+ * `handle` must be a valid pointer returned by one of the codec constructor
+ * functions, or null. Double-free is undefined behavior.
+ */
+void nat_nexus_codec_free(struct FfiCodecHandle *handle);
+
+/**
  * Free an optimizer runtime handle previously returned by `nat_nexus_optimizer_runtime_create`.
  *
  * # Safety
@@ -1981,5 +2036,25 @@ char *nat_nexus_event_parent_uuid(const struct FfiEvent *ptr);
  * `ptr` must be a valid `FfiEvent` pointer or null.
  */
 char *nat_nexus_event_scope_type(const struct FfiEvent *ptr);
+
+/**
+ * Return the annotated request from an LLM start event as a JSON C string,
+ * or null if not available (non-LLM events, or no codec was active).
+ * Caller must free the result with `nat_nexus_string_free`.
+ *
+ * # Safety
+ * `ptr` must be a valid `FfiEvent` pointer or null.
+ */
+char *nat_nexus_event_annotated_request(const struct FfiEvent *ptr);
+
+/**
+ * Return the annotated response from an LLM end event as a JSON C string,
+ * or null if not available (non-LLM events, or no response codec was active).
+ * Caller must free the result with `nat_nexus_string_free`.
+ *
+ * # Safety
+ * `ptr` must be a valid `FfiEvent` pointer or null.
+ */
+char *nat_nexus_event_annotated_response(const struct FfiEvent *ptr);
 
 #endif  /* NAT_NEXUS_H */

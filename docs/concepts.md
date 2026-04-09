@@ -89,6 +89,51 @@ response = {"choices": [...]}
 
 The `headers` field holds metadata (HTTP headers, SDK options, tracing context). The `content` field holds the actual payload sent to the LLM provider.
 
+## LLM Codecs
+
+Codecs provide structured, typed access to LLM request and response data
+that would otherwise require manual JSON parsing. There are two codec
+traits:
+
+### Request Codecs (LlmCodec)
+
+A request codec translates between opaque `LLMRequest.content` and a
+structured `AnnotatedLLMRequest` with typed fields (messages, model,
+params, tools, tool_choice). The pipeline decodes before request
+intercepts and encodes back after, so intercepts can work with typed data
+without knowing the underlying API format.
+
+### Response Codecs (LlmResponseCodec)
+
+A response codec parses raw JSON API responses into a normalized
+`AnnotatedLLMResponse` with fields like `id`, `model`, `message`,
+`tool_calls`, `finish_reason`, `usage`, and `api_specific`. Response
+codecs are **decode-only** (introspection, not modification) and
+**non-fatal** -- if decoding fails, the pipeline continues with
+`annotated_response: None`.
+
+### Built-In Codecs
+
+Nexus ships three built-in codecs that implement both traits:
+
+| Codec | API | Request Fields | Response Fields |
+|-------|-----|---------------|-----------------|
+| `OpenAIChatCodec` | Chat Completions | `messages`, `model`, `temperature`, `max_tokens`/`max_completion_tokens`, `top_p`, `stop`, `tools`, `tool_choice` | `choices[0].message`, `finish_reason`, `usage` with cached tokens |
+| `OpenAIResponsesCodec` | Responses API | `input`/`instructions`, `model`, `temperature`, `max_output_tokens`, `top_p`, `tools`, `tool_choice` | `output` items, `status`-based finish reason, `usage` with input/output tokens |
+| `AnthropicMessagesCodec` | Messages API | `system` (top-level), `messages`, `model`, `max_tokens`, `temperature`, `top_p`, `stop_sequences`, `tools`, `tool_choice` | `content` blocks, `stop_reason`, `usage` with cache tokens |
+
+### Event Enrichment
+
+When codecs are active, LLM lifecycle events carry structured data:
+
+- `LLMStartEvent.annotated_request` -- the `AnnotatedLLMRequest` from
+  the request codec
+- `LLMEndEvent.annotated_response` -- the `AnnotatedLLMResponse` from
+  the response codec
+
+See [LLM Codecs](llm-codecs.md) for full documentation including
+cross-language examples and custom codec authoring.
+
 ## Events
 
 Every lifecycle operation emits events to registered subscribers. Events carry:
@@ -108,6 +153,8 @@ Every lifecycle operation emits events to registered subscribers. Events carry:
 | `output` | Post-guardrail response (End events) |
 | `model_name` | LLM model name (LLM events) |
 | `tool_call_id` | External correlation ID (tool events) |
+| `annotated_request` | Structured request from codec (LLMStart events, when codec is active) |
+| `annotated_response` | Structured response from response codec (LLMEnd events, when response codec is active) |
 
 Subscriber callbacks run synchronously on the calling thread, but Nexus snapshots
 the subscriber list and releases its runtime locks before invoking them. This
@@ -288,6 +335,7 @@ Effective:     [compliance_gate(1), redact_args(5), block_dangerous(10), audit_l
 |-------|------|
 | `AlreadyExists` | Duplicate registration (same name) |
 | `NotFound` | Missing scope/handle |
+| `InvalidArgument` | Precondition violation (e.g., popping a scope that is not at the top of the stack) |
 | `ScopeStackEmpty` | Should never occur (root always present) |
 | `GuardrailRejected` | Conditional guardrail blocked execution |
 | `Internal` | Lock poisoning or other runtime failure |

@@ -8,8 +8,7 @@ emit correct Nexus Mark events with the expected names, event types, and data
 fields, and that guard behavior prevents spurious events when no scope stack
 is active.
 
-Covers requirements LIFE-01 (Checkpoint Save), LIFE-02 (Checkpoint Restore),
-LIFE-04 (Graph Interrupt), LIFE-05 (Graph Resume).
+Covers checkpoint save, checkpoint restore, graph interrupt, and graph resume.
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ from nat_nexus import create_scope_stack, set_thread_scope_stack
 
 
 class TestCheckpointEvents:
-    """Validate checkpoint save and restore event emission (LIFE-01, LIFE-02)."""
+    """Validate checkpoint save and restore event emission."""
 
     @pytest.fixture(autouse=True)
     def scope_stack(self):
@@ -51,7 +50,7 @@ class TestCheckpointEvents:
         nat_nexus.subscribers.deregister("test-lifecycle-collector")
 
     # -------------------------------------------------------------------
-    # LIFE-01: Checkpoint Save events
+    # Checkpoint Save events
     # -------------------------------------------------------------------
 
     def test_checkpoint_save_emits_event(self, scope_stack: Any, events: list[Any]) -> None:
@@ -130,7 +129,7 @@ class TestCheckpointEvents:
 
 
 class TestInterruptEvents:
-    """Validate graph interrupt and resume event emission (LIFE-04, LIFE-05)."""
+    """Validate graph interrupt and resume event emission."""
 
     @pytest.fixture(autouse=True)
     def scope_stack(self):
@@ -148,7 +147,7 @@ class TestInterruptEvents:
         nat_nexus.subscribers.deregister("test-interrupt-collector")
 
     # -------------------------------------------------------------------
-    # LIFE-04: Graph Interrupt events
+    # Graph Interrupt events
     # -------------------------------------------------------------------
 
     def test_graph_interrupt_emits_event(self, scope_stack: Any, events: list[Any]) -> None:
@@ -199,7 +198,7 @@ class TestInterruptEvents:
         pop_graph_scope(graph_handle)
 
     # -------------------------------------------------------------------
-    # LIFE-05: Graph Resume events
+    # Graph Resume events
     # -------------------------------------------------------------------
 
     def test_graph_resume_emits_event(self, scope_stack: Any, events: list[Any]) -> None:

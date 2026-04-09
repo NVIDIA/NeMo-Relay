@@ -66,6 +66,8 @@ extern char* nat_nexus_event_model_name(const void* ptr);
 extern char* nat_nexus_event_tool_call_id(const void* ptr);
 extern char* nat_nexus_event_parent_uuid(const void* ptr);
 extern char* nat_nexus_event_scope_type(const void* ptr);
+extern char* nat_nexus_event_annotated_request(const FfiEvent* ptr);
+extern char* nat_nexus_event_annotated_response(const FfiEvent* ptr);
 extern void nat_nexus_event_free(FfiEvent* ptr);
 
 // String free
@@ -362,6 +364,8 @@ type Event interface {
 	Output() json.RawMessage
 	ModelName() string
 	ToolCallID() string
+	AnnotatedRequest() json.RawMessage
+	AnnotatedResponse() json.RawMessage
 }
 
 type eventBase struct {
@@ -394,6 +398,12 @@ func (e eventBase) ToolCallID() string {
 }
 func (e eventBase) ParentUUID() string {
 	return goStringOpt((*C.char)(C.nat_nexus_event_parent_uuid(unsafe.Pointer(e.ptr))))
+}
+func (e eventBase) AnnotatedRequest() json.RawMessage {
+	return goJSONOpt(C.nat_nexus_event_annotated_request(e.ptr))
+}
+func (e eventBase) AnnotatedResponse() json.RawMessage {
+	return goJSONOpt(C.nat_nexus_event_annotated_response(e.ptr))
 }
 
 type ScopeStartEvent struct{ eventBase }

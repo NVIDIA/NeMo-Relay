@@ -527,6 +527,57 @@ pub fn wrap_js_codec(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Response codec wrapper
+// ---------------------------------------------------------------------------
+
+/// A NAPI-RS wrapper that implements the core [`LlmResponseCodec`] trait by
+/// delegating `decode_response` to a JavaScript function via `ThreadsafeFunction`.
+struct NapiResponseCodec {
+    decode_response: Arc<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
+}
+
+impl nvidia_nat_nexus_core::codec::LlmResponseCodec for NapiResponseCodec {
+    fn decode_response(
+        &self,
+        response: &Json,
+    ) -> nvidia_nat_nexus_core::Result<nvidia_nat_nexus_core::codec::AnnotatedLLMResponse> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let status = self.decode_response.call_with_return_value(
+            response.clone(),
+            ThreadsafeFunctionCallMode::Blocking,
+            move |v: Json| {
+                tx.send(v).ok();
+                Ok(())
+            },
+        );
+        if status != napi::Status::Ok {
+            return Err(nvidia_nat_nexus_core::NexusError::Internal(format!(
+                "decode_response call failed: {status:?}"
+            )));
+        }
+        let result = rx.recv().map_err(|_| {
+            nvidia_nat_nexus_core::NexusError::Internal(
+                "decode_response callback did not return".into(),
+            )
+        })?;
+        serde_json::from_value(result).map_err(|e| {
+            nvidia_nat_nexus_core::NexusError::Internal(format!(
+                "decode_response returned invalid AnnotatedLLMResponse: {e}"
+            ))
+        })
+    }
+}
+
+/// Wrap a JS decode_response function into an `Arc<dyn LlmResponseCodec>`.
+pub fn wrap_js_response_codec(
+    decode_response: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+) -> Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec> {
+    Arc::new(NapiResponseCodec {
+        decode_response: Arc::new(decode_response),
+    })
+}
+
 #[cfg(test)]
 #[path = "callable_coverage_tests.rs"]
 mod coverage_tests;

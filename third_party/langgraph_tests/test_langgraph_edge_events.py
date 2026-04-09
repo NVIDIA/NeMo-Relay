@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for LangGraph edge traversal event emission (HIER-01).
+"""Unit tests for LangGraph edge traversal event emission.
 
 Validates that emit_edge_write in _nat_nexus.py emits correct Nexus Mark events
-with the expected name, data fields, and source_node extraction behavior (D-02).
+with the expected name, data fields, and source_node extraction behavior.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from nat_nexus import create_scope_stack, set_thread_scope_stack
 
 
 class TestEdgeWriteEvents:
-    """Validate edge traversal event emission (HIER-01)."""
+    """Validate edge traversal event emission."""
 
     @pytest.fixture(autouse=True)
     def scope_stack(self):
@@ -44,7 +44,7 @@ class TestEdgeWriteEvents:
         nat_nexus.subscribers.deregister("test-edge-collector")
 
     def test_edge_write_emits_event(self, scope_stack: Any, events: list[Any]) -> None:
-        """emit_edge_write emits a Mark event with correct name and data fields (HIER-01)."""
+        """emit_edge_write emits a Mark event with correct name and data fields."""
         graph_handle = push_graph_scope("edge_graph")
         emit_edge_write(source_node="node_a", channels=["out"], write_count=1)
         pop_graph_scope(graph_handle)

@@ -35,6 +35,9 @@ fn test_register_exposes_all_type_bindings() {
         assert!(module.getattr("OpenInferenceSubscriber").is_ok());
         assert!(module.getattr("OpenTelemetryConfig").is_ok());
         assert!(module.getattr("OpenTelemetrySubscriber").is_ok());
+        assert!(module.getattr("OpenAIChatCodec").is_ok());
+        assert!(module.getattr("OpenAIResponsesCodec").is_ok());
+        assert!(module.getattr("AnthropicMessagesCodec").is_ok());
     });
 }
 
@@ -216,6 +219,7 @@ fn test_bitflags_handles_and_event_wrappers_expose_expected_fields() {
             core_types::LLMAttributes::STATELESS,
             Some(json!({"output": true})),
             Some("model".into()),
+            None,
         ) {
             core_types::Event::LLMEnd(inner) => PyLLMEndEvent { inner },
             _ => unreachable!(),
@@ -273,11 +277,13 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
             None,
             None,
             Some("typed-model".into()),
+            None,
         )
         .unwrap();
         nvidia_nat_nexus_core::nat_nexus_llm_call_end(
             &handle,
             json!({"content": "world"}),
+            None,
             None,
             None,
         )

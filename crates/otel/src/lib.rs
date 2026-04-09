@@ -813,6 +813,7 @@ mod tests {
                 nvidia_nat_nexus_core::LLMAttributes::empty(),
                 input,
                 None,
+                None,
             ),
             _ => Event::scope_start(
                 parent_uuid,
@@ -1152,6 +1153,7 @@ mod tests {
             nvidia_nat_nexus_core::LLMAttributes::empty(),
             None,
             None,
+            None,
         ));
         processor.process(&Event::scope_end(
             None,
@@ -1250,6 +1252,7 @@ mod tests {
             None,
             nvidia_nat_nexus_core::LLMAttributes::empty(),
             Some(json!({"result": "hello"})),
+            None,
             None,
         );
         assert_eq!(semantic_scope_type(&llm_event), Some(ScopeType::Llm));

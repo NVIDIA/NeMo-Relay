@@ -15,6 +15,7 @@ from nat_nexus import optimizer as optimizer
 from nat_nexus import scope as scope
 from nat_nexus import typed as typed
 from nat_nexus.codecs import LlmCodec as LlmCodec
+from nat_nexus.codecs import LlmResponseCodec as LlmResponseCodec
 
 Json = Any
 """Type alias for JSON-serializable Python objects (dicts, lists, strings, numbers, etc.)."""
@@ -318,6 +319,69 @@ class AnnotatedLLMRequest:
     def last_user_message(self) -> Optional[str]: ...
     def has_tool_calls(self) -> bool: ...
 
+class AnnotatedLLMResponse:
+    """Structured view of an LLM response produced by a response codec.
+
+    Read-only: fields are accessed via properties. Complex fields
+    (message, tool_calls, usage, api_specific) return Python dicts/lists.
+    """
+
+    @property
+    def id(self) -> Optional[str]: ...
+    @property
+    def model(self) -> Optional[str]: ...
+    @property
+    def message(self) -> Optional[Any]: ...
+    @property
+    def tool_calls(self) -> Optional[list[dict[str, Any]]]: ...
+    @property
+    def finish_reason(self) -> Optional[str]: ...
+    @property
+    def usage(self) -> Optional[dict[str, Any]]: ...
+    @property
+    def api_specific(self) -> Optional[dict[str, Any]]: ...
+    @property
+    def extra(self) -> dict[str, Any]: ...
+    def response_text(self) -> Optional[str]: ...
+    def has_tool_calls(self) -> bool: ...
+
+# ---------------------------------------------------------------------------
+# Built-in LLM Codec classes
+# ---------------------------------------------------------------------------
+
+class OpenAIChatCodec:
+    """Built-in codec for OpenAI Chat Completions API.
+
+    Implements both LlmCodec (decode/encode for requests) and
+    LlmResponseCodec (decode_response for responses).
+    """
+    def __init__(self) -> None: ...
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest: ...
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest: ...
+    def decode_response(self, response: Json) -> AnnotatedLLMResponse: ...
+
+class OpenAIResponsesCodec:
+    """Built-in codec for OpenAI Responses API.
+
+    Implements both LlmCodec (decode/encode for requests) and
+    LlmResponseCodec (decode_response for responses).
+    """
+    def __init__(self) -> None: ...
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest: ...
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest: ...
+    def decode_response(self, response: Json) -> AnnotatedLLMResponse: ...
+
+class AnthropicMessagesCodec:
+    """Built-in codec for Anthropic Messages API.
+
+    Implements both LlmCodec (decode/encode for requests) and
+    LlmResponseCodec (decode_response for responses).
+    """
+    def __init__(self) -> None: ...
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest: ...
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest: ...
+    def decode_response(self, response: Json) -> AnnotatedLLMResponse: ...
+
 class ScopeStartEvent:
     @property
     def kind(self) -> Literal["ScopeStart"]: ...
@@ -423,6 +487,8 @@ class LLMStartEvent:
     def input(self) -> Optional[Any]: ...
     @property
     def model_name(self) -> Optional[str]: ...
+    @property
+    def annotated_request(self) -> Optional[AnnotatedLLMRequest]: ...
 
 class LLMEndEvent:
     @property
@@ -445,6 +511,8 @@ class LLMEndEvent:
     def output(self) -> Optional[Any]: ...
     @property
     def model_name(self) -> Optional[str]: ...
+    @property
+    def annotated_response(self) -> Optional[AnnotatedLLMResponse]: ...
 
 class MarkEvent:
     @property
@@ -850,6 +918,7 @@ def nat_nexus_llm_call_execute(
     metadata: Optional[Json] = None,
     model_name: Optional[str] = None,
     codec: Optional[LlmCodec] = None,
+    response_codec: Optional[Any] = None,
 ) -> Awaitable[Json]:
     """Execute an LLM call through the full middleware pipeline.
 
@@ -898,6 +967,7 @@ async def nat_nexus_llm_stream_call_execute(
     metadata: Optional[Json] = None,
     model_name: Optional[str] = None,
     codec: Optional[LlmCodec] = None,
+    response_codec: Optional[Any] = None,
 ) -> LlmStream:
     """Execute a streaming LLM call through the full middleware pipeline.
 

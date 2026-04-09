@@ -67,7 +67,7 @@ A `RunRecord` represents a completed agent run. It contains:
 
 - `id` -- Unique UUID for this run
 - `agent_id` -- Which agent executed this run
-- `calls` -- Ordered sequence of `CallRecord` entries (each with `kind: Llm|Tool`, `name`, `started_at`, `ended_at`, `output_tokens`)
+- `calls` -- Ordered sequence of `CallRecord` entries (each with `kind: Llm|Tool`, `name`, `started_at`, `ended_at`, `output_tokens`, `prompt_tokens`, `total_tokens`, `model_name`, `tool_call_count`)
 - `started_at` / `ended_at` -- Run boundary timestamps
 
 ### Learner Pipeline

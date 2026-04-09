@@ -35,6 +35,7 @@ typedef struct FfiLLMHandle FfiLLMHandle;
 typedef struct FfiLLMRequest FfiLLMRequest;
 typedef struct FfiEvent FfiEvent;
 typedef struct FfiStream FfiStream;
+typedef struct FfiCodecHandle FfiCodecHandle;
 
 typedef void (*NatNexusFreeFn)(void* user_data);
 
@@ -87,6 +88,7 @@ extern int32_t nat_nexus_llm_call_execute(
 	const char* model_name,
 	NatNexusCodecDecodeFn codec_decode, NatNexusCodecEncodeFn codec_encode,
 	void* codec_user_data, NatNexusFreeFn codec_free_fn,
+	const FfiCodecHandle* response_codec,
 	char** out);
 
 // LLM stream execute
@@ -99,7 +101,14 @@ extern int32_t nat_nexus_llm_stream_call_execute(
 	const char* model_name,
 	NatNexusCodecDecodeFn codec_decode, NatNexusCodecEncodeFn codec_encode,
 	void* codec_user_data, NatNexusFreeFn codec_free_fn,
+	const FfiCodecHandle* response_codec,
 	FfiStream** out);
+
+// Built-in codec constructors
+extern FfiCodecHandle* nat_nexus_openai_chat_codec_new(void);
+extern FfiCodecHandle* nat_nexus_openai_responses_codec_new(void);
+extern FfiCodecHandle* nat_nexus_anthropic_messages_codec_new(void);
+extern void nat_nexus_codec_free(FfiCodecHandle* handle);
 
 extern void nat_nexus_set_last_error_message(const char* msg);
 
@@ -613,15 +622,17 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 // ---------------------------------------------------------------------------
 
 type llmCallOptions struct {
-	parent        *C.FfiScopeHandle
-	attributes    uint32
-	data          *C.char
-	metadata      *C.char
-	modelName     *C.char
-	codecDecode   C.NatNexusCodecDecodeFn
-	codecEncode   C.NatNexusCodecEncodeFn
-	codecUserData unsafe.Pointer
-	codecFreeFn   C.NatNexusFreeFn
+	parent              *C.FfiScopeHandle
+	attributes          uint32
+	data                *C.char
+	metadata            *C.char
+	modelName           *C.char
+	codecDecode         C.NatNexusCodecDecodeFn
+	codecEncode         C.NatNexusCodecEncodeFn
+	codecUserData       unsafe.Pointer
+	codecFreeFn         C.NatNexusFreeFn
+	responseCodec       *C.FfiCodecHandle
+	responseCodecHandle *CodecHandle // prevents GC of the CodecHandle during FFI calls
 }
 
 // LLMCallOption is a functional option that configures optional parameters for
@@ -688,6 +699,65 @@ func WithLLMCodec(codec CodecFunc) LLMCallOption {
 	}
 }
 
+// CodecHandle wraps an opaque FFI codec handle that carries both request
+// codec (decode/encode) and response codec (decode_response) implementations.
+// Create via [NewOpenAIChatCodec], [NewOpenAIResponsesCodec], or
+// [NewAnthropicMessagesCodec]. The handle is automatically freed when
+// garbage collected.
+type CodecHandle struct {
+	ptr *C.FfiCodecHandle
+}
+
+// NewOpenAIChatCodec creates a codec for the OpenAI Chat Completions API.
+func NewOpenAIChatCodec() *CodecHandle {
+	h := &CodecHandle{ptr: C.nat_nexus_openai_chat_codec_new()}
+	runtime.SetFinalizer(h, func(h *CodecHandle) {
+		if h.ptr != nil {
+			C.nat_nexus_codec_free(h.ptr)
+			h.ptr = nil
+		}
+	})
+	return h
+}
+
+// NewOpenAIResponsesCodec creates a codec for the OpenAI Responses API.
+func NewOpenAIResponsesCodec() *CodecHandle {
+	h := &CodecHandle{ptr: C.nat_nexus_openai_responses_codec_new()}
+	runtime.SetFinalizer(h, func(h *CodecHandle) {
+		if h.ptr != nil {
+			C.nat_nexus_codec_free(h.ptr)
+			h.ptr = nil
+		}
+	})
+	return h
+}
+
+// NewAnthropicMessagesCodec creates a codec for the Anthropic Messages API.
+func NewAnthropicMessagesCodec() *CodecHandle {
+	h := &CodecHandle{ptr: C.nat_nexus_anthropic_messages_codec_new()}
+	runtime.SetFinalizer(h, func(h *CodecHandle) {
+		if h.ptr != nil {
+			C.nat_nexus_codec_free(h.ptr)
+			h.ptr = nil
+		}
+	})
+	return h
+}
+
+// WithLLMResponseCodec sets the response codec for this LLM call.
+// Pass a CodecHandle created by [NewOpenAIChatCodec],
+// [NewOpenAIResponsesCodec], or [NewAnthropicMessagesCodec].
+// The codec handle is kept alive for the duration of the FFI call via
+// runtime.KeepAlive, so it is safe to pass an inline-constructed handle.
+func WithLLMResponseCodec(codec *CodecHandle) LLMCallOption {
+	return func(o *llmCallOptions) {
+		if codec != nil {
+			o.responseCodec = codec.ptr
+			o.responseCodecHandle = codec
+		}
+	}
+}
+
 func freeLLMOpts(o *llmCallOptions) {
 	if o.data != nil {
 		C.free(unsafe.Pointer(o.data))
@@ -698,6 +768,8 @@ func freeLLMOpts(o *llmCallOptions) {
 	if o.modelName != nil {
 		C.free(unsafe.Pointer(o.modelName))
 	}
+	// responseCodec is borrowed from a CodecHandle kept alive via
+	// responseCodecHandle + runtime.KeepAlive — do not free here.
 	// Codec closure cleanup is handled by the FFI free_fn callback.
 }
 
@@ -790,8 +862,10 @@ func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts 
 		o.modelName,
 		o.codecDecode, o.codecEncode,
 		o.codecUserData, o.codecFreeFn,
+		o.responseCodec,
 		&out,
 	)
+	runtime.KeepAlive(o.responseCodecHandle)
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}
@@ -856,8 +930,10 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 		o.modelName,
 		o.codecDecode, o.codecEncode,
 		o.codecUserData, o.codecFreeFn,
+		o.responseCodec,
 		&out,
 	)
+	runtime.KeepAlive(o.responseCodecHandle)
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}

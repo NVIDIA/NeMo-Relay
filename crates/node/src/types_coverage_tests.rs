@@ -104,6 +104,7 @@ fn test_js_event_conversion_maps_all_fields() {
         core_types::LLMAttributes::STATELESS,
         Some(json!({"output": true})),
         Some("model".into()),
+        None,
     );
 
     let js_event = JsEvent::from(&event);
@@ -118,6 +119,7 @@ fn test_js_event_conversion_maps_all_fields() {
             attributes,
             output,
             model_name,
+            annotated_response,
         } => {
             assert_eq!(js_parent_uuid, parent_uuid.map(|value| value.to_string()));
             assert_eq!(js_uuid, uuid.to_string());
@@ -127,6 +129,7 @@ fn test_js_event_conversion_maps_all_fields() {
             assert_eq!(attributes, LLM_ATTR_STATELESS);
             assert_eq!(output, Some(json!({"output": true})));
             assert_eq!(model_name, Some("model".into()));
+            assert!(annotated_response.is_none());
             assert!(!timestamp.is_empty());
         }
         _ => panic!("expected LLMEnd event"),
@@ -206,6 +209,7 @@ fn test_scope_type_is_only_present_on_scope_events() {
         None,
         None,
         core_types::LLMAttributes::empty(),
+        None,
         None,
         None,
     );

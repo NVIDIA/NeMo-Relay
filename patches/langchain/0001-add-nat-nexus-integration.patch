@@ -1,6 +1,6 @@
 diff --git a/libs/core/langchain_core/callbacks/nat_nexus_handler.py b/libs/core/langchain_core/callbacks/nat_nexus_handler.py
 new file mode 100644
-index 0000000..8b0638d
+index 0000000000..8b0638d93a
 --- /dev/null
 +++ b/libs/core/langchain_core/callbacks/nat_nexus_handler.py
 @@ -0,0 +1,145 @@
@@ -150,7 +150,7 @@ index 0000000..8b0638d
 +    except Exception:
 +        return None
 diff --git a/libs/core/langchain_core/tools/base.py b/libs/core/langchain_core/tools/base.py
-index 7026a2e..9e9157c 100644
+index 7026a2e8fb..9e9157c5b7 100644
 --- a/libs/core/langchain_core/tools/base.py
 +++ b/libs/core/langchain_core/tools/base.py
 @@ -58,6 +58,7 @@ from langchain_core.utils.function_calling import (
@@ -235,7 +235,7 @@ index 7026a2e..9e9157c 100644
                      "Since response_format='content_and_artifact' "
 diff --git a/libs/core/langchain_core/utils/_nat_nexus.py b/libs/core/langchain_core/utils/_nat_nexus.py
 new file mode 100644
-index 0000000..7aca177
+index 0000000000..7aca177bcd
 --- /dev/null
 +++ b/libs/core/langchain_core/utils/_nat_nexus.py
 @@ -0,0 +1,35 @@
@@ -276,7 +276,7 @@ index 0000000..7aca177
 +    return get_nat_nexus() is not None
 diff --git a/libs/core/tests/unit_tests/callbacks/test_nat_nexus_handler.py b/libs/core/tests/unit_tests/callbacks/test_nat_nexus_handler.py
 new file mode 100644
-index 0000000..8321c4e
+index 0000000000..8321c4e43d
 --- /dev/null
 +++ b/libs/core/tests/unit_tests/callbacks/test_nat_nexus_handler.py
 @@ -0,0 +1,197 @@
@@ -478,7 +478,7 @@ index 0000000..8321c4e
 +        mock_nnex.scope.pop.side_effect = RuntimeError("nnex failure")
 +        h.on_chain_end({}, run_id=run_id)
 diff --git a/libs/core/uv.lock b/libs/core/uv.lock
-index 8dad83e..612bb81 100644
+index 8dad83ef38..612bb81212 100644
 --- a/libs/core/uv.lock
 +++ b/libs/core/uv.lock
 @@ -992,7 +992,7 @@ wheels = [
@@ -490,12 +490,305 @@ index 8dad83e..612bb81 100644
  source = { editable = "." }
  dependencies = [
      { name = "jsonpatch" },
+diff --git a/libs/partners/anthropic/langchain_anthropic/_nat_nexus.py b/libs/partners/anthropic/langchain_anthropic/_nat_nexus.py
+new file mode 100644
+index 0000000000..fe74931ca2
+--- /dev/null
++++ b/libs/partners/anthropic/langchain_anthropic/_nat_nexus.py
+@@ -0,0 +1,124 @@
++"""Thin bridge module for optional Nexus integration.
++
++When nat_nexus is installed and a scope stack has been initialized by the
++caller, the helpers in this module route LLM calls through the full
++Nexus middleware pipeline (guardrails, intercepts, execution intercepts).
++If nat_nexus is not installed or no scope stack is active, ``available()``
++returns ``False`` and ChatAnthropic falls back to its vanilla code path.
++
++LLM calls use the standard Nexus API (``nat_nexus.llm.execute`` /
++``nat_nexus.llm.stream_execute``) with
++``response_codec=nat_nexus.AnthropicMessagesCodec()`` to get structured
++``AnnotatedLLMResponse`` on LLM end events via the built-in Anthropic
++Messages codec.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import contextvars
++from concurrent.futures import ThreadPoolExecutor
++from typing import Any, Callable
++
++try:
++    import nat_nexus
++    from nat_nexus import LLMRequest
++
++    _HAS_NAT_NEXUS = True
++except ImportError:
++    _HAS_NAT_NEXUS = False
++
++
++def available() -> bool:
++    """Return True when nat_nexus is importable *and* a scope stack is active."""
++    if not _HAS_NAT_NEXUS:
++        return False
++    try:
++        # Only consider nat_nexus available if the caller has explicitly
++        # initialised a scope stack (we don't want to auto-create one).
++        return nat_nexus.scope_stack_active()
++    except Exception:
++        return False
++
++
++def make_request(payload: dict) -> "LLMRequest":
++    """Wrap a payload dict into an LLMRequest."""
++    return LLMRequest({}, payload)
++
++
++# ---------------------------------------------------------------------------
++# Sync-to-async bridge
++# ---------------------------------------------------------------------------
++
++
++def run_sync(coro: Any) -> Any:
++    """Run *coro* synchronously, handling the case where an event loop is
++    already running (e.g. Jupyter notebooks).
++
++    PATCH-01: When offloading to a ThreadPoolExecutor worker, propagate
++    both Python contextvars and the Rust thread-local scope stack so that
++    Nexus telemetry is preserved on the worker thread.
++    """
++    try:
++        asyncio.get_running_loop()
++    except RuntimeError:
++        # No loop running -- we can just use asyncio.run.
++        return asyncio.run(coro)
++    # Loop already running -- offload to a worker thread so we don't block.
++    # Propagate contextvars and scope stack to the worker thread.
++    ctx = contextvars.copy_context()
++    if _HAS_NAT_NEXUS:
++        try:
++            scope_stack = nat_nexus.get_scope_stack()
++
++            def _run_with_scope_stack() -> Any:
++                nat_nexus.set_thread_scope_stack(scope_stack)
++                return asyncio.run(coro)
++
++            with ThreadPoolExecutor(max_workers=1) as pool:
++                return pool.submit(
++                    ctx.run, _run_with_scope_stack
++                ).result()
++        except Exception:
++            pass  # Fall through to vanilla path
++    with ThreadPoolExecutor(max_workers=1) as pool:
++        return pool.submit(asyncio.run, coro).result()
++
++
++# ---------------------------------------------------------------------------
++# LLM pipeline wrappers
++# ---------------------------------------------------------------------------
++
++
++async def llm_execute(
++    model_name: str,
++    request: "LLMRequest",
++    func: Callable[..., Any],
++) -> Any:
++    """Execute a non-streaming LLM call through the Nexus pipeline."""
++    return await nat_nexus.llm.execute(
++        model_name,
++        request,
++        func,
++        model_name=model_name,
++        response_codec=nat_nexus.AnthropicMessagesCodec(),
++    )
++
++
++async def llm_stream_execute(
++    model_name: str,
++    request: "LLMRequest",
++    func: Callable[..., Any],
++    collector: Callable[[Any], None],
++    finalizer: Callable[[], Any],
++) -> Any:
++    """Execute a streaming LLM call through the Nexus pipeline."""
++    return await nat_nexus.llm.stream_execute(
++        model_name,
++        request,
++        func,
++        collector,
++        finalizer,
++        model_name=model_name,
++        response_codec=nat_nexus.AnthropicMessagesCodec(),
++    )
+diff --git a/libs/partners/anthropic/langchain_anthropic/chat_models.py b/libs/partners/anthropic/langchain_anthropic/chat_models.py
+index ee9f480427..8c983e035d 100644
+--- a/libs/partners/anthropic/langchain_anthropic/chat_models.py
++++ b/libs/partners/anthropic/langchain_anthropic/chat_models.py
+@@ -57,7 +57,7 @@ from langchain_core.utils.utils import _build_model_kwargs
+ from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+ from typing_extensions import NotRequired, Self, TypedDict
+
+-from langchain_anthropic import __version__
++from langchain_anthropic import __version__, _nat_nexus
+ from langchain_anthropic._client_utils import (
+     _get_default_async_httpx_client,
+     _get_default_httpx_client,
+@@ -1303,6 +1303,55 @@ class ChatAnthropic(BaseChatModel):
+             stream_usage = self.stream_usage
+         kwargs["stream"] = True
+         payload = self._get_request_payload(messages, stop=stop, **kwargs)
++
++        if _nat_nexus.available():
++            request = _nat_nexus.make_request(payload)
++            collected_events: list = []
++            collected_dicts: list[dict] = []
++
++            async def _call(req: Any) -> Any:
++                stream = self._create(req.content)
++                for event in stream:
++                    collected_events.append(event)
++                    yield event.model_dump()
++
++            def _collector(chunk: Any) -> None:
++                collected_dicts.append(chunk)
++
++            def _finalizer() -> dict:
++                return collected_dicts[-1] if collected_dicts else {}
++
++            async def _run() -> list[dict]:
++                nexus_stream = await _nat_nexus.llm_stream_execute(
++                    self.model, request, _call, _collector, _finalizer
++                )
++                chunks: list[dict] = []
++                async for chunk_dict in nexus_stream:
++                    chunks.append(chunk_dict)
++                return chunks
++
++            _nat_nexus.run_sync(_run())
++            coerce_content_to_string = (
++                not _tools_in_params(payload)
++                and not _documents_in_params(payload)
++                and not _thinking_in_params(payload)
++                and not _compact_in_params(payload)
++            )
++            block_start_event = None
++            for event in collected_events:
++                msg, block_start_event = _make_message_chunk_from_anthropic_event(
++                    event,
++                    stream_usage=stream_usage,
++                    coerce_content_to_string=coerce_content_to_string,
++                    block_start_event=block_start_event,
++                )
++                if msg is not None:
++                    chunk = ChatGenerationChunk(message=msg)
++                    if run_manager and isinstance(msg.content, str):
++                        run_manager.on_llm_new_token(msg.content, chunk=chunk)
++                    yield chunk
++            return
++
+         try:
+             stream = self._create(payload)
+             coerce_content_to_string = (
+@@ -1340,6 +1389,51 @@ class ChatAnthropic(BaseChatModel):
+             stream_usage = self.stream_usage
+         kwargs["stream"] = True
+         payload = self._get_request_payload(messages, stop=stop, **kwargs)
++
++        if _nat_nexus.available():
++            request = _nat_nexus.make_request(payload)
++            collected_events: list = []
++            collected_dicts: list[dict] = []
++
++            async def _call(req: Any) -> Any:
++                stream = await self._acreate(req.content)
++                async for event in stream:
++                    collected_events.append(event)
++                    yield event.model_dump()
++
++            def _collector(chunk: Any) -> None:
++                collected_dicts.append(chunk)
++
++            def _finalizer() -> dict:
++                return collected_dicts[-1] if collected_dicts else {}
++
++            nexus_stream = await _nat_nexus.llm_stream_execute(
++                self.model, request, _call, _collector, _finalizer
++            )
++            async for _chunk_dict in nexus_stream:
++                pass  # Stream consumed; events captured in collected_events
++
++            coerce_content_to_string = (
++                not _tools_in_params(payload)
++                and not _documents_in_params(payload)
++                and not _thinking_in_params(payload)
++                and not _compact_in_params(payload)
++            )
++            block_start_event = None
++            for event in collected_events:
++                msg, block_start_event = _make_message_chunk_from_anthropic_event(
++                    event,
++                    stream_usage=stream_usage,
++                    coerce_content_to_string=coerce_content_to_string,
++                    block_start_event=block_start_event,
++                )
++                if msg is not None:
++                    chunk = ChatGenerationChunk(message=msg)
++                    if run_manager and isinstance(msg.content, str):
++                        await run_manager.on_llm_new_token(msg.content, chunk=chunk)
++                    yield chunk
++            return
++
+         try:
+             stream = await self._acreate(payload)
+             coerce_content_to_string = (
+@@ -1428,6 +1522,21 @@ class ChatAnthropic(BaseChatModel):
+         **kwargs: Any,
+     ) -> ChatResult:
+         payload = self._get_request_payload(messages, stop=stop, **kwargs)
++
++        if _nat_nexus.available():
++            request = _nat_nexus.make_request(payload)
++            _sdk_data: list = []
++
++            async def _call(req: Any) -> dict:
++                data = self._create(req.content)
++                _sdk_data.append(data)
++                return data.model_dump()
++
++            _nat_nexus.run_sync(
++                _nat_nexus.llm_execute(self.model, request, _call)
++            )
++            return self._format_output(_sdk_data[0], **kwargs)
++
+         try:
+             data = self._create(payload)
+         except anthropic.BadRequestError as e:
+@@ -1442,6 +1551,19 @@ class ChatAnthropic(BaseChatModel):
+         **kwargs: Any,
+     ) -> ChatResult:
+         payload = self._get_request_payload(messages, stop=stop, **kwargs)
++
++        if _nat_nexus.available():
++            request = _nat_nexus.make_request(payload)
++            _sdk_data: list = []
++
++            async def _call(req: Any) -> dict:
++                data = await self._acreate(req.content)
++                _sdk_data.append(data)
++                return data.model_dump()
++
++            await _nat_nexus.llm_execute(self.model, request, _call)
++            return self._format_output(_sdk_data[0], **kwargs)
++
+         try:
+             data = await self._acreate(payload)
+         except anthropic.BadRequestError as e:
 diff --git a/libs/partners/openai/langchain_openai/chat_models/_nat_nexus.py b/libs/partners/openai/langchain_openai/chat_models/_nat_nexus.py
 new file mode 100644
-index 0000000..3ca598d
+index 0000000000..fdd5fe8ad7
 --- /dev/null
 +++ b/libs/partners/openai/langchain_openai/chat_models/_nat_nexus.py
-@@ -0,0 +1,198 @@
+@@ -0,0 +1,102 @@
 +"""Thin bridge module for optional Nexus integration.
 +
 +When nat_nexus is installed and a scope stack has been initialized by the
@@ -504,10 +797,11 @@ index 0000000..3ca598d
 +If nat_nexus is not installed or no scope stack is active, ``available()``
 +returns ``False`` and ChatOpenAI falls back to its vanilla code path.
 +
-+All LLM calls flow through the **typed** Nexus API
-+(``nat_nexus.typed.llm_execute`` / ``nat_nexus.typed.llm_stream_execute``)
-+with ``JsonPassthrough`` since the ``_call`` helpers already convert SDK
-+responses to plain dicts (via ``model_dump()``) before returning.
++LLM calls use the standard Nexus API (``nat_nexus.llm.execute`` /
++``nat_nexus.llm.stream_execute``) with
++``response_codec=nat_nexus.OpenAIChatCodec()`` to get structured
++``AnnotatedLLMResponse`` on LLM end events via the built-in OpenAI Chat
++codec.
 +"""
 +
 +from __future__ import annotations
@@ -523,86 +817,6 @@ index 0000000..3ca598d
 +    _HAS_NAT_NEXUS = True
 +except ImportError:
 +    _HAS_NAT_NEXUS = False
-+
-+# ---------------------------------------------------------------------------
-+# LLM Codec instance (passed directly to execute calls)
-+# ---------------------------------------------------------------------------
-+
-+_openai_codec = None
-+
-+if _HAS_NAT_NEXUS:
-+    try:
-+        from nat_nexus import AnnotatedLLMRequest
-+        from nat_nexus.codecs import LlmCodec
-+
-+        class OpenAICodec(LlmCodec):
-+            """Codec for OpenAI Chat Completions API payloads."""
-+
-+            _PARAM_KEYS = {
-+                "temperature",
-+                "max_tokens",
-+                "max_completion_tokens",
-+                "top_p",
-+                "stop",
-+            }
-+            _MODELED_KEYS = {
-+                "messages",
-+                "model",
-+                "tools",
-+                "tool_choice",
-+            } | _PARAM_KEYS
-+
-+            def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
-+                c = request.content
-+                messages = c.get("messages", [])
-+                model = c.get("model")
-+                params: dict = {}
-+                for k in self._PARAM_KEYS:
-+                    if k in c and c[k] is not None:
-+                        # Normalize max_completion_tokens -> max_tokens
-+                        key = "max_tokens" if k == "max_completion_tokens" else k
-+                        params[key] = c[k]
-+                extra = {k: v for k, v in c.items() if k not in self._MODELED_KEYS}
-+                return AnnotatedLLMRequest(
-+                    messages,
-+                    model=model,
-+                    params=params or None,
-+                    tools=c.get("tools"),
-+                    tool_choice=c.get("tool_choice"),
-+                    extra=extra or None,
-+                )
-+
-+            def encode(
-+                self,
-+                annotated: AnnotatedLLMRequest,
-+                original: LLMRequest,
-+            ) -> LLMRequest:
-+                content = dict(original.content)
-+                content["messages"] = annotated.messages
-+                if annotated.model is not None:
-+                    content["model"] = annotated.model
-+                if annotated.params:
-+                    for k, v in annotated.params.items():
-+                        # Write back to max_completion_tokens when original used it
-+                        if (
-+                            k == "max_tokens"
-+                            and "max_completion_tokens" in original.content
-+                        ):
-+                            content["max_completion_tokens"] = v
-+                        else:
-+                            content[k] = v
-+                if annotated.tools is not None:
-+                    content["tools"] = annotated.tools
-+                if annotated.tool_choice is not None:
-+                    content["tool_choice"] = annotated.tool_choice
-+                if annotated.extra:
-+                    for k, v in annotated.extra.items():
-+                        content[k] = v
-+                return LLMRequest(original.headers, content)
-+
-+        _openai_codec = OpenAICodec()
-+    except ImportError:
-+        pass  # nat_nexus version without codec support
 +
 +
 +def available() -> bool:
@@ -641,7 +855,7 @@ index 0000000..3ca598d
 +
 +
 +# ---------------------------------------------------------------------------
-+# LLM pipeline wrappers (typed API)
++# LLM pipeline wrappers
 +# ---------------------------------------------------------------------------
 +
 +
@@ -650,20 +864,13 @@ index 0000000..3ca598d
 +    request: "LLMRequest",
 +    func: Callable[..., Any],
 +) -> Any:
-+    """Execute a non-streaming LLM call through the Nexus typed pipeline.
-+
-+    The *func* callable receives an ``LLMRequest`` and returns a dict
-+    (already converted from the SDK response via ``model_dump()``).
-+    ``JsonPassthrough`` passes dicts through with zero overhead.
-+    """
-+    codec = nat_nexus.typed.JsonPassthrough()
-+    return await nat_nexus.typed.llm_execute(  # type: ignore[union-attr]
++    """Execute a non-streaming LLM call through the Nexus pipeline."""
++    return await nat_nexus.llm.execute(
 +        model_name,
 +        request,
 +        func,
-+        codec,
 +        model_name=model_name,
-+        codec=_openai_codec,
++        response_codec=nat_nexus.OpenAIChatCodec(),
 +    )
 +
 +
@@ -674,28 +881,18 @@ index 0000000..3ca598d
 +    collector: Callable[[Any], None],
 +    finalizer: Callable[[], Any],
 +) -> Any:
-+    """Execute a streaming LLM call through the Nexus typed pipeline.
-+
-+    The *func* callable receives an ``LLMRequest`` and should return an
-+    async iterator of dict chunks (already converted via ``model_dump()``).
-+    ``JsonPassthrough`` passes each chunk through with zero overhead.
-+    Returns an ``LlmStream`` async-iterable whose chunks have already
-+    passed through stream execution intercepts.
-+    """
-+    codec = nat_nexus.typed.JsonPassthrough()
-+    return await nat_nexus.typed.llm_stream_execute(  # type: ignore[union-attr]
++    """Execute a streaming LLM call through the Nexus pipeline."""
++    return await nat_nexus.llm.stream_execute(
 +        model_name,
 +        request,
 +        func,
 +        collector,
 +        finalizer,
-+        codec,
-+        codec,
 +        model_name=model_name,
-+        codec=_openai_codec,
++        response_codec=nat_nexus.OpenAIChatCodec(),
 +    )
 diff --git a/libs/partners/openai/langchain_openai/chat_models/base.py b/libs/partners/openai/langchain_openai/chat_models/base.py
-index c74c40f..cb374f7 100644
+index c74c40f3c5..cb374f7b6d 100644
 --- a/libs/partners/openai/langchain_openai/chat_models/base.py
 +++ b/libs/partners/openai/langchain_openai/chat_models/base.py
 @@ -128,6 +128,7 @@ from pydantic import (

@@ -3,7 +3,7 @@ new file mode 100644
 index 00000000..d2ffef76
 --- /dev/null
 +++ b/libs/langgraph/langgraph/_nat_nexus.py
-@@ -0,0 +1,438 @@
+@@ -0,0 +1,456 @@
 +# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 +# SPDX-License-Identifier: Apache-2.0
 +
@@ -84,7 +84,7 @@ index 00000000..d2ffef76
 +
 +    graph_name: str
 +    metadata: dict
-+    codec_name: str | None = None
++    response_codec: object | None = None
 +
 +
 +# Stores the graph scope identity so run_with_retry can reconstruct it
@@ -124,6 +124,19 @@ index 00000000..d2ffef76
 +    return _langgraph_nexus_active.get(False)
 +
 +
++def get_graph_response_codec() -> object | None:
++    """Return the response codec from the current graph scope, if any.
++
++    Provider patches (langchain-openai, langchain-nvidia) can call this
++    to use a graph-level codec override instead of their hardcoded default.
++    Returns None if no graph scope is active or no response_codec was set.
++    """
++    info = _graph_scope_info.get(None)
++    if info is not None:
++        return info.response_codec
++    return None
++
++
 +# ---------------------------------------------------------------------------
 +# Graph-level scope helpers (used by pregel/main.py)
 +# ---------------------------------------------------------------------------
@@ -132,7 +145,7 @@ index 00000000..d2ffef76
 +def push_graph_scope(
 +    graph_name: str,
 +    *,
-+    codec_name: str | None = None,
++    response_codec: object | None = None,
 +    graph_topology: dict | None = None,
 +) -> Any:
 +    """Push a graph-level Nexus scope and set coordination ContextVars.
@@ -141,10 +154,9 @@ index 00000000..d2ffef76
 +
 +    Args:
 +        graph_name: Human-readable name for the graph scope.
-+        codec_name: Optional registered Codec name to set as scope-default.
-+            When provided, typed intercepts in this scope will use the
-+            named Codec for decode/encode without explicit `codec_name`
-+            on each LLM call.
++        response_codec: Optional response codec object to set as scope-default.
++            When provided, provider patches in this scope will use the
++            codec for response decoding instead of their hardcoded default.
 +        graph_topology: Optional graph topology dict (nodes, edges) stored
 +            as named metadata on the scope under ``"graph_topology"``.
 +
@@ -160,7 +172,7 @@ index 00000000..d2ffef76
 +    )
 +    _langgraph_nexus_active.set(True)
 +    _graph_scope_info.set(
-+        _GraphScopeInfo(graph_name=graph_name, metadata=metadata, codec_name=codec_name)
++        _GraphScopeInfo(graph_name=graph_name, metadata=metadata, response_codec=response_codec)
 +    )
 +    return handle
 +
@@ -240,7 +252,7 @@ index 00000000..d2ffef76
 +def push_subgraph_scope(
 +    graph_name: str,
 +    *,
-+    codec_name: str | None = None,
++    response_codec: object | None = None,
 +) -> tuple[Any, contextvars.Token, contextvars.Token]:
 +    """Push a subgraph-level scope on the CURRENT scope stack.
 +
@@ -250,7 +262,7 @@ index 00000000..d2ffef76
 +
 +    Args:
 +        graph_name: Human-readable name for the subgraph scope.
-+        codec_name: Optional registered Codec name to set as scope-default.
++        response_codec: Optional response codec object to set as scope-default.
 +
 +    Returns ``(handle, active_token, info_token)`` where the tokens are
 +    used by ``pop_subgraph_scope`` to restore parent ContextVar values.
@@ -261,7 +273,7 @@ index 00000000..d2ffef76
 +        _GraphScopeInfo(
 +            graph_name=graph_name,
 +            metadata={"langgraph.graph": True, "langgraph.subgraph": True},
-+            codec_name=codec_name,
++            response_codec=response_codec,
 +        )
 +    )
 +    handle = nat_nexus.scope.push(
@@ -441,6 +453,12 @@ index 00000000..d2ffef76
 +    Note: Superstep End does NOT fire when tick() returns False (out_of_steps or
 +    done paths). Only completed supersteps (tasks ran and wrote) get the End bracket.
 +    """
++    if not available():
++        return
++    nat_nexus.scope.event(
++        "Superstep End",
++        data={"step": step, "task_count": task_count},
++    )
 diff --git a/libs/langgraph/langgraph/pregel/_loop.py b/libs/langgraph/langgraph/pregel/_loop.py
 index 4f9c55d2..cabe5d3d 100644
 --- a/libs/langgraph/langgraph/pregel/_loop.py

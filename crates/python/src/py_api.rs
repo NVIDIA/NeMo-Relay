@@ -368,6 +368,7 @@ fn nat_nexus_llm_call(
         data,
         metadata,
         model_name,
+        None,
     )
     .map(PyLLMHandle::from)
     .map_err(to_py_err)
@@ -391,7 +392,8 @@ fn nat_nexus_llm_call_end(
     let response_json = py_to_json(response)?;
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
-    core::nat_nexus_llm_call_end(&handle.inner, response_json, data, metadata).map_err(to_py_err)
+    core::nat_nexus_llm_call_end(&handle.inner, response_json, data, metadata, None)
+        .map_err(to_py_err)
 }
 
 /// Execute an LLM call through the full middleware pipeline.
@@ -417,7 +419,7 @@ fn nat_nexus_llm_call_end(
 ///     intercepts. Sanitize guardrails do not rewrite the value returned to
 ///     the caller.
 #[pyfunction]
-#[pyo3(signature = (name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None, codec=None))]
+#[pyo3(signature = (name, request, func, *, handle=None, attributes=None, data=None, metadata=None, model_name=None, codec=None, response_codec=None))]
 #[allow(clippy::too_many_arguments)]
 fn nat_nexus_llm_call_execute<'py>(
     py: Python<'py>,
@@ -430,6 +432,7 @@ fn nat_nexus_llm_call_execute<'py>(
     metadata: Option<&Bound<'py, PyAny>>,
     model_name: Option<String>,
     codec: Option<&Bound<'py, PyAny>>,
+    response_codec: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let attrs = attributes
         .map(|a| a.inner)
@@ -444,6 +447,25 @@ fn nat_nexus_llm_call_execute<'py>(
             py_codec: c.clone().unbind(),
         }) as Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>
     });
+    let response_codec_arc: Option<Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>> =
+        response_codec.map(
+            |c| -> Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec> {
+                // Try to extract as a built-in codec first (avoids Python method dispatch overhead)
+                if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIChatCodec>>() {
+                    return builtin.inner_response_codec.clone();
+                }
+                if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIResponsesCodec>>() {
+                    return builtin.inner_response_codec.clone();
+                }
+                if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
+                    return builtin.inner_response_codec.clone();
+                }
+                // Fall back to wrapping the Python object as a custom response codec
+                Arc::new(py_callable::PyLlmResponseCodecWrapper {
+                    py_codec: c.clone().unbind(),
+                })
+            },
+        );
 
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -459,6 +481,7 @@ fn nat_nexus_llm_call_execute<'py>(
                     metadata_json,
                     model_name,
                     codec_arc,
+                    response_codec_arc,
                 )
                 .await
                 .map_err(to_py_err)?;
@@ -492,7 +515,7 @@ fn nat_nexus_llm_call_execute<'py>(
 /// Returns:
 ///     An awaitable that resolves to an ``LlmStream`` async iterator of JSON chunks.
 #[pyfunction]
-#[pyo3(signature = (name, request, func, collector, finalizer, *, handle=None, attributes=None, data=None, metadata=None, model_name=None, codec=None))]
+#[pyo3(signature = (name, request, func, collector, finalizer, *, handle=None, attributes=None, data=None, metadata=None, model_name=None, codec=None, response_codec=None))]
 #[allow(clippy::too_many_arguments)]
 fn nat_nexus_llm_stream_call_execute<'py>(
     py: Python<'py>,
@@ -507,6 +530,7 @@ fn nat_nexus_llm_stream_call_execute<'py>(
     metadata: Option<&Bound<'py, PyAny>>,
     model_name: Option<String>,
     codec: Option<&Bound<'py, PyAny>>,
+    response_codec: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let attrs = attributes
         .map(|a| a.inner)
@@ -524,6 +548,23 @@ fn nat_nexus_llm_stream_call_execute<'py>(
             py_codec: c.clone().unbind(),
         }) as Arc<dyn nvidia_nat_nexus_core::codec::LlmCodec>
     });
+    let response_codec_arc: Option<Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec>> =
+        response_codec.map(
+            |c| -> Arc<dyn nvidia_nat_nexus_core::codec::LlmResponseCodec> {
+                if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIChatCodec>>() {
+                    return builtin.inner_response_codec.clone();
+                }
+                if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIResponsesCodec>>() {
+                    return builtin.inner_response_codec.clone();
+                }
+                if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
+                    return builtin.inner_response_codec.clone();
+                }
+                Arc::new(py_callable::PyLlmResponseCodecWrapper {
+                    py_codec: c.clone().unbind(),
+                })
+            },
+        );
 
     let scope_stack = nvidia_nat_nexus_core::current_scope_stack();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -541,6 +582,7 @@ fn nat_nexus_llm_stream_call_execute<'py>(
                     metadata_json,
                     model_name,
                     codec_arc,
+                    response_codec_arc,
                 )
                 .await
                 .map_err(to_py_err)?;
