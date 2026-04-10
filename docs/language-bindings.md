@@ -40,6 +40,21 @@ graph TD
     WA --> WASM --> CORE
 ```
 
+## Process Ownership
+
+NeMo Flow expects a single native binding owner per OS process.
+
+- Python, the Node.js native addon, and direct Rust `nemo-flow-core` usage
+  claim a process-wide owner token on module init or first API use.
+- The owner token records the binding kind, the NeMo Flow major version, and
+  the current process ID.
+- Reusing the same binding within the same major version is allowed.
+- Loading a different native binding into the same process fails fast instead
+  of creating a second independent runtime.
+
+WebAssembly builds remain local to their own module instance and should be
+treated as isolated runtimes.
+
 ## Naming Conventions
 
 | Aspect | Python | Go | Node.js | WASM | FFI/C |

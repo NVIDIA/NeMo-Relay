@@ -86,6 +86,20 @@ impl<T> SortedRegistry<T> {
             .collect()
     }
 
+    /// Returns a shared reference to an entry by name.
+    pub fn get(&self, name: &str) -> Option<&T> {
+        self.entries.get(name)
+    }
+
+    /// Remove and return an entry by name.
+    pub fn remove(&mut self, name: &str) -> Option<T> {
+        let removed = self.entries.remove(name);
+        if removed.is_some() {
+            self.resort();
+        }
+        removed
+    }
+
     /// Returns `true` if an entry with the given name exists in the registry.
     pub fn contains(&self, name: &str) -> bool {
         self.entries.contains_key(name)

@@ -36,6 +36,7 @@ use crate::codec::{AnnotatedLLMRequest, AnnotatedLLMResponse, LlmCodec, LlmRespo
 use crate::context::*;
 use crate::error::{FlowError, Result};
 use crate::json::Json;
+use crate::shared_runtime::ensure_process_runtime_owner;
 use crate::stream::LlmStreamWrapper;
 use crate::types::*;
 
@@ -57,6 +58,10 @@ fn snapshot_event_subscribers(
     Ok(state.collect_event_subscribers(&scope_local_subscribers))
 }
 
+fn ensure_runtime_owner() -> Result<()> {
+    ensure_process_runtime_owner()
+}
+
 // ---------------------------------------------------------------------------
 // Macros for register/deregister API generation
 // ---------------------------------------------------------------------------
@@ -65,6 +70,7 @@ macro_rules! guardrail_registry_api {
     ($(#[$reg_meta:meta])* $register_name:ident, $deregister_name:ident, $field:ident, $fn_type:ty) => {
         $(#[$reg_meta])*
         pub fn $register_name(name: &str, priority: i32, guardrail: $fn_type) -> Result<()> {
+            ensure_runtime_owner()?;
             let ctx = global_context();
             let mut state = ctx
                 .write()
@@ -83,6 +89,7 @@ macro_rules! guardrail_registry_api {
 
         /// Deregister the guardrail by name. Returns `true` if it existed.
         pub fn $deregister_name(name: &str) -> Result<bool> {
+            ensure_runtime_owner()?;
             let ctx = global_context();
             let mut state = ctx
                 .write()
@@ -101,6 +108,7 @@ macro_rules! intercept_registry_api {
             break_chain: bool,
             callable: $fn_type,
         ) -> Result<()> {
+            ensure_runtime_owner()?;
             let ctx = global_context();
             let mut state = ctx
                 .write()
@@ -120,6 +128,7 @@ macro_rules! intercept_registry_api {
 
         /// Deregister the intercept by name. Returns `true` if it existed.
         pub fn $deregister_name(name: &str) -> Result<bool> {
+            ensure_runtime_owner()?;
             let ctx = global_context();
             let mut state = ctx
                 .write()
@@ -133,6 +142,7 @@ macro_rules! execution_intercept_registry_api {
     ($(#[$reg_meta:meta])* $register_name:ident, $deregister_name:ident, $field:ident, $fn_type:ty) => {
         $(#[$reg_meta])*
         pub fn $register_name(name: &str, priority: i32, callable: $fn_type) -> Result<()> {
+            ensure_runtime_owner()?;
             let ctx = global_context();
             let mut state = ctx
                 .write()
@@ -145,6 +155,7 @@ macro_rules! execution_intercept_registry_api {
 
         /// Deregister the execution intercept by name. Returns `true` if it existed.
         pub fn $deregister_name(name: &str) -> Result<bool> {
+            ensure_runtime_owner()?;
             let ctx = global_context();
             let mut state = ctx
                 .write()
@@ -418,6 +429,7 @@ macro_rules! scope_local_guardrail_registry_api {
     ($(#[$reg_meta:meta])* $register_name:ident, $deregister_name:ident, $field:ident, $fn_type:ty) => {
         $(#[$reg_meta])*
         pub fn $register_name(scope_uuid: &Uuid, name: &str, priority: i32, guardrail: $fn_type) -> Result<()> {
+            ensure_runtime_owner()?;
             let ss = current_scope_stack();
             let mut guard = ss.write().expect("scope stack lock poisoned");
             let regs = guard
@@ -436,6 +448,7 @@ macro_rules! scope_local_guardrail_registry_api {
 
         /// Deregister a scope-local guardrail by name. Returns `true` if it existed.
         pub fn $deregister_name(scope_uuid: &Uuid, name: &str) -> Result<bool> {
+            ensure_runtime_owner()?;
             let ss = current_scope_stack();
             let mut guard = ss.write().expect("scope stack lock poisoned");
             let regs = guard
@@ -456,6 +469,7 @@ macro_rules! scope_local_intercept_registry_api {
             break_chain: bool,
             callable: $fn_type,
         ) -> Result<()> {
+            ensure_runtime_owner()?;
             let ss = current_scope_stack();
             let mut guard = ss.write().expect("scope stack lock poisoned");
             let regs = guard
@@ -475,6 +489,7 @@ macro_rules! scope_local_intercept_registry_api {
 
         /// Deregister a scope-local intercept by name. Returns `true` if it existed.
         pub fn $deregister_name(scope_uuid: &Uuid, name: &str) -> Result<bool> {
+            ensure_runtime_owner()?;
             let ss = current_scope_stack();
             let mut guard = ss.write().expect("scope stack lock poisoned");
             let regs = guard
@@ -489,6 +504,7 @@ macro_rules! scope_local_execution_intercept_registry_api {
     ($(#[$reg_meta:meta])* $register_name:ident, $deregister_name:ident, $field:ident, $fn_type:ty) => {
         $(#[$reg_meta])*
         pub fn $register_name(scope_uuid: &Uuid, name: &str, priority: i32, callable: $fn_type) -> Result<()> {
+            ensure_runtime_owner()?;
             let ss = current_scope_stack();
             let mut guard = ss.write().expect("scope stack lock poisoned");
             let regs = guard
@@ -501,6 +517,7 @@ macro_rules! scope_local_execution_intercept_registry_api {
 
         /// Deregister a scope-local execution intercept by name. Returns `true` if it existed.
         pub fn $deregister_name(scope_uuid: &Uuid, name: &str) -> Result<bool> {
+            ensure_runtime_owner()?;
             let ss = current_scope_stack();
             let mut guard = ss.write().expect("scope stack lock poisoned");
             let regs = guard
@@ -604,6 +621,7 @@ pub fn nemo_flow_scope_register_subscriber(
     name: &str,
     callback: EventSubscriberFn,
 ) -> Result<()> {
+    ensure_runtime_owner()?;
     let ss = current_scope_stack();
     let mut guard = ss.write().expect("scope stack lock poisoned");
     let regs = guard
@@ -620,6 +638,7 @@ pub fn nemo_flow_scope_register_subscriber(
 
 /// Deregisters a scope-local event subscriber. Returns `true` if it existed.
 pub fn nemo_flow_scope_deregister_subscriber(scope_uuid: &Uuid, name: &str) -> Result<bool> {
+    ensure_runtime_owner()?;
     let ss = current_scope_stack();
     let mut guard = ss.write().expect("scope stack lock poisoned");
     let regs = guard
@@ -636,6 +655,7 @@ pub fn nemo_flow_scope_deregister_subscriber(scope_uuid: &Uuid, name: &str) -> R
 ///
 /// Always succeeds because the root scope is always present.
 pub fn nemo_flow_get_handle() -> Result<ScopeHandle> {
+    ensure_runtime_owner()?;
     Ok(task_scope_top())
 }
 
@@ -655,6 +675,7 @@ pub fn nemo_flow_push_scope(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<ScopeHandle> {
+    ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(parent);
     let (handle, event, subscribers) = {
         let ss = current_scope_stack();
@@ -680,6 +701,7 @@ pub fn nemo_flow_push_scope(
 /// [`FlowError::InvalidArgument`] if it does not identify the current top
 /// scope.
 pub fn nemo_flow_pop_scope(handle_uuid: &Uuid) -> Result<()> {
+    ensure_runtime_owner()?;
     let ss = current_scope_stack();
     let (scope, event, subscribers) = {
         let ss_guard = ss.read().expect("scope stack lock poisoned");
@@ -716,6 +738,7 @@ pub fn nemo_flow_event(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
+    ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(parent);
     let (event, subscribers) = {
         let ss = current_scope_stack();
@@ -749,6 +772,7 @@ pub fn nemo_flow_tool_call(
     metadata: Option<Json>,
     tool_call_id: Option<String>,
 ) -> Result<ToolHandle> {
+    ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(parent);
     let (handle, event, subscribers) = {
         let ss = current_scope_stack();
@@ -778,6 +802,7 @@ pub fn nemo_flow_tool_call_end(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
+    ensure_runtime_owner()?;
     let (event, subscribers) = {
         let ss = current_scope_stack();
         let ss_guard = ss.read().expect("scope stack lock poisoned");
@@ -800,6 +825,7 @@ fn emit_tool_end_without_output(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
+    ensure_runtime_owner()?;
     let (event, subscribers) = {
         let ss = current_scope_stack();
         let ss_guard = ss.read().expect("scope stack lock poisoned");
@@ -834,6 +860,7 @@ pub async fn nemo_flow_tool_call_execute(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<Json> {
+    ensure_runtime_owner()?;
     // Conditional guardrails — run on the raw args before any transformation
     {
         let ss = current_scope_stack();
@@ -920,6 +947,7 @@ pub fn nemo_flow_llm_call(
     model_name: Option<String>,
     annotated_request: Option<Arc<AnnotatedLLMRequest>>,
 ) -> Result<LLMHandle> {
+    ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(parent);
     let (handle, event, subscribers) = {
         let ss = current_scope_stack();
@@ -951,6 +979,7 @@ pub fn nemo_flow_llm_call_end(
     metadata: Option<Json>,
     annotated_response: Option<Arc<AnnotatedLLMResponse>>,
 ) -> Result<()> {
+    ensure_runtime_owner()?;
     let (event, subscribers) = {
         let ss = current_scope_stack();
         let ss_guard = ss.read().expect("scope stack lock poisoned");
@@ -979,6 +1008,7 @@ fn emit_llm_end_without_output(
     data: Option<Json>,
     metadata: Option<Json>,
 ) -> Result<()> {
+    ensure_runtime_owner()?;
     let (event, subscribers) = {
         let ss = current_scope_stack();
         let ss_guard = ss.read().expect("scope stack lock poisoned");
@@ -1018,6 +1048,7 @@ pub async fn nemo_flow_llm_call_execute(
     codec: Option<Arc<dyn LlmCodec>>,
     response_codec: Option<Arc<dyn LlmResponseCodec>>,
 ) -> Result<Json> {
+    ensure_runtime_owner()?;
     // Conditional guardrails — check on unmodified request
     {
         let ss = current_scope_stack();
@@ -1127,6 +1158,7 @@ pub async fn nemo_flow_llm_stream_call_execute(
     codec: Option<Arc<dyn LlmCodec>>,
     response_codec: Option<Arc<dyn LlmResponseCodec>>,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<Json>> + Send>>> {
+    ensure_runtime_owner()?;
     // Conditional guardrails — check on unmodified request
     {
         let ss = current_scope_stack();
@@ -1208,6 +1240,7 @@ pub async fn nemo_flow_llm_stream_call_execute(
 /// This allows invoking request intercepts independently of the full
 /// [`nemo_flow_tool_call_execute`] pipeline.
 pub fn nemo_flow_tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
+    ensure_runtime_owner()?;
     let ss = current_scope_stack();
     let ss_guard = ss.read().expect("scope stack lock poisoned");
     let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_request_intercepts);
@@ -1222,6 +1255,7 @@ pub fn nemo_flow_tool_request_intercepts(name: &str, args: Json) -> Result<Json>
 /// [`Err(FlowError::GuardrailRejected(reason))`](FlowError::GuardrailRejected)
 /// if any guardrail rejects the call.
 pub fn nemo_flow_tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
+    ensure_runtime_owner()?;
     let ss = current_scope_stack();
     let ss_guard = ss.read().expect("scope stack lock poisoned");
     let sl = ss_guard.collect_scope_local_registries(|r| &r.tool_conditional_execution_guardrails);
@@ -1239,6 +1273,7 @@ pub fn nemo_flow_tool_conditional_execution(name: &str, args: &Json) -> Result<(
 /// This allows invoking request intercepts independently of the full
 /// [`nemo_flow_llm_call_execute`] pipeline.
 pub fn nemo_flow_llm_request_intercepts(name: &str, request: LLMRequest) -> Result<LLMRequest> {
+    ensure_runtime_owner()?;
     let ss = current_scope_stack();
     let ss_guard = ss.read().expect("scope stack lock poisoned");
     let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_request_intercepts);
@@ -1254,6 +1289,7 @@ pub fn nemo_flow_llm_request_intercepts(name: &str, request: LLMRequest) -> Resu
 /// [`Err(FlowError::GuardrailRejected(reason))`](FlowError::GuardrailRejected)
 /// if any guardrail rejects the call.
 pub fn nemo_flow_llm_conditional_execution(request: &LLMRequest) -> Result<()> {
+    ensure_runtime_owner()?;
     let ss = current_scope_stack();
     let ss_guard = ss.read().expect("scope stack lock poisoned");
     let sl = ss_guard.collect_scope_local_registries(|r| &r.llm_conditional_execution_guardrails);
@@ -1272,12 +1308,20 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
 
-    // Serialize all API tests since they share global state.
-    // Using std::sync::Mutex (not tokio) is intentional — these are single-threaded
-    // tokio tests and the lock serializes access to the process-wide global context.
-    static TEST_MUTEX: Mutex<()> = Mutex::new(());
+    use crate::shared_runtime::{reset_runtime_owner_for_tests, runtime_owner_test_mutex};
+
+    struct TestMutexProxy;
+
+    impl TestMutexProxy {
+        fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'static, ()>> {
+            runtime_owner_test_mutex().lock()
+        }
+    }
+
+    static TEST_MUTEX: TestMutexProxy = TestMutexProxy;
 
     fn reset_global() {
+        reset_runtime_owner_for_tests();
         let ctx = global_context();
         let mut state = ctx.write().unwrap();
         *state = NemoFlowContextState::new();
@@ -1285,7 +1329,7 @@ mod tests {
 
     #[test]
     fn test_push_pop_scope() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
 
         // Root scope is always present
@@ -1310,7 +1354,7 @@ mod tests {
 
     #[test]
     fn test_subscriber_callbacks_run_outside_runtime_locks() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
 
         let lock_checks = Arc::new(Mutex::new(Vec::new()));
@@ -1354,7 +1398,7 @@ mod tests {
 
     #[test]
     fn test_scope_events_observe_post_mutation_active_handle() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
 
         let observations = Arc::new(Mutex::new(Vec::new()));
@@ -1400,7 +1444,7 @@ mod tests {
 
     #[test]
     fn test_subscriber_registration() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
         let count = Arc::new(AtomicU32::new(0));
         let c = count.clone();
@@ -1437,7 +1481,7 @@ mod tests {
 
     #[test]
     fn test_tool_guardrail_registration() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
         nemo_flow_register_tool_sanitize_request_guardrail("g1", 10, Box::new(|_name, args| args))
             .unwrap();
@@ -1459,7 +1503,7 @@ mod tests {
 
     #[test]
     fn test_nested_scopes() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
 
         let s1 = nemo_flow_push_scope(
@@ -1494,7 +1538,7 @@ mod tests {
 
     #[test]
     fn test_pop_nonexistent_scope() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
         let result = nemo_flow_pop_scope(&Uuid::new_v4());
         assert!(result.is_err());
@@ -1502,7 +1546,7 @@ mod tests {
 
     #[test]
     fn test_pop_non_top_scope_rejected_without_end_event() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
 
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -1556,7 +1600,7 @@ mod tests {
 
     #[test]
     fn test_scope_attributes_propagated() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
         let handle = nemo_flow_push_scope(
             "parallel_scope",
@@ -1576,7 +1620,7 @@ mod tests {
 
     #[test]
     fn test_event_emission() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
 
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -1606,7 +1650,7 @@ mod tests {
 
     #[test]
     fn test_tool_call_and_end() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
 
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -1644,7 +1688,7 @@ mod tests {
 
     #[test]
     fn test_tool_call_with_sanitize_guardrail() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
 
         // Register a sanitizer that adds a field
@@ -1696,7 +1740,7 @@ mod tests {
 
     #[test]
     fn test_tool_call_end_with_sanitize_response_guardrail() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
 
         nemo_flow_register_tool_sanitize_response_guardrail(
@@ -1749,7 +1793,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_call_execute_basic() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
 
         let func: ToolExecutionNextFn =

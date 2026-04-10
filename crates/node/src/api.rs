@@ -38,6 +38,12 @@ use crate::convert::{
 use crate::stream::LlmStream;
 use crate::types::*;
 
+#[napi::module_init]
+fn init() {
+    nemo_flow_core::initialize_shared_runtime_binding("node")
+        .expect("node runtime ownership initialization should succeed");
+}
+
 fn parse_string_map(
     value: Option<Json>,
     field_name: &str,

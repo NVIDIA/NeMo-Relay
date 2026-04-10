@@ -34,6 +34,11 @@ mod py_types;
 /// The `_native` PyO3 module entry point. Registers all types and functions.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    nemo_flow_core::initialize_shared_runtime_binding("python").map_err(|e| {
+        pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "failed to initialize NeMo Flow runtime ownership: {e}"
+        ))
+    })?;
     py_types::register(m)?;
     py_api::register(m)?;
     py_optimizer::register(m)?;
