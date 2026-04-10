@@ -32,6 +32,12 @@ wasm-pack build crates/wasm --scope nvidia --target nodejs
 
 This produces a `pkg/` directory under `crates/wasm/`.
 
+## Process Ownership Note
+
+The WebAssembly binding runs as a local module instance. If you need one
+canonical NeMo Flow runtime in a host process, do not mix the WebAssembly
+package with a native NeMo Flow binding in that same process.
+
 ## Minimal Scope and Tool Execution
 
 Create a JavaScript file next to the generated package and import from

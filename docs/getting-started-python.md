@@ -34,6 +34,13 @@ uv sync
 This builds the native extension and installs the Python package into the local
 virtual environment.
 
+## Process Ownership Note
+
+The Python binding claims NeMo Flow runtime ownership for the current process
+when the module loads. Do not load a different native NeMo Flow binding into
+the same process. Reusing the Python binding within the same major version is
+allowed.
+
 ## Minimal Scope and Tool Execution
 
 Save the following as a Python script and run it with `uv run python ...`:

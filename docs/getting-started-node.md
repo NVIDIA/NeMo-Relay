@@ -31,6 +31,13 @@ npm install
 npm run build
 ```
 
+## Process Ownership Note
+
+The Node native addon claims NeMo Flow runtime ownership for the current
+process when the module loads. Do not load a different native NeMo Flow
+binding into the same process. Reusing the Node binding within the same major
+version is allowed.
+
 ## Minimal Scope and Tool Execution
 
 Run this from `crates/node` so `./index.js` resolves to the generated binding:
