@@ -13,7 +13,7 @@
 use libc::c_char;
 use serde_json::Value as Json;
 
-use nemo_flow_core::types as core_types;
+use nemo_flow::types as core_types;
 
 use crate::convert::{json_to_c_string, str_to_c_string};
 
@@ -33,24 +33,26 @@ pub struct FfiLLMRequest(pub core_types::LLMRequest);
 /// Opaque wrapper around a lifecycle event emitted by the runtime.
 pub struct FfiEvent(pub core_types::Event);
 /// Opaque handle to an isolated scope stack for per-request/per-task isolation.
-pub struct FfiScopeStack(pub nemo_flow_core::ScopeStackHandle);
+pub struct FfiScopeStack(pub nemo_flow::ScopeStackHandle);
 /// Opaque ATIF exporter handle.
-pub struct FfiAtifExporter(pub nemo_flow_core::atif::AtifExporter);
+pub struct FfiAtifExporter(pub nemo_flow::atif::AtifExporter);
 /// Opaque OpenTelemetry subscriber handle.
-pub struct FfiOpenTelemetrySubscriber(pub nemo_flow_otel::OpenTelemetrySubscriber);
+pub struct FfiOpenTelemetrySubscriber(pub nemo_flow::observability::otel::OpenTelemetrySubscriber);
 /// Opaque OpenInference subscriber handle.
-pub struct FfiOpenInferenceSubscriber(pub nemo_flow_openinference::OpenInferenceSubscriber);
+pub struct FfiOpenInferenceSubscriber(
+    pub nemo_flow::observability::openinference::OpenInferenceSubscriber,
+);
 /// Opaque plugin registration context.
 ///
 /// This wrapper contains a borrowed raw pointer to an
-/// `nemo_flow_core::PluginRegistrationContext`, not an owned heap allocation.
+/// `nemo_flow::PluginRegistrationContext`, not an owned heap allocation.
 /// It is only valid for the duration of the hosted plugin registration callback that receives
 /// it. C callers must not store the pointer, use it after the callback returns, or attempt to
 /// free or drop it.
 ///
 /// There is intentionally no `nemo_flow_plugin_context_free` function because this FFI
 /// wrapper does not own the underlying registration context.
-pub struct FfiPluginContext(pub *mut nemo_flow_core::PluginRegistrationContext);
+pub struct FfiPluginContext(pub *mut nemo_flow::PluginRegistrationContext);
 
 /// Opaque handle carrying both request and response codec trait objects.
 ///
@@ -60,8 +62,8 @@ pub struct FfiPluginContext(pub *mut nemo_flow_core::PluginRegistrationContext);
 /// one for the `LlmResponseCodec` trait.
 pub struct FfiCodecHandle {
     #[allow(dead_code)]
-    pub(crate) codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmCodec>,
-    pub(crate) response_codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmResponseCodec>,
+    pub(crate) codec: std::sync::Arc<dyn nemo_flow::codec::LlmCodec>,
+    pub(crate) response_codec: std::sync::Arc<dyn nemo_flow::codec::LlmResponseCodec>,
 }
 
 // ---------------------------------------------------------------------------

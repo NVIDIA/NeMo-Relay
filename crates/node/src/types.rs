@@ -11,7 +11,7 @@ use napi_derive::napi;
 use serde::Serialize;
 use serde_json::Value as Json;
 
-use nemo_flow_core::types as core_types;
+use nemo_flow::types as core_types;
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -87,7 +87,7 @@ impl From<core_types::ScopeType> for ScopeType {
 /// Handle to an isolated scope stack for per-request/per-task isolation.
 #[napi]
 pub struct JsScopeStack {
-    pub(crate) inner: nemo_flow_core::ScopeStackHandle,
+    pub(crate) inner: nemo_flow::ScopeStackHandle,
 }
 
 #[napi]
@@ -96,13 +96,13 @@ impl JsScopeStack {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {
-            inner: nemo_flow_core::create_scope_stack(),
+            inner: nemo_flow::create_scope_stack(),
         }
     }
 }
 
-impl From<nemo_flow_core::ScopeStackHandle> for JsScopeStack {
-    fn from(h: nemo_flow_core::ScopeStackHandle) -> Self {
+impl From<nemo_flow::ScopeStackHandle> for JsScopeStack {
+    fn from(h: nemo_flow::ScopeStackHandle) -> Self {
         Self { inner: h }
     }
 }
@@ -504,8 +504,8 @@ pub const LLM_ATTR_STREAMING: u32 = core_types::LLMAttributes::STREAMING.bits();
 /// (decodeResponse). Construct with `new OpenAIChatCodec()`.
 #[napi]
 pub struct JsOpenAIChatCodec {
-    pub(crate) inner_codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmCodec>,
-    pub(crate) inner_response_codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmResponseCodec>,
+    pub(crate) inner_codec: std::sync::Arc<dyn nemo_flow::codec::LlmCodec>,
+    pub(crate) inner_response_codec: std::sync::Arc<dyn nemo_flow::codec::LlmResponseCodec>,
 }
 
 #[napi]
@@ -513,15 +513,15 @@ impl JsOpenAIChatCodec {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {
-            inner_codec: std::sync::Arc::new(nemo_flow_core::codec::OpenAIChatCodec),
-            inner_response_codec: std::sync::Arc::new(nemo_flow_core::codec::OpenAIChatCodec),
+            inner_codec: std::sync::Arc::new(nemo_flow::codec::OpenAIChatCodec),
+            inner_response_codec: std::sync::Arc::new(nemo_flow::codec::OpenAIChatCodec),
         }
     }
 
     /// Decode an opaque LLM request into structured form.
     #[napi]
     pub fn decode(&self, request: Json) -> napi::Result<Json> {
-        let llm_req: nemo_flow_core::types::LLMRequest = serde_json::from_value(request)
+        let llm_req: nemo_flow::types::LLMRequest = serde_json::from_value(request)
             .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
         let annotated = self
             .inner_codec
@@ -533,9 +533,9 @@ impl JsOpenAIChatCodec {
     /// Encode structured changes back into an opaque LLM request.
     #[napi]
     pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
-        let ann: nemo_flow_core::codec::AnnotatedLLMRequest = serde_json::from_value(annotated)
+        let ann: nemo_flow::codec::AnnotatedLLMRequest = serde_json::from_value(annotated)
             .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLLMRequest: {e}")))?;
-        let orig: nemo_flow_core::types::LLMRequest = serde_json::from_value(original)
+        let orig: nemo_flow::types::LLMRequest = serde_json::from_value(original)
             .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
         let result = self
             .inner_codec
@@ -561,8 +561,8 @@ impl JsOpenAIChatCodec {
 /// (decodeResponse). Construct with `new OpenAIResponsesCodec()`.
 #[napi]
 pub struct JsOpenAIResponsesCodec {
-    pub(crate) inner_codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmCodec>,
-    pub(crate) inner_response_codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmResponseCodec>,
+    pub(crate) inner_codec: std::sync::Arc<dyn nemo_flow::codec::LlmCodec>,
+    pub(crate) inner_response_codec: std::sync::Arc<dyn nemo_flow::codec::LlmResponseCodec>,
 }
 
 #[napi]
@@ -570,15 +570,15 @@ impl JsOpenAIResponsesCodec {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {
-            inner_codec: std::sync::Arc::new(nemo_flow_core::codec::OpenAIResponsesCodec),
-            inner_response_codec: std::sync::Arc::new(nemo_flow_core::codec::OpenAIResponsesCodec),
+            inner_codec: std::sync::Arc::new(nemo_flow::codec::OpenAIResponsesCodec),
+            inner_response_codec: std::sync::Arc::new(nemo_flow::codec::OpenAIResponsesCodec),
         }
     }
 
     /// Decode an opaque LLM request into structured form.
     #[napi]
     pub fn decode(&self, request: Json) -> napi::Result<Json> {
-        let llm_req: nemo_flow_core::types::LLMRequest = serde_json::from_value(request)
+        let llm_req: nemo_flow::types::LLMRequest = serde_json::from_value(request)
             .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
         let annotated = self
             .inner_codec
@@ -590,9 +590,9 @@ impl JsOpenAIResponsesCodec {
     /// Encode structured changes back into an opaque LLM request.
     #[napi]
     pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
-        let ann: nemo_flow_core::codec::AnnotatedLLMRequest = serde_json::from_value(annotated)
+        let ann: nemo_flow::codec::AnnotatedLLMRequest = serde_json::from_value(annotated)
             .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLLMRequest: {e}")))?;
-        let orig: nemo_flow_core::types::LLMRequest = serde_json::from_value(original)
+        let orig: nemo_flow::types::LLMRequest = serde_json::from_value(original)
             .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
         let result = self
             .inner_codec
@@ -618,8 +618,8 @@ impl JsOpenAIResponsesCodec {
 /// (decodeResponse). Construct with `new AnthropicMessagesCodec()`.
 #[napi]
 pub struct JsAnthropicMessagesCodec {
-    pub(crate) inner_codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmCodec>,
-    pub(crate) inner_response_codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmResponseCodec>,
+    pub(crate) inner_codec: std::sync::Arc<dyn nemo_flow::codec::LlmCodec>,
+    pub(crate) inner_response_codec: std::sync::Arc<dyn nemo_flow::codec::LlmResponseCodec>,
 }
 
 #[napi]
@@ -627,17 +627,15 @@ impl JsAnthropicMessagesCodec {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {
-            inner_codec: std::sync::Arc::new(nemo_flow_core::codec::AnthropicMessagesCodec),
-            inner_response_codec: std::sync::Arc::new(
-                nemo_flow_core::codec::AnthropicMessagesCodec,
-            ),
+            inner_codec: std::sync::Arc::new(nemo_flow::codec::AnthropicMessagesCodec),
+            inner_response_codec: std::sync::Arc::new(nemo_flow::codec::AnthropicMessagesCodec),
         }
     }
 
     /// Decode an opaque LLM request into structured form.
     #[napi]
     pub fn decode(&self, request: Json) -> napi::Result<Json> {
-        let llm_req: nemo_flow_core::types::LLMRequest = serde_json::from_value(request)
+        let llm_req: nemo_flow::types::LLMRequest = serde_json::from_value(request)
             .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
         let annotated = self
             .inner_codec
@@ -649,9 +647,9 @@ impl JsAnthropicMessagesCodec {
     /// Encode structured changes back into an opaque LLM request.
     #[napi]
     pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
-        let ann: nemo_flow_core::codec::AnnotatedLLMRequest = serde_json::from_value(annotated)
+        let ann: nemo_flow::codec::AnnotatedLLMRequest = serde_json::from_value(annotated)
             .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLLMRequest: {e}")))?;
-        let orig: nemo_flow_core::types::LLMRequest = serde_json::from_value(original)
+        let orig: nemo_flow::types::LLMRequest = serde_json::from_value(original)
             .map_err(|e| napi::Error::from_reason(format!("invalid LLMRequest: {e}")))?;
         let result = self
             .inner_codec

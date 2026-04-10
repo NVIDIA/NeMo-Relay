@@ -34,7 +34,7 @@ wasm-pack test --node crates/wasm
 cargo test --workspace
 
 # Core only
-cargo test -p nemo-flow-core
+cargo test -p nemo-flow
 
 # Adaptive only (in-memory backend)
 cargo test -p nemo-flow-adaptive
@@ -94,7 +94,7 @@ cargo llvm-cov report --release \
 
 | Surface | Primary Command | Notes |
 |---------|-----------------|-------|
-| Core runtime | `cargo test -p nemo-flow-core` | Shared middleware, scopes, events, and ATIF behavior |
+| Core runtime | `cargo test -p nemo-flow` | Shared middleware, scopes, events, and ATIF behavior |
 | Python binding | `uv run pytest` | Rebuild native extension if Rust-backed Python code changed |
 | Go binding | `go test -race -v ./...` | Run from `go/nemo_flow` after building the FFI shared library |
 | Node binding | `cd crates/node && npm install && npm test` | Runs JS integration tests against the native addon |
@@ -115,7 +115,7 @@ cargo llvm-cov report --release \
 > serial execution:
 >
 > ```bash
-> cargo test -p nemo-flow-core -- --test-threads=1
+> cargo test -p nemo-flow -- --test-threads=1
 > ```
 >
 > CI already serializes via `TEST_MUTEX`, but single-threaded mode eliminates
@@ -304,8 +304,8 @@ Adaptive tests live under `crates/adaptive/tests/` and are split by backend:
 
 - `runtime_integration_tests.rs` exercises adaptive registration, event capture, and
   hot-path intercept behavior using `InMemoryBackend`
-- the same in-memory suite now covers hosted plugin registration, unknown hosted
-  plugin diagnostics, and rollback on hosted plugin registration failure
+- the same in-memory suite now covers custom plugin registration, unknown custom
+  plugin diagnostics, and rollback on custom plugin registration failure
 - `redis_tests.rs` exercises `RedisBackend` storage round-trips and is gated by
   the `redis-backend` feature
 
@@ -370,6 +370,8 @@ cargo build --release -p nemo-flow-ffi
 cd go/nemo_flow
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" go test ./...
 ```
+
+On macOS, use `DYLD_LIBRARY_PATH` instead of `LD_LIBRARY_PATH`.
 
 ### WASM Adaptive Plugins
 

@@ -6,17 +6,17 @@ SPDX-License-Identifier: Apache-2.0
 # Adaptive API Reference
 
 Adaptive exposes config helpers for one top-level plugin component. Activation,
-validation, and hosted plugin registration all happen through the core plugin
-host.
+validation, and custom plugin registration all happen through the shared core
+plugin host.
 
 ## Top-Level Model
 
 - adaptive config is represented by `AdaptiveConfig`
 - adaptive is activated with a top-level plugin component whose `kind` is
   `adaptive`
-- hosted plugins use separate top-level plugin components with their own `kind`
+- custom plugins use separate top-level plugin components with their own `kind`
 - there is no public adaptive runtime object
-- there is no adaptive-specific hosted-plugin registration API
+- there is no adaptive-specific custom-plugin registration API
 
 ## Adaptive Config Fields
 
@@ -48,34 +48,22 @@ Supported backend kinds:
 
 ```json
 {
-  "version": 1,
-  "components": [
-    {
-      "kind": "adaptive",
-      "enabled": true,
-      "config": {
-        "version": 1,
-        "state": {
-          "backend": {
-            "kind": "in_memory",
-            "config": {}
-          }
-        },
-        "telemetry": {
-          "learners": ["latency_sensitivity"]
-        },
-        "adaptive_hints": {},
-        "tool_parallelism": {}
+  "kind": "adaptive",
+  "enabled": true,
+  "config": {
+    "version": 1,
+    "state": {
+      "backend": {
+        "kind": "in_memory",
+        "config": {}
       }
     },
-    {
-      "kind": "example.header_plugin",
-      "enabled": true,
-      "config": {
-        "priority": 25
-      }
-    }
-  ]
+    "telemetry": {
+      "learners": ["latency_sensitivity"]
+    },
+    "adaptive_hints": {},
+    "tool_parallelism": {}
+  }
 }
 ```
 
@@ -87,13 +75,13 @@ Supported backend kinds:
   Returns: a backend document embedded under `state.backend`.
   Behavior: use the helpers below instead of constructing raw backend maps when possible.
 
-- `BackendSpec.in_memory()` / `inMemoryBackend()` / `NewInMemoryBackend()`
+- `BackendSpec.in_memory()` / `inMemoryBackend()` / `NewInMemoryAdaptiveBackend()`
   Description: creates an in-memory backend spec.
   Arguments: none.
   Returns: a backend spec with `kind = "in_memory"` and an empty config object.
   Behavior: state lives in-process only and is lost when the process exits.
 
-- `BackendSpec.redis(url, key_prefix)` / `redisBackend(url, keyPrefix)` / `NewRedisBackend(url, keyPrefix)`
+- `BackendSpec.redis(url, key_prefix)` / `redisBackend(url, keyPrefix)` / `NewRedisAdaptiveBackend(url, keyPrefix)`
   Description: creates a Redis-backed state spec.
   Arguments: `url` is the Redis connection URL and `key_prefix` / `keyPrefix` scopes adaptive keys.
   Returns: a backend spec with `kind = "redis"` and the corresponding config object.
@@ -109,7 +97,7 @@ Supported backend kinds:
   Description: configures the built-in adaptive telemetry subscriber and learners.
   Arguments: `subscriber_name` is an optional override for the subscriber registration name and `learners` is the enabled learner set.
   Returns: a `telemetry` section for `AdaptiveConfig`.
-  Behavior: telemetry only emits adaptive learning signals; hosted plugins are still configured separately as top-level plugin components.
+  Behavior: telemetry only emits adaptive learning signals; custom plugins are still configured separately as top-level plugin components.
 
 - `AdaptiveHintsConfig`
   Description: configures built-in LLM request hint injection.
@@ -133,7 +121,7 @@ Supported backend kinds:
   Description: wraps one `AdaptiveConfig` as a top-level plugin component.
   Arguments: `config` and `enabled`.
   Returns: a component whose `kind` is always `adaptive`.
-  Behavior: this is the value placed into `PluginConfig.components` / `components`. Adaptive is always a top-level component alongside any hosted plugins.
+  Behavior: this is the value placed into `PluginConfig.components` / `components`. Adaptive is always a top-level component alongside any custom plugins.
 
 - `set_latency_sensitivity(level)`
   Description: writes a request-local latency-sensitivity hint into the current runtime context.
@@ -174,8 +162,8 @@ Relevant shared operations:
   Behavior: safe to call during startup before validating or initializing plugin configs.
 - `nemo_flow_adaptive::deregister_adaptive_component()`
   Description: removes the adaptive kind from the core plugin registry.
-- `nemo_flow_core::PluginConfig`
-  Description: shared plugin host config that contains both adaptive and hosted plugin components.
+- `nemo_flow::PluginConfig`
+  Description: shared plugin host config that contains both adaptive and custom plugin components.
 
 ### Python
 
@@ -205,74 +193,22 @@ Relevant shared operations:
 
 ### Go
 
-- `adaptive.NewConfig()`
+- `nemo_flow.NewAdaptiveConfig()`
   Description: creates a default adaptive config value.
-- `adaptive.NewComponentSpec(config)`
+- `nemo_flow.NewAdaptiveComponentSpec(config)`
   Description: creates an adaptive-owned component wrapper.
-- `(adaptive.ComponentSpec).PluginComponent()`
+- `(nemo_flow.AdaptiveComponentSpec).PluginComponent()`
   Description: converts the adaptive component wrapper into the shared `PluginComponentSpec` type used by `nemo_flow.PluginConfig`.
+- `nemo_flow.AdaptiveComponent(config)`
+  Description: convenience helper that converts an adaptive config directly into `PluginComponentSpec`.
 - `nemo_flow.ValidatePluginConfig(config)`
   Description: validates the full config and returns `(ConfigReport, error)`.
 - `nemo_flow.InitializePlugins(config)`
   Description: activates the full config and returns `(ConfigReport, error)`.
 
-## Hosted Plugins
+## Plugins
 
-Hosted plugins are always top-level plugin components.
+Custom plugin composition is documented separately in [Plugins](hosted-plugins.md).
 
-Registration pattern:
-
-1. Register a handler through the core plugin API.
-2. Add a top-level plugin component with that plugin kind.
-3. Configure adaptive separately with its own top-level `adaptive` component.
-
-Registration context surface:
-
-- `registerSubscriber(...)`
-- `registerLlmRequestIntercept(...)`
-- `registerLlmExecutionIntercept(...)`
-- `registerLlmStreamExecutionIntercept(...)`
-- `registerToolRequestIntercept(...)`
-- `registerToolExecutionIntercept(...)`
-
-Registration names are local to each component. The runtime namespaces them
-internally, so users do not need to provide component instance ids.
-
-## Example
-
-```python
-from nemo_flow import adaptive, plugin
-
-class HeaderPlugin:
-    def validate(self, plugin_config):
-        return []
-
-    def register(self, plugin_config, context):
-        context.register_tool_request_intercept(
-            "tool",
-            25,
-            False,
-            lambda name, args: {**args, "x_plugin": "enabled", "tool": name},
-        )
-
-plugin.register("example.header_plugin", HeaderPlugin())
-
-config = plugin.PluginConfig(
-    components=[
-        adaptive.ComponentSpec(
-            adaptive.AdaptiveConfig(
-                state=adaptive.StateConfig(
-                    backend=adaptive.BackendSpec.in_memory()
-                ),
-                adaptive_hints=adaptive.AdaptiveHintsConfig(),
-            )
-        ),
-        plugin.ComponentSpec(
-            kind="example.header_plugin",
-            config={"priority": 25},
-        ),
-    ]
-)
-
-await plugin.initialize(config)
-```
+Adaptive and custom plugins are always sibling top-level plugin components.
+Adaptive does not contain nested plugin definitions.

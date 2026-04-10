@@ -984,30 +984,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "nemo-flow"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bitflags",
+ "chrono",
+ "futures",
+ "getrandom 0.3.4",
+ "js-sys",
+ "openinference-semantic-conventions",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "nemo-flow-adaptive"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "nemo-flow-core",
+ "nemo-flow",
  "redis",
  "serde",
  "serde_json",
  "tdigest",
- "thiserror",
- "tokio",
- "tokio-stream",
- "uuid",
-]
-
-[[package]]
-name = "nemo-flow-core"
-version = "0.1.0"
-dependencies = [
- "bitflags",
- "chrono",
- "futures",
- "serde",
- "serde_json",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -1020,10 +1032,8 @@ version = "0.1.0"
 dependencies = [
  "cbindgen",
  "libc",
+ "nemo-flow",
  "nemo-flow-adaptive",
- "nemo-flow-core",
- "nemo-flow-openinference",
- "nemo-flow-otel",
  "serde_json",
  "tokio",
  "tokio-stream",
@@ -1037,10 +1047,8 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "nemo-flow",
  "nemo-flow-adaptive",
- "nemo-flow-core",
- "nemo-flow-openinference",
- "nemo-flow-otel",
  "serde",
  "serde_json",
  "tokio",
@@ -1049,63 +1057,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "nemo-flow-openinference"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "getrandom 0.3.4",
- "js-sys",
- "nemo-flow-core",
- "openinference-semantic-conventions",
- "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tonic",
- "uuid",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "nemo-flow-otel"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "getrandom 0.3.4",
- "js-sys",
- "nemo-flow-core",
- "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tonic",
- "uuid",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "nemo-flow-python"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "nemo-flow",
  "nemo-flow-adaptive",
- "nemo-flow-core",
- "nemo-flow-openinference",
- "nemo-flow-otel",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",
@@ -1121,10 +1078,8 @@ name = "nemo-flow-wasm"
 version = "0.1.0"
 dependencies = [
  "js-sys",
+ "nemo-flow",
  "nemo-flow-adaptive",
- "nemo-flow-core",
- "nemo-flow-openinference",
- "nemo-flow-otel",
  "send_wrapper",
  "serde",
  "serde-wasm-bindgen",

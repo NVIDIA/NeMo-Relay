@@ -49,7 +49,7 @@ Read [ATIF Export](atif-export.md) when you need the schema mapping details.
 ## Export Traces to OpenTelemetry
 
 ```rust
-use nemo_flow_otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+use nemo_flow::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -77,7 +77,7 @@ guidance, and binding-specific examples, see
 [Observability with OpenTelemetry](observability-with-opentelemetry.md).
 
 If you need Phoenix or another OpenInference-oriented backend instead, use
-`nemo-flow-openinference` and
+`nemo_flow::observability::openinference` and
 [Observability with OpenInference](observability-with-openinference.md).
 
 ## Register Scope-Local Middleware

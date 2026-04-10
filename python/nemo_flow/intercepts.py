@@ -26,34 +26,34 @@ from nemo_flow import (
     ToolRequestIntercept,
 )
 from nemo_flow._native import (
-    nemo_flow_deregister_llm_execution_intercept as _native_deregister_llm_execution,
+    deregister_llm_execution_intercept as _native_deregister_llm_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_deregister_llm_request_intercept as _native_deregister_llm_request,
+    deregister_llm_request_intercept as _native_deregister_llm_request,
 )
 from nemo_flow._native import (
-    nemo_flow_deregister_llm_stream_execution_intercept as _native_deregister_llm_stream_execution,
+    deregister_llm_stream_execution_intercept as _native_deregister_llm_stream_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_deregister_tool_execution_intercept as _native_deregister_tool_execution,
+    deregister_tool_execution_intercept as _native_deregister_tool_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_deregister_tool_request_intercept as _native_deregister_tool_request,
+    deregister_tool_request_intercept as _native_deregister_tool_request,
 )
 from nemo_flow._native import (
-    nemo_flow_register_llm_execution_intercept as _native_register_llm_execution,
+    register_llm_execution_intercept as _native_register_llm_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_register_llm_request_intercept as _native_register_llm_request,
+    register_llm_request_intercept as _native_register_llm_request,
 )
 from nemo_flow._native import (
-    nemo_flow_register_llm_stream_execution_intercept as _native_register_llm_stream_execution,
+    register_llm_stream_execution_intercept as _native_register_llm_stream_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_register_tool_execution_intercept as _native_register_tool_execution,
+    register_tool_execution_intercept as _native_register_tool_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_register_tool_request_intercept as _native_register_tool_request,
+    register_tool_request_intercept as _native_register_tool_request,
 )
 
 # ---------------------------------------------------------------------------

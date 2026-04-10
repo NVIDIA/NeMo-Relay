@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 
 NeMo Flow can export scope, tool, LLM, and mark events as OTLP traces annotated
 with OpenInference semantic conventions. The exporter implementation lives in
-the separate Rust crate `nemo-flow-openinference`, and the Python,
+the `nemo_flow::observability::openinference` module, and the Python,
 Node.js, Go, and WASM bindings expose language-native config objects on top of
 the same subscriber.
 
@@ -86,7 +86,7 @@ key headers.
 ```rust
 use std::time::Duration;
 
-use nemo_flow_openinference::{OpenInferenceConfig, OtlpTransport};
+use nemo_flow::observability::openinference::{OpenInferenceConfig, OtlpTransport};
 
 let config = OpenInferenceConfig::new()
     .with_transport(OtlpTransport::Grpc)
@@ -162,8 +162,8 @@ The intended lifecycle is the same across languages:
 ```rust
 use std::time::Duration;
 
-use nemo_flow_core::{ScopeAttributes, ScopeType, nemo_flow_event, nemo_flow_pop_scope, nemo_flow_push_scope};
-use nemo_flow_openinference::{OpenInferenceConfig, OpenInferenceSubscriber, OtlpTransport};
+use nemo_flow::{event, pop_scope, push_scope, ScopeAttributes, ScopeType};
+use nemo_flow::observability::openinference::{OpenInferenceConfig, OpenInferenceSubscriber, OtlpTransport};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = OpenInferenceConfig::new()
@@ -179,7 +179,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let subscriber = OpenInferenceSubscriber::new(config)?;
     subscriber.register("openinference")?;
 
-    let handle = nemo_flow_push_scope(
+    let handle = push_scope(
         "agent-turn",
         ScopeType::Agent,
         None,
@@ -188,13 +188,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(serde_json::json!({"phase": "start"})),
     )?;
 
-    nemo_flow_event(
+    event(
         "tool-selection",
         Some(&handle),
         Some(serde_json::json!({"tool": "search"})),
         Some(serde_json::json!({"source": "rust"})),
     )?;
-    nemo_flow_pop_scope(&handle.uuid)?;
+    pop_scope(&handle.uuid)?;
 
     subscriber.deregister("openinference")?;
     subscriber.force_flush()?;
@@ -203,8 +203,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-For direct Rust integration, the crate-specific overview also lives in
-[`crates/openinference/README.md`](../crates/openinference/README.md).
+For direct Rust integration, import the subscriber from
+`nemo_flow::observability::openinference`.
 
 ## Python
 
@@ -302,7 +302,7 @@ defer subscriber.Shutdown()
 import init, {
   defaultOpenInferenceConfig,
   OpenInferenceSubscriber,
-  ScopeType,
+  SCOPE_TYPE_AGENT,
   event,
   popScope,
   pushScope,
@@ -322,7 +322,7 @@ const subscriber = new OpenInferenceSubscriber(config);
 subscriber.register("openinference");
 
 try {
-  const handle = pushScope("agent-turn", ScopeType.Agent, null, 0, { scope: true }, null);
+  const handle = pushScope("agent-turn", SCOPE_TYPE_AGENT, null, 0, { scope: true }, null);
   event("tool-selection", handle, { tool: "search" }, { source: "wasm" });
   popScope(handle);
 } finally {

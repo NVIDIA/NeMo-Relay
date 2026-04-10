@@ -11,7 +11,7 @@
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use nemo_flow_core::Json;
+use nemo_flow::Json;
 
 /// Wraps a streaming LLM response for consumption from JavaScript/TypeScript.
 ///
@@ -22,8 +22,7 @@ pub struct WasmLlmStream {
     /// Async MPSC receiver that yields Json chunks or errors from the
     /// underlying LLM stream. Wrapped in a `Mutex` to allow shared-ref
     /// `&self` calls from JavaScript.
-    pub(crate) receiver:
-        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nemo_flow_core::Result<Json>>>,
+    pub(crate) receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nemo_flow::Result<Json>>>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -121,7 +120,7 @@ mod tests {
 
         block_on(async {
             let (tx, rx) = tokio::sync::mpsc::channel(1);
-            tx.send(Err(nemo_flow_core::FlowError::Internal(
+            tx.send(Err(nemo_flow::FlowError::Internal(
                 "stream failed".to_string(),
             )))
             .await

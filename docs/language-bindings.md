@@ -31,7 +31,7 @@ graph TD
     end
 
     subgraph "Core"
-        CORE["nemo-flow-core (Rust)"]
+        CORE["nemo-flow (Rust)"]
     end
 
     PY --> PYO3 --> CORE
@@ -44,7 +44,7 @@ graph TD
 
 NeMo Flow expects a single native binding owner per OS process.
 
-- Python, the Node.js native addon, and direct Rust `nemo-flow-core` usage
+- Python, the Node.js native addon, and direct Rust `nemo-flow` usage
   claim a process-wide owner token on module init or first API use.
 - The owner token records the binding kind, the NeMo Flow major version, and
   the current process ID.
@@ -61,20 +61,20 @@ treated as isolated runtimes.
 |--------|--------|----|---------|------|-------|
 | Functions | `snake_case` | `PascalCase` | `camelCase` | `camelCase` | `nemo_flow_snake_case` |
 | Types | `PascalCase` | `PascalCase` | `PascalCase` | `PascalCase` | `FfiPascalCase` |
-| Enums | `ScopeType.Agent` | `ScopeTypeAgent` | `ScopeType.Agent` | `ScopeType.Agent` | `NemoFlowScopeTypeAgent` |
+| Enums | `ScopeType.Agent` | `ScopeTypeAgent` | `ScopeType.Agent` | `SCOPE_TYPE_AGENT` | `NemoFlowScopeTypeAgent` |
 | Errors | `RuntimeError` | `error` | JS exception | JS exception | `NemoFlowStatus` + `nemo_flow_last_error()` |
 
 ## Rust Core Notes
 
-Direct Rust users of `nemo-flow-core` should note that
+Direct Rust users of `nemo-flow` should note that
 `EventSubscriberFn` is an `Arc<dyn Fn(&Event) + Send + Sync>`. Register
 subscribers with `Arc::new(...)`, not `Box::new(...)`.
 
 If you want OTLP export without adding exporter logic to your own callback,
-use the separate `nemo-flow-otel` crate. It turns NeMo Flow lifecycle
+use `nemo_flow::observability::otel`. It turns NeMo Flow lifecycle
 events into OpenTelemetry spans and exposes a normal `EventSubscriberFn`.
-If you want OTLP export with OpenInference semantic conventions, use the
-separate `nemo-flow-openinference` crate instead.
+If you want OTLP export with OpenInference semantic conventions, use
+`nemo_flow::observability::openinference` instead.
 
 ## OpenTelemetry
 
@@ -111,6 +111,30 @@ const config = {
   endpoint: "http://localhost:4318/v1/traces",
   serviceName: "demo-agent",
 };
+
+const subscriber = new OpenTelemetrySubscriber(config);
+subscriber.register("otel");
+```
+
+```go
+config := nemo_flow.NewOpenTelemetryConfig()
+config.Endpoint = "http://localhost:4318/v1/traces"
+config.ServiceName = "demo-agent"
+
+subscriber, err := nemo_flow.NewOpenTelemetrySubscriber(config)
+```
+
+```javascript
+import init, {
+  defaultOpenTelemetryConfig,
+  OpenTelemetrySubscriber,
+} from "./pkg/nemo_flow_wasm.js";
+
+await init();
+
+const config = defaultOpenTelemetryConfig();
+config.endpoint = "http://localhost:4318/v1/traces";
+config.service_name = "demo-agent";
 
 const subscriber = new OpenTelemetrySubscriber(config);
 subscriber.register("otel");
@@ -179,30 +203,6 @@ config.service_name = "demo-agent";
 
 const subscriber = new OpenInferenceSubscriber(config);
 subscriber.register("openinference");
-```
-
-```go
-config := nemo_flow.NewOpenTelemetryConfig()
-config.Endpoint = "http://localhost:4318/v1/traces"
-config.ServiceName = "demo-agent"
-
-subscriber, err := nemo_flow.NewOpenTelemetrySubscriber(config)
-```
-
-```javascript
-import init, {
-  defaultOpenTelemetryConfig,
-  OpenTelemetrySubscriber,
-} from "./pkg/nemo_flow_wasm.js";
-
-await init();
-
-const config = defaultOpenTelemetryConfig();
-config.endpoint = "http://localhost:4318/v1/traces";
-config.service_name = "demo-agent";
-
-const subscriber = new OpenTelemetrySubscriber(config);
-subscriber.register("otel");
 ```
 
 ## Callback Contracts
@@ -275,11 +275,28 @@ The Python package wraps a PyO3 native extension (`_native`) built with the stab
 ### Adaptive Plugins
 
 Python exposes adaptive config helpers in `nemo_flow.adaptive`, and uses
-`nemo_flow.plugin` for validation, configuration, and hosted plugin
+`nemo_flow.plugin` for validation, configuration, and custom plugin
 registration:
 
 ```python
-from nemo_flow import adaptive, plugin
+from nemo_flow import JsonObject, adaptive, plugin
+
+class HeaderPlugin(plugin.Plugin):
+    def validate(self, plugin_config: JsonObject) -> list[plugin.ConfigDiagnostic]:
+        return []
+
+    def register(
+        self,
+        plugin_config: JsonObject,
+        context: plugin.PluginContext,
+    ) -> None:
+        priority = int(plugin_config.get("priority", 25))
+
+        def inject_header(tool_name: str, args: JsonObject) -> JsonObject:
+            return {**args, "x_plugin": "enabled", "tool": tool_name}
+
+        context.register_tool_request_intercept("tool", priority, False, inject_header)
+
 
 plugin.register("example.header_plugin", HeaderPlugin())
 
@@ -307,7 +324,7 @@ report = plugin.validate(config)
 await plugin.initialize(config)
 ```
 
-`context` exposes:
+`plugin.PluginContext` exposes:
 
 - `register_subscriber(...)`
 - `register_llm_request_intercept(...)`
@@ -462,19 +479,19 @@ process.exit(0);
 ```javascript
 import {
     pushScope, popScope, ScopeType,
-    scopeRegisterToolConditionalExecution,
+    scopeRegisterToolConditionalExecutionGuardrail,
     scopeRegisterSubscriber,
 } from './index.js';
 
 const handle = pushScope("session", ScopeType.Agent, null, null);
 
 // Register middleware bound to this scope
-scopeRegisterToolConditionalExecution(
-    handle, "session_guard", 10,
+scopeRegisterToolConditionalExecutionGuardrail(
+    handle.uuid, "session_guard", 10,
     (name, args) => name === "rm" ? "blocked" : null,
 );
 scopeRegisterSubscriber(
-    handle, "session_logger",
+    handle.uuid, "session_logger",
     (event) => console.log(event.name),
 );
 
@@ -545,7 +562,7 @@ const validation = plugin.validate(config);
 await plugin.initialize(config);
 ```
 
-Node hosted plugin contexts expose:
+Node plugin contexts expose:
 
 - `registerSubscriber(...)`
 - `registerLlmRequestIntercept(...)`
@@ -570,21 +587,18 @@ cd go/nemo_flow
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" go test -v ./...
 ```
 
+On macOS, use `DYLD_LIBRARY_PATH` instead of `LD_LIBRARY_PATH`.
+
 ### Package Structure
 
 ```
 go/nemo_flow/
-  nemo_flow.go        # CGo declarations, core bindings
+  nemo_flow.go      # CGo declarations, core bindings
   types.go          # Type definitions (ScopeHandle, ToolHandle, etc.)
   stream.go         # LLM stream handling
   callbacks.go      # Go trampolines for Rust callbacks
   adaptive.go      # Adaptive config and plugin helpers
-  scope/            # Convenience package
-  tools/            # Convenience package
-  llm/              # Convenience package
-  guardrails/       # Convenience package
-  intercepts/       # Convenience package
-  subscribers/      # Convenience package
+  plugin.go         # Plugin-host config and registration helpers
 ```
 
 ### Usage
@@ -639,13 +653,13 @@ func main() {
 ```go
 import (
     "github.com/NVIDIA/NeMo-Flow/go/nemo_flow"
-    "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/scope"
 )
 
-handle, _ := scope.Push("session", nemo_flow.ScopeTypeAgent, 0, nil)
+handle, _ := nemo_flow.PushScope("session", nemo_flow.ScopeTypeAgent)
+defer nemo_flow.PopScope(handle)
 
 // Register middleware bound to this scope
-nemo_flow.ScopeRegisterToolConditionalExecution(handle, "session_guard", 10,
+nemo_flow.ScopeRegisterToolConditionalExecutionGuardrail(handle.UUID, "session_guard", 10,
     func(name string, args json.RawMessage) *string {
         if name == "rm" {
             reason := "blocked"
@@ -654,13 +668,11 @@ nemo_flow.ScopeRegisterToolConditionalExecution(handle, "session_guard", 10,
         return nil
     },
 )
-nemo_flow.ScopeRegisterSubscriber(handle, "session_logger",
+nemo_flow.ScopeRegisterSubscriber(handle.UUID, "session_logger",
     func(event json.RawMessage) { fmt.Println("event:", string(event)) },
 )
 
 // ... middleware is active while scope is on the stack ...
-
-scope.Pop(handle)  // both registrations automatically removed
 ```
 
 ### CGo Callback Pattern
@@ -673,31 +685,32 @@ Go uses trampolines — C-compatible function pointers that bridge Rust callback
 func goToolSanitizeTrampoline(userData unsafe.Pointer, name *C.char, args *C.char) *C.char { ... }
 ```
 
-Memory management requires explicit `Free()` calls on handles and scope stacks.
+`ScopeStack`, `LlmStream`, `AtifExporter`, and observability subscribers expose
+`Close()` methods. Scope, tool, and LLM handles are plain Go values and do not
+require explicit freeing.
 
 ### Adaptive Plugins
 
-Go exposes typed adaptive config builders through the `adaptive` subpackage and
+Go exposes typed adaptive config builders directly from `nemo_flow` and
 activates them through the core plugin host:
 
 ```go
 import (
-    adaptive "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/adaptive"
     nemo_flow "github.com/NVIDIA/NeMo-Flow/go/nemo_flow"
 )
 
-config := adaptive.NewConfig()
-config.State = &adaptive.StateConfig{
-    Backend: adaptive.NewInMemoryBackend(),
+config := nemo_flow.NewAdaptiveConfig()
+config.State = &nemo_flow.AdaptiveStateConfig{
+    Backend: nemo_flow.NewInMemoryAdaptiveBackend(),
 }
-telemetry := adaptive.NewTelemetryConfig()
+telemetry := nemo_flow.NewTelemetryConfig()
 telemetry.Learners = []string{"latency_sensitivity"}
 config.Telemetry = &telemetry
 
 report, err := nemo_flow.InitializePlugins(nemo_flow.PluginConfig{
     Version: 1,
     Components: []nemo_flow.PluginComponentSpec{
-        adaptive.NewComponentSpec(config).PluginComponent(),
+        nemo_flow.NewAdaptiveComponentSpec(config).PluginComponent(),
     },
 })
 if err != nil {
@@ -706,21 +719,19 @@ if err != nil {
 _ = report
 ```
 
-### Hosted Plugins
+### Plugins
 
-The Go binding exposes hosted plugin registration through the core plugin host.
+The Go binding exposes custom plugin registration through the core plugin host.
 Adaptive remains a separate top-level plugin component:
 
 ```go
 import (
     "encoding/json"
-
-    adaptive "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/adaptive"
     nemo_flow "github.com/NVIDIA/NeMo-Flow/go/nemo_flow"
 )
 
 pluginKind := "example.header_plugin"
-err := nemo_flow.RegisterPlugin(pluginKind, nemo_flow.PluginHandlerFuncs{
+err := nemo_flow.RegisterPlugin(pluginKind, nemo_flow.PluginFuncs{
     ValidateFunc: func(pluginConfig map[string]any) ([]nemo_flow.ConfigDiagnostic, error) {
         return nil, nil
     },
@@ -746,7 +757,7 @@ if err != nil {
 
 config := nemo_flow.NewPluginConfig()
 config.Components = []nemo_flow.PluginComponentSpec{
-    adaptive.NewComponentSpec(adaptive.NewConfig()).PluginComponent(),
+    nemo_flow.NewAdaptiveComponentSpec(nemo_flow.NewAdaptiveConfig()).PluginComponent(),
     {
         Kind:    pluginKind,
         Enabled: true,
@@ -785,7 +796,8 @@ defer stack.Close()
 go func() {
     stack.Run(func() {
         // All scope operations use this stack
-        scope.Push("agent", scope.TypeAgent)
+        handle, _ := nemo_flow.PushScope("agent", nemo_flow.ScopeTypeAgent)
+        defer nemo_flow.PopScope(handle)
 
         // Check if a scope stack is explicitly bound
         if nemo_flow.ScopeStackActive() {
@@ -876,11 +888,6 @@ async function searchFunc(args) {
     return { results: [`result for: ${args.q}`] };
 }
 
-For infallible callback shapes that do not have an error return channel
-(for example sanitize guardrails, subscribers, and stream finalizers), the
-WASM binding also records the most recent binding-side callback failure. Read it with
-`getLastCallbackError()` and clear it with `clearLastCallbackError()`.
-
 // 4. Execute a tool through the full middleware pipeline
 const result = await toolCallExecute(
     "search",
@@ -897,23 +904,29 @@ console.log("Tool result:", result);
 popScope(handle);
 ```
 
+For infallible callback shapes that do not have an error return channel
+(for example sanitize guardrails, subscribers, and stream finalizers), the
+WASM binding also records the most recent binding-side callback failure. Read it
+with `getLastCallbackError()` and clear it with `clearLastCallbackError()`.
+
 ### Scope-Local Middleware
 
 ```javascript
 import {
     pushScope, popScope,
-    scope_register_tool_conditional_execution,
-    scope_register_subscriber,
+    scopeRegisterToolConditionalExecutionGuardrail,
+    scopeRegisterSubscriber,
+    SCOPE_TYPE_AGENT,
 } from './pkg/nemo_flow_wasm.js';
 
-const handle = pushScope("session", 0 /* SCOPE_TYPE_AGENT */, null, null);
+const handle = pushScope("session", SCOPE_TYPE_AGENT, null, null, null, null);
 
-scope_register_tool_conditional_execution(
-    handle, "session_guard", 10,
+scopeRegisterToolConditionalExecutionGuardrail(
+    handle.uuid, "session_guard", 10,
     (name, args) => name === "rm" ? "blocked" : null,
 );
-scope_register_subscriber(
-    handle, "session_logger",
+scopeRegisterSubscriber(
+    handle.uuid, "session_logger",
     (event) => console.log(event),
 );
 
@@ -964,7 +977,7 @@ console.log(plugin.validate(config));
 await plugin.initialize(config);
 ```
 
-WASM hosted plugin contexts expose:
+WASM plugin contexts expose:
 
 - `registerSubscriber(...)`
 - `registerLlmRequestIntercept(...)`
@@ -980,7 +993,7 @@ WASM stream execution note:
 
 - `registerLlmStreamExecutionIntercept(...)` in the WASM binding produces a
   single-item stream result directly and does not delegate to downstream stream
-  handlers. WASM hosted plugins therefore cannot chain stream execution
+  handlers. WASM plugins therefore cannot chain stream execution
   intercepts the same way the Rust, Python, Go, and Node.js bindings can.
 
 ### Streaming LLM Example
@@ -1111,7 +1124,7 @@ opt into threaded builds (e.g., with `wasm-bindgen-rayon`).
 | Typed wrappers | `nemo_flow.typed` | — | `typed.js` | — |
 | Built-in codecs | `nemo_flow.codecs.OpenAIChatCodec`, `nemo_flow.codecs.OpenAIResponsesCodec`, `nemo_flow.codecs.AnthropicMessagesCodec` | `NewOpenAIChatCodec()`, `NewOpenAIResponsesCodec()`, `NewAnthropicMessagesCodec()` | `OpenAIChatCodec`, `OpenAIResponsesCodec`, `AnthropicMessagesCodec` | `WasmOpenAIChatCodec`, `WasmOpenAIResponsesCodec`, `WasmAnthropicMessagesCodec` |
 | Response codec param | `response_codec=` on execute/stream_execute | `WithLLMResponseCodec(codec)` | `responseCodecDecode` param | `response_codec_decode` param |
-| Memory management | GC | Manual (`Free`/`Close`) | GC | GC |
+| Memory management | GC | `Close()` on scope stacks, streams, exporters, and subscribers | GC | GC |
 
 ## Error Handling
 

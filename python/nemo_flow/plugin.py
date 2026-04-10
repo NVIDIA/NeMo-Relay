@@ -4,7 +4,7 @@
 """Generic plugin configuration and registration helpers.
 
 This module exposes the top-level plugin host used to validate and activate
-adaptive and hosted plugin components. Component registration names are scoped
+adaptive and custom plugin components. Component registration names are scoped
 per component by the runtime, so end users do not provide instance ids.
 """
 
@@ -69,7 +69,7 @@ class ConfigReport(TypedDict):
 
 
 class PluginContext(Protocol):
-    """Component-scoped registration context passed to hosted plugin handlers."""
+    """Component-scoped registration context passed to custom plugin handlers."""
 
     def register_subscriber(self, name: str, callback: Callable[[Event], None]) -> None:
         """Register an infallible event subscriber for this component."""
@@ -102,8 +102,8 @@ class PluginContext(Protocol):
         ...
 
 
-class PluginHandler(Protocol):
-    """Hosted plugin callback contract."""
+class Plugin(Protocol):
+    """Custom plugin callback contract."""
 
     def validate(self, plugin_config: JsonObject) -> list[ConfigDiagnostic] | None:
         """Validate one component-local config object.
@@ -191,7 +191,7 @@ class ConfigPolicy:
 
 @dataclass(slots=True)
 class ComponentSpec:
-    """One top-level hosted plugin component.
+    """One top-level custom plugin component.
 
     Args:
         kind: Registered plugin kind string.
@@ -254,7 +254,7 @@ def validate(config: PluginConfig | JsonObject) -> ConfigReport:
 
     Behavior:
         Validation checks host-level compatibility, unknown component kinds,
-        multiplicity rules, and per-handler validation logic.
+        multiplicity rules, and per-plugin validation logic.
     """
     return cast(ConfigReport, _validate_plugin_config(_normalize_object(config)))
 
@@ -300,24 +300,24 @@ def report() -> ConfigReport | None:
 
 
 def list_kinds() -> list[str]:
-    """List registered hosted plugin kinds.
+    """List registered custom plugin kinds.
 
     Returns:
-        A sorted list of plugin kind strings known to the handler registry.
+        A sorted list of plugin kind strings known to the plugin registry.
 
     Behavior:
-        This reports available handler kinds, not the currently active
+        This reports available plugin kinds, not the currently active
         component set.
     """
     return cast(list[str], _list_plugin_kinds())
 
 
-def register(plugin_kind: str, handler: PluginHandler) -> None:
-    """Register a hosted plugin handler implementation.
+def register(plugin_kind: str, plugin: Plugin) -> None:
+    """Register a custom plugin implementation.
 
     Args:
         plugin_kind: Unique top-level component kind string.
-        handler: Hosted plugin callback implementation.
+        plugin: Custom plugin implementation.
 
     Returns:
         `None`.
@@ -325,17 +325,17 @@ def register(plugin_kind: str, handler: PluginHandler) -> None:
     Behavior:
         Registering the same kind twice raises an error.
     """
-    _register_plugin(plugin_kind, handler)
+    _register_plugin(plugin_kind, plugin)
 
 
 def deregister(plugin_kind: str) -> bool:
-    """Deregister a hosted plugin handler kind.
+    """Deregister a custom plugin kind.
 
     Args:
-        plugin_kind: Kind string to remove from the handler registry.
+        plugin_kind: Kind string to remove from the plugin registry.
 
     Returns:
-        `True` if a handler was removed, otherwise `False`.
+        `True` if a plugin was removed, otherwise `False`.
 
     Behavior:
         This affects future validation and initialization only. Active runtime
@@ -352,7 +352,7 @@ __all__ = [
     "ConfigReport",
     "PluginConfig",
     "PluginContext",
-    "PluginHandler",
+    "Plugin",
     "clear",
     "initialize",
     "deregister",

@@ -56,6 +56,7 @@ pub mod codec;
 pub mod context;
 pub mod error;
 pub mod json;
+pub mod observability;
 pub mod plugin;
 pub mod registry;
 mod shared_runtime;

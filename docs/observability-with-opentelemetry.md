@@ -7,8 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 
 NeMo Flow can export scope, tool, LLM, and mark events as OpenTelemetry traces
 through an OTLP-backed subscriber. The exporter implementation lives in the
-separate Rust crate `nemo-flow-otel`, and the Python, Node.js, Go, and
-WASM bindings expose binding-native config objects on top of the same
+`nemo_flow::observability::otel` module, and the Python, Node.js, Go,
+and WASM bindings expose binding-native config objects on top of the same
 subscriber.
 
 Use this when you want NeMo Flow activity to appear in an OpenTelemetry Collector,
@@ -65,7 +65,7 @@ headers such as `x-honeycomb-team: <key>`.
 HTTP:
 
 ```rust
-use nemo_flow_otel::OpenTelemetryConfig;
+use nemo_flow::observability::otel::OpenTelemetryConfig;
 
 let config = OpenTelemetryConfig::http_binary("demo-agent")
     .with_endpoint("http://127.0.0.1:4318/v1/traces")
@@ -75,7 +75,7 @@ let config = OpenTelemetryConfig::http_binary("demo-agent")
 gRPC metadata:
 
 ```rust
-use nemo_flow_otel::OpenTelemetryConfig;
+use nemo_flow::observability::otel::OpenTelemetryConfig;
 
 let config = OpenTelemetryConfig::grpc("demo-agent")
     .with_endpoint("http://127.0.0.1:4317")
@@ -191,8 +191,8 @@ The intended lifecycle is the same across languages:
 ## Rust
 
 ```rust
-use nemo_flow_core::{ScopeAttributes, ScopeType, nemo_flow_pop_scope, nemo_flow_push_scope};
-use nemo_flow_otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+use nemo_flow::{pop_scope, push_scope, ScopeAttributes, ScopeType};
+use nemo_flow::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = OpenTelemetryConfig::http_binary("demo-agent")
@@ -204,7 +204,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let subscriber = OpenTelemetrySubscriber::new(config)?;
     subscriber.register("otel")?;
 
-    let handle = nemo_flow_push_scope(
+    let handle = push_scope(
         "agent-turn",
         ScopeType::Agent,
         None,
@@ -215,7 +215,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ... tool / LLM / mark events here ...
 
-    nemo_flow_pop_scope(&handle.uuid)?;
+    pop_scope(&handle.uuid)?;
 
     subscriber.deregister("otel")?;
     subscriber.force_flush()?;
@@ -224,8 +224,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-For direct Rust integration, the crate-specific overview also lives in
-[`crates/otel/README.md`](../crates/otel/README.md).
+For direct Rust integration, import the subscriber from
+`nemo_flow::observability::otel`.
 
 ## Python
 
@@ -338,7 +338,7 @@ if err := subscriber.Shutdown(); err != nil {
 import init, {
   defaultOpenTelemetryConfig,
   OpenTelemetrySubscriber,
-  ScopeType,
+  SCOPE_TYPE_AGENT,
   pushScope,
   popScope,
   event,
@@ -357,7 +357,7 @@ const subscriber = new OpenTelemetrySubscriber(config);
 subscriber.register("otel");
 
 try {
-  const scope = pushScope("agent-turn", ScopeType.Agent, null, null, null, null);
+  const scope = pushScope("agent-turn", SCOPE_TYPE_AGENT, null, null, null, null);
   event("tool-selection", scope, { tool: "search" }, null);
   popScope(scope);
 } finally {

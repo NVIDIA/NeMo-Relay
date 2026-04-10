@@ -20,11 +20,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Utc};
-use nemo_flow_core::{
+use crate::{
     Event, EventSubscriberFn, FlowError, HandleAttributes, ScopeType, ToolAttributes,
-    nemo_flow_deregister_subscriber, nemo_flow_register_subscriber,
+    deregister_subscriber, register_subscriber,
 };
+use chrono::{DateTime, Utc};
 use openinference_semantic_conventions::SpanKind as OpenInferenceSpanKind;
 use openinference_semantic_conventions::attributes as oi;
 use opentelemetry::trace::{
@@ -259,12 +259,12 @@ impl OpenInferenceSubscriber {
 
     /// Registers this subscriber globally with the NeMo Flow runtime.
     pub fn register(&self, name: &str) -> Result<()> {
-        nemo_flow_register_subscriber(name, self.subscriber()).map_err(Into::into)
+        register_subscriber(name, self.subscriber()).map_err(Into::into)
     }
 
     /// Deregisters a previously-registered global subscriber by name.
     pub fn deregister(&self, name: &str) -> Result<bool> {
-        nemo_flow_deregister_subscriber(name).map_err(Into::into)
+        deregister_subscriber(name).map_err(Into::into)
     }
 
     /// Flushes finished spans through the underlying tracer provider.
@@ -824,26 +824,20 @@ fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nemo_flow_core::{Json, ScopeType};
+    use crate::{Json, ScopeType};
     use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
     use serde_json::json;
     use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::mpsc;
-    use std::sync::{Mutex, OnceLock};
     use std::thread;
     use uuid::Uuid;
 
-    static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-
-    fn test_mutex() -> &'static Mutex<()> {
-        TEST_MUTEX.get_or_init(|| Mutex::new(()))
-    }
-
     fn reset_global() {
-        let context = nemo_flow_core::global_context();
-        *context.write().unwrap() = nemo_flow_core::NemoFlowContextState::new();
+        crate::shared_runtime::reset_runtime_owner_for_tests();
+        let context = crate::global_context();
+        *context.write().unwrap() = crate::NemoFlowContextState::new();
     }
 
     fn make_provider() -> (
@@ -883,7 +877,7 @@ mod tests {
                 name,
                 None,
                 None,
-                nemo_flow_core::ToolAttributes::empty(),
+                crate::ToolAttributes::empty(),
                 input,
                 None,
             ),
@@ -893,7 +887,7 @@ mod tests {
                 name,
                 None,
                 None,
-                nemo_flow_core::LLMAttributes::empty(),
+                crate::LLMAttributes::empty(),
                 input,
                 None,
                 None,
@@ -904,7 +898,7 @@ mod tests {
                 name,
                 None,
                 None,
-                nemo_flow_core::ScopeAttributes::empty(),
+                crate::ScopeAttributes::empty(),
                 scope_type,
             ),
         }
@@ -977,6 +971,9 @@ mod tests {
 
     #[test]
     fn subscriber_registration_and_provider_lifecycle_methods_work() {
+        let _guard = crate::observability::test_mutex().lock().unwrap();
+        reset_global();
+
         let (provider, _exporter) = make_provider();
         let subscriber = OpenInferenceSubscriber::from_tracer_provider(provider, "test-scope");
         let name = format!("otel_test_{}", Uuid::new_v4().simple());
@@ -990,7 +987,7 @@ mod tests {
 
     #[test]
     fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
-        let _guard = test_mutex().lock().unwrap();
+        let _guard = crate::observability::test_mutex().lock().unwrap();
         reset_global();
 
         let (provider, exporter) = make_provider();
@@ -998,23 +995,23 @@ mod tests {
         let name = format!("otel_e2e_{}", Uuid::new_v4().simple());
 
         subscriber.register(&name).unwrap();
-        let handle = nemo_flow_core::nemo_flow_push_scope(
+        let handle = crate::push_scope(
             "otel_scope",
             ScopeType::Agent,
             None,
-            nemo_flow_core::ScopeAttributes::empty(),
+            crate::ScopeAttributes::empty(),
             Some(json!({"scope": true})),
             Some(json!({"phase": "start"})),
         )
         .unwrap();
-        nemo_flow_core::nemo_flow_event(
+        crate::event(
             "otel_mark",
             Some(&handle),
             Some(json!({"step": 1})),
             Some(json!({"source": "rust-test"})),
         )
         .unwrap();
-        nemo_flow_core::nemo_flow_pop_scope(&handle.uuid).unwrap();
+        crate::pop_scope(&handle.uuid).unwrap();
 
         assert!(subscriber.deregister(&name).unwrap());
         subscriber.force_flush().unwrap();
@@ -1059,7 +1056,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn http_config_exports_scope_push_pop_and_marks_without_tokio_runtime() {
-        let _guard = test_mutex().lock().unwrap();
+        let _guard = crate::observability::test_mutex().lock().unwrap();
         reset_global();
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1134,23 +1131,23 @@ mod tests {
         let name = format!("otel_http_{}", Uuid::new_v4().simple());
 
         subscriber.register(&name).unwrap();
-        let handle = nemo_flow_core::nemo_flow_push_scope(
+        let handle = crate::push_scope(
             "otel_scope",
             ScopeType::Agent,
             None,
-            nemo_flow_core::ScopeAttributes::empty(),
+            crate::ScopeAttributes::empty(),
             Some(json!({"scope": true})),
             None,
         )
         .unwrap();
-        nemo_flow_core::nemo_flow_event(
+        crate::event(
             "otel_mark",
             Some(&handle),
             Some(json!({"step": 1})),
             Some(json!({"source": "rust-http"})),
         )
         .unwrap();
-        nemo_flow_core::nemo_flow_pop_scope(&handle.uuid).unwrap();
+        crate::pop_scope(&handle.uuid).unwrap();
 
         assert!(subscriber.deregister(&name).unwrap());
         subscriber.force_flush().unwrap();
@@ -1194,7 +1191,7 @@ mod tests {
             "search",
             None,
             None,
-            nemo_flow_core::ToolAttributes::empty(),
+            crate::ToolAttributes::empty(),
             Some(json!({"result": "ok"})),
             None,
         );
@@ -1247,7 +1244,7 @@ mod tests {
             "chat",
             None,
             None,
-            nemo_flow_core::LLMAttributes::empty(),
+            crate::LLMAttributes::empty(),
             Some(json!({"message": "hello"})),
             None,
             None,
@@ -1289,7 +1286,7 @@ mod tests {
             "ping",
             None,
             None,
-            nemo_flow_core::ToolAttributes::empty(),
+            crate::ToolAttributes::empty(),
             Some(json!({"ok": true})),
             None,
         ));
@@ -1337,7 +1334,7 @@ mod tests {
             "model-call",
             None,
             None,
-            nemo_flow_core::LLMAttributes::empty(),
+            crate::LLMAttributes::empty(),
             None,
             None,
             None,
@@ -1348,7 +1345,7 @@ mod tests {
             "agent",
             None,
             None,
-            nemo_flow_core::ScopeAttributes::empty(),
+            crate::ScopeAttributes::empty(),
             ScopeType::Agent,
         ));
 
@@ -1414,7 +1411,7 @@ mod tests {
             "model-call",
             None,
             None,
-            nemo_flow_core::LLMAttributes::empty(),
+            crate::LLMAttributes::empty(),
             Some(json!({
                 "headers": {"authorization": "Bearer token"},
                 "content": {"messages": [{"role": "user", "content": "hello"}]},
@@ -1438,7 +1435,7 @@ mod tests {
             "model-call",
             None,
             None,
-            nemo_flow_core::LLMAttributes::empty(),
+            crate::LLMAttributes::empty(),
             Some(json!({
                 "headers": {"authorization": "Bearer token"},
                 "prompt": "hello",
@@ -1460,7 +1457,7 @@ mod tests {
             "search",
             None,
             None,
-            nemo_flow_core::ToolAttributes::LOCAL,
+            crate::ToolAttributes::LOCAL,
             Some(json!({"query": "hello"})),
             None,
         );

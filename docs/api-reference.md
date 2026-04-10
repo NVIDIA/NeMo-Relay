@@ -353,7 +353,10 @@ error return channel.
 ## Plugin Host
 
 The plugin host is the shared configuration and registration surface used by the
-adaptive component and any hosted third-party plugin kinds.
+adaptive component and any custom plugin kinds.
+
+For practical guidance, start with [Plugins](hosted-plugins.md). This section is
+the low-level API reference for the same host.
 
 ```python
 policy = plugin.ConfigPolicy(
@@ -379,7 +382,7 @@ report = await plugin.initialize(config: PluginConfig | dict) -> ConfigReport
 plugin.clear() -> None
 active = plugin.report() -> ConfigReport | None
 kinds = plugin.list_kinds() -> list[str]
-plugin.register(plugin_kind: str, handler: PluginHandler) -> None
+plugin.register(plugin_kind: str, plugin: Plugin) -> None
 removed = plugin.deregister(plugin_kind: str) -> bool
 ```
 
@@ -392,7 +395,7 @@ removed = plugin.deregister(plugin_kind: str) -> bool
   Behavior: `"warn"` adds a warning diagnostic, `"error"` adds an error diagnostic that blocks `initialize(...)`, and `"ignore"` suppresses diagnostics.
 
 - `ComponentSpec`
-  Description: describes one top-level hosted plugin component.
+  Description: describes one top-level custom plugin component.
   Arguments: `kind` is the registered plugin kind string, `config` is the component-specific JSON object, and `enabled` controls whether the host should activate the component.
   Returns: a component document suitable for inclusion in `PluginConfig.components`.
   Behavior: disabled components are still validated but skipped during runtime registration. Adaptive uses its own `adaptive.ComponentSpec(...)`, but both adaptive and generic components share the same top-level `components` array.
@@ -409,7 +412,7 @@ removed = plugin.deregister(plugin_kind: str) -> bool
   Description: validates a plugin host config without changing runtime state.
   Arguments: a `PluginConfig` instance or an equivalent JSON object.
   Returns: `ConfigReport` with zero or more diagnostics.
-  Behavior: this is pure validation. It checks host-level compatibility, unknown plugin kinds, multiplicity rules, and each registered plugin handler's per-component validation logic.
+  Behavior: this is pure validation. It checks host-level compatibility, unknown plugin kinds, multiplicity rules, and each registered plugin's per-component validation logic.
 
 - `await plugin.initialize(config)`
   Description: validates and activates the full plugin configuration.
@@ -421,7 +424,7 @@ removed = plugin.deregister(plugin_kind: str) -> bool
   Description: deregisters all middleware and subscribers installed by the active plugin configuration.
   Arguments: none.
   Returns: `None`.
-  Behavior: this clears active component registrations only. It does not remove plugin kinds from the handler registry.
+  Behavior: this clears active component registrations only. It does not remove plugin kinds from the plugin registry.
 
 - `plugin.report()`
   Description: returns the last successfully activated plugin report.
@@ -430,29 +433,29 @@ removed = plugin.deregister(plugin_kind: str) -> bool
   Behavior: returns `None` when no plugin configuration is active.
 
 - `plugin.list_kinds()`
-  Description: lists hosted plugin kinds currently registered with the plugin handler registry.
+  Description: lists custom plugin kinds currently registered with the plugin registry.
   Arguments: none.
   Returns: a sorted list of kind strings.
-  Behavior: this reports available handler kinds, not the currently active component set.
+  Behavior: this reports available plugin kinds, not the currently active component set.
 
-- `plugin.register(plugin_kind, handler)`
-  Description: registers a hosted plugin handler implementation.
-  Arguments: `plugin_kind` is the unique top-level component kind and `handler` implements the `PluginHandler` contract.
+- `plugin.register(plugin_kind, plugin)`
+  Description: registers a custom plugin implementation.
+  Arguments: `plugin_kind` is the unique top-level component kind and `plugin` implements the `Plugin` contract.
   Returns: `None`.
   Behavior: registration makes the kind available to later `validate(...)` and `initialize(...)` calls. Registering the same kind twice raises an error.
 
 - `plugin.deregister(plugin_kind)`
-  Description: removes a previously registered hosted plugin handler kind.
+  Description: removes a previously registered custom plugin kind.
   Arguments: `plugin_kind` is the kind string to remove.
-  Returns: `True` if a handler was removed, otherwise `False`.
+  Returns: `True` if a plugin was removed, otherwise `False`.
   Behavior: deregistration affects future validation and initialization. It does not retroactively clear middleware already installed by an active configuration.
 
-### Handler Contract
+### Plugin Contract
 
 ```python
-class PluginHandler(Protocol):
-    def validate(self, plugin_config: dict[str, Any]) -> list[ConfigDiagnostic] | None: ...
-    def register(self, plugin_config: dict[str, Any], context: PluginContext) -> None: ...
+class Plugin(Protocol):
+    def validate(self, plugin_config: JsonObject) -> list[ConfigDiagnostic] | None: ...
+    def register(self, plugin_config: JsonObject, context: PluginContext) -> None: ...
 ```
 
 - `validate(plugin_config)`
@@ -663,10 +666,10 @@ stream collectors are fallible.
 
 | Python | Go | Node.js | WASM | FFI/C |
 |--------|----|---------|------|-------|
-| `scope_local.register_tool_conditional_execution` | `ScopeRegisterToolConditionalExecution` | `scopeRegisterToolConditionalExecution` | `scope_register_tool_conditional_execution` | `nemo_flow_scope_register_tool_conditional_execution` |
-| `scope_local.register_subscriber` | `ScopeRegisterSubscriber` | `scopeRegisterSubscriber` | `scope_register_subscriber` | `nemo_flow_scope_register_subscriber` |
+| `scope_local.register_tool_conditional_execution` | `ScopeRegisterToolConditionalExecutionGuardrail` | `scopeRegisterToolConditionalExecutionGuardrail` | `scopeRegisterToolConditionalExecutionGuardrail` | `nemo_flow_scope_register_tool_conditional_execution` |
+| `scope_local.register_subscriber` | `ScopeRegisterSubscriber` | `scopeRegisterSubscriber` | `scopeRegisterSubscriber` | `nemo_flow_scope_register_subscriber` |
 
-All scope-local registration functions follow the same naming pattern: prefix the global registration name with `scope_register_` (FFI/WASM), `scopeRegister` (Node.js), `ScopeRegister` (Go), or place it in the `scope_local` module (Python).
+All scope-local registration functions follow the same naming pattern: prefix the global registration name with `nemo_flow_scope_` (FFI), `scopeRegister` (Node.js and WASM), `ScopeRegister` (Go), or place it in the `scope_local` module (Python).
 
 ## Built-In Codec Types
 

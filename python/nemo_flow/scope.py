@@ -27,16 +27,16 @@ from nemo_flow._native import (
     ScopeType,
 )
 from nemo_flow._native import (
-    nemo_flow_event as _native_event,
+    event as _native_event,
 )
 from nemo_flow._native import (
-    nemo_flow_get_handle as _native_get_handle,
+    get_handle as _native_get_handle,
 )
 from nemo_flow._native import (
-    nemo_flow_pop_scope as _native_pop_scope,
+    pop_scope as _native_pop_scope,
 )
 from nemo_flow._native import (
-    nemo_flow_push_scope as _native_push_scope,
+    push_scope as _native_push_scope,
 )
 
 

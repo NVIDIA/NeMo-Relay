@@ -13,7 +13,7 @@ func TestTopLevelPluginValidationAndLifecycle(t *testing.T) {
 	pluginKind := "go.test.plugin"
 	registerCalls := 0
 
-	if err := RegisterPlugin(pluginKind, PluginHandlerFuncs{
+	if err := RegisterPlugin(pluginKind, PluginFuncs{
 		ValidateFunc: func(pluginConfig map[string]any) ([]ConfigDiagnostic, error) {
 			threshold, _ := pluginConfig["threshold"].(float64)
 			field := "threshold"
@@ -69,7 +69,7 @@ func TestTopLevelPluginValidationAndLifecycle(t *testing.T) {
 	}
 
 	streamPluginKind := pluginKind + ".stream"
-	if err := RegisterPlugin(streamPluginKind, PluginHandlerFuncs{
+	if err := RegisterPlugin(streamPluginKind, PluginFuncs{
 		RegisterFunc: func(pluginConfig map[string]any, ctx *PluginContext) error {
 			return ctx.RegisterLlmStreamExecutionIntercept(
 				"llm_stream_exec",

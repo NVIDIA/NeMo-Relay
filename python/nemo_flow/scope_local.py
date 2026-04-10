@@ -21,76 +21,76 @@ Example:
 """
 
 from nemo_flow._native import (
-    nemo_flow_scope_deregister_llm_conditional_execution_guardrail as _deregister_llm_conditional_execution,
+    scope_deregister_llm_conditional_execution_guardrail as _deregister_llm_conditional_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_deregister_llm_execution_intercept as _deregister_llm_execution,
+    scope_deregister_llm_execution_intercept as _deregister_llm_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_deregister_llm_request_intercept as _deregister_llm_request,
+    scope_deregister_llm_request_intercept as _deregister_llm_request,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_deregister_llm_sanitize_request_guardrail as _deregister_llm_sanitize_request,
+    scope_deregister_llm_sanitize_request_guardrail as _deregister_llm_sanitize_request,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_deregister_llm_sanitize_response_guardrail as _deregister_llm_sanitize_response,
+    scope_deregister_llm_sanitize_response_guardrail as _deregister_llm_sanitize_response,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_deregister_llm_stream_execution_intercept as _deregister_llm_stream_execution,
+    scope_deregister_llm_stream_execution_intercept as _deregister_llm_stream_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_deregister_subscriber as _deregister_subscriber,
+    scope_deregister_subscriber as _deregister_subscriber,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_deregister_tool_conditional_execution_guardrail as _deregister_tool_conditional_execution,
+    scope_deregister_tool_conditional_execution_guardrail as _deregister_tool_conditional_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_deregister_tool_execution_intercept as _deregister_tool_execution,
+    scope_deregister_tool_execution_intercept as _deregister_tool_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_deregister_tool_request_intercept as _deregister_tool_request,
+    scope_deregister_tool_request_intercept as _deregister_tool_request,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_deregister_tool_sanitize_request_guardrail as _deregister_tool_sanitize_request,
+    scope_deregister_tool_sanitize_request_guardrail as _deregister_tool_sanitize_request,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_deregister_tool_sanitize_response_guardrail as _deregister_tool_sanitize_response,
+    scope_deregister_tool_sanitize_response_guardrail as _deregister_tool_sanitize_response,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_register_llm_conditional_execution_guardrail as _register_llm_conditional_execution,
+    scope_register_llm_conditional_execution_guardrail as _register_llm_conditional_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_register_llm_execution_intercept as _register_llm_execution,
+    scope_register_llm_execution_intercept as _register_llm_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_register_llm_request_intercept as _register_llm_request,
+    scope_register_llm_request_intercept as _register_llm_request,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_register_llm_sanitize_request_guardrail as _register_llm_sanitize_request,
+    scope_register_llm_sanitize_request_guardrail as _register_llm_sanitize_request,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_register_llm_sanitize_response_guardrail as _register_llm_sanitize_response,
+    scope_register_llm_sanitize_response_guardrail as _register_llm_sanitize_response,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_register_llm_stream_execution_intercept as _register_llm_stream_execution,
+    scope_register_llm_stream_execution_intercept as _register_llm_stream_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_register_subscriber as _register_subscriber,
+    scope_register_subscriber as _register_subscriber,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_register_tool_conditional_execution_guardrail as _register_tool_conditional_execution,
+    scope_register_tool_conditional_execution_guardrail as _register_tool_conditional_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_register_tool_execution_intercept as _register_tool_execution,
+    scope_register_tool_execution_intercept as _register_tool_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_register_tool_request_intercept as _register_tool_request,
+    scope_register_tool_request_intercept as _register_tool_request,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_register_tool_sanitize_request_guardrail as _register_tool_sanitize_request,
+    scope_register_tool_sanitize_request_guardrail as _register_tool_sanitize_request,
 )
 from nemo_flow._native import (
-    nemo_flow_scope_register_tool_sanitize_response_guardrail as _register_tool_sanitize_response,
+    scope_register_tool_sanitize_response_guardrail as _register_tool_sanitize_response,
 )
 
 # ---------------------------------------------------------------------------

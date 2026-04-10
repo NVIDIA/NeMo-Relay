@@ -48,14 +48,14 @@ impl From<serde_json::Error> for AdaptiveError {
     }
 }
 
-impl From<nemo_flow_core::PluginError> for AdaptiveError {
-    fn from(value: nemo_flow_core::PluginError) -> Self {
+impl From<nemo_flow::PluginError> for AdaptiveError {
+    fn from(value: nemo_flow::PluginError) -> Self {
         match value {
-            nemo_flow_core::PluginError::InvalidConfig(message) => Self::InvalidConfig(message),
-            nemo_flow_core::PluginError::NotFound(message) => Self::NotFound(message),
-            nemo_flow_core::PluginError::Serialization(err) => Self::Serialization(err),
-            nemo_flow_core::PluginError::Internal(message) => Self::Internal(message),
-            nemo_flow_core::PluginError::RegistrationFailed(message) => {
+            nemo_flow::PluginError::InvalidConfig(message) => Self::InvalidConfig(message),
+            nemo_flow::PluginError::NotFound(message) => Self::NotFound(message),
+            nemo_flow::PluginError::Serialization(err) => Self::Serialization(err),
+            nemo_flow::PluginError::Internal(message) => Self::Internal(message),
+            nemo_flow::PluginError::RegistrationFailed(message) => {
                 Self::RegistrationFailed(message)
             }
         }

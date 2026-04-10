@@ -17,8 +17,7 @@ use serde_json::Value as Json;
 /// response chunks. Returns `null` when the stream is fully consumed.
 #[napi]
 pub struct LlmStream {
-    pub(crate) receiver:
-        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nemo_flow_core::Result<Json>>>,
+    pub(crate) receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nemo_flow::Result<Json>>>,
 }
 
 #[napi]

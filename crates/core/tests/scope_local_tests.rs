@@ -12,10 +12,10 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use nemo_flow_core::context::*;
-use nemo_flow_core::error::FlowError;
-use nemo_flow_core::types::*;
-use nemo_flow_core::*;
+use nemo_flow::context::*;
+use nemo_flow::error::FlowError;
+use nemo_flow::types::*;
+use nemo_flow::*;
 use serde_json::json;
 
 // All tests share the global context, so we serialize them.
@@ -32,7 +32,7 @@ fn reset_global() {
 fn setup_isolated_scope(name: &str) -> ScopeHandle {
     let stack = create_scope_stack();
     set_thread_scope_stack(stack);
-    nemo_flow_push_scope(
+    push_scope(
         name,
         ScopeType::Agent,
         None,
@@ -47,7 +47,7 @@ fn setup_isolated_scope(name: &str) -> ScopeHandle {
 // 1. Scope-local guardrail registration and execution
 //
 // Registers a scope-local tool sanitize request guardrail and verifies it
-// runs during nemo_flow_tool_call within that scope by inspecting the
+// runs during tool_call within that scope by inspecting the
 // event's `input` field (sanitize guardrails transform what is recorded
 // in events, not the execution-pipeline args).
 // -----------------------------------------------------------------------
@@ -59,7 +59,7 @@ fn test_scope_local_guardrail_registration_and_execution() {
     let handle = setup_isolated_scope("scope_guardrail");
 
     // Register a scope-local tool sanitize request guardrail that adds a marker.
-    nemo_flow_scope_register_tool_sanitize_request_guardrail(
+    scope_register_tool_sanitize_request_guardrail(
         &handle.uuid,
         "local_sanitizer",
         10,
@@ -75,7 +75,7 @@ fn test_scope_local_guardrail_registration_and_execution() {
     // Capture events via a global subscriber to inspect the input field.
     let events: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nemo_flow_register_subscriber(
+    register_subscriber(
         "sanitize_observer",
         Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
@@ -83,8 +83,8 @@ fn test_scope_local_guardrail_registration_and_execution() {
     )
     .unwrap();
 
-    // Invoke nemo_flow_tool_call — the sanitize guardrail runs inside.
-    let tool_handle = nemo_flow_tool_call(
+    // Invoke tool_call — the sanitize guardrail runs inside.
+    let tool_handle = tool_call(
         "test_tool",
         json!({"input": "data"}),
         None,
@@ -104,11 +104,11 @@ fn test_scope_local_guardrail_registration_and_execution() {
         assert_eq!(input["input"], "data");
     }
 
-    nemo_flow_tool_call_end(&tool_handle, json!("ok"), None, None).unwrap();
+    tool_call_end(&tool_handle, json!("ok"), None, None).unwrap();
 
     // Cleanup
-    nemo_flow_deregister_subscriber("sanitize_observer").unwrap();
-    nemo_flow_pop_scope(&handle.uuid).unwrap();
+    deregister_subscriber("sanitize_observer").unwrap();
+    pop_scope(&handle.uuid).unwrap();
 }
 
 // -----------------------------------------------------------------------
@@ -125,7 +125,7 @@ async fn test_auto_cleanup_on_scope_pop() {
     let stack = create_scope_stack();
     set_thread_scope_stack(stack);
 
-    let handle = nemo_flow_push_scope(
+    let handle = push_scope(
         "ephemeral",
         ScopeType::Function,
         None,
@@ -136,7 +136,7 @@ async fn test_auto_cleanup_on_scope_pop() {
     .unwrap();
 
     // Register a scope-local request intercept that appends a field.
-    nemo_flow_scope_register_tool_request_intercept(
+    scope_register_tool_request_intercept(
         &handle.uuid,
         "ephemeral_intercept",
         1,
@@ -152,7 +152,7 @@ async fn test_auto_cleanup_on_scope_pop() {
 
     // Verify it runs before pop.
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let result = nemo_flow_tool_call_execute(
+    let result = tool_call_execute(
         "tool",
         json!({"v": 1}),
         func,
@@ -166,11 +166,11 @@ async fn test_auto_cleanup_on_scope_pop() {
     assert_eq!(result["ephemeral"], true);
 
     // Pop the scope — middleware should be cleaned up.
-    nemo_flow_pop_scope(&handle.uuid).unwrap();
+    pop_scope(&handle.uuid).unwrap();
 
     // Now execute again — the field should NOT appear.
     let func2: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let result2 = nemo_flow_tool_call_execute(
+    let result2 = tool_call_execute(
         "tool",
         json!({"v": 2}),
         func2,
@@ -203,7 +203,7 @@ async fn test_priority_merge_global_and_scope_local() {
 
     // Global intercept at priority 10
     let o1 = order.clone();
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "global_p10",
         10,
         false,
@@ -219,7 +219,7 @@ async fn test_priority_merge_global_and_scope_local() {
 
     // Global intercept at priority 30
     let o3 = order.clone();
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "global_p30",
         30,
         false,
@@ -235,7 +235,7 @@ async fn test_priority_merge_global_and_scope_local() {
 
     // Scope-local intercept at priority 20
     let o2 = order.clone();
-    nemo_flow_scope_register_tool_request_intercept(
+    scope_register_tool_request_intercept(
         &handle.uuid,
         "local_p20",
         20,
@@ -251,7 +251,7 @@ async fn test_priority_merge_global_and_scope_local() {
     .unwrap();
 
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let result = nemo_flow_tool_call_execute(
+    let result = tool_call_execute(
         "tool",
         json!({}),
         func,
@@ -273,9 +273,9 @@ async fn test_priority_merge_global_and_scope_local() {
     assert_eq!(*recorded, vec![10, 20, 30]);
 
     // Cleanup
-    nemo_flow_deregister_tool_request_intercept("global_p10").unwrap();
-    nemo_flow_deregister_tool_request_intercept("global_p30").unwrap();
-    nemo_flow_pop_scope(&handle.uuid).unwrap();
+    deregister_tool_request_intercept("global_p10").unwrap();
+    deregister_tool_request_intercept("global_p30").unwrap();
+    pop_scope(&handle.uuid).unwrap();
 }
 
 // -----------------------------------------------------------------------
@@ -296,7 +296,7 @@ fn test_name_coexistence_global_and_scope_local() {
 
     // Global guardrail named "shared_name"
     let c1 = count.clone();
-    nemo_flow_register_tool_sanitize_request_guardrail(
+    register_tool_sanitize_request_guardrail(
         "shared_name",
         1,
         Box::new(move |_name, args| {
@@ -308,7 +308,7 @@ fn test_name_coexistence_global_and_scope_local() {
 
     // Scope-local guardrail also named "shared_name"
     let c2 = count.clone();
-    nemo_flow_scope_register_tool_sanitize_request_guardrail(
+    scope_register_tool_sanitize_request_guardrail(
         &handle.uuid,
         "shared_name",
         2,
@@ -319,8 +319,8 @@ fn test_name_coexistence_global_and_scope_local() {
     )
     .unwrap();
 
-    // Use nemo_flow_tool_call which exercises sanitize guardrails.
-    let _tool_handle = nemo_flow_tool_call(
+    // Use tool_call which exercises sanitize guardrails.
+    let _tool_handle = tool_call(
         "tool",
         json!({}),
         None,
@@ -335,8 +335,8 @@ fn test_name_coexistence_global_and_scope_local() {
     assert_eq!(count.load(Ordering::SeqCst), 2);
 
     // Cleanup
-    nemo_flow_deregister_tool_sanitize_request_guardrail("shared_name").unwrap();
-    nemo_flow_pop_scope(&handle.uuid).unwrap();
+    deregister_tool_sanitize_request_guardrail("shared_name").unwrap();
+    pop_scope(&handle.uuid).unwrap();
 }
 
 // -----------------------------------------------------------------------
@@ -357,7 +357,7 @@ async fn test_scope_isolation_between_stacks() {
     // Set up stack A with a scope-local intercept that adds "agent_a"
     let scope_a = {
         set_thread_scope_stack(stack_a.clone());
-        let s = nemo_flow_push_scope(
+        let s = push_scope(
             "agent_a",
             ScopeType::Agent,
             None,
@@ -366,7 +366,7 @@ async fn test_scope_isolation_between_stacks() {
             None,
         )
         .unwrap();
-        nemo_flow_scope_register_tool_request_intercept(
+        scope_register_tool_request_intercept(
             &s.uuid,
             "a_intercept",
             1,
@@ -385,7 +385,7 @@ async fn test_scope_isolation_between_stacks() {
     // Set up stack B with a scope-local intercept that adds "agent_b"
     let scope_b = {
         set_thread_scope_stack(stack_b.clone());
-        let s = nemo_flow_push_scope(
+        let s = push_scope(
             "agent_b",
             ScopeType::Agent,
             None,
@@ -394,7 +394,7 @@ async fn test_scope_isolation_between_stacks() {
             None,
         )
         .unwrap();
-        nemo_flow_scope_register_tool_request_intercept(
+        scope_register_tool_request_intercept(
             &s.uuid,
             "b_intercept",
             1,
@@ -413,7 +413,7 @@ async fn test_scope_isolation_between_stacks() {
     // Execute on stack A — should see agent_a's intercept only
     set_thread_scope_stack(stack_a.clone());
     let func_a: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let result_a = nemo_flow_tool_call_execute(
+    let result_a = tool_call_execute(
         "tool",
         json!({}),
         func_a,
@@ -429,7 +429,7 @@ async fn test_scope_isolation_between_stacks() {
     // Execute on stack B — should see agent_b's intercept only
     set_thread_scope_stack(stack_b.clone());
     let func_b: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let result_b = nemo_flow_tool_call_execute(
+    let result_b = tool_call_execute(
         "tool",
         json!({}),
         func_b,
@@ -444,9 +444,9 @@ async fn test_scope_isolation_between_stacks() {
 
     // Cleanup
     set_thread_scope_stack(stack_a);
-    nemo_flow_pop_scope(&scope_a.uuid).unwrap();
+    pop_scope(&scope_a.uuid).unwrap();
     set_thread_scope_stack(stack_b);
-    nemo_flow_pop_scope(&scope_b.uuid).unwrap();
+    pop_scope(&scope_b.uuid).unwrap();
 }
 
 // -----------------------------------------------------------------------
@@ -468,7 +468,7 @@ async fn test_nested_scope_inheritance() {
 
     // Global request intercept
     let og = order.clone();
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "global_intercept",
         1,
         false,
@@ -483,7 +483,7 @@ async fn test_nested_scope_inheritance() {
     .unwrap();
 
     // Push scope A with its own request intercept
-    let scope_a = nemo_flow_push_scope(
+    let scope_a = push_scope(
         "scope_a",
         ScopeType::Agent,
         None,
@@ -493,7 +493,7 @@ async fn test_nested_scope_inheritance() {
     )
     .unwrap();
     let oa = order.clone();
-    nemo_flow_scope_register_tool_request_intercept(
+    scope_register_tool_request_intercept(
         &scope_a.uuid,
         "a_intercept",
         5,
@@ -509,7 +509,7 @@ async fn test_nested_scope_inheritance() {
     .unwrap();
 
     // Push child scope B with its own request intercept
-    let scope_b = nemo_flow_push_scope(
+    let scope_b = push_scope(
         "scope_b",
         ScopeType::Function,
         Some(&scope_a),
@@ -519,7 +519,7 @@ async fn test_nested_scope_inheritance() {
     )
     .unwrap();
     let ob = order.clone();
-    nemo_flow_scope_register_tool_request_intercept(
+    scope_register_tool_request_intercept(
         &scope_b.uuid,
         "b_intercept",
         10,
@@ -536,7 +536,7 @@ async fn test_nested_scope_inheritance() {
 
     // Execute within scope B — should see global + scope_a + scope_b
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let result = nemo_flow_tool_call_execute(
+    let result = tool_call_execute(
         "tool",
         json!({}),
         func,
@@ -557,9 +557,9 @@ async fn test_nested_scope_inheritance() {
     assert_eq!(*recorded, vec!["global", "scope_a", "scope_b"]);
 
     // Cleanup
-    nemo_flow_pop_scope(&scope_b.uuid).unwrap();
-    nemo_flow_pop_scope(&scope_a.uuid).unwrap();
-    nemo_flow_deregister_tool_request_intercept("global_intercept").unwrap();
+    pop_scope(&scope_b.uuid).unwrap();
+    pop_scope(&scope_a.uuid).unwrap();
+    deregister_tool_request_intercept("global_intercept").unwrap();
 }
 
 // -----------------------------------------------------------------------
@@ -577,7 +577,7 @@ fn test_scope_local_subscriber() {
 
     let events = Arc::new(Mutex::new(Vec::<String>::new()));
     let ec = events.clone();
-    nemo_flow_scope_register_subscriber(
+    scope_register_subscriber(
         &handle.uuid,
         "local_sub",
         Arc::new(move |e: &Event| {
@@ -587,7 +587,7 @@ fn test_scope_local_subscriber() {
     .unwrap();
 
     // Push a child scope — this emits a Start event
-    let child = nemo_flow_push_scope(
+    let child = push_scope(
         "child",
         ScopeType::Function,
         Some(&handle),
@@ -598,7 +598,7 @@ fn test_scope_local_subscriber() {
     .unwrap();
 
     // Pop the child — emits End event
-    nemo_flow_pop_scope(&child.uuid).unwrap();
+    pop_scope(&child.uuid).unwrap();
 
     {
         let captured = events.lock().unwrap();
@@ -610,7 +610,7 @@ fn test_scope_local_subscriber() {
     // Pop the scope that owns the subscriber.
     // The End event for this scope is emitted *before* removal, so the
     // scope-local subscriber sees its own scope's End event as well.
-    nemo_flow_pop_scope(&handle.uuid).unwrap();
+    pop_scope(&handle.uuid).unwrap();
 
     {
         let captured = events.lock().unwrap();
@@ -620,7 +620,7 @@ fn test_scope_local_subscriber() {
     }
 
     // After pop, push another scope — the subscriber should NOT fire
-    let another = nemo_flow_push_scope(
+    let another = push_scope(
         "after_pop",
         ScopeType::Function,
         None,
@@ -629,7 +629,7 @@ fn test_scope_local_subscriber() {
         None,
     )
     .unwrap();
-    nemo_flow_pop_scope(&another.uuid).unwrap();
+    pop_scope(&another.uuid).unwrap();
 
     let captured2 = events.lock().unwrap();
     // Still only 3 events (the subscriber was cleaned up with the scope)
@@ -650,7 +650,7 @@ async fn test_scope_local_conditional_execution_guardrail() {
     let handle = setup_isolated_scope("cond_scope");
 
     // Register a scope-local conditional guardrail that rejects "banned_tool"
-    nemo_flow_scope_register_tool_conditional_execution_guardrail(
+    scope_register_tool_conditional_execution_guardrail(
         &handle.uuid,
         "tool_blocker",
         1,
@@ -666,7 +666,7 @@ async fn test_scope_local_conditional_execution_guardrail() {
 
     // Call to banned_tool should be rejected
     let func_banned: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let err = nemo_flow_tool_call_execute(
+    let err = tool_call_execute(
         "banned_tool",
         json!({"input": 1}),
         func_banned,
@@ -687,7 +687,7 @@ async fn test_scope_local_conditional_execution_guardrail() {
 
     // Call to a different tool should succeed
     let func_ok: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let result = nemo_flow_tool_call_execute(
+    let result = tool_call_execute(
         "allowed_tool",
         json!({"input": 2}),
         func_ok,
@@ -701,5 +701,5 @@ async fn test_scope_local_conditional_execution_guardrail() {
 
     assert_eq!(result["input"], 2);
 
-    nemo_flow_pop_scope(&handle.uuid).unwrap();
+    pop_scope(&handle.uuid).unwrap();
 }

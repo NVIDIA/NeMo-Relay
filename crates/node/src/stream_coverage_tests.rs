@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use nemo_flow_core::FlowError;
+use nemo_flow::FlowError;
 use serde_json::json;
 
 #[test]

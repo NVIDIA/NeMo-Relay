@@ -12,9 +12,7 @@ name = "nemo_flow_wasm"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-nemo-flow-core = { path = "../core" }
-nemo-flow-openinference = { path = "../openinference" }
-nemo-flow-otel = { path = "../otel" }
+nemo-flow = { path = "../core" }
 nemo-flow-adaptive = { path = "../adaptive" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

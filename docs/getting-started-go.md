@@ -70,9 +70,12 @@ Save the example as `main.go` outside `go/nemo_flow/`, then run it with the
 FFI library on the loader path:
 
 ```bash
-CGO_LDFLAGS="-L$(pwd)/target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}$(pwd)/target/release" \
+CGO_LDFLAGS="-L$(pwd)/target/release" \
+LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}$(pwd)/target/release" \
 go run ./main.go
 ```
+
+On macOS, use `DYLD_LIBRARY_PATH` instead of `LD_LIBRARY_PATH`.
 
 ## Minimal LLM Execution
 
@@ -101,7 +104,7 @@ response, err := nemo_flow.LlmCallExecute(
 
 - Dynamic library not found
   Rebuild the FFI crate and make sure `LD_LIBRARY_PATH` includes
-  `target/release`.
+  `target/release` on Linux, or `DYLD_LIBRARY_PATH` on macOS.
 - Concurrent server integration confusion
   Read [Context Isolation](context-isolation.md) before integrating with
   goroutines or worker pools.

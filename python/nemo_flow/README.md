@@ -89,21 +89,29 @@ report = await plugin.initialize(
 assert report["diagnostics"] == []
 ```
 
-## Hosted Plugins
+## Plugins
 
-Python hosted plugins register a handler object first, then enable themselves
+Python custom plugins register a plugin object first, then enable themselves
 as top-level plugin components in `nemo_flow.plugin.initialize(...)`.
 
 ```python
-from nemo_flow import LLMRequest
+from nemo_flow import AnnotatedLLMRequest, JsonObject, LLMRequest
 from nemo_flow import plugin
 
-class HeaderPlugin:
-    def validate(self, plugin_config):
+class HeaderPlugin(plugin.Plugin):
+    def validate(self, plugin_config: JsonObject) -> list[plugin.ConfigDiagnostic]:
         return []
 
-    def register(self, plugin_config, context):
-        def intercept(_name, request, annotated):
+    def register(
+        self,
+        plugin_config: JsonObject,
+        context: plugin.PluginContext,
+    ) -> None:
+        def intercept(
+            _name: str,
+            request: LLMRequest,
+            annotated: AnnotatedLLMRequest | None,
+        ) -> tuple[LLMRequest, AnnotatedLLMRequest | None]:
             headers = dict(request.headers)
             headers["x-plugin"] = "enabled"
             return LLMRequest(headers, request.content), annotated
@@ -126,7 +134,7 @@ await plugin.initialize(
 )
 ```
 
-`context` exposes:
+`plugin.PluginContext` exposes:
 
 - `register_subscriber(...)`
 - `register_llm_request_intercept(...)`

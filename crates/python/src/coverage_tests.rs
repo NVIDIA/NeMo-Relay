@@ -20,8 +20,8 @@ use crate::py_callable::{
     wrap_py_llm_stream_exec_intercept_fn, wrap_py_tool_conditional_fn, wrap_py_tool_exec_fn,
     wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn, wrap_py_tool_request_intercept_fn,
 };
-use nemo_flow_core::types::{Event, LLMRequest, ToolAttributes};
-use nemo_flow_core::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_flow::types::{Event, LLMRequest, ToolAttributes};
+use nemo_flow::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
 
 fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     let code = CString::new(code).unwrap();
@@ -64,7 +64,7 @@ fn test_native_module_registers_types_and_api_functions() {
         assert!(module.getattr("ScopeStack").is_ok());
         assert!(module.getattr("AtifExporter").is_ok());
         assert!(module.getattr("create_scope_stack").is_ok());
-        assert!(module.getattr("nemo_flow_llm_stream_call_execute").is_ok());
+        assert!(module.getattr("llm_stream_call_execute").is_ok());
     });
 }
 
@@ -148,69 +148,69 @@ fn test_register_exposes_all_native_api_functions() {
             "set_thread_scope_stack",
             "sync_thread_scope_stack",
             "scope_stack_active",
-            "nemo_flow_get_handle",
-            "nemo_flow_push_scope",
-            "nemo_flow_pop_scope",
-            "nemo_flow_event",
-            "nemo_flow_tool_call",
-            "nemo_flow_tool_call_end",
-            "nemo_flow_tool_call_execute",
-            "nemo_flow_llm_call",
-            "nemo_flow_llm_call_end",
-            "nemo_flow_llm_call_execute",
-            "nemo_flow_llm_stream_call_execute",
-            "nemo_flow_register_tool_sanitize_request_guardrail",
-            "nemo_flow_deregister_tool_sanitize_request_guardrail",
-            "nemo_flow_register_tool_sanitize_response_guardrail",
-            "nemo_flow_deregister_tool_sanitize_response_guardrail",
-            "nemo_flow_register_tool_conditional_execution_guardrail",
-            "nemo_flow_deregister_tool_conditional_execution_guardrail",
-            "nemo_flow_register_tool_request_intercept",
-            "nemo_flow_deregister_tool_request_intercept",
-            "nemo_flow_register_tool_execution_intercept",
-            "nemo_flow_deregister_tool_execution_intercept",
-            "nemo_flow_register_llm_sanitize_request_guardrail",
-            "nemo_flow_deregister_llm_sanitize_request_guardrail",
-            "nemo_flow_register_llm_sanitize_response_guardrail",
-            "nemo_flow_deregister_llm_sanitize_response_guardrail",
-            "nemo_flow_register_llm_conditional_execution_guardrail",
-            "nemo_flow_deregister_llm_conditional_execution_guardrail",
-            "nemo_flow_register_llm_request_intercept",
-            "nemo_flow_deregister_llm_request_intercept",
-            "nemo_flow_register_llm_execution_intercept",
-            "nemo_flow_deregister_llm_execution_intercept",
-            "nemo_flow_register_llm_stream_execution_intercept",
-            "nemo_flow_deregister_llm_stream_execution_intercept",
-            "nemo_flow_register_subscriber",
-            "nemo_flow_deregister_subscriber",
-            "nemo_flow_scope_register_tool_sanitize_request_guardrail",
-            "nemo_flow_scope_deregister_tool_sanitize_request_guardrail",
-            "nemo_flow_scope_register_tool_sanitize_response_guardrail",
-            "nemo_flow_scope_deregister_tool_sanitize_response_guardrail",
-            "nemo_flow_scope_register_tool_conditional_execution_guardrail",
-            "nemo_flow_scope_deregister_tool_conditional_execution_guardrail",
-            "nemo_flow_scope_register_tool_request_intercept",
-            "nemo_flow_scope_deregister_tool_request_intercept",
-            "nemo_flow_scope_register_tool_execution_intercept",
-            "nemo_flow_scope_deregister_tool_execution_intercept",
-            "nemo_flow_scope_register_llm_sanitize_request_guardrail",
-            "nemo_flow_scope_deregister_llm_sanitize_request_guardrail",
-            "nemo_flow_scope_register_llm_sanitize_response_guardrail",
-            "nemo_flow_scope_deregister_llm_sanitize_response_guardrail",
-            "nemo_flow_scope_register_llm_conditional_execution_guardrail",
-            "nemo_flow_scope_deregister_llm_conditional_execution_guardrail",
-            "nemo_flow_scope_register_llm_request_intercept",
-            "nemo_flow_scope_deregister_llm_request_intercept",
-            "nemo_flow_scope_register_llm_execution_intercept",
-            "nemo_flow_scope_deregister_llm_execution_intercept",
-            "nemo_flow_scope_register_llm_stream_execution_intercept",
-            "nemo_flow_scope_deregister_llm_stream_execution_intercept",
-            "nemo_flow_scope_register_subscriber",
-            "nemo_flow_scope_deregister_subscriber",
-            "nemo_flow_tool_request_intercepts",
-            "nemo_flow_tool_conditional_execution",
-            "nemo_flow_llm_request_intercepts",
-            "nemo_flow_llm_conditional_execution",
+            "get_handle",
+            "push_scope",
+            "pop_scope",
+            "event",
+            "tool_call",
+            "tool_call_end",
+            "tool_call_execute",
+            "llm_call",
+            "llm_call_end",
+            "llm_call_execute",
+            "llm_stream_call_execute",
+            "register_tool_sanitize_request_guardrail",
+            "deregister_tool_sanitize_request_guardrail",
+            "register_tool_sanitize_response_guardrail",
+            "deregister_tool_sanitize_response_guardrail",
+            "register_tool_conditional_execution_guardrail",
+            "deregister_tool_conditional_execution_guardrail",
+            "register_tool_request_intercept",
+            "deregister_tool_request_intercept",
+            "register_tool_execution_intercept",
+            "deregister_tool_execution_intercept",
+            "register_llm_sanitize_request_guardrail",
+            "deregister_llm_sanitize_request_guardrail",
+            "register_llm_sanitize_response_guardrail",
+            "deregister_llm_sanitize_response_guardrail",
+            "register_llm_conditional_execution_guardrail",
+            "deregister_llm_conditional_execution_guardrail",
+            "register_llm_request_intercept",
+            "deregister_llm_request_intercept",
+            "register_llm_execution_intercept",
+            "deregister_llm_execution_intercept",
+            "register_llm_stream_execution_intercept",
+            "deregister_llm_stream_execution_intercept",
+            "register_subscriber",
+            "deregister_subscriber",
+            "scope_register_tool_sanitize_request_guardrail",
+            "scope_deregister_tool_sanitize_request_guardrail",
+            "scope_register_tool_sanitize_response_guardrail",
+            "scope_deregister_tool_sanitize_response_guardrail",
+            "scope_register_tool_conditional_execution_guardrail",
+            "scope_deregister_tool_conditional_execution_guardrail",
+            "scope_register_tool_request_intercept",
+            "scope_deregister_tool_request_intercept",
+            "scope_register_tool_execution_intercept",
+            "scope_deregister_tool_execution_intercept",
+            "scope_register_llm_sanitize_request_guardrail",
+            "scope_deregister_llm_sanitize_request_guardrail",
+            "scope_register_llm_sanitize_response_guardrail",
+            "scope_deregister_llm_sanitize_response_guardrail",
+            "scope_register_llm_conditional_execution_guardrail",
+            "scope_deregister_llm_conditional_execution_guardrail",
+            "scope_register_llm_request_intercept",
+            "scope_deregister_llm_request_intercept",
+            "scope_register_llm_execution_intercept",
+            "scope_deregister_llm_execution_intercept",
+            "scope_register_llm_stream_execution_intercept",
+            "scope_deregister_llm_stream_execution_intercept",
+            "scope_register_subscriber",
+            "scope_deregister_subscriber",
+            "tool_request_intercepts",
+            "tool_conditional_execution",
+            "llm_request_intercepts",
+            "llm_conditional_execution",
         ];
 
         for name in expected {
@@ -665,7 +665,7 @@ async def llm_stream_intercept(request, next):
                         let chunks = vec![Ok(json!({"chunk": "a"})), Ok(json!({"chunk": "b"}))];
                         Ok(Box::pin(tokio_stream::iter(chunks))
                             as Pin<
-                                Box<dyn Stream<Item = nemo_flow_core::Result<Json>> + Send>,
+                                Box<dyn Stream<Item = nemo_flow::Result<Json>> + Send>,
                             >)
                     })
                 });
@@ -805,7 +805,7 @@ async def llm_stream_intercept_fail(request, next):
                         let chunks = vec![Ok(json!({"chunk": "downstream"}))];
                         Ok(Box::pin(tokio_stream::iter(chunks))
                             as Pin<
-                                Box<dyn Stream<Item = nemo_flow_core::Result<Json>> + Send>,
+                                Box<dyn Stream<Item = nemo_flow::Result<Json>> + Send>,
                             >)
                     })
                 });
@@ -824,7 +824,7 @@ async def llm_stream_intercept_fail(request, next):
                     Box::pin(async move {
                         Ok(Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": 1}))]))
                             as Pin<
-                                Box<dyn Stream<Item = nemo_flow_core::Result<Json>> + Send>,
+                                Box<dyn Stream<Item = nemo_flow::Result<Json>> + Send>,
                             >)
                     })
                 });

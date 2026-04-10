@@ -381,7 +381,7 @@ mod tests {
         let _lock = acquire_test_lock();
         reset_runtime_owner_for_tests();
 
-        let handle = api::nemo_flow_get_handle().unwrap();
+        let handle = api::get_handle().unwrap();
         assert_eq!(handle.name, "root");
 
         let owner = read_process_runtime_owner().unwrap().unwrap();
@@ -404,7 +404,7 @@ mod tests {
             )
         };
 
-        let error = api::nemo_flow_get_handle().unwrap_err();
+        let error = api::get_handle().unwrap_err();
         let message = error.to_string();
         assert!(message.contains("NeMo Flow does not support multiple bindings in one process"));
         assert!(message.contains("existing owner=python@"));

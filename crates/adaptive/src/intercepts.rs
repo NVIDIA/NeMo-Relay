@@ -20,7 +20,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-use nemo_flow_core::{Json, ToolExecutionFn, ToolExecutionNextFn};
+use nemo_flow::{Json, ToolExecutionFn, ToolExecutionNextFn};
 
 use crate::types::HotCache;
 
@@ -46,7 +46,7 @@ pub const AGENT_HINTS_HEADER_KEY: &str = "x-nemo-flow-adaptive-agent-hints";
 ///
 /// An [`Arc`]-wrapped closure matching [`ToolExecutionFn`] that can be registered
 /// with the NeMo Flow runtime via
-/// [`nemo_flow_register_tool_execution_intercept`](nemo_flow_core::nemo_flow_register_tool_execution_intercept).
+/// [`register_tool_execution_intercept`](nemo_flow::register_tool_execution_intercept).
 pub(crate) fn create_tool_execution_intercept(hot_cache: Arc<RwLock<HotCache>>) -> ToolExecutionFn {
     Arc::new(move |_name: &str, args: Json, next: ToolExecutionNextFn| {
         let cache = hot_cache.clone();
@@ -67,7 +67,7 @@ pub(crate) fn create_tool_execution_intercept(hot_cache: Arc<RwLock<HotCache>>) 
             }
             // Always continue the middleware chain in v1
             next(args).await
-        }) as Pin<Box<dyn Future<Output = nemo_flow_core::Result<Json>> + Send>>
+        }) as Pin<Box<dyn Future<Output = nemo_flow::Result<Json>> + Send>>
     })
 }
 

@@ -5,7 +5,7 @@
 //!
 //! This module owns:
 //! - config diagnostics and policy enums used by plugin hosts
-//! - a global plugin handler registry
+//! - a global plugin registry
 //! - plugin registration contexts for middleware/subscriber installation
 //! - rollback bookkeeping for registrations created during plugin setup
 
@@ -20,19 +20,19 @@ use serde_json::{Map, Value as Json};
 use thiserror::Error;
 
 use crate::api::{
-    nemo_flow_deregister_llm_execution_intercept, nemo_flow_deregister_llm_request_intercept,
-    nemo_flow_deregister_llm_stream_execution_intercept, nemo_flow_deregister_subscriber,
-    nemo_flow_deregister_tool_execution_intercept, nemo_flow_deregister_tool_request_intercept,
-    nemo_flow_register_llm_execution_intercept, nemo_flow_register_llm_request_intercept,
-    nemo_flow_register_llm_stream_execution_intercept, nemo_flow_register_subscriber,
-    nemo_flow_register_tool_execution_intercept, nemo_flow_register_tool_request_intercept,
+    deregister_llm_execution_intercept, deregister_llm_request_intercept,
+    deregister_llm_stream_execution_intercept, deregister_subscriber,
+    deregister_tool_execution_intercept, deregister_tool_request_intercept,
+    register_llm_execution_intercept, register_llm_request_intercept,
+    register_llm_stream_execution_intercept, register_subscriber,
+    register_tool_execution_intercept, register_tool_request_intercept,
 };
 use crate::context::{
     EventSubscriberFn, LlmExecutionFn, LlmRequestInterceptFn, LlmStreamExecutionFn,
     ToolExecutionFn, ToolInterceptFn,
 };
 
-type PluginMap = HashMap<String, Arc<dyn PluginHandler>>;
+type PluginMap = HashMap<String, Arc<dyn Plugin>>;
 
 static PLUGIN_HANDLERS: LazyLock<RwLock<PluginMap>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 static ACTIVE_PLUGIN_CONFIGURATION: LazyLock<Mutex<Option<ActivePluginConfiguration>>> =
@@ -100,7 +100,7 @@ pub struct PluginComponentSpec {
     /// registration.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    /// Component-local JSON config object passed to the plugin handler.
+    /// Component-local JSON config object passed to the plugin.
     #[serde(default)]
     pub config: Map<String, Json>,
 }
@@ -163,7 +163,7 @@ pub enum DiagnosticLevel {
 /// Policy for how unsupported plugin/runtime config is handled.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct ConfigPolicy {
-    /// Policy applied when a component kind is unknown to the handler registry.
+    /// Policy applied when a component kind is unknown to the plugin registry.
     #[serde(default = "default_warn")]
     pub unknown_component: UnsupportedBehavior,
     /// Policy applied when a known component contains an unknown field.
@@ -276,7 +276,7 @@ impl PluginRegistrationContext {
     /// Registers an event subscriber and records its rollback closure.
     pub fn register_subscriber(&mut self, name: &str, callback: EventSubscriberFn) -> Result<()> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_register_subscriber(&qualified_name, callback)
+        register_subscriber(&qualified_name, callback)
             .map_err(|err| PluginError::RegistrationFailed(format!("subscriber: {err}")))?;
 
         let name_owned = qualified_name;
@@ -284,7 +284,7 @@ impl PluginRegistrationContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_deregister_subscriber(&name_owned)
+                deregister_subscriber(&name_owned)
                     .map(|_| ())
                     .map_err(|err| {
                         PluginError::RegistrationFailed(format!(
@@ -305,17 +305,16 @@ impl PluginRegistrationContext {
         callback: LlmRequestInterceptFn,
     ) -> Result<()> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_register_llm_request_intercept(&qualified_name, priority, break_chain, callback)
-            .map_err(|err| {
-                PluginError::RegistrationFailed(format!("llm request intercept: {err}"))
-            })?;
+        register_llm_request_intercept(&qualified_name, priority, break_chain, callback).map_err(
+            |err| PluginError::RegistrationFailed(format!("llm request intercept: {err}")),
+        )?;
 
         let name_owned = qualified_name;
         self.registrations.push(PluginRegistration::new(
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_deregister_llm_request_intercept(&name_owned)
+                deregister_llm_request_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|err| {
                         PluginError::RegistrationFailed(format!(
@@ -335,16 +334,16 @@ impl PluginRegistrationContext {
         callback: LlmExecutionFn,
     ) -> Result<()> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_register_llm_execution_intercept(&qualified_name, priority, callback).map_err(
-            |err| PluginError::RegistrationFailed(format!("llm execution intercept: {err}")),
-        )?;
+        register_llm_execution_intercept(&qualified_name, priority, callback).map_err(|err| {
+            PluginError::RegistrationFailed(format!("llm execution intercept: {err}"))
+        })?;
 
         let name_owned = qualified_name;
         self.registrations.push(PluginRegistration::new(
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_deregister_llm_execution_intercept(&name_owned)
+                deregister_llm_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|err| {
                         PluginError::RegistrationFailed(format!(
@@ -364,17 +363,16 @@ impl PluginRegistrationContext {
         callback: LlmStreamExecutionFn,
     ) -> Result<()> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_register_llm_stream_execution_intercept(&qualified_name, priority, callback)
-            .map_err(|err| {
-                PluginError::RegistrationFailed(format!("llm stream execution intercept: {err}"))
-            })?;
+        register_llm_stream_execution_intercept(&qualified_name, priority, callback).map_err(
+            |err| PluginError::RegistrationFailed(format!("llm stream execution intercept: {err}")),
+        )?;
 
         let name_owned = qualified_name;
         self.registrations.push(PluginRegistration::new(
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_deregister_llm_stream_execution_intercept(&name_owned)
+                deregister_llm_stream_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|err| {
                         PluginError::RegistrationFailed(format!(
@@ -395,17 +393,16 @@ impl PluginRegistrationContext {
         callback: ToolInterceptFn,
     ) -> Result<()> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_register_tool_request_intercept(&qualified_name, priority, break_chain, callback)
-            .map_err(|err| {
-                PluginError::RegistrationFailed(format!("tool request intercept: {err}"))
-            })?;
+        register_tool_request_intercept(&qualified_name, priority, break_chain, callback).map_err(
+            |err| PluginError::RegistrationFailed(format!("tool request intercept: {err}")),
+        )?;
 
         let name_owned = qualified_name;
         self.registrations.push(PluginRegistration::new(
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_deregister_tool_request_intercept(&name_owned)
+                deregister_tool_request_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|err| {
                         PluginError::RegistrationFailed(format!(
@@ -425,16 +422,16 @@ impl PluginRegistrationContext {
         callback: ToolExecutionFn,
     ) -> Result<()> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_register_tool_execution_intercept(&qualified_name, priority, callback).map_err(
-            |err| PluginError::RegistrationFailed(format!("tool execution intercept: {err}")),
-        )?;
+        register_tool_execution_intercept(&qualified_name, priority, callback).map_err(|err| {
+            PluginError::RegistrationFailed(format!("tool execution intercept: {err}"))
+        })?;
 
         let name_owned = qualified_name;
         self.registrations.push(PluginRegistration::new(
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_deregister_tool_execution_intercept(&name_owned)
+                deregister_tool_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|err| {
                         PluginError::RegistrationFailed(format!(
@@ -462,8 +459,8 @@ impl PluginRegistrationContext {
     }
 }
 
-/// Implemented by hosted plugins that register runtime middleware.
-pub trait PluginHandler: Send + Sync + 'static {
+/// Implemented by custom plugins that register runtime middleware.
+pub trait Plugin: Send + Sync + 'static {
     /// Returns the unique plugin kind string.
     fn plugin_kind(&self) -> &str;
 
@@ -493,29 +490,28 @@ pub trait PluginHandler: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 }
 
-/// Registers a plugin handler by kind.
+/// Registers a plugin by kind.
 ///
-/// Registering the same kind twice returns
-/// [`PluginError::RegistrationFailed`].
-pub fn register_plugin_handler(handler: Arc<dyn PluginHandler>) -> Result<()> {
+/// Registering the same kind twice returns [`PluginError::RegistrationFailed`].
+pub fn register_plugin(plugin: Arc<dyn Plugin>) -> Result<()> {
     let mut guard = PLUGIN_HANDLERS
         .write()
         .map_err(|err| PluginError::Internal(format!("plugin registry lock poisoned: {err}")))?;
-    let plugin_kind = handler.plugin_kind().to_string();
+    let plugin_kind = plugin.plugin_kind().to_string();
     if guard.contains_key(&plugin_kind) {
         return Err(PluginError::RegistrationFailed(format!(
-            "plugin handler '{plugin_kind}' is already registered"
+            "plugin '{plugin_kind}' is already registered"
         )));
     }
-    guard.insert(plugin_kind, handler);
+    guard.insert(plugin_kind, plugin);
     Ok(())
 }
 
-/// Removes a previously registered plugin handler.
+/// Removes a previously registered plugin.
 ///
 /// This affects future validation and initialization only. Active runtime
 /// registrations remain until cleared or replaced.
-pub fn deregister_plugin_handler(plugin_kind: &str) -> bool {
+pub fn deregister_plugin(plugin_kind: &str) -> bool {
     PLUGIN_HANDLERS
         .write()
         .ok()
@@ -533,8 +529,8 @@ pub fn list_plugin_kinds() -> Vec<String> {
     kinds
 }
 
-/// Looks up a registered plugin handler by kind.
-pub fn plugin_handler(plugin_kind: &str) -> Option<Arc<dyn PluginHandler>> {
+/// Looks up a registered plugin by kind.
+pub fn lookup_plugin(plugin_kind: &str) -> Option<Arc<dyn Plugin>> {
     PLUGIN_HANDLERS
         .read()
         .ok()
@@ -562,7 +558,7 @@ pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
     validate_plugin_multiplicity(&mut report, config);
 
     for component in &config.components {
-        let Some(handler) = plugin_handler(&component.kind) else {
+        let Some(plugin) = lookup_plugin(&component.kind) else {
             push_policy_diag(
                 &mut report.diagnostics,
                 config.policy.unknown_component,
@@ -575,7 +571,7 @@ pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
         };
         report
             .diagnostics
-            .extend(handler.validate(&component.config));
+            .extend(plugin.validate(&component.config));
     }
 
     report
@@ -683,7 +679,7 @@ async fn initialize_plugin_components(config: &PluginConfig) -> Result<Vec<Plugi
         .iter()
         .filter(|component| component.enabled)
     {
-        let Some(handler) = plugin_handler(&component.kind) else {
+        let Some(plugin) = lookup_plugin(&component.kind) else {
             rollback_registrations(&mut registrations);
             return Err(PluginError::NotFound(format!(
                 "plugin component '{}' is not registered",
@@ -702,7 +698,7 @@ async fn initialize_plugin_components(config: &PluginConfig) -> Result<Vec<Plugi
         );
 
         let mut ctx = PluginRegistrationContext::with_namespace(namespace);
-        if let Err(err) = handler.register(&component.config, &mut ctx).await {
+        if let Err(err) = plugin.register(&component.config, &mut ctx).await {
             let mut just_registered = ctx.into_registrations();
             rollback_registrations(&mut just_registered);
             rollback_registrations(&mut registrations);
@@ -759,8 +755,8 @@ fn validate_plugin_multiplicity(report: &mut ConfigReport, config: &PluginConfig
             continue;
         }
 
-        let allows_multiple = plugin_handler(&component.kind)
-            .map(|handler| handler.allows_multiple_components())
+        let allows_multiple = lookup_plugin(&component.kind)
+            .map(|plugin| plugin.allows_multiple_components())
             .unwrap_or(true);
         if !allows_multiple {
             report.diagnostics.push(ConfigDiagnostic {
@@ -817,9 +813,9 @@ mod tests {
 
     use serde_json::json;
 
-    use crate::{NemoFlowContextState, global_context, nemo_flow_llm_request_intercepts};
+    use crate::{NemoFlowContextState, global_context, llm_request_intercepts};
 
-    struct TestPluginHandler;
+    struct TestPlugin;
 
     static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -827,7 +823,7 @@ mod tests {
         TEST_MUTEX.get_or_init(|| Mutex::new(()))
     }
 
-    impl PluginHandler for TestPluginHandler {
+    impl Plugin for TestPlugin {
         fn plugin_kind(&self) -> &str {
             "test.plugin"
         }
@@ -866,7 +862,7 @@ mod tests {
         let mut state = ctx.write().unwrap();
         *state = NemoFlowContextState::new();
         clear_plugin_configuration().unwrap();
-        let _ = deregister_plugin_handler("test.plugin");
+        let _ = deregister_plugin("test.plugin");
     }
 
     #[test]
@@ -884,13 +880,13 @@ mod tests {
     }
 
     #[test]
-    fn test_register_and_deregister_plugin_handler() {
+    fn test_register_and_deregister_plugin() {
         let _guard = test_mutex().lock().unwrap();
         reset_global();
-        assert!(register_plugin_handler(Arc::new(TestPluginHandler)).is_ok());
+        assert!(register_plugin(Arc::new(TestPlugin)).is_ok());
         assert!(list_plugin_kinds().contains(&"test.plugin".to_string()));
-        assert!(plugin_handler("test.plugin").is_some());
-        assert!(deregister_plugin_handler("test.plugin"));
+        assert!(lookup_plugin("test.plugin").is_some());
+        assert!(deregister_plugin("test.plugin"));
     }
 
     #[test]
@@ -904,10 +900,10 @@ mod tests {
             .build()
             .unwrap();
         runtime
-            .block_on(TestPluginHandler.register(&Map::new(), &mut ctx))
+            .block_on(TestPlugin.register(&Map::new(), &mut ctx))
             .unwrap();
 
-        let request = nemo_flow_llm_request_intercepts(
+        let request = llm_request_intercepts(
             "model",
             crate::LLMRequest {
                 headers: Map::new(),
@@ -920,7 +916,7 @@ mod tests {
         let mut registrations = ctx.into_registrations();
         rollback_registrations(&mut registrations);
 
-        let request = nemo_flow_llm_request_intercepts(
+        let request = llm_request_intercepts(
             "model",
             crate::LLMRequest {
                 headers: Map::new(),
@@ -935,7 +931,7 @@ mod tests {
     fn test_initialize_plugins_registers_and_clears_components() {
         let _guard = test_mutex().lock().unwrap();
         reset_global();
-        register_plugin_handler(Arc::new(TestPluginHandler)).unwrap();
+        register_plugin(Arc::new(TestPlugin)).unwrap();
 
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -950,7 +946,7 @@ mod tests {
         assert!(!report.has_errors());
         assert!(active_plugin_report().is_some());
 
-        let request = nemo_flow_llm_request_intercepts(
+        let request = llm_request_intercepts(
             "model",
             crate::LLMRequest {
                 headers: Map::new(),
@@ -961,7 +957,7 @@ mod tests {
         assert_eq!(request.headers.get("x-plugin"), Some(&json!(true)));
 
         clear_plugin_configuration().unwrap();
-        let request = nemo_flow_llm_request_intercepts(
+        let request = llm_request_intercepts(
             "model",
             crate::LLMRequest {
                 headers: Map::new(),

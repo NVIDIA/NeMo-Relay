@@ -37,22 +37,22 @@ from nemo_flow._native import (
     LlmStream,
 )
 from nemo_flow._native import (
-    nemo_flow_llm_call as _native_llm_call,
+    llm_call as _native_llm_call,
 )
 from nemo_flow._native import (
-    nemo_flow_llm_call_end as _native_llm_call_end,
+    llm_call_end as _native_llm_call_end,
 )
 from nemo_flow._native import (
-    nemo_flow_llm_call_execute as _native_llm_call_execute,
+    llm_call_execute as _native_llm_call_execute,
 )
 from nemo_flow._native import (
-    nemo_flow_llm_conditional_execution as _native_llm_conditional_execution,
+    llm_conditional_execution as _native_llm_conditional_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_llm_request_intercepts as _native_llm_request_intercepts,
+    llm_request_intercepts as _native_llm_request_intercepts,
 )
 from nemo_flow._native import (
-    nemo_flow_llm_stream_call_execute as _native_llm_stream_call_execute,
+    llm_stream_call_execute as _native_llm_stream_call_execute,
 )
 
 if TYPE_CHECKING:

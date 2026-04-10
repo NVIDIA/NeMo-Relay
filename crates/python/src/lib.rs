@@ -13,7 +13,7 @@
 //!   `AtifExporter`, etc.). `Event` exposes typed lifecycle fields (`input`, `output`,
 //!   `model_name`, `tool_call_id`). `AtifExporter` collects events and
 //!   exports ATIF v1.6 trajectories.
-//! - `py_api` — Python-facing API functions (`nemo_flow_push_scope`, etc.). Tool calls
+//! - `py_api` — Python-facing API functions (`push_scope`, etc.). Tool calls
 //!   accept `tool_call_id` and LLM calls accept `model_name` for ATIF correlation.
 //! - `py_callable` — Bridges between Python callables and Rust callback types
 //! - `py_context` — Notes on scope propagation between sync/async contexts
@@ -35,7 +35,7 @@ mod py_types;
 /// The `_native` PyO3 module entry point. Registers all types and functions.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    nemo_flow_core::initialize_shared_runtime_binding("python").map_err(|e| {
+    nemo_flow::initialize_shared_runtime_binding("python").map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!(
             "failed to initialize NeMo Flow runtime ownership: {e}"
         ))

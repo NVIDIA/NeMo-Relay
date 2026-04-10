@@ -10,7 +10,7 @@ use std::sync::{LazyLock, Mutex};
 
 use serde_json::Value as Json;
 
-use nemo_flow_core::FlowError;
+use nemo_flow::FlowError;
 
 static LAST_CALLBACK_ERROR: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 

@@ -138,7 +138,7 @@ fn test_js_event_conversion_maps_all_fields() {
 
 #[test]
 fn test_event_and_scope_stack_conversions_cover_remaining_variants() {
-    let stack = JsScopeStack::from(nemo_flow_core::create_scope_stack());
+    let stack = JsScopeStack::from(nemo_flow::create_scope_stack());
     let _ = stack;
 
     let remaining_scope_types = [

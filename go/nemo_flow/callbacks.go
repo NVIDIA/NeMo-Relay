@@ -450,7 +450,7 @@ func goLlmRequestInterceptTrampoline(
 
 //export goPluginValidateTrampoline
 func goPluginValidateTrampoline(userData unsafe.Pointer, pluginConfigJSON *C.char) *C.char {
-	handler := lookupClosure(userData).(PluginHandler)
+	plugin := lookupClosure(userData).(Plugin)
 	var pluginConfig map[string]any
 	if pluginConfigJSON != nil {
 		if err := json.Unmarshal([]byte(C.GoString(pluginConfigJSON)), &pluginConfig); err != nil {
@@ -458,7 +458,7 @@ func goPluginValidateTrampoline(userData unsafe.Pointer, pluginConfigJSON *C.cha
 			return nil
 		}
 	}
-	diagnostics, err := handler.Validate(pluginConfig)
+	diagnostics, err := plugin.Validate(pluginConfig)
 	if err != nil {
 		setLastErrorMessage(err.Error())
 		return nil
@@ -476,7 +476,7 @@ func goPluginValidateTrampoline(userData unsafe.Pointer, pluginConfigJSON *C.cha
 
 //export goPluginRegisterTrampoline
 func goPluginRegisterTrampoline(userData unsafe.Pointer, pluginConfigJSON *C.char, ctx *C.FfiPluginContext) C.int32_t {
-	handler := lookupClosure(userData).(PluginHandler)
+	plugin := lookupClosure(userData).(Plugin)
 	var pluginConfig map[string]any
 	if pluginConfigJSON != nil {
 		if err := json.Unmarshal([]byte(C.GoString(pluginConfigJSON)), &pluginConfig); err != nil {
@@ -484,7 +484,7 @@ func goPluginRegisterTrampoline(userData unsafe.Pointer, pluginConfigJSON *C.cha
 			return 5
 		}
 	}
-	if err := handler.Register(pluginConfig, &PluginContext{ptr: ctx}); err != nil {
+	if err := plugin.Register(pluginConfig, &PluginContext{ptr: ctx}); err != nil {
 		setLastErrorMessage(err.Error())
 		return 5
 	}

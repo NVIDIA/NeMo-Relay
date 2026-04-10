@@ -22,19 +22,19 @@ Example:
 """
 
 from nemo_flow._native import (
-    nemo_flow_tool_call as _native_tool_call,
+    tool_call as _native_tool_call,
 )
 from nemo_flow._native import (
-    nemo_flow_tool_call_end as _native_tool_call_end,
+    tool_call_end as _native_tool_call_end,
 )
 from nemo_flow._native import (
-    nemo_flow_tool_call_execute as _native_tool_call_execute,
+    tool_call_execute as _native_tool_call_execute,
 )
 from nemo_flow._native import (
-    nemo_flow_tool_conditional_execution as _native_tool_conditional_execution,
+    tool_conditional_execution as _native_tool_conditional_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_tool_request_intercepts as _native_tool_request_intercepts,
+    tool_request_intercepts as _native_tool_request_intercepts,
 )
 
 

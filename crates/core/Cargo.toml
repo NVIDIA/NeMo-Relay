@@ -2,10 +2,40 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "nemo-flow-core"
+name = "nemo-flow"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[features]
+default = ["otel", "openinference"]
+otel = [
+    "dep:async-trait",
+    "dep:getrandom",
+    "dep:js-sys",
+    "dep:opentelemetry",
+    "dep:opentelemetry-http",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tonic",
+    "dep:web-sys",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+]
+openinference = [
+    "dep:async-trait",
+    "dep:getrandom",
+    "dep:js-sys",
+    "dep:openinference-semantic-conventions",
+    "dep:opentelemetry",
+    "dep:opentelemetry-http",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tonic",
+    "dep:web-sys",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+]
 
 [dependencies]
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -14,9 +44,28 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 bitflags = { version = "2", features = ["serde"] }
 thiserror = "2"
-tokio = { version = "1", features = ["rt", "macros", "sync"] }
-tokio-stream = "0.1"
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "sync"] }
+tokio-stream = { version = "0.1", default-features = false }
+opentelemetry = { version = "0.31", default-features = false, features = ["trace"], optional = true }
+opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"], optional = true }
+openinference-semantic-conventions = { version = "0.1.1", optional = true }
+async-trait = { version = "0.1", optional = true }
+getrandom = { version = "0.3.4", features = ["wasm_js"], optional = true }
+js-sys = { version = "0.3", optional = true }
+opentelemetry-http = { version = "0.31", default-features = false, optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", features = ["Headers", "Request", "RequestInit", "Response", "Window", "console"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-multi-thread"] }
 futures = "0.3"
+opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace", "testing"] }
+serde_json = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto"], optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "grpc-tonic"], optional = true }
+tonic = { version = "0.14.1", default-features = false, optional = true }
