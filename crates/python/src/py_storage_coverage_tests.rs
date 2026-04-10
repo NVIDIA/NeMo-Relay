@@ -9,10 +9,10 @@ use pyo3::types::PyModule;
 use serde_json::json;
 use uuid::Uuid;
 
-use nemo_flow_optimizer::storage::StorageBackendDyn;
-use nemo_flow_optimizer::trie::data_models::PredictionTrieNode;
-use nemo_flow_optimizer::trie::{AccumulatorState, NodeAccumulators, RunningStats};
-use nemo_flow_optimizer::types::{
+use nemo_flow_adaptive::storage::StorageBackendDyn;
+use nemo_flow_adaptive::trie::data_models::PredictionTrieNode;
+use nemo_flow_adaptive::trie::{AccumulatorState, NodeAccumulators, RunningStats};
+use nemo_flow_adaptive::types::{
     CallKind, CallRecord, ExecutionPlan, MetadataEnvelope, ParallelGroup, ParallelHint, RunRecord,
 };
 

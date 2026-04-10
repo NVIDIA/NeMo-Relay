@@ -13,7 +13,8 @@ const {
   typedLlmStreamExecute,
   JsonPassthrough,
 } = require('../typed.js');
-const optimizer = require('../optimizer.js');
+const adaptive = require('../adaptive.js');
+const plugin = require('../plugin.js');
 
 const { registerToolRequestIntercept, deregisterToolRequestIntercept } = lib;
 
@@ -59,40 +60,42 @@ describe('JsonPassthrough', () => {
   });
 });
 
-describe('optimizer typed helpers', () => {
-  it('keeps optimizer helpers out of typed.js', () => {
-    assert.equal('defaultOptimizerConfig' in require('../typed.js'), false);
-    assert.equal(typeof optimizer.defaultConfig, 'function');
+describe('adaptive typed helpers', () => {
+  it('keeps adaptive helpers out of typed.js', () => {
+    assert.equal('defaultAdaptiveConfig' in require('../typed.js'), false);
+    assert.equal(typeof adaptive.defaultConfig, 'function');
   });
 
-  it('build default optimizer config and components', () => {
-    const config = optimizer.defaultConfig();
-    config.state = { backend: optimizer.inMemoryBackend() };
-    config.components = [
-      optimizer.telemetryComponent({ learners: ['latency_sensitivity'] }),
-      optimizer.dynamoHintsComponent(),
-      optimizer.toolParallelismComponent(),
-    ];
+  it('build default adaptive config and components', () => {
+    const config = adaptive.defaultConfig();
+    config.state = { backend: adaptive.inMemoryBackend() };
+    config.telemetry = adaptive.telemetryConfig({ learners: ['latency_sensitivity'] });
+    config.adaptive_hints = adaptive.adaptiveHintsConfig();
+    config.tool_parallelism = adaptive.toolParallelismConfig();
 
-    const report = optimizer.validateConfig(config);
+    const report = plugin.validate({
+      version: 1,
+      components: [adaptive.ComponentSpec(config)],
+    });
     assert.deepEqual(report.diagnostics, []);
   });
 
-  it('runs optimizer runtime lifecycle from JS', async () => {
-    const runtime = new optimizer.Runtime({
+  it('configures adaptive through the core plugin host', async () => {
+    const report = await plugin.initialize({
       version: 1,
-      state: { backend: optimizer.inMemoryBackend() },
       components: [
-        optimizer.telemetryComponent({ learners: ['latency_sensitivity'] }),
-        optimizer.dynamoHintsComponent(),
-        optimizer.toolParallelismComponent(),
+        adaptive.ComponentSpec({
+          version: 1,
+          state: { backend: adaptive.inMemoryBackend() },
+          telemetry: adaptive.telemetryConfig({ learners: ['latency_sensitivity'] }),
+          adaptive_hints: adaptive.adaptiveHintsConfig(),
+          tool_parallelism: adaptive.toolParallelismConfig(),
+        }),
       ],
     });
 
-    assert.deepEqual((await runtime.report()).diagnostics, []);
-    await runtime.register();
-    await runtime.deregister();
-    await runtime.shutdown();
+    assert.deepEqual(report.diagnostics, []);
+    plugin.clear();
   });
 });
 

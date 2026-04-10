@@ -140,30 +140,33 @@ asyncio.run(main())
 Use this when you want middleware to stay JSON-based while application code
 works with dataclasses or Pydantic models.
 
-## Enable Optimizer Runtime with In-Memory State
+## Enable Adaptive with In-Memory State
 
 ```python
 import asyncio
 
 import nemo_flow
+from nemo_flow import adaptive, plugin
 
 
 async def main() -> None:
-    runtime = nemo_flow.optimizer.OptimizerRuntime(
-        nemo_flow.optimizer.OptimizerConfig(
-            state=nemo_flow.optimizer.StateConfig(
-                backend=nemo_flow.optimizer.BackendSpec.in_memory()
-            ),
-            components=[
-                nemo_flow.optimizer.TelemetryComponent(
-                    learners=["latency_sensitivity"]
-                ),
-                nemo_flow.optimizer.DynamoHintsComponent(),
-                nemo_flow.optimizer.ToolParallelismComponent(),
-            ],
-        )
+    config = plugin.PluginConfig(
+        components=[
+            adaptive.ComponentSpec(
+                adaptive.AdaptiveConfig(
+                    state=adaptive.StateConfig(
+                        backend=adaptive.BackendSpec.in_memory()
+                    ),
+                    telemetry=adaptive.TelemetryConfig(
+                        learners=["latency_sensitivity"]
+                    ),
+                    adaptive_hints=adaptive.AdaptiveHintsConfig(),
+                    tool_parallelism=adaptive.ToolParallelismConfig(),
+                )
+            )
+        ]
     )
-    await runtime.register()
+    await plugin.initialize(config)
 
 
 asyncio.run(main())
@@ -171,40 +174,43 @@ asyncio.run(main())
 
 Use this for local development, tests, and single-process runs.
 
-## Enable Optimizer Runtime with Redis State
+## Enable Adaptive with Redis State
 
 ```python
 import asyncio
 
 import nemo_flow
+from nemo_flow import adaptive, plugin
 
 
 async def main() -> None:
-    runtime = nemo_flow.optimizer.OptimizerRuntime(
-        nemo_flow.optimizer.OptimizerConfig(
-            state=nemo_flow.optimizer.StateConfig(
-                backend=nemo_flow.optimizer.BackendSpec.redis(
-                    "redis://127.0.0.1:6379",
-                    "nemo_flow:",
+    config = plugin.PluginConfig(
+        components=[
+            adaptive.ComponentSpec(
+                adaptive.AdaptiveConfig(
+                    state=adaptive.StateConfig(
+                        backend=adaptive.BackendSpec.redis(
+                            "redis://127.0.0.1:6379",
+                            "nemo_flow:",
+                        )
+                    ),
+                    telemetry=adaptive.TelemetryConfig(
+                        learners=["latency_sensitivity"]
+                    ),
+                    adaptive_hints=adaptive.AdaptiveHintsConfig(),
+                    tool_parallelism=adaptive.ToolParallelismConfig(),
                 )
-            ),
-            components=[
-                nemo_flow.optimizer.TelemetryComponent(
-                    learners=["latency_sensitivity"]
-                ),
-                nemo_flow.optimizer.DynamoHintsComponent(),
-                nemo_flow.optimizer.ToolParallelismComponent(),
-            ],
-        )
+            )
+        ]
     )
-    await runtime.register()
+    await plugin.initialize(config)
 
 
 asyncio.run(main())
 ```
 
 This requires Redis support in the underlying build. See
-[Optimizer Layer](optimizer-layer.md) and [Optimizer API Reference](optimizer-api-reference.md)
+[Adaptive Layer](adaptive-layer.md) and [Adaptive API Reference](adaptive-api-reference.md)
 for the feature-flagged build requirements.
 
 ## Propagate Scope Context to Worker Threads
@@ -250,7 +256,7 @@ Checklist:
 
 - [Getting Started: Python](getting-started-python.md)
 - [Typed API Reference](typed-api-reference.md)
-- [Optimizer API Reference](optimizer-api-reference.md)
+- [Adaptive API Reference](adaptive-api-reference.md)
 - [Context Isolation](context-isolation.md)
 - [Observability with OpenTelemetry](observability-with-opentelemetry.md)
 - [Observability with OpenInference](observability-with-openinference.md)

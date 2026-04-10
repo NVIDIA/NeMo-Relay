@@ -5,10 +5,10 @@ SPDX-License-Identifier: Apache-2.0
 
 # Online Learning Engine
 
-The online learning engine observes agent executions in real-time, builds statistical models of each node's behavior, and produces predictions for future calls. It operates entirely within the optimizer runtime's telemetry pipeline -- no separate service or batch job is required.
+The online learning engine observes agent executions in real-time, builds statistical models of each node's behavior, and produces predictions for future calls. It operates entirely within the adaptive plugin's telemetry pipeline -- no separate service or batch job is required.
 
-The implementation lives in the `nemo-flow-optimizer` crate. Redis-backed
-persistence is optional and depends on enabling the optimizer crate's
+The implementation lives in the `nemo-flow-adaptive` crate. Redis-backed
+persistence is optional and depends on enabling the adaptive crate's
 `redis-backend` feature.
 
 ## Overview
@@ -59,7 +59,7 @@ The engine learns from the agent's actual execution patterns, not from static co
 
 ### Drain Task
 
-The drain task is an async background task spawned by `OptimizerRuntime::register()` when the telemetry component is enabled. It reads events from the unbounded mpsc channel, constructs `RunRecord`s from event pairs (Start/End), and invokes the learner pipeline after each completed run. The task exits cleanly when the channel sender is dropped (optimizer shutting down).
+The drain task is an async background task spawned when the adaptive component is configured with `telemetry` enabled. It reads events from the unbounded mpsc channel, constructs `RunRecord`s from event pairs (Start/End), and invokes the learner pipeline after each completed run. The task exits cleanly when the adaptive component is deregistered.
 
 ### RunRecord
 
@@ -182,7 +182,7 @@ config = nemo_flow.SensitivityConfig(
 ```
 
 ```rust
-use nemo_flow_optimizer::trie::SensitivityConfig;
+use nemo_flow_adaptive::trie::SensitivityConfig;
 
 let config = SensitivityConfig {
     sensitivity_scale: 5,
@@ -230,7 +230,7 @@ After 4-8 observed runs, the sensitivity scores converge to stable values that r
 The builder takes accumulated stats, computes sensitivity scores, and builds the `PredictionTrieNode` tree:
 
 ```rust
-use nemo_flow_optimizer::trie::PredictionTrieBuilder;
+use nemo_flow_adaptive::trie::PredictionTrieBuilder;
 
 // From scratch
 let mut builder = PredictionTrieBuilder::new(Some(SensitivityConfig::default()));
@@ -260,7 +260,7 @@ The lookup provides a three-level fallback chain for fast hot-path reads:
 5. `None` if the trie has no predictions at all
 
 ```rust
-use nemo_flow_optimizer::trie::lookup::PredictionTrieLookup;
+use nemo_flow_adaptive::trie::lookup::PredictionTrieLookup;
 
 let lookup = PredictionTrieLookup::new(&trie_root);
 let path = vec!["classify".to_string()];
@@ -293,13 +293,13 @@ The default backend. Zero-config, single-process only.
 - **Thread safety:** Uses `std::sync::RwLock` internally (fast for in-memory operations)
 
 ```python
-state = nemo_flow.optimizer.StateConfig(
-    backend=nemo_flow.optimizer.BackendSpec.in_memory()
+state = nemo_flow.adaptive.StateConfig(
+    backend=nemo_flow.adaptive.BackendSpec.in_memory()
 )
 ```
 
 ```rust
-use nemo_flow_optimizer::{BackendSpec, StateConfig};
+use nemo_flow_adaptive::{BackendSpec, StateConfig};
 
 let state = StateConfig {
     backend: BackendSpec::in_memory(),
@@ -316,13 +316,13 @@ Cross-process shared state with automatic reconnection.
 - **Feature gate:** Requires `redis-backend` Cargo feature
 
 ```python
-state = nemo_flow.optimizer.StateConfig(
-    backend=nemo_flow.optimizer.BackendSpec.redis("redis://localhost:6379", "nemo_flow:")
+state = nemo_flow.adaptive.StateConfig(
+    backend=nemo_flow.adaptive.BackendSpec.redis("redis://localhost:6379", "nemo_flow:")
 )
 ```
 
 ```rust
-use nemo_flow_optimizer::{BackendSpec, StateConfig};
+use nemo_flow_adaptive::{BackendSpec, StateConfig};
 
 let state = StateConfig {
     backend: BackendSpec::redis("redis://localhost:6379", "nemo_flow:"),
@@ -348,10 +348,10 @@ Run records are stored individually and indexed via a Redis LIST for ordered ret
 The `Learner` trait is object-safe and designed for pipeline composition:
 
 ```rust
-use nemo_flow_optimizer::learner::Learner;
-use nemo_flow_optimizer::storage::StorageBackendDyn;
-use nemo_flow_optimizer::types::{HotCache, RunRecord};
-use nemo_flow_optimizer::error::Result;
+use nemo_flow_adaptive::learner::Learner;
+use nemo_flow_adaptive::storage::StorageBackendDyn;
+use nemo_flow_adaptive::types::{HotCache, RunRecord};
+use nemo_flow_adaptive::error::Result;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
@@ -417,6 +417,6 @@ The key validation: after 6+ runs, `classify_sensitivity > mean(parallel_branch_
 
 ## Cross-References
 
-- [Optimizer Layer](optimizer-layer.md) -- dynamic optimizer config, built-in components, and runtime lifecycle
+- [Adaptive Layer](adaptive-layer.md) -- dynamic adaptive config, flat adaptive sections, and plugin-host integration
 - [Middleware Pipeline](middleware-pipeline.md) -- How intercepts are ordered and executed
 - [Context Isolation](context-isolation.md) -- Scope stack and `resolve_agent_id()` for multi-tenant isolation

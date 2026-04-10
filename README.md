@@ -49,8 +49,8 @@ For complete quick-start examples in all supported languages, see the [Language 
 - **Node.js users** -- start with [Getting Started: Node.js](docs/getting-started-node.md), then read [Language Bindings](docs/language-bindings.md).
 - **Go users** -- start with [Getting Started: Go](docs/getting-started-go.md), then read [Language Bindings](docs/language-bindings.md).
 - **WASM users** -- start with [Getting Started: WebAssembly](docs/getting-started-wasm.md), then read [Language Bindings](docs/language-bindings.md).
-- **Optimizer users** -- start with [Optimizer Layer](docs/optimizer-layer.md) and [Online Learning Engine](docs/online-learning-engine.md).
-- **Optimizer plugin authors** -- start with [Optimizer Layer](docs/optimizer-layer.md), [Optimizer API Reference](docs/optimizer-api-reference.md), and [Language Bindings](docs/language-bindings.md).
+- **Adaptive users** -- start with [Adaptive Layer](docs/adaptive-layer.md) and [Online Learning Engine](docs/online-learning-engine.md).
+- **Adaptive plugin authors** -- start with [Adaptive Layer](docs/adaptive-layer.md), [Adaptive API Reference](docs/adaptive-api-reference.md), and [Language Bindings](docs/language-bindings.md).
 - **Contributors** -- start with the canonical [Documentation Index](docs/README.md) and [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
 ## Documentation
@@ -69,8 +69,8 @@ Comprehensive documentation lives in the [docs/](docs/) directory. The canonical
 | [Observability with OpenTelemetry](docs/observability-with-opentelemetry.md) | OTLP subscriber setup, event mapping, and per-language examples |
 | [Observability with OpenInference](docs/observability-with-openinference.md) | OpenInference semantic mapping, Phoenix-oriented OTLP setup, and per-language examples |
 | [Language Bindings](docs/language-bindings.md) | Per-language usage guides and naming conventions |
-| [Recipes](docs/recipes.md) | Task-oriented patterns for logging, ATIF, optimizer setup, and context propagation |
-| [Optimizer Layer](docs/optimizer-layer.md) | Dynamic optimizer config, built-in components, hosted plugins, and runtime lifecycle |
+| [Recipes](docs/recipes.md) | Task-oriented patterns for logging, ATIF, adaptive setup, and context propagation |
+| [Adaptive Layer](docs/adaptive-layer.md) | Dynamic adaptive config, flat adaptive sections, and plugin-host integration |
 | [Online Learning Engine](docs/online-learning-engine.md) | Prediction trie, sensitivity scoring, Redis persistence, and learner pipeline |
 | [Integration Best Practices](docs/integration-best-practices.md) | Patterns for integrating NeMo Flow into existing agent frameworks |
 | [Testing](docs/testing.md) | Testing strategy and how to run tests across all languages |
@@ -86,7 +86,7 @@ crates/
   ffi/        # C FFI layer (used by Go, generates header via cbindgen)
   node/       # NAPI Node.js bindings
   wasm/       # wasm-bindgen WebAssembly bindings
-  optimizer/      # Optimizer layer with online learning and scheduling hints
+  adaptive/      # Adaptive layer with online learning and scheduling hints
 python/       # Python wrapper module (nemo_flow/)
 go/           # Go CGo bindings
 docs/         # Comprehensive documentation
@@ -147,14 +147,14 @@ wasm-pack build crates/wasm --scope nvidia
 Use [docs/testing.md](docs/testing.md) for the full matrix. Common entry points:
 
 ```bash
-cargo test --workspace                                # Core + optimizer + Rust bindings
+cargo test --workspace                                # Core + adaptive + Rust bindings
 uv run pytest                                         # Python
 cd go/nemo_flow && \
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" \
 go test -race -v ./...
 cd crates/node && npm install && npm test             # Node.js
 wasm-pack test --node crates/wasm                     # WASM
-cargo test -p nemo-flow-optimizer --features redis-backend redis_tests  # Optimizer + Redis
+cargo test -p nemo-flow-adaptive --features redis-backend redis_tests  # Adaptive + Redis
 ```
 
 ## Dev Tooling

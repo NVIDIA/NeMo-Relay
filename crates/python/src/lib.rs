@@ -17,17 +17,18 @@
 //!   accept `tool_call_id` and LLM calls accept `model_name` for ATIF correlation.
 //! - `py_callable` — Bridges between Python callables and Rust callback types
 //! - `py_context` — Notes on scope propagation between sync/async contexts
-//! - `py_optimizer` — Python-facing optimizer config/runtime helpers (`OptimizerRuntime`,
-//!   `validate_optimizer_config`, `set_latency_sensitivity`)
+//! - `py_adaptive` — Python-facing adaptive helpers (`set_latency_sensitivity`)
+//! - `py_plugin` — Python-facing generic plugin config/registration helpers
 //! - `convert` — JSON ↔ Python conversion utilities
 
 use pyo3::prelude::*;
 
 mod convert;
+mod py_adaptive;
 mod py_api;
 mod py_callable;
 mod py_context;
-mod py_optimizer;
+mod py_plugin;
 mod py_storage;
 mod py_types;
 
@@ -39,9 +40,15 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
             "failed to initialize NeMo Flow runtime ownership: {e}"
         ))
     })?;
+    nemo_flow_adaptive::register_adaptive_component().map_err(|e| {
+        pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "failed to register adaptive plugin component: {e}"
+        ))
+    })?;
     py_types::register(m)?;
     py_api::register(m)?;
-    py_optimizer::register(m)?;
+    py_plugin::register(m)?;
+    py_adaptive::register(m)?;
     Ok(())
 }
 

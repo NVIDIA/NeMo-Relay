@@ -50,71 +50,57 @@ cargo test -p nemo-flow-wasm
 wasm-pack test --node crates/wasm
 ```
 
-## Optimizer Runtime
+## Adaptive Config
 
-The WASM binding uses plain JavaScript objects for optimizer config and exposes
-the optimizer surface through `optimizer.js`.
+The WASM binding uses plain JavaScript objects for adaptive config and exposes
+the adaptive helpers through `adaptive.js`, with configuration managed through
+the generic plugin host.
 
 ```javascript
 import init from "./pkg/nemo_flow_wasm.js";
-import {
-  Runtime,
-  validateConfig,
-} from "./optimizer.js";
+import * as adaptive from "./adaptive.js";
+import * as plugin from "./plugin.js";
 
 await init();
 
 const config = {
   version: 1,
   state: { backend: { kind: "in_memory", config: {} } },
-  components: [
-    { kind: "telemetry", enabled: true, config: { learners: ["latency_sensitivity"] } },
-  ],
+  telemetry: { learners: ["latency_sensitivity"] },
 };
 
-const validation = validateConfig(config);
-const runtime = new Runtime(config);
+const validation = plugin.validate({
+  version: 1,
+  components: [adaptive.ComponentSpec(config)],
+});
 ```
 
-## Hosted Optimizer Plugins
+## Hosted Plugins
 
 WASM hosted plugins register JavaScript handlers first, then enable themselves
-through `external_component` in the optimizer config.
+as top-level plugin components in the generic plugin config.
 
 ```javascript
 import init from "./pkg/nemo_flow_wasm.js";
-import {
-  Runtime,
-  registerPlugin,
-} from "./optimizer.js";
+import * as plugin from "./plugin.js";
 
 await init();
 
-registerPlugin("example.header_plugin", {
-  validate(instanceId, pluginConfig) {
-    return [];
-  },
-  register(instanceId, pluginConfig, context) {
-    context.registerToolRequestIntercept(
-      `${instanceId}.tool`,
-      25,
-      false,
-      (_name, args) => ({ ...args, wasmPlugin: instanceId }),
-    );
+plugin.register("example.header_plugin", {
+  register(pluginConfig, context) {
+  context.registerToolRequestIntercept(
+    "tool",
+    25,
+    false,
+      (_name, args) => ({ ...args, wasmPlugin: "enabled" }),
+  );
   },
 });
 
-const runtime = new Runtime({
+await plugin.initialize({
   version: 1,
   components: [
-    {
-      kind: "external_component",
-      enabled: true,
-      config: {
-        plugin_kind: "example.header_plugin",
-        instance_id: "plugin-1",
-      },
-    },
+    plugin.ComponentSpec("example.header_plugin", {}),
   ],
 });
 ```

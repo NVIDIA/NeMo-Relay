@@ -4,7 +4,7 @@
 """Python bindings for the NeMo Flow runtime.
 
 This package exposes the runtime's scope stack, lifecycle events, middleware
-registries, typed wrappers, and optimizer helpers from Python.
+registries, typed wrappers, and adaptive helpers from Python.
 
 The main entry points are:
 
@@ -14,7 +14,8 @@ The main entry points are:
 - ``nemo_flow.guardrails`` and ``nemo_flow.intercepts`` for global middleware
 - ``nemo_flow.scope_local`` for middleware scoped to a specific ``ScopeHandle``
 - ``nemo_flow.typed`` for codec-based typed wrappers
-- ``nemo_flow.optimizer`` for optimizer configuration and plugin registration
+- ``nemo_flow.plugin`` for global plugin configuration and hosted plugin registration
+- ``nemo_flow.adaptive`` for adaptive component configuration helpers
 
 Example:
     ```python
@@ -121,11 +122,12 @@ LlmStreamExecutionIntercept: TypeAlias = Callable[
 ]
 
 from nemo_flow import (  # noqa: E402
+    adaptive,
     codecs,
     guardrails,
     intercepts,
     llm,
-    optimizer,
+    plugin,
     scope,
     scope_local,
     subscribers,
@@ -278,7 +280,8 @@ __all__ = [
     "scope_local",
     "codecs",
     "typed",
-    "optimizer",
+    "plugin",
+    "adaptive",
     # Scope stack isolation
     "ScopeStack",
     "create_scope_stack",

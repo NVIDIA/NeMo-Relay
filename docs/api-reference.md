@@ -13,8 +13,8 @@ See also:
 
 - [Typed API Reference](typed-api-reference.md) for `nemo_flow.typed` helper
   functions and codec types.
-- [Optimizer API Reference](optimizer-api-reference.md) for the config-driven
-  `nemo_flow.optimizer` runtime and component helpers.
+- [Adaptive API Reference](adaptive-api-reference.md) for the config-driven
+  adaptive component and core plugin-host helpers.
 
 ## Scope Operations
 
@@ -349,6 +349,152 @@ snapshotted the subscriber list and released its runtime locks. Subscribers may
 call other NeMo Flow APIs, but should remain lightweight because they are still on
 the request path. Subscribers are infallible callbacks: they do not have an
 error return channel.
+
+## Plugin Host
+
+The plugin host is the shared configuration and registration surface used by the
+adaptive component and any hosted third-party plugin kinds.
+
+```python
+policy = plugin.ConfigPolicy(
+    unknown_component: Literal["ignore", "warn", "error"] = "warn",
+    unknown_field: Literal["ignore", "warn", "error"] = "warn",
+    unsupported_value: Literal["ignore", "warn", "error"] = "error",
+)
+
+component = plugin.ComponentSpec(
+    kind: str,
+    config: dict[str, Any] = {},
+    enabled: bool = True,
+)
+
+config = plugin.PluginConfig(
+    version: int = 1,
+    components: list[object] = [],
+    policy: ConfigPolicy = ConfigPolicy(),
+)
+
+report = plugin.validate(config: PluginConfig | dict) -> ConfigReport
+report = await plugin.initialize(config: PluginConfig | dict) -> ConfigReport
+plugin.clear() -> None
+active = plugin.report() -> ConfigReport | None
+kinds = plugin.list_kinds() -> list[str]
+plugin.register(plugin_kind: str, handler: PluginHandler) -> None
+removed = plugin.deregister(plugin_kind: str) -> bool
+```
+
+### Config Objects
+
+- `ConfigPolicy`
+  Description: controls how the host reports unsupported component kinds, unknown fields, and unsupported values.
+  Arguments: `unknown_component`, `unknown_field`, and `unsupported_value` each accept `"ignore"`, `"warn"`, or `"error"`.
+  Returns: a policy object embedded in `PluginConfig`.
+  Behavior: `"warn"` adds a warning diagnostic, `"error"` adds an error diagnostic that blocks `initialize(...)`, and `"ignore"` suppresses diagnostics.
+
+- `ComponentSpec`
+  Description: describes one top-level hosted plugin component.
+  Arguments: `kind` is the registered plugin kind string, `config` is the component-specific JSON object, and `enabled` controls whether the host should activate the component.
+  Returns: a component document suitable for inclusion in `PluginConfig.components`.
+  Behavior: disabled components are still validated but skipped during runtime registration. Adaptive uses its own `adaptive.ComponentSpec(...)`, but both adaptive and generic components share the same top-level `components` array.
+
+- `PluginConfig`
+  Description: the canonical plugin host configuration document.
+  Arguments: `version` is the host config schema version, `components` is the ordered list of top-level components, and `policy` controls unsupported-config behavior.
+  Returns: a serializable config document.
+  Behavior: component order is preserved during activation, so earlier components can register middleware before later ones.
+
+### Host Operations
+
+- `plugin.validate(config)`
+  Description: validates a plugin host config without changing runtime state.
+  Arguments: a `PluginConfig` instance or an equivalent JSON object.
+  Returns: `ConfigReport` with zero or more diagnostics.
+  Behavior: this is pure validation. It checks host-level compatibility, unknown plugin kinds, multiplicity rules, and each registered plugin handler's per-component validation logic.
+
+- `await plugin.initialize(config)`
+  Description: validates and activates the full plugin configuration.
+  Arguments: a `PluginConfig` instance or an equivalent JSON object.
+  Returns: the successful `ConfigReport` for the activated configuration.
+  Behavior: initialization replaces the current active plugin configuration. If registration fails partway through, the host rolls back partial registrations. If there was a previous active configuration, the host attempts to restore it.
+
+- `plugin.clear()`
+  Description: deregisters all middleware and subscribers installed by the active plugin configuration.
+  Arguments: none.
+  Returns: `None`.
+  Behavior: this clears active component registrations only. It does not remove plugin kinds from the handler registry.
+
+- `plugin.report()`
+  Description: returns the last successfully activated plugin report.
+  Arguments: none.
+  Returns: `ConfigReport | None`.
+  Behavior: returns `None` when no plugin configuration is active.
+
+- `plugin.list_kinds()`
+  Description: lists hosted plugin kinds currently registered with the plugin handler registry.
+  Arguments: none.
+  Returns: a sorted list of kind strings.
+  Behavior: this reports available handler kinds, not the currently active component set.
+
+- `plugin.register(plugin_kind, handler)`
+  Description: registers a hosted plugin handler implementation.
+  Arguments: `plugin_kind` is the unique top-level component kind and `handler` implements the `PluginHandler` contract.
+  Returns: `None`.
+  Behavior: registration makes the kind available to later `validate(...)` and `initialize(...)` calls. Registering the same kind twice raises an error.
+
+- `plugin.deregister(plugin_kind)`
+  Description: removes a previously registered hosted plugin handler kind.
+  Arguments: `plugin_kind` is the kind string to remove.
+  Returns: `True` if a handler was removed, otherwise `False`.
+  Behavior: deregistration affects future validation and initialization. It does not retroactively clear middleware already installed by an active configuration.
+
+### Handler Contract
+
+```python
+class PluginHandler(Protocol):
+    def validate(self, plugin_config: dict[str, Any]) -> list[ConfigDiagnostic] | None: ...
+    def register(self, plugin_config: dict[str, Any], context: PluginContext) -> None: ...
+```
+
+- `validate(plugin_config)`
+  Description: validates one component's `config` object.
+  Arguments: the component-local JSON config for a single `ComponentSpec`.
+  Returns: a list of diagnostics or `None`.
+  Behavior: validation runs during both `plugin.validate(...)` and `plugin.initialize(...)`. Returning an error-level diagnostic blocks initialization.
+
+- `register(plugin_config, context)`
+  Description: installs middleware and subscribers for one component instance.
+  Arguments: the component-local JSON config and a `PluginContext`.
+  Returns: `None`.
+  Behavior: this runs only for enabled components during `initialize(...)`. Any exception or registration failure aborts the current initialization and triggers rollback.
+
+### Plugin Context
+
+`PluginContext` exposes these registration methods:
+
+- `register_subscriber(name, callback)`
+- `register_llm_request_intercept(name, priority, break_chain, callback)`
+- `register_llm_execution_intercept(name, priority, callback)`
+- `register_llm_stream_execution_intercept(name, priority, callback)`
+- `register_tool_request_intercept(name, priority, break_chain, callback)`
+- `register_tool_execution_intercept(name, priority, callback)`
+
+Shared behavior:
+
+- `name`
+  Description: the plugin-local registration name.
+  Behavior: names are scoped per component. The runtime namespaces them internally, so users do not provide instance ids or global registration names.
+
+- `priority`
+  Description: middleware execution order.
+  Behavior: lower values run first.
+
+- `break_chain`
+  Description: request-intercept short-circuit flag.
+  Behavior: when `True`, later request intercepts in that chain are skipped after the callback runs.
+
+- `callback`
+  Description: the runtime callback implementation for the subscriber or intercept.
+  Behavior: the callback contracts match the normal subscriber/intercept APIs for the host language. Registration succeeds immediately, and the plugin host records a rollback action so the registration can be undone on failure or `plugin.clear()`.
 
 ## Context Isolation
 

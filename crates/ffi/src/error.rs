@@ -17,7 +17,7 @@ use std::ffi::CString;
 use libc::c_char;
 
 use nemo_flow_core::FlowError;
-use nemo_flow_optimizer::OptimizerError;
+use nemo_flow_core::PluginError;
 
 /// Status codes returned by all FFI functions.
 ///
@@ -132,20 +132,14 @@ pub fn status_from_error(e: &FlowError) -> NemoFlowStatus {
     NemoFlowStatus::from(e)
 }
 
-/// Convert an `OptimizerError` to an `NemoFlowStatus`, storing the error message
+/// Convert a `PluginError` to an `NemoFlowStatus`, storing the error message
 /// in thread-local storage.
-pub fn status_from_optimizer_error(e: &OptimizerError) -> NemoFlowStatus {
+pub fn status_from_plugin_error(e: &PluginError) -> NemoFlowStatus {
     set_last_error(&e.to_string());
     match e {
-        OptimizerError::NotFound(_) => NemoFlowStatus::NotFound,
-        OptimizerError::InvalidConfig(_) | OptimizerError::Serialization(_) => {
-            NemoFlowStatus::InvalidArg
-        }
-        OptimizerError::Storage(_)
-        | OptimizerError::Internal(_)
-        | OptimizerError::RegistrationFailed(_)
-        | OptimizerError::ChannelClosed(_) => NemoFlowStatus::Internal,
-        OptimizerError::Redis(_) => NemoFlowStatus::Internal,
+        PluginError::NotFound(_) => NemoFlowStatus::NotFound,
+        PluginError::InvalidConfig(_) | PluginError::Serialization(_) => NemoFlowStatus::InvalidArg,
+        PluginError::Internal(_) | PluginError::RegistrationFailed(_) => NemoFlowStatus::Internal,
     }
 }
 
@@ -221,35 +215,6 @@ mod tests {
             let status = status_from_error(&error);
             assert_eq!(status, expected_status);
             assert_eq!(NemoFlowStatus::from(&error), expected_status);
-            assert!(last_error_message().unwrap().contains(&error.to_string()));
-        }
-    }
-
-    #[test]
-    fn test_status_from_optimizer_error_maps_variants_and_sets_message() {
-        let cases = [
-            (
-                OptimizerError::NotFound("missing".into()),
-                NemoFlowStatus::NotFound,
-            ),
-            (
-                OptimizerError::InvalidConfig("bad config".into()),
-                NemoFlowStatus::InvalidArg,
-            ),
-            (
-                OptimizerError::Internal("boom".into()),
-                NemoFlowStatus::Internal,
-            ),
-            (
-                OptimizerError::RegistrationFailed("subscriber".into()),
-                NemoFlowStatus::Internal,
-            ),
-        ];
-
-        for (error, expected_status) in cases {
-            clear_last_error();
-            let status = status_from_optimizer_error(&error);
-            assert_eq!(status, expected_status);
             assert!(last_error_message().unwrap().contains(&error.to_string()));
         }
     }

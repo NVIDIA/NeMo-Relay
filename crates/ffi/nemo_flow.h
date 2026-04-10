@@ -150,23 +150,18 @@ typedef struct FfiOpenInferenceSubscriber FfiOpenInferenceSubscriber;
 typedef struct FfiOpenTelemetrySubscriber FfiOpenTelemetrySubscriber;
 
 /**
- * Opaque optimizer hosted plugin context.
+ * Opaque plugin registration context.
  *
  * This wrapper contains a borrowed raw pointer to an
- * `nemo_flow_optimizer::HostedRegistrationContext`, not an owned heap allocation.
+ * `nemo_flow_core::PluginRegistrationContext`, not an owned heap allocation.
  * It is only valid for the duration of the hosted plugin registration callback that receives
  * it. C callers must not store the pointer, use it after the callback returns, or attempt to
  * free or drop it.
  *
- * There is intentionally no `nemo_flow_optimizer_plugin_context_free` function because this FFI
+ * There is intentionally no `nemo_flow_plugin_context_free` function because this FFI
  * wrapper does not own the underlying registration context.
  */
-typedef struct FfiOptimizerPluginContext FfiOptimizerPluginContext;
-
-/**
- * Opaque optimizer runtime handle.
- */
-typedef struct FfiOptimizerRuntime FfiOptimizerRuntime;
+typedef struct FfiPluginContext FfiPluginContext;
 
 /**
  * Opaque handle representing an active execution scope.
@@ -193,17 +188,16 @@ typedef struct Option_NemoFlowCollectorCb Option_NemoFlowCollectorCb;
 
 typedef struct Option_NemoFlowFinalizerCb Option_NemoFlowFinalizerCb;
 
-typedef struct Option_NemoFlowOptimizerPluginValidateCb Option_NemoFlowOptimizerPluginValidateCb;
+typedef struct Option_NemoFlowPluginValidateCb Option_NemoFlowPluginValidateCb;
 
 /**
- * Callback for optimizer hosted plugin registration.
- * Receives an instance ID, plugin config JSON, and a plugin context pointer that is
+ * Callback for hosted plugin registration.
+ * Receives plugin config JSON and a plugin context pointer that is
  * only valid for the duration of the call.
  */
-typedef NemoFlowStatus (*NemoFlowOptimizerPluginRegisterCb)(void *user_data,
-                                                            const char *instance_id,
-                                                            const char *plugin_config_json,
-                                                            struct FfiOptimizerPluginContext *ctx);
+typedef NemoFlowStatus (*NemoFlowPluginRegisterCb)(void *user_data,
+                                                   const char *plugin_config_json,
+                                                   struct FfiPluginContext *ctx);
 
 /**
  * Optional destructor for user data passed to callbacks.
@@ -324,160 +318,146 @@ typedef char *(*NemoFlowJsonCb)(void *user_data, const char *json);
 typedef char *(*NemoFlowLlmConditionalCb)(void *user_data, const struct FfiLLMRequest *request);
 
 /**
- * Validate an optimizer config document and return the diagnostics report as JSON.
+ * Validate a generic plugin config document and return the diagnostics report as JSON.
  *
  * # Safety
  * `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
  */
-NemoFlowStatus nemo_flow_validate_optimizer_config(const char *config_json, char **out_json);
+NemoFlowStatus nemo_flow_validate_plugin_config(const char *config_json, char **out_json);
 
 /**
- * Create an optimizer runtime from a JSON config document.
+ * Initialize the active global plugin components and return the resulting diagnostics report.
  *
  * # Safety
- * `config_json` must be a valid C string and `out` must be a valid, non-null pointer.
+ * `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
  */
-NemoFlowStatus nemo_flow_optimizer_runtime_create(const char *config_json,
-                                                  struct FfiOptimizerRuntime **out);
+NemoFlowStatus nemo_flow_initialize_plugins(const char *config_json, char **out_json);
 
 /**
- * Register a previously created optimizer runtime.
+ * Clear the active global plugin configuration.
+ */
+NemoFlowStatus nemo_flow_clear_plugin_configuration(void);
+
+/**
+ * Return the last successfully configured plugin report as JSON.
  *
  * # Safety
- * `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer.
+ * `out_json` must be a valid, non-null pointer.
  */
-NemoFlowStatus nemo_flow_optimizer_runtime_register(struct FfiOptimizerRuntime *runtime);
+NemoFlowStatus nemo_flow_active_plugin_report_json(char **out_json);
 
 /**
- * Deregister an optimizer runtime.
+ * Return the registered plugin kinds as JSON.
  *
  * # Safety
- * `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer.
+ * `out_json` must be a valid, non-null pointer.
  */
-NemoFlowStatus nemo_flow_optimizer_runtime_deregister(struct FfiOptimizerRuntime *runtime);
+NemoFlowStatus nemo_flow_list_plugin_kinds_json(char **out_json);
 
 /**
- * Shut down an optimizer runtime and free its background work.
- *
- * # Safety
- * `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer.
- */
-NemoFlowStatus nemo_flow_optimizer_runtime_shutdown(struct FfiOptimizerRuntime *runtime);
-
-/**
- * Return the runtime creation diagnostics report as JSON.
- *
- * # Safety
- * `runtime` must be a valid, non-null `FfiOptimizerRuntime` pointer and `out_json`
- * must be a valid, non-null pointer.
- */
-NemoFlowStatus nemo_flow_optimizer_runtime_report_json(const struct FfiOptimizerRuntime *runtime,
-                                                       char **out_json);
-
-/**
- * Register a hosted optimizer plugin handler backed by foreign callbacks.
+ * Register a hosted plugin handler backed by foreign callbacks.
  *
  * # Safety
  * `plugin_kind` must be a valid C string and `register_cb` must be a valid function pointer.
  */
-NemoFlowStatus nemo_flow_optimizer_register_plugin(const char *plugin_kind,
-                                                   struct Option_NemoFlowOptimizerPluginValidateCb validate_cb,
-                                                   NemoFlowOptimizerPluginRegisterCb register_cb,
-                                                   void *user_data,
-                                                   NemoFlowFreeFn free_fn);
+NemoFlowStatus nemo_flow_register_plugin(const char *plugin_kind,
+                                         struct Option_NemoFlowPluginValidateCb validate_cb,
+                                         NemoFlowPluginRegisterCb register_cb,
+                                         void *user_data,
+                                         NemoFlowFreeFn free_fn);
 
 /**
- * Deregister a hosted optimizer plugin handler by kind.
+ * Deregister a hosted plugin handler by kind.
  *
  * # Safety
  * `plugin_kind` must be a valid C string.
  */
-NemoFlowStatus nemo_flow_optimizer_deregister_plugin(const char *plugin_kind);
+NemoFlowStatus nemo_flow_deregister_plugin(const char *plugin_kind);
 
 /**
- * Register an event subscriber into the optimizer hosted plugin context.
+ * Register an event subscriber into the plugin registration context.
  *
  * # Safety
  * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
  * of the hosted plugin registration lifetime.
  */
-NemoFlowStatus nemo_flow_optimizer_plugin_context_register_subscriber(struct FfiOptimizerPluginContext *ctx,
-                                                                      const char *name,
-                                                                      NemoFlowEventSubscriberCb cb,
-                                                                      void *user_data,
-                                                                      NemoFlowFreeFn free_fn);
+NemoFlowStatus nemo_flow_plugin_context_register_subscriber(struct FfiPluginContext *ctx,
+                                                            const char *name,
+                                                            NemoFlowEventSubscriberCb cb,
+                                                            void *user_data,
+                                                            NemoFlowFreeFn free_fn);
 
 /**
- * Register an LLM request intercept into the optimizer hosted plugin context.
+ * Register an LLM request intercept into the plugin registration context.
  *
  * # Safety
  * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
  * of the hosted plugin registration lifetime.
  */
-NemoFlowStatus nemo_flow_optimizer_plugin_context_register_llm_request_intercept(struct FfiOptimizerPluginContext *ctx,
-                                                                                 const char *name,
-                                                                                 int32_t priority,
-                                                                                 bool break_chain,
-                                                                                 NemoFlowLlmRequestInterceptCb cb,
-                                                                                 void *user_data,
-                                                                                 NemoFlowFreeFn free_fn);
+NemoFlowStatus nemo_flow_plugin_context_register_llm_request_intercept(struct FfiPluginContext *ctx,
+                                                                       const char *name,
+                                                                       int32_t priority,
+                                                                       bool break_chain,
+                                                                       NemoFlowLlmRequestInterceptCb cb,
+                                                                       void *user_data,
+                                                                       NemoFlowFreeFn free_fn);
 
 /**
- * Register a tool execution intercept into the optimizer hosted plugin context.
+ * Register a tool request intercept into the plugin registration context.
  *
  * # Safety
  * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
  * of the hosted plugin registration lifetime.
  */
-NemoFlowStatus nemo_flow_optimizer_plugin_context_register_tool_request_intercept(struct FfiOptimizerPluginContext *ctx,
-                                                                                  const char *name,
-                                                                                  int32_t priority,
-                                                                                  bool break_chain,
-                                                                                  NemoFlowToolSanitizeCb cb,
-                                                                                  void *user_data,
-                                                                                  NemoFlowFreeFn free_fn);
+NemoFlowStatus nemo_flow_plugin_context_register_tool_request_intercept(struct FfiPluginContext *ctx,
+                                                                        const char *name,
+                                                                        int32_t priority,
+                                                                        bool break_chain,
+                                                                        NemoFlowToolSanitizeCb cb,
+                                                                        void *user_data,
+                                                                        NemoFlowFreeFn free_fn);
 
 /**
- * Register an LLM execution intercept into the optimizer hosted plugin context.
+ * Register an LLM execution intercept into the plugin registration context.
  *
  * # Safety
  * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
  * of the hosted plugin registration lifetime.
  */
-NemoFlowStatus nemo_flow_optimizer_plugin_context_register_llm_execution_intercept(struct FfiOptimizerPluginContext *ctx,
-                                                                                   const char *name,
-                                                                                   int32_t priority,
-                                                                                   NemoFlowLlmExecInterceptCb cb,
-                                                                                   void *user_data,
-                                                                                   NemoFlowFreeFn free_fn);
+NemoFlowStatus nemo_flow_plugin_context_register_llm_execution_intercept(struct FfiPluginContext *ctx,
+                                                                         const char *name,
+                                                                         int32_t priority,
+                                                                         NemoFlowLlmExecInterceptCb cb,
+                                                                         void *user_data,
+                                                                         NemoFlowFreeFn free_fn);
 
 /**
- * Register an LLM stream execution intercept into the optimizer hosted plugin context.
+ * Register an LLM stream execution intercept into the plugin registration context.
  *
  * # Safety
  * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
  * of the hosted plugin registration lifetime.
  */
-NemoFlowStatus nemo_flow_optimizer_plugin_context_register_llm_stream_execution_intercept(struct FfiOptimizerPluginContext *ctx,
-                                                                                          const char *name,
-                                                                                          int32_t priority,
-                                                                                          NemoFlowLlmExecInterceptCb cb,
-                                                                                          void *user_data,
-                                                                                          NemoFlowFreeFn free_fn);
+NemoFlowStatus nemo_flow_plugin_context_register_llm_stream_execution_intercept(struct FfiPluginContext *ctx,
+                                                                                const char *name,
+                                                                                int32_t priority,
+                                                                                NemoFlowLlmExecInterceptCb cb,
+                                                                                void *user_data,
+                                                                                NemoFlowFreeFn free_fn);
 
 /**
- * Register a tool execution intercept into the optimizer hosted plugin context.
+ * Register a tool execution intercept into the plugin registration context.
  *
  * # Safety
  * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
  * of the hosted plugin registration lifetime.
  */
-NemoFlowStatus nemo_flow_optimizer_plugin_context_register_tool_execution_intercept(struct FfiOptimizerPluginContext *ctx,
-                                                                                    const char *name,
-                                                                                    int32_t priority,
-                                                                                    NemoFlowToolExecInterceptCb cb,
-                                                                                    void *user_data,
-                                                                                    NemoFlowFreeFn free_fn);
+NemoFlowStatus nemo_flow_plugin_context_register_tool_execution_intercept(struct FfiPluginContext *ctx,
+                                                                          const char *name,
+                                                                          int32_t priority,
+                                                                          NemoFlowToolExecInterceptCb cb,
+                                                                          void *user_data,
+                                                                          NemoFlowFreeFn free_fn);
 
 /**
  * Retrieve the current scope handle from the thread-local scope stack.
@@ -1757,14 +1737,6 @@ void nemo_flow_openinference_subscriber_free(struct FfiOpenInferenceSubscriber *
  * functions, or null. Double-free is undefined behavior.
  */
 void nemo_flow_codec_free(struct FfiCodecHandle *handle);
-
-/**
- * Free an optimizer runtime handle previously returned by `nemo_flow_optimizer_runtime_create`.
- *
- * # Safety
- * `ptr` must be a valid pointer returned by `nemo_flow_optimizer_runtime_create`, or null.
- */
-void nemo_flow_optimizer_runtime_free(struct FfiOptimizerRuntime *ptr);
 
 /**
  * Return the UUID of a scope handle as a C string. Caller must free the result

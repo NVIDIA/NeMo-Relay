@@ -5,11 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # go/nemo_flow
 
-Go CGo bindings for the NeMo Flow runtime, including the optimizer surface.
+Go CGo bindings for the NeMo Flow runtime, including the adaptive surface.
 
 ## Overview
 
-This package wraps the NeMo Flow C FFI layer via CGo, providing a Go-idiomatic API with functional options patterns, native error types, optimizer config/runtime helpers, and subpackages organized by domain. It requires the FFI library to be built before use.
+This package wraps the NeMo Flow C FFI layer via CGo, providing a Go-idiomatic API with functional options patterns, native error types, generic plugin-host helpers, adaptive config helpers, and subpackages organized by domain. It requires the FFI library to be built before use.
 
 ## What It Provides
 
@@ -19,8 +19,8 @@ This package wraps the NeMo Flow C FFI layer via CGo, providing a Go-idiomatic A
 - **Stream support** -- Go-native stream handling for LLM streaming responses.
 - **Scope-local middleware** -- `ScopeRegister*` functions for registering middleware scoped to a specific execution scope.
 - **Context isolation** -- `CreateScopeStack`/`CurrentScopeStack`/`SetThreadScopeStack` for per-request isolation in concurrent servers.
-- **Optimizer runtime** -- the `optimizer` subpackage exposes `Config`, `Runtime`, validation helpers, and typed component builders.
-- **Hosted optimizer plugins** -- the `optimizer` subpackage exposes `RegisterPlugin`, `DeregisterPlugin`, `ExternalComponent`, and `PluginContext` for callback-backed optimizer extensions.
+- **Generic plugin host** -- `PluginConfig`, `RegisterPlugin`, `InitializePlugins`, and `PluginContext` expose the core plugin system directly.
+- **Adaptive config helpers** -- the `adaptive` subpackage exposes typed config builders plus adaptive-owned component specs for the top-level adaptive plugin component.
 
 ## Key Files
 
@@ -30,7 +30,8 @@ This package wraps the NeMo Flow C FFI layer via CGo, providing a Go-idiomatic A
 | `types.go` | Go type definitions mirroring core types |
 | `callbacks.go` | Go-to-C callback bridging |
 | `stream.go` | LLM stream wrapper for Go |
-| `optimizer.go` | Optimizer config, diagnostics, runtime wrapper, and hosted plugin APIs |
+| `plugin.go` | Generic plugin-host config, registration, and callback APIs |
+| `adaptive.go` | Adaptive config helpers and top-level adaptive plugin wrapper |
 | `scope/scope.go` | Scope management subpackage |
 | `tools/tools.go` | Tool registration and invocation |
 | `llm/llm.go` | LLM call registration and invocation |
@@ -56,57 +57,62 @@ cd go/nemo_flow
 go test -race -v ./...
 ```
 
-## Optimizer Runtime
+## Adaptive Config
 
-Go exposes typed optimizer config builders and a synchronous runtime wrapper
-through the `optimizer` subpackage.
+Go exposes typed adaptive config builders through the `adaptive` subpackage,
+then activates them through the generic plugin host.
 
 ```go
-import optimizer "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/optimizer"
+import adaptive "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/adaptive"
 
-config := optimizer.NewConfig()
-config.State = &optimizer.StateConfig{
-    Backend: optimizer.NewInMemoryBackend(),
+config := adaptive.NewConfig()
+config.State = &adaptive.StateConfig{
+    Backend: adaptive.NewInMemoryBackend(),
 }
-config.Components = []optimizer.ComponentSpec{
-    optimizer.TelemetryComponent(optimizer.TelemetryComponentConfig{
-        Learners: []string{"latency_sensitivity"},
-    }),
-}
+telemetry := adaptive.NewTelemetryConfig()
+telemetry.Learners = []string{"latency_sensitivity"}
+config.Telemetry = &telemetry
 
-runtime, err := optimizer.NewRuntime(config)
+report, err := nemo_flow.InitializePlugins(nemo_flow.PluginConfig{
+    Version: 1,
+    Components: []nemo_flow.PluginComponentSpec{
+        adaptive.NewComponentSpec(config).PluginComponent(),
+    },
+})
 if err != nil {
     panic(err)
 }
-defer runtime.Close()
+_ = report
+defer func() { _ = nemo_flow.ClearPluginConfiguration() }()
 ```
 
-## Hosted Optimizer Plugins
+## Hosted Plugins
 
-Go plugins register callback handlers up front, then enable themselves through
-the optimizer config via `ExternalComponent(...)`.
+Go plugins register callback handlers up front, then enable themselves as
+top-level plugin components in the core plugin config.
 
 ```go
 import (
     "encoding/json"
 
-    optimizer "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/optimizer"
+    adaptive "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/adaptive"
+    nemo_flow "github.com/NVIDIA/NeMo-Flow/go/nemo_flow"
 )
 
 pluginKind := "example.header_plugin"
-err := optimizer.RegisterPlugin(pluginKind, optimizer.PluginHandlerFuncs{
-    ValidateFunc: func(instanceID string, pluginConfig map[string]any) ([]optimizer.ConfigDiagnostic, error) {
+err := nemo_flow.RegisterPlugin(pluginKind, nemo_flow.PluginHandlerFuncs{
+    ValidateFunc: func(pluginConfig map[string]any) ([]nemo_flow.ConfigDiagnostic, error) {
         return nil, nil
     },
-    RegisterFunc: func(instanceID string, pluginConfig map[string]any, ctx *optimizer.PluginContext) error {
+    RegisterFunc: func(pluginConfig map[string]any, ctx *nemo_flow.PluginContext) error {
         return ctx.RegisterToolRequestIntercept(
-            instanceID+".tool",
+            "tool",
             25,
             false,
             func(name string, args json.RawMessage) json.RawMessage {
                 var payload map[string]any
                 _ = json.Unmarshal(args, &payload)
-                payload["goPlugin"] = instanceID
+                payload["goPlugin"] = "enabled"
                 payload["tool"] = name
                 out, _ := json.Marshal(payload)
                 return out
@@ -117,7 +123,18 @@ err := optimizer.RegisterPlugin(pluginKind, optimizer.PluginHandlerFuncs{
 if err != nil {
     panic(err)
 }
-defer func() { _ = optimizer.DeregisterPlugin(pluginKind) }()
+defer func() { _ = nemo_flow.DeregisterPlugin(pluginKind) }()
+
+_, err = nemo_flow.InitializePlugins(nemo_flow.PluginConfig{
+    Version: 1,
+    Components: []nemo_flow.PluginComponentSpec{
+        adaptive.NewComponentSpec(adaptive.NewConfig()).PluginComponent(),
+        {
+            Kind:    pluginKind,
+            Enabled: true,
+        },
+    },
+})
 ```
 
 `PluginContext` exposes:

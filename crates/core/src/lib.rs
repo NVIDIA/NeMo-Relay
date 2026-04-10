@@ -56,6 +56,7 @@ pub mod codec;
 pub mod context;
 pub mod error;
 pub mod json;
+pub mod plugin;
 pub mod registry;
 mod shared_runtime;
 pub mod stream;
@@ -75,6 +76,7 @@ pub use context::{
 };
 pub use error::{FlowError, Result};
 pub use json::{Json, merge_json};
+pub use plugin::*;
 #[doc(hidden)]
 pub use shared_runtime::initialize_shared_runtime_binding;
 pub use stream::LlmStreamWrapper;

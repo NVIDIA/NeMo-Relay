@@ -11,8 +11,9 @@ import contextvars
 from collections.abc import Mapping, Sequence
 from typing import AsyncIterator, Awaitable, Callable, Literal, Optional, TypeAlias
 
+from nemo_flow import adaptive as adaptive
 from nemo_flow import codecs as codecs
-from nemo_flow import optimizer as optimizer
+from nemo_flow import plugin as plugin
 from nemo_flow import scope as scope
 from nemo_flow import typed as typed
 from nemo_flow.codecs import LlmCodec as LlmCodec

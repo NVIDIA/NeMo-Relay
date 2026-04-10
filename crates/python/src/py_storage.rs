@@ -16,11 +16,11 @@ use std::sync::{Arc, Mutex};
 use pyo3::prelude::*;
 use pyo3_async_runtimes::TaskLocals;
 
-use nemo_flow_optimizer::error::{OptimizerError, Result};
-use nemo_flow_optimizer::storage::StorageBackendDyn;
-use nemo_flow_optimizer::trie::AccumulatorState;
-use nemo_flow_optimizer::trie::serialization::TrieEnvelope;
-use nemo_flow_optimizer::types::{ExecutionPlan, RunRecord};
+use nemo_flow_adaptive::error::{AdaptiveError, Result};
+use nemo_flow_adaptive::storage::StorageBackendDyn;
+use nemo_flow_adaptive::trie::AccumulatorState;
+use nemo_flow_adaptive::trie::serialization::TrieEnvelope;
+use nemo_flow_adaptive::types::{ExecutionPlan, RunRecord};
 
 use crate::convert::{json_to_py, py_to_json};
 
@@ -60,7 +60,7 @@ impl PyStorageBackend {
     ) -> Result<Option<TaskLocals>> {
         let mut guard = task_locals
             .lock()
-            .map_err(|e| OptimizerError::Internal(format!("task locals lock poisoned: {e}")))?;
+            .map_err(|e| AdaptiveError::Internal(format!("task locals lock poisoned: {e}")))?;
 
         if let Some(locals) = guard.as_ref() {
             return Ok(Some(locals.clone()));
@@ -85,13 +85,13 @@ impl PyStorageBackend {
             Some(locals) => {
                 let fut =
                     pyo3_async_runtimes::into_future_with_locals(&locals, coro).map_err(|e| {
-                        OptimizerError::Internal(format!("into_future_with_locals: {e}"))
+                        AdaptiveError::Internal(format!("into_future_with_locals: {e}"))
                     })?;
                 Ok(Box::pin(fut))
             }
             None => {
                 let fut = pyo3_async_runtimes::tokio::into_future(coro)
-                    .map_err(|e| OptimizerError::Internal(format!("into_future: {e}")))?;
+                    .map_err(|e| AdaptiveError::Internal(format!("into_future: {e}")))?;
                 Ok(Box::pin(fut))
             }
         }
@@ -106,19 +106,19 @@ impl StorageBackendDyn for PyStorageBackend {
         let inner = self.inner.clone();
         let task_locals = self.task_locals.clone();
         let record_json = serde_json::to_value(record)
-            .map_err(|e| OptimizerError::Internal(format!("serialize RunRecord: {e}")));
+            .map_err(|e| AdaptiveError::Internal(format!("serialize RunRecord: {e}")));
         Box::pin(async move {
             let record_json = record_json?;
-            let fut = Python::attach(|py| -> std::result::Result<_, OptimizerError> {
+            let fut = Python::attach(|py| -> std::result::Result<_, AdaptiveError> {
                 let dict = json_to_py(py, &record_json)
-                    .map_err(|e| OptimizerError::Internal(format!("json_to_py: {e}")))?;
+                    .map_err(|e| AdaptiveError::Internal(format!("json_to_py: {e}")))?;
                 let coro = inner
                     .call_method1(py, "store_run", (dict,))
-                    .map_err(|e| OptimizerError::Internal(format!("call store_run: {e}")))?;
+                    .map_err(|e| AdaptiveError::Internal(format!("call store_run: {e}")))?;
                 Self::into_python_future(task_locals.as_ref(), py, coro.into_bound(py))
             })?;
             fut.await
-                .map_err(|e| OptimizerError::Internal(format!("Python store_run: {e}")))?;
+                .map_err(|e| AdaptiveError::Internal(format!("Python store_run: {e}")))?;
             Ok(())
         })
     }
@@ -131,24 +131,24 @@ impl StorageBackendDyn for PyStorageBackend {
         let task_locals = self.task_locals.clone();
         let agent_id = agent_id.to_string();
         Box::pin(async move {
-            let fut = Python::attach(|py| -> std::result::Result<_, OptimizerError> {
+            let fut = Python::attach(|py| -> std::result::Result<_, AdaptiveError> {
                 let coro = inner
                     .call_method1(py, "load_plan", (agent_id.as_str(),))
-                    .map_err(|e| OptimizerError::Internal(format!("call load_plan: {e}")))?;
+                    .map_err(|e| AdaptiveError::Internal(format!("call load_plan: {e}")))?;
                 Self::into_python_future(task_locals.as_ref(), py, coro.into_bound(py))
             })?;
             let result = fut
                 .await
-                .map_err(|e| OptimizerError::Internal(format!("Python load_plan: {e}")))?;
+                .map_err(|e| AdaptiveError::Internal(format!("Python load_plan: {e}")))?;
             Python::attach(|py| {
                 let obj = result.bind(py);
                 if obj.is_none() {
                     return Ok(None);
                 }
                 let json_val = py_to_json(obj)
-                    .map_err(|e| OptimizerError::Internal(format!("py_to_json: {e}")))?;
+                    .map_err(|e| AdaptiveError::Internal(format!("py_to_json: {e}")))?;
                 let plan: ExecutionPlan = serde_json::from_value(json_val).map_err(|e| {
-                    OptimizerError::Internal(format!("deserialize ExecutionPlan: {e}"))
+                    AdaptiveError::Internal(format!("deserialize ExecutionPlan: {e}"))
                 })?;
                 Ok(Some(plan))
             })
@@ -163,21 +163,21 @@ impl StorageBackendDyn for PyStorageBackend {
         let task_locals = self.task_locals.clone();
         let agent_id = agent_id.to_string();
         Box::pin(async move {
-            let fut = Python::attach(|py| -> std::result::Result<_, OptimizerError> {
+            let fut = Python::attach(|py| -> std::result::Result<_, AdaptiveError> {
                 let coro = inner
                     .call_method1(py, "list_runs", (agent_id.as_str(),))
-                    .map_err(|e| OptimizerError::Internal(format!("call list_runs: {e}")))?;
+                    .map_err(|e| AdaptiveError::Internal(format!("call list_runs: {e}")))?;
                 Self::into_python_future(task_locals.as_ref(), py, coro.into_bound(py))
             })?;
             let result = fut
                 .await
-                .map_err(|e| OptimizerError::Internal(format!("Python list_runs: {e}")))?;
+                .map_err(|e| AdaptiveError::Internal(format!("Python list_runs: {e}")))?;
             Python::attach(|py| {
                 let obj = result.bind(py);
                 let json_val = py_to_json(obj)
-                    .map_err(|e| OptimizerError::Internal(format!("py_to_json: {e}")))?;
+                    .map_err(|e| AdaptiveError::Internal(format!("py_to_json: {e}")))?;
                 let runs: Vec<RunRecord> = serde_json::from_value(json_val).map_err(|e| {
-                    OptimizerError::Internal(format!("deserialize Vec<RunRecord>: {e}"))
+                    AdaptiveError::Internal(format!("deserialize Vec<RunRecord>: {e}"))
                 })?;
                 Ok(runs)
             })
@@ -193,19 +193,19 @@ impl StorageBackendDyn for PyStorageBackend {
         let task_locals = self.task_locals.clone();
         let agent_id = agent_id.to_string();
         let envelope_json = serde_json::to_value(envelope)
-            .map_err(|e| OptimizerError::Internal(format!("serialize TrieEnvelope: {e}")));
+            .map_err(|e| AdaptiveError::Internal(format!("serialize TrieEnvelope: {e}")));
         Box::pin(async move {
             let envelope_json = envelope_json?;
-            let fut = Python::attach(|py| -> std::result::Result<_, OptimizerError> {
+            let fut = Python::attach(|py| -> std::result::Result<_, AdaptiveError> {
                 let dict = json_to_py(py, &envelope_json)
-                    .map_err(|e| OptimizerError::Internal(format!("json_to_py: {e}")))?;
+                    .map_err(|e| AdaptiveError::Internal(format!("json_to_py: {e}")))?;
                 let coro = inner
                     .call_method1(py, "store_trie", (agent_id.as_str(), dict))
-                    .map_err(|e| OptimizerError::Internal(format!("call store_trie: {e}")))?;
+                    .map_err(|e| AdaptiveError::Internal(format!("call store_trie: {e}")))?;
                 Self::into_python_future(task_locals.as_ref(), py, coro.into_bound(py))
             })?;
             fut.await
-                .map_err(|e| OptimizerError::Internal(format!("Python store_trie: {e}")))?;
+                .map_err(|e| AdaptiveError::Internal(format!("Python store_trie: {e}")))?;
             Ok(())
         })
     }
@@ -218,24 +218,24 @@ impl StorageBackendDyn for PyStorageBackend {
         let task_locals = self.task_locals.clone();
         let agent_id = agent_id.to_string();
         Box::pin(async move {
-            let fut = Python::attach(|py| -> std::result::Result<_, OptimizerError> {
+            let fut = Python::attach(|py| -> std::result::Result<_, AdaptiveError> {
                 let coro = inner
                     .call_method1(py, "load_trie", (agent_id.as_str(),))
-                    .map_err(|e| OptimizerError::Internal(format!("call load_trie: {e}")))?;
+                    .map_err(|e| AdaptiveError::Internal(format!("call load_trie: {e}")))?;
                 Self::into_python_future(task_locals.as_ref(), py, coro.into_bound(py))
             })?;
             let result = fut
                 .await
-                .map_err(|e| OptimizerError::Internal(format!("Python load_trie: {e}")))?;
+                .map_err(|e| AdaptiveError::Internal(format!("Python load_trie: {e}")))?;
             Python::attach(|py| {
                 let obj = result.bind(py);
                 if obj.is_none() {
                     return Ok(None);
                 }
                 let json_val = py_to_json(obj)
-                    .map_err(|e| OptimizerError::Internal(format!("py_to_json: {e}")))?;
+                    .map_err(|e| AdaptiveError::Internal(format!("py_to_json: {e}")))?;
                 let envelope: TrieEnvelope = serde_json::from_value(json_val).map_err(|e| {
-                    OptimizerError::Internal(format!("deserialize TrieEnvelope: {e}"))
+                    AdaptiveError::Internal(format!("deserialize TrieEnvelope: {e}"))
                 })?;
                 Ok(Some(envelope))
             })
@@ -251,21 +251,21 @@ impl StorageBackendDyn for PyStorageBackend {
         let task_locals = self.task_locals.clone();
         let agent_id = agent_id.to_string();
         let state_json = serde_json::to_value(state)
-            .map_err(|e| OptimizerError::Internal(format!("serialize AccumulatorState: {e}")));
+            .map_err(|e| AdaptiveError::Internal(format!("serialize AccumulatorState: {e}")));
         Box::pin(async move {
             let state_json = state_json?;
-            let fut = Python::attach(|py| -> std::result::Result<_, OptimizerError> {
+            let fut = Python::attach(|py| -> std::result::Result<_, AdaptiveError> {
                 let dict = json_to_py(py, &state_json)
-                    .map_err(|e| OptimizerError::Internal(format!("json_to_py: {e}")))?;
+                    .map_err(|e| AdaptiveError::Internal(format!("json_to_py: {e}")))?;
                 let coro = inner
                     .call_method1(py, "store_accumulators", (agent_id.as_str(), dict))
                     .map_err(|e| {
-                        OptimizerError::Internal(format!("call store_accumulators: {e}"))
+                        AdaptiveError::Internal(format!("call store_accumulators: {e}"))
                     })?;
                 Self::into_python_future(task_locals.as_ref(), py, coro.into_bound(py))
             })?;
             fut.await
-                .map_err(|e| OptimizerError::Internal(format!("Python store_accumulators: {e}")))?;
+                .map_err(|e| AdaptiveError::Internal(format!("Python store_accumulators: {e}")))?;
             Ok(())
         })
     }
@@ -278,26 +278,24 @@ impl StorageBackendDyn for PyStorageBackend {
         let task_locals = self.task_locals.clone();
         let agent_id = agent_id.to_string();
         Box::pin(async move {
-            let fut = Python::attach(|py| -> std::result::Result<_, OptimizerError> {
+            let fut = Python::attach(|py| -> std::result::Result<_, AdaptiveError> {
                 let coro = inner
                     .call_method1(py, "load_accumulators", (agent_id.as_str(),))
-                    .map_err(|e| {
-                        OptimizerError::Internal(format!("call load_accumulators: {e}"))
-                    })?;
+                    .map_err(|e| AdaptiveError::Internal(format!("call load_accumulators: {e}")))?;
                 Self::into_python_future(task_locals.as_ref(), py, coro.into_bound(py))
             })?;
             let result = fut
                 .await
-                .map_err(|e| OptimizerError::Internal(format!("Python load_accumulators: {e}")))?;
+                .map_err(|e| AdaptiveError::Internal(format!("Python load_accumulators: {e}")))?;
             Python::attach(|py| {
                 let obj = result.bind(py);
                 if obj.is_none() {
                     return Ok(None);
                 }
                 let json_val = py_to_json(obj)
-                    .map_err(|e| OptimizerError::Internal(format!("py_to_json: {e}")))?;
+                    .map_err(|e| AdaptiveError::Internal(format!("py_to_json: {e}")))?;
                 let state: AccumulatorState = serde_json::from_value(json_val).map_err(|e| {
-                    OptimizerError::Internal(format!("deserialize AccumulatorState: {e}"))
+                    AdaptiveError::Internal(format!("deserialize AccumulatorState: {e}"))
                 })?;
                 Ok(Some(state))
             })

@@ -23,8 +23,9 @@
 //! All functions use `JsValue` for JSON payloads and return `Result<T, JsValue>`
 //! where errors are thrown as JavaScript exceptions.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use js_sys::Function;
@@ -34,10 +35,9 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
 use nemo_flow_core::types as core_types;
-use nemo_flow_optimizer::{
-    ComponentRegistration, ConfigDiagnostic, ConfigReport, DiagnosticLevel, HostedPluginHandler,
-    OptimizerConfig, OptimizerError, OptimizerRuntime as NativeOptimizerRuntime,
-    deregister_hosted_plugin_handler, register_hosted_plugin_handler,
+use nemo_flow_core::{
+    ConfigDiagnostic, DiagnosticLevel, PluginError, PluginHandler as HostedPluginHandler,
+    PluginRegistration as ComponentRegistration, PluginRegistrationContext,
 };
 
 use crate::callable;
@@ -1792,25 +1792,32 @@ pub fn default_open_inference_config() -> Result<JsValue, JsValue> {
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
-/// Validate an optimizer config document and return a structured diagnostics report.
-#[wasm_bindgen(js_name = "validateOptimizerConfig")]
-pub fn validate_optimizer_config(config: JsValue) -> Result<JsValue, JsValue> {
-    let config: OptimizerConfig = serde_wasm_bindgen::from_value(config)?;
-    serde_wasm_bindgen::to_value(&NativeOptimizerRuntime::validate_config(&config))
+fn ensure_adaptive_component_registered() -> Result<(), JsValue> {
+    nemo_flow_adaptive::register_adaptive_component().map_err(to_js_err)
+}
+
+/// Validate a plugin config document and return a structured diagnostics report.
+#[wasm_bindgen(js_name = "validatePluginConfig")]
+pub fn validate_plugin_config(config: JsValue) -> Result<JsValue, JsValue> {
+    ensure_adaptive_component_registered()?;
+    let config: nemo_flow_core::PluginConfig = serde_wasm_bindgen::from_value(config)?;
+    serde_wasm_bindgen::to_value(&nemo_flow_core::validate_plugin_config(&config))
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 #[derive(Clone)]
-#[wasm_bindgen(js_name = "OptimizerPluginContext")]
-pub struct WasmOptimizerPluginContext {
+#[wasm_bindgen(js_name = "PluginContext")]
+pub struct WasmPluginContext {
     registrations: Arc<Mutex<Vec<ComponentRegistration>>>,
+    namespace_prefix: String,
 }
 
-impl WasmOptimizerPluginContext {
+impl WasmPluginContext {
     fn drain_registrations(&self) -> Result<Vec<ComponentRegistration>, JsValue> {
-        let mut guard = self.registrations.lock().map_err(|e| {
-            JsValue::from_str(&format!("optimizer plugin context lock poisoned: {e}"))
-        })?;
+        let mut guard = self
+            .registrations
+            .lock()
+            .map_err(|e| JsValue::from_str(&format!("plugin context lock poisoned: {e}")))?;
         Ok(std::mem::take(&mut *guard))
     }
 
@@ -1821,27 +1828,32 @@ impl WasmOptimizerPluginContext {
             .push(registration);
         Ok(())
     }
+
+    fn qualify_name(&self, name: &str) -> String {
+        format!("{}{}", self.namespace_prefix, name)
+    }
 }
 
-#[wasm_bindgen(js_class = OptimizerPluginContext)]
-impl WasmOptimizerPluginContext {
+#[wasm_bindgen(js_class = PluginContext)]
+impl WasmPluginContext {
     #[wasm_bindgen(js_name = registerSubscriber)]
     pub fn register_subscriber(&self, name: &str, callback: Function) -> Result<(), JsValue> {
+        let qualified_name = self.qualify_name(name);
         nemo_flow_core::nemo_flow_register_subscriber(
-            name,
+            &qualified_name,
             crate::callable::wrap_js_event_subscriber(callback),
         )
         .map_err(to_js_err)?;
 
-        let name_owned = name.to_string();
+        let name_owned = qualified_name;
         self.push_registration(ComponentRegistration::new(
-            "external_component",
+            "plugin",
             name_owned.clone(),
             Box::new(move || {
                 nemo_flow_core::nemo_flow_deregister_subscriber(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
-                        OptimizerError::RegistrationFailed(format!(
+                        PluginError::RegistrationFailed(format!(
                             "subscriber deregistration failed: {e}"
                         ))
                     })
@@ -1857,23 +1869,24 @@ impl WasmOptimizerPluginContext {
         break_chain: bool,
         callback: Function,
     ) -> Result<(), JsValue> {
+        let qualified_name = self.qualify_name(name);
         nemo_flow_core::nemo_flow_register_llm_request_intercept(
-            name,
+            &qualified_name,
             priority,
             break_chain,
             crate::callable::wrap_js_llm_request_intercept_fn(callback),
         )
         .map_err(to_js_err)?;
 
-        let name_owned = name.to_string();
+        let name_owned = qualified_name;
         self.push_registration(ComponentRegistration::new(
-            "external_component",
+            "plugin",
             name_owned.clone(),
             Box::new(move || {
                 nemo_flow_core::nemo_flow_deregister_llm_request_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
-                        OptimizerError::RegistrationFailed(format!(
+                        PluginError::RegistrationFailed(format!(
                             "llm request intercept deregistration failed: {e}"
                         ))
                     })
@@ -1888,22 +1901,23 @@ impl WasmOptimizerPluginContext {
         priority: i32,
         callback: Function,
     ) -> Result<(), JsValue> {
+        let qualified_name = self.qualify_name(name);
         nemo_flow_core::nemo_flow_register_llm_execution_intercept(
-            name,
+            &qualified_name,
             priority,
             crate::callable::wrap_js_llm_exec_intercept_fn(callback),
         )
         .map_err(to_js_err)?;
 
-        let name_owned = name.to_string();
+        let name_owned = qualified_name;
         self.push_registration(ComponentRegistration::new(
-            "external_component",
+            "plugin",
             name_owned.clone(),
             Box::new(move || {
                 nemo_flow_core::nemo_flow_deregister_llm_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
-                        OptimizerError::RegistrationFailed(format!(
+                        PluginError::RegistrationFailed(format!(
                             "llm execution intercept deregistration failed: {e}"
                         ))
                     })
@@ -1918,22 +1932,23 @@ impl WasmOptimizerPluginContext {
         priority: i32,
         callback: Function,
     ) -> Result<(), JsValue> {
+        let qualified_name = self.qualify_name(name);
         nemo_flow_core::nemo_flow_register_llm_stream_execution_intercept(
-            name,
+            &qualified_name,
             priority,
             crate::callable::wrap_js_llm_stream_exec_intercept_fn(callback),
         )
         .map_err(to_js_err)?;
 
-        let name_owned = name.to_string();
+        let name_owned = qualified_name;
         self.push_registration(ComponentRegistration::new(
-            "external_component",
+            "plugin",
             name_owned.clone(),
             Box::new(move || {
                 nemo_flow_core::nemo_flow_deregister_llm_stream_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
-                        OptimizerError::RegistrationFailed(format!(
+                        PluginError::RegistrationFailed(format!(
                             "llm stream execution intercept deregistration failed: {e}"
                         ))
                     })
@@ -1949,23 +1964,24 @@ impl WasmOptimizerPluginContext {
         break_chain: bool,
         callback: Function,
     ) -> Result<(), JsValue> {
+        let qualified_name = self.qualify_name(name);
         nemo_flow_core::nemo_flow_register_tool_request_intercept(
-            name,
+            &qualified_name,
             priority,
             break_chain,
             crate::callable::wrap_js_tool_request_intercept_fn(callback),
         )
         .map_err(to_js_err)?;
 
-        let name_owned = name.to_string();
+        let name_owned = qualified_name;
         self.push_registration(ComponentRegistration::new(
-            "external_component",
+            "plugin",
             name_owned.clone(),
             Box::new(move || {
                 nemo_flow_core::nemo_flow_deregister_tool_request_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
-                        OptimizerError::RegistrationFailed(format!(
+                        PluginError::RegistrationFailed(format!(
                             "tool request intercept deregistration failed: {e}"
                         ))
                     })
@@ -1980,22 +1996,23 @@ impl WasmOptimizerPluginContext {
         priority: i32,
         callback: Function,
     ) -> Result<(), JsValue> {
+        let qualified_name = self.qualify_name(name);
         nemo_flow_core::nemo_flow_register_tool_execution_intercept(
-            name,
+            &qualified_name,
             priority,
             crate::callable::wrap_js_tool_exec_intercept_fn(callback),
         )
         .map_err(to_js_err)?;
 
-        let name_owned = name.to_string();
+        let name_owned = qualified_name;
         self.push_registration(ComponentRegistration::new(
-            "external_component",
+            "plugin",
             name_owned.clone(),
             Box::new(move || {
                 nemo_flow_core::nemo_flow_deregister_tool_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
-                        OptimizerError::RegistrationFailed(format!(
+                        PluginError::RegistrationFailed(format!(
                             "tool execution intercept deregistration failed: {e}"
                         ))
                     })
@@ -2004,7 +2021,7 @@ impl WasmOptimizerPluginContext {
     }
 }
 
-struct WasmHostedPluginHandler {
+struct WasmPluginHandler {
     plugin_kind: String,
     validate: Option<send_wrapper::SendWrapper<Function>>,
     register: send_wrapper::SendWrapper<Function>,
@@ -2013,19 +2030,18 @@ struct WasmHostedPluginHandler {
 // SAFETY: The `validate` and `register` functions are wrapped in `SendWrapper`,
 // which enforces access from the thread that created them. Cross-thread access
 // will panic rather than allow undefined behavior.
-unsafe impl Send for WasmHostedPluginHandler {}
+unsafe impl Send for WasmPluginHandler {}
 // SAFETY: The same `SendWrapper` invariant applies for shared references; the
 // wrapped callbacks are only invoked on their originating thread.
-unsafe impl Sync for WasmHostedPluginHandler {}
+unsafe impl Sync for WasmPluginHandler {}
 
-impl HostedPluginHandler for WasmHostedPluginHandler {
+impl HostedPluginHandler for WasmPluginHandler {
     fn plugin_kind(&self) -> &str {
         &self.plugin_kind
     }
 
     fn validate(
         &self,
-        instance_id: &str,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
     ) -> Vec<ConfigDiagnostic> {
         let Some(validate) = &self.validate else {
@@ -2033,75 +2049,72 @@ impl HostedPluginHandler for WasmHostedPluginHandler {
         };
         let plugin_config_js = json_to_js(&serde_json::Value::Object(plugin_config.clone()));
         let this_arg = JsValue::NULL;
-        let instance_arg = JsValue::from_str(instance_id);
-        let validation = validate.call2(&this_arg, &instance_arg, &plugin_config_js);
+        let validation = validate.call1(&this_arg, &plugin_config_js);
         match validation {
             Ok(value) => serde_wasm_bindgen::from_value::<Vec<ConfigDiagnostic>>(value)
                 .unwrap_or_else(|e| {
                     vec![ConfigDiagnostic {
-                        level: nemo_flow_optimizer::DiagnosticLevel::Error,
-                        code: "optimizer.plugin_validate_failed".into(),
-                        component: Some("external_component".into()),
+                        level: DiagnosticLevel::Error,
+                        code: "plugin.validate_failed".into(),
+                        component: Some(self.plugin_kind.clone()),
                         field: None,
-                        message: format!(
-                            "WASM optimizer plugin validate returned invalid diagnostics: {e}"
-                        ),
+                        message: format!("WASM plugin validate returned invalid diagnostics: {e}"),
                     }]
                 }),
             Err(err) => vec![ConfigDiagnostic {
-                level: nemo_flow_optimizer::DiagnosticLevel::Error,
-                code: "optimizer.plugin_validate_failed".into(),
-                component: Some("external_component".into()),
+                level: DiagnosticLevel::Error,
+                code: "plugin.validate_failed".into(),
+                component: Some(self.plugin_kind.clone()),
                 field: None,
                 message: err
                     .as_string()
-                    .unwrap_or_else(|| "WASM optimizer plugin validate failed".to_string()),
+                    .unwrap_or_else(|| "WASM plugin validate failed".to_string()),
             }],
         }
     }
 
-    fn register(
-        &self,
-        instance_id: &str,
+    fn register<'a>(
+        &'a self,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &mut nemo_flow_optimizer::HostedRegistrationContext,
-    ) -> nemo_flow_optimizer::Result<()> {
-        let plugin_context = WasmOptimizerPluginContext {
-            registrations: Arc::new(Mutex::new(vec![])),
-        };
-        let plugin_context_js = JsValue::from(plugin_context.clone());
-        let plugin_config_js = json_to_js(&serde_json::Value::Object(plugin_config.clone()));
-        self.register
-            .call3(
-                &JsValue::NULL,
-                &JsValue::from_str(instance_id),
-                &plugin_config_js,
-                &plugin_context_js,
-            )
-            .map_err(|err| {
-                OptimizerError::RegistrationFailed(
-                    err.as_string()
-                        .unwrap_or_else(|| "WASM optimizer plugin register failed".to_string()),
-                )
-            })?;
+        ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
+        let namespace_prefix = ctx.qualify_name("");
+        let plugin_config = plugin_config.clone();
+        Box::pin(async move {
+            let plugin_context = WasmPluginContext {
+                registrations: Arc::new(Mutex::new(vec![])),
+                namespace_prefix,
+            };
+            let plugin_context_js = JsValue::from(plugin_context.clone());
+            let plugin_config_js = json_to_js(&serde_json::Value::Object(plugin_config));
+            self.register
+                .call2(&JsValue::NULL, &plugin_config_js, &plugin_context_js)
+                .map_err(|err| {
+                    PluginError::RegistrationFailed(
+                        err.as_string()
+                            .unwrap_or_else(|| "WASM plugin register failed".to_string()),
+                    )
+                })?;
 
-        ctx.extend_registrations(plugin_context.drain_registrations().map_err(|err| {
-            OptimizerError::RegistrationFailed(
-                err.as_string()
-                    .unwrap_or_else(|| "failed to drain WASM plugin registrations".to_string()),
-            )
-        })?);
-        Ok(())
+            ctx.extend_registrations(plugin_context.drain_registrations().map_err(|err| {
+                PluginError::RegistrationFailed(
+                    err.as_string()
+                        .unwrap_or_else(|| "failed to drain WASM plugin registrations".to_string()),
+                )
+            })?);
+            Ok(())
+        })
     }
 }
 
-#[wasm_bindgen(js_name = "registerOptimizerPlugin")]
-pub fn register_optimizer_plugin(
+#[wasm_bindgen(js_name = "registerPlugin")]
+pub fn register_plugin(
     plugin_kind: String,
     validate: Option<Function>,
     register: Function,
 ) -> Result<(), JsValue> {
-    register_hosted_plugin_handler(Arc::new(WasmHostedPluginHandler {
+    ensure_adaptive_component_registered()?;
+    nemo_flow_core::register_plugin_handler(Arc::new(WasmPluginHandler {
         plugin_kind,
         validate: validate.map(send_wrapper::SendWrapper::new),
         register: send_wrapper::SendWrapper::new(register),
@@ -2109,128 +2122,37 @@ pub fn register_optimizer_plugin(
     .map_err(to_js_err)
 }
 
-#[wasm_bindgen(js_name = "deregisterOptimizerPlugin")]
-pub fn deregister_optimizer_plugin(plugin_kind: String) -> bool {
-    deregister_hosted_plugin_handler(&plugin_kind)
+#[wasm_bindgen(js_name = "deregisterPlugin")]
+pub fn deregister_plugin(plugin_kind: String) -> bool {
+    nemo_flow_core::deregister_plugin_handler(&plugin_kind)
 }
 
-/// Dynamic optimizer runtime selected by config.
-#[wasm_bindgen(js_name = "OptimizerRuntime")]
-pub struct WasmOptimizerRuntime {
-    inner: RefCell<Option<WasmOptimizerRuntimeState>>,
+#[wasm_bindgen(js_name = "initializePlugins")]
+pub async fn initialize_plugins(config: JsValue) -> Result<JsValue, JsValue> {
+    ensure_adaptive_component_registered()?;
+    let config: nemo_flow_core::PluginConfig = serde_wasm_bindgen::from_value(config)?;
+    let report = nemo_flow_core::initialize_plugins(config)
+        .await
+        .map_err(to_js_err)?;
+    serde_wasm_bindgen::to_value(&report).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
-enum WasmOptimizerRuntimeState {
-    Pending {
-        config: OptimizerConfig,
-        report: ConfigReport,
-    },
-    Ready(NativeOptimizerRuntime),
+#[wasm_bindgen(js_name = "clearPluginConfiguration")]
+pub fn clear_plugin_configuration() -> Result<(), JsValue> {
+    nemo_flow_core::clear_plugin_configuration().map_err(to_js_err)
 }
 
-#[allow(tail_expr_drop_order)]
-#[wasm_bindgen]
-impl WasmOptimizerRuntime {
-    #[wasm_bindgen(constructor)]
-    pub fn new(config: JsValue) -> Result<WasmOptimizerRuntime, JsValue> {
-        let config: OptimizerConfig = serde_wasm_bindgen::from_value(config)?;
-        let report = validate_optimizer_config_or_js_err(&config)?;
-        Ok(WasmOptimizerRuntime {
-            inner: RefCell::new(Some(WasmOptimizerRuntimeState::Pending { config, report })),
-        })
-    }
-
-    #[wasm_bindgen]
-    pub async fn register(&self) -> Result<(), JsValue> {
-        let state = self
-            .inner
-            .borrow_mut()
-            .take()
-            .ok_or_else(|| JsValue::from_str("optimizer runtime already shut down"))?;
-
-        let (result, next_state) = match state {
-            WasmOptimizerRuntimeState::Pending { config, report } => {
-                match NativeOptimizerRuntime::new(config.clone()).await {
-                    Ok(mut runtime) => {
-                        let result = runtime.register().await.map_err(to_js_err);
-                        (result, Some(WasmOptimizerRuntimeState::Ready(runtime)))
-                    }
-                    Err(err) => (
-                        Err(to_js_err(err)),
-                        Some(WasmOptimizerRuntimeState::Pending { config, report }),
-                    ),
-                }
-            }
-            WasmOptimizerRuntimeState::Ready(mut runtime) => {
-                let result = runtime.register().await.map_err(to_js_err);
-                (result, Some(WasmOptimizerRuntimeState::Ready(runtime)))
-            }
-        };
-
-        *self.inner.borrow_mut() = next_state;
-        result
-    }
-
-    #[wasm_bindgen]
-    pub fn deregister(&self) -> Result<(), JsValue> {
-        {
-            let mut guard = self.inner.borrow_mut();
-            let state = guard
-                .as_mut()
-                .ok_or_else(|| JsValue::from_str("optimizer runtime already shut down"))?;
-            match state {
-                WasmOptimizerRuntimeState::Pending { .. } => Ok(()),
-                WasmOptimizerRuntimeState::Ready(runtime) => {
-                    runtime.deregister().map_err(to_js_err)
-                }
-            }
-        }
-    }
-
-    #[wasm_bindgen]
-    pub async fn shutdown(&self) -> Result<(), JsValue> {
-        let state = self
-            .inner
-            .borrow_mut()
-            .take()
-            .ok_or_else(|| JsValue::from_str("optimizer runtime already shut down"))?;
-        match state {
-            WasmOptimizerRuntimeState::Pending { .. } => Ok(()),
-            WasmOptimizerRuntimeState::Ready(runtime) => {
-                runtime.shutdown().await.map_err(to_js_err)
-            }
-        }
-    }
-
-    #[wasm_bindgen]
-    pub fn report(&self) -> Result<JsValue, JsValue> {
-        let report = {
-            let guard = self.inner.borrow();
-            let state = guard
-                .as_ref()
-                .ok_or_else(|| JsValue::from_str("optimizer runtime already shut down"))?;
-            match state {
-                WasmOptimizerRuntimeState::Pending { report, .. } => report.clone(),
-                WasmOptimizerRuntimeState::Ready(runtime) => runtime.report().clone(),
-            }
-        };
-        serde_wasm_bindgen::to_value(&report).map_err(|e| JsValue::from_str(&e.to_string()))
-    }
+#[wasm_bindgen(js_name = "activePluginReport")]
+pub fn active_plugin_report() -> Result<JsValue, JsValue> {
+    serde_wasm_bindgen::to_value(&nemo_flow_core::active_plugin_report())
+        .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
-fn validate_optimizer_config_or_js_err(config: &OptimizerConfig) -> Result<ConfigReport, JsValue> {
-    let report = NativeOptimizerRuntime::validate_config(config);
-    if report.has_errors() {
-        let joined = report
-            .diagnostics
-            .iter()
-            .filter(|diag| diag.level == DiagnosticLevel::Error)
-            .map(|diag| diag.message.as_str())
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(JsValue::from_str(&joined));
-    }
-    Ok(report)
+#[wasm_bindgen(js_name = "listPluginKinds")]
+pub fn list_plugin_kinds() -> Result<JsValue, JsValue> {
+    ensure_adaptive_component_registered()?;
+    serde_wasm_bindgen::to_value(&nemo_flow_core::list_plugin_kinds())
+        .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// OpenInference-backed event subscriber.
@@ -2391,7 +2313,7 @@ mod tests {
 
     #[cfg(target_arch = "wasm32")]
     #[test]
-    fn optimizer_config_validation_and_runtime_report_round_trip() {
+    fn adaptive_config_validation_and_runtime_report_round_trip() {
         let config = serde_wasm_bindgen::to_value(&serde_json::json!({
             "version": 1,
             "state": {
@@ -2400,35 +2322,16 @@ mod tests {
                     "config": {}
                 }
             },
-            "components": [
-                {
-                    "kind": "telemetry",
-                    "enabled": true,
-                    "config": {
-                        "learners": ["latency_sensitivity"]
-                    }
-                },
-                {
-                    "kind": "dynamo_hints",
-                    "enabled": true,
-                    "config": {}
-                },
-                {
-                    "kind": "tool_parallelism",
-                    "enabled": true,
-                    "config": {}
-                }
-            ]
+            "telemetry": {
+                "learners": ["latency_sensitivity"]
+            },
+            "adaptive_hints": {},
+            "tool_parallelism": {}
         }))
         .unwrap();
 
-        let report = validate_optimizer_config(config.clone()).unwrap();
+        let report = validate_plugin_config(config.clone()).unwrap();
         let report_json: serde_json::Value = serde_wasm_bindgen::from_value(report).unwrap();
-        assert_eq!(report_json["diagnostics"], serde_json::json!([]));
-
-        let runtime = WasmOptimizerRuntime::new(config).unwrap();
-        let report_json: serde_json::Value =
-            serde_wasm_bindgen::from_value(runtime.report().unwrap()).unwrap();
         assert_eq!(report_json["diagnostics"], serde_json::json!([]));
     }
 
@@ -2448,14 +2351,15 @@ mod tests {
     }
 
     #[test]
-    fn optimizer_plugin_context_helpers_work_natively() {
+    fn adaptive_plugin_context_helpers_work_natively() {
         let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
-        let context = WasmOptimizerPluginContext {
+        let context = WasmPluginContext {
             registrations: Arc::new(Mutex::new(Vec::new())),
+            namespace_prefix: String::new(),
         };
         context
             .push_registration(ComponentRegistration::new(
-                "external_component",
+                "plugin",
                 "plugin.reg".to_string(),
                 Box::new(|| Ok(())),
             ))
