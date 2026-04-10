@@ -40,19 +40,17 @@ pub struct FfiAtifExporter(pub nemo_flow_core::atif::AtifExporter);
 pub struct FfiOpenTelemetrySubscriber(pub nemo_flow_otel::OpenTelemetrySubscriber);
 /// Opaque OpenInference subscriber handle.
 pub struct FfiOpenInferenceSubscriber(pub nemo_flow_openinference::OpenInferenceSubscriber);
-/// Opaque optimizer runtime handle.
-pub struct FfiOptimizerRuntime(pub nemo_flow_optimizer::OptimizerRuntime);
-/// Opaque optimizer hosted plugin context.
+/// Opaque plugin registration context.
 ///
 /// This wrapper contains a borrowed raw pointer to an
-/// `nemo_flow_optimizer::HostedRegistrationContext`, not an owned heap allocation.
+/// `nemo_flow_core::PluginRegistrationContext`, not an owned heap allocation.
 /// It is only valid for the duration of the hosted plugin registration callback that receives
 /// it. C callers must not store the pointer, use it after the callback returns, or attempt to
 /// free or drop it.
 ///
-/// There is intentionally no `nemo_flow_optimizer_plugin_context_free` function because this FFI
+/// There is intentionally no `nemo_flow_plugin_context_free` function because this FFI
 /// wrapper does not own the underlying registration context.
-pub struct FfiOptimizerPluginContext(pub *mut nemo_flow_optimizer::HostedRegistrationContext);
+pub struct FfiPluginContext(pub *mut nemo_flow_core::PluginRegistrationContext);
 
 /// Opaque handle carrying both request and response codec trait objects.
 ///
@@ -252,17 +250,6 @@ pub unsafe extern "C" fn nemo_flow_openinference_subscriber_free(
 pub unsafe extern "C" fn nemo_flow_codec_free(handle: *mut FfiCodecHandle) {
     if !handle.is_null() {
         drop(unsafe { Box::from_raw(handle) });
-    }
-}
-
-/// Free an optimizer runtime handle previously returned by `nemo_flow_optimizer_runtime_create`.
-///
-/// # Safety
-/// `ptr` must be a valid pointer returned by `nemo_flow_optimizer_runtime_create`, or null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_optimizer_runtime_free(ptr: *mut FfiOptimizerRuntime) {
-    if !ptr.is_null() {
-        drop(unsafe { Box::from_raw(ptr) });
     }
 }
 
@@ -1000,7 +987,6 @@ mod tests {
             nemo_flow_atif_exporter_free(std::ptr::null_mut());
             nemo_flow_otel_subscriber_free(std::ptr::null_mut());
             nemo_flow_openinference_subscriber_free(std::ptr::null_mut());
-            nemo_flow_optimizer_runtime_free(std::ptr::null_mut());
         }
     }
 

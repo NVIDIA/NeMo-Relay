@@ -40,57 +40,55 @@ npm run build
 npm test
 ```
 
-## Optimizer Runtime
+## Adaptive Config
 
-Node exposes optimizer helpers through `optimizer.js`:
+Node exposes adaptive config helpers through `adaptive.js` and configures them
+through `plugin.js`:
 
 ```javascript
-const {
-  Runtime,
-  defaultConfig,
-  inMemoryBackend,
-  telemetryComponent,
-  validateConfig,
-} = require("./optimizer.js");
+const adaptive = require("./adaptive.js");
+const plugin = require("./plugin.js");
 
-const config = defaultConfig();
-config.state = { backend: inMemoryBackend() };
-config.components = [telemetryComponent({ learners: ["latency_sensitivity"] })];
+const config = adaptive.defaultConfig();
+config.state = { backend: adaptive.inMemoryBackend() };
+config.telemetry = adaptive.telemetryConfig({ learners: ["latency_sensitivity"] });
 
-const validation = validateConfig(config);
-const runtime = new Runtime(config);
+const validation = plugin.validate({
+  version: 1,
+  components: [adaptive.ComponentSpec(config)],
+});
 ```
 
-## Hosted Optimizer Plugins
+## Hosted Plugins
 
 Node hosted plugins register callback handlers first, then activate themselves
-through `externalComponent(...)` in the optimizer config.
+as top-level plugin components in the generic plugin config.
 
 ```javascript
 const {
-  Runtime,
-  defaultConfig,
-  externalComponent,
-  registerPlugin,
-} = require("./optimizer.js");
+  register,
+  initialize,
+  ComponentSpec,
+} = require("./plugin.js");
 
-registerPlugin("example.header_plugin", {
-  validate(instanceId, pluginConfig) {
+register("example.header_plugin", {
+  validate(pluginConfig) {
     return [];
   },
-  register(instanceId, pluginConfig, context) {
+  register(pluginConfig, context) {
     context.registerToolRequestIntercept(
-      `${instanceId}.tool`,
+      "tool",
       25,
       false,
-      (_name, args) => ({ ...args, nodePlugin: instanceId }),
+      (_name, args) => ({ ...args, nodePlugin: "enabled" }),
     );
   },
 });
 
-const config = defaultConfig();
-config.components = [externalComponent("example.header_plugin", "plugin-1", {})];
-const runtime = new Runtime(config);
+initialize({
+  version: 1,
+  components: [ComponentSpec("example.header_plugin", {})],
+});
 ```
 
 `context` exposes:

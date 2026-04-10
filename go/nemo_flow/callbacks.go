@@ -36,7 +36,7 @@ typedef char* (*NemoFlowLlmConditionalCb)(void* user_data, const FfiLLMRequest* 
 typedef char* (*NemoFlowLlmExecFn)(void* user_data, const char* native_json);
 typedef char* (*NemoFlowLlmResponseFn)(void* user_data, const char* response_json);
 typedef void (*NemoFlowEventSubscriberFn)(void* user_data, const FfiEvent* event);
-typedef struct FfiOptimizerPluginContext FfiOptimizerPluginContext;
+typedef struct FfiPluginContext FfiPluginContext;
 
 // Middleware chain next function types
 typedef char* (*NemoFlowToolExecNextFn)(const char* args_json, void* next_ctx);
@@ -448,9 +448,9 @@ func goLlmRequestInterceptTrampoline(
 	return 0 // NemoFlowStatus::Ok
 }
 
-//export goOptimizerPluginValidateTrampoline
-func goOptimizerPluginValidateTrampoline(userData unsafe.Pointer, instanceID *C.char, pluginConfigJSON *C.char) *C.char {
-	handler := lookupClosure(userData).(OptimizerPluginHandler)
+//export goPluginValidateTrampoline
+func goPluginValidateTrampoline(userData unsafe.Pointer, pluginConfigJSON *C.char) *C.char {
+	handler := lookupClosure(userData).(PluginHandler)
 	var pluginConfig map[string]any
 	if pluginConfigJSON != nil {
 		if err := json.Unmarshal([]byte(C.GoString(pluginConfigJSON)), &pluginConfig); err != nil {
@@ -458,13 +458,13 @@ func goOptimizerPluginValidateTrampoline(userData unsafe.Pointer, instanceID *C.
 			return nil
 		}
 	}
-	diagnostics, err := handler.Validate(C.GoString(instanceID), pluginConfig)
+	diagnostics, err := handler.Validate(pluginConfig)
 	if err != nil {
 		setLastErrorMessage(err.Error())
 		return nil
 	}
 	if diagnostics == nil {
-		diagnostics = []OptimizerConfigDiagnostic{}
+		diagnostics = []ConfigDiagnostic{}
 	}
 	payload, err := json.Marshal(diagnostics)
 	if err != nil {
@@ -474,9 +474,9 @@ func goOptimizerPluginValidateTrampoline(userData unsafe.Pointer, instanceID *C.
 	return C.CString(string(payload))
 }
 
-//export goOptimizerPluginRegisterTrampoline
-func goOptimizerPluginRegisterTrampoline(userData unsafe.Pointer, instanceID *C.char, pluginConfigJSON *C.char, ctx *C.FfiOptimizerPluginContext) C.int32_t {
-	handler := lookupClosure(userData).(OptimizerPluginHandler)
+//export goPluginRegisterTrampoline
+func goPluginRegisterTrampoline(userData unsafe.Pointer, pluginConfigJSON *C.char, ctx *C.FfiPluginContext) C.int32_t {
+	handler := lookupClosure(userData).(PluginHandler)
 	var pluginConfig map[string]any
 	if pluginConfigJSON != nil {
 		if err := json.Unmarshal([]byte(C.GoString(pluginConfigJSON)), &pluginConfig); err != nil {
@@ -484,7 +484,7 @@ func goOptimizerPluginRegisterTrampoline(userData unsafe.Pointer, instanceID *C.
 			return 5
 		}
 	}
-	if err := handler.Register(C.GoString(instanceID), pluginConfig, &OptimizerPluginContext{ptr: ctx}); err != nil {
+	if err := handler.Register(pluginConfig, &PluginContext{ptr: ctx}); err != nil {
 		setLastErrorMessage(err.Error())
 		return 5
 	}

@@ -100,7 +100,7 @@ crates/
       scope_local_tests.rs
       stream_tests.rs
 
-  optimizer/       # Dynamic optimizer runtime
+  adaptive/       # Adaptive plugin component and learning engine
   python/          # PyO3 bindings
   ffi/             # C FFI (used by Go via CGo)
   node/            # NAPI Node.js bindings
@@ -121,7 +121,7 @@ python/            # Python wrapper package (nemo_flow/)
     scope_local.py     # Scope-local middleware registration
     codecs.py          # LLM codec protocol definitions
     typed.py           # Codec-based typed wrappers
-    optimizer.py       # Optimizer config helpers and runtime lifecycle
+    adaptive.py       # Adaptive config helpers
 
 go/nemo_flow/        # Go CGo bindings
 ```

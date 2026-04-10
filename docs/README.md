@@ -62,10 +62,10 @@ Choose the path that matches what you are trying to do:
 8. [Observability with OpenInference](observability-with-openinference.md)
 9. [Testing](testing.md)
 
-### Using the Optimizer Runtime
+### Using Adaptive Components
 
-1. [Optimizer Layer](optimizer-layer.md)
-2. [Optimizer API Reference](optimizer-api-reference.md)
+1. [Adaptive Layer](adaptive-layer.md)
+2. [Adaptive API Reference](adaptive-api-reference.md)
 3. [Online Learning Engine](online-learning-engine.md)
 4. [Context Isolation](context-isolation.md)
 5. [Testing](testing.md)
@@ -98,9 +98,9 @@ Choose the path that matches what you are trying to do:
 | [Getting Started: Node.js](getting-started-node.md) | Minimal install-to-first-tool-call path for Node.js |
 | [Getting Started: Go](getting-started-go.md) | Minimal install-to-first-tool-call path for Go |
 | [Getting Started: WebAssembly](getting-started-wasm.md) | Minimal install-to-first-tool-call path for WASM |
-| [Recipes](recipes.md) | Task-oriented patterns for logging, ATIF, optimizer setup, and context propagation |
-| [Optimizer Layer](optimizer-layer.md) | Dynamic optimizer config, built-in components, hosted plugins, and runtime lifecycle |
-| [Optimizer API Reference](optimizer-api-reference.md) | Public optimizer config types, diagnostics, runtime helpers, and plugin registration APIs |
+| [Recipes](recipes.md) | Task-oriented patterns for logging, ATIF, adaptive setup, and context propagation |
+| [Adaptive Layer](adaptive-layer.md) | Dynamic adaptive config, flat adaptive sections, and plugin-host integration |
+| [Adaptive API Reference](adaptive-api-reference.md) | Public adaptive config types, diagnostics, runtime helpers, and plugin registration APIs |
 | [Online Learning Engine](online-learning-engine.md) | Prediction trie, sensitivity scoring, Redis persistence, and learner pipeline |
 | [Testing](testing.md) | Test commands, helpers, coverage, and conventions |
 | [Integration Best Practices](integration-best-practices.md) | Patterns for integrating NeMo Flow into agent frameworks |

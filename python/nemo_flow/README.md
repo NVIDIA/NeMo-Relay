@@ -18,8 +18,8 @@ This package provides a thin Python layer over the native Rust extension (`_nati
 - **Scope context managers** -- Python context managers for automatic scope push/pop with cleanup.
 - **Async support** -- All async operations are exposed as native Python coroutines compatible with `asyncio`.
 - **Scope-local middleware** -- `scope_local.py` exposes scope-scoped guardrail, intercept, and subscriber registration.
-- **Typed and optimizer helpers** -- `typed.py` and `optimizer.py` expose higher-level typed wrappers plus config-driven optimizer runtime helpers.
-- **Hosted optimizer plugins** -- `register_optimizer_plugin(...)`, `deregister_optimizer_plugin(...)`, and `ExternalComponent` support callback-backed optimizer extensions invoked from Rust.
+- **Typed and adaptive helpers** -- `typed.py` and `adaptive.py` expose higher-level typed wrappers plus flat adaptive config helpers for the core plugin host.
+- **Generic plugin host** -- `plugin.py` exposes global plugin registration, configuration, and reporting helpers.
 
 ## Key Files
 
@@ -35,7 +35,8 @@ This package provides a thin Python layer over the native Rust extension (`_nati
 | `subscribers.py` | Event subscriber registration |
 | `scope_local.py` | Scope-local middleware registration |
 | `typed.py` | Typed helper utilities |
-| `optimizer.py` | Optimizer config helpers, diagnostics, runtime lifecycle wrapper, and hosted plugin helpers |
+| `adaptive.py` | Adaptive config helpers for the top-level `adaptive` plugin component |
+| `plugin.py` | Generic plugin-host registration and configuration helpers |
 
 ## Install
 
@@ -49,74 +50,77 @@ This builds the native Rust extension and installs the package in a virtual envi
 uv run pytest
 ```
 
-If the native extension changed, rebuild it before rerunning optimizer tests:
+If the native extension changed, rebuild it before rerunning adaptive tests:
 
 ```bash
 uv run maturin develop
-uv run pytest python/tests/test_optimizer.py python/tests/test_optimizer_config.py
+uv run pytest python/tests/test_adaptive.py python/tests/test_adaptive_config.py
 ```
 
-## Optimizer Runtime
+## Adaptive Config
 
-Python exposes typed optimizer helpers through `nemo_flow.optimizer`.
+Python exposes typed adaptive helpers through `nemo_flow.adaptive`, then
+activates them through `nemo_flow.plugin`.
 
 ```python
-from nemo_flow.optimizer import (
+from nemo_flow.adaptive import (
+    AdaptiveHintsConfig,
     BackendSpec,
-    OptimizerConfig,
-    OptimizerRuntime,
+    AdaptiveConfig,
+    ComponentSpec,
     StateConfig,
-    TelemetryComponent,
+    TelemetryConfig,
 )
+from nemo_flow import plugin
 
-runtime = OptimizerRuntime(
-    OptimizerConfig(
-        state=StateConfig(backend=BackendSpec.in_memory()),
-        components=[TelemetryComponent(learners=["latency_sensitivity"])],
+report = await plugin.initialize(
+    plugin.PluginConfig(
+        components=[
+            ComponentSpec(
+                AdaptiveConfig(
+                    state=StateConfig(backend=BackendSpec.in_memory()),
+                    telemetry=TelemetryConfig(learners=["latency_sensitivity"]),
+                    adaptive_hints=AdaptiveHintsConfig(),
+                )
+            )
+        ]
     )
 )
+assert report["diagnostics"] == []
 ```
 
-## Hosted Optimizer Plugins
+## Hosted Plugins
 
-Python hosted optimizer plugins register a handler object first, then enable
-the plugin through `ExternalComponent(...)` in `OptimizerConfig`.
+Python hosted plugins register a handler object first, then enable themselves
+as top-level plugin components in `nemo_flow.plugin.initialize(...)`.
 
 ```python
 from nemo_flow import LLMRequest
-from nemo_flow.optimizer import (
-    ExternalComponent,
-    OptimizerConfig,
-    OptimizerRuntime,
-    register_optimizer_plugin,
-)
+from nemo_flow import plugin
 
 class HeaderPlugin:
-    def validate(self, instance_id, plugin_config):
+    def validate(self, plugin_config):
         return []
 
-    def register(self, instance_id, plugin_config, context):
+    def register(self, plugin_config, context):
         def intercept(_name, request, annotated):
             headers = dict(request.headers)
-            headers["x-plugin"] = instance_id
+            headers["x-plugin"] = "enabled"
             return LLMRequest(headers, request.content), annotated
 
         context.register_llm_request_intercept(
-            f"{instance_id}.header",
+            "header",
             25,
             False,
             intercept,
         )
 
-register_optimizer_plugin("example.header_plugin", HeaderPlugin())
+plugin.register("example.header_plugin", HeaderPlugin())
 
-runtime = OptimizerRuntime(
-    OptimizerConfig(
+await plugin.initialize(
+    plugin.PluginConfig(
         components=[
-            ExternalComponent(
-                plugin_kind="example.header_plugin",
-                instance_id="plugin-1",
-            )
+            plugin.ComponentSpec(kind="example.header_plugin"),
         ]
     )
 )
@@ -135,5 +139,5 @@ runtime = OptimizerRuntime(
 
 See [docs/api-reference.md](../../docs/api-reference.md) for the core runtime
 API, [docs/typed-api-reference.md](../../docs/typed-api-reference.md) for typed
-helpers, and [docs/optimizer-api-reference.md](../../docs/optimizer-api-reference.md)
-for optimizer APIs.
+helpers, and [docs/adaptive-api-reference.md](../../docs/adaptive-api-reference.md)
+for adaptive APIs.

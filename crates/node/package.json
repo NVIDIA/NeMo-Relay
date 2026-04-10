@@ -13,9 +13,13 @@
       "types": "./typed.d.ts",
       "default": "./typed.js"
     },
-    "./optimizer": {
-      "types": "./optimizer.d.ts",
-      "default": "./optimizer.js"
+    "./plugin": {
+      "types": "./plugin.d.ts",
+      "default": "./plugin.js"
+    },
+    "./adaptive": {
+      "types": "./adaptive.d.ts",
+      "default": "./adaptive.js"
     }
   },
   "napi": {

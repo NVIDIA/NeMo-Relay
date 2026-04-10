@@ -4,13 +4,13 @@
 [workspace]
 members = [
     "crates/core",
+    "crates/adaptive",
     # Language Bindings
     "crates/python",
     "crates/ffi",
     "crates/node",
     "crates/wasm",
-    # Optimizer
-    "crates/optimizer",
+    # Adaptive
     # Observability Subscribers
     "crates/otel",
     "crates/openinference"

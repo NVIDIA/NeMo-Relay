@@ -261,7 +261,7 @@ python/nemo_flow/
   subscribers.py    # Event subscriber registration
   scope_local.py    # Scope-local middleware registration
   codecs.py         # LlmCodec/LlmResponseCodec protocols and built-in codec classes
-  optimizer.py      # Config-driven optimizer runtime helpers
+  adaptive.py      # Adaptive config helpers
   typed.py          # Codec-based typed wrappers
 ```
 
@@ -272,72 +272,39 @@ Each implements both `LlmCodec` (request decode/encode) and
 
 The Python package wraps a PyO3 native extension (`_native`) built with the stable ABI (abi3), producing a single `.so` compatible with Python 3.11+.
 
-### Optimizer Runtime
+### Adaptive Plugins
 
-Python exposes typed optimizer helpers in `nemo_flow.optimizer`:
-
-```python
-from nemo_flow.optimizer import (
-    BackendSpec,
-    OptimizerConfig,
-    OptimizerRuntime,
-    StateConfig,
-    TelemetryComponent,
-)
-
-runtime = OptimizerRuntime(
-    OptimizerConfig(
-        state=StateConfig(backend=BackendSpec.in_memory()),
-        components=[TelemetryComponent(learners=["latency_sensitivity"])],
-    )
-)
-
-report = runtime.report()
-await runtime.register()
-runtime.deregister()
-await runtime.shutdown()
-```
-
-### Optimizer Hosted Plugins
-
-Python can register hosted optimizer plugins that the Rust optimizer runtime
-calls during validation and registration.
+Python exposes adaptive config helpers in `nemo_flow.adaptive`, and uses
+`nemo_flow.plugin` for validation, configuration, and hosted plugin
+registration:
 
 ```python
-from nemo_flow.optimizer import (
-    ExternalComponent,
-    OptimizerConfig,
-    OptimizerRuntime,
-    register_optimizer_plugin,
-)
+from nemo_flow import adaptive, plugin
 
-class HeaderPlugin:
-    def validate(self, instance_id, plugin_config):
-        return []
+plugin.register("example.header_plugin", HeaderPlugin())
 
-    def register(self, instance_id, plugin_config, context):
-        def intercept(tool_name, args):
-            return {**args, "x_plugin": instance_id, "tool": tool_name}
-
-        context.register_tool_request_intercept(
-            f"{instance_id}.tool",
-            25,
-            False,
-            intercept,
-        )
-
-register_optimizer_plugin("example.header_plugin", HeaderPlugin())
-
-runtime = OptimizerRuntime(
-    OptimizerConfig(
-        components=[
-            ExternalComponent(
-                plugin_kind="example.header_plugin",
-                instance_id="plugin-1",
+config = plugin.PluginConfig(
+    components=[
+        adaptive.ComponentSpec(
+            adaptive.AdaptiveConfig(
+                state=adaptive.StateConfig(
+                    backend=adaptive.BackendSpec.in_memory()
+                ),
+                telemetry=adaptive.TelemetryConfig(
+                    learners=["latency_sensitivity"]
+                ),
+                adaptive_hints=adaptive.AdaptiveHintsConfig(),
             )
-        ]
-    )
+        ),
+        plugin.ComponentSpec(
+            kind="example.header_plugin",
+            config={"priority": 25},
+        ),
+    ]
 )
+
+report = plugin.validate(config)
+await plugin.initialize(config)
 ```
 
 `context` exposes:
@@ -538,61 +505,44 @@ const result = await typedToolExecute(
 
 Node.js uses a push-based stream bridge for LLM streaming. JavaScript drives async iteration and pushes chunks back to the native layer via `pushStreamChunk()` / `endStream()`.
 
-### Optimizer Runtime
+### Adaptive Plugins
 
-Node exposes optimizer helpers through `optimizer.js`:
-
-```javascript
-import {
-  Runtime,
-  defaultConfig,
-  inMemoryBackend,
-  telemetryComponent,
-  validateConfig,
-} from "./optimizer.js";
-
-const config = defaultConfig();
-config.state = { backend: inMemoryBackend() };
-config.components = [telemetryComponent({ learners: ["latency_sensitivity"] })];
-
-const validation = validateConfig(config);
-const runtime = new Runtime(config);
-const report = await runtime.report();
-await runtime.register();
-await runtime.deregister();
-await runtime.shutdown();
-```
-
-### Optimizer Hosted Plugins
-
-Node exposes hosted optimizer plugins through `registerPlugin(...)`
-and the `externalComponent(...)` helper in `optimizer.js`:
+Node exposes adaptive config helpers through `adaptive.js` and activates them
+through the core plugin host in `plugin.js`:
 
 ```javascript
-import {
-  Runtime,
-  defaultConfig,
-  externalComponent,
-  registerPlugin,
-} from "./optimizer.js";
+import * as adaptive from "./adaptive.js";
+import * as plugin from "./plugin.js";
 
-registerPlugin("example.header_plugin", {
-  validate(instanceId, pluginConfig) {
+plugin.register("example.header_plugin", {
+  validate(pluginConfig) {
     return [];
   },
-  register(instanceId, pluginConfig, context) {
+  register(pluginConfig, context) {
     context.registerToolRequestIntercept(
-      `${instanceId}.tool`,
+      "tool",
       25,
       false,
-      (_name, args) => ({ ...args, nodePlugin: instanceId }),
+      (_name, args) => ({ ...args, nodePlugin: "enabled" }),
     );
   },
 });
 
-const config = defaultConfig();
-config.components = [externalComponent("example.header_plugin", "plugin-1", {})];
-const runtime = new Runtime(config);
+const config = plugin.defaultConfig();
+config.components = [
+  adaptive.ComponentSpec({
+    version: 1,
+    state: { backend: adaptive.inMemoryBackend() },
+    telemetry: adaptive.telemetryConfig({
+      learners: ["latency_sensitivity"],
+    }),
+    adaptive_hints: adaptive.adaptiveHintsConfig(),
+  }),
+  plugin.ComponentSpec("example.header_plugin", { priority: 25 }),
+];
+
+const validation = plugin.validate(config);
+await plugin.initialize(config);
 ```
 
 Node hosted plugin contexts expose:
@@ -603,6 +553,9 @@ Node hosted plugin contexts expose:
 - `registerLlmStreamExecutionIntercept(...)`
 - `registerToolRequestIntercept(...)`
 - `registerToolExecutionIntercept(...)`
+
+Registration names are local to each component. The runtime namespaces them
+internally, so users do not need to provide component instance ids.
 
 ## Go
 
@@ -625,7 +578,7 @@ go/nemo_flow/
   types.go          # Type definitions (ScopeHandle, ToolHandle, etc.)
   stream.go         # LLM stream handling
   callbacks.go      # Go trampolines for Rust callbacks
-  optimizer.go      # Optimizer config/runtime wrapper
+  adaptive.go      # Adaptive config and plugin helpers
   scope/            # Convenience package
   tools/            # Convenience package
   llm/              # Convenience package
@@ -722,63 +675,64 @@ func goToolSanitizeTrampoline(userData unsafe.Pointer, name *C.char, args *C.cha
 
 Memory management requires explicit `Free()` calls on handles and scope stacks.
 
-### Optimizer Runtime
+### Adaptive Plugins
 
-Go exposes typed optimizer config builders and a synchronous runtime wrapper
-through the `optimizer` subpackage:
+Go exposes typed adaptive config builders through the `adaptive` subpackage and
+activates them through the core plugin host:
 
 ```go
-import optimizer "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/optimizer"
+import (
+    adaptive "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/adaptive"
+    nemo_flow "github.com/NVIDIA/NeMo-Flow/go/nemo_flow"
+)
 
-config := optimizer.NewConfig()
-config.State = &optimizer.StateConfig{
-    Backend: optimizer.NewInMemoryBackend(),
+config := adaptive.NewConfig()
+config.State = &adaptive.StateConfig{
+    Backend: adaptive.NewInMemoryBackend(),
 }
-config.Components = []optimizer.ComponentSpec{
-    optimizer.TelemetryComponent(optimizer.TelemetryComponentConfig{
-        Learners: []string{"latency_sensitivity"},
-    }),
-}
+telemetry := adaptive.NewTelemetryConfig()
+telemetry.Learners = []string{"latency_sensitivity"}
+config.Telemetry = &telemetry
 
-report, err := optimizer.ValidateConfig(config)
-runtime, err := optimizer.NewRuntime(config)
+report, err := nemo_flow.InitializePlugins(nemo_flow.PluginConfig{
+    Version: 1,
+    Components: []nemo_flow.PluginComponentSpec{
+        adaptive.NewComponentSpec(config).PluginComponent(),
+    },
+})
 if err != nil {
     panic(err)
 }
-defer runtime.Close()
-
 _ = report
-_ = runtime.Register()
-_ = runtime.Deregister()
-_ = runtime.Shutdown()
 ```
 
-### Optimizer Hosted Plugins
+### Hosted Plugins
 
-The Go binding exposes hosted plugin registration plus a temporary registration
-context for adding subscribers and intercepts:
+The Go binding exposes hosted plugin registration through the core plugin host.
+Adaptive remains a separate top-level plugin component:
 
 ```go
 import (
     "encoding/json"
 
-    optimizer "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/optimizer"
+    adaptive "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/adaptive"
+    nemo_flow "github.com/NVIDIA/NeMo-Flow/go/nemo_flow"
 )
 
 pluginKind := "example.header_plugin"
-err := optimizer.RegisterPlugin(pluginKind, optimizer.PluginHandlerFuncs{
-    ValidateFunc: func(instanceID string, pluginConfig map[string]any) ([]optimizer.ConfigDiagnostic, error) {
+err := nemo_flow.RegisterPlugin(pluginKind, nemo_flow.PluginHandlerFuncs{
+    ValidateFunc: func(pluginConfig map[string]any) ([]nemo_flow.ConfigDiagnostic, error) {
         return nil, nil
     },
-    RegisterFunc: func(instanceID string, pluginConfig map[string]any, ctx *optimizer.PluginContext) error {
+    RegisterFunc: func(pluginConfig map[string]any, ctx *nemo_flow.PluginContext) error {
         return ctx.RegisterToolRequestIntercept(
-            instanceID+".tool",
+            "tool",
             25,
             false,
             func(name string, args json.RawMessage) json.RawMessage {
                 var payload map[string]any
                 _ = json.Unmarshal(args, &payload)
-                payload["goPlugin"] = instanceID
+                payload["goPlugin"] = "enabled"
                 payload["tool"] = name
                 out, _ := json.Marshal(payload)
                 return out
@@ -790,12 +744,21 @@ if err != nil {
     panic(err)
 }
 
-config := optimizer.NewConfig()
-config.Components = []optimizer.ComponentSpec{
-    optimizer.ExternalComponent(optimizer.ExternalComponentConfig{
-        PluginKind: pluginKind,
-        InstanceID: "plugin-1",
-    }),
+config := nemo_flow.NewPluginConfig()
+config.Components = []nemo_flow.PluginComponentSpec{
+    adaptive.NewComponentSpec(adaptive.NewConfig()).PluginComponent(),
+    {
+        Kind:    pluginKind,
+        Enabled: true,
+        Config: map[string]any{
+            "priority": 25,
+        },
+    },
+}
+
+_, err = nemo_flow.InitializePlugins(config)
+if err != nil {
+    panic(err)
 }
 ```
 
@@ -807,6 +770,9 @@ config.Components = []optimizer.ComponentSpec{
 - `RegisterLlmStreamExecutionIntercept(...)`
 - `RegisterToolRequestIntercept(...)`
 - `RegisterToolExecutionIntercept(...)`
+
+Registration names are local to each component. The runtime namespaces them
+internally, so users do not need to provide component instance ids.
 
 ### Context Isolation
 
@@ -956,87 +922,46 @@ scope_register_subscriber(
 popScope(handle);  // auto-cleanup
 ```
 
-### Optimizer Runtime
+### Adaptive Plugins
 
-The WASM binding uses plain JavaScript objects for optimizer config and exposes
-the optimizer surface through `optimizer.js`:
+The WASM binding uses `adaptive.js` for adaptive config helpers and
+`plugin.js` for the core plugin host:
 
 ```javascript
 import init from "./pkg/nemo_flow_wasm.js";
-import {
-  Runtime,
-  validateConfig,
-} from "./optimizer.js";
+import * as adaptive from "./adaptive.js";
+import * as plugin from "./plugin.js";
 
 await init();
 
-const config = {
-  version: 1,
-  state: { backend: { kind: "in_memory", config: {} } },
-  components: [
-    { kind: "telemetry", enabled: true, config: { learners: ["latency_sensitivity"] } },
-  ],
-};
-
-const validation = validateConfig(config);
-const runtime = new Runtime(config);
-runtime.report();
-await runtime.register();
-runtime.deregister();
-await runtime.shutdown();
-```
-
-### Optimizer Hosted Plugins
-
-The WASM binding also supports hosted plugins. Register the plugin handler in
-JavaScript, then activate it through `external_component` in the optimizer
-config:
-
-```javascript
-import init from './pkg/nemo_flow_wasm.js';
-import {
-    Runtime,
-    registerPlugin,
-    deregisterPlugin,
-    validateConfig,
-} from './optimizer.js';
-
-await init();
-
-registerPlugin("example.header_plugin", {
-    validate(instanceId, pluginConfig) {
-        return [];
-    },
-    register(instanceId, pluginConfig, context) {
-        context.registerToolRequestIntercept(
-            `${instanceId}.tool`,
-            25,
-            false,
-            (_name, args) => ({ ...args, wasmPlugin: instanceId }),
-        );
-    },
+plugin.register("example.header_plugin", {
+  validate() {
+    return [];
+  },
+  register(pluginConfig, context) {
+    context.registerToolRequestIntercept(
+      "tool",
+      25,
+      false,
+      (_name, args) => ({ ...args, wasmPlugin: "enabled" }),
+    );
+  },
 });
 
 const config = {
-    version: 1,
-    components: [
-        {
-            kind: "external_component",
-            enabled: true,
-            config: {
-                plugin_kind: "example.header_plugin",
-                instance_id: "plugin-1",
-            },
-        },
-    ],
+  version: 1,
+  components: [
+    adaptive.ComponentSpec({
+      version: 1,
+      state: { backend: adaptive.inMemoryBackend() },
+      adaptive_hints: adaptive.adaptiveHintsConfig(),
+    }),
+    plugin.ComponentSpec("example.header_plugin", { priority: 25 }),
+  ],
 };
 
-console.log(validateConfig(config));
-const runtime = new Runtime(config);
-await runtime.register();
-runtime.deregister();
-await runtime.shutdown();
-deregisterPlugin("example.header_plugin");
+console.log(plugin.validate(config));
+await plugin.initialize(config);
 ```
 
 WASM hosted plugin contexts expose:
@@ -1047,6 +972,9 @@ WASM hosted plugin contexts expose:
 - `registerLlmStreamExecutionIntercept(...)`
 - `registerToolRequestIntercept(...)`
 - `registerToolExecutionIntercept(...)`
+
+Registration names are local to each component. The runtime namespaces them
+internally, so users do not need to provide component instance ids.
 
 WASM stream execution note:
 

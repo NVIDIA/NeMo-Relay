@@ -71,7 +71,7 @@ else
         third_party/langgraph_tests/*)
           run_python=true
           ;;
-        crates/core/*|crates/optimizer/*|crates/otel/*|crates/openinference/*|Cargo.toml|Cargo.lock|rust-toolchain.toml|deny.toml|.github/workflows/*|scripts/*|patches/*|third_party/*)
+        crates/core/*|crates/adaptive/*|crates/otel/*|crates/openinference/*|Cargo.toml|Cargo.lock|rust-toolchain.toml|deny.toml|.github/workflows/*|scripts/*|patches/*|third_party/*)
           run_all=true
           break
           ;;

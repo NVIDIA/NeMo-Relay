@@ -10,6 +10,8 @@
 //! in the generated `index.d.ts` TypeScript definitions.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -24,10 +26,9 @@ use tokio_stream::StreamExt;
 
 use nemo_flow_core as core;
 use nemo_flow_core::types as core_types;
-use nemo_flow_optimizer::{
-    ComponentRegistration, ConfigDiagnostic, ConfigReport, HostedPluginHandler, OptimizerConfig,
-    OptimizerError, OptimizerRuntime as NativeOptimizerRuntime, deregister_hosted_plugin_handler,
-    register_hosted_plugin_handler,
+use nemo_flow_core::{
+    ConfigDiagnostic, DiagnosticLevel, PluginError, PluginHandler as HostedPluginHandler,
+    PluginRegistration as ComponentRegistration, PluginRegistrationContext,
 };
 
 use crate::callable;
@@ -42,6 +43,8 @@ use crate::types::*;
 fn init() {
     nemo_flow_core::initialize_shared_runtime_binding("node")
         .expect("node runtime ownership initialization should succeed");
+    nemo_flow_adaptive::register_adaptive_component()
+        .expect("node adaptive plugin component registration should succeed");
 }
 
 fn parse_string_map(
@@ -310,17 +313,18 @@ fn json_callback_tsfn(
     Ok(tsfn)
 }
 
-fn build_optimizer_plugin_context(
+fn build_plugin_context(
     env: &Env,
+    namespace_prefix: String,
     registrations: Arc<StdMutex<Vec<ComponentRegistration>>>,
 ) -> napi::Result<JsObject> {
     let mut context = env.create_object()?;
 
     let subscriber_regs = registrations.clone();
-    let register_subscriber = env.create_function_from_closure(
-        "__nemo_flow_optimizer_register_subscriber",
-        move |ctx| {
-            let name = ctx.get::<String>(0)?;
+    let subscriber_namespace = namespace_prefix.clone();
+    let register_subscriber =
+        env.create_function_from_closure("__nemo_flow_adaptive_register_subscriber", move |ctx| {
+            let name = format!("{}{}", subscriber_namespace, ctx.get::<String>(0)?);
             let callback = ctx.get::<JsFunction>(1)?;
             let tsfn = json_callback_tsfn(ctx.env, &callback)?;
             core::nemo_flow_register_subscriber(&name, callable::wrap_js_event_subscriber(tsfn))
@@ -331,28 +335,28 @@ fn build_optimizer_plugin_context(
                 .lock()
                 .unwrap()
                 .push(ComponentRegistration::new(
-                    "external_component",
+                    "plugin",
                     name_clone.clone(),
                     Box::new(move || {
                         core::nemo_flow_deregister_subscriber(&name_clone)
                             .map(|_| ())
                             .map_err(|e| {
-                                OptimizerError::RegistrationFailed(format!(
+                                PluginError::RegistrationFailed(format!(
                                     "subscriber deregistration failed: {e}"
                                 ))
                             })
                     }),
                 ));
             ctx.env.get_undefined()
-        },
-    )?;
+        })?;
     context.set_named_property("registerSubscriber", register_subscriber)?;
 
     let llm_regs = registrations.clone();
+    let llm_request_namespace = namespace_prefix.clone();
     let register_llm_request_intercept = env.create_function_from_closure(
-        "__nemo_flow_optimizer_register_llm_request_intercept",
+        "__nemo_flow_adaptive_register_llm_request_intercept",
         move |ctx| {
-            let name = ctx.get::<String>(0)?;
+            let name = format!("{}{}", llm_request_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
             let break_chain = ctx.get::<bool>(2)?;
             let callback = ctx.get::<JsFunction>(3)?;
@@ -367,13 +371,13 @@ fn build_optimizer_plugin_context(
 
             let name_clone = name.clone();
             llm_regs.lock().unwrap().push(ComponentRegistration::new(
-                "external_component",
+                "plugin",
                 name_clone.clone(),
                 Box::new(move || {
                     core::nemo_flow_deregister_llm_request_intercept(&name_clone)
                         .map(|_| ())
                         .map_err(|e| {
-                            OptimizerError::RegistrationFailed(format!(
+                            PluginError::RegistrationFailed(format!(
                                 "llm request intercept deregistration failed: {e}"
                             ))
                         })
@@ -388,10 +392,11 @@ fn build_optimizer_plugin_context(
     )?;
 
     let llm_exec_regs = registrations.clone();
+    let llm_exec_namespace = namespace_prefix.clone();
     let register_llm_execution_intercept = env.create_function_from_closure(
-        "__nemo_flow_optimizer_register_llm_execution_intercept",
+        "__nemo_flow_adaptive_register_llm_execution_intercept",
         move |ctx| {
-            let name = ctx.get::<String>(0)?;
+            let name = format!("{}{}", llm_exec_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
             let callback = ctx.get::<JsFunction>(2)?;
             let promise_fn = Arc::new(crate::promise_call::PromiseAwareFn::new(
@@ -409,14 +414,14 @@ fn build_optimizer_plugin_context(
                 .lock()
                 .unwrap()
                 .push(ComponentRegistration::new(
-                    "external_component",
+                    "plugin",
                     name_clone.clone(),
                     Box::new(move || {
                         let result =
                             core::nemo_flow_deregister_llm_execution_intercept(&name_clone)
                                 .map(|_| ())
                                 .map_err(|e| {
-                                    OptimizerError::RegistrationFailed(format!(
+                                    PluginError::RegistrationFailed(format!(
                                         "llm execution intercept deregistration failed: {e}"
                                     ))
                                 });
@@ -433,10 +438,11 @@ fn build_optimizer_plugin_context(
     )?;
 
     let llm_stream_exec_regs = registrations.clone();
+    let llm_stream_namespace = namespace_prefix.clone();
     let register_llm_stream_execution_intercept = env.create_function_from_closure(
-        "__nemo_flow_optimizer_register_llm_stream_execution_intercept",
+        "__nemo_flow_adaptive_register_llm_stream_execution_intercept",
         move |ctx| {
-            let name = ctx.get::<String>(0)?;
+            let name = format!("{}{}", llm_stream_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
             let callback = ctx.get::<JsFunction>(2)?;
             let promise_fn = Arc::new(crate::promise_call::PromiseAwareFn::new(
@@ -454,14 +460,14 @@ fn build_optimizer_plugin_context(
                 .lock()
                 .unwrap()
                 .push(ComponentRegistration::new(
-                    "external_component",
+                    "plugin",
                     name_clone.clone(),
                     Box::new(move || {
                         let result =
                             core::nemo_flow_deregister_llm_stream_execution_intercept(&name_clone)
                                 .map(|_| ())
                                 .map_err(|e| {
-                                    OptimizerError::RegistrationFailed(format!(
+                                    PluginError::RegistrationFailed(format!(
                                         "llm stream execution intercept deregistration failed: {e}"
                                     ))
                                 });
@@ -478,10 +484,11 @@ fn build_optimizer_plugin_context(
     )?;
 
     let tool_request_regs = registrations.clone();
+    let tool_request_namespace = namespace_prefix.clone();
     let register_tool_request_intercept = env.create_function_from_closure(
-        "__nemo_flow_optimizer_register_tool_request_intercept",
+        "__nemo_flow_adaptive_register_tool_request_intercept",
         move |ctx| {
-            let name = ctx.get::<String>(0)?;
+            let name = format!("{}{}", tool_request_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
             let break_chain = ctx.get::<bool>(2)?;
             let callback =
@@ -499,13 +506,13 @@ fn build_optimizer_plugin_context(
                 .lock()
                 .unwrap()
                 .push(ComponentRegistration::new(
-                    "external_component",
+                    "plugin",
                     name_clone.clone(),
                     Box::new(move || {
                         core::nemo_flow_deregister_tool_request_intercept(&name_clone)
                             .map(|_| ())
                             .map_err(|e| {
-                                OptimizerError::RegistrationFailed(format!(
+                                PluginError::RegistrationFailed(format!(
                                     "tool request intercept deregistration failed: {e}"
                                 ))
                             })
@@ -520,10 +527,11 @@ fn build_optimizer_plugin_context(
     )?;
 
     let tool_regs = registrations.clone();
+    let tool_exec_namespace = namespace_prefix;
     let register_tool_execution_intercept = env.create_function_from_closure(
-        "__nemo_flow_optimizer_register_tool_execution_intercept",
+        "__nemo_flow_adaptive_register_tool_execution_intercept",
         move |ctx| {
-            let name = ctx.get::<String>(0)?;
+            let name = format!("{}{}", tool_exec_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
             let callback = ctx.get::<JsFunction>(2)?;
             let promise_fn = Arc::new(crate::promise_call::PromiseAwareFn::new(
@@ -538,13 +546,13 @@ fn build_optimizer_plugin_context(
 
             let name_clone = name.clone();
             tool_regs.lock().unwrap().push(ComponentRegistration::new(
-                "external_component",
+                "plugin",
                 name_clone.clone(),
                 Box::new(move || {
                     let result = core::nemo_flow_deregister_tool_execution_intercept(&name_clone)
                         .map(|_| ())
                         .map_err(|e| {
-                            OptimizerError::RegistrationFailed(format!(
+                            PluginError::RegistrationFailed(format!(
                                 "tool execution intercept deregistration failed: {e}"
                             ))
                         });
@@ -564,8 +572,8 @@ fn build_optimizer_plugin_context(
 }
 
 struct NodePluginRegisterCall {
-    instance_id: String,
     plugin_config: Json,
+    namespace_prefix: String,
     registrations: Arc<StdMutex<Vec<ComponentRegistration>>>,
 }
 
@@ -608,11 +616,10 @@ impl PersistentJsFunction {
         }
     }
 
-    fn call_validate(&self, instance_id: &str, plugin_config: &Json) -> napi::Result<Json> {
+    fn call_validate(&self, plugin_config: &Json) -> napi::Result<Json> {
         // SAFETY: `self.env` was captured from a live N-API environment when
         // this persistent reference was created and remains valid while the
         // binding module is alive.
-        let env = unsafe { Env::from_raw(self.env) };
         let mut value = ptr::null_mut();
         // SAFETY: `self.reference` is a valid reference created by
         // `napi_create_reference`; `value` is writable storage for the
@@ -629,19 +636,13 @@ impl PersistentJsFunction {
         // SAFETY: `value` came from `napi_get_reference_value` for a function
         // reference owned by this struct, so it is a live JS function handle.
         let func = unsafe { JsFunction::from_raw_unchecked(self.env, value) };
-        let instance = unsafe {
-            JsUnknown::from_raw_unchecked(
-                self.env,
-                env.create_string_from_std(instance_id.to_string())?.raw(),
-            )
-        };
         let config = unsafe {
             JsUnknown::from_raw_unchecked(
                 self.env,
                 Json::to_napi_value(self.env, plugin_config.clone())?,
             )
         };
-        let returned = func.call(None, &[instance, config])?;
+        let returned = func.call(None, &[config])?;
         // SAFETY: `returned` is the live result of invoking `func` in the same
         // environment stored on this struct.
         unsafe { Json::from_napi_value(self.env, returned.raw()) }
@@ -669,77 +670,75 @@ impl HostedPluginHandler for NodeHostedPluginHandler {
 
     fn validate(
         &self,
-        instance_id: &str,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
     ) -> Vec<ConfigDiagnostic> {
         let Some(validate) = &self.validate else {
             return vec![];
         };
-        match validate.call_validate(instance_id, &Json::Object(plugin_config.clone())) {
+        match validate.call_validate(&Json::Object(plugin_config.clone())) {
             Ok(value) => {
                 serde_json::from_value::<Vec<ConfigDiagnostic>>(value).unwrap_or_else(|e| {
                     vec![ConfigDiagnostic {
-                        level: nemo_flow_optimizer::DiagnosticLevel::Error,
-                        code: "optimizer.plugin_validate_failed".into(),
-                        component: Some("external_component".into()),
+                        level: DiagnosticLevel::Error,
+                        code: "plugin.validate_failed".into(),
+                        component: Some(self.plugin_kind.clone()),
                         field: None,
-                        message: format!(
-                            "JS optimizer plugin validate returned invalid diagnostics: {e}"
-                        ),
+                        message: format!("JS plugin validate returned invalid diagnostics: {e}"),
                     }]
                 })
             }
             Err(e) => vec![ConfigDiagnostic {
-                level: nemo_flow_optimizer::DiagnosticLevel::Error,
-                code: "optimizer.plugin_validate_failed".into(),
-                component: Some("external_component".into()),
+                level: DiagnosticLevel::Error,
+                code: "plugin.validate_failed".into(),
+                component: Some(self.plugin_kind.clone()),
                 field: None,
-                message: format!("JS optimizer plugin validate failed: {e}"),
+                message: format!("JS plugin validate failed: {e}"),
             }],
         }
     }
 
-    fn register(
-        &self,
-        instance_id: &str,
+    fn register<'a>(
+        &'a self,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &mut nemo_flow_optimizer::HostedRegistrationContext,
-    ) -> nemo_flow_optimizer::Result<()> {
-        let registrations = Arc::new(StdMutex::new(Vec::<ComponentRegistration>::new()));
-        let payload = NodePluginRegisterCall {
-            instance_id: instance_id.to_string(),
-            plugin_config: Json::Object(plugin_config.clone()),
-            registrations: registrations.clone(),
-        };
-        let (tx, rx) = std::sync::mpsc::sync_channel::<std::result::Result<(), String>>(1);
-        let status = self.register.call_with_return_value(
-            payload,
-            ThreadsafeFunctionCallMode::NonBlocking,
-            move |_val: JsUnknown| {
-                let _ = tx.send(Ok(()));
-                Ok(())
-            },
-        );
-        if status != napi::Status::Ok {
-            return Err(OptimizerError::RegistrationFailed(format!(
-                "failed to queue JS optimizer plugin register callback: {status:?}"
-            )));
-        }
-        rx.recv()
-            .map_err(|_| {
-                OptimizerError::RegistrationFailed(
-                    "JS optimizer plugin register completion channel closed".into(),
-                )
-            })?
-            .map_err(OptimizerError::RegistrationFailed)?;
+        ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
+        let namespace_prefix = ctx.qualify_name("");
+        let plugin_config = plugin_config.clone();
+        Box::pin(async move {
+            let registrations = Arc::new(StdMutex::new(Vec::<ComponentRegistration>::new()));
+            let payload = NodePluginRegisterCall {
+                plugin_config: Json::Object(plugin_config),
+                namespace_prefix,
+                registrations: registrations.clone(),
+            };
+            let (tx, rx) = std::sync::mpsc::sync_channel::<std::result::Result<(), String>>(1);
+            let status = self.register.call_with_return_value(
+                payload,
+                ThreadsafeFunctionCallMode::NonBlocking,
+                move |_val: JsUnknown| {
+                    let _ = tx.send(Ok(()));
+                    Ok(())
+                },
+            );
+            if status != napi::Status::Ok {
+                return Err(PluginError::RegistrationFailed(format!(
+                    "failed to queue JS plugin register callback: {status:?}"
+                )));
+            }
+            rx.recv()
+                .map_err(|_| {
+                    PluginError::RegistrationFailed(
+                        "JS plugin register completion channel closed".into(),
+                    )
+                })?
+                .map_err(PluginError::RegistrationFailed)?;
 
-        let drained = std::mem::take(&mut *registrations.lock().map_err(|e| {
-            OptimizerError::RegistrationFailed(format!(
-                "optimizer plugin registrations lock poisoned: {e}"
-            ))
-        })?);
-        ctx.extend_registrations(drained);
-        Ok(())
+            let drained = std::mem::take(&mut *registrations.lock().map_err(|e| {
+                PluginError::RegistrationFailed(format!("plugin registrations lock poisoned: {e}"))
+            })?);
+            ctx.extend_registrations(drained);
+            Ok(())
+        })
     }
 }
 
@@ -2631,22 +2630,22 @@ impl JsOpenInferenceSubscriber {
     }
 }
 
-/// Validate an optimizer config document and return a structured diagnostics report.
+/// Validate a plugin config document and return a structured diagnostics report.
 #[napi]
-pub fn validate_optimizer_config(config: Json) -> napi::Result<Json> {
-    let config: OptimizerConfig =
+pub fn validate_plugin_config(config: Json) -> napi::Result<Json> {
+    let config: core::PluginConfig =
         serde_json::from_value(config).map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    serde_json::to_value(NativeOptimizerRuntime::validate_config(&config))
+    serde_json::to_value(core::validate_plugin_config(&config))
         .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
-/// Register a hosted optimizer plugin handler backed by JavaScript callbacks.
+/// Register a hosted plugin handler backed by JavaScript callbacks.
 ///
-/// `validate` receives `(instanceId, pluginConfig)` and should return a diagnostics array.
-/// `register` receives `(instanceId, pluginConfig, context)` and should use the context methods
+/// `validate` receives `(pluginConfig)` and should return a diagnostics array.
+/// `register` receives `(pluginConfig, context)` and should use the context methods
 /// to attach subscribers or intercepts. Both callbacks must be synchronous.
 #[napi]
-pub fn register_optimizer_plugin(
+pub fn register_plugin(
     env: Env,
     plugin_kind: String,
     validate: Option<JsFunction>,
@@ -2660,17 +2659,18 @@ pub fn register_optimizer_plugin(
         .create_threadsafe_function::<NodePluginRegisterCall, JsUnknown, _, ErrorStrategy::Fatal>(
             0,
             move |ctx: napi::threadsafe_function::ThreadSafeCallContext<NodePluginRegisterCall>| {
-                let instance_id = ctx.env.create_string_from_std(ctx.value.instance_id)?;
                 let plugin_config = unsafe {
                     JsUnknown::from_raw_unchecked(
                         ctx.env.raw(),
                         Json::to_napi_value(ctx.env.raw(), ctx.value.plugin_config)?,
                     )
                 };
-                let plugin_context =
-                    build_optimizer_plugin_context(&ctx.env, ctx.value.registrations)?;
+                let plugin_context = build_plugin_context(
+                    &ctx.env,
+                    ctx.value.namespace_prefix,
+                    ctx.value.registrations,
+                )?;
                 Ok(vec![
-                    js_unknown_from_raw(&ctx.env, &instance_id),
                     plugin_config,
                     js_unknown_from_raw(&ctx.env, &plugin_context),
                 ])
@@ -2678,7 +2678,7 @@ pub fn register_optimizer_plugin(
         )?;
     register_tsfn.unref(&env)?;
 
-    register_hosted_plugin_handler(Arc::new(NodeHostedPluginHandler {
+    core::register_plugin_handler(Arc::new(NodeHostedPluginHandler {
         plugin_kind,
         validate: validate_tsfn,
         register: register_tsfn,
@@ -2686,140 +2686,40 @@ pub fn register_optimizer_plugin(
     .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
-/// Deregister a hosted optimizer plugin handler by kind.
+/// Deregister a hosted plugin handler by kind.
 #[napi]
-pub fn deregister_optimizer_plugin(plugin_kind: String) -> bool {
-    deregister_hosted_plugin_handler(&plugin_kind)
+pub fn deregister_plugin(plugin_kind: String) -> bool {
+    core::deregister_plugin_handler(&plugin_kind)
 }
 
-/// Dynamic optimizer runtime selected by config.
-#[napi(js_name = "OptimizerRuntime")]
-pub struct JsOptimizerRuntime {
-    inner: Arc<tokio::sync::Mutex<Option<JsOptimizerRuntimeState>>>,
-}
-
-enum JsOptimizerRuntimeState {
-    Pending {
-        config: OptimizerConfig,
-        report: ConfigReport,
-    },
-    Ready(NativeOptimizerRuntime),
-}
-
+/// Initialize the active global plugin components.
 #[napi]
-impl JsOptimizerRuntime {
-    /// Create a new optimizer runtime from a config object.
-    #[napi(constructor)]
-    pub fn new(config: Json) -> napi::Result<Self> {
-        let config: OptimizerConfig =
-            serde_json::from_value(config).map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        let report = validate_optimizer_config_or_err(&config)?;
-        Ok(Self {
-            inner: Arc::new(tokio::sync::Mutex::new(Some(
-                JsOptimizerRuntimeState::Pending { config, report },
-            ))),
-        })
-    }
-
-    /// Register the runtime globally.
-    #[napi]
-    pub async fn register(&self) -> napi::Result<()> {
-        let state = {
-            let mut guard = self.inner.lock().await;
-            guard
-                .take()
-                .ok_or_else(|| napi::Error::from_reason("optimizer runtime already shut down"))?
-        };
-
-        let (result, next_state) = match state {
-            JsOptimizerRuntimeState::Pending { config, report } => {
-                match NativeOptimizerRuntime::new(config.clone()).await {
-                    Ok(mut runtime) => {
-                        let result = runtime
-                            .register()
-                            .await
-                            .map_err(|e| napi::Error::from_reason(e.to_string()));
-                        (result, Some(JsOptimizerRuntimeState::Ready(runtime)))
-                    }
-                    Err(err) => (
-                        Err(napi::Error::from_reason(err.to_string())),
-                        Some(JsOptimizerRuntimeState::Pending { config, report }),
-                    ),
-                }
-            }
-            JsOptimizerRuntimeState::Ready(mut runtime) => {
-                let result = runtime
-                    .register()
-                    .await
-                    .map_err(|e| napi::Error::from_reason(e.to_string()));
-                (result, Some(JsOptimizerRuntimeState::Ready(runtime)))
-            }
-        };
-
-        let mut guard = self.inner.lock().await;
-        *guard = next_state;
-        result
-    }
-
-    /// Deregister the runtime.
-    #[napi]
-    pub async fn deregister(&self) -> napi::Result<()> {
-        let mut guard = self.inner.lock().await;
-        let state = guard
-            .as_mut()
-            .ok_or_else(|| napi::Error::from_reason("optimizer runtime already shut down"))?;
-        match state {
-            JsOptimizerRuntimeState::Pending { .. } => Ok(()),
-            JsOptimizerRuntimeState::Ready(runtime) => runtime
-                .deregister()
-                .map_err(|e| napi::Error::from_reason(e.to_string())),
-        }
-    }
-
-    /// Shut down the runtime and wait for any background work to finish.
-    #[napi]
-    pub async fn shutdown(&self) -> napi::Result<()> {
-        let state = {
-            let mut guard = self.inner.lock().await;
-            guard
-                .take()
-                .ok_or_else(|| napi::Error::from_reason("optimizer runtime already shut down"))?
-        };
-        match state {
-            JsOptimizerRuntimeState::Pending { .. } => Ok(()),
-            JsOptimizerRuntimeState::Ready(runtime) => runtime
-                .shutdown()
-                .await
-                .map_err(|e| napi::Error::from_reason(e.to_string())),
-        }
-    }
-
-    /// Return the diagnostics report captured during runtime creation.
-    #[napi]
-    pub async fn report(&self) -> napi::Result<Json> {
-        let guard = self.inner.lock().await;
-        let state = guard
-            .as_ref()
-            .ok_or_else(|| napi::Error::from_reason("optimizer runtime already shut down"))?;
-        let report = match state {
-            JsOptimizerRuntimeState::Pending { report, .. } => report,
-            JsOptimizerRuntimeState::Ready(runtime) => runtime.report(),
-        };
-        serde_json::to_value(report).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
+pub async fn initialize_plugins(config: Json) -> napi::Result<Json> {
+    let config: core::PluginConfig =
+        serde_json::from_value(config).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let report = core::initialize_plugins(config)
+        .await
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    serde_json::to_value(&report).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
-fn validate_optimizer_config_or_err(config: &OptimizerConfig) -> napi::Result<ConfigReport> {
-    let report = NativeOptimizerRuntime::validate_config(config);
-    if report.has_errors() {
-        let joined = report
-            .diagnostics
-            .iter()
-            .filter(|diag| diag.level == nemo_flow_optimizer::DiagnosticLevel::Error)
-            .map(|diag| diag.message.as_str())
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(napi::Error::from_reason(joined));
-    }
-    Ok(report)
+/// Clear the active global plugin configuration.
+#[napi]
+pub fn clear_plugin_configuration() -> napi::Result<()> {
+    core::clear_plugin_configuration().map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+/// Return the last successfully configured plugin report.
+#[napi]
+pub fn active_plugin_report() -> napi::Result<Option<Json>> {
+    core::active_plugin_report()
+        .map(|report| serde_json::to_value(&report))
+        .transpose()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+/// List registered plugin kinds.
+#[napi]
+pub fn list_plugin_kinds() -> Vec<String> {
+    core::list_plugin_kinds()
 }

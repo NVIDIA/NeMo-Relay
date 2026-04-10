@@ -16,7 +16,9 @@ use std::sync::Mutex;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::OnceLock;
 
-use crate::error::{FlowError, Result};
+#[cfg(any(test, not(target_arch = "wasm32")))]
+use crate::error::FlowError;
+use crate::error::Result;
 
 #[cfg(not(target_arch = "wasm32"))]
 const BINDING_KIND_ENV: &str = "NEMO_FLOW_BINDING_KIND";
@@ -117,6 +119,7 @@ fn runtime_owner_controller() -> &'static Mutex<RuntimeOwnerController> {
     RUNTIME_OWNER_CONTROLLER.get_or_init(|| Mutex::new(RuntimeOwnerController::default()))
 }
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 fn compatibility_major_version(version: &str) -> Result<&str> {
     version
         .split('.')
@@ -129,6 +132,7 @@ fn compatibility_major_version(version: &str) -> Result<&str> {
         })
 }
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 fn current_compatibility_version() -> Result<&'static str> {
     compatibility_major_version(env!("CARGO_PKG_VERSION"))
 }

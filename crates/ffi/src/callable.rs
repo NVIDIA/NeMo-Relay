@@ -33,7 +33,7 @@ use nemo_flow_core::{
 
 use crate::convert::json_to_c_string;
 use crate::error::{NemoFlowStatus, clear_last_error, last_error_message, set_last_error};
-use crate::types::{FfiEvent, FfiLLMRequest, FfiOptimizerPluginContext};
+use crate::types::{FfiEvent, FfiLLMRequest, FfiPluginContext};
 
 // ---------------------------------------------------------------------------
 // Callback typedefs (mirrored in the C header)
@@ -188,22 +188,20 @@ pub type NemoFlowCollectorCb = unsafe extern "C" fn(chunk: *const c_char);
 /// runtime will free it.
 pub type NemoFlowFinalizerCb = unsafe extern "C" fn() -> *mut c_char;
 
-/// Callback for optimizer hosted plugin validation.
-/// Receives an instance ID and plugin config JSON, returns a JSON array of diagnostics.
-pub type NemoFlowOptimizerPluginValidateCb = unsafe extern "C" fn(
+/// Callback for hosted plugin validation.
+/// Receives plugin config JSON and returns a JSON array of diagnostics.
+pub type NemoFlowPluginValidateCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
-    instance_id: *const c_char,
     plugin_config_json: *const c_char,
 ) -> *mut c_char;
 
-/// Callback for optimizer hosted plugin registration.
-/// Receives an instance ID, plugin config JSON, and a plugin context pointer that is
+/// Callback for hosted plugin registration.
+/// Receives plugin config JSON and a plugin context pointer that is
 /// only valid for the duration of the call.
-pub type NemoFlowOptimizerPluginRegisterCb = unsafe extern "C" fn(
+pub type NemoFlowPluginRegisterCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
-    instance_id: *const c_char,
     plugin_config_json: *const c_char,
-    ctx: *mut FfiOptimizerPluginContext,
+    ctx: *mut FfiPluginContext,
 ) -> NemoFlowStatus;
 
 // ---------------------------------------------------------------------------

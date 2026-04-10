@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # Testing Guide
 
 NeMo Flow maintains test coverage across the core runtime, all language bindings,
-and the optimizer layer. Every binding mirrors the same major test domains so that
+and the adaptive layer. Every binding mirrors the same major test domains so that
 behavioral parity is verified at each layer.
 
 ## Fast Local Sanity
@@ -14,7 +14,7 @@ behavioral parity is verified at each layer.
 Use this path when you want the shortest high-signal verification loop:
 
 ```bash
-# Core runtime + optimizer crate
+# Core runtime + adaptive crate
 cargo test --workspace
 
 # Python wrapper
@@ -30,17 +30,17 @@ wasm-pack test --node crates/wasm
 ## Quick Reference
 
 ```bash
-# ── Rust (core + optimizer + WASM unit tests) ──────────────────
+# ── Rust (core + adaptive + WASM unit tests) ──────────────────
 cargo test --workspace
 
 # Core only
 cargo test -p nemo-flow-core
 
-# Optimizer only (in-memory backend)
-cargo test -p nemo-flow-optimizer
+# Adaptive only (in-memory backend)
+cargo test -p nemo-flow-adaptive
 
-# Optimizer with Redis backend enabled
-cargo test -p nemo-flow-optimizer --features redis-backend redis_tests
+# Adaptive with Redis backend enabled
+cargo test -p nemo-flow-adaptive --features redis-backend redis_tests
 
 # WASM unit tests
 cargo test -p nemo-flow-wasm
@@ -67,8 +67,8 @@ cd -
 # ── Full suite ─────────────────────────────────────────────
 cargo test --workspace && uv run pytest
 
-# Optional Redis-backed optimizer validation
-cargo test -p nemo-flow-optimizer --features redis-backend redis_tests
+# Optional Redis-backed adaptive validation
+cargo test -p nemo-flow-adaptive --features redis-backend redis_tests
 
 # ── Coverage artifacts ────────────────────────────────────
 # Python wrapper coverage
@@ -99,8 +99,8 @@ cargo llvm-cov report --release \
 | Go binding | `go test -race -v ./...` | Run from `go/nemo_flow` after building the FFI shared library |
 | Node binding | `cd crates/node && npm install && npm test` | Runs JS integration tests against the native addon |
 | WASM binding | `wasm-pack test --node crates/wasm` | Verifies the generated `wasm-bindgen` behavior path |
-| Optimizer crate | `cargo test -p nemo-flow-optimizer` | Covers in-memory backend and end-to-end optimizer registration |
-| Optimizer crate with Redis | `cargo test -p nemo-flow-optimizer --features redis-backend redis_tests` | Requires a local Redis instance at `redis://127.0.0.1/` |
+| Adaptive crate | `cargo test -p nemo-flow-adaptive` | Covers in-memory backend and end-to-end adaptive registration |
+| Adaptive crate with Redis | `cargo test -p nemo-flow-adaptive --features redis-backend redis_tests` | Requires a local Redis instance at `redis://127.0.0.1/` |
 
 ## Test Helpers & Utilities
 
@@ -298,27 +298,27 @@ gocover-cobertura < coverage.out > ../../target/coverage/go_coverage_report.xml
 cd -
 ```
 
-### Optimizer
+### Adaptive
 
-Optimizer tests live under `crates/optimizer/tests/` and are split by backend:
+Adaptive tests live under `crates/adaptive/tests/` and are split by backend:
 
-- `runtime_integration_tests.rs` exercises optimizer registration, event capture, and
+- `runtime_integration_tests.rs` exercises adaptive registration, event capture, and
   hot-path intercept behavior using `InMemoryBackend`
 - the same in-memory suite now covers hosted plugin registration, unknown hosted
   plugin diagnostics, and rollback on hosted plugin registration failure
 - `redis_tests.rs` exercises `RedisBackend` storage round-trips and is gated by
   the `redis-backend` feature
 
-Run the in-memory optimizer suite with:
+Run the in-memory adaptive suite with:
 
 ```bash
-cargo test -p nemo-flow-optimizer
+cargo test -p nemo-flow-adaptive
 ```
 
 Run the Redis-backed suite with:
 
 ```bash
-cargo test -p nemo-flow-optimizer --features redis-backend redis_tests
+cargo test -p nemo-flow-adaptive --features redis-backend redis_tests
 ```
 
 Redis requirements:
@@ -340,28 +340,28 @@ cd -
 This writes structured coverage reports under `crates/node/coverage/`, including
 `coverage-summary.json` and `cobertura-coverage.xml`.
 
-Node optimizer plugin coverage lives in
-`crates/node/tests/optimizer_tests.mjs`.
+Node adaptive plugin coverage lives in
+`crates/node/tests/adaptive_tests.mjs`.
 
-### Python Optimizer Helpers
+### Python Adaptive Helpers
 
-The external Python optimizer surface is validated through:
+The external Python adaptive surface is validated through:
 
-- `python/tests/test_optimizer.py`
-- `python/tests/test_optimizer_config.py`
+- `python/tests/test_adaptive.py`
+- `python/tests/test_adaptive_config.py`
 
 If the native module changes, rebuild it before trusting those tests:
 
 ```bash
 uv run maturin develop
-uv run pytest python/tests/test_optimizer.py python/tests/test_optimizer_config.py
+uv run pytest python/tests/test_adaptive.py python/tests/test_adaptive_config.py
 ```
 
-### Go Optimizer Plugins
+### Go Adaptive Plugins
 
-Go hosted optimizer plugin coverage lives in:
+Go hosted adaptive plugin coverage lives in:
 
-- `go/nemo_flow/optimizer_plugin_test.go`
+- `go/nemo_flow/adaptive_plugin_test.go`
 
 Run it with the normal Go suite after building the FFI library:
 
@@ -371,11 +371,11 @@ cd go/nemo_flow
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" go test ./...
 ```
 
-### WASM Optimizer Plugins
+### WASM Adaptive Plugins
 
-WASM hosted optimizer plugin coverage lives in:
+WASM hosted adaptive plugin coverage lives in:
 
-- `crates/wasm/tests/optimizer_tests.rs`
+- `crates/wasm/tests/adaptive_tests.rs`
 
 Run it with:
 

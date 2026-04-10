@@ -56,7 +56,10 @@ fn test_native_module_registers_types_and_api_functions() {
     Python::initialize();
     Python::attach(|py| {
         let module = PyModule::new(py, "_native_test").unwrap();
-        crate::_native(&module).unwrap();
+        crate::py_types::register(&module).unwrap();
+        crate::py_api::register(&module).unwrap();
+        crate::py_plugin::register(&module).unwrap();
+        crate::py_adaptive::register(&module).unwrap();
 
         assert!(module.getattr("ScopeStack").is_ok());
         assert!(module.getattr("AtifExporter").is_ok());
@@ -217,33 +220,45 @@ fn test_register_exposes_all_native_api_functions() {
 }
 
 #[test]
-fn test_optimizer_runtime_bindings_validate_register_and_shutdown() {
+fn test_plugin_bindings_validate_configure_and_clear() {
     Python::initialize();
     Python::attach(|py| {
-        let module = PyModule::new(py, "_optimizer_test").unwrap();
-        crate::py_optimizer::register(&module).unwrap();
+        nemo_flow_adaptive::register_adaptive_component().unwrap();
 
-        assert!(module.getattr("OptimizerRuntime").is_ok());
-        assert!(module.getattr("OptimizerPluginContext").is_ok());
-        assert!(module.getattr("validate_optimizer_config").is_ok());
-        assert!(module.getattr("register_optimizer_plugin").is_ok());
-        assert!(module.getattr("deregister_optimizer_plugin").is_ok());
-        assert!(module.getattr("set_latency_sensitivity").is_ok());
+        let plugin_module = PyModule::new(py, "_plugin_test").unwrap();
+        crate::py_plugin::register(&plugin_module).unwrap();
+
+        assert!(plugin_module.getattr("PluginContext").is_ok());
+        assert!(plugin_module.getattr("validate_plugin_config").is_ok());
+        assert!(plugin_module.getattr("initialize_plugins").is_ok());
+        assert!(plugin_module.getattr("clear_plugin_configuration").is_ok());
+        assert!(plugin_module.getattr("active_plugin_report").is_ok());
+        assert!(plugin_module.getattr("list_plugin_kinds").is_ok());
+        assert!(plugin_module.getattr("register_plugin").is_ok());
+        assert!(plugin_module.getattr("deregister_plugin").is_ok());
+
+        let adaptive_module = PyModule::new(py, "_adaptive_test").unwrap();
+        crate::py_adaptive::register(&adaptive_module).unwrap();
+        assert!(adaptive_module.getattr("set_latency_sensitivity").is_ok());
 
         let report_config = crate::convert::json_to_py(
             py,
             &json!({
                 "version": 1,
                 "components": [{
-                    "kind": "future_component",
+                    "kind": "adaptive",
                     "enabled": true,
-                    "config": {}
+                    "config": {
+                        "version": 1,
+                        "telemetry": {},
+                        "future_field": true
+                    }
                 }]
             }),
         )
         .unwrap();
-        let report = module
-            .getattr("validate_optimizer_config")
+        let report = plugin_module
+            .getattr("validate_plugin_config")
             .unwrap()
             .call1((report_config.bind(py),))
             .unwrap();
@@ -253,28 +268,28 @@ fn test_optimizer_runtime_bindings_validate_register_and_shutdown() {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|diag| diag["code"] == "optimizer.unknown_component")
+                .any(|diag| diag["code"] == "adaptive.unknown_field")
         );
 
         let plugin_helpers = load_module(
             py,
             r#"
 class CoveragePlugin:
-    def validate(self, instance_id, plugin_config):
+    def validate(self, plugin_config):
         return [{
             "level": "warning",
-            "code": "optimizer.coverage_plugin_validate",
-            "component": "external_component",
-            "message": f"{instance_id}:{plugin_config.get('priority', 0)}",
+            "code": "plugin.coverage_plugin_validate",
+            "component": "coverage.python_plugin",
+            "message": f"priority:{plugin_config.get('priority', 0)}",
         }]
 
-    def register(self, instance_id, plugin_config, context):
-        context.register_subscriber(f"{instance_id}.coverage_subscriber", lambda event: None)
+    def register(self, plugin_config, context):
+        context.register_subscriber("coverage_subscriber", lambda event: None)
 "#,
         );
 
-        module
-            .getattr("register_optimizer_plugin")
+        plugin_module
+            .getattr("register_plugin")
             .unwrap()
             .call1((
                 "coverage.python_plugin",
@@ -291,19 +306,15 @@ class CoveragePlugin:
             &json!({
                 "version": 1,
                 "components": [{
-                    "kind": "external_component",
+                    "kind": "coverage.python_plugin",
                     "enabled": true,
-                    "config": {
-                        "plugin_kind": "coverage.python_plugin",
-                        "instance_id": "coverage-plugin",
-                        "plugin_config": {"priority": 9}
-                    }
+                    "config": {"priority": 9}
                 }]
             }),
         )
         .unwrap();
-        let plugin_report = module
-            .getattr("validate_optimizer_config")
+        let plugin_report = plugin_module
+            .getattr("validate_plugin_config")
             .unwrap()
             .call1((plugin_report_config.bind(py),))
             .unwrap();
@@ -313,89 +324,108 @@ class CoveragePlugin:
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|diag| diag["code"] == "optimizer.coverage_plugin_validate")
+                .any(|diag| diag["code"] == "plugin.coverage_plugin_validate")
         );
 
-        let runtime_config = crate::convert::json_to_py(
+        let configured_plugin_config = crate::convert::json_to_py(
             py,
             &json!({
                 "version": 1,
-                "state": {
-                    "backend": {
-                        "kind": "in_memory",
-                        "config": {}
-                    }
-                },
                 "components": [
                     {
-                        "kind": "telemetry",
+                        "kind": "adaptive",
                         "enabled": true,
                         "config": {
-                            "learners": ["latency_sensitivity"]
+                            "version": 1,
+                            "state": {
+                                "backend": {
+                                    "kind": "in_memory",
+                                    "config": {}
+                                }
+                            },
+                            "telemetry": {
+                                "learners": ["latency_sensitivity"]
+                            },
+                            "adaptive_hints": {},
+                            "tool_parallelism": {}
                         }
                     },
                     {
-                        "kind": "dynamo_hints",
+                        "kind": "coverage.python_plugin",
                         "enabled": true,
                         "config": {}
-                    },
-                    {
-                        "kind": "tool_parallelism",
-                        "enabled": true,
-                        "config": {}
-                    },
-                    {
-                        "kind": "external_component",
-                        "enabled": true,
-                        "config": {
-                            "plugin_kind": "coverage.python_plugin",
-                            "instance_id": "coverage-plugin",
-                            "plugin_config": {}
-                        }
                     }
                 ]
             }),
         )
         .unwrap();
-        let runtime_type = module.getattr("OptimizerRuntime").unwrap();
-        let runtime = runtime_type.call1((runtime_config.bind(py),)).unwrap();
-
-        let report = runtime.call_method0("report").unwrap();
-        let report_json = crate::convert::py_to_json(&report).unwrap();
-        assert!(
-            report_json["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|diag| diag["code"] == "optimizer.coverage_plugin_validate")
-        );
 
         let helpers = load_module(
             py,
             r#"
 import asyncio
 
-async def run_optimizer_lifecycle(runtime):
-    await runtime.register()
-    runtime.deregister()
-    await runtime.shutdown()
+async def initialize_plugins(module, config):
+    return await module.initialize_plugins(config)
 "#,
         );
         with_event_loop(py, |event_loop| {
-            event_loop
+            let configured = event_loop
                 .call_method1(
                     "run_until_complete",
                     (helpers
-                        .getattr("run_optimizer_lifecycle")
+                        .getattr("initialize_plugins")
                         .unwrap()
-                        .call1((runtime,))
+                        .call1((plugin_module.clone(), configured_plugin_config.bind(py)))
                         .unwrap(),),
                 )
                 .unwrap();
+            let configured_json = crate::convert::py_to_json(&configured).unwrap();
+            assert!(
+                configured_json["diagnostics"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|diag| diag["code"] == "plugin.coverage_plugin_validate")
+            );
         });
 
-        let removed = module
-            .getattr("deregister_optimizer_plugin")
+        let active_report = plugin_module
+            .getattr("active_plugin_report")
+            .unwrap()
+            .call0()
+            .unwrap();
+        let active_report_json = crate::convert::py_to_json(&active_report).unwrap();
+        assert!(
+            active_report_json["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diag| diag["code"] == "plugin.coverage_plugin_validate")
+        );
+
+        let kinds = plugin_module
+            .getattr("list_plugin_kinds")
+            .unwrap()
+            .call0()
+            .unwrap();
+        let kinds_json = crate::convert::py_to_json(&kinds).unwrap();
+        assert!(
+            kinds_json
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|kind| kind == "adaptive")
+        );
+
+        plugin_module
+            .getattr("clear_plugin_configuration")
+            .unwrap()
+            .call0()
+            .unwrap();
+
+        let removed = plugin_module
+            .getattr("deregister_plugin")
             .unwrap()
             .call1(("coverage.python_plugin",))
             .unwrap();
