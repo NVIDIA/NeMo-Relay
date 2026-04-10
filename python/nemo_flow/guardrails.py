@@ -29,40 +29,40 @@ from nemo_flow import (
     ToolSanitizeGuardrail,
 )
 from nemo_flow._native import (
-    nemo_flow_deregister_llm_conditional_execution_guardrail as _native_deregister_llm_conditional_execution,
+    deregister_llm_conditional_execution_guardrail as _native_deregister_llm_conditional_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_deregister_llm_sanitize_request_guardrail as _native_deregister_llm_sanitize_request,
+    deregister_llm_sanitize_request_guardrail as _native_deregister_llm_sanitize_request,
 )
 from nemo_flow._native import (
-    nemo_flow_deregister_llm_sanitize_response_guardrail as _native_deregister_llm_sanitize_response,
+    deregister_llm_sanitize_response_guardrail as _native_deregister_llm_sanitize_response,
 )
 from nemo_flow._native import (
-    nemo_flow_deregister_tool_conditional_execution_guardrail as _native_deregister_tool_conditional_execution,
+    deregister_tool_conditional_execution_guardrail as _native_deregister_tool_conditional_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_deregister_tool_sanitize_request_guardrail as _native_deregister_tool_sanitize_request,
+    deregister_tool_sanitize_request_guardrail as _native_deregister_tool_sanitize_request,
 )
 from nemo_flow._native import (
-    nemo_flow_deregister_tool_sanitize_response_guardrail as _native_deregister_tool_sanitize_response,
+    deregister_tool_sanitize_response_guardrail as _native_deregister_tool_sanitize_response,
 )
 from nemo_flow._native import (
-    nemo_flow_register_llm_conditional_execution_guardrail as _native_register_llm_conditional_execution,
+    register_llm_conditional_execution_guardrail as _native_register_llm_conditional_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_register_llm_sanitize_request_guardrail as _native_register_llm_sanitize_request,
+    register_llm_sanitize_request_guardrail as _native_register_llm_sanitize_request,
 )
 from nemo_flow._native import (
-    nemo_flow_register_llm_sanitize_response_guardrail as _native_register_llm_sanitize_response,
+    register_llm_sanitize_response_guardrail as _native_register_llm_sanitize_response,
 )
 from nemo_flow._native import (
-    nemo_flow_register_tool_conditional_execution_guardrail as _native_register_tool_conditional_execution,
+    register_tool_conditional_execution_guardrail as _native_register_tool_conditional_execution,
 )
 from nemo_flow._native import (
-    nemo_flow_register_tool_sanitize_request_guardrail as _native_register_tool_sanitize_request,
+    register_tool_sanitize_request_guardrail as _native_register_tool_sanitize_request,
 )
 from nemo_flow._native import (
-    nemo_flow_register_tool_sanitize_response_guardrail as _native_register_tool_sanitize_response,
+    register_tool_sanitize_response_guardrail as _native_register_tool_sanitize_response,
 )
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-use nemo_flow_core::{
+use nemo_flow::{
     ConfigDiagnostic, ConfigPolicy, ConfigReport, DiagnosticLevel, Event, EventSubscriberFn,
     LlmRequestInterceptFn, PluginRegistration as ComponentRegistration,
     PluginRegistrationContext as HostedRegistrationContext, ToolExecutionFn, UnsupportedBehavior,
@@ -299,7 +299,7 @@ impl TelemetryFeature {
     fn new(config: TelemetryComponentConfig, agent_id: String, runtime_id: Uuid) -> Self {
         let subscriber_name = config
             .subscriber_name
-            .unwrap_or_else(|| format!("nemo_flow_adaptive_{runtime_id}_subscriber"));
+            .unwrap_or_else(|| format!("adaptive_{runtime_id}_subscriber"));
         Self {
             learners: build_learners(&agent_id, &config.learners),
             agent_id,
@@ -348,7 +348,7 @@ impl AdaptiveHintsFeature {
         runtime_id: Uuid,
     ) -> Self {
         Self {
-            name: format!("nemo_flow_adaptive_{runtime_id}_adaptive_hints_request"),
+            name: format!("adaptive_{runtime_id}_adaptive_hints_request"),
             priority: config.priority,
             break_chain: config.break_chain,
             hot_cache,
@@ -388,7 +388,7 @@ impl ToolParallelismFeature {
         runtime_id: Uuid,
     ) -> Self {
         Self {
-            name: format!("nemo_flow_adaptive_{runtime_id}_tool_execution"),
+            name: format!("adaptive_{runtime_id}_tool_execution"),
             priority: config.priority,
             hot_cache,
         }

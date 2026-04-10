@@ -153,7 +153,7 @@ typedef struct FfiOpenTelemetrySubscriber FfiOpenTelemetrySubscriber;
  * Opaque plugin registration context.
  *
  * This wrapper contains a borrowed raw pointer to an
- * `nemo_flow_core::PluginRegistrationContext`, not an owned heap allocation.
+ * `nemo_flow::PluginRegistrationContext`, not an owned heap allocation.
  * It is only valid for the duration of the hosted plugin registration callback that receives
  * it. C callers must not store the pointer, use it after the callback returns, or attempt to
  * free or drop it.
@@ -355,7 +355,7 @@ NemoFlowStatus nemo_flow_active_plugin_report_json(char **out_json);
 NemoFlowStatus nemo_flow_list_plugin_kinds_json(char **out_json);
 
 /**
- * Register a hosted plugin handler backed by foreign callbacks.
+ * Register a plugin backed by foreign callbacks.
  *
  * # Safety
  * `plugin_kind` must be a valid C string and `register_cb` must be a valid function pointer.
@@ -367,7 +367,7 @@ NemoFlowStatus nemo_flow_register_plugin(const char *plugin_kind,
                                          NemoFlowFreeFn free_fn);
 
 /**
- * Deregister a hosted plugin handler by kind.
+ * Deregister a plugin by kind.
  *
  * # Safety
  * `plugin_kind` must be a valid C string.

@@ -6,21 +6,21 @@
 //! This module contains all top-level functions that language bindings and
 //! application code call. The API is organized into several groups:
 //!
-//! - **Scope operations** — [`nemo_flow_get_handle`], [`nemo_flow_push_scope`],
-//!   [`nemo_flow_pop_scope`], [`nemo_flow_event`]
-//! - **Tool lifecycle** — [`nemo_flow_tool_call`], [`nemo_flow_tool_call_end`],
-//!   [`nemo_flow_tool_call_execute`]
-//! - **LLM lifecycle** — [`nemo_flow_llm_call`], [`nemo_flow_llm_call_end`],
-//!   [`nemo_flow_llm_call_execute`], [`nemo_flow_llm_stream_call_execute`]
-//! - **Guardrail registration** — `nemo_flow_register_*_guardrail` /
-//!   `nemo_flow_deregister_*_guardrail` for tool and LLM sanitize/conditional guardrails
-//! - **Intercept registration** — `nemo_flow_register_*_intercept` /
-//!   `nemo_flow_deregister_*_intercept` for tool and LLM request/execution intercepts
-//! - **Subscriber registration** — [`nemo_flow_register_subscriber`],
-//!   [`nemo_flow_deregister_subscriber`]
-//! - **Standalone middleware chains** — [`nemo_flow_tool_request_intercepts`],
-//!   [`nemo_flow_tool_conditional_execution`],
-//!   [`nemo_flow_llm_request_intercepts`], [`nemo_flow_llm_conditional_execution`]
+//! - **Scope operations** — [`get_handle`], [`push_scope`],
+//!   [`pop_scope`], [`event`]
+//! - **Tool lifecycle** — [`tool_call`], [`tool_call_end`],
+//!   [`tool_call_execute`]
+//! - **LLM lifecycle** — [`llm_call`], [`llm_call_end`],
+//!   [`llm_call_execute`], [`llm_stream_call_execute`]
+//! - **Guardrail registration** — `register_*_guardrail` /
+//!   `deregister_*_guardrail` for tool and LLM sanitize/conditional guardrails
+//! - **Intercept registration** — `register_*_intercept` /
+//!   `deregister_*_intercept` for tool and LLM request/execution intercepts
+//! - **Subscriber registration** — [`register_subscriber`],
+//!   [`deregister_subscriber`]
+//! - **Standalone middleware chains** — [`tool_request_intercepts`],
+//!   [`tool_conditional_execution`],
+//!   [`llm_request_intercepts`], [`llm_conditional_execution`]
 //!
 //! All functions operate on the global context singleton returned by
 //! [`global_context`].
@@ -169,9 +169,9 @@ macro_rules! execution_intercept_registry_api {
 // Tool guardrail registrations
 //
 // Each pair generates:
-//   - `nemo_flow_register_*`: registers a named guardrail with a priority.
+//   - `register_*`: registers a named guardrail with a priority.
 //     Returns AlreadyExists if the name is taken.
-//   - `nemo_flow_deregister_*`: removes a guardrail by name.
+//   - `deregister_*`: removes a guardrail by name.
 //     Returns Ok(true) if it existed, Ok(false) otherwise.
 // ---------------------------------------------------------------------------
 
@@ -189,8 +189,8 @@ guardrail_registry_api!(
     /// # Errors
     ///
     /// Returns [`FlowError::AlreadyExists`] if a guardrail with the given name is already registered.
-    nemo_flow_register_tool_sanitize_request_guardrail,
-    nemo_flow_deregister_tool_sanitize_request_guardrail,
+    register_tool_sanitize_request_guardrail,
+    deregister_tool_sanitize_request_guardrail,
     tool_sanitize_request_guardrails,
     ToolSanitizeFn
 );
@@ -204,8 +204,8 @@ guardrail_registry_api!(
     /// not the value returned to the caller.
     ///
     /// This callback is infallible. Handle failures inside the callback itself.
-    nemo_flow_register_tool_sanitize_response_guardrail,
-    nemo_flow_deregister_tool_sanitize_response_guardrail,
+    register_tool_sanitize_response_guardrail,
+    deregister_tool_sanitize_response_guardrail,
     tool_sanitize_response_guardrails,
     ToolSanitizeFn
 );
@@ -216,8 +216,8 @@ guardrail_registry_api!(
     /// Callback signature: `(tool_name: &str, args: &Json) -> Result<Option<String>>`.
     /// Return `Ok(None)` to allow execution, `Ok(Some(reason))` to reject it.
     /// Returning `Err(...)` aborts the originating NeMo Flow call.
-    nemo_flow_register_tool_conditional_execution_guardrail,
-    nemo_flow_deregister_tool_conditional_execution_guardrail,
+    register_tool_conditional_execution_guardrail,
+    deregister_tool_conditional_execution_guardrail,
     tool_conditional_execution_guardrails,
     ToolConditionalFn
 );
@@ -235,8 +235,8 @@ intercept_registry_api!(
     /// Callback signature: `(tool_name: &str, args: Json) -> Result<Json>`.
     /// Set `break_chain = true` to prevent lower-priority intercepts from running.
     /// Returning `Err(...)` aborts the originating NeMo Flow call.
-    nemo_flow_register_tool_request_intercept,
-    nemo_flow_deregister_tool_request_intercept,
+    register_tool_request_intercept,
+    deregister_tool_request_intercept,
     tool_request_intercepts,
     ToolInterceptFn
 );
@@ -246,8 +246,8 @@ execution_intercept_registry_api!(
     ///
     /// Callback signature: `(args: Json, next: ToolExecutionNextFn) -> Future<Result<Json>>`.
     /// Call `next(args)` to continue the chain, or skip it to short-circuit.
-    nemo_flow_register_tool_execution_intercept,
-    nemo_flow_deregister_tool_execution_intercept,
+    register_tool_execution_intercept,
+    deregister_tool_execution_intercept,
     tool_execution_intercepts,
     ToolExecutionFn
 );
@@ -265,8 +265,8 @@ guardrail_registry_api!(
     /// while request intercepts still control the request passed into execution.
     ///
     /// This callback is infallible. Handle failures inside the callback itself.
-    nemo_flow_register_llm_sanitize_request_guardrail,
-    nemo_flow_deregister_llm_sanitize_request_guardrail,
+    register_llm_sanitize_request_guardrail,
+    deregister_llm_sanitize_request_guardrail,
     llm_sanitize_request_guardrails,
     LlmSanitizeRequestFn
 );
@@ -280,8 +280,8 @@ guardrail_registry_api!(
     /// not the value returned to the caller.
     ///
     /// This callback is infallible. Handle failures inside the callback itself.
-    nemo_flow_register_llm_sanitize_response_guardrail,
-    nemo_flow_deregister_llm_sanitize_response_guardrail,
+    register_llm_sanitize_response_guardrail,
+    deregister_llm_sanitize_response_guardrail,
     llm_sanitize_response_guardrails,
     LlmSanitizeResponseFn
 );
@@ -292,8 +292,8 @@ guardrail_registry_api!(
     /// Callback signature: `(request: &LLMRequest) -> Result<Option<String>>`.
     /// Return `Ok(None)` to allow execution, `Ok(Some(reason))` to reject it.
     /// Returning `Err(...)` aborts the originating NeMo Flow call.
-    nemo_flow_register_llm_conditional_execution_guardrail,
-    nemo_flow_deregister_llm_conditional_execution_guardrail,
+    register_llm_conditional_execution_guardrail,
+    deregister_llm_conditional_execution_guardrail,
     llm_conditional_execution_guardrails,
     LlmConditionalFn
 );
@@ -308,8 +308,8 @@ intercept_registry_api!(
     /// Callback signature: `(request: LLMRequest) -> Result<LLMRequest>`.
     /// Set `break_chain = true` to prevent lower-priority intercepts from running.
     /// Returning `Err(...)` aborts the originating NeMo Flow call.
-    nemo_flow_register_llm_request_intercept,
-    nemo_flow_deregister_llm_request_intercept,
+    register_llm_request_intercept,
+    deregister_llm_request_intercept,
     llm_request_intercepts,
     LlmRequestInterceptFn
 );
@@ -319,8 +319,8 @@ execution_intercept_registry_api!(
     ///
     /// Callback signature: `(request: LLMRequest, next: LlmExecutionNextFn) -> Future<Result<Json>>`.
     /// Call `next(request)` to continue the chain, or skip it to short-circuit.
-    nemo_flow_register_llm_execution_intercept,
-    nemo_flow_deregister_llm_execution_intercept,
+    register_llm_execution_intercept,
+    deregister_llm_execution_intercept,
     llm_execution_intercepts,
     LlmExecutionFn
 );
@@ -330,8 +330,8 @@ execution_intercept_registry_api!(
     ///
     /// Callback signature: `(request: LLMRequest, next: LlmStreamExecutionNextFn) -> Future<Result<Stream>>`.
     /// Call `next(request)` to continue the chain, or skip it to short-circuit.
-    nemo_flow_register_llm_stream_execution_intercept,
-    nemo_flow_deregister_llm_stream_execution_intercept,
+    register_llm_stream_execution_intercept,
+    deregister_llm_stream_execution_intercept,
     llm_stream_execution_intercepts,
     LlmStreamExecutionFn
 );
@@ -348,7 +348,7 @@ execution_intercept_registry_api!(
 ///
 /// Returns [`FlowError::AlreadyExists`] if a subscriber with the given name
 /// is already registered.
-pub fn nemo_flow_register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()> {
+pub fn register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()> {
     let ctx = global_context();
     let mut state = ctx
         .write()
@@ -363,7 +363,7 @@ pub fn nemo_flow_register_subscriber(name: &str, callback: EventSubscriberFn) ->
 }
 
 /// Deregisters an event subscriber by name. Returns `true` if it existed, `false` otherwise.
-pub fn nemo_flow_deregister_subscriber(name: &str) -> Result<bool> {
+pub fn deregister_subscriber(name: &str) -> Result<bool> {
     let ctx = global_context();
     let mut state = ctx
         .write()
@@ -383,7 +383,7 @@ pub fn nemo_flow_deregister_subscriber(name: &str) -> Result<bool> {
 /// 3. If Codec provided and annotated was produced: encode back to LLMRequest,
 ///    preserving headers from the post-intercept request
 ///
-/// Used by both [`nemo_flow_llm_call_execute`] and [`nemo_flow_llm_stream_call_execute`].
+/// Used by both [`llm_call_execute`] and [`llm_stream_call_execute`].
 fn run_request_intercepts_with_codec(
     name: &str,
     request: LLMRequest,
@@ -531,22 +531,22 @@ macro_rules! scope_local_execution_intercept_registry_api {
 // Tool guardrails — scope-local
 scope_local_guardrail_registry_api!(
     /// Register a scope-local tool request sanitize guardrail.
-    nemo_flow_scope_register_tool_sanitize_request_guardrail,
-    nemo_flow_scope_deregister_tool_sanitize_request_guardrail,
+    scope_register_tool_sanitize_request_guardrail,
+    scope_deregister_tool_sanitize_request_guardrail,
     tool_sanitize_request_guardrails,
     ToolSanitizeFn
 );
 scope_local_guardrail_registry_api!(
     /// Register a scope-local tool response sanitize guardrail.
-    nemo_flow_scope_register_tool_sanitize_response_guardrail,
-    nemo_flow_scope_deregister_tool_sanitize_response_guardrail,
+    scope_register_tool_sanitize_response_guardrail,
+    scope_deregister_tool_sanitize_response_guardrail,
     tool_sanitize_response_guardrails,
     ToolSanitizeFn
 );
 scope_local_guardrail_registry_api!(
     /// Register a scope-local tool conditional execution guardrail.
-    nemo_flow_scope_register_tool_conditional_execution_guardrail,
-    nemo_flow_scope_deregister_tool_conditional_execution_guardrail,
+    scope_register_tool_conditional_execution_guardrail,
+    scope_deregister_tool_conditional_execution_guardrail,
     tool_conditional_execution_guardrails,
     ToolConditionalFn
 );
@@ -554,15 +554,15 @@ scope_local_guardrail_registry_api!(
 // Tool intercepts — scope-local
 scope_local_intercept_registry_api!(
     /// Register a scope-local tool request intercept.
-    nemo_flow_scope_register_tool_request_intercept,
-    nemo_flow_scope_deregister_tool_request_intercept,
+    scope_register_tool_request_intercept,
+    scope_deregister_tool_request_intercept,
     tool_request_intercepts,
     ToolInterceptFn
 );
 scope_local_execution_intercept_registry_api!(
     /// Register a scope-local tool execution intercept.
-    nemo_flow_scope_register_tool_execution_intercept,
-    nemo_flow_scope_deregister_tool_execution_intercept,
+    scope_register_tool_execution_intercept,
+    scope_deregister_tool_execution_intercept,
     tool_execution_intercepts,
     ToolExecutionFn
 );
@@ -570,22 +570,22 @@ scope_local_execution_intercept_registry_api!(
 // LLM guardrails — scope-local
 scope_local_guardrail_registry_api!(
     /// Register a scope-local LLM request sanitize guardrail.
-    nemo_flow_scope_register_llm_sanitize_request_guardrail,
-    nemo_flow_scope_deregister_llm_sanitize_request_guardrail,
+    scope_register_llm_sanitize_request_guardrail,
+    scope_deregister_llm_sanitize_request_guardrail,
     llm_sanitize_request_guardrails,
     LlmSanitizeRequestFn
 );
 scope_local_guardrail_registry_api!(
     /// Register a scope-local LLM response sanitize guardrail.
-    nemo_flow_scope_register_llm_sanitize_response_guardrail,
-    nemo_flow_scope_deregister_llm_sanitize_response_guardrail,
+    scope_register_llm_sanitize_response_guardrail,
+    scope_deregister_llm_sanitize_response_guardrail,
     llm_sanitize_response_guardrails,
     LlmSanitizeResponseFn
 );
 scope_local_guardrail_registry_api!(
     /// Register a scope-local LLM conditional execution guardrail.
-    nemo_flow_scope_register_llm_conditional_execution_guardrail,
-    nemo_flow_scope_deregister_llm_conditional_execution_guardrail,
+    scope_register_llm_conditional_execution_guardrail,
+    scope_deregister_llm_conditional_execution_guardrail,
     llm_conditional_execution_guardrails,
     LlmConditionalFn
 );
@@ -593,22 +593,22 @@ scope_local_guardrail_registry_api!(
 // LLM intercepts — scope-local
 scope_local_intercept_registry_api!(
     /// Register a scope-local LLM request intercept.
-    nemo_flow_scope_register_llm_request_intercept,
-    nemo_flow_scope_deregister_llm_request_intercept,
+    scope_register_llm_request_intercept,
+    scope_deregister_llm_request_intercept,
     llm_request_intercepts,
     LlmRequestInterceptFn
 );
 scope_local_execution_intercept_registry_api!(
     /// Register a scope-local LLM execution intercept.
-    nemo_flow_scope_register_llm_execution_intercept,
-    nemo_flow_scope_deregister_llm_execution_intercept,
+    scope_register_llm_execution_intercept,
+    scope_deregister_llm_execution_intercept,
     llm_execution_intercepts,
     LlmExecutionFn
 );
 scope_local_execution_intercept_registry_api!(
     /// Register a scope-local LLM streaming execution intercept.
-    nemo_flow_scope_register_llm_stream_execution_intercept,
-    nemo_flow_scope_deregister_llm_stream_execution_intercept,
+    scope_register_llm_stream_execution_intercept,
+    scope_deregister_llm_stream_execution_intercept,
     llm_stream_execution_intercepts,
     LlmStreamExecutionFn
 );
@@ -616,7 +616,7 @@ scope_local_execution_intercept_registry_api!(
 // Scope-local subscriber registration
 
 /// Registers a scope-local event subscriber.
-pub fn nemo_flow_scope_register_subscriber(
+pub fn scope_register_subscriber(
     scope_uuid: &Uuid,
     name: &str,
     callback: EventSubscriberFn,
@@ -637,7 +637,7 @@ pub fn nemo_flow_scope_register_subscriber(
 }
 
 /// Deregisters a scope-local event subscriber. Returns `true` if it existed.
-pub fn nemo_flow_scope_deregister_subscriber(scope_uuid: &Uuid, name: &str) -> Result<bool> {
+pub fn scope_deregister_subscriber(scope_uuid: &Uuid, name: &str) -> Result<bool> {
     ensure_runtime_owner()?;
     let ss = current_scope_stack();
     let mut guard = ss.write().expect("scope stack lock poisoned");
@@ -654,7 +654,7 @@ pub fn nemo_flow_scope_deregister_subscriber(scope_uuid: &Uuid, name: &str) -> R
 /// Returns a clone of the current top scope handle from the scope stack.
 ///
 /// Always succeeds because the root scope is always present.
-pub fn nemo_flow_get_handle() -> Result<ScopeHandle> {
+pub fn get_handle() -> Result<ScopeHandle> {
     ensure_runtime_owner()?;
     Ok(task_scope_top())
 }
@@ -667,7 +667,7 @@ pub fn nemo_flow_get_handle() -> Result<ScopeHandle> {
 /// scope handle.
 ///
 /// Returns the new [`ScopeHandle`].
-pub fn nemo_flow_push_scope(
+pub fn push_scope(
     name: &str,
     scope_type: ScopeType,
     parent: Option<&ScopeHandle>,
@@ -700,7 +700,7 @@ pub fn nemo_flow_push_scope(
 /// Returns [`FlowError::NotFound`] if the UUID is not in the stack, or
 /// [`FlowError::InvalidArgument`] if it does not identify the current top
 /// scope.
-pub fn nemo_flow_pop_scope(handle_uuid: &Uuid) -> Result<()> {
+pub fn pop_scope(handle_uuid: &Uuid) -> Result<()> {
     ensure_runtime_owner()?;
     let ss = current_scope_stack();
     let (scope, event, subscribers) = {
@@ -732,7 +732,7 @@ pub fn nemo_flow_pop_scope(handle_uuid: &Uuid) -> Result<()> {
 ///
 /// This is a lightweight way to record application-specific events (e.g.,
 /// checkpoints, metrics) without creating a scope or handle.
-pub fn nemo_flow_event(
+pub fn event(
     name: &str,
     parent: Option<&ScopeHandle>,
     data: Option<Json>,
@@ -762,8 +762,8 @@ pub fn nemo_flow_event(
 /// and emits a `Start` event.
 ///
 /// The sanitized arguments are stored in the event's `input` field.
-/// Call [`nemo_flow_tool_call_end`] when the tool completes.
-pub fn nemo_flow_tool_call(
+/// Call [`tool_call_end`] when the tool completes.
+pub fn tool_call(
     name: &str,
     args: Json,
     parent: Option<&ScopeHandle>,
@@ -796,7 +796,7 @@ pub fn nemo_flow_tool_call(
 /// Ends a tool call: runs response sanitize guardrails and emits an `End` event.
 ///
 /// The sanitized result is stored in the event's `output` field.
-pub fn nemo_flow_tool_call_end(
+pub fn tool_call_end(
     handle: &ToolHandle,
     result: Json,
     data: Option<Json>,
@@ -851,7 +851,7 @@ fn emit_tool_end_without_output(
 ///
 /// This is the high-level function that orchestrates the full middleware pipeline.
 /// Returns [`FlowError::GuardrailRejected`] if a conditional guardrail rejects the call.
-pub async fn nemo_flow_tool_call_execute(
+pub async fn tool_call_execute(
     name: &str,
     args: Json,
     func: ToolExecutionNextFn,
@@ -877,7 +877,7 @@ pub async fn nemo_flow_tool_call_execute(
                 obj.insert("rejected".into(), json!(true));
                 obj.insert("rejection_reason".into(), json!(&err));
             }
-            let _ = nemo_flow_event(name, parent.as_ref(), Some(rejection_data), metadata);
+            let _ = event(name, parent.as_ref(), Some(rejection_data), metadata);
             return Err(FlowError::GuardrailRejected(err));
         }
     }
@@ -892,8 +892,8 @@ pub async fn nemo_flow_tool_call_execute(
         state.tool_request_intercepts_chain(name, args, &sl)?
     };
 
-    // Tool call start (scope-local sanitize request guardrails are picked up inside nemo_flow_tool_call)
-    let handle = nemo_flow_tool_call(
+    // Tool call start (scope-local sanitize request guardrails are picked up inside tool_call)
+    let handle = tool_call(
         name,
         intercepted_args.clone(),
         parent.as_ref(),
@@ -916,8 +916,8 @@ pub async fn nemo_flow_tool_call_execute(
     drop(exec_future);
     match exec_result {
         Ok(result) => {
-            // Tool call end (scope-local sanitize response guardrails are picked up inside nemo_flow_tool_call_end)
-            nemo_flow_tool_call_end(&handle, result.clone(), data, metadata)?;
+            // Tool call end (scope-local sanitize response guardrails are picked up inside tool_call_end)
+            tool_call_end(&handle, result.clone(), data, metadata)?;
             Ok(result)
         }
         Err(err) => {
@@ -935,9 +935,9 @@ pub async fn nemo_flow_tool_call_execute(
 /// creates an LLM handle, and emits a `Start` event.
 ///
 /// The sanitized request is stored in the event's `input` field.
-/// Call [`nemo_flow_llm_call_end`] when the LLM call completes.
+/// Call [`llm_call_end`] when the LLM call completes.
 #[allow(clippy::too_many_arguments)]
-pub fn nemo_flow_llm_call(
+pub fn llm_call(
     name: &str,
     request: &LLMRequest,
     parent: Option<&ScopeHandle>,
@@ -972,7 +972,7 @@ pub fn nemo_flow_llm_call(
 /// Ends an LLM call: runs response sanitize guardrails and emits an `End` event.
 ///
 /// The sanitized response data is stored in the event's `output` field.
-pub fn nemo_flow_llm_call_end(
+pub fn llm_call_end(
     handle: &LLMHandle,
     response: Json,
     data: Option<Json>,
@@ -1036,7 +1036,7 @@ fn emit_llm_end_without_output(
 ///
 /// Returns [`FlowError::GuardrailRejected`] if a conditional guardrail rejects the call.
 #[allow(clippy::too_many_arguments)]
-pub async fn nemo_flow_llm_call_execute(
+pub async fn llm_call_execute(
     name: &str,
     request: LLMRequest,
     func: LlmExecutionNextFn,
@@ -1065,7 +1065,7 @@ pub async fn nemo_flow_llm_call_execute(
                 obj.insert("rejected".into(), json!(true));
                 obj.insert("rejection_reason".into(), json!(&err));
             }
-            let _ = nemo_flow_event(name, parent.as_ref(), Some(rejection_data), metadata);
+            let _ = event(name, parent.as_ref(), Some(rejection_data), metadata);
             return Err(FlowError::GuardrailRejected(err));
         }
     }
@@ -1074,8 +1074,8 @@ pub async fn nemo_flow_llm_call_execute(
     let (intercepted_request, annotated_request) =
         run_request_intercepts_with_codec(name, request, codec)?;
 
-    // LLM call start (sanitize guardrails happen inside nemo_flow_llm_call)
-    let handle = nemo_flow_llm_call(
+    // LLM call start (sanitize guardrails happen inside llm_call)
+    let handle = llm_call(
         name,
         &intercepted_request,
         parent.as_ref(),
@@ -1104,8 +1104,8 @@ pub async fn nemo_flow_llm_call_execute(
                 .as_ref()
                 .and_then(|c| c.decode_response(&response).ok())
                 .map(Arc::new);
-            // LLM call end (sanitize response guardrails happen inside nemo_flow_llm_call_end)
-            nemo_flow_llm_call_end(
+            // LLM call end (sanitize response guardrails happen inside llm_call_end)
+            llm_call_end(
                 &handle,
                 response.clone(),
                 data,
@@ -1123,7 +1123,7 @@ pub async fn nemo_flow_llm_call_execute(
 
 /// Executes a complete streaming LLM call lifecycle.
 ///
-/// Similar to [`nemo_flow_llm_call_execute`] but returns a
+/// Similar to [`llm_call_execute`] but returns a
 /// [`Stream`] of Json chunks. Conditional execution guardrails run
 /// **before** request intercepts so that they gate on the unmodified
 /// input. On rejection, only a standalone `Mark` event is emitted
@@ -1144,7 +1144,7 @@ pub async fn nemo_flow_llm_call_execute(
 ///
 /// Returns [`FlowError::GuardrailRejected`] if a conditional guardrail rejects the call.
 #[allow(clippy::too_many_arguments)]
-pub async fn nemo_flow_llm_stream_call_execute(
+pub async fn llm_stream_call_execute(
     name: &str,
     request: LLMRequest,
     func: LlmStreamExecutionNextFn,
@@ -1175,7 +1175,7 @@ pub async fn nemo_flow_llm_stream_call_execute(
                 obj.insert("rejected".into(), json!(true));
                 obj.insert("rejection_reason".into(), json!(&err));
             }
-            let _ = nemo_flow_event(name, parent.as_ref(), Some(rejection_data), metadata);
+            let _ = event(name, parent.as_ref(), Some(rejection_data), metadata);
             return Err(FlowError::GuardrailRejected(err));
         }
     }
@@ -1184,8 +1184,8 @@ pub async fn nemo_flow_llm_stream_call_execute(
     let (intercepted_request, annotated_request) =
         run_request_intercepts_with_codec(name, request, codec)?;
 
-    // LLM call start (sanitize guardrails happen inside nemo_flow_llm_call)
-    let handle = nemo_flow_llm_call(
+    // LLM call start (sanitize guardrails happen inside llm_call)
+    let handle = llm_call(
         name,
         &intercepted_request,
         parent.as_ref(),
@@ -1238,8 +1238,8 @@ pub async fn nemo_flow_llm_stream_call_execute(
 ///
 /// Returns the transformed arguments after all intercepts have been applied.
 /// This allows invoking request intercepts independently of the full
-/// [`nemo_flow_tool_call_execute`] pipeline.
-pub fn nemo_flow_tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
+/// [`tool_call_execute`] pipeline.
+pub fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
     ensure_runtime_owner()?;
     let ss = current_scope_stack();
     let ss_guard = ss.read().expect("scope stack lock poisoned");
@@ -1254,7 +1254,7 @@ pub fn nemo_flow_tool_request_intercepts(name: &str, args: Json) -> Result<Json>
 /// Returns `Ok(())` if all guardrails pass, or
 /// [`Err(FlowError::GuardrailRejected(reason))`](FlowError::GuardrailRejected)
 /// if any guardrail rejects the call.
-pub fn nemo_flow_tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
+pub fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
     ensure_runtime_owner()?;
     let ss = current_scope_stack();
     let ss_guard = ss.read().expect("scope stack lock poisoned");
@@ -1271,8 +1271,8 @@ pub fn nemo_flow_tool_conditional_execution(name: &str, args: &Json) -> Result<(
 ///
 /// Returns the transformed [`LLMRequest`] after all intercepts have been applied.
 /// This allows invoking request intercepts independently of the full
-/// [`nemo_flow_llm_call_execute`] pipeline.
-pub fn nemo_flow_llm_request_intercepts(name: &str, request: LLMRequest) -> Result<LLMRequest> {
+/// [`llm_call_execute`] pipeline.
+pub fn llm_request_intercepts(name: &str, request: LLMRequest) -> Result<LLMRequest> {
     ensure_runtime_owner()?;
     let ss = current_scope_stack();
     let ss_guard = ss.read().expect("scope stack lock poisoned");
@@ -1288,7 +1288,7 @@ pub fn nemo_flow_llm_request_intercepts(name: &str, request: LLMRequest) -> Resu
 /// Returns `Ok(())` if all guardrails pass, or
 /// [`Err(FlowError::GuardrailRejected(reason))`](FlowError::GuardrailRejected)
 /// if any guardrail rejects the call.
-pub fn nemo_flow_llm_conditional_execution(request: &LLMRequest) -> Result<()> {
+pub fn llm_conditional_execution(request: &LLMRequest) -> Result<()> {
     ensure_runtime_owner()?;
     let ss = current_scope_stack();
     let ss_guard = ss.read().expect("scope stack lock poisoned");
@@ -1333,10 +1333,10 @@ mod tests {
         reset_global();
 
         // Root scope is always present
-        let root = nemo_flow_get_handle().unwrap();
+        let root = get_handle().unwrap();
         assert_eq!(root.name, "root");
 
-        let handle = nemo_flow_push_scope(
+        let handle = push_scope(
             "test_scope",
             ScopeType::Agent,
             None,
@@ -1345,11 +1345,11 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(nemo_flow_get_handle().unwrap().name, "test_scope");
-        nemo_flow_pop_scope(&handle.uuid).unwrap();
+        assert_eq!(get_handle().unwrap().name, "test_scope");
+        pop_scope(&handle.uuid).unwrap();
 
         // After pop, root scope is on top again
-        assert_eq!(nemo_flow_get_handle().unwrap().name, "root");
+        assert_eq!(get_handle().unwrap().name, "root");
     }
 
     #[test]
@@ -1359,7 +1359,7 @@ mod tests {
 
         let lock_checks = Arc::new(Mutex::new(Vec::new()));
         let captured = lock_checks.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "lock_probe",
             Arc::new(move |_| {
                 let scope_stack_writable =
@@ -1373,7 +1373,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nemo_flow_push_scope(
+        let handle = push_scope(
             "probe",
             ScopeType::Agent,
             None,
@@ -1382,7 +1382,7 @@ mod tests {
             None,
         )
         .unwrap();
-        nemo_flow_pop_scope(&handle.uuid).unwrap();
+        pop_scope(&handle.uuid).unwrap();
 
         let checks = lock_checks.lock().unwrap();
         assert_eq!(checks.len(), 2);
@@ -1393,7 +1393,7 @@ mod tests {
         );
 
         drop(checks);
-        nemo_flow_deregister_subscriber("lock_probe").unwrap();
+        deregister_subscriber("lock_probe").unwrap();
     }
 
     #[test]
@@ -1403,7 +1403,7 @@ mod tests {
 
         let observations = Arc::new(Mutex::new(Vec::new()));
         let captured = observations.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "scope_visibility",
             Arc::new(move |event: &crate::types::Event| {
                 if event.scope_type() != Some(ScopeType::Agent) {
@@ -1412,7 +1412,7 @@ mod tests {
                 if event.name() != "visible_scope" {
                     return;
                 }
-                let active_uuid = nemo_flow_get_handle().unwrap().uuid;
+                let active_uuid = get_handle().unwrap().uuid;
                 captured
                     .lock()
                     .unwrap()
@@ -1421,7 +1421,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nemo_flow_push_scope(
+        let handle = push_scope(
             "visible_scope",
             ScopeType::Agent,
             None,
@@ -1431,7 +1431,7 @@ mod tests {
         )
         .unwrap();
         let parent_uuid = handle.parent_uuid.unwrap();
-        nemo_flow_pop_scope(&handle.uuid).unwrap();
+        pop_scope(&handle.uuid).unwrap();
 
         let observations = observations.lock().unwrap();
         assert_eq!(observations.len(), 2);
@@ -1439,7 +1439,7 @@ mod tests {
         assert_eq!(observations[1], ("ScopeEnd".to_string(), parent_uuid));
 
         drop(observations);
-        nemo_flow_deregister_subscriber("scope_visibility").unwrap();
+        deregister_subscriber("scope_visibility").unwrap();
     }
 
     #[test]
@@ -1448,7 +1448,7 @@ mod tests {
         reset_global();
         let count = Arc::new(AtomicU32::new(0));
         let c = count.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "test_sub",
             Arc::new(move |_| {
                 c.fetch_add(1, Ordering::SeqCst);
@@ -1457,10 +1457,10 @@ mod tests {
         .unwrap();
 
         // Duplicate should fail
-        assert!(nemo_flow_register_subscriber("test_sub", Arc::new(|_| {}),).is_err());
+        assert!(register_subscriber("test_sub", Arc::new(|_| {}),).is_err());
 
         // Push scope emits event
-        let handle = nemo_flow_push_scope(
+        let handle = push_scope(
             "s",
             ScopeType::Function,
             None,
@@ -1471,32 +1471,27 @@ mod tests {
         .unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 1);
 
-        nemo_flow_pop_scope(&handle.uuid).unwrap();
+        pop_scope(&handle.uuid).unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 2);
 
         // Deregister
-        assert!(nemo_flow_deregister_subscriber("test_sub").unwrap());
-        assert!(!nemo_flow_deregister_subscriber("test_sub").unwrap());
+        assert!(deregister_subscriber("test_sub").unwrap());
+        assert!(!deregister_subscriber("test_sub").unwrap());
     }
 
     #[test]
     fn test_tool_guardrail_registration() {
         let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
-        nemo_flow_register_tool_sanitize_request_guardrail("g1", 10, Box::new(|_name, args| args))
-            .unwrap();
+        register_tool_sanitize_request_guardrail("g1", 10, Box::new(|_name, args| args)).unwrap();
 
         // Duplicate fails
         assert!(
-            nemo_flow_register_tool_sanitize_request_guardrail(
-                "g1",
-                10,
-                Box::new(|_name, args| args),
-            )
-            .is_err()
+            register_tool_sanitize_request_guardrail("g1", 10, Box::new(|_name, args| args),)
+                .is_err()
         );
 
-        assert!(nemo_flow_deregister_tool_sanitize_request_guardrail("g1").unwrap());
+        assert!(deregister_tool_sanitize_request_guardrail("g1").unwrap());
     }
 
     // -- Scope hierarchy --
@@ -1506,7 +1501,7 @@ mod tests {
         let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
 
-        let s1 = nemo_flow_push_scope(
+        let s1 = push_scope(
             "level1",
             ScopeType::Agent,
             None,
@@ -1515,9 +1510,9 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(nemo_flow_get_handle().unwrap().name, "level1");
+        assert_eq!(get_handle().unwrap().name, "level1");
 
-        let s2 = nemo_flow_push_scope(
+        let s2 = push_scope(
             "level2",
             ScopeType::Function,
             Some(&s1),
@@ -1526,21 +1521,21 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(nemo_flow_get_handle().unwrap().name, "level2");
+        assert_eq!(get_handle().unwrap().name, "level2");
         assert_eq!(s2.parent_uuid, Some(s1.uuid));
 
-        nemo_flow_pop_scope(&s2.uuid).unwrap();
-        assert_eq!(nemo_flow_get_handle().unwrap().name, "level1");
+        pop_scope(&s2.uuid).unwrap();
+        assert_eq!(get_handle().unwrap().name, "level1");
 
-        nemo_flow_pop_scope(&s1.uuid).unwrap();
-        assert_eq!(nemo_flow_get_handle().unwrap().name, "root");
+        pop_scope(&s1.uuid).unwrap();
+        assert_eq!(get_handle().unwrap().name, "root");
     }
 
     #[test]
     fn test_pop_nonexistent_scope() {
         let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
-        let result = nemo_flow_pop_scope(&Uuid::new_v4());
+        let result = pop_scope(&Uuid::new_v4());
         assert!(result.is_err());
     }
 
@@ -1551,7 +1546,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = events.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "capture_scope_events",
             Arc::new(move |event: &crate::types::Event| {
                 captured
@@ -1562,7 +1557,7 @@ mod tests {
         )
         .unwrap();
 
-        let parent = nemo_flow_push_scope(
+        let parent = push_scope(
             "parent",
             ScopeType::Agent,
             None,
@@ -1571,7 +1566,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let child = nemo_flow_push_scope(
+        let child = push_scope(
             "child",
             ScopeType::Function,
             Some(&parent),
@@ -1581,9 +1576,9 @@ mod tests {
         )
         .unwrap();
 
-        let err = nemo_flow_pop_scope(&parent.uuid).unwrap_err();
+        let err = pop_scope(&parent.uuid).unwrap_err();
         assert!(matches!(err, FlowError::InvalidArgument(_)));
-        assert_eq!(nemo_flow_get_handle().unwrap().uuid, child.uuid);
+        assert_eq!(get_handle().unwrap().uuid, child.uuid);
 
         let events = events.lock().unwrap();
         let parent_end_count = events
@@ -1593,16 +1588,16 @@ mod tests {
         assert_eq!(parent_end_count, 0);
 
         drop(events);
-        nemo_flow_pop_scope(&child.uuid).unwrap();
-        nemo_flow_pop_scope(&parent.uuid).unwrap();
-        nemo_flow_deregister_subscriber("capture_scope_events").unwrap();
+        pop_scope(&child.uuid).unwrap();
+        pop_scope(&parent.uuid).unwrap();
+        deregister_subscriber("capture_scope_events").unwrap();
     }
 
     #[test]
     fn test_scope_attributes_propagated() {
         let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
-        let handle = nemo_flow_push_scope(
+        let handle = push_scope(
             "parallel_scope",
             ScopeType::Agent,
             None,
@@ -1613,7 +1608,7 @@ mod tests {
         .unwrap();
         assert!(handle.attributes.contains(ScopeAttributes::PARALLEL));
         assert!(handle.attributes.contains(ScopeAttributes::RELOCATABLE));
-        nemo_flow_pop_scope(&handle.uuid).unwrap();
+        pop_scope(&handle.uuid).unwrap();
     }
 
     // -- Event emission --
@@ -1625,7 +1620,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "evt_test",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock()
@@ -1635,7 +1630,7 @@ mod tests {
         )
         .unwrap();
 
-        nemo_flow_event("my_mark", None, Some(json!({"x": 1})), None).unwrap();
+        event("my_mark", None, Some(json!({"x": 1})), None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1643,7 +1638,7 @@ mod tests {
         assert_eq!(captured[0].1, "Mark");
 
         drop(captured);
-        nemo_flow_deregister_subscriber("evt_test").unwrap();
+        deregister_subscriber("evt_test").unwrap();
     }
 
     // -- Tool lifecycle --
@@ -1655,7 +1650,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "tool_test",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.kind().to_string());
@@ -1663,7 +1658,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nemo_flow_tool_call(
+        let handle = tool_call(
             "my_tool",
             json!({"input": "data"}),
             None,
@@ -1675,7 +1670,7 @@ mod tests {
         .unwrap();
         assert_eq!(handle.name, "my_tool");
 
-        nemo_flow_tool_call_end(&handle, json!({"output": "result"}), None, None).unwrap();
+        tool_call_end(&handle, json!({"output": "result"}), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -1683,7 +1678,7 @@ mod tests {
         assert_eq!(captured[1], "ToolEnd");
 
         drop(captured);
-        nemo_flow_deregister_subscriber("tool_test").unwrap();
+        deregister_subscriber("tool_test").unwrap();
     }
 
     #[test]
@@ -1692,7 +1687,7 @@ mod tests {
         reset_global();
 
         // Register a sanitizer that adds a field
-        nemo_flow_register_tool_sanitize_request_guardrail(
+        register_tool_sanitize_request_guardrail(
             "sanitizer",
             1,
             Box::new(|_name, mut args| {
@@ -1706,7 +1701,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "tool_san_test",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1714,7 +1709,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nemo_flow_tool_call(
+        let handle = tool_call(
             "my_tool",
             json!({"input": "data"}),
             None,
@@ -1733,9 +1728,9 @@ mod tests {
         assert_eq!(input["input"], "data");
 
         drop(captured);
-        nemo_flow_tool_call_end(&handle, json!("ok"), None, None).unwrap();
-        nemo_flow_deregister_subscriber("tool_san_test").unwrap();
-        nemo_flow_deregister_tool_sanitize_request_guardrail("sanitizer").unwrap();
+        tool_call_end(&handle, json!("ok"), None, None).unwrap();
+        deregister_subscriber("tool_san_test").unwrap();
+        deregister_tool_sanitize_request_guardrail("sanitizer").unwrap();
     }
 
     #[test]
@@ -1743,7 +1738,7 @@ mod tests {
         let _lock = runtime_owner_test_mutex().lock().unwrap();
         reset_global();
 
-        nemo_flow_register_tool_sanitize_response_guardrail(
+        register_tool_sanitize_response_guardrail(
             "resp_sanitizer",
             1,
             Box::new(|_name, mut result| {
@@ -1758,7 +1753,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "tool_resp_test",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1766,7 +1761,7 @@ mod tests {
         )
         .unwrap();
 
-        let handle = nemo_flow_tool_call(
+        let handle = tool_call(
             "tool",
             json!({}),
             None,
@@ -1776,7 +1771,7 @@ mod tests {
             None,
         )
         .unwrap();
-        nemo_flow_tool_call_end(&handle, json!({"output": "raw"}), None, None).unwrap();
+        tool_call_end(&handle, json!({"output": "raw"}), None, None).unwrap();
 
         let captured = events.lock().unwrap();
         let end_event = &captured[1];
@@ -1785,8 +1780,8 @@ mod tests {
         assert_eq!(output["output"], "raw");
 
         drop(captured);
-        nemo_flow_deregister_subscriber("tool_resp_test").unwrap();
-        nemo_flow_deregister_tool_sanitize_response_guardrail("resp_sanitizer").unwrap();
+        deregister_subscriber("tool_resp_test").unwrap();
+        deregister_tool_sanitize_response_guardrail("resp_sanitizer").unwrap();
     }
 
     // -- Tool call execute (async) --
@@ -1799,7 +1794,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Arc::new(|args| Box::pin(async move { Ok(json!({"result": args["input"]})) }));
 
-        let result = nemo_flow_tool_call_execute(
+        let result = tool_call_execute(
             "exec_tool",
             json!({"input": "hello"}),
             func,
@@ -1821,7 +1816,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = events.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "tool_exec_failure_sub",
             Arc::new(move |e: &crate::types::Event| {
                 captured.lock().unwrap().push(e.clone());
@@ -1832,7 +1827,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Arc::new(|_args| Box::pin(async move { Err(FlowError::Internal("boom".into())) }));
 
-        let err = nemo_flow_tool_call_execute(
+        let err = tool_call_execute(
             "failing_tool",
             json!({"input": true}),
             func,
@@ -1854,7 +1849,7 @@ mod tests {
         assert!(captured[1].output().is_none());
 
         drop(captured);
-        nemo_flow_deregister_subscriber("tool_exec_failure_sub").unwrap();
+        deregister_subscriber("tool_exec_failure_sub").unwrap();
     }
 
     #[tokio::test]
@@ -1862,7 +1857,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nemo_flow_register_tool_request_intercept(
+        register_tool_request_intercept(
             "req_intercept",
             1,
             false,
@@ -1877,7 +1872,7 @@ mod tests {
 
         let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
-        let result = nemo_flow_tool_call_execute(
+        let result = tool_call_execute(
             "tool",
             json!({"original": true}),
             func,
@@ -1892,7 +1887,7 @@ mod tests {
         assert_eq!(result["original"], true);
         assert_eq!(result["added_by_intercept"], true);
 
-        nemo_flow_deregister_tool_request_intercept("req_intercept").unwrap();
+        deregister_tool_request_intercept("req_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -1902,7 +1897,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "tool_reject_sub",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -1910,7 +1905,7 @@ mod tests {
         )
         .unwrap();
 
-        nemo_flow_register_tool_conditional_execution_guardrail(
+        register_tool_conditional_execution_guardrail(
             "blocker",
             1,
             Box::new(|_name, _args| Ok(Some("forbidden tool".into()))),
@@ -1920,7 +1915,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Arc::new(|_args| Box::pin(async move { Ok(json!({"should_not_reach": true})) }));
 
-        let result = nemo_flow_tool_call_execute(
+        let result = tool_call_execute(
             "tool",
             json!({}),
             func,
@@ -1946,8 +1941,8 @@ mod tests {
         assert_eq!(mark_data["rejection_reason"], "forbidden tool");
 
         drop(captured);
-        nemo_flow_deregister_subscriber("tool_reject_sub").unwrap();
-        nemo_flow_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
+        deregister_subscriber("tool_reject_sub").unwrap();
+        deregister_tool_conditional_execution_guardrail("blocker").unwrap();
     }
 
     #[tokio::test]
@@ -1955,7 +1950,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nemo_flow_register_tool_execution_intercept(
+        register_tool_execution_intercept(
             "exec_intercept",
             1,
             Arc::new(|_name: &str, _args: Json, _next: ToolExecutionNextFn| {
@@ -1968,7 +1963,7 @@ mod tests {
         let func: ToolExecutionNextFn =
             Arc::new(|_args| Box::pin(async move { Ok(json!({"from_original": true})) }));
 
-        let result = nemo_flow_tool_call_execute(
+        let result = tool_call_execute(
             "tool",
             json!({}),
             func,
@@ -1984,7 +1979,7 @@ mod tests {
         assert_eq!(result["from_intercept"], true);
         assert!(result.get("from_original").is_none());
 
-        nemo_flow_deregister_tool_execution_intercept("exec_intercept").unwrap();
+        deregister_tool_execution_intercept("exec_intercept").unwrap();
     }
 
     // -- LLM lifecycle --
@@ -1996,7 +1991,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "llm_test",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.kind().to_string());
@@ -2008,7 +2003,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        let handle = nemo_flow_llm_call(
+        let handle = llm_call(
             "my_llm",
             &request,
             None,
@@ -2021,7 +2016,7 @@ mod tests {
         .unwrap();
         assert_eq!(handle.name, "my_llm");
 
-        nemo_flow_llm_call_end(&handle, json!({"response": "ok"}), None, None, None).unwrap();
+        llm_call_end(&handle, json!({"response": "ok"}), None, None, None).unwrap();
 
         let captured = events.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -2029,7 +2024,7 @@ mod tests {
         assert_eq!(captured[1], "LLMEnd");
 
         drop(captured);
-        nemo_flow_deregister_subscriber("llm_test").unwrap();
+        deregister_subscriber("llm_test").unwrap();
     }
 
     #[test]
@@ -2037,7 +2032,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nemo_flow_register_llm_sanitize_request_guardrail(
+        register_llm_sanitize_request_guardrail(
             "llm_sanitizer",
             1,
             Box::new(|mut req: LLMRequest| {
@@ -2049,7 +2044,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "llm_san_test",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -2061,7 +2056,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        let handle = nemo_flow_llm_call(
+        let handle = llm_call(
             "llm",
             &request,
             None,
@@ -2080,9 +2075,9 @@ mod tests {
         assert_eq!(input["headers"]["X-Sanitized"], "true");
 
         drop(captured);
-        nemo_flow_llm_call_end(&handle, json!("ok"), None, None, None).unwrap();
-        nemo_flow_deregister_subscriber("llm_san_test").unwrap();
-        nemo_flow_deregister_llm_sanitize_request_guardrail("llm_sanitizer").unwrap();
+        llm_call_end(&handle, json!("ok"), None, None, None).unwrap();
+        deregister_subscriber("llm_san_test").unwrap();
+        deregister_llm_sanitize_request_guardrail("llm_sanitizer").unwrap();
     }
 
     #[tokio::test]
@@ -2099,7 +2094,7 @@ mod tests {
         };
         let content = request.content.clone();
 
-        let result = nemo_flow_llm_call_execute(
+        let result = llm_call_execute(
             "llm",
             request,
             func,
@@ -2124,7 +2119,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = events.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "llm_exec_failure_sub",
             Arc::new(move |e: &crate::types::Event| {
                 captured.lock().unwrap().push(e.clone());
@@ -2139,7 +2134,7 @@ mod tests {
         let func: LlmExecutionNextFn =
             Arc::new(|_req| Box::pin(async move { Err(FlowError::Internal("boom".into())) }));
 
-        let err = nemo_flow_llm_call_execute(
+        let err = llm_call_execute(
             "failing_llm",
             request,
             func,
@@ -2164,7 +2159,7 @@ mod tests {
         assert!(captured[1].output().is_none());
 
         drop(captured);
-        nemo_flow_deregister_subscriber("llm_exec_failure_sub").unwrap();
+        deregister_subscriber("llm_exec_failure_sub").unwrap();
     }
 
     #[tokio::test]
@@ -2174,7 +2169,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "llm_reject_sub",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -2182,7 +2177,7 @@ mod tests {
         )
         .unwrap();
 
-        nemo_flow_register_llm_conditional_execution_guardrail(
+        register_llm_conditional_execution_guardrail(
             "llm_blocker",
             1,
             Box::new(|_req: &LLMRequest| Ok(Some("blocked by policy".into()))),
@@ -2196,7 +2191,7 @@ mod tests {
             content: json!({"messages": []}),
         };
 
-        let result = nemo_flow_llm_call_execute(
+        let result = llm_call_execute(
             "llm",
             request,
             func,
@@ -2225,8 +2220,8 @@ mod tests {
         assert_eq!(mark_data["rejection_reason"], "blocked by policy");
 
         drop(captured);
-        nemo_flow_deregister_subscriber("llm_reject_sub").unwrap();
-        nemo_flow_deregister_llm_conditional_execution_guardrail("llm_blocker").unwrap();
+        deregister_subscriber("llm_reject_sub").unwrap();
+        deregister_llm_conditional_execution_guardrail("llm_blocker").unwrap();
     }
 
     #[tokio::test]
@@ -2234,7 +2229,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nemo_flow_register_llm_request_intercept(
+        register_llm_request_intercept(
             "llm_req_intercept",
             1,
             false,
@@ -2259,7 +2254,7 @@ mod tests {
             content: json!({"messages": []}),
         };
 
-        let result = nemo_flow_llm_call_execute(
+        let result = llm_call_execute(
             "llm",
             request,
             func,
@@ -2276,7 +2271,7 @@ mod tests {
 
         assert_eq!(result["saw_intercepted"], true);
 
-        nemo_flow_deregister_llm_request_intercept("llm_req_intercept").unwrap();
+        deregister_llm_request_intercept("llm_req_intercept").unwrap();
     }
 
     #[tokio::test]
@@ -2284,7 +2279,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nemo_flow_register_llm_execution_intercept(
+        register_llm_execution_intercept(
             "llm_exec_intercept",
             1,
             Arc::new(|_name: &str, _req: LLMRequest, _next: LlmExecutionNextFn| {
@@ -2302,7 +2297,7 @@ mod tests {
             content: json!({"messages": []}),
         };
 
-        let result = nemo_flow_llm_call_execute(
+        let result = llm_call_execute(
             "llm",
             request,
             func,
@@ -2320,7 +2315,7 @@ mod tests {
         assert_eq!(result["from_intercept"], true);
         assert!(result.get("from_original").is_none());
 
-        nemo_flow_deregister_llm_execution_intercept("llm_exec_intercept").unwrap();
+        deregister_llm_execution_intercept("llm_exec_intercept").unwrap();
     }
 
     // -- All guardrail/intercept registration pairs --
@@ -2329,53 +2324,39 @@ mod tests {
     fn test_tool_sanitize_response_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nemo_flow_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r)).unwrap();
-        assert!(
-            nemo_flow_register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r))
-                .is_err()
-        );
-        assert!(nemo_flow_deregister_tool_sanitize_response_guardrail("g1").unwrap());
-        assert!(!nemo_flow_deregister_tool_sanitize_response_guardrail("g1").unwrap());
+        register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r)).unwrap();
+        assert!(register_tool_sanitize_response_guardrail("g1", 1, Box::new(|_n, r| r)).is_err());
+        assert!(deregister_tool_sanitize_response_guardrail("g1").unwrap());
+        assert!(!deregister_tool_sanitize_response_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_tool_conditional_execution_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nemo_flow_register_tool_conditional_execution_guardrail(
-            "g1",
-            1,
-            Box::new(|_n, _a| Ok(None)),
-        )
-        .unwrap();
+        register_tool_conditional_execution_guardrail("g1", 1, Box::new(|_n, _a| Ok(None)))
+            .unwrap();
         assert!(
-            nemo_flow_register_tool_conditional_execution_guardrail(
-                "g1",
-                1,
-                Box::new(|_n, _a| Ok(None))
-            )
-            .is_err()
+            register_tool_conditional_execution_guardrail("g1", 1, Box::new(|_n, _a| Ok(None)))
+                .is_err()
         );
-        assert!(nemo_flow_deregister_tool_conditional_execution_guardrail("g1").unwrap());
+        assert!(deregister_tool_conditional_execution_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_tool_request_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nemo_flow_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| Ok(a))).unwrap();
-        assert!(
-            nemo_flow_register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| Ok(a)))
-                .is_err()
-        );
-        assert!(nemo_flow_deregister_tool_request_intercept("i1").unwrap());
+        register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| Ok(a))).unwrap();
+        assert!(register_tool_request_intercept("i1", 1, false, Box::new(|_n, a| Ok(a))).is_err());
+        assert!(deregister_tool_request_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_tool_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nemo_flow_register_tool_execution_intercept(
+        register_tool_execution_intercept(
             "i1",
             1,
             Arc::new(|_name: &str, a: Json, _next: ToolExecutionNextFn| {
@@ -2385,7 +2366,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            nemo_flow_register_tool_execution_intercept(
+            register_tool_execution_intercept(
                 "i1",
                 1,
                 Arc::new(
@@ -2401,61 +2382,46 @@ mod tests {
             )
             .is_err()
         );
-        assert!(nemo_flow_deregister_tool_execution_intercept("i1").unwrap());
+        assert!(deregister_tool_execution_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_sanitize_request_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nemo_flow_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).unwrap();
-        assert!(
-            nemo_flow_register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).is_err()
-        );
-        assert!(nemo_flow_deregister_llm_sanitize_request_guardrail("g1").unwrap());
+        register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).unwrap();
+        assert!(register_llm_sanitize_request_guardrail("g1", 1, Box::new(|r| r)).is_err());
+        assert!(deregister_llm_sanitize_request_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_sanitize_response_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nemo_flow_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).unwrap();
-        assert!(
-            nemo_flow_register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).is_err()
-        );
-        assert!(nemo_flow_deregister_llm_sanitize_response_guardrail("g1").unwrap());
+        register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).unwrap();
+        assert!(register_llm_sanitize_response_guardrail("g1", 1, Box::new(|r| r)).is_err());
+        assert!(deregister_llm_sanitize_response_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_conditional_execution_guardrail_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nemo_flow_register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| Ok(None)))
-            .unwrap();
+        register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| Ok(None))).unwrap();
         assert!(
-            nemo_flow_register_llm_conditional_execution_guardrail(
-                "g1",
-                1,
-                Box::new(|_r| Ok(None))
-            )
-            .is_err()
+            register_llm_conditional_execution_guardrail("g1", 1, Box::new(|_r| Ok(None))).is_err()
         );
-        assert!(nemo_flow_deregister_llm_conditional_execution_guardrail("g1").unwrap());
+        assert!(deregister_llm_conditional_execution_guardrail("g1").unwrap());
     }
 
     #[test]
     fn test_llm_request_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nemo_flow_register_llm_request_intercept(
-            "i1",
-            1,
-            false,
-            Box::new(|_name: &str, r, a| Ok((r, a))),
-        )
-        .unwrap();
+        register_llm_request_intercept("i1", 1, false, Box::new(|_name: &str, r, a| Ok((r, a))))
+            .unwrap();
         assert!(
-            nemo_flow_register_llm_request_intercept(
+            register_llm_request_intercept(
                 "i1",
                 1,
                 false,
@@ -2463,14 +2429,14 @@ mod tests {
             )
             .is_err()
         );
-        assert!(nemo_flow_deregister_llm_request_intercept("i1").unwrap());
+        assert!(deregister_llm_request_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nemo_flow_register_llm_execution_intercept(
+        register_llm_execution_intercept(
             "i1",
             1,
             Arc::new(
@@ -2485,14 +2451,14 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(nemo_flow_deregister_llm_execution_intercept("i1").unwrap());
+        assert!(deregister_llm_execution_intercept("i1").unwrap());
     }
 
     #[test]
     fn test_llm_stream_execution_intercept_registration() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        nemo_flow_register_llm_stream_execution_intercept(
+        register_llm_stream_execution_intercept(
             "i1",
             1,
             Arc::new(
@@ -2520,7 +2486,7 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(nemo_flow_deregister_llm_stream_execution_intercept("i1").unwrap());
+        assert!(deregister_llm_stream_execution_intercept("i1").unwrap());
     }
 
     // -- Deregister non-existent returns false --
@@ -2529,30 +2495,30 @@ mod tests {
     fn test_deregister_nonexistent_subscriber() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nemo_flow_deregister_subscriber("nonexistent").unwrap());
+        assert!(!deregister_subscriber("nonexistent").unwrap());
     }
 
     #[test]
     fn test_deregister_nonexistent_guardrails() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nemo_flow_deregister_tool_sanitize_request_guardrail("nope").unwrap());
-        assert!(!nemo_flow_deregister_tool_sanitize_response_guardrail("nope").unwrap());
-        assert!(!nemo_flow_deregister_tool_conditional_execution_guardrail("nope").unwrap());
-        assert!(!nemo_flow_deregister_llm_sanitize_request_guardrail("nope").unwrap());
-        assert!(!nemo_flow_deregister_llm_sanitize_response_guardrail("nope").unwrap());
-        assert!(!nemo_flow_deregister_llm_conditional_execution_guardrail("nope").unwrap());
+        assert!(!deregister_tool_sanitize_request_guardrail("nope").unwrap());
+        assert!(!deregister_tool_sanitize_response_guardrail("nope").unwrap());
+        assert!(!deregister_tool_conditional_execution_guardrail("nope").unwrap());
+        assert!(!deregister_llm_sanitize_request_guardrail("nope").unwrap());
+        assert!(!deregister_llm_sanitize_response_guardrail("nope").unwrap());
+        assert!(!deregister_llm_conditional_execution_guardrail("nope").unwrap());
     }
 
     #[test]
     fn test_deregister_nonexistent_intercepts() {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
-        assert!(!nemo_flow_deregister_tool_request_intercept("nope").unwrap());
-        assert!(!nemo_flow_deregister_tool_execution_intercept("nope").unwrap());
-        assert!(!nemo_flow_deregister_llm_request_intercept("nope").unwrap());
-        assert!(!nemo_flow_deregister_llm_execution_intercept("nope").unwrap());
-        assert!(!nemo_flow_deregister_llm_stream_execution_intercept("nope").unwrap());
+        assert!(!deregister_tool_request_intercept("nope").unwrap());
+        assert!(!deregister_tool_execution_intercept("nope").unwrap());
+        assert!(!deregister_llm_request_intercept("nope").unwrap());
+        assert!(!deregister_llm_execution_intercept("nope").unwrap());
+        assert!(!deregister_llm_stream_execution_intercept("nope").unwrap());
     }
 
     // -- LLM stream call execute --
@@ -2599,7 +2565,7 @@ mod tests {
             Json::Array(chunks.clone())
         });
 
-        let mut stream = nemo_flow_llm_stream_call_execute(
+        let mut stream = llm_stream_call_execute(
             "llm",
             request,
             func,
@@ -2634,7 +2600,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = events.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "llm_stream_exec_failure_sub",
             Arc::new(move |e: &crate::types::Event| {
                 captured.lock().unwrap().push(e.clone());
@@ -2649,7 +2615,7 @@ mod tests {
         let func: LlmStreamExecutionNextFn =
             Arc::new(|_req| Box::pin(async move { Err(FlowError::Internal("boom".into())) }));
 
-        let result = nemo_flow_llm_stream_call_execute(
+        let result = llm_stream_call_execute(
             "failing_stream_llm",
             request,
             func,
@@ -2675,7 +2641,7 @@ mod tests {
         assert!(captured[1].output().is_none());
 
         drop(captured);
-        nemo_flow_deregister_subscriber("llm_stream_exec_failure_sub").unwrap();
+        deregister_subscriber("llm_stream_exec_failure_sub").unwrap();
     }
 
     #[tokio::test]
@@ -2685,7 +2651,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let ec = events.clone();
-        nemo_flow_register_subscriber(
+        register_subscriber(
             "stream_reject_sub",
             Arc::new(move |e: &crate::types::Event| {
                 ec.lock().unwrap().push(e.clone());
@@ -2693,7 +2659,7 @@ mod tests {
         )
         .unwrap();
 
-        nemo_flow_register_llm_conditional_execution_guardrail(
+        register_llm_conditional_execution_guardrail(
             "stream_blocker",
             1,
             Box::new(|_req: &LLMRequest| Ok(Some("stream blocked".into()))),
@@ -2725,7 +2691,7 @@ mod tests {
         let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(|_| Ok(()));
         let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| Json::Null);
 
-        let result = nemo_flow_llm_stream_call_execute(
+        let result = llm_stream_call_execute(
             "llm",
             request,
             func,
@@ -2756,8 +2722,8 @@ mod tests {
         assert_eq!(mark_data["rejection_reason"], "stream blocked");
 
         drop(captured);
-        nemo_flow_deregister_subscriber("stream_reject_sub").unwrap();
-        nemo_flow_deregister_llm_conditional_execution_guardrail("stream_blocker").unwrap();
+        deregister_subscriber("stream_reject_sub").unwrap();
+        deregister_llm_conditional_execution_guardrail("stream_blocker").unwrap();
     }
 
     // -- Tool call with explicit parent --
@@ -2767,7 +2733,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        let scope = nemo_flow_push_scope(
+        let scope = push_scope(
             "parent",
             ScopeType::Agent,
             None,
@@ -2776,7 +2742,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let handle = nemo_flow_tool_call(
+        let handle = tool_call(
             "tool",
             json!({}),
             Some(&scope),
@@ -2788,8 +2754,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(handle.parent_uuid, Some(scope.uuid));
-        nemo_flow_tool_call_end(&handle, json!({}), None, None).unwrap();
-        nemo_flow_pop_scope(&scope.uuid).unwrap();
+        tool_call_end(&handle, json!({}), None, None).unwrap();
+        pop_scope(&scope.uuid).unwrap();
     }
 
     // -- LLM call with attributes --
@@ -2803,7 +2769,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        let handle = nemo_flow_llm_call(
+        let handle = llm_call(
             "llm",
             &request,
             None,
@@ -2817,7 +2783,7 @@ mod tests {
 
         assert!(handle.attributes.contains(LLMAttributes::STATELESS));
         assert!(handle.attributes.contains(LLMAttributes::STREAMING));
-        nemo_flow_llm_call_end(&handle, json!({}), None, None, None).unwrap();
+        llm_call_end(&handle, json!({}), None, None, None).unwrap();
     }
 
     // -- Standalone middleware chain tests --
@@ -2827,7 +2793,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nemo_flow_register_tool_request_intercept(
+        register_tool_request_intercept(
             "add_field",
             10,
             false,
@@ -2840,11 +2806,11 @@ mod tests {
         )
         .unwrap();
 
-        let result = nemo_flow_tool_request_intercepts("tool", json!({"key": "value"})).unwrap();
+        let result = tool_request_intercepts("tool", json!({"key": "value"})).unwrap();
         assert_eq!(result["key"], "value");
         assert_eq!(result["injected"], true);
 
-        nemo_flow_deregister_tool_request_intercept("add_field").unwrap();
+        deregister_tool_request_intercept("add_field").unwrap();
     }
 
     #[test]
@@ -2853,7 +2819,7 @@ mod tests {
         reset_global();
 
         // No guardrails registered — should pass
-        assert!(nemo_flow_tool_conditional_execution("tool", &json!({})).is_ok());
+        assert!(tool_conditional_execution("tool", &json!({})).is_ok());
     }
 
     #[test]
@@ -2861,19 +2827,19 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nemo_flow_register_tool_conditional_execution_guardrail(
+        register_tool_conditional_execution_guardrail(
             "blocker",
             1,
             Box::new(|_name, _args| Ok(Some("blocked".into()))),
         )
         .unwrap();
 
-        match nemo_flow_tool_conditional_execution("tool", &json!({})) {
+        match tool_conditional_execution("tool", &json!({})) {
             Err(FlowError::GuardrailRejected(msg)) => assert_eq!(msg, "blocked"),
             other => panic!("expected GuardrailRejected, got {other:?}"),
         }
 
-        nemo_flow_deregister_tool_conditional_execution_guardrail("blocker").unwrap();
+        deregister_tool_conditional_execution_guardrail("blocker").unwrap();
     }
 
     #[test]
@@ -2881,7 +2847,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nemo_flow_register_tool_request_intercept(
+        register_tool_request_intercept(
             "broken",
             1,
             false,
@@ -2889,12 +2855,12 @@ mod tests {
         )
         .unwrap();
 
-        match nemo_flow_tool_request_intercepts("tool", json!({})) {
+        match tool_request_intercepts("tool", json!({})) {
             Err(FlowError::Internal(msg)) => assert_eq!(msg, "tool intercept failed"),
             other => panic!("expected Internal error, got {other:?}"),
         }
 
-        nemo_flow_deregister_tool_request_intercept("broken").unwrap();
+        deregister_tool_request_intercept("broken").unwrap();
     }
 
     #[test]
@@ -2902,19 +2868,19 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nemo_flow_register_tool_conditional_execution_guardrail(
+        register_tool_conditional_execution_guardrail(
             "broken",
             1,
             Box::new(|_name, _args| Err(FlowError::Internal("tool conditional failed".into()))),
         )
         .unwrap();
 
-        match nemo_flow_tool_conditional_execution("tool", &json!({})) {
+        match tool_conditional_execution("tool", &json!({})) {
             Err(FlowError::Internal(msg)) => assert_eq!(msg, "tool conditional failed"),
             other => panic!("expected Internal error, got {other:?}"),
         }
 
-        nemo_flow_deregister_tool_conditional_execution_guardrail("broken").unwrap();
+        deregister_tool_conditional_execution_guardrail("broken").unwrap();
     }
 
     #[test]
@@ -2922,7 +2888,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nemo_flow_register_llm_request_intercept(
+        register_llm_request_intercept(
             "add_field",
             10,
             false,
@@ -2941,11 +2907,11 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        let result = nemo_flow_llm_request_intercepts("test_llm", request).unwrap();
+        let result = llm_request_intercepts("test_llm", request).unwrap();
         assert_eq!(result.content["intercepted"], true);
         assert_eq!(result.content["messages"], json!([]));
 
-        nemo_flow_deregister_llm_request_intercept("add_field").unwrap();
+        deregister_llm_request_intercept("add_field").unwrap();
     }
 
     #[test]
@@ -2957,7 +2923,7 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        assert!(nemo_flow_llm_conditional_execution(&request).is_ok());
+        assert!(llm_conditional_execution(&request).is_ok());
     }
 
     #[test]
@@ -2965,7 +2931,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nemo_flow_register_llm_conditional_execution_guardrail(
+        register_llm_conditional_execution_guardrail(
             "blocker",
             1,
             Box::new(|_req| Ok(Some("llm blocked".into()))),
@@ -2976,12 +2942,12 @@ mod tests {
             headers: serde_json::Map::new(),
             content: json!({"messages": []}),
         };
-        match nemo_flow_llm_conditional_execution(&request) {
+        match llm_conditional_execution(&request) {
             Err(FlowError::GuardrailRejected(msg)) => assert_eq!(msg, "llm blocked"),
             other => panic!("expected GuardrailRejected, got {other:?}"),
         }
 
-        nemo_flow_deregister_llm_conditional_execution_guardrail("blocker").unwrap();
+        deregister_llm_conditional_execution_guardrail("blocker").unwrap();
     }
 
     #[test]
@@ -2989,7 +2955,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nemo_flow_register_llm_request_intercept(
+        register_llm_request_intercept(
             "broken",
             1,
             false,
@@ -3004,12 +2970,12 @@ mod tests {
             content: json!({"messages": []}),
         };
 
-        match nemo_flow_llm_request_intercepts("test_llm", request) {
+        match llm_request_intercepts("test_llm", request) {
             Err(FlowError::Internal(msg)) => assert_eq!(msg, "llm request intercept failed"),
             other => panic!("expected Internal error, got {other:?}"),
         }
 
-        nemo_flow_deregister_llm_request_intercept("broken").unwrap();
+        deregister_llm_request_intercept("broken").unwrap();
     }
 
     #[test]
@@ -3017,7 +2983,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         reset_global();
 
-        nemo_flow_register_llm_conditional_execution_guardrail(
+        register_llm_conditional_execution_guardrail(
             "broken",
             1,
             Box::new(|_request| Err(FlowError::Internal("llm conditional failed".into()))),
@@ -3029,11 +2995,11 @@ mod tests {
             content: json!({"messages": []}),
         };
 
-        match nemo_flow_llm_conditional_execution(&request) {
+        match llm_conditional_execution(&request) {
             Err(FlowError::Internal(msg)) => assert_eq!(msg, "llm conditional failed"),
             other => panic!("expected Internal error, got {other:?}"),
         }
 
-        nemo_flow_deregister_llm_conditional_execution_guardrail("broken").unwrap();
+        deregister_llm_conditional_execution_guardrail("broken").unwrap();
     }
 }

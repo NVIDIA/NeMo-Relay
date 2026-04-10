@@ -10,19 +10,18 @@ use std::sync::{Arc, Mutex};
 use pyo3::prelude::*;
 use serde_json::{Map, Value as Json};
 
-use nemo_flow_core::{
-    ConfigDiagnostic, PluginConfig, PluginError, PluginHandler, PluginRegistration,
-    PluginRegistrationContext, active_plugin_report, clear_plugin_configuration,
-    deregister_plugin_handler, initialize_plugins, list_plugin_kinds, register_plugin_handler,
-    validate_plugin_config,
+use nemo_flow::{
+    ConfigDiagnostic, Plugin, PluginConfig, PluginError, PluginRegistration,
+    PluginRegistrationContext, active_plugin_report, clear_plugin_configuration, deregister_plugin,
+    initialize_plugins, list_plugin_kinds, register_plugin, validate_plugin_config,
 };
-use nemo_flow_core::{
-    nemo_flow_deregister_llm_execution_intercept, nemo_flow_deregister_llm_request_intercept,
-    nemo_flow_deregister_llm_stream_execution_intercept, nemo_flow_deregister_subscriber,
-    nemo_flow_deregister_tool_execution_intercept, nemo_flow_deregister_tool_request_intercept,
-    nemo_flow_register_llm_execution_intercept, nemo_flow_register_llm_request_intercept,
-    nemo_flow_register_llm_stream_execution_intercept, nemo_flow_register_subscriber,
-    nemo_flow_register_tool_execution_intercept, nemo_flow_register_tool_request_intercept,
+use nemo_flow::{
+    deregister_llm_execution_intercept, deregister_llm_request_intercept,
+    deregister_llm_stream_execution_intercept, deregister_subscriber,
+    deregister_tool_execution_intercept, deregister_tool_request_intercept,
+    register_llm_execution_intercept, register_llm_request_intercept,
+    register_llm_stream_execution_intercept, register_subscriber,
+    register_tool_execution_intercept, register_tool_request_intercept,
 };
 
 use crate::convert::{json_to_py, py_to_json};
@@ -59,7 +58,7 @@ impl PyPluginContext {
     )]
     fn register_subscriber(&self, name: &str, callback: Py<PyAny>) -> PyResult<()> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_register_subscriber(&qualified_name, wrap_py_event_subscriber(callback))
+        register_subscriber(&qualified_name, wrap_py_event_subscriber(callback))
             .map_err(to_py_err)?;
 
         let name_owned = qualified_name;
@@ -70,13 +69,11 @@ impl PyPluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_deregister_subscriber(&name_owned)
-                    .map(|_| ())
-                    .map_err(|e| {
-                        PluginError::RegistrationFailed(format!(
-                            "subscriber deregistration failed: {e}"
-                        ))
-                    })
+                deregister_subscriber(&name_owned).map(|_| ()).map_err(|e| {
+                    PluginError::RegistrationFailed(format!(
+                        "subscriber deregistration failed: {e}"
+                    ))
+                })
             }),
         ));
         Ok(())
@@ -96,7 +93,7 @@ impl PyPluginContext {
         callback: Py<PyAny>,
     ) -> PyResult<()> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_register_llm_request_intercept(
+        register_llm_request_intercept(
             &qualified_name,
             priority,
             break_chain,
@@ -112,7 +109,7 @@ impl PyPluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_deregister_llm_request_intercept(&name_owned)
+                deregister_llm_request_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -132,7 +129,7 @@ impl PyPluginContext {
         callback: Py<PyAny>,
     ) -> PyResult<()> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_register_llm_execution_intercept(
+        register_llm_execution_intercept(
             &qualified_name,
             priority,
             wrap_py_llm_exec_intercept_fn(callback),
@@ -147,7 +144,7 @@ impl PyPluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_deregister_llm_execution_intercept(&name_owned)
+                deregister_llm_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -167,7 +164,7 @@ impl PyPluginContext {
         callback: Py<PyAny>,
     ) -> PyResult<()> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_register_llm_stream_execution_intercept(
+        register_llm_stream_execution_intercept(
             &qualified_name,
             priority,
             wrap_py_llm_stream_exec_intercept_fn(callback),
@@ -182,7 +179,7 @@ impl PyPluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_deregister_llm_stream_execution_intercept(&name_owned)
+                deregister_llm_stream_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -208,7 +205,7 @@ impl PyPluginContext {
         callback: Py<PyAny>,
     ) -> PyResult<()> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_register_tool_request_intercept(
+        register_tool_request_intercept(
             &qualified_name,
             priority,
             break_chain,
@@ -224,7 +221,7 @@ impl PyPluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_deregister_tool_request_intercept(&name_owned)
+                deregister_tool_request_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -244,7 +241,7 @@ impl PyPluginContext {
         callback: Py<PyAny>,
     ) -> PyResult<()> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_register_tool_execution_intercept(
+        register_tool_execution_intercept(
             &qualified_name,
             priority,
             wrap_py_tool_exec_intercept_fn(callback),
@@ -259,7 +256,7 @@ impl PyPluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_deregister_tool_execution_intercept(&name_owned)
+                deregister_tool_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -276,20 +273,20 @@ impl PyPluginContext {
     }
 }
 
-struct PyPluginHandler {
+struct PyPlugin {
     plugin_kind: String,
-    handler: Py<PyAny>,
+    plugin: Py<PyAny>,
 }
 
-impl PluginHandler for PyPluginHandler {
+impl Plugin for PyPlugin {
     fn plugin_kind(&self) -> &str {
         &self.plugin_kind
     }
 
     fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
         Python::attach(|py| {
-            let handler = self.handler.bind(py);
-            let Ok(method) = handler.getattr("validate") else {
+            let plugin = self.plugin.bind(py);
+            let Ok(method) = plugin.getattr("validate") else {
                 return vec![];
             };
 
@@ -367,7 +364,7 @@ impl PluginHandler for PyPluginHandler {
                     },
                 )?;
                 let plugin_config_py = json_to_py(py, &Json::Object(plugin_config.clone()))?;
-                self.handler.call_method1(
+                self.plugin.call_method1(
                     py,
                     "register",
                     (plugin_config_py, py_ctx.clone_ref(py)),
@@ -444,11 +441,11 @@ fn list_plugin_kinds_py(py: Python<'_>) -> PyResult<Py<PyAny>> {
 }
 
 #[pyfunction(name = "register_plugin")]
-#[pyo3(signature = (plugin_kind: "str", handler: "object") -> "None", text_signature = "(plugin_kind: str, handler: object) -> None")]
-fn register_plugin_py(plugin_kind: &str, handler: Py<PyAny>) -> PyResult<()> {
-    register_plugin_handler(Arc::new(PyPluginHandler {
+#[pyo3(signature = (plugin_kind: "str", plugin: "object") -> "None", text_signature = "(plugin_kind: str, plugin: object) -> None")]
+fn register_plugin_py(plugin_kind: &str, plugin: Py<PyAny>) -> PyResult<()> {
+    register_plugin(Arc::new(PyPlugin {
         plugin_kind: plugin_kind.to_string(),
-        handler,
+        plugin,
     }))
     .map_err(to_py_err)
 }
@@ -456,7 +453,7 @@ fn register_plugin_py(plugin_kind: &str, handler: Py<PyAny>) -> PyResult<()> {
 #[pyfunction(name = "deregister_plugin")]
 #[pyo3(signature = (plugin_kind: "str") -> "bool", text_signature = "(plugin_kind: str) -> bool")]
 fn deregister_plugin_py(plugin_kind: &str) -> bool {
-    deregister_plugin_handler(plugin_kind)
+    deregister_plugin(plugin_kind)
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -473,7 +470,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 fn plugin_callback_diag(plugin_kind: &str, code: &str, message: String) -> ConfigDiagnostic {
     ConfigDiagnostic {
-        level: nemo_flow_core::DiagnosticLevel::Error,
+        level: nemo_flow::DiagnosticLevel::Error,
         code: code.to_string(),
         component: Some(plugin_kind.to_string()),
         field: None,

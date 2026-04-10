@@ -17,7 +17,7 @@ use std::sync::{Arc, RwLock};
 
 use uuid::Uuid;
 
-use nemo_flow_core::{Event, ScopeType};
+use nemo_flow::{Event, ScopeType};
 
 use crate::learner::Learner;
 use crate::storage::StorageBackendDyn;
@@ -212,7 +212,7 @@ mod tests {
     use super::*;
     use crate::storage::{InMemoryBackend, StorageBackend, StorageBackendDyn};
     use crate::types::{ExecutionPlan, HotCache, MetadataEnvelope, ParallelGroup};
-    use nemo_flow_core::{Event, ScopeType};
+    use nemo_flow::{Event, ScopeType};
     use serde_json::json;
     use std::time::Duration;
     use uuid::Uuid;
@@ -239,7 +239,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nemo_flow_core::ToolAttributes::empty(),
+                nemo_flow::ToolAttributes::empty(),
                 None,
                 None,
             ),
@@ -249,7 +249,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nemo_flow_core::ToolAttributes::empty(),
+                nemo_flow::ToolAttributes::empty(),
                 None,
                 None,
             ),
@@ -259,7 +259,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nemo_flow_core::LLMAttributes::empty(),
+                nemo_flow::LLMAttributes::empty(),
                 None,
                 None,
                 None,
@@ -270,7 +270,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nemo_flow_core::LLMAttributes::empty(),
+                nemo_flow::LLMAttributes::empty(),
                 None,
                 None,
                 None,
@@ -281,7 +281,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nemo_flow_core::ScopeAttributes::empty(),
+                nemo_flow::ScopeAttributes::empty(),
                 scope_type,
             ),
             (EventType::End, Some(scope_type)) => Event::scope_end(
@@ -290,7 +290,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nemo_flow_core::ScopeAttributes::empty(),
+                nemo_flow::ScopeAttributes::empty(),
                 scope_type,
             ),
             (_, None) => Event::mark(parent_uuid, uuid, event_name, None, None),
@@ -306,7 +306,7 @@ mod tests {
             "my-agent",
             None,
             None,
-            nemo_flow_core::ScopeAttributes::empty(),
+            nemo_flow::ScopeAttributes::empty(),
             ScopeType::Agent,
         )
     }
@@ -319,7 +319,7 @@ mod tests {
             "my-agent",
             None,
             None,
-            nemo_flow_core::ScopeAttributes::empty(),
+            nemo_flow::ScopeAttributes::empty(),
             ScopeType::Agent,
         )
     }
@@ -692,7 +692,7 @@ mod tests {
         uuid: Uuid,
         parent_uuid: Option<Uuid>,
         name: &str,
-        annotated: nemo_flow_core::AnnotatedLLMResponse,
+        annotated: nemo_flow::AnnotatedLLMResponse,
     ) -> Event {
         Event::llm_end(
             parent_uuid,
@@ -700,7 +700,7 @@ mod tests {
             name,
             None,
             None,
-            nemo_flow_core::LLMAttributes::empty(),
+            nemo_flow::LLMAttributes::empty(),
             None,
             None,
             Some(std::sync::Arc::new(annotated)),
@@ -709,7 +709,7 @@ mod tests {
 
     #[test]
     fn test_accumulator_extracts_annotated_response() {
-        use nemo_flow_core::{AnnotatedLLMResponse, ResponseToolCall, Usage};
+        use nemo_flow::{AnnotatedLLMResponse, ResponseToolCall, Usage};
 
         let mut acc = RunAccumulator::new("agent-1".to_string());
 
@@ -845,7 +845,7 @@ mod tests {
 
     #[test]
     fn test_accumulator_annotated_response_partial_data() {
-        use nemo_flow_core::AnnotatedLLMResponse;
+        use nemo_flow::AnnotatedLLMResponse;
 
         let mut acc = RunAccumulator::new("agent-1".to_string());
 

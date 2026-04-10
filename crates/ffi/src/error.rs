@@ -16,8 +16,8 @@ use std::ffi::CString;
 
 use libc::c_char;
 
-use nemo_flow_core::FlowError;
-use nemo_flow_core::PluginError;
+use nemo_flow::FlowError;
+use nemo_flow::PluginError;
 
 /// Status codes returned by all FFI functions.
 ///

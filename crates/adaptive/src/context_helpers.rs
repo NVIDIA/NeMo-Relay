@@ -18,7 +18,7 @@
 //! Manual latency sensitivity is stored in scope metadata under the JSON path
 //! `/nemo_flow_adaptive/latency_sensitivity` as a positive integer.
 
-use nemo_flow_core::{ScopeType, current_scope_stack};
+use nemo_flow::{ScopeType, current_scope_stack};
 
 /// Metadata key path for manual latency sensitivity annotation.
 pub const LATENCY_SENSITIVITY_POINTER: &str = "/nemo_flow_adaptive/latency_sensitivity";

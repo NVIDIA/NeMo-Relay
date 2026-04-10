@@ -14,7 +14,7 @@ The main entry points are:
 - ``nemo_flow.guardrails`` and ``nemo_flow.intercepts`` for global middleware
 - ``nemo_flow.scope_local`` for middleware scoped to a specific ``ScopeHandle``
 - ``nemo_flow.typed`` for codec-based typed wrappers
-- ``nemo_flow.plugin`` for global plugin configuration and hosted plugin registration
+- ``nemo_flow.plugin`` for global plugin configuration and custom plugin registration
 - ``nemo_flow.adaptive`` for adaptive component configuration helpers
 
 Example:
@@ -135,7 +135,7 @@ from nemo_flow import (  # noqa: E402
     typed,
 )
 
-_scope_stack_var: contextvars.ContextVar[_ScopeStack] = contextvars.ContextVar("nemo_flow_scope_stack")
+_scope_stack_var: contextvars.ContextVar[_ScopeStack] = contextvars.ContextVar("scope_stack")
 
 
 def get_scope_stack() -> _ScopeStack:

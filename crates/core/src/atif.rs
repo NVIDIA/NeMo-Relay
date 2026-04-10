@@ -297,7 +297,7 @@ impl AtifExporter {
     }
 
     /// Returns an event subscriber function that can be registered with
-    /// [`nemo_flow_register_subscriber`](crate::api::nemo_flow_register_subscriber).
+    /// [`register_subscriber`](crate::api::register_subscriber).
     pub fn subscriber(&self) -> EventSubscriberFn {
         let state = self.state.clone();
         Arc::new(move |event: &Event| {

@@ -3,7 +3,7 @@
 
 //! Python-facing type wrappers for NeMo Flow core types.
 //!
-//! Each type wraps its corresponding `nemo_flow_core::types` struct and exposes
+//! Each type wraps its corresponding `nemo_flow::types` struct and exposes
 //! properties via `#[getter]`. Doc comments on `#[pyclass]` and `#[pymethods]`
 //! become Python `help()` output.
 
@@ -14,8 +14,8 @@ use std::time::Duration;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use nemo_flow_core::codec;
-use nemo_flow_core::types as core_types;
+use nemo_flow::codec;
+use nemo_flow::types as core_types;
 
 use crate::convert::{json_to_py, opt_json_to_py, py_to_json};
 
@@ -51,7 +51,7 @@ fn py_string_map(obj: &Bound<'_, PyAny>, field_name: &str) -> PyResult<HashMap<S
 #[pyclass(name = "LlmStream")]
 pub struct PyLlmStream {
     pub receiver:
-        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nemo_flow_core::Result<serde_json::Value>>>,
+        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nemo_flow::Result<serde_json::Value>>>,
 }
 
 #[pymethods]
@@ -65,7 +65,7 @@ impl PyLlmStream {
         // Since PyLlmStream is behind a PyRef (shared), we use tokio::sync::Mutex.
         let receiver_ptr = &self.receiver
             as *const tokio::sync::Mutex<
-                tokio::sync::mpsc::Receiver<nemo_flow_core::Result<serde_json::Value>>,
+                tokio::sync::mpsc::Receiver<nemo_flow::Result<serde_json::Value>>,
             >;
         // SAFETY: The PyLlmStream outlives this future because Python holds a reference to it.
         // The tokio Mutex ensures exclusive access to the receiver.
@@ -96,7 +96,7 @@ impl PyLlmStream {
 /// Each ``ScopeStack`` wraps an independent scope stack with its own root
 /// scope. Use ``create_scope_stack()`` to obtain one.
 #[pyclass(name = "ScopeStack")]
-pub struct PyScopeStack(pub nemo_flow_core::ScopeStackHandle);
+pub struct PyScopeStack(pub nemo_flow::ScopeStackHandle);
 
 #[pymethods]
 impl PyScopeStack {
@@ -1024,7 +1024,7 @@ impl PyMarkEvent {
 ///     exporter.deregister("atif")
 #[pyclass(name = "AtifExporter")]
 pub struct PyAtifExporter {
-    inner: nemo_flow_core::atif::AtifExporter,
+    inner: nemo_flow::atif::AtifExporter,
 }
 
 #[pymethods]
@@ -1053,7 +1053,7 @@ impl PyAtifExporter {
             Some(obj) if !obj.is_none() => Some(py_to_json(obj)?),
             _ => None,
         };
-        let agent_info = nemo_flow_core::atif::AtifAgentInfo {
+        let agent_info = nemo_flow::atif::AtifAgentInfo {
             name: agent_name,
             version: agent_version,
             model_name,
@@ -1061,14 +1061,14 @@ impl PyAtifExporter {
             extra: extra_json,
         };
         Ok(Self {
-            inner: nemo_flow_core::atif::AtifExporter::new(session_id, agent_info),
+            inner: nemo_flow::atif::AtifExporter::new(session_id, agent_info),
         })
     }
 
     /// Register this exporter as an event subscriber with the given name.
     fn register(&self, name: String) -> PyResult<()> {
         let subscriber = self.inner.subscriber();
-        nemo_flow_core::nemo_flow_register_subscriber(&name, subscriber)
+        nemo_flow::register_subscriber(&name, subscriber)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -1076,7 +1076,7 @@ impl PyAtifExporter {
     ///
     /// Returns ``True`` if a subscriber with that name was found and removed.
     fn deregister(&self, name: String) -> PyResult<bool> {
-        nemo_flow_core::nemo_flow_deregister_subscriber(&name)
+        nemo_flow::deregister_subscriber(&name)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -1149,12 +1149,14 @@ pub struct PyOpenTelemetryConfig {
 }
 
 impl PyOpenTelemetryConfig {
-    fn to_rust_config(&self) -> PyResult<nemo_flow_otel::OpenTelemetryConfig> {
+    fn to_rust_config(&self) -> PyResult<nemo_flow::observability::otel::OpenTelemetryConfig> {
         let mut config = match self.transport.as_str() {
-            "http_binary" => {
-                nemo_flow_otel::OpenTelemetryConfig::http_binary(self.service_name.clone())
+            "http_binary" => nemo_flow::observability::otel::OpenTelemetryConfig::http_binary(
+                self.service_name.clone(),
+            ),
+            "grpc" => {
+                nemo_flow::observability::otel::OpenTelemetryConfig::grpc(self.service_name.clone())
             }
-            "grpc" => nemo_flow_otel::OpenTelemetryConfig::grpc(self.service_name.clone()),
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "transport must be 'http_binary' or 'grpc', got {other:?}"
@@ -1247,15 +1249,16 @@ impl PyOpenTelemetryConfig {
 /// name, then call ``force_flush()`` or ``shutdown()`` when appropriate.
 #[pyclass(name = "OpenTelemetrySubscriber")]
 pub struct PyOpenTelemetrySubscriber {
-    inner: nemo_flow_otel::OpenTelemetrySubscriber,
+    inner: nemo_flow::observability::otel::OpenTelemetrySubscriber,
 }
 
 #[pymethods]
 impl PyOpenTelemetrySubscriber {
     #[new]
     fn new(config: PyRef<'_, PyOpenTelemetryConfig>) -> PyResult<Self> {
-        let inner = nemo_flow_otel::OpenTelemetrySubscriber::new(config.to_rust_config()?)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let inner =
+            nemo_flow::observability::otel::OpenTelemetrySubscriber::new(config.to_rust_config()?)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
 
@@ -1321,10 +1324,12 @@ pub struct PyOpenInferenceConfig {
 }
 
 impl PyOpenInferenceConfig {
-    fn to_rust_config(&self) -> PyResult<nemo_flow_openinference::OpenInferenceConfig> {
+    fn to_rust_config(
+        &self,
+    ) -> PyResult<nemo_flow::observability::openinference::OpenInferenceConfig> {
         let transport = match self.transport.as_str() {
-            "http_binary" => nemo_flow_openinference::OtlpTransport::HttpBinary,
-            "grpc" => nemo_flow_openinference::OtlpTransport::Grpc,
+            "http_binary" => nemo_flow::observability::openinference::OtlpTransport::HttpBinary,
+            "grpc" => nemo_flow::observability::openinference::OtlpTransport::Grpc,
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "transport must be 'http_binary' or 'grpc', got {other:?}"
@@ -1332,7 +1337,7 @@ impl PyOpenInferenceConfig {
             }
         };
 
-        let mut config = nemo_flow_openinference::OpenInferenceConfig::new()
+        let mut config = nemo_flow::observability::openinference::OpenInferenceConfig::new()
             .with_transport(transport)
             .with_service_name(self.service_name.clone())
             .with_instrumentation_scope(self.instrumentation_scope.clone())
@@ -1418,15 +1423,17 @@ impl PyOpenInferenceConfig {
 /// OpenInference-backed event subscriber.
 #[pyclass(name = "OpenInferenceSubscriber")]
 pub struct PyOpenInferenceSubscriber {
-    inner: nemo_flow_openinference::OpenInferenceSubscriber,
+    inner: nemo_flow::observability::openinference::OpenInferenceSubscriber,
 }
 
 #[pymethods]
 impl PyOpenInferenceSubscriber {
     #[new]
     fn new(config: PyRef<'_, PyOpenInferenceConfig>) -> PyResult<Self> {
-        let inner = nemo_flow_openinference::OpenInferenceSubscriber::new(config.to_rust_config()?)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let inner = nemo_flow::observability::openinference::OpenInferenceSubscriber::new(
+            config.to_rust_config()?,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
 
@@ -1831,8 +1838,8 @@ impl PyAnnotatedLLMResponse {
 ///     annotated_resp = codec.decode_response(response)
 #[pyclass(name = "OpenAIChatCodec")]
 pub struct PyOpenAIChatCodec {
-    pub(crate) inner_codec: Arc<dyn nemo_flow_core::codec::LlmCodec>,
-    pub(crate) inner_response_codec: Arc<dyn nemo_flow_core::codec::LlmResponseCodec>,
+    pub(crate) inner_codec: Arc<dyn nemo_flow::codec::LlmCodec>,
+    pub(crate) inner_response_codec: Arc<dyn nemo_flow::codec::LlmResponseCodec>,
 }
 
 #[pymethods]
@@ -1840,8 +1847,8 @@ impl PyOpenAIChatCodec {
     #[new]
     fn new() -> Self {
         Self {
-            inner_codec: Arc::new(nemo_flow_core::codec::OpenAIChatCodec),
-            inner_response_codec: Arc::new(nemo_flow_core::codec::OpenAIChatCodec),
+            inner_codec: Arc::new(nemo_flow::codec::OpenAIChatCodec),
+            inner_response_codec: Arc::new(nemo_flow::codec::OpenAIChatCodec),
         }
     }
 
@@ -1892,8 +1899,8 @@ impl PyOpenAIChatCodec {
 ///     annotated_resp = codec.decode_response(response)
 #[pyclass(name = "OpenAIResponsesCodec")]
 pub struct PyOpenAIResponsesCodec {
-    pub(crate) inner_codec: Arc<dyn nemo_flow_core::codec::LlmCodec>,
-    pub(crate) inner_response_codec: Arc<dyn nemo_flow_core::codec::LlmResponseCodec>,
+    pub(crate) inner_codec: Arc<dyn nemo_flow::codec::LlmCodec>,
+    pub(crate) inner_response_codec: Arc<dyn nemo_flow::codec::LlmResponseCodec>,
 }
 
 #[pymethods]
@@ -1901,8 +1908,8 @@ impl PyOpenAIResponsesCodec {
     #[new]
     fn new() -> Self {
         Self {
-            inner_codec: Arc::new(nemo_flow_core::codec::OpenAIResponsesCodec),
-            inner_response_codec: Arc::new(nemo_flow_core::codec::OpenAIResponsesCodec),
+            inner_codec: Arc::new(nemo_flow::codec::OpenAIResponsesCodec),
+            inner_response_codec: Arc::new(nemo_flow::codec::OpenAIResponsesCodec),
         }
     }
 
@@ -1953,8 +1960,8 @@ impl PyOpenAIResponsesCodec {
 ///     annotated_resp = codec.decode_response(response)
 #[pyclass(name = "AnthropicMessagesCodec")]
 pub struct PyAnthropicMessagesCodec {
-    pub(crate) inner_codec: Arc<dyn nemo_flow_core::codec::LlmCodec>,
-    pub(crate) inner_response_codec: Arc<dyn nemo_flow_core::codec::LlmResponseCodec>,
+    pub(crate) inner_codec: Arc<dyn nemo_flow::codec::LlmCodec>,
+    pub(crate) inner_response_codec: Arc<dyn nemo_flow::codec::LlmResponseCodec>,
 }
 
 #[pymethods]
@@ -1962,8 +1969,8 @@ impl PyAnthropicMessagesCodec {
     #[new]
     fn new() -> Self {
         Self {
-            inner_codec: Arc::new(nemo_flow_core::codec::AnthropicMessagesCodec),
-            inner_response_codec: Arc::new(nemo_flow_core::codec::AnthropicMessagesCodec),
+            inner_codec: Arc::new(nemo_flow::codec::AnthropicMessagesCodec),
+            inner_response_codec: Arc::new(nemo_flow::codec::AnthropicMessagesCodec),
         }
     }
 

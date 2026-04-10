@@ -13,10 +13,10 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use nemo_flow_core::context::*;
-use nemo_flow_core::error::FlowError;
-use nemo_flow_core::types::*;
-use nemo_flow_core::*;
+use nemo_flow::context::*;
+use nemo_flow::error::FlowError;
+use nemo_flow::types::*;
+use nemo_flow::*;
 use serde_json::json;
 
 // All tests share the global context, so we serialize them.
@@ -38,7 +38,7 @@ fn setup_isolated_thread() {
 /// returning the scope handle.
 fn setup_isolated_scope(name: &str) -> ScopeHandle {
     setup_isolated_thread();
-    nemo_flow_push_scope(
+    push_scope(
         name,
         ScopeType::Agent,
         None,
@@ -65,7 +65,7 @@ fn test_sanitize_guardrail_priority_ordering() {
 
     // Register at priority 1
     let o1 = order.clone();
-    nemo_flow_register_tool_sanitize_request_guardrail(
+    register_tool_sanitize_request_guardrail(
         "g_p1",
         1,
         Box::new(move |_name, args| {
@@ -77,7 +77,7 @@ fn test_sanitize_guardrail_priority_ordering() {
 
     // Register at priority 3
     let o3 = order.clone();
-    nemo_flow_register_tool_sanitize_request_guardrail(
+    register_tool_sanitize_request_guardrail(
         "g_p3",
         3,
         Box::new(move |_name, args| {
@@ -89,7 +89,7 @@ fn test_sanitize_guardrail_priority_ordering() {
 
     // Register at priority 2
     let o2 = order.clone();
-    nemo_flow_register_tool_sanitize_request_guardrail(
+    register_tool_sanitize_request_guardrail(
         "g_p2",
         2,
         Box::new(move |_name, args| {
@@ -99,8 +99,8 @@ fn test_sanitize_guardrail_priority_ordering() {
     )
     .unwrap();
 
-    // Trigger the chain via nemo_flow_tool_call (which runs sanitize request guardrails)
-    let _handle = nemo_flow_tool_call(
+    // Trigger the chain via tool_call (which runs sanitize request guardrails)
+    let _handle = tool_call(
         "test_tool",
         json!({}),
         None,
@@ -119,9 +119,9 @@ fn test_sanitize_guardrail_priority_ordering() {
     );
 
     // Cleanup
-    nemo_flow_deregister_tool_sanitize_request_guardrail("g_p1").unwrap();
-    nemo_flow_deregister_tool_sanitize_request_guardrail("g_p2").unwrap();
-    nemo_flow_deregister_tool_sanitize_request_guardrail("g_p3").unwrap();
+    deregister_tool_sanitize_request_guardrail("g_p1").unwrap();
+    deregister_tool_sanitize_request_guardrail("g_p2").unwrap();
+    deregister_tool_sanitize_request_guardrail("g_p3").unwrap();
 }
 
 /// Register 3 tool request intercepts at priorities 1, 3, 2;
@@ -135,7 +135,7 @@ fn test_request_intercept_priority_ordering() {
     let order = Arc::new(Mutex::new(Vec::<i32>::new()));
 
     let o1 = order.clone();
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "i_p1",
         1,
         false,
@@ -147,7 +147,7 @@ fn test_request_intercept_priority_ordering() {
     .unwrap();
 
     let o3 = order.clone();
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "i_p3",
         3,
         false,
@@ -159,7 +159,7 @@ fn test_request_intercept_priority_ordering() {
     .unwrap();
 
     let o2 = order.clone();
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "i_p2",
         2,
         false,
@@ -171,7 +171,7 @@ fn test_request_intercept_priority_ordering() {
     .unwrap();
 
     // Use the standalone intercept chain function
-    let _result = nemo_flow_tool_request_intercepts("test_tool", json!({})).unwrap();
+    let _result = tool_request_intercepts("test_tool", json!({})).unwrap();
 
     let recorded = order.lock().unwrap();
     assert_eq!(
@@ -181,9 +181,9 @@ fn test_request_intercept_priority_ordering() {
     );
 
     // Cleanup
-    nemo_flow_deregister_tool_request_intercept("i_p1").unwrap();
-    nemo_flow_deregister_tool_request_intercept("i_p2").unwrap();
-    nemo_flow_deregister_tool_request_intercept("i_p3").unwrap();
+    deregister_tool_request_intercept("i_p1").unwrap();
+    deregister_tool_request_intercept("i_p2").unwrap();
+    deregister_tool_request_intercept("i_p3").unwrap();
 }
 
 /// Verify that deregistering and re-registering at a different priority re-sorts.
@@ -196,7 +196,7 @@ fn test_re_registration_at_different_priority_re_sorts() {
     let order = Arc::new(Mutex::new(Vec::<String>::new()));
 
     let o_a = order.clone();
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "intercept_a",
         10,
         false,
@@ -208,7 +208,7 @@ fn test_re_registration_at_different_priority_re_sorts() {
     .unwrap();
 
     let o_b = order.clone();
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "intercept_b",
         20,
         false,
@@ -220,16 +220,16 @@ fn test_re_registration_at_different_priority_re_sorts() {
     .unwrap();
 
     // First call: a runs before b
-    let _ = nemo_flow_tool_request_intercepts("test", json!({})).unwrap();
+    let _ = tool_request_intercepts("test", json!({})).unwrap();
     {
         let recorded = order.lock().unwrap();
         assert_eq!(*recorded, vec!["a_p10", "b_p20"]);
     }
 
     // Deregister a and re-register at priority 30 (after b)
-    nemo_flow_deregister_tool_request_intercept("intercept_a").unwrap();
+    deregister_tool_request_intercept("intercept_a").unwrap();
     let o_a2 = order.clone();
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "intercept_a",
         30,
         false,
@@ -242,7 +242,7 @@ fn test_re_registration_at_different_priority_re_sorts() {
 
     // Clear and re-run
     order.lock().unwrap().clear();
-    let _ = nemo_flow_tool_request_intercepts("test", json!({})).unwrap();
+    let _ = tool_request_intercepts("test", json!({})).unwrap();
     {
         let recorded = order.lock().unwrap();
         assert_eq!(
@@ -253,8 +253,8 @@ fn test_re_registration_at_different_priority_re_sorts() {
     }
 
     // Cleanup
-    nemo_flow_deregister_tool_request_intercept("intercept_a").unwrap();
-    nemo_flow_deregister_tool_request_intercept("intercept_b").unwrap();
+    deregister_tool_request_intercept("intercept_a").unwrap();
+    deregister_tool_request_intercept("intercept_b").unwrap();
 }
 
 // =========================================================================
@@ -271,7 +271,7 @@ fn test_break_chain_stops_subsequent_intercepts() {
 
     let second_called = Arc::new(AtomicBool::new(false));
 
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "breaker",
         1,
         true, // break_chain = true
@@ -285,7 +285,7 @@ fn test_break_chain_stops_subsequent_intercepts() {
     .unwrap();
 
     let sc = second_called.clone();
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "after_breaker",
         2,
         false,
@@ -299,7 +299,7 @@ fn test_break_chain_stops_subsequent_intercepts() {
     )
     .unwrap();
 
-    let result = nemo_flow_tool_request_intercepts("tool", json!({})).unwrap();
+    let result = tool_request_intercepts("tool", json!({})).unwrap();
 
     // First intercept's transformation should be applied
     assert_eq!(result["breaker_ran"], true);
@@ -314,8 +314,8 @@ fn test_break_chain_stops_subsequent_intercepts() {
     );
 
     // Cleanup
-    nemo_flow_deregister_tool_request_intercept("breaker").unwrap();
-    nemo_flow_deregister_tool_request_intercept("after_breaker").unwrap();
+    deregister_tool_request_intercept("breaker").unwrap();
+    deregister_tool_request_intercept("after_breaker").unwrap();
 }
 
 /// With break_chain=false on all intercepts, both should be called.
@@ -328,7 +328,7 @@ fn test_no_break_chain_runs_all_intercepts() {
     let call_count = Arc::new(AtomicU32::new(0));
 
     let c1 = call_count.clone();
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "first",
         1,
         false,
@@ -340,7 +340,7 @@ fn test_no_break_chain_runs_all_intercepts() {
     .unwrap();
 
     let c2 = call_count.clone();
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "second",
         2,
         false,
@@ -351,7 +351,7 @@ fn test_no_break_chain_runs_all_intercepts() {
     )
     .unwrap();
 
-    let _ = nemo_flow_tool_request_intercepts("tool", json!({})).unwrap();
+    let _ = tool_request_intercepts("tool", json!({})).unwrap();
 
     assert_eq!(
         call_count.load(Ordering::SeqCst),
@@ -360,8 +360,8 @@ fn test_no_break_chain_runs_all_intercepts() {
     );
 
     // Cleanup
-    nemo_flow_deregister_tool_request_intercept("first").unwrap();
-    nemo_flow_deregister_tool_request_intercept("second").unwrap();
+    deregister_tool_request_intercept("first").unwrap();
+    deregister_tool_request_intercept("second").unwrap();
 }
 
 // =========================================================================
@@ -379,7 +379,7 @@ async fn test_execution_intercept_calls_next() {
     let original_called = Arc::new(AtomicBool::new(false));
 
     // Register an execution intercept that passes through to next
-    nemo_flow_register_tool_execution_intercept(
+    register_tool_execution_intercept(
         "passthrough",
         1,
         Arc::new(|_name, args, next| {
@@ -397,7 +397,7 @@ async fn test_execution_intercept_calls_next() {
         Box::pin(async move { Ok(args) })
     });
 
-    let result = nemo_flow_tool_call_execute(
+    let result = tool_call_execute(
         "tool",
         json!({"value": 42}),
         func,
@@ -416,7 +416,7 @@ async fn test_execution_intercept_calls_next() {
     assert_eq!(result["value"], 42);
 
     // Cleanup
-    nemo_flow_deregister_tool_execution_intercept("passthrough").unwrap();
+    deregister_tool_execution_intercept("passthrough").unwrap();
 }
 
 /// Register an execution intercept that does NOT call next().
@@ -430,7 +430,7 @@ async fn test_execution_intercept_skips_next() {
     let original_called = Arc::new(AtomicBool::new(false));
 
     // Register an execution intercept that short-circuits (does not call next)
-    nemo_flow_register_tool_execution_intercept(
+    register_tool_execution_intercept(
         "short_circuit",
         1,
         Arc::new(|_name, _args, _next| {
@@ -448,7 +448,7 @@ async fn test_execution_intercept_skips_next() {
         Box::pin(async move { Ok(args) })
     });
 
-    let result = nemo_flow_tool_call_execute(
+    let result = tool_call_execute(
         "tool",
         json!({"value": 42}),
         func,
@@ -467,7 +467,7 @@ async fn test_execution_intercept_skips_next() {
     assert_eq!(result["intercepted"], true);
 
     // Cleanup
-    nemo_flow_deregister_tool_execution_intercept("short_circuit").unwrap();
+    deregister_tool_execution_intercept("short_circuit").unwrap();
 }
 
 /// Register 2 chained execution intercepts. Verify both run in priority order
@@ -482,7 +482,7 @@ async fn test_execution_intercept_chain_ordering() {
 
     // Intercept at priority 1 (runs first in the chain)
     let o1 = order.clone();
-    nemo_flow_register_tool_execution_intercept(
+    register_tool_execution_intercept(
         "exec_p1",
         1,
         Arc::new(move |_name, args, next| {
@@ -499,7 +499,7 @@ async fn test_execution_intercept_chain_ordering() {
 
     // Intercept at priority 2 (runs second, nested inside first)
     let o2 = order.clone();
-    nemo_flow_register_tool_execution_intercept(
+    register_tool_execution_intercept(
         "exec_p2",
         2,
         Arc::new(move |_name, args, next| {
@@ -520,7 +520,7 @@ async fn test_execution_intercept_chain_ordering() {
         Box::pin(async move { Ok(args) })
     });
 
-    let _ = nemo_flow_tool_call_execute(
+    let _ = tool_call_execute(
         "tool",
         json!({}),
         func,
@@ -547,8 +547,8 @@ async fn test_execution_intercept_chain_ordering() {
     );
 
     // Cleanup
-    nemo_flow_deregister_tool_execution_intercept("exec_p1").unwrap();
-    nemo_flow_deregister_tool_execution_intercept("exec_p2").unwrap();
+    deregister_tool_execution_intercept("exec_p1").unwrap();
+    deregister_tool_execution_intercept("exec_p2").unwrap();
 }
 
 /// Verify execution intercept can modify args before passing to next.
@@ -558,7 +558,7 @@ async fn test_execution_intercept_modifies_args() {
     reset_global();
     setup_isolated_thread();
 
-    nemo_flow_register_tool_execution_intercept(
+    register_tool_execution_intercept(
         "arg_modifier",
         1,
         Arc::new(|_name, mut args, next| {
@@ -574,7 +574,7 @@ async fn test_execution_intercept_modifies_args() {
 
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
-    let result = nemo_flow_tool_call_execute(
+    let result = tool_call_execute(
         "tool",
         json!({"original": true}),
         func,
@@ -590,7 +590,7 @@ async fn test_execution_intercept_modifies_args() {
     assert_eq!(result["injected"], true);
 
     // Cleanup
-    nemo_flow_deregister_tool_execution_intercept("arg_modifier").unwrap();
+    deregister_tool_execution_intercept("arg_modifier").unwrap();
 }
 
 // =========================================================================
@@ -605,7 +605,7 @@ async fn test_conditional_guardrail_rejects() {
     reset_global();
     setup_isolated_thread();
 
-    nemo_flow_register_tool_conditional_execution_guardrail(
+    register_tool_conditional_execution_guardrail(
         "rejector",
         1,
         Box::new(|_name, _args| Ok(Some("not allowed".to_string()))),
@@ -614,7 +614,7 @@ async fn test_conditional_guardrail_rejects() {
 
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
-    let result = nemo_flow_tool_call_execute(
+    let result = tool_call_execute(
         "tool",
         json!({}),
         func,
@@ -634,7 +634,7 @@ async fn test_conditional_guardrail_rejects() {
     }
 
     // Cleanup
-    nemo_flow_deregister_tool_conditional_execution_guardrail("rejector").unwrap();
+    deregister_tool_conditional_execution_guardrail("rejector").unwrap();
 }
 
 /// Register a conditional guardrail that allows (returns None). Execution proceeds.
@@ -644,16 +644,12 @@ async fn test_conditional_guardrail_allows() {
     reset_global();
     setup_isolated_thread();
 
-    nemo_flow_register_tool_conditional_execution_guardrail(
-        "allower",
-        1,
-        Box::new(|_name, _args| Ok(None)),
-    )
-    .unwrap();
+    register_tool_conditional_execution_guardrail("allower", 1, Box::new(|_name, _args| Ok(None)))
+        .unwrap();
 
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
-    let result = nemo_flow_tool_call_execute(
+    let result = tool_call_execute(
         "tool",
         json!({"input": "data"}),
         func,
@@ -668,7 +664,7 @@ async fn test_conditional_guardrail_allows() {
     assert_eq!(result.unwrap()["input"], "data");
 
     // Cleanup
-    nemo_flow_deregister_tool_conditional_execution_guardrail("allower").unwrap();
+    deregister_tool_conditional_execution_guardrail("allower").unwrap();
 }
 
 /// Multiple conditional guardrails: first allows, second rejects.
@@ -679,14 +675,10 @@ async fn test_conditional_guardrail_first_rejection_wins() {
     reset_global();
     setup_isolated_thread();
 
-    nemo_flow_register_tool_conditional_execution_guardrail(
-        "allows",
-        1,
-        Box::new(|_name, _args| Ok(None)),
-    )
-    .unwrap();
+    register_tool_conditional_execution_guardrail("allows", 1, Box::new(|_name, _args| Ok(None)))
+        .unwrap();
 
-    nemo_flow_register_tool_conditional_execution_guardrail(
+    register_tool_conditional_execution_guardrail(
         "rejects",
         2,
         Box::new(|_name, _args| Ok(Some("blocked by second".to_string()))),
@@ -695,7 +687,7 @@ async fn test_conditional_guardrail_first_rejection_wins() {
 
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
-    let result = nemo_flow_tool_call_execute(
+    let result = tool_call_execute(
         "tool",
         json!({}),
         func,
@@ -715,8 +707,8 @@ async fn test_conditional_guardrail_first_rejection_wins() {
     }
 
     // Cleanup
-    nemo_flow_deregister_tool_conditional_execution_guardrail("allows").unwrap();
-    nemo_flow_deregister_tool_conditional_execution_guardrail("rejects").unwrap();
+    deregister_tool_conditional_execution_guardrail("allows").unwrap();
+    deregister_tool_conditional_execution_guardrail("rejects").unwrap();
 }
 
 /// Conditional guardrail that only rejects specific tool names.
@@ -726,7 +718,7 @@ async fn test_conditional_guardrail_tool_name_filtering() {
     reset_global();
     setup_isolated_thread();
 
-    nemo_flow_register_tool_conditional_execution_guardrail(
+    register_tool_conditional_execution_guardrail(
         "name_filter",
         1,
         Box::new(|name, _args| {
@@ -741,7 +733,7 @@ async fn test_conditional_guardrail_tool_name_filtering() {
 
     // Dangerous tool is rejected
     let func1: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let err = nemo_flow_tool_call_execute(
+    let err = tool_call_execute(
         "dangerous_tool",
         json!({}),
         func1,
@@ -755,7 +747,7 @@ async fn test_conditional_guardrail_tool_name_filtering() {
 
     // Safe tool is allowed
     let func2: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let ok = nemo_flow_tool_call_execute(
+    let ok = tool_call_execute(
         "safe_tool",
         json!({}),
         func2,
@@ -768,7 +760,7 @@ async fn test_conditional_guardrail_tool_name_filtering() {
     assert!(ok.is_ok());
 
     // Cleanup
-    nemo_flow_deregister_tool_conditional_execution_guardrail("name_filter").unwrap();
+    deregister_tool_conditional_execution_guardrail("name_filter").unwrap();
 }
 
 // =========================================================================
@@ -787,7 +779,7 @@ fn test_scope_local_guardrail_lifecycle() {
 
     // Register a scope-local sanitize request guardrail
     let cc = call_count.clone();
-    nemo_flow_scope_register_tool_sanitize_request_guardrail(
+    scope_register_tool_sanitize_request_guardrail(
         &handle.uuid,
         "scoped_guardrail",
         1,
@@ -799,7 +791,7 @@ fn test_scope_local_guardrail_lifecycle() {
     .unwrap();
 
     // Invoke tool call -- guardrail should fire
-    let _tool = nemo_flow_tool_call(
+    let _tool = tool_call(
         "tool",
         json!({}),
         None,
@@ -816,10 +808,10 @@ fn test_scope_local_guardrail_lifecycle() {
     );
 
     // Pop scope -- guardrail should be cleaned up
-    nemo_flow_pop_scope(&handle.uuid).unwrap();
+    pop_scope(&handle.uuid).unwrap();
 
     // Invoke tool call again -- guardrail should NOT fire
-    let _tool2 = nemo_flow_tool_call(
+    let _tool2 = tool_call(
         "tool",
         json!({}),
         None,
@@ -846,7 +838,7 @@ async fn test_scope_local_execution_intercept_cleanup() {
     let intercept_called = Arc::new(AtomicU32::new(0));
 
     let ic = intercept_called.clone();
-    nemo_flow_scope_register_tool_execution_intercept(
+    scope_register_tool_execution_intercept(
         &handle.uuid,
         "scoped_exec",
         1,
@@ -859,7 +851,7 @@ async fn test_scope_local_execution_intercept_cleanup() {
 
     // Execute -- intercept should fire
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let _ = nemo_flow_tool_call_execute(
+    let _ = tool_call_execute(
         "tool",
         json!({}),
         func,
@@ -873,11 +865,11 @@ async fn test_scope_local_execution_intercept_cleanup() {
     assert_eq!(intercept_called.load(Ordering::SeqCst), 1);
 
     // Pop scope
-    nemo_flow_pop_scope(&handle.uuid).unwrap();
+    pop_scope(&handle.uuid).unwrap();
 
     // Execute again -- intercept should NOT fire
     let func2: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let _ = nemo_flow_tool_call_execute(
+    let _ = tool_call_execute(
         "tool",
         json!({}),
         func2,
@@ -912,7 +904,7 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
 
     // Global guardrail at priority 5
     let og = order.clone();
-    nemo_flow_register_tool_sanitize_request_guardrail(
+    register_tool_sanitize_request_guardrail(
         "global_g",
         5,
         Box::new(move |_name, mut args| {
@@ -927,7 +919,7 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
 
     // Scope-local guardrail at priority 3
     let ol = order.clone();
-    nemo_flow_scope_register_tool_sanitize_request_guardrail(
+    scope_register_tool_sanitize_request_guardrail(
         &handle.uuid,
         "local_g",
         3,
@@ -944,7 +936,7 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
     // Capture via events
     let events: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nemo_flow_register_subscriber(
+    register_subscriber(
         "merge_observer",
         Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
@@ -952,7 +944,7 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
     )
     .unwrap();
 
-    let _tool = nemo_flow_tool_call(
+    let _tool = tool_call(
         "tool",
         json!({}),
         None,
@@ -982,9 +974,9 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
     assert_eq!(input["local"], true);
 
     // Cleanup
-    nemo_flow_deregister_tool_sanitize_request_guardrail("global_g").unwrap();
-    nemo_flow_deregister_subscriber("merge_observer").unwrap();
-    nemo_flow_pop_scope(&handle.uuid).unwrap();
+    deregister_tool_sanitize_request_guardrail("global_g").unwrap();
+    deregister_subscriber("merge_observer").unwrap();
+    pop_scope(&handle.uuid).unwrap();
 }
 
 /// Global and scope-local execution intercepts merge in priority order.
@@ -998,7 +990,7 @@ async fn test_scope_local_and_global_execution_intercept_merge() {
 
     // Global execution intercept at priority 10
     let og = order.clone();
-    nemo_flow_register_tool_execution_intercept(
+    register_tool_execution_intercept(
         "global_exec",
         10,
         Arc::new(move |_name, args, next| {
@@ -1015,7 +1007,7 @@ async fn test_scope_local_and_global_execution_intercept_merge() {
 
     // Scope-local execution intercept at priority 5 (runs first)
     let ol = order.clone();
-    nemo_flow_scope_register_tool_execution_intercept(
+    scope_register_tool_execution_intercept(
         &handle.uuid,
         "local_exec",
         5,
@@ -1037,7 +1029,7 @@ async fn test_scope_local_and_global_execution_intercept_merge() {
         Box::pin(async move { Ok(args) })
     });
 
-    let _ = nemo_flow_tool_call_execute(
+    let _ = tool_call_execute(
         "tool",
         json!({}),
         func,
@@ -1063,8 +1055,8 @@ async fn test_scope_local_and_global_execution_intercept_merge() {
     );
 
     // Cleanup
-    nemo_flow_deregister_tool_execution_intercept("global_exec").unwrap();
-    nemo_flow_pop_scope(&handle.uuid).unwrap();
+    deregister_tool_execution_intercept("global_exec").unwrap();
+    pop_scope(&handle.uuid).unwrap();
 }
 
 // =========================================================================
@@ -1081,7 +1073,7 @@ async fn test_conditional_rejection_prevents_intercepts() {
     let intercept_called = Arc::new(AtomicBool::new(false));
 
     // Register a conditional guardrail that rejects
-    nemo_flow_register_tool_conditional_execution_guardrail(
+    register_tool_conditional_execution_guardrail(
         "gate",
         1,
         Box::new(|_name, _args| Ok(Some("blocked".to_string()))),
@@ -1090,7 +1082,7 @@ async fn test_conditional_rejection_prevents_intercepts() {
 
     // Register a request intercept -- should NOT run because conditional rejects first
     let ic = intercept_called.clone();
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "should_not_run",
         1,
         false,
@@ -1102,7 +1094,7 @@ async fn test_conditional_rejection_prevents_intercepts() {
     .unwrap();
 
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-    let result = nemo_flow_tool_call_execute(
+    let result = tool_call_execute(
         "tool",
         json!({}),
         func,
@@ -1121,8 +1113,8 @@ async fn test_conditional_rejection_prevents_intercepts() {
     );
 
     // Cleanup
-    nemo_flow_deregister_tool_conditional_execution_guardrail("gate").unwrap();
-    nemo_flow_deregister_tool_request_intercept("should_not_run").unwrap();
+    deregister_tool_conditional_execution_guardrail("gate").unwrap();
+    deregister_tool_request_intercept("should_not_run").unwrap();
 }
 
 /// Conditional guardrail rejection prevents execution intercepts from running.
@@ -1134,7 +1126,7 @@ async fn test_conditional_rejection_prevents_execution() {
 
     let exec_called = Arc::new(AtomicBool::new(false));
 
-    nemo_flow_register_tool_conditional_execution_guardrail(
+    register_tool_conditional_execution_guardrail(
         "gate2",
         1,
         Box::new(|_name, _args| Ok(Some("no execution".to_string()))),
@@ -1142,7 +1134,7 @@ async fn test_conditional_rejection_prevents_execution() {
     .unwrap();
 
     let ec = exec_called.clone();
-    nemo_flow_register_tool_execution_intercept(
+    register_tool_execution_intercept(
         "should_not_execute",
         1,
         Arc::new(move |_name, args, next| {
@@ -1159,7 +1151,7 @@ async fn test_conditional_rejection_prevents_execution() {
         Box::pin(async move { Ok(args) })
     });
 
-    let result = nemo_flow_tool_call_execute(
+    let result = tool_call_execute(
         "tool",
         json!({}),
         func,
@@ -1181,8 +1173,8 @@ async fn test_conditional_rejection_prevents_execution() {
     );
 
     // Cleanup
-    nemo_flow_deregister_tool_conditional_execution_guardrail("gate2").unwrap();
-    nemo_flow_deregister_tool_execution_intercept("should_not_execute").unwrap();
+    deregister_tool_conditional_execution_guardrail("gate2").unwrap();
+    deregister_tool_execution_intercept("should_not_execute").unwrap();
 }
 
 // =========================================================================
@@ -1197,7 +1189,7 @@ fn test_sanitize_guardrails_pipe_data() {
     setup_isolated_thread();
 
     // First guardrail adds field_a
-    nemo_flow_register_tool_sanitize_request_guardrail(
+    register_tool_sanitize_request_guardrail(
         "add_a",
         1,
         Box::new(|_name, mut args| {
@@ -1210,7 +1202,7 @@ fn test_sanitize_guardrails_pipe_data() {
     .unwrap();
 
     // Second guardrail reads field_a and adds field_b
-    nemo_flow_register_tool_sanitize_request_guardrail(
+    register_tool_sanitize_request_guardrail(
         "add_b",
         2,
         Box::new(|_name, mut args| {
@@ -1227,7 +1219,7 @@ fn test_sanitize_guardrails_pipe_data() {
     // Capture the sanitized args via events
     let events: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nemo_flow_register_subscriber(
+    register_subscriber(
         "pipe_observer",
         Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
@@ -1235,7 +1227,7 @@ fn test_sanitize_guardrails_pipe_data() {
     )
     .unwrap();
 
-    let _tool = nemo_flow_tool_call(
+    let _tool = tool_call(
         "tool",
         json!({}),
         None,
@@ -1259,9 +1251,9 @@ fn test_sanitize_guardrails_pipe_data() {
     );
 
     // Cleanup
-    nemo_flow_deregister_tool_sanitize_request_guardrail("add_a").unwrap();
-    nemo_flow_deregister_tool_sanitize_request_guardrail("add_b").unwrap();
-    nemo_flow_deregister_subscriber("pipe_observer").unwrap();
+    deregister_tool_sanitize_request_guardrail("add_a").unwrap();
+    deregister_tool_sanitize_request_guardrail("add_b").unwrap();
+    deregister_subscriber("pipe_observer").unwrap();
 }
 
 /// Response sanitize guardrails also pipe through.
@@ -1271,7 +1263,7 @@ fn test_response_sanitize_guardrails_pipe() {
     reset_global();
     setup_isolated_thread();
 
-    nemo_flow_register_tool_sanitize_response_guardrail(
+    register_tool_sanitize_response_guardrail(
         "resp_g1",
         1,
         Box::new(|_name, mut result| {
@@ -1287,7 +1279,7 @@ fn test_response_sanitize_guardrails_pipe() {
     // Capture events
     let events: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
-    nemo_flow_register_subscriber(
+    register_subscriber(
         "resp_observer",
         Arc::new(move |e: &Event| {
             ec.lock().unwrap().push(e.clone());
@@ -1295,7 +1287,7 @@ fn test_response_sanitize_guardrails_pipe() {
     )
     .unwrap();
 
-    let tool_handle = nemo_flow_tool_call(
+    let tool_handle = tool_call(
         "tool",
         json!({}),
         None,
@@ -1306,7 +1298,7 @@ fn test_response_sanitize_guardrails_pipe() {
     )
     .unwrap();
 
-    nemo_flow_tool_call_end(&tool_handle, json!({"raw": true}), None, None).unwrap();
+    tool_call_end(&tool_handle, json!({"raw": true}), None, None).unwrap();
 
     let captured = events.lock().unwrap();
     let end = captured
@@ -1318,8 +1310,8 @@ fn test_response_sanitize_guardrails_pipe() {
     assert_eq!(output["raw"], true);
 
     // Cleanup
-    nemo_flow_deregister_tool_sanitize_response_guardrail("resp_g1").unwrap();
-    nemo_flow_deregister_subscriber("resp_observer").unwrap();
+    deregister_tool_sanitize_response_guardrail("resp_g1").unwrap();
+    deregister_subscriber("resp_observer").unwrap();
 }
 
 // =========================================================================
@@ -1343,7 +1335,7 @@ fn test_concurrent_register_deregister() {
                 b.wait(); // synchronize thread start
 
                 // Register
-                let res = nemo_flow_register_tool_sanitize_request_guardrail(
+                let res = register_tool_sanitize_request_guardrail(
                     &name,
                     i,
                     Box::new(|_name, args| args),
@@ -1354,7 +1346,7 @@ fn test_concurrent_register_deregister() {
                 std::thread::yield_now();
 
                 // Deregister
-                let res = nemo_flow_deregister_tool_sanitize_request_guardrail(&name);
+                let res = deregister_tool_sanitize_request_guardrail(&name);
                 assert!(res.is_ok());
             })
         })
@@ -1391,7 +1383,7 @@ fn test_concurrent_intercept_mutations() {
                 let name = format!("concurrent_intercept_{i}");
                 b.wait();
 
-                let res = nemo_flow_register_tool_request_intercept(
+                let res = register_tool_request_intercept(
                     &name,
                     i,
                     false,
@@ -1401,7 +1393,7 @@ fn test_concurrent_intercept_mutations() {
 
                 std::thread::yield_now();
 
-                let res = nemo_flow_deregister_tool_request_intercept(&name);
+                let res = deregister_tool_request_intercept(&name);
                 assert!(res.is_ok());
             })
         })
@@ -1427,7 +1419,7 @@ fn test_concurrent_register_and_read() {
 
     // Pre-register some guardrails
     for i in 0..4 {
-        nemo_flow_register_tool_sanitize_request_guardrail(
+        register_tool_sanitize_request_guardrail(
             &format!("stable_{i}"),
             i,
             Box::new(|_name, args| args),
@@ -1446,18 +1438,18 @@ fn test_concurrent_register_and_read() {
                 if i < 4 {
                     // Writer threads: register then deregister
                     let name = format!("dynamic_{i}");
-                    let _ = nemo_flow_register_tool_sanitize_request_guardrail(
+                    let _ = register_tool_sanitize_request_guardrail(
                         &name,
                         100 + i,
                         Box::new(|_name, args| args),
                     );
                     std::thread::yield_now();
-                    let _ = nemo_flow_deregister_tool_sanitize_request_guardrail(&name);
+                    let _ = deregister_tool_sanitize_request_guardrail(&name);
                 } else {
                     // Reader threads: set up scope stack and do tool calls
                     let stack = create_scope_stack();
                     set_thread_scope_stack(stack);
-                    let _ = nemo_flow_tool_call(
+                    let _ = tool_call(
                         "tool",
                         json!({}),
                         None,
@@ -1478,7 +1470,7 @@ fn test_concurrent_register_and_read() {
 
     // Clean up stable guardrails
     for i in 0..4 {
-        nemo_flow_deregister_tool_sanitize_request_guardrail(&format!("stable_{i}")).unwrap();
+        deregister_tool_sanitize_request_guardrail(&format!("stable_{i}")).unwrap();
     }
 }
 
@@ -1499,7 +1491,7 @@ async fn test_full_pipeline_integration() {
 
     // Request intercept
     let o1 = order.clone();
-    nemo_flow_register_tool_request_intercept(
+    register_tool_request_intercept(
         "req_intercept",
         1,
         false,
@@ -1515,7 +1507,7 @@ async fn test_full_pipeline_integration() {
 
     // Sanitize request guardrail
     let o2 = order.clone();
-    nemo_flow_register_tool_sanitize_request_guardrail(
+    register_tool_sanitize_request_guardrail(
         "sanitize_req",
         1,
         Box::new(move |_name, args| {
@@ -1527,7 +1519,7 @@ async fn test_full_pipeline_integration() {
 
     // Conditional guardrail (allows)
     let o3 = order.clone();
-    nemo_flow_register_tool_conditional_execution_guardrail(
+    register_tool_conditional_execution_guardrail(
         "conditional",
         1,
         Box::new(move |_name, _args| {
@@ -1539,7 +1531,7 @@ async fn test_full_pipeline_integration() {
 
     // Execution intercept
     let o4 = order.clone();
-    nemo_flow_register_tool_execution_intercept(
+    register_tool_execution_intercept(
         "exec_intercept",
         1,
         Arc::new(move |_name, args, next| {
@@ -1554,7 +1546,7 @@ async fn test_full_pipeline_integration() {
 
     // Sanitize response guardrail
     let o5 = order.clone();
-    nemo_flow_register_tool_sanitize_response_guardrail(
+    register_tool_sanitize_response_guardrail(
         "sanitize_resp",
         1,
         Box::new(move |_name, result| {
@@ -1570,7 +1562,7 @@ async fn test_full_pipeline_integration() {
         Box::pin(async move { Ok(args) })
     });
 
-    let result = nemo_flow_tool_call_execute(
+    let result = tool_call_execute(
         "tool",
         json!({"data": "test"}),
         func,
@@ -1585,9 +1577,9 @@ async fn test_full_pipeline_integration() {
     // Verify the pipeline order:
     // 1. conditional (runs on raw args, before intercepts)
     // 2. request_intercept (transforms args)
-    // 3. sanitize_request (inside nemo_flow_tool_call)
+    // 3. sanitize_request (inside tool_call)
     // 4. execution_intercept -> original_execution
-    // 5. sanitize_response (inside nemo_flow_tool_call_end)
+    // 5. sanitize_response (inside tool_call_end)
     let recorded = order.lock().unwrap();
     assert_eq!(
         *recorded,
@@ -1607,11 +1599,11 @@ async fn test_full_pipeline_integration() {
     assert_eq!(result["data"], "test");
 
     // Cleanup
-    nemo_flow_deregister_tool_request_intercept("req_intercept").unwrap();
-    nemo_flow_deregister_tool_sanitize_request_guardrail("sanitize_req").unwrap();
-    nemo_flow_deregister_tool_conditional_execution_guardrail("conditional").unwrap();
-    nemo_flow_deregister_tool_execution_intercept("exec_intercept").unwrap();
-    nemo_flow_deregister_tool_sanitize_response_guardrail("sanitize_resp").unwrap();
+    deregister_tool_request_intercept("req_intercept").unwrap();
+    deregister_tool_sanitize_request_guardrail("sanitize_req").unwrap();
+    deregister_tool_conditional_execution_guardrail("conditional").unwrap();
+    deregister_tool_execution_intercept("exec_intercept").unwrap();
+    deregister_tool_sanitize_response_guardrail("sanitize_resp").unwrap();
 }
 
 // =========================================================================
@@ -1624,18 +1616,10 @@ fn test_duplicate_guardrail_registration_returns_error() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    nemo_flow_register_tool_sanitize_request_guardrail(
-        "duplicate",
-        1,
-        Box::new(|_name, args| args),
-    )
-    .unwrap();
+    register_tool_sanitize_request_guardrail("duplicate", 1, Box::new(|_name, args| args)).unwrap();
 
-    let err = nemo_flow_register_tool_sanitize_request_guardrail(
-        "duplicate",
-        2,
-        Box::new(|_name, args| args),
-    );
+    let err =
+        register_tool_sanitize_request_guardrail("duplicate", 2, Box::new(|_name, args| args));
 
     assert!(err.is_err());
     match err.unwrap_err() {
@@ -1646,7 +1630,7 @@ fn test_duplicate_guardrail_registration_returns_error() {
     }
 
     // Cleanup
-    nemo_flow_deregister_tool_sanitize_request_guardrail("duplicate").unwrap();
+    deregister_tool_sanitize_request_guardrail("duplicate").unwrap();
 }
 
 /// Attempting to register an intercept with the same name returns AlreadyExists.
@@ -1655,15 +1639,10 @@ fn test_duplicate_intercept_registration_returns_error() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    nemo_flow_register_tool_request_intercept(
-        "dup_intercept",
-        1,
-        false,
-        Box::new(|_name, args| Ok(args)),
-    )
-    .unwrap();
+    register_tool_request_intercept("dup_intercept", 1, false, Box::new(|_name, args| Ok(args)))
+        .unwrap();
 
-    let err = nemo_flow_register_tool_request_intercept(
+    let err = register_tool_request_intercept(
         "dup_intercept",
         2,
         false,
@@ -1679,7 +1658,7 @@ fn test_duplicate_intercept_registration_returns_error() {
     }
 
     // Cleanup
-    nemo_flow_deregister_tool_request_intercept("dup_intercept").unwrap();
+    deregister_tool_request_intercept("dup_intercept").unwrap();
 }
 
 // =========================================================================
@@ -1692,7 +1671,7 @@ fn test_deregister_nonexistent_returns_false() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    let result = nemo_flow_deregister_tool_sanitize_request_guardrail("nonexistent").unwrap();
+    let result = deregister_tool_sanitize_request_guardrail("nonexistent").unwrap();
     assert!(
         !result,
         "Deregistering non-existent entry should return false"
@@ -1709,7 +1688,7 @@ fn test_deregister_removes_from_chain() {
     let call_count = Arc::new(AtomicU32::new(0));
 
     let cc = call_count.clone();
-    nemo_flow_register_tool_sanitize_request_guardrail(
+    register_tool_sanitize_request_guardrail(
         "removable",
         1,
         Box::new(move |_name, args| {
@@ -1720,7 +1699,7 @@ fn test_deregister_removes_from_chain() {
     .unwrap();
 
     // First call -- guardrail runs
-    let _ = nemo_flow_tool_call(
+    let _ = tool_call(
         "tool",
         json!({}),
         None,
@@ -1733,11 +1712,11 @@ fn test_deregister_removes_from_chain() {
     assert_eq!(call_count.load(Ordering::SeqCst), 1);
 
     // Deregister
-    let removed = nemo_flow_deregister_tool_sanitize_request_guardrail("removable").unwrap();
+    let removed = deregister_tool_sanitize_request_guardrail("removable").unwrap();
     assert!(removed, "Should return true for existing entry");
 
     // Second call -- guardrail should NOT run
-    let _ = nemo_flow_tool_call(
+    let _ = tool_call(
         "tool",
         json!({}),
         None,
@@ -1765,7 +1744,7 @@ async fn test_llm_conditional_guardrail_rejects() {
     reset_global();
     setup_isolated_thread();
 
-    nemo_flow_register_llm_conditional_execution_guardrail(
+    register_llm_conditional_execution_guardrail(
         "llm_gate",
         1,
         Box::new(|_req| Ok(Some("LLM call rejected".to_string()))),
@@ -1780,7 +1759,7 @@ async fn test_llm_conditional_guardrail_rejects() {
         content: json!({"prompt": "hello"}),
     };
 
-    let result = nemo_flow_llm_call_execute(
+    let result = llm_call_execute(
         "test_llm",
         request,
         func,
@@ -1803,7 +1782,7 @@ async fn test_llm_conditional_guardrail_rejects() {
     }
 
     // Cleanup
-    nemo_flow_deregister_llm_conditional_execution_guardrail("llm_gate").unwrap();
+    deregister_llm_conditional_execution_guardrail("llm_gate").unwrap();
 }
 
 /// LLM request intercept transforms the request.
@@ -1813,7 +1792,7 @@ async fn test_llm_request_intercept_transforms() {
     reset_global();
     setup_isolated_thread();
 
-    nemo_flow_register_llm_request_intercept(
+    register_llm_request_intercept(
         "llm_req_i",
         1,
         false,
@@ -1829,11 +1808,11 @@ async fn test_llm_request_intercept_transforms() {
         content: json!({"prompt": "hello"}),
     };
 
-    let result = nemo_flow_llm_request_intercepts("test_llm", request).unwrap();
+    let result = llm_request_intercepts("test_llm", request).unwrap();
     assert_eq!(result.headers["x-intercepted"], true);
 
     // Cleanup
-    nemo_flow_deregister_llm_request_intercept("llm_req_i").unwrap();
+    deregister_llm_request_intercept("llm_req_i").unwrap();
 }
 
 /// LLM execution intercept middleware chain with next().
@@ -1846,7 +1825,7 @@ async fn test_llm_execution_intercept_chain() {
     let order = Arc::new(Mutex::new(Vec::<String>::new()));
 
     let o1 = order.clone();
-    nemo_flow_register_llm_execution_intercept(
+    register_llm_execution_intercept(
         "llm_exec_1",
         1,
         Arc::new(move |_name, req, next| {
@@ -1872,7 +1851,7 @@ async fn test_llm_execution_intercept_chain() {
         content: json!({}),
     };
 
-    let result = nemo_flow_llm_call_execute(
+    let result = llm_call_execute(
         "llm",
         request,
         func,
@@ -1895,39 +1874,39 @@ async fn test_llm_execution_intercept_chain() {
     assert_eq!(result["response"], "done");
 
     // Cleanup
-    nemo_flow_deregister_llm_execution_intercept("llm_exec_1").unwrap();
+    deregister_llm_execution_intercept("llm_exec_1").unwrap();
 }
 
 // =========================================================================
 // Standalone Chain API Tests
 // =========================================================================
 
-/// nemo_flow_tool_conditional_execution returns Ok(()) when no guardrails reject.
+/// tool_conditional_execution returns Ok(()) when no guardrails reject.
 #[test]
 fn test_standalone_conditional_execution_passes() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
 
-    let result = nemo_flow_tool_conditional_execution("tool", &json!({}));
+    let result = tool_conditional_execution("tool", &json!({}));
     assert!(result.is_ok(), "No guardrails means no rejection");
 }
 
-/// nemo_flow_tool_conditional_execution returns GuardrailRejected when a guardrail rejects.
+/// tool_conditional_execution returns GuardrailRejected when a guardrail rejects.
 #[test]
 fn test_standalone_conditional_execution_rejects() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
 
-    nemo_flow_register_tool_conditional_execution_guardrail(
+    register_tool_conditional_execution_guardrail(
         "standalone_gate",
         1,
         Box::new(|_name, _args| Ok(Some("rejected by standalone".to_string()))),
     )
     .unwrap();
 
-    let result = nemo_flow_tool_conditional_execution("tool", &json!({}));
+    let result = tool_conditional_execution("tool", &json!({}));
     assert!(result.is_err());
     match result.unwrap_err() {
         FlowError::GuardrailRejected(reason) => {
@@ -1937,7 +1916,7 @@ fn test_standalone_conditional_execution_rejects() {
     }
 
     // Cleanup
-    nemo_flow_deregister_tool_conditional_execution_guardrail("standalone_gate").unwrap();
+    deregister_tool_conditional_execution_guardrail("standalone_gate").unwrap();
 }
 
 // =========================================================================
@@ -1953,7 +1932,7 @@ async fn test_empty_chain_passthrough() {
 
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
-    let result = nemo_flow_tool_call_execute(
+    let result = tool_call_execute(
         "tool",
         json!({"value": "unchanged"}),
         func,
@@ -1978,6 +1957,6 @@ fn test_empty_request_intercept_chain() {
     reset_global();
     setup_isolated_thread();
 
-    let result = nemo_flow_tool_request_intercepts("tool", json!({"key": "val"})).unwrap();
+    let result = tool_request_intercepts("tool", json!({"key": "val"})).unwrap();
     assert_eq!(result["key"], "val");
 }

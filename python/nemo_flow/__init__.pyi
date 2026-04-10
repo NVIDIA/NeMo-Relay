@@ -732,14 +732,14 @@ def propagate_scope_to_thread() -> ScopeStack:
 # Scope / handle operations
 # ---------------------------------------------------------------------------
 
-def nemo_flow_get_handle() -> Optional[ScopeHandle]:
+def get_handle() -> Optional[ScopeHandle]:
     """Return the current scope handle from the task-local scope stack.
 
     Returns ``None`` if the scope stack is empty.
     """
     ...
 
-def nemo_flow_push_scope(
+def push_scope(
     name: str,
     scope_type: ScopeType,
     *,
@@ -763,26 +763,26 @@ def nemo_flow_push_scope(
 
     Example:
         ```python
-        handle = nemo_flow_push_scope("my-agent", ScopeType.Agent)
+        handle = push_scope("my-agent", ScopeType.Agent)
         try:
             # ... do work ...
             pass
         finally:
-            nemo_flow_pop_scope(handle)
+            pop_scope(handle)
         ```
     """
     ...
 
-def nemo_flow_pop_scope(handle: ScopeHandle) -> None:
+def pop_scope(handle: ScopeHandle) -> None:
     """Remove a scope from the stack and emit an End event.
 
     Args:
         handle: The current top-of-stack scope handle returned by
-            ``nemo_flow_push_scope``.
+            ``push_scope``.
     """
     ...
 
-def nemo_flow_event(
+def event(
     name: str,
     *,
     handle: Optional[ScopeHandle] = None,
@@ -803,7 +803,7 @@ def nemo_flow_event(
 # Tool lifecycle
 # ---------------------------------------------------------------------------
 
-def nemo_flow_tool_call(
+def tool_call(
     name: str,
     args: Json,
     *,
@@ -826,11 +826,11 @@ def nemo_flow_tool_call(
 
     Returns:
         ToolHandle: Handle that must be passed to
-        ``nemo_flow_tool_call_end()``.
+        ``tool_call_end()``.
     """
     ...
 
-def nemo_flow_tool_call_end(
+def tool_call_end(
     handle: ToolHandle,
     result: Json,
     *,
@@ -840,14 +840,14 @@ def nemo_flow_tool_call_end(
     """End a manual tool call.
 
     Args:
-        handle: Tool handle returned by ``nemo_flow_tool_call()``.
+        handle: Tool handle returned by ``tool_call()``.
         result: JSON-compatible tool result to record on the end event.
         data: Optional application data recorded on the end event.
         metadata: Optional metadata recorded on the end event.
     """
     ...
 
-def nemo_flow_tool_call_execute(
+def tool_call_execute(
     name: str,
     args: Json,
     func: Callable[[Json], Awaitable[Json]],
@@ -885,7 +885,7 @@ def nemo_flow_tool_call_execute(
         async def my_tool(args):
             return {"answer": args["x"] + args["y"]}
 
-        result = await nemo_flow_tool_call_execute("add", {"x": 1, "y": 2}, my_tool)
+        result = await tool_call_execute("add", {"x": 1, "y": 2}, my_tool)
         ```
     """
     ...
@@ -894,7 +894,7 @@ def nemo_flow_tool_call_execute(
 # LLM lifecycle
 # ---------------------------------------------------------------------------
 
-def nemo_flow_llm_call(
+def llm_call(
     name: str,
     request: LLMRequest,
     *,
@@ -910,12 +910,12 @@ def nemo_flow_llm_call(
         name: Model/provider name.
         request: An ``LLMRequest`` object with headers and content.
 
-    Returns an ``LLMHandle`` that must be passed to ``nemo_flow_llm_call_end``.
+    Returns an ``LLMHandle`` that must be passed to ``llm_call_end``.
     Emits a Start event.
     """
     ...
 
-def nemo_flow_llm_call_end(
+def llm_call_end(
     handle: LLMHandle,
     response: Json,
     *,
@@ -925,14 +925,14 @@ def nemo_flow_llm_call_end(
     """End a manual LLM call.
 
     Args:
-        handle: LLM handle returned by ``nemo_flow_llm_call()``.
+        handle: LLM handle returned by ``llm_call()``.
         response: JSON-compatible response to record on the end event.
         data: Optional application data recorded on the end event.
         metadata: Optional metadata recorded on the end event.
     """
     ...
 
-def nemo_flow_llm_call_execute(
+def llm_call_execute(
     name: str,
     request: LLMRequest,
     func: Callable[[LLMRequest], Awaitable[Json]],
@@ -975,12 +975,12 @@ def nemo_flow_llm_call_execute(
             return await httpx_client.post("/chat/completions", json=req.content)
 
         request = LLMRequest({}, {"model": "gpt-4", "messages": [...]})
-        response = await nemo_flow_llm_call_execute("gpt-4", request, call_openai)
+        response = await llm_call_execute("gpt-4", request, call_openai)
         ```
     """
     ...
 
-async def nemo_flow_llm_stream_call_execute(
+async def llm_stream_call_execute(
     name: str,
     request: LLMRequest,
     func: Callable[[LLMRequest], AsyncIterator[Json]],
@@ -997,7 +997,7 @@ async def nemo_flow_llm_stream_call_execute(
 ) -> LlmStream:
     """Execute a streaming LLM call through the full middleware pipeline.
 
-    Like ``nemo_flow_llm_call_execute``, conditional-execution guardrails run
+    Like ``llm_call_execute``, conditional-execution guardrails run
     first. On rejection, only a standalone ``Mark`` event is emitted
     (no ``Start``/``End`` pair) and ``GuardrailRejected`` is raised.
 
@@ -1024,7 +1024,7 @@ async def nemo_flow_llm_stream_call_execute(
 # Standalone middleware chains
 # ---------------------------------------------------------------------------
 
-def nemo_flow_tool_request_intercepts(name: str, args: Json) -> Json:
+def tool_request_intercepts(name: str, args: Json) -> Json:
     """Run the registered tool request intercept chain.
 
     Args:
@@ -1036,7 +1036,7 @@ def nemo_flow_tool_request_intercepts(name: str, args: Json) -> Json:
     """
     ...
 
-def nemo_flow_tool_conditional_execution(name: str, args: Json) -> None:
+def tool_conditional_execution(name: str, args: Json) -> None:
     """Run the registered tool conditional execution guardrail chain.
 
     Args:
@@ -1047,7 +1047,7 @@ def nemo_flow_tool_conditional_execution(name: str, args: Json) -> None:
     """
     ...
 
-def nemo_flow_llm_request_intercepts(name: str, request: LLMRequest) -> LLMRequest:
+def llm_request_intercepts(name: str, request: LLMRequest) -> LLMRequest:
     """Run the registered LLM request intercept chain.
 
     Args:
@@ -1059,7 +1059,7 @@ def nemo_flow_llm_request_intercepts(name: str, request: LLMRequest) -> LLMReque
     """
     ...
 
-def nemo_flow_llm_conditional_execution(request: LLMRequest) -> None:
+def llm_conditional_execution(request: LLMRequest) -> None:
     """Run the registered LLM conditional execution guardrail chain.
 
     Args:
@@ -1073,9 +1073,7 @@ def nemo_flow_llm_conditional_execution(request: LLMRequest) -> None:
 # Tool guardrails
 # ---------------------------------------------------------------------------
 
-def nemo_flow_register_tool_sanitize_request_guardrail(
-    name: str, priority: int, guardrail: ToolSanitizeGuardrail
-) -> None:
+def register_tool_sanitize_request_guardrail(name: str, priority: int, guardrail: ToolSanitizeGuardrail) -> None:
     """Register a tool sanitize-request guardrail.
 
     Args:
@@ -1089,26 +1087,24 @@ def nemo_flow_register_tool_sanitize_request_guardrail(
         def redact_keys(tool_name: str, args: dict) -> dict:
             return {k: "***" if "secret" in k else v for k, v in args.items()}
 
-        nemo_flow_register_tool_sanitize_request_guardrail("redact", 0, redact_keys)
+        register_tool_sanitize_request_guardrail("redact", 0, redact_keys)
         ```
     """
     ...
 
-def nemo_flow_deregister_tool_sanitize_request_guardrail(name: str) -> bool:
+def deregister_tool_sanitize_request_guardrail(name: str) -> bool:
     """Remove a tool sanitize-request guardrail.
 
     Args:
         name: Guardrail name previously passed to
-            ``nemo_flow_register_tool_sanitize_request_guardrail()``.
+            ``register_tool_sanitize_request_guardrail()``.
 
     Returns:
         bool: ``True`` if a guardrail was removed, otherwise ``False``.
     """
     ...
 
-def nemo_flow_register_tool_sanitize_response_guardrail(
-    name: str, priority: int, guardrail: ToolSanitizeGuardrail
-) -> None:
+def register_tool_sanitize_response_guardrail(name: str, priority: int, guardrail: ToolSanitizeGuardrail) -> None:
     """Register a tool sanitize-response guardrail.
 
     Args:
@@ -1119,19 +1115,19 @@ def nemo_flow_register_tool_sanitize_response_guardrail(
     """
     ...
 
-def nemo_flow_deregister_tool_sanitize_response_guardrail(name: str) -> bool:
+def deregister_tool_sanitize_response_guardrail(name: str) -> bool:
     """Remove a tool sanitize-response guardrail.
 
     Args:
         name: Guardrail name previously passed to
-            ``nemo_flow_register_tool_sanitize_response_guardrail()``.
+            ``register_tool_sanitize_response_guardrail()``.
 
     Returns:
         bool: ``True`` if a guardrail was removed, otherwise ``False``.
     """
     ...
 
-def nemo_flow_register_tool_conditional_execution_guardrail(
+def register_tool_conditional_execution_guardrail(
     name: str, priority: int, guardrail: ToolConditionalExecutionGuardrail
 ) -> None:
     """Register a tool conditional-execution guardrail.
@@ -1149,17 +1145,17 @@ def nemo_flow_register_tool_conditional_execution_guardrail(
                 return "dangerous tool blocked"
             return None  # allow
 
-        nemo_flow_register_tool_conditional_execution_guardrail("safety", 0, block_dangerous)
+        register_tool_conditional_execution_guardrail("safety", 0, block_dangerous)
         ```
     """
     ...
 
-def nemo_flow_deregister_tool_conditional_execution_guardrail(name: str) -> bool:
+def deregister_tool_conditional_execution_guardrail(name: str) -> bool:
     """Remove a tool conditional-execution guardrail.
 
     Args:
         name: Guardrail name previously passed to
-            ``nemo_flow_register_tool_conditional_execution_guardrail()``.
+            ``register_tool_conditional_execution_guardrail()``.
 
     Returns:
         bool: ``True`` if a guardrail was removed, otherwise ``False``.
@@ -1170,7 +1166,7 @@ def nemo_flow_deregister_tool_conditional_execution_guardrail(name: str) -> bool
 # Tool intercepts
 # ---------------------------------------------------------------------------
 
-def nemo_flow_register_tool_request_intercept(
+def register_tool_request_intercept(
     name: str,
     priority: int,
     break_chain: bool,
@@ -1188,19 +1184,19 @@ def nemo_flow_register_tool_request_intercept(
     """
     ...
 
-def nemo_flow_deregister_tool_request_intercept(name: str) -> bool:
+def deregister_tool_request_intercept(name: str) -> bool:
     """Remove a tool request intercept.
 
     Args:
         name: Intercept name previously passed to
-            ``nemo_flow_register_tool_request_intercept()``.
+            ``register_tool_request_intercept()``.
 
     Returns:
         bool: ``True`` if an intercept was removed, otherwise ``False``.
     """
     ...
 
-def nemo_flow_register_tool_execution_intercept(
+def register_tool_execution_intercept(
     name: str,
     priority: int,
     callable: ToolExecutionIntercept,
@@ -1226,17 +1222,17 @@ def nemo_flow_register_tool_execution_intercept(
             cache[key] = result
             return result
 
-        nemo_flow_register_tool_execution_intercept("cache", 0, cache_intercept)
+        register_tool_execution_intercept("cache", 0, cache_intercept)
         ```
     """
     ...
 
-def nemo_flow_deregister_tool_execution_intercept(name: str) -> bool:
+def deregister_tool_execution_intercept(name: str) -> bool:
     """Remove a tool execution intercept.
 
     Args:
         name: Intercept name previously passed to
-            ``nemo_flow_register_tool_execution_intercept()``.
+            ``register_tool_execution_intercept()``.
 
     Returns:
         bool: ``True`` if an intercept was removed, otherwise ``False``.
@@ -1247,9 +1243,7 @@ def nemo_flow_deregister_tool_execution_intercept(name: str) -> bool:
 # LLM guardrails
 # ---------------------------------------------------------------------------
 
-def nemo_flow_register_llm_sanitize_request_guardrail(
-    name: str, priority: int, guardrail: LlmSanitizeRequestGuardrail
-) -> None:
+def register_llm_sanitize_request_guardrail(name: str, priority: int, guardrail: LlmSanitizeRequestGuardrail) -> None:
     """Register an LLM sanitize-request guardrail.
 
     Args:
@@ -1259,21 +1253,19 @@ def nemo_flow_register_llm_sanitize_request_guardrail(
     """
     ...
 
-def nemo_flow_deregister_llm_sanitize_request_guardrail(name: str) -> bool:
+def deregister_llm_sanitize_request_guardrail(name: str) -> bool:
     """Remove an LLM sanitize-request guardrail.
 
     Args:
         name: Guardrail name previously passed to
-            ``nemo_flow_register_llm_sanitize_request_guardrail()``.
+            ``register_llm_sanitize_request_guardrail()``.
 
     Returns:
         bool: ``True`` if a guardrail was removed, otherwise ``False``.
     """
     ...
 
-def nemo_flow_register_llm_sanitize_response_guardrail(
-    name: str, priority: int, guardrail: LlmSanitizeResponseGuardrail
-) -> None:
+def register_llm_sanitize_response_guardrail(name: str, priority: int, guardrail: LlmSanitizeResponseGuardrail) -> None:
     """Register an LLM sanitize-response guardrail.
 
     Args:
@@ -1283,19 +1275,19 @@ def nemo_flow_register_llm_sanitize_response_guardrail(
     """
     ...
 
-def nemo_flow_deregister_llm_sanitize_response_guardrail(name: str) -> bool:
+def deregister_llm_sanitize_response_guardrail(name: str) -> bool:
     """Remove an LLM sanitize-response guardrail.
 
     Args:
         name: Guardrail name previously passed to
-            ``nemo_flow_register_llm_sanitize_response_guardrail()``.
+            ``register_llm_sanitize_response_guardrail()``.
 
     Returns:
         bool: ``True`` if a guardrail was removed, otherwise ``False``.
     """
     ...
 
-def nemo_flow_register_llm_conditional_execution_guardrail(
+def register_llm_conditional_execution_guardrail(
     name: str, priority: int, guardrail: LlmConditionalExecutionGuardrail
 ) -> None:
     """Register an LLM conditional-execution guardrail.
@@ -1308,12 +1300,12 @@ def nemo_flow_register_llm_conditional_execution_guardrail(
     """
     ...
 
-def nemo_flow_deregister_llm_conditional_execution_guardrail(name: str) -> bool:
+def deregister_llm_conditional_execution_guardrail(name: str) -> bool:
     """Remove an LLM conditional-execution guardrail.
 
     Args:
         name: Guardrail name previously passed to
-            ``nemo_flow_register_llm_conditional_execution_guardrail()``.
+            ``register_llm_conditional_execution_guardrail()``.
 
     Returns:
         bool: ``True`` if a guardrail was removed, otherwise ``False``.
@@ -1324,7 +1316,7 @@ def nemo_flow_deregister_llm_conditional_execution_guardrail(name: str) -> bool:
 # LLM intercepts
 # ---------------------------------------------------------------------------
 
-def nemo_flow_register_llm_request_intercept(
+def register_llm_request_intercept(
     name: str,
     priority: int,
     break_chain: bool,
@@ -1341,19 +1333,19 @@ def nemo_flow_register_llm_request_intercept(
     """
     ...
 
-def nemo_flow_deregister_llm_request_intercept(name: str) -> bool:
+def deregister_llm_request_intercept(name: str) -> bool:
     """Remove an LLM request intercept.
 
     Args:
         name: Intercept name previously passed to
-            ``nemo_flow_register_llm_request_intercept()``.
+            ``register_llm_request_intercept()``.
 
     Returns:
         bool: ``True`` if an intercept was removed, otherwise ``False``.
     """
     ...
 
-def nemo_flow_register_llm_execution_intercept(
+def register_llm_execution_intercept(
     name: str,
     priority: int,
     callable: LlmExecutionIntercept,
@@ -1377,24 +1369,24 @@ def nemo_flow_register_llm_execution_intercept(
             print(f"LLM response tokens: {len(str(response))}")
             return response
 
-        nemo_flow_register_llm_execution_intercept("logger", 0, logging_intercept)
+        register_llm_execution_intercept("logger", 0, logging_intercept)
         ```
     """
     ...
 
-def nemo_flow_deregister_llm_execution_intercept(name: str) -> bool:
+def deregister_llm_execution_intercept(name: str) -> bool:
     """Remove an LLM execution intercept.
 
     Args:
         name: Intercept name previously passed to
-            ``nemo_flow_register_llm_execution_intercept()``.
+            ``register_llm_execution_intercept()``.
 
     Returns:
         bool: ``True`` if an intercept was removed, otherwise ``False``.
     """
     ...
 
-def nemo_flow_register_llm_stream_execution_intercept(
+def register_llm_stream_execution_intercept(
     name: str,
     priority: int,
     callable: LlmStreamExecutionIntercept,
@@ -1412,12 +1404,12 @@ def nemo_flow_register_llm_stream_execution_intercept(
     """
     ...
 
-def nemo_flow_deregister_llm_stream_execution_intercept(name: str) -> bool:
+def deregister_llm_stream_execution_intercept(name: str) -> bool:
     """Remove an LLM stream-execution intercept.
 
     Args:
         name: Intercept name previously passed to
-            ``nemo_flow_register_llm_stream_execution_intercept()``.
+            ``register_llm_stream_execution_intercept()``.
 
     Returns:
         bool: ``True`` if an intercept was removed, otherwise ``False``.
@@ -1428,7 +1420,7 @@ def nemo_flow_deregister_llm_stream_execution_intercept(name: str) -> bool:
 # Subscribers
 # ---------------------------------------------------------------------------
 
-def nemo_flow_register_subscriber(name: str, callback: Callable[[Event], None]) -> None:
+def register_subscriber(name: str, callback: Callable[[Event], None]) -> None:
     """Register an event subscriber.
 
     Args:
@@ -1440,17 +1432,17 @@ def nemo_flow_register_subscriber(name: str, callback: Callable[[Event], None]) 
         def on_event(event: Event) -> None:
             print(f"[{event.kind}] {event.name} @ {event.timestamp}")
 
-        nemo_flow_register_subscriber("my-logger", on_event)
+        register_subscriber("my-logger", on_event)
         ```
     """
     ...
 
-def nemo_flow_deregister_subscriber(name: str) -> bool:
+def deregister_subscriber(name: str) -> bool:
     """Remove an event subscriber.
 
     Args:
         name: Subscriber name previously passed to
-            ``nemo_flow_register_subscriber()``.
+            ``register_subscriber()``.
 
     Returns:
         bool: ``True`` if a subscriber was removed, otherwise ``False``.
@@ -1461,7 +1453,7 @@ def nemo_flow_deregister_subscriber(name: str) -> bool:
 # Scope-local tool guardrails
 # ---------------------------------------------------------------------------
 
-def nemo_flow_scope_register_tool_sanitize_request_guardrail(
+def scope_register_tool_sanitize_request_guardrail(
     scope_uuid: str, name: str, priority: int, guardrail: ToolSanitizeGuardrail
 ) -> None:
     """Register a scope-local tool sanitize-request guardrail.
@@ -1477,7 +1469,7 @@ def nemo_flow_scope_register_tool_sanitize_request_guardrail(
     """
     ...
 
-def nemo_flow_scope_deregister_tool_sanitize_request_guardrail(scope_uuid: str, name: str) -> bool:
+def scope_deregister_tool_sanitize_request_guardrail(scope_uuid: str, name: str) -> bool:
     """Remove a scope-local tool sanitize-request guardrail.
 
     Args:
@@ -1489,7 +1481,7 @@ def nemo_flow_scope_deregister_tool_sanitize_request_guardrail(scope_uuid: str, 
     """
     ...
 
-def nemo_flow_scope_register_tool_sanitize_response_guardrail(
+def scope_register_tool_sanitize_response_guardrail(
     scope_uuid: str, name: str, priority: int, guardrail: ToolSanitizeGuardrail
 ) -> None:
     """Register a scope-local tool sanitize-response guardrail.
@@ -1505,7 +1497,7 @@ def nemo_flow_scope_register_tool_sanitize_response_guardrail(
     """
     ...
 
-def nemo_flow_scope_deregister_tool_sanitize_response_guardrail(scope_uuid: str, name: str) -> bool:
+def scope_deregister_tool_sanitize_response_guardrail(scope_uuid: str, name: str) -> bool:
     """Remove a scope-local tool sanitize-response guardrail.
 
     Args:
@@ -1517,7 +1509,7 @@ def nemo_flow_scope_deregister_tool_sanitize_response_guardrail(scope_uuid: str,
     """
     ...
 
-def nemo_flow_scope_register_tool_conditional_execution_guardrail(
+def scope_register_tool_conditional_execution_guardrail(
     scope_uuid: str, name: str, priority: int, guardrail: ToolConditionalExecutionGuardrail
 ) -> None:
     """Register a scope-local tool conditional-execution guardrail.
@@ -1530,7 +1522,7 @@ def nemo_flow_scope_register_tool_conditional_execution_guardrail(
     """
     ...
 
-def nemo_flow_scope_deregister_tool_conditional_execution_guardrail(scope_uuid: str, name: str) -> bool:
+def scope_deregister_tool_conditional_execution_guardrail(scope_uuid: str, name: str) -> bool:
     """Remove a scope-local tool conditional-execution guardrail.
 
     Args:
@@ -1546,7 +1538,7 @@ def nemo_flow_scope_deregister_tool_conditional_execution_guardrail(scope_uuid: 
 # Scope-local tool intercepts
 # ---------------------------------------------------------------------------
 
-def nemo_flow_scope_register_tool_request_intercept(
+def scope_register_tool_request_intercept(
     scope_uuid: str,
     name: str,
     priority: int,
@@ -1564,7 +1556,7 @@ def nemo_flow_scope_register_tool_request_intercept(
     """
     ...
 
-def nemo_flow_scope_deregister_tool_request_intercept(scope_uuid: str, name: str) -> bool:
+def scope_deregister_tool_request_intercept(scope_uuid: str, name: str) -> bool:
     """Remove a scope-local tool request intercept.
 
     Args:
@@ -1576,7 +1568,7 @@ def nemo_flow_scope_deregister_tool_request_intercept(scope_uuid: str, name: str
     """
     ...
 
-def nemo_flow_scope_register_tool_execution_intercept(
+def scope_register_tool_execution_intercept(
     scope_uuid: str,
     name: str,
     priority: int,
@@ -1592,7 +1584,7 @@ def nemo_flow_scope_register_tool_execution_intercept(
     """
     ...
 
-def nemo_flow_scope_deregister_tool_execution_intercept(scope_uuid: str, name: str) -> bool:
+def scope_deregister_tool_execution_intercept(scope_uuid: str, name: str) -> bool:
     """Remove a scope-local tool execution intercept.
 
     Args:
@@ -1608,7 +1600,7 @@ def nemo_flow_scope_deregister_tool_execution_intercept(scope_uuid: str, name: s
 # Scope-local LLM guardrails
 # ---------------------------------------------------------------------------
 
-def nemo_flow_scope_register_llm_sanitize_request_guardrail(
+def scope_register_llm_sanitize_request_guardrail(
     scope_uuid: str, name: str, priority: int, guardrail: LlmSanitizeRequestGuardrail
 ) -> None:
     """Register a scope-local LLM sanitize-request guardrail.
@@ -1624,7 +1616,7 @@ def nemo_flow_scope_register_llm_sanitize_request_guardrail(
     """
     ...
 
-def nemo_flow_scope_deregister_llm_sanitize_request_guardrail(scope_uuid: str, name: str) -> bool:
+def scope_deregister_llm_sanitize_request_guardrail(scope_uuid: str, name: str) -> bool:
     """Remove a scope-local LLM sanitize-request guardrail.
 
     Args:
@@ -1636,7 +1628,7 @@ def nemo_flow_scope_deregister_llm_sanitize_request_guardrail(scope_uuid: str, n
     """
     ...
 
-def nemo_flow_scope_register_llm_sanitize_response_guardrail(
+def scope_register_llm_sanitize_response_guardrail(
     scope_uuid: str, name: str, priority: int, guardrail: LlmSanitizeResponseGuardrail
 ) -> None:
     """Register a scope-local LLM sanitize-response guardrail.
@@ -1652,7 +1644,7 @@ def nemo_flow_scope_register_llm_sanitize_response_guardrail(
     """
     ...
 
-def nemo_flow_scope_deregister_llm_sanitize_response_guardrail(scope_uuid: str, name: str) -> bool:
+def scope_deregister_llm_sanitize_response_guardrail(scope_uuid: str, name: str) -> bool:
     """Remove a scope-local LLM sanitize-response guardrail.
 
     Args:
@@ -1664,7 +1656,7 @@ def nemo_flow_scope_deregister_llm_sanitize_response_guardrail(scope_uuid: str, 
     """
     ...
 
-def nemo_flow_scope_register_llm_conditional_execution_guardrail(
+def scope_register_llm_conditional_execution_guardrail(
     scope_uuid: str, name: str, priority: int, guardrail: LlmConditionalExecutionGuardrail
 ) -> None:
     """Register a scope-local LLM conditional-execution guardrail.
@@ -1677,7 +1669,7 @@ def nemo_flow_scope_register_llm_conditional_execution_guardrail(
     """
     ...
 
-def nemo_flow_scope_deregister_llm_conditional_execution_guardrail(scope_uuid: str, name: str) -> bool:
+def scope_deregister_llm_conditional_execution_guardrail(scope_uuid: str, name: str) -> bool:
     """Remove a scope-local LLM conditional-execution guardrail.
 
     Args:
@@ -1693,7 +1685,7 @@ def nemo_flow_scope_deregister_llm_conditional_execution_guardrail(scope_uuid: s
 # Scope-local LLM intercepts
 # ---------------------------------------------------------------------------
 
-def nemo_flow_scope_register_llm_request_intercept(
+def scope_register_llm_request_intercept(
     scope_uuid: str,
     name: str,
     priority: int,
@@ -1711,7 +1703,7 @@ def nemo_flow_scope_register_llm_request_intercept(
     """
     ...
 
-def nemo_flow_scope_deregister_llm_request_intercept(scope_uuid: str, name: str) -> bool:
+def scope_deregister_llm_request_intercept(scope_uuid: str, name: str) -> bool:
     """Remove a scope-local LLM request intercept.
 
     Args:
@@ -1723,7 +1715,7 @@ def nemo_flow_scope_deregister_llm_request_intercept(scope_uuid: str, name: str)
     """
     ...
 
-def nemo_flow_scope_register_llm_execution_intercept(
+def scope_register_llm_execution_intercept(
     scope_uuid: str,
     name: str,
     priority: int,
@@ -1739,7 +1731,7 @@ def nemo_flow_scope_register_llm_execution_intercept(
     """
     ...
 
-def nemo_flow_scope_deregister_llm_execution_intercept(scope_uuid: str, name: str) -> bool:
+def scope_deregister_llm_execution_intercept(scope_uuid: str, name: str) -> bool:
     """Remove a scope-local LLM execution intercept.
 
     Args:
@@ -1751,7 +1743,7 @@ def nemo_flow_scope_deregister_llm_execution_intercept(scope_uuid: str, name: st
     """
     ...
 
-def nemo_flow_scope_register_llm_stream_execution_intercept(
+def scope_register_llm_stream_execution_intercept(
     scope_uuid: str,
     name: str,
     priority: int,
@@ -1767,7 +1759,7 @@ def nemo_flow_scope_register_llm_stream_execution_intercept(
     """
     ...
 
-def nemo_flow_scope_deregister_llm_stream_execution_intercept(scope_uuid: str, name: str) -> bool:
+def scope_deregister_llm_stream_execution_intercept(scope_uuid: str, name: str) -> bool:
     """Remove a scope-local LLM stream-execution intercept.
 
     Args:
@@ -1783,7 +1775,7 @@ def nemo_flow_scope_deregister_llm_stream_execution_intercept(scope_uuid: str, n
 # Scope-local subscribers
 # ---------------------------------------------------------------------------
 
-def nemo_flow_scope_register_subscriber(scope_uuid: str, name: str, callback: Callable[[Event], None]) -> None:
+def scope_register_subscriber(scope_uuid: str, name: str, callback: Callable[[Event], None]) -> None:
     """Register a scope-local event subscriber.
 
     Args:
@@ -1793,7 +1785,7 @@ def nemo_flow_scope_register_subscriber(scope_uuid: str, name: str, callback: Ca
     """
     ...
 
-def nemo_flow_scope_deregister_subscriber(scope_uuid: str, name: str) -> bool:
+def scope_deregister_subscriber(scope_uuid: str, name: str) -> bool:
     """Remove a scope-local event subscriber.
 
     Args:

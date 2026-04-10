@@ -27,10 +27,10 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from nemo_flow._native import (
-    nemo_flow_deregister_subscriber as _native_deregister,
+    deregister_subscriber as _native_deregister,
 )
 from nemo_flow._native import (
-    nemo_flow_register_subscriber as _native_register,
+    register_subscriber as _native_register,
 )
 
 if TYPE_CHECKING:

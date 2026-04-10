@@ -116,7 +116,8 @@ go func() {
     stack.Run(func() {
         // Goroutine is pinned to an OS thread
         // All scope operations use this stack
-        scope.Push("agent", scope.TypeAgent)
+        handle, _ := nemo_flow.PushScope("agent", nemo_flow.ScopeTypeAgent)
+        defer nemo_flow.PopScope(handle)
     })
 }()
 ```
@@ -251,7 +252,8 @@ for _, agentID := range agents {
         defer stack.Close()
 
         stack.Run(func() {
-            scope.Push("agent-"+id, scope.TypeAgent)
+            handle, _ := nemo_flow.PushScope("agent-"+id, nemo_flow.ScopeTypeAgent)
+            defer nemo_flow.PopScope(handle)
             // Process agent — isolated from other goroutines
         })
     }(agentID)

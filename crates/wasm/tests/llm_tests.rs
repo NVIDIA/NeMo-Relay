@@ -29,7 +29,7 @@ fn make_request() -> JsValue {
 #[wasm_bindgen_test]
 fn test_llm_call_and_end() {
     let request = make_request();
-    let handle = nemo_flow_llm_call(
+    let handle = llm_call(
         "test_llm",
         request,
         None,
@@ -43,13 +43,13 @@ fn test_llm_call_and_end() {
     assert!(!handle.uuid().is_empty());
 
     let response = parse_json(r#"{"choices":[{"text":"hello"}]}"#);
-    nemo_flow_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
+    llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_call_with_attributes() {
     let request = make_request();
-    let handle = nemo_flow_llm_call(
+    let handle = llm_call(
         "attr_llm",
         request,
         None,
@@ -62,12 +62,12 @@ fn test_llm_call_with_attributes() {
     assert_eq!(handle.attributes(), LLM_STATELESS | LLM_STREAMING);
 
     let response = parse_json(r#"{}"#);
-    nemo_flow_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
+    llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_llm_call_with_parent() {
-    let scope = nemo_flow_push_scope(
+    let scope = push_scope(
         "llm_parent",
         SCOPE_TYPE_AGENT,
         None,
@@ -78,7 +78,7 @@ fn test_llm_call_with_parent() {
     .unwrap();
     let scope_uuid = scope.uuid();
     let request = make_request();
-    let handle = nemo_flow_llm_call(
+    let handle = llm_call(
         "parented_llm",
         request,
         Some(scope),
@@ -91,10 +91,10 @@ fn test_llm_call_with_parent() {
     assert_eq!(handle.parent_uuid().unwrap(), scope_uuid);
 
     let response = parse_json(r#"{}"#);
-    nemo_flow_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
+    llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
 
-    let current = nemo_flow_get_handle().unwrap();
-    nemo_flow_pop_scope(&current).unwrap();
+    let current = get_handle().unwrap();
+    pop_scope(&current).unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -102,11 +102,11 @@ fn test_llm_call_with_data_metadata() {
     let request = make_request();
     let data = parse_json(r#"{"info":"llm_test"}"#);
     let meta = parse_json(r#"{"version":"2.0"}"#);
-    let handle = nemo_flow_llm_call("data_llm", request, None, None, data, meta, None).unwrap();
+    let handle = llm_call("data_llm", request, None, None, data, meta, None).unwrap();
 
     let response = parse_json(r#"{}"#);
     let end_data = parse_json(r#"{"tokens":100}"#);
-    nemo_flow_llm_call_end(&handle, response, end_data, JsValue::NULL).unwrap();
+    llm_call_end(&handle, response, end_data, JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -116,7 +116,7 @@ fn test_llm_call_generates_events() {
     register_subscriber("wasm_llm_evt_sub", cb).unwrap();
 
     let request = make_request();
-    let handle = nemo_flow_llm_call(
+    let handle = llm_call(
         "evt_llm",
         request,
         None,
@@ -127,7 +127,7 @@ fn test_llm_call_generates_events() {
     )
     .unwrap();
     let response = parse_json(r#"{}"#);
-    nemo_flow_llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
+    llm_call_end(&handle, response, JsValue::NULL, JsValue::NULL).unwrap();
 
     let events = js_sys::eval("globalThis.__llm_events").unwrap();
     let arr = js_sys::Array::from(&events);
@@ -148,7 +148,7 @@ fn test_llm_call_generates_events() {
 async fn test_llm_execute_basic() {
     let func = js_fn1("native", "return {response: 'hello from llm'}");
     let request = make_request();
-    let result = nemo_flow_llm_call_execute(
+    let result = llm_call_execute(
         "exec_llm",
         request,
         func,
@@ -172,7 +172,7 @@ async fn test_llm_execute_basic() {
 async fn test_llm_execute_promise() {
     let func = js_fn1("native", "return Promise.resolve({async: true})");
     let request = make_request();
-    let result = nemo_flow_llm_call_execute(
+    let result = llm_call_execute(
         "async_llm",
         request,
         func,
@@ -301,7 +301,7 @@ async fn test_llm_request_intercept_modifies_request() {
         "return {saw_intercepted: (native.content && native.content.intercepted) || false}",
     );
     let request = make_request();
-    let result = nemo_flow_llm_call_execute(
+    let result = llm_call_execute(
         "mod_llm",
         request,
         func,
@@ -330,7 +330,7 @@ async fn test_llm_execution_intercept_replaces_func() {
 
     let original = js_fn1("native", "return {original: true}");
     let request = make_request();
-    let result = nemo_flow_llm_call_execute(
+    let result = llm_call_execute(
         "repl_llm",
         request,
         original,

@@ -6,13 +6,13 @@
 
 use serde_json::json;
 
-use nemo_flow_core::codec::{
+use nemo_flow::codec::{
     AnnotatedLLMRequest, ContentPart, FunctionCall, FunctionDefinition, GenerationParams, LlmCodec,
     Message, MessageContent, ToolCall, ToolChoice, ToolChoiceFunction, ToolChoiceFunctionName,
     ToolDefinition,
 };
-use nemo_flow_core::error::Result;
-use nemo_flow_core::types::LLMRequest;
+use nemo_flow::error::Result;
+use nemo_flow::types::LLMRequest;
 
 // ---------------------------------------------------------------------------
 // Mock Codec for registry and resolution tests

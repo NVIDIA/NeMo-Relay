@@ -100,7 +100,7 @@ import (
 )
 
 pluginKind := "example.header_plugin"
-err := nemo_flow.RegisterPlugin(pluginKind, nemo_flow.PluginHandlerFuncs{
+err := nemo_flow.RegisterPlugin(pluginKind, nemo_flow.PluginFuncs{
     ValidateFunc: func(pluginConfig map[string]any) ([]nemo_flow.ConfigDiagnostic, error) {
         return nil, nil
     },

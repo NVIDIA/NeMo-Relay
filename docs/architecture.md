@@ -21,7 +21,7 @@ NeMo Flow is a Rust-core runtime with bindings for Python, Node.js, Go, and WebA
 └──────┬───┘  └───┬────┘ └───┬───┘ └───┬──────┘
        │          │          │         │
 ┌──────▼──────────▼──────────▼─────────▼──────┐
-│              nemo-flow-core (Rust)            │
+│              nemo-flow (Rust)            │
 │                                             │
 │  ┌──────────┐  ┌──────────┐  ┌───────────┐  │
 │  │  Scopes  │  │  Tools   │  │    LLM    │  │
@@ -55,7 +55,7 @@ graph TD
     end
 
     subgraph "Core"
-        CORE[crates/core<br/>nemo-flow-core]
+        CORE[crates/core<br/>nemo-flow]
     end
 
     PY --> PYO3
@@ -182,7 +182,7 @@ See [Core Concepts: Scope-Local Middleware](concepts.md#scope-local-middleware) 
 ```mermaid
 sequenceDiagram
     participant App
-    participant Core as nemo-flow-core
+    participant Core as nemo-flow
     participant Guards as Guardrails
     participant Ints as Intercepts
     participant Func as User Function

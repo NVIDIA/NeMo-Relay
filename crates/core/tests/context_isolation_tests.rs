@@ -5,12 +5,12 @@
 
 use std::sync::Arc;
 
-use nemo_flow_core::context::{
+use nemo_flow::context::{
     TASK_SCOPE_STACK, create_scope_stack, current_scope_stack, propagate_scope_to_thread,
     scope_stack_active, set_thread_scope_stack,
 };
-use nemo_flow_core::types::*;
-use nemo_flow_core::{task_scope_push, task_scope_top};
+use nemo_flow::types::*;
+use nemo_flow::{task_scope_push, task_scope_top};
 
 /// Two ScopeStackHandles push different scopes → verify independent.
 #[test]

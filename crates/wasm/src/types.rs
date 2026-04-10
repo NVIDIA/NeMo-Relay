@@ -35,7 +35,7 @@
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use nemo_flow_core::types as core_types;
+use nemo_flow::types as core_types;
 
 // ---------------------------------------------------------------------------
 // Enums (exposed as plain constants -- wasm_bindgen doesn't support const defs)
@@ -282,7 +282,7 @@ impl From<core_types::LLMHandle> for WasmLLMHandle {
 /// request and pass it to scope-stack-aware API variants.
 #[wasm_bindgen]
 pub struct WasmScopeStack {
-    pub(crate) inner: nemo_flow_core::ScopeStackHandle,
+    pub(crate) inner: nemo_flow::ScopeStackHandle,
 }
 
 #[wasm_bindgen]
@@ -291,7 +291,7 @@ impl WasmScopeStack {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
-            inner: nemo_flow_core::create_scope_stack(),
+            inner: nemo_flow::create_scope_stack(),
         }
     }
 }
@@ -302,8 +302,8 @@ impl Default for WasmScopeStack {
     }
 }
 
-impl From<nemo_flow_core::ScopeStackHandle> for WasmScopeStack {
-    fn from(h: nemo_flow_core::ScopeStackHandle) -> Self {
+impl From<nemo_flow::ScopeStackHandle> for WasmScopeStack {
+    fn from(h: nemo_flow::ScopeStackHandle) -> Self {
         Self { inner: h }
     }
 }
@@ -569,8 +569,8 @@ impl From<&core_types::Event> for WasmEvent {
 /// (decode_response). Construct with `new WasmOpenAIChatCodec()`.
 #[wasm_bindgen]
 pub struct WasmOpenAIChatCodec {
-    pub(crate) inner_codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmCodec>,
-    pub(crate) inner_response_codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmResponseCodec>,
+    pub(crate) inner_codec: std::sync::Arc<dyn nemo_flow::codec::LlmCodec>,
+    pub(crate) inner_response_codec: std::sync::Arc<dyn nemo_flow::codec::LlmResponseCodec>,
 }
 
 impl Default for WasmOpenAIChatCodec {
@@ -584,24 +584,24 @@ impl WasmOpenAIChatCodec {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
-            inner_codec: std::sync::Arc::new(nemo_flow_core::codec::OpenAIChatCodec),
-            inner_response_codec: std::sync::Arc::new(nemo_flow_core::codec::OpenAIChatCodec),
+            inner_codec: std::sync::Arc::new(nemo_flow::codec::OpenAIChatCodec),
+            inner_response_codec: std::sync::Arc::new(nemo_flow::codec::OpenAIChatCodec),
         }
     }
 
     /// Decode an opaque LLM request into structured form.
     pub fn decode(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let req_json = crate::convert::js_to_json(&request)?;
-        let llm_req: nemo_flow_core::types::LLMRequest =
+        let llm_req: nemo_flow::types::LLMRequest =
             serde_json::from_value(req_json).map_err(|e| {
-                crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+                crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
             })?;
         let annotated = self
             .inner_codec
             .decode(&llm_req)
             .map_err(crate::convert::to_js_err)?;
         let json = serde_json::to_value(&annotated).map_err(|e| {
-            crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+            crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
         })?;
         Ok(crate::convert::json_to_js(&json))
     }
@@ -610,20 +610,20 @@ impl WasmOpenAIChatCodec {
     pub fn encode(&self, annotated: JsValue, original: JsValue) -> Result<JsValue, JsValue> {
         let ann_json = crate::convert::js_to_json(&annotated)?;
         let orig_json = crate::convert::js_to_json(&original)?;
-        let ann: nemo_flow_core::codec::AnnotatedLLMRequest = serde_json::from_value(ann_json)
-            .map_err(|e| {
-                crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+        let ann: nemo_flow::codec::AnnotatedLLMRequest =
+            serde_json::from_value(ann_json).map_err(|e| {
+                crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
             })?;
-        let orig: nemo_flow_core::types::LLMRequest =
+        let orig: nemo_flow::types::LLMRequest =
             serde_json::from_value(orig_json).map_err(|e| {
-                crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+                crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
             })?;
         let result = self
             .inner_codec
             .encode(&ann, &orig)
             .map_err(crate::convert::to_js_err)?;
         let json = serde_json::to_value(&result).map_err(|e| {
-            crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+            crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
         })?;
         Ok(crate::convert::json_to_js(&json))
     }
@@ -636,7 +636,7 @@ impl WasmOpenAIChatCodec {
             .decode_response(&resp_json)
             .map_err(crate::convert::to_js_err)?;
         let json = serde_json::to_value(&annotated).map_err(|e| {
-            crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+            crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
         })?;
         Ok(crate::convert::json_to_js(&json))
     }
@@ -648,8 +648,8 @@ impl WasmOpenAIChatCodec {
 /// (decode_response). Construct with `new WasmOpenAIResponsesCodec()`.
 #[wasm_bindgen]
 pub struct WasmOpenAIResponsesCodec {
-    pub(crate) inner_codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmCodec>,
-    pub(crate) inner_response_codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmResponseCodec>,
+    pub(crate) inner_codec: std::sync::Arc<dyn nemo_flow::codec::LlmCodec>,
+    pub(crate) inner_response_codec: std::sync::Arc<dyn nemo_flow::codec::LlmResponseCodec>,
 }
 
 impl Default for WasmOpenAIResponsesCodec {
@@ -663,24 +663,24 @@ impl WasmOpenAIResponsesCodec {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
-            inner_codec: std::sync::Arc::new(nemo_flow_core::codec::OpenAIResponsesCodec),
-            inner_response_codec: std::sync::Arc::new(nemo_flow_core::codec::OpenAIResponsesCodec),
+            inner_codec: std::sync::Arc::new(nemo_flow::codec::OpenAIResponsesCodec),
+            inner_response_codec: std::sync::Arc::new(nemo_flow::codec::OpenAIResponsesCodec),
         }
     }
 
     /// Decode an opaque LLM request into structured form.
     pub fn decode(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let req_json = crate::convert::js_to_json(&request)?;
-        let llm_req: nemo_flow_core::types::LLMRequest =
+        let llm_req: nemo_flow::types::LLMRequest =
             serde_json::from_value(req_json).map_err(|e| {
-                crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+                crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
             })?;
         let annotated = self
             .inner_codec
             .decode(&llm_req)
             .map_err(crate::convert::to_js_err)?;
         let json = serde_json::to_value(&annotated).map_err(|e| {
-            crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+            crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
         })?;
         Ok(crate::convert::json_to_js(&json))
     }
@@ -689,20 +689,20 @@ impl WasmOpenAIResponsesCodec {
     pub fn encode(&self, annotated: JsValue, original: JsValue) -> Result<JsValue, JsValue> {
         let ann_json = crate::convert::js_to_json(&annotated)?;
         let orig_json = crate::convert::js_to_json(&original)?;
-        let ann: nemo_flow_core::codec::AnnotatedLLMRequest = serde_json::from_value(ann_json)
-            .map_err(|e| {
-                crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+        let ann: nemo_flow::codec::AnnotatedLLMRequest =
+            serde_json::from_value(ann_json).map_err(|e| {
+                crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
             })?;
-        let orig: nemo_flow_core::types::LLMRequest =
+        let orig: nemo_flow::types::LLMRequest =
             serde_json::from_value(orig_json).map_err(|e| {
-                crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+                crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
             })?;
         let result = self
             .inner_codec
             .encode(&ann, &orig)
             .map_err(crate::convert::to_js_err)?;
         let json = serde_json::to_value(&result).map_err(|e| {
-            crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+            crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
         })?;
         Ok(crate::convert::json_to_js(&json))
     }
@@ -715,7 +715,7 @@ impl WasmOpenAIResponsesCodec {
             .decode_response(&resp_json)
             .map_err(crate::convert::to_js_err)?;
         let json = serde_json::to_value(&annotated).map_err(|e| {
-            crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+            crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
         })?;
         Ok(crate::convert::json_to_js(&json))
     }
@@ -727,8 +727,8 @@ impl WasmOpenAIResponsesCodec {
 /// (decode_response). Construct with `new WasmAnthropicMessagesCodec()`.
 #[wasm_bindgen]
 pub struct WasmAnthropicMessagesCodec {
-    pub(crate) inner_codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmCodec>,
-    pub(crate) inner_response_codec: std::sync::Arc<dyn nemo_flow_core::codec::LlmResponseCodec>,
+    pub(crate) inner_codec: std::sync::Arc<dyn nemo_flow::codec::LlmCodec>,
+    pub(crate) inner_response_codec: std::sync::Arc<dyn nemo_flow::codec::LlmResponseCodec>,
 }
 
 impl Default for WasmAnthropicMessagesCodec {
@@ -742,26 +742,24 @@ impl WasmAnthropicMessagesCodec {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
-            inner_codec: std::sync::Arc::new(nemo_flow_core::codec::AnthropicMessagesCodec),
-            inner_response_codec: std::sync::Arc::new(
-                nemo_flow_core::codec::AnthropicMessagesCodec,
-            ),
+            inner_codec: std::sync::Arc::new(nemo_flow::codec::AnthropicMessagesCodec),
+            inner_response_codec: std::sync::Arc::new(nemo_flow::codec::AnthropicMessagesCodec),
         }
     }
 
     /// Decode an opaque LLM request into structured form.
     pub fn decode(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let req_json = crate::convert::js_to_json(&request)?;
-        let llm_req: nemo_flow_core::types::LLMRequest =
+        let llm_req: nemo_flow::types::LLMRequest =
             serde_json::from_value(req_json).map_err(|e| {
-                crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+                crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
             })?;
         let annotated = self
             .inner_codec
             .decode(&llm_req)
             .map_err(crate::convert::to_js_err)?;
         let json = serde_json::to_value(&annotated).map_err(|e| {
-            crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+            crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
         })?;
         Ok(crate::convert::json_to_js(&json))
     }
@@ -770,20 +768,20 @@ impl WasmAnthropicMessagesCodec {
     pub fn encode(&self, annotated: JsValue, original: JsValue) -> Result<JsValue, JsValue> {
         let ann_json = crate::convert::js_to_json(&annotated)?;
         let orig_json = crate::convert::js_to_json(&original)?;
-        let ann: nemo_flow_core::codec::AnnotatedLLMRequest = serde_json::from_value(ann_json)
-            .map_err(|e| {
-                crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+        let ann: nemo_flow::codec::AnnotatedLLMRequest =
+            serde_json::from_value(ann_json).map_err(|e| {
+                crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
             })?;
-        let orig: nemo_flow_core::types::LLMRequest =
+        let orig: nemo_flow::types::LLMRequest =
             serde_json::from_value(orig_json).map_err(|e| {
-                crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+                crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
             })?;
         let result = self
             .inner_codec
             .encode(&ann, &orig)
             .map_err(crate::convert::to_js_err)?;
         let json = serde_json::to_value(&result).map_err(|e| {
-            crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+            crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
         })?;
         Ok(crate::convert::json_to_js(&json))
     }
@@ -796,7 +794,7 @@ impl WasmAnthropicMessagesCodec {
             .decode_response(&resp_json)
             .map_err(crate::convert::to_js_err)?;
         let json = serde_json::to_value(&annotated).map_err(|e| {
-            crate::convert::to_js_err(nemo_flow_core::FlowError::Internal(e.to_string()))
+            crate::convert::to_js_err(nemo_flow::FlowError::Internal(e.to_string()))
         })?;
         Ok(crate::convert::json_to_js(&json))
     }

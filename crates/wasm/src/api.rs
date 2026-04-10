@@ -34,9 +34,9 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
-use nemo_flow_core::types as core_types;
-use nemo_flow_core::{
-    ConfigDiagnostic, DiagnosticLevel, PluginError, PluginHandler as HostedPluginHandler,
+use nemo_flow::types as core_types;
+use nemo_flow::{
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError,
     PluginRegistration as ComponentRegistration, PluginRegistrationContext,
 };
 
@@ -105,7 +105,7 @@ impl Default for WasmOpenInferenceConfig {
 
 fn build_otel_config(
     config: Option<WasmOpenTelemetryConfig>,
-) -> Result<nemo_flow_otel::OpenTelemetryConfig, JsValue> {
+) -> Result<nemo_flow::observability::otel::OpenTelemetryConfig, JsValue> {
     let config = config.unwrap_or_default();
     let transport = config
         .transport
@@ -119,8 +119,10 @@ fn build_otel_config(
     let timeout_millis = config.timeout_millis.unwrap_or(3_000);
 
     let mut otel_config = match transport.as_str() {
-        "http_binary" => nemo_flow_otel::OpenTelemetryConfig::http_binary(service_name),
-        "grpc" => nemo_flow_otel::OpenTelemetryConfig::grpc(service_name),
+        "http_binary" => {
+            nemo_flow::observability::otel::OpenTelemetryConfig::http_binary(service_name)
+        }
+        "grpc" => nemo_flow::observability::otel::OpenTelemetryConfig::grpc(service_name),
         other => {
             return Err(JsValue::from_str(&format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}",
@@ -150,7 +152,7 @@ fn build_otel_config(
 
 fn build_openinference_config(
     config: Option<WasmOpenInferenceConfig>,
-) -> Result<nemo_flow_openinference::OpenInferenceConfig, JsValue> {
+) -> Result<nemo_flow::observability::openinference::OpenInferenceConfig, JsValue> {
     let config = config.unwrap_or_default();
     let transport = config
         .transport
@@ -164,8 +166,8 @@ fn build_openinference_config(
     let timeout_millis = config.timeout_millis.unwrap_or(3_000);
 
     let transport = match transport.as_str() {
-        "http_binary" => nemo_flow_openinference::OtlpTransport::HttpBinary,
-        "grpc" => nemo_flow_openinference::OtlpTransport::Grpc,
+        "http_binary" => nemo_flow::observability::openinference::OtlpTransport::HttpBinary,
+        "grpc" => nemo_flow::observability::openinference::OtlpTransport::Grpc,
         other => {
             return Err(JsValue::from_str(&format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}",
@@ -173,11 +175,12 @@ fn build_openinference_config(
         }
     };
 
-    let mut openinference_config = nemo_flow_openinference::OpenInferenceConfig::new()
-        .with_transport(transport)
-        .with_service_name(service_name)
-        .with_instrumentation_scope(instrumentation_scope)
-        .with_timeout(std::time::Duration::from_millis(timeout_millis.into()));
+    let mut openinference_config =
+        nemo_flow::observability::openinference::OpenInferenceConfig::new()
+            .with_transport(transport)
+            .with_service_name(service_name)
+            .with_instrumentation_scope(instrumentation_scope)
+            .with_timeout(std::time::Duration::from_millis(timeout_millis.into()));
 
     if let Some(endpoint) = config.endpoint {
         openinference_config = openinference_config.with_endpoint(endpoint);
@@ -205,8 +208,8 @@ fn build_openinference_config(
 ///
 /// Throws if the scope stack is empty.
 #[wasm_bindgen(js_name = "getHandle")]
-pub fn nemo_flow_get_handle() -> Result<WasmScopeHandle, JsValue> {
-    nemo_flow_core::nemo_flow_get_handle()
+pub fn get_handle() -> Result<WasmScopeHandle, JsValue> {
+    nemo_flow::get_handle()
         .map(WasmScopeHandle::from)
         .map_err(to_js_err)
 }
@@ -220,7 +223,7 @@ pub fn nemo_flow_get_handle() -> Result<WasmScopeHandle, JsValue> {
 /// - `data` - Optional JSON application data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "pushScope")]
-pub fn nemo_flow_push_scope(
+pub fn push_scope(
     name: &str,
     scope_type: i32,
     parent: Option<WasmScopeHandle>,
@@ -229,7 +232,7 @@ pub fn nemo_flow_push_scope(
     metadata: JsValue,
 ) -> Result<WasmScopeHandle, JsValue> {
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    nemo_flow_core::nemo_flow_push_scope(
+    nemo_flow::push_scope(
         name,
         i32_to_scope_type(scope_type),
         parent.as_ref().map(|h| &h.inner),
@@ -245,20 +248,20 @@ pub fn nemo_flow_push_scope(
 ///
 /// Throws if the handle does not match the current top of the stack.
 #[wasm_bindgen(js_name = "popScope")]
-pub fn nemo_flow_pop_scope(handle: &WasmScopeHandle) -> Result<(), JsValue> {
-    nemo_flow_core::nemo_flow_pop_scope(&handle.inner.uuid).map_err(to_js_err)
+pub fn pop_scope(handle: &WasmScopeHandle) -> Result<(), JsValue> {
+    nemo_flow::pop_scope(&handle.inner.uuid).map_err(to_js_err)
 }
 
 /// Returns the most recent callback error that could not be surfaced through a direct exception.
 #[wasm_bindgen(js_name = "getLastCallbackError")]
-pub fn nemo_flow_get_last_callback_error() -> Option<String> {
-    get_last_callback_error()
+pub fn get_last_callback_error() -> Option<String> {
+    crate::convert::get_last_callback_error()
 }
 
 /// Clears the most recent callback error recorded by the WASM binding.
 #[wasm_bindgen(js_name = "clearLastCallbackError")]
-pub fn nemo_flow_clear_last_callback_error() {
-    clear_last_callback_error();
+pub fn clear_last_callback_error() {
+    crate::convert::clear_last_callback_error();
 }
 
 /// Pushes a scope, invokes the callback, then pops the scope automatically.
@@ -276,7 +279,7 @@ pub fn nemo_flow_clear_last_callback_error() {
 /// - `data` - Optional JSON application data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "withScope")]
-pub fn nemo_flow_with_scope(
+pub fn with_scope(
     name: &str,
     scope_type: i32,
     callback: &Function,
@@ -286,7 +289,7 @@ pub fn nemo_flow_with_scope(
     metadata: JsValue,
 ) -> Result<JsValue, JsValue> {
     let attrs = core_types::ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    let scope_handle = nemo_flow_core::nemo_flow_push_scope(
+    let scope_handle = nemo_flow::push_scope(
         name,
         i32_to_scope_type(scope_type),
         parent.as_ref().map(|h| &h.inner),
@@ -310,13 +313,13 @@ pub fn nemo_flow_with_scope(
 
             let then_uuid = scope_uuid;
             let then_cb = Closure::once(move |resolved: JsValue| -> JsValue {
-                let _ = nemo_flow_core::nemo_flow_pop_scope(&then_uuid);
+                let _ = nemo_flow::pop_scope(&then_uuid);
                 resolved
             });
 
             let catch_uuid = scope_uuid;
             let catch_cb = Closure::once(move |rejected: JsValue| -> JsValue {
-                let _ = nemo_flow_core::nemo_flow_pop_scope(&catch_uuid);
+                let _ = nemo_flow::pop_scope(&catch_uuid);
                 // Re-throw by returning a rejected promise
                 js_sys::Promise::reject(&rejected).into()
             });
@@ -331,12 +334,12 @@ pub fn nemo_flow_with_scope(
         }
         Ok(val) => {
             // Synchronous return — pop immediately.
-            let _ = nemo_flow_core::nemo_flow_pop_scope(&scope_uuid);
+            let _ = nemo_flow::pop_scope(&scope_uuid);
             Ok(val)
         }
         Err(err) => {
             // Callback threw — pop and propagate the error.
-            let _ = nemo_flow_core::nemo_flow_pop_scope(&scope_uuid);
+            let _ = nemo_flow::pop_scope(&scope_uuid);
             Err(err)
         }
     }
@@ -349,13 +352,13 @@ pub fn nemo_flow_with_scope(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "event")]
-pub fn nemo_flow_event(
+pub fn event(
     name: &str,
     parent: Option<WasmScopeHandle>,
     data: JsValue,
     metadata: JsValue,
 ) -> Result<(), JsValue> {
-    nemo_flow_core::nemo_flow_event(
+    nemo_flow::event(
         name,
         parent.as_ref().map(|h| &h.inner),
         opt_js_to_json(&data)?,
@@ -379,7 +382,7 @@ pub fn nemo_flow_event(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "toolCall")]
-pub fn nemo_flow_tool_call(
+pub fn tool_call(
     name: &str,
     args: JsValue,
     parent: Option<WasmScopeHandle>,
@@ -390,7 +393,7 @@ pub fn nemo_flow_tool_call(
 ) -> Result<WasmToolHandle, JsValue> {
     let args_json = js_to_json(&args)?;
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    nemo_flow_core::nemo_flow_tool_call(
+    nemo_flow::tool_call(
         name,
         args_json,
         parent.as_ref().map(|h| &h.inner),
@@ -410,14 +413,14 @@ pub fn nemo_flow_tool_call(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "toolCallEnd")]
-pub fn nemo_flow_tool_call_end(
+pub fn tool_call_end(
     handle: &WasmToolHandle,
     result: JsValue,
     data: JsValue,
     metadata: JsValue,
 ) -> Result<(), JsValue> {
     let result_json = js_to_json(&result)?;
-    nemo_flow_core::nemo_flow_tool_call_end(
+    nemo_flow::tool_call_end(
         &handle.inner,
         result_json,
         opt_js_to_json(&data)?,
@@ -441,7 +444,7 @@ pub fn nemo_flow_tool_call_end(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "toolCallExecute")]
-pub async fn nemo_flow_tool_call_execute(
+pub async fn tool_call_execute(
     name: &str,
     args: JsValue,
     func: Function,
@@ -454,16 +457,16 @@ pub async fn nemo_flow_tool_call_execute(
     let attrs = core_types::ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
-        .unwrap_or_else(nemo_flow_core::task_scope_top);
+        .unwrap_or_else(nemo_flow::task_scope_top);
     let exec_fn = callable::wrap_js_tool_exec_fn(func);
-    let default_fn: nemo_flow_core::ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
+    let default_fn: nemo_flow::ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
 
-    let scope_stack = nemo_flow_core::current_scope_stack();
+    let scope_stack = nemo_flow::current_scope_stack();
     let data_json = opt_js_to_json(&data)?;
     let metadata_json = opt_js_to_json(&metadata)?;
-    let result = nemo_flow_core::TASK_SCOPE_STACK
+    let result = nemo_flow::TASK_SCOPE_STACK
         .scope(scope_stack, async move {
-            nemo_flow_core::nemo_flow_tool_call_execute(
+            nemo_flow::tool_call_execute(
                 name,
                 args_json,
                 default_fn,
@@ -497,7 +500,7 @@ pub async fn nemo_flow_tool_call_execute(
 /// - `model_name` - Optional model name string.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmCall")]
-pub fn nemo_flow_llm_call(
+pub fn llm_call(
     name: &str,
     request: JsValue,
     parent: Option<WasmScopeHandle>,
@@ -508,9 +511,9 @@ pub fn nemo_flow_llm_call(
 ) -> Result<WasmLLMHandle, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nemo_flow_core::FlowError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nemo_flow::FlowError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
-    nemo_flow_core::nemo_flow_llm_call(
+    nemo_flow::llm_call(
         name,
         &llm_request,
         parent.as_ref().map(|h| &h.inner),
@@ -531,14 +534,14 @@ pub fn nemo_flow_llm_call(
 /// - `data` - Optional JSON data payload.
 /// - `metadata` - Optional JSON metadata payload.
 #[wasm_bindgen(js_name = "llmCallEnd")]
-pub fn nemo_flow_llm_call_end(
+pub fn llm_call_end(
     handle: &WasmLLMHandle,
     response: JsValue,
     data: JsValue,
     metadata: JsValue,
 ) -> Result<(), JsValue> {
     let response_json = js_to_json(&response)?;
-    nemo_flow_core::nemo_flow_llm_call_end(
+    nemo_flow::llm_call_end(
         &handle.inner,
         response_json,
         opt_js_to_json(&data)?,
@@ -567,7 +570,7 @@ pub fn nemo_flow_llm_call_end(
 /// - `codec_encode` - Optional JS encode function for annotated-aware request intercepts.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmCallExecute")]
-pub async fn nemo_flow_llm_call_execute(
+pub async fn llm_call_execute(
     name: &str,
     request: JsValue,
     func: Function,
@@ -582,25 +585,25 @@ pub async fn nemo_flow_llm_call_execute(
 ) -> Result<JsValue, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nemo_flow_core::FlowError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nemo_flow::FlowError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
-        .unwrap_or_else(nemo_flow_core::task_scope_top);
+        .unwrap_or_else(nemo_flow::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
-    let default_fn: nemo_flow_core::LlmExecutionNextFn = Arc::new(move |request| exec_fn(request));
+    let default_fn: nemo_flow::LlmExecutionNextFn = Arc::new(move |request| exec_fn(request));
     let codec = match (codec_decode, codec_encode) {
         (Some(d), Some(e)) => Some(callable::wrap_js_codec(d, e)),
         _ => None,
     };
     let response_codec = response_codec_decode.map(callable::wrap_js_response_codec);
 
-    let scope_stack = nemo_flow_core::current_scope_stack();
+    let scope_stack = nemo_flow::current_scope_stack();
     let data_json = opt_js_to_json(&data)?;
     let metadata_json = opt_js_to_json(&metadata)?;
-    let result = nemo_flow_core::TASK_SCOPE_STACK
+    let result = nemo_flow::TASK_SCOPE_STACK
         .scope(scope_stack, async move {
-            nemo_flow_core::nemo_flow_llm_call_execute(
+            nemo_flow::llm_call_execute(
                 name,
                 llm_request,
                 default_fn,
@@ -642,7 +645,7 @@ pub async fn nemo_flow_llm_call_execute(
 /// - `codec_encode` - Optional JS encode function for annotated-aware request intercepts.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = "llmStreamCallExecute")]
-pub async fn nemo_flow_llm_stream_call_execute(
+pub async fn llm_stream_call_execute(
     name: &str,
     request: JsValue,
     func: Function,
@@ -659,14 +662,14 @@ pub async fn nemo_flow_llm_stream_call_execute(
 ) -> Result<WasmLlmStream, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nemo_flow_core::FlowError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nemo_flow::FlowError::Internal(e.to_string())))?;
     let attrs = core_types::LLMAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let parent_handle = parent
         .map(|h| h.inner)
-        .unwrap_or_else(nemo_flow_core::task_scope_top);
+        .unwrap_or_else(nemo_flow::task_scope_top);
     let exec_fn = callable::wrap_js_llm_exec_fn(func);
 
-    let wrapped_collector: Box<dyn FnMut(serde_json::Value) -> nemo_flow_core::Result<()> + Send> =
+    let wrapped_collector: Box<dyn FnMut(serde_json::Value) -> nemo_flow::Result<()> + Send> =
         match collector {
             Some(cb) => callable::wrap_js_collector_fn(cb),
             None => Box::new(|_: serde_json::Value| Ok(())),
@@ -678,7 +681,7 @@ pub async fn nemo_flow_llm_stream_call_execute(
     };
 
     // Bridge LlmExecutionFn -> LlmStreamExecutionNextFn
-    let default_fn: nemo_flow_core::LlmStreamExecutionNextFn = Arc::new(move |request| {
+    let default_fn: nemo_flow::LlmStreamExecutionNextFn = Arc::new(move |request| {
         let fut = exec_fn(request);
         Box::pin(async move {
             let result = fut.await?;
@@ -686,7 +689,7 @@ pub async fn nemo_flow_llm_stream_call_execute(
             Ok(Box::pin(stream)
                 as std::pin::Pin<
                     Box<
-                        dyn tokio_stream::Stream<Item = nemo_flow_core::Result<serde_json::Value>>
+                        dyn tokio_stream::Stream<Item = nemo_flow::Result<serde_json::Value>>
                             + Send,
                     >,
                 >)
@@ -698,12 +701,12 @@ pub async fn nemo_flow_llm_stream_call_execute(
         _ => None,
     };
     let response_codec = response_codec_decode.map(callable::wrap_js_response_codec);
-    let scope_stack = nemo_flow_core::current_scope_stack();
+    let scope_stack = nemo_flow::current_scope_stack();
     let data_json = opt_js_to_json(&data)?;
     let metadata_json = opt_js_to_json(&metadata)?;
-    let rust_stream = nemo_flow_core::TASK_SCOPE_STACK
+    let rust_stream = nemo_flow::TASK_SCOPE_STACK
         .scope(scope_stack, async move {
-            nemo_flow_core::nemo_flow_llm_stream_call_execute(
+            nemo_flow::llm_stream_call_execute(
                 name,
                 llm_request,
                 default_fn,
@@ -753,7 +756,7 @@ pub fn register_tool_sanitize_request_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nemo_flow_core::nemo_flow_register_tool_sanitize_request_guardrail(
+    nemo_flow::register_tool_sanitize_request_guardrail(
         name,
         priority,
         callable::wrap_js_tool_fn(guardrail),
@@ -766,7 +769,7 @@ pub fn register_tool_sanitize_request_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolSanitizeRequestGuardrail")]
 pub fn deregister_tool_sanitize_request_guardrail(name: &str) -> Result<bool, JsValue> {
-    nemo_flow_core::nemo_flow_deregister_tool_sanitize_request_guardrail(name).map_err(to_js_err)
+    nemo_flow::deregister_tool_sanitize_request_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that sanitizes tool response data after execution.
@@ -780,7 +783,7 @@ pub fn register_tool_sanitize_response_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nemo_flow_core::nemo_flow_register_tool_sanitize_response_guardrail(
+    nemo_flow::register_tool_sanitize_response_guardrail(
         name,
         priority,
         callable::wrap_js_tool_fn(guardrail),
@@ -793,7 +796,7 @@ pub fn register_tool_sanitize_response_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolSanitizeResponseGuardrail")]
 pub fn deregister_tool_sanitize_response_guardrail(name: &str) -> Result<bool, JsValue> {
-    nemo_flow_core::nemo_flow_deregister_tool_sanitize_response_guardrail(name).map_err(to_js_err)
+    nemo_flow::deregister_tool_sanitize_response_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that conditionally gates tool execution.
@@ -810,7 +813,7 @@ pub fn register_tool_conditional_execution_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nemo_flow_core::nemo_flow_register_tool_conditional_execution_guardrail(
+    nemo_flow::register_tool_conditional_execution_guardrail(
         name,
         priority,
         callable::wrap_js_tool_conditional_fn(guardrail),
@@ -823,8 +826,7 @@ pub fn register_tool_conditional_execution_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolConditionalExecutionGuardrail")]
 pub fn deregister_tool_conditional_execution_guardrail(name: &str) -> Result<bool, JsValue> {
-    nemo_flow_core::nemo_flow_deregister_tool_conditional_execution_guardrail(name)
-        .map_err(to_js_err)
+    nemo_flow::deregister_tool_conditional_execution_guardrail(name).map_err(to_js_err)
 }
 
 // Tool intercepts
@@ -842,7 +844,7 @@ pub fn register_tool_request_intercept(
     break_chain: bool,
     func: Function,
 ) -> Result<(), JsValue> {
-    nemo_flow_core::nemo_flow_register_tool_request_intercept(
+    nemo_flow::register_tool_request_intercept(
         name,
         priority,
         break_chain,
@@ -856,7 +858,7 @@ pub fn register_tool_request_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolRequestIntercept")]
 pub fn deregister_tool_request_intercept(name: &str) -> Result<bool, JsValue> {
-    nemo_flow_core::nemo_flow_deregister_tool_request_intercept(name).map_err(to_js_err)
+    nemo_flow::deregister_tool_request_intercept(name).map_err(to_js_err)
 }
 
 /// Registers a tool execution intercept following the middleware chain pattern.
@@ -871,7 +873,7 @@ pub fn register_tool_execution_intercept(
     priority: i32,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    nemo_flow_core::nemo_flow_register_tool_execution_intercept(
+    nemo_flow::register_tool_execution_intercept(
         name,
         priority,
         callable::wrap_js_tool_exec_intercept_fn(exec_fn),
@@ -884,7 +886,7 @@ pub fn register_tool_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolExecutionIntercept")]
 pub fn deregister_tool_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    nemo_flow_core::nemo_flow_deregister_tool_execution_intercept(name).map_err(to_js_err)
+    nemo_flow::deregister_tool_execution_intercept(name).map_err(to_js_err)
 }
 
 // LLM guardrails
@@ -900,7 +902,7 @@ pub fn register_llm_sanitize_request_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nemo_flow_core::nemo_flow_register_llm_sanitize_request_guardrail(
+    nemo_flow::register_llm_sanitize_request_guardrail(
         name,
         priority,
         callable::wrap_js_llm_sanitize_request_fn(guardrail),
@@ -913,7 +915,7 @@ pub fn register_llm_sanitize_request_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmSanitizeRequestGuardrail")]
 pub fn deregister_llm_sanitize_request_guardrail(name: &str) -> Result<bool, JsValue> {
-    nemo_flow_core::nemo_flow_deregister_llm_sanitize_request_guardrail(name).map_err(to_js_err)
+    nemo_flow::deregister_llm_sanitize_request_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that sanitizes LLM response data after the call.
@@ -927,7 +929,7 @@ pub fn register_llm_sanitize_response_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nemo_flow_core::nemo_flow_register_llm_sanitize_response_guardrail(
+    nemo_flow::register_llm_sanitize_response_guardrail(
         name,
         priority,
         callable::wrap_js_llm_response_fn(guardrail),
@@ -940,7 +942,7 @@ pub fn register_llm_sanitize_response_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmSanitizeResponseGuardrail")]
 pub fn deregister_llm_sanitize_response_guardrail(name: &str) -> Result<bool, JsValue> {
-    nemo_flow_core::nemo_flow_deregister_llm_sanitize_response_guardrail(name).map_err(to_js_err)
+    nemo_flow::deregister_llm_sanitize_response_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that conditionally gates LLM execution.
@@ -957,7 +959,7 @@ pub fn register_llm_conditional_execution_guardrail(
     priority: i32,
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    nemo_flow_core::nemo_flow_register_llm_conditional_execution_guardrail(
+    nemo_flow::register_llm_conditional_execution_guardrail(
         name,
         priority,
         callable::wrap_js_llm_conditional_fn(guardrail),
@@ -970,8 +972,7 @@ pub fn register_llm_conditional_execution_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmConditionalExecutionGuardrail")]
 pub fn deregister_llm_conditional_execution_guardrail(name: &str) -> Result<bool, JsValue> {
-    nemo_flow_core::nemo_flow_deregister_llm_conditional_execution_guardrail(name)
-        .map_err(to_js_err)
+    nemo_flow::deregister_llm_conditional_execution_guardrail(name).map_err(to_js_err)
 }
 
 // LLM intercepts
@@ -989,7 +990,7 @@ pub fn register_llm_request_intercept(
     break_chain: bool,
     func: Function,
 ) -> Result<(), JsValue> {
-    nemo_flow_core::nemo_flow_register_llm_request_intercept(
+    nemo_flow::register_llm_request_intercept(
         name,
         priority,
         break_chain,
@@ -1003,7 +1004,7 @@ pub fn register_llm_request_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmRequestIntercept")]
 pub fn deregister_llm_request_intercept(name: &str) -> Result<bool, JsValue> {
-    nemo_flow_core::nemo_flow_deregister_llm_request_intercept(name).map_err(to_js_err)
+    nemo_flow::deregister_llm_request_intercept(name).map_err(to_js_err)
 }
 
 /// Registers an LLM execution intercept following the middleware chain pattern.
@@ -1018,7 +1019,7 @@ pub fn register_llm_execution_intercept(
     priority: i32,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    nemo_flow_core::nemo_flow_register_llm_execution_intercept(
+    nemo_flow::register_llm_execution_intercept(
         name,
         priority,
         callable::wrap_js_llm_exec_intercept_fn(exec_fn),
@@ -1031,7 +1032,7 @@ pub fn register_llm_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmExecutionIntercept")]
 pub fn deregister_llm_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    nemo_flow_core::nemo_flow_deregister_llm_execution_intercept(name).map_err(to_js_err)
+    nemo_flow::deregister_llm_execution_intercept(name).map_err(to_js_err)
 }
 
 /// Registers a streaming LLM execution intercept following the middleware chain pattern.
@@ -1048,7 +1049,7 @@ pub fn register_llm_stream_execution_intercept(
     priority: i32,
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    nemo_flow_core::nemo_flow_register_llm_stream_execution_intercept(
+    nemo_flow::register_llm_stream_execution_intercept(
         name,
         priority,
         callable::wrap_js_llm_stream_exec_intercept_fn(exec_fn),
@@ -1061,7 +1062,7 @@ pub fn register_llm_stream_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmStreamExecutionIntercept")]
 pub fn deregister_llm_stream_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    nemo_flow_core::nemo_flow_deregister_llm_stream_execution_intercept(name).map_err(to_js_err)
+    nemo_flow::deregister_llm_stream_execution_intercept(name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1074,11 +1075,8 @@ pub fn deregister_llm_stream_execution_intercept(name: &str) -> Result<bool, JsV
 /// - `callback` - JS function `(event) => void` called for each event.
 #[wasm_bindgen(js_name = "registerSubscriber")]
 pub fn register_subscriber(name: &str, callback: Function) -> Result<(), JsValue> {
-    nemo_flow_core::nemo_flow_register_subscriber(
-        name,
-        callable::wrap_js_event_subscriber(callback),
-    )
-    .map_err(to_js_err)
+    nemo_flow::register_subscriber(name, callable::wrap_js_event_subscriber(callback))
+        .map_err(to_js_err)
 }
 
 /// Removes a previously registered event subscriber by name.
@@ -1086,7 +1084,7 @@ pub fn register_subscriber(name: &str, callback: Function) -> Result<(), JsValue
 /// Returns `true` if the subscriber was found and removed.
 #[wasm_bindgen(js_name = "deregisterSubscriber")]
 pub fn deregister_subscriber(name: &str) -> Result<bool, JsValue> {
-    nemo_flow_core::nemo_flow_deregister_subscriber(name).map_err(to_js_err)
+    nemo_flow::deregister_subscriber(name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1108,7 +1106,7 @@ pub fn scope_register_tool_sanitize_request_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_register_tool_sanitize_request_guardrail(
+    nemo_flow::scope_register_tool_sanitize_request_guardrail(
         &uuid,
         name,
         priority,
@@ -1127,8 +1125,7 @@ pub fn scope_deregister_tool_sanitize_request_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_deregister_tool_sanitize_request_guardrail(&uuid, name)
-        .map_err(to_js_err)
+    nemo_flow::scope_deregister_tool_sanitize_request_guardrail(&uuid, name).map_err(to_js_err)
 }
 
 /// Registers a scope-local guardrail that sanitizes tool response data after execution.
@@ -1146,7 +1143,7 @@ pub fn scope_register_tool_sanitize_response_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_register_tool_sanitize_response_guardrail(
+    nemo_flow::scope_register_tool_sanitize_response_guardrail(
         &uuid,
         name,
         priority,
@@ -1165,8 +1162,7 @@ pub fn scope_deregister_tool_sanitize_response_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_deregister_tool_sanitize_response_guardrail(&uuid, name)
-        .map_err(to_js_err)
+    nemo_flow::scope_deregister_tool_sanitize_response_guardrail(&uuid, name).map_err(to_js_err)
 }
 
 /// Registers a scope-local guardrail that conditionally gates tool execution.
@@ -1187,7 +1183,7 @@ pub fn scope_register_tool_conditional_execution_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_register_tool_conditional_execution_guardrail(
+    nemo_flow::scope_register_tool_conditional_execution_guardrail(
         &uuid,
         name,
         priority,
@@ -1206,8 +1202,7 @@ pub fn scope_deregister_tool_conditional_execution_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_deregister_tool_conditional_execution_guardrail(&uuid, name)
-        .map_err(to_js_err)
+    nemo_flow::scope_deregister_tool_conditional_execution_guardrail(&uuid, name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1231,7 +1226,7 @@ pub fn scope_register_tool_request_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_register_tool_request_intercept(
+    nemo_flow::scope_register_tool_request_intercept(
         &uuid,
         name,
         priority,
@@ -1251,8 +1246,7 @@ pub fn scope_deregister_tool_request_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_deregister_tool_request_intercept(&uuid, name)
-        .map_err(to_js_err)
+    nemo_flow::scope_deregister_tool_request_intercept(&uuid, name).map_err(to_js_err)
 }
 
 /// Registers a scope-local tool execution intercept following the middleware chain pattern.
@@ -1271,7 +1265,7 @@ pub fn scope_register_tool_execution_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_register_tool_execution_intercept(
+    nemo_flow::scope_register_tool_execution_intercept(
         &uuid,
         name,
         priority,
@@ -1290,8 +1284,7 @@ pub fn scope_deregister_tool_execution_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_deregister_tool_execution_intercept(&uuid, name)
-        .map_err(to_js_err)
+    nemo_flow::scope_deregister_tool_execution_intercept(&uuid, name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1313,7 +1306,7 @@ pub fn scope_register_llm_sanitize_request_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_register_llm_sanitize_request_guardrail(
+    nemo_flow::scope_register_llm_sanitize_request_guardrail(
         &uuid,
         name,
         priority,
@@ -1332,8 +1325,7 @@ pub fn scope_deregister_llm_sanitize_request_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_deregister_llm_sanitize_request_guardrail(&uuid, name)
-        .map_err(to_js_err)
+    nemo_flow::scope_deregister_llm_sanitize_request_guardrail(&uuid, name).map_err(to_js_err)
 }
 
 /// Registers a scope-local guardrail that sanitizes LLM response data after the call.
@@ -1351,7 +1343,7 @@ pub fn scope_register_llm_sanitize_response_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_register_llm_sanitize_response_guardrail(
+    nemo_flow::scope_register_llm_sanitize_response_guardrail(
         &uuid,
         name,
         priority,
@@ -1370,8 +1362,7 @@ pub fn scope_deregister_llm_sanitize_response_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_deregister_llm_sanitize_response_guardrail(&uuid, name)
-        .map_err(to_js_err)
+    nemo_flow::scope_deregister_llm_sanitize_response_guardrail(&uuid, name).map_err(to_js_err)
 }
 
 /// Registers a scope-local guardrail that conditionally gates LLM execution.
@@ -1392,7 +1383,7 @@ pub fn scope_register_llm_conditional_execution_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_register_llm_conditional_execution_guardrail(
+    nemo_flow::scope_register_llm_conditional_execution_guardrail(
         &uuid,
         name,
         priority,
@@ -1411,8 +1402,7 @@ pub fn scope_deregister_llm_conditional_execution_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_deregister_llm_conditional_execution_guardrail(&uuid, name)
-        .map_err(to_js_err)
+    nemo_flow::scope_deregister_llm_conditional_execution_guardrail(&uuid, name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1436,7 +1426,7 @@ pub fn scope_register_llm_request_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_register_llm_request_intercept(
+    nemo_flow::scope_register_llm_request_intercept(
         &uuid,
         name,
         priority,
@@ -1456,7 +1446,7 @@ pub fn scope_deregister_llm_request_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_deregister_llm_request_intercept(&uuid, name).map_err(to_js_err)
+    nemo_flow::scope_deregister_llm_request_intercept(&uuid, name).map_err(to_js_err)
 }
 
 /// Registers a scope-local LLM execution intercept following the middleware chain pattern.
@@ -1475,7 +1465,7 @@ pub fn scope_register_llm_execution_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_register_llm_execution_intercept(
+    nemo_flow::scope_register_llm_execution_intercept(
         &uuid,
         name,
         priority,
@@ -1494,8 +1484,7 @@ pub fn scope_deregister_llm_execution_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_deregister_llm_execution_intercept(&uuid, name)
-        .map_err(to_js_err)
+    nemo_flow::scope_deregister_llm_execution_intercept(&uuid, name).map_err(to_js_err)
 }
 
 /// Registers a scope-local streaming LLM execution intercept following the middleware chain pattern.
@@ -1516,7 +1505,7 @@ pub fn scope_register_llm_stream_execution_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_register_llm_stream_execution_intercept(
+    nemo_flow::scope_register_llm_stream_execution_intercept(
         &uuid,
         name,
         priority,
@@ -1535,8 +1524,7 @@ pub fn scope_deregister_llm_stream_execution_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_deregister_llm_stream_execution_intercept(&uuid, name)
-        .map_err(to_js_err)
+    nemo_flow::scope_deregister_llm_stream_execution_intercept(&uuid, name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1557,12 +1545,8 @@ pub fn scope_register_subscriber(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_register_subscriber(
-        &uuid,
-        name,
-        callable::wrap_js_event_subscriber(callback),
-    )
-    .map_err(to_js_err)
+    nemo_flow::scope_register_subscriber(&uuid, name, callable::wrap_js_event_subscriber(callback))
+        .map_err(to_js_err)
 }
 
 /// Removes a scope-local event subscriber by name.
@@ -1572,7 +1556,7 @@ pub fn scope_register_subscriber(
 pub fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    nemo_flow_core::nemo_flow_scope_deregister_subscriber(&uuid, name).map_err(to_js_err)
+    nemo_flow::scope_deregister_subscriber(&uuid, name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1583,7 +1567,7 @@ pub fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> Result<bool,
 #[wasm_bindgen(js_name = "createScopeStack")]
 pub fn create_scope_stack() -> WasmScopeStack {
     WasmScopeStack {
-        inner: nemo_flow_core::create_scope_stack(),
+        inner: nemo_flow::create_scope_stack(),
     }
 }
 
@@ -1591,14 +1575,14 @@ pub fn create_scope_stack() -> WasmScopeStack {
 #[wasm_bindgen(js_name = "currentScopeStack")]
 pub fn current_scope_stack() -> WasmScopeStack {
     WasmScopeStack {
-        inner: nemo_flow_core::current_scope_stack(),
+        inner: nemo_flow::current_scope_stack(),
     }
 }
 
 /// Binds a scope stack to the current thread.
 #[wasm_bindgen(js_name = "setThreadScopeStack")]
 pub fn set_thread_scope_stack(stack: &WasmScopeStack) {
-    nemo_flow_core::set_thread_scope_stack(stack.inner.clone());
+    nemo_flow::set_thread_scope_stack(stack.inner.clone());
 }
 
 /// Returns whether the current execution context has an explicitly-initialized
@@ -1608,7 +1592,7 @@ pub fn set_thread_scope_stack(stack: &WasmScopeStack) {
 /// when only the auto-created default is present.
 #[wasm_bindgen(js_name = "scopeStackActive")]
 pub fn scope_stack_active() -> bool {
-    nemo_flow_core::scope_stack_active()
+    nemo_flow::scope_stack_active()
 }
 
 // ---------------------------------------------------------------------------
@@ -1617,36 +1601,28 @@ pub fn scope_stack_active() -> bool {
 
 /// Runs the registered tool request intercept chain on the given arguments.
 #[wasm_bindgen(js_name = "toolRequestIntercepts")]
-pub fn nemo_flow_tool_request_intercepts_wasm(
-    name: &str,
-    args: JsValue,
-) -> Result<JsValue, JsValue> {
+pub fn tool_request_intercepts_wasm(name: &str, args: JsValue) -> Result<JsValue, JsValue> {
     let args_json = js_to_json(&args)?;
-    let result =
-        nemo_flow_core::nemo_flow_tool_request_intercepts(name, args_json).map_err(to_js_err)?;
+    let result = nemo_flow::tool_request_intercepts(name, args_json).map_err(to_js_err)?;
     Ok(json_to_js(&result))
 }
 
 /// Runs the registered tool conditional execution guardrail chain.
 #[wasm_bindgen(js_name = "toolConditionalExecution")]
-pub fn nemo_flow_tool_conditional_execution_wasm(name: &str, args: JsValue) -> Result<(), JsValue> {
+pub fn tool_conditional_execution_wasm(name: &str, args: JsValue) -> Result<(), JsValue> {
     let args_json = js_to_json(&args)?;
-    nemo_flow_core::nemo_flow_tool_conditional_execution(name, &args_json).map_err(to_js_err)
+    nemo_flow::tool_conditional_execution(name, &args_json).map_err(to_js_err)
 }
 
 /// Runs the registered LLM request intercept chain on the given `LLMRequest`.
 #[wasm_bindgen(js_name = "llmRequestIntercepts")]
-pub fn nemo_flow_llm_request_intercepts_wasm(
-    name: &str,
-    request: JsValue,
-) -> Result<JsValue, JsValue> {
+pub fn llm_request_intercepts_wasm(name: &str, request: JsValue) -> Result<JsValue, JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nemo_flow_core::FlowError::Internal(e.to_string())))?;
-    let result =
-        nemo_flow_core::nemo_flow_llm_request_intercepts(name, llm_request).map_err(to_js_err)?;
+        .map_err(|e| to_js_err(nemo_flow::FlowError::Internal(e.to_string())))?;
+    let result = nemo_flow::llm_request_intercepts(name, llm_request).map_err(to_js_err)?;
     let result_json = serde_json::to_value(&result)
-        .map_err(|e| to_js_err(nemo_flow_core::FlowError::Internal(e.to_string())))?;
+        .map_err(|e| to_js_err(nemo_flow::FlowError::Internal(e.to_string())))?;
     Ok(json_to_js(&result_json))
 }
 
@@ -1654,11 +1630,11 @@ pub fn nemo_flow_llm_request_intercepts_wasm(
 ///
 /// - `request` - The LLM request as a JSON value with `{ headers, content }` shape.
 #[wasm_bindgen(js_name = "llmConditionalExecution")]
-pub fn nemo_flow_llm_conditional_execution_wasm(request: JsValue) -> Result<(), JsValue> {
+pub fn llm_conditional_execution_wasm(request: JsValue) -> Result<(), JsValue> {
     let request_json = js_to_json(&request)?;
     let llm_request: core_types::LLMRequest = serde_json::from_value(request_json)
-        .map_err(|e| to_js_err(nemo_flow_core::FlowError::Internal(e.to_string())))?;
-    nemo_flow_core::nemo_flow_llm_conditional_execution(&llm_request).map_err(to_js_err)
+        .map_err(|e| to_js_err(nemo_flow::FlowError::Internal(e.to_string())))?;
+    nemo_flow::llm_conditional_execution(&llm_request).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1668,7 +1644,7 @@ pub fn nemo_flow_llm_conditional_execution_wasm(request: JsValue) -> Result<(), 
 /// ATIF trajectory exporter for collecting events and producing ATIF JSON.
 #[wasm_bindgen]
 pub struct WasmAtifExporter {
-    inner: nemo_flow_core::atif::AtifExporter,
+    inner: nemo_flow::atif::AtifExporter,
 }
 
 #[wasm_bindgen]
@@ -1681,7 +1657,7 @@ impl WasmAtifExporter {
         agent_version: String,
         model_name: Option<String>,
     ) -> Self {
-        let agent_info = nemo_flow_core::atif::AtifAgentInfo {
+        let agent_info = nemo_flow::atif::AtifAgentInfo {
             name: agent_name,
             version: agent_version,
             model_name,
@@ -1689,21 +1665,20 @@ impl WasmAtifExporter {
             extra: None,
         };
         Self {
-            inner: nemo_flow_core::atif::AtifExporter::new(session_id, agent_info),
+            inner: nemo_flow::atif::AtifExporter::new(session_id, agent_info),
         }
     }
 
     /// Registers the exporter as an event subscriber.
     pub fn register(&self, name: &str) -> Result<(), JsValue> {
         let subscriber = self.inner.subscriber();
-        nemo_flow_core::nemo_flow_register_subscriber(name, subscriber)
+        nemo_flow::register_subscriber(name, subscriber)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Deregisters the exporter subscriber.
     pub fn deregister(&self, name: &str) -> Result<bool, JsValue> {
-        nemo_flow_core::nemo_flow_deregister_subscriber(name)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+        nemo_flow::deregister_subscriber(name).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Exports collected events as an ATIF trajectory JSON string.
@@ -1729,7 +1704,7 @@ pub fn default_open_telemetry_config() -> Result<JsValue, JsValue> {
 /// OpenTelemetry-backed event subscriber.
 #[wasm_bindgen(js_name = OpenTelemetrySubscriber)]
 pub struct WasmOpenTelemetrySubscriber {
-    inner: nemo_flow_otel::OpenTelemetrySubscriber,
+    inner: nemo_flow::observability::otel::OpenTelemetrySubscriber,
 }
 
 #[wasm_bindgen(js_class = OpenTelemetrySubscriber)]
@@ -1749,8 +1724,10 @@ impl WasmOpenTelemetrySubscriber {
             _ => None,
         };
 
-        let inner = nemo_flow_otel::OpenTelemetrySubscriber::new(build_otel_config(config)?)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let inner = nemo_flow::observability::otel::OpenTelemetrySubscriber::new(
+            build_otel_config(config)?,
+        )
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(Self { inner })
     }
 
@@ -1800,8 +1777,8 @@ fn ensure_adaptive_component_registered() -> Result<(), JsValue> {
 #[wasm_bindgen(js_name = "validatePluginConfig")]
 pub fn validate_plugin_config(config: JsValue) -> Result<JsValue, JsValue> {
     ensure_adaptive_component_registered()?;
-    let config: nemo_flow_core::PluginConfig = serde_wasm_bindgen::from_value(config)?;
-    serde_wasm_bindgen::to_value(&nemo_flow_core::validate_plugin_config(&config))
+    let config: nemo_flow::PluginConfig = serde_wasm_bindgen::from_value(config)?;
+    serde_wasm_bindgen::to_value(&nemo_flow::validate_plugin_config(&config))
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
@@ -1839,7 +1816,7 @@ impl WasmPluginContext {
     #[wasm_bindgen(js_name = registerSubscriber)]
     pub fn register_subscriber(&self, name: &str, callback: Function) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_core::nemo_flow_register_subscriber(
+        nemo_flow::register_subscriber(
             &qualified_name,
             crate::callable::wrap_js_event_subscriber(callback),
         )
@@ -1850,7 +1827,7 @@ impl WasmPluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_core::nemo_flow_deregister_subscriber(&name_owned)
+                nemo_flow::deregister_subscriber(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -1870,7 +1847,7 @@ impl WasmPluginContext {
         callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_core::nemo_flow_register_llm_request_intercept(
+        nemo_flow::register_llm_request_intercept(
             &qualified_name,
             priority,
             break_chain,
@@ -1883,7 +1860,7 @@ impl WasmPluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_core::nemo_flow_deregister_llm_request_intercept(&name_owned)
+                nemo_flow::deregister_llm_request_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -1902,7 +1879,7 @@ impl WasmPluginContext {
         callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_core::nemo_flow_register_llm_execution_intercept(
+        nemo_flow::register_llm_execution_intercept(
             &qualified_name,
             priority,
             crate::callable::wrap_js_llm_exec_intercept_fn(callback),
@@ -1914,7 +1891,7 @@ impl WasmPluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_core::nemo_flow_deregister_llm_execution_intercept(&name_owned)
+                nemo_flow::deregister_llm_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -1933,7 +1910,7 @@ impl WasmPluginContext {
         callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_core::nemo_flow_register_llm_stream_execution_intercept(
+        nemo_flow::register_llm_stream_execution_intercept(
             &qualified_name,
             priority,
             crate::callable::wrap_js_llm_stream_exec_intercept_fn(callback),
@@ -1945,7 +1922,7 @@ impl WasmPluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_core::nemo_flow_deregister_llm_stream_execution_intercept(&name_owned)
+                nemo_flow::deregister_llm_stream_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -1965,7 +1942,7 @@ impl WasmPluginContext {
         callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_core::nemo_flow_register_tool_request_intercept(
+        nemo_flow::register_tool_request_intercept(
             &qualified_name,
             priority,
             break_chain,
@@ -1978,7 +1955,7 @@ impl WasmPluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_core::nemo_flow_deregister_tool_request_intercept(&name_owned)
+                nemo_flow::deregister_tool_request_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -1997,7 +1974,7 @@ impl WasmPluginContext {
         callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        nemo_flow_core::nemo_flow_register_tool_execution_intercept(
+        nemo_flow::register_tool_execution_intercept(
             &qualified_name,
             priority,
             crate::callable::wrap_js_tool_exec_intercept_fn(callback),
@@ -2009,7 +1986,7 @@ impl WasmPluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                nemo_flow_core::nemo_flow_deregister_tool_execution_intercept(&name_owned)
+                nemo_flow::deregister_tool_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -2021,7 +1998,7 @@ impl WasmPluginContext {
     }
 }
 
-struct WasmPluginHandler {
+struct WasmPlugin {
     plugin_kind: String,
     validate: Option<send_wrapper::SendWrapper<Function>>,
     register: send_wrapper::SendWrapper<Function>,
@@ -2030,12 +2007,12 @@ struct WasmPluginHandler {
 // SAFETY: The `validate` and `register` functions are wrapped in `SendWrapper`,
 // which enforces access from the thread that created them. Cross-thread access
 // will panic rather than allow undefined behavior.
-unsafe impl Send for WasmPluginHandler {}
+unsafe impl Send for WasmPlugin {}
 // SAFETY: The same `SendWrapper` invariant applies for shared references; the
 // wrapped callbacks are only invoked on their originating thread.
-unsafe impl Sync for WasmPluginHandler {}
+unsafe impl Sync for WasmPlugin {}
 
-impl HostedPluginHandler for WasmPluginHandler {
+impl Plugin for WasmPlugin {
     fn plugin_kind(&self) -> &str {
         &self.plugin_kind
     }
@@ -2114,7 +2091,7 @@ pub fn register_plugin(
     register: Function,
 ) -> Result<(), JsValue> {
     ensure_adaptive_component_registered()?;
-    nemo_flow_core::register_plugin_handler(Arc::new(WasmPluginHandler {
+    nemo_flow::register_plugin(Arc::new(WasmPlugin {
         plugin_kind,
         validate: validate.map(send_wrapper::SendWrapper::new),
         register: send_wrapper::SendWrapper::new(register),
@@ -2124,14 +2101,14 @@ pub fn register_plugin(
 
 #[wasm_bindgen(js_name = "deregisterPlugin")]
 pub fn deregister_plugin(plugin_kind: String) -> bool {
-    nemo_flow_core::deregister_plugin_handler(&plugin_kind)
+    nemo_flow::deregister_plugin(&plugin_kind)
 }
 
 #[wasm_bindgen(js_name = "initializePlugins")]
 pub async fn initialize_plugins(config: JsValue) -> Result<JsValue, JsValue> {
     ensure_adaptive_component_registered()?;
-    let config: nemo_flow_core::PluginConfig = serde_wasm_bindgen::from_value(config)?;
-    let report = nemo_flow_core::initialize_plugins(config)
+    let config: nemo_flow::PluginConfig = serde_wasm_bindgen::from_value(config)?;
+    let report = nemo_flow::initialize_plugins(config)
         .await
         .map_err(to_js_err)?;
     serde_wasm_bindgen::to_value(&report).map_err(|e| JsValue::from_str(&e.to_string()))
@@ -2139,26 +2116,26 @@ pub async fn initialize_plugins(config: JsValue) -> Result<JsValue, JsValue> {
 
 #[wasm_bindgen(js_name = "clearPluginConfiguration")]
 pub fn clear_plugin_configuration() -> Result<(), JsValue> {
-    nemo_flow_core::clear_plugin_configuration().map_err(to_js_err)
+    nemo_flow::clear_plugin_configuration().map_err(to_js_err)
 }
 
 #[wasm_bindgen(js_name = "activePluginReport")]
 pub fn active_plugin_report() -> Result<JsValue, JsValue> {
-    serde_wasm_bindgen::to_value(&nemo_flow_core::active_plugin_report())
+    serde_wasm_bindgen::to_value(&nemo_flow::active_plugin_report())
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 #[wasm_bindgen(js_name = "listPluginKinds")]
 pub fn list_plugin_kinds() -> Result<JsValue, JsValue> {
     ensure_adaptive_component_registered()?;
-    serde_wasm_bindgen::to_value(&nemo_flow_core::list_plugin_kinds())
+    serde_wasm_bindgen::to_value(&nemo_flow::list_plugin_kinds())
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// OpenInference-backed event subscriber.
 #[wasm_bindgen(js_name = OpenInferenceSubscriber)]
 pub struct WasmOpenInferenceSubscriber {
-    inner: nemo_flow_openinference::OpenInferenceSubscriber,
+    inner: nemo_flow::observability::openinference::OpenInferenceSubscriber,
 }
 
 #[wasm_bindgen(js_class = OpenInferenceSubscriber)]
@@ -2174,7 +2151,7 @@ impl WasmOpenInferenceSubscriber {
             _ => None,
         };
 
-        let inner = nemo_flow_openinference::OpenInferenceSubscriber::new(
+        let inner = nemo_flow::observability::openinference::OpenInferenceSubscriber::new(
             build_openinference_config(config)?,
         )
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -2338,16 +2315,16 @@ mod tests {
     #[test]
     fn callback_error_wrapper_accessors_round_trip() {
         clear_last_callback_error();
-        assert_eq!(nemo_flow_get_last_callback_error(), None);
+        assert_eq!(get_last_callback_error(), None);
 
         record_callback_error("wasm wrapper callback failed");
         assert_eq!(
-            nemo_flow_get_last_callback_error(),
+            get_last_callback_error(),
             Some("wasm wrapper callback failed".to_string())
         );
 
-        nemo_flow_clear_last_callback_error();
-        assert_eq!(nemo_flow_get_last_callback_error(), None);
+        clear_last_callback_error();
+        assert_eq!(get_last_callback_error(), None);
     }
 
     #[test]

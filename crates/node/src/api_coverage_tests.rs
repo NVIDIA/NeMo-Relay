@@ -45,10 +45,7 @@ fn test_ensure_stream_callback_queued_cleans_up_channel_on_failure() {
 
     let result = ensure_stream_callback_queued(id, napi::Status::Closing);
 
-    assert!(matches!(
-        result,
-        Err(nemo_flow_core::FlowError::Internal(_))
-    ));
+    assert!(matches!(result, Err(nemo_flow::FlowError::Internal(_))));
     assert!(!push_stream_chunk(id as f64, json!({"ok": false})));
 }
 

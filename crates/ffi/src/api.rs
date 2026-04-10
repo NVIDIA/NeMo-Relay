@@ -14,13 +14,9 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use libc::c_char;
-use nemo_flow_core as core;
-use nemo_flow_core::types as core_types;
-use nemo_flow_core::{
-    ConfigDiagnostic, PluginError, PluginHandler as HostedPluginHandler,
-    deregister_plugin_handler as deregister_hosted_plugin_handler,
-    register_plugin_handler as register_hosted_plugin_handler,
-};
+use nemo_flow as core;
+use nemo_flow::types as core_types;
+use nemo_flow::{ConfigDiagnostic, Plugin, PluginError, deregister_plugin, register_plugin};
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
 
@@ -66,7 +62,7 @@ struct FfiHostedPluginAdapter {
     user_data: Arc<FfiHostedPluginUserData>,
 }
 
-impl HostedPluginHandler for FfiHostedPluginAdapter {
+impl Plugin for FfiHostedPluginAdapter {
     fn plugin_kind(&self) -> &str {
         &self.plugin_kind
     }
@@ -93,7 +89,7 @@ impl HostedPluginHandler for FfiHostedPluginAdapter {
                 )
             });
             return vec![ConfigDiagnostic {
-                level: nemo_flow_core::DiagnosticLevel::Error,
+                level: nemo_flow::DiagnosticLevel::Error,
                 code: "plugin.validate_failed".to_string(),
                 component: Some(self.plugin_kind.clone()),
                 field: None,
@@ -108,7 +104,7 @@ impl HostedPluginHandler for FfiHostedPluginAdapter {
         unsafe { nemo_flow_string_free(result_ptr) };
         diagnostics.unwrap_or_else(|| {
             vec![ConfigDiagnostic {
-                level: nemo_flow_core::DiagnosticLevel::Error,
+                level: nemo_flow::DiagnosticLevel::Error,
                 code: "plugin.validate_failed".to_string(),
                 component: Some(self.plugin_kind.clone()),
                 field: None,
@@ -123,7 +119,7 @@ impl HostedPluginHandler for FfiHostedPluginAdapter {
     fn register<'a>(
         &'a self,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &'a mut nemo_flow_core::PluginRegistrationContext,
+        ctx: &'a mut nemo_flow::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {
@@ -294,7 +290,7 @@ pub unsafe extern "C" fn nemo_flow_list_plugin_kinds_json(
     NemoFlowStatus::Ok
 }
 
-/// Register a hosted plugin handler backed by foreign callbacks.
+/// Register a plugin backed by foreign callbacks.
 ///
 /// # Safety
 /// `plugin_kind` must be a valid C string and `register_cb` must be a valid function pointer.
@@ -312,7 +308,7 @@ pub unsafe extern "C" fn nemo_flow_register_plugin(
         Err(status) => return status,
     };
 
-    let handler = Arc::new(FfiHostedPluginAdapter {
+    let plugin = Arc::new(FfiHostedPluginAdapter {
         plugin_kind: plugin_kind.clone(),
         validate_cb,
         register_cb,
@@ -321,13 +317,13 @@ pub unsafe extern "C" fn nemo_flow_register_plugin(
             free_fn,
         }),
     });
-    match register_hosted_plugin_handler(handler) {
+    match register_plugin(plugin) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }
 
-/// Deregister a hosted plugin handler by kind.
+/// Deregister a plugin by kind.
 ///
 /// # Safety
 /// `plugin_kind` must be a valid C string.
@@ -338,10 +334,10 @@ pub unsafe extern "C" fn nemo_flow_deregister_plugin(plugin_kind: *const c_char)
         Ok(value) => value,
         Err(status) => return status,
     };
-    if deregister_hosted_plugin_handler(&plugin_kind) {
+    if deregister_plugin(&plugin_kind) {
         NemoFlowStatus::Ok
     } else {
-        set_last_error(&format!("not found: hosted plugin '{plugin_kind}'"));
+        set_last_error(&format!("not found: plugin '{plugin_kind}'"));
         NemoFlowStatus::NotFound
     }
 }
@@ -558,7 +554,7 @@ pub unsafe extern "C" fn nemo_flow_get_handle(out: *mut *mut FfiScopeHandle) -> 
         set_last_error("out pointer is null");
         return NemoFlowStatus::NullPointer;
     }
-    match core::nemo_flow_get_handle() {
+    match core::get_handle() {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiScopeHandle(h))) };
             NemoFlowStatus::Ok
@@ -615,7 +611,7 @@ pub unsafe extern "C" fn nemo_flow_push_scope(
         None => return NemoFlowStatus::InvalidJson,
     };
 
-    match core::nemo_flow_push_scope(&name, scope_type.into(), parent_ref, attrs, data, metadata) {
+    match core::push_scope(&name, scope_type.into(), parent_ref, attrs, data, metadata) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiScopeHandle(h))) };
             NemoFlowStatus::Ok
@@ -638,7 +634,7 @@ pub unsafe extern "C" fn nemo_flow_pop_scope(handle: *const FfiScopeHandle) -> N
         set_last_error("handle is null");
         return NemoFlowStatus::NullPointer;
     }
-    match core::nemo_flow_pop_scope(&unsafe { &*handle }.0.uuid) {
+    match core::pop_scope(&unsafe { &*handle }.0.uuid) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -680,7 +676,7 @@ pub unsafe extern "C" fn nemo_flow_event(
         None => return NemoFlowStatus::InvalidJson,
     };
 
-    match core::nemo_flow_event(&name, parent_ref, data, metadata) {
+    match core::event(&name, parent_ref, data, metadata) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -751,7 +747,7 @@ pub unsafe extern "C" fn nemo_flow_tool_call(
         }
     };
 
-    match core::nemo_flow_tool_call(
+    match core::tool_call(
         &name,
         args,
         parent_ref,
@@ -803,7 +799,7 @@ pub unsafe extern "C" fn nemo_flow_tool_call_end(
         None => return NemoFlowStatus::InvalidJson,
     };
 
-    match core::nemo_flow_tool_call_end(&unsafe { &*handle }.0, result, data, metadata) {
+    match core::tool_call_end(&unsafe { &*handle }.0, result, data, metadata) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -873,22 +869,21 @@ pub unsafe extern "C" fn nemo_flow_tool_call_execute(
     };
 
     let exec_fn = wrap_tool_exec_fn(func, func_user_data, func_free);
-    let default_fn: nemo_flow_core::ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
+    let default_fn: nemo_flow::ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
 
     let scope_stack = core::current_scope_stack();
-    let result =
-        tokio_runtime().block_on(nemo_flow_core::TASK_SCOPE_STACK.scope(scope_stack, async {
-            core::nemo_flow_tool_call_execute(
-                &name,
-                args,
-                default_fn,
-                parent_handle,
-                attrs,
-                data,
-                metadata,
-            )
-            .await
-        }));
+    let result = tokio_runtime().block_on(nemo_flow::TASK_SCOPE_STACK.scope(scope_stack, async {
+        core::tool_call_execute(
+            &name,
+            args,
+            default_fn,
+            parent_handle,
+            attrs,
+            data,
+            metadata,
+        )
+        .await
+    }));
 
     match result {
         Ok(json) => {
@@ -972,7 +967,7 @@ pub unsafe extern "C" fn nemo_flow_llm_call(
         }
     };
 
-    match core::nemo_flow_llm_call(
+    match core::llm_call(
         &name,
         &request,
         parent_ref,
@@ -1025,7 +1020,7 @@ pub unsafe extern "C" fn nemo_flow_llm_call_end(
         None => return NemoFlowStatus::InvalidJson,
     };
 
-    match core::nemo_flow_llm_call_end(&unsafe { &*handle }.0, response, data, metadata, None) {
+    match core::llm_call_end(&unsafe { &*handle }.0, response, data, metadata, None) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1045,8 +1040,8 @@ pub unsafe extern "C" fn nemo_flow_llm_call_end(
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_flow_openai_chat_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_flow_core::codec::OpenAIChatCodec),
-        response_codec: Arc::new(nemo_flow_core::codec::OpenAIChatCodec),
+        codec: Arc::new(nemo_flow::codec::OpenAIChatCodec),
+        response_codec: Arc::new(nemo_flow::codec::OpenAIChatCodec),
     }))
 }
 
@@ -1060,8 +1055,8 @@ pub extern "C" fn nemo_flow_openai_chat_codec_new() -> *mut FfiCodecHandle {
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_flow_openai_responses_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_flow_core::codec::OpenAIResponsesCodec),
-        response_codec: Arc::new(nemo_flow_core::codec::OpenAIResponsesCodec),
+        codec: Arc::new(nemo_flow::codec::OpenAIResponsesCodec),
+        response_codec: Arc::new(nemo_flow::codec::OpenAIResponsesCodec),
     }))
 }
 
@@ -1075,8 +1070,8 @@ pub extern "C" fn nemo_flow_openai_responses_codec_new() -> *mut FfiCodecHandle 
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_flow_anthropic_messages_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_flow_core::codec::AnthropicMessagesCodec),
-        response_codec: Arc::new(nemo_flow_core::codec::AnthropicMessagesCodec),
+        codec: Arc::new(nemo_flow::codec::AnthropicMessagesCodec),
+        response_codec: Arc::new(nemo_flow::codec::AnthropicMessagesCodec),
     }))
 }
 
@@ -1181,25 +1176,24 @@ pub unsafe extern "C" fn nemo_flow_llm_call_execute(
     };
 
     let exec_fn = wrap_llm_exec_fn(func, func_user_data, func_free);
-    let default_fn: nemo_flow_core::LlmExecutionNextFn = Arc::new(move |request| exec_fn(request));
+    let default_fn: nemo_flow::LlmExecutionNextFn = Arc::new(move |request| exec_fn(request));
 
     let scope_stack = core::current_scope_stack();
-    let result =
-        tokio_runtime().block_on(nemo_flow_core::TASK_SCOPE_STACK.scope(scope_stack, async {
-            core::nemo_flow_llm_call_execute(
-                &name,
-                request,
-                default_fn,
-                parent_handle,
-                attrs,
-                data,
-                metadata,
-                model_name_opt,
-                codec,
-                response_codec,
-            )
-            .await
-        }));
+    let result = tokio_runtime().block_on(nemo_flow::TASK_SCOPE_STACK.scope(scope_stack, async {
+        core::llm_call_execute(
+            &name,
+            request,
+            default_fn,
+            parent_handle,
+            attrs,
+            data,
+            metadata,
+            model_name_opt,
+            codec,
+            response_codec,
+        )
+        .await
+    }));
 
     match result {
         Ok(json) => {
@@ -1217,8 +1211,7 @@ pub unsafe extern "C" fn nemo_flow_llm_call_execute(
 /// Opaque stream handle for consuming LLM streaming responses chunk by chunk.
 /// Use `nemo_flow_stream_next` to poll and `nemo_flow_stream_free` to release.
 pub struct FfiStream {
-    receiver:
-        tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nemo_flow_core::Result<serde_json::Value>>>,
+    receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nemo_flow::Result<serde_json::Value>>>,
 }
 
 /// Execute a streaming LLM call end-to-end. Conditional-execution guardrails
@@ -1326,10 +1319,9 @@ pub unsafe extern "C" fn nemo_flow_llm_stream_call_execute(
     };
 
     let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
-    let default_fn: nemo_flow_core::LlmStreamExecutionNextFn =
-        Arc::new(move |request| exec_fn(request));
+    let default_fn: nemo_flow::LlmStreamExecutionNextFn = Arc::new(move |request| exec_fn(request));
 
-    let wrapped_collector: Box<dyn FnMut(serde_json::Value) -> nemo_flow_core::Result<()> + Send> =
+    let wrapped_collector: Box<dyn FnMut(serde_json::Value) -> nemo_flow::Result<()> + Send> =
         match collector {
             Some(cb) => wrap_collector_fn(cb),
             None => Box::new(|_: serde_json::Value| Ok(())),
@@ -1341,24 +1333,23 @@ pub unsafe extern "C" fn nemo_flow_llm_stream_call_execute(
     };
 
     let scope_stack = core::current_scope_stack();
-    let result =
-        tokio_runtime().block_on(nemo_flow_core::TASK_SCOPE_STACK.scope(scope_stack, async {
-            core::nemo_flow_llm_stream_call_execute(
-                &name,
-                request,
-                default_fn,
-                wrapped_collector,
-                wrapped_finalizer,
-                parent_handle,
-                attrs,
-                data,
-                metadata,
-                model_name_opt,
-                codec,
-                response_codec,
-            )
-            .await
-        }));
+    let result = tokio_runtime().block_on(nemo_flow::TASK_SCOPE_STACK.scope(scope_stack, async {
+        core::llm_stream_call_execute(
+            &name,
+            request,
+            default_fn,
+            wrapped_collector,
+            wrapped_finalizer,
+            parent_handle,
+            attrs,
+            data,
+            metadata,
+            model_name_opt,
+            codec,
+            response_codec,
+        )
+        .await
+    }));
 
     match result {
         Ok(rust_stream) => {
@@ -1496,8 +1487,8 @@ ffi_guardrail_tool_api!(
     /// # Safety
     /// `name` must be a valid C string.
     nemo_flow_deregister_tool_sanitize_request_guardrail,
-    core::nemo_flow_register_tool_sanitize_request_guardrail,
-    core::nemo_flow_deregister_tool_sanitize_request_guardrail,
+    core::register_tool_sanitize_request_guardrail,
+    core::deregister_tool_sanitize_request_guardrail,
     wrap_tool_sanitize_fn
 );
 
@@ -1520,8 +1511,8 @@ ffi_guardrail_tool_api!(
     /// # Safety
     /// `name` must be a valid C string.
     nemo_flow_deregister_tool_sanitize_response_guardrail,
-    core::nemo_flow_register_tool_sanitize_response_guardrail,
-    core::nemo_flow_deregister_tool_sanitize_response_guardrail,
+    core::register_tool_sanitize_response_guardrail,
+    core::deregister_tool_sanitize_response_guardrail,
     wrap_tool_sanitize_fn
 );
 
@@ -1555,7 +1546,7 @@ pub unsafe extern "C" fn nemo_flow_register_tool_conditional_execution_guardrail
         Err(status) => return status,
     };
     let wrapped = wrap_tool_conditional_fn(cb, user_data, free_fn);
-    match core::nemo_flow_register_tool_conditional_execution_guardrail(&name, priority, wrapped) {
+    match core::register_tool_conditional_execution_guardrail(&name, priority, wrapped) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1574,7 +1565,7 @@ pub unsafe extern "C" fn nemo_flow_deregister_tool_conditional_execution_guardra
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_deregister_tool_conditional_execution_guardrail(&name) {
+    match core::deregister_tool_conditional_execution_guardrail(&name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1652,8 +1643,8 @@ ffi_intercept_tool_api!(
     /// # Safety
     /// `name` must be a valid C string.
     nemo_flow_deregister_tool_request_intercept,
-    core::nemo_flow_register_tool_request_intercept,
-    core::nemo_flow_deregister_tool_request_intercept,
+    core::register_tool_request_intercept,
+    core::deregister_tool_request_intercept,
     wrap_tool_request_intercept_fn
 );
 
@@ -1685,7 +1676,7 @@ pub unsafe extern "C" fn nemo_flow_register_tool_execution_intercept(
         Err(status) => return status,
     };
     let exec = wrap_tool_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nemo_flow_register_tool_execution_intercept(&name, priority, exec) {
+    match core::register_tool_execution_intercept(&name, priority, exec) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1704,7 +1695,7 @@ pub unsafe extern "C" fn nemo_flow_deregister_tool_execution_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_deregister_tool_execution_intercept(&name) {
+    match core::deregister_tool_execution_intercept(&name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1740,7 +1731,7 @@ pub unsafe extern "C" fn nemo_flow_register_llm_sanitize_request_guardrail(
         Err(status) => return status,
     };
     let wrapped = wrap_llm_sanitize_request_fn(cb, user_data, free_fn);
-    match core::nemo_flow_register_llm_sanitize_request_guardrail(&name, priority, wrapped) {
+    match core::register_llm_sanitize_request_guardrail(&name, priority, wrapped) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1759,7 +1750,7 @@ pub unsafe extern "C" fn nemo_flow_deregister_llm_sanitize_request_guardrail(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_deregister_llm_sanitize_request_guardrail(&name) {
+    match core::deregister_llm_sanitize_request_guardrail(&name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1791,7 +1782,7 @@ pub unsafe extern "C" fn nemo_flow_register_llm_sanitize_response_guardrail(
         Err(status) => return status,
     };
     let wrapped = wrap_llm_response_fn(cb, user_data, free_fn);
-    match core::nemo_flow_register_llm_sanitize_response_guardrail(&name, priority, wrapped) {
+    match core::register_llm_sanitize_response_guardrail(&name, priority, wrapped) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1810,7 +1801,7 @@ pub unsafe extern "C" fn nemo_flow_deregister_llm_sanitize_response_guardrail(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_deregister_llm_sanitize_response_guardrail(&name) {
+    match core::deregister_llm_sanitize_response_guardrail(&name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1846,7 +1837,7 @@ pub unsafe extern "C" fn nemo_flow_register_llm_conditional_execution_guardrail(
         Err(status) => return status,
     };
     let wrapped = wrap_llm_conditional_fn(cb, user_data, free_fn);
-    match core::nemo_flow_register_llm_conditional_execution_guardrail(&name, priority, wrapped) {
+    match core::register_llm_conditional_execution_guardrail(&name, priority, wrapped) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1865,7 +1856,7 @@ pub unsafe extern "C" fn nemo_flow_deregister_llm_conditional_execution_guardrai
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_deregister_llm_conditional_execution_guardrail(&name) {
+    match core::deregister_llm_conditional_execution_guardrail(&name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1906,7 +1897,7 @@ pub unsafe extern "C" fn nemo_flow_register_llm_request_intercept(
         Err(status) => return status,
     };
     let wrapped = wrap_llm_request_intercept_fn(cb, user_data, free_fn);
-    match core::nemo_flow_register_llm_request_intercept(&name, priority, break_chain, wrapped) {
+    match core::register_llm_request_intercept(&name, priority, break_chain, wrapped) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1925,7 +1916,7 @@ pub unsafe extern "C" fn nemo_flow_deregister_llm_request_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_deregister_llm_request_intercept(&name) {
+    match core::deregister_llm_request_intercept(&name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1959,7 +1950,7 @@ pub unsafe extern "C" fn nemo_flow_register_llm_execution_intercept(
         Err(status) => return status,
     };
     let exec = wrap_llm_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nemo_flow_register_llm_execution_intercept(&name, priority, exec) {
+    match core::register_llm_execution_intercept(&name, priority, exec) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -1978,7 +1969,7 @@ pub unsafe extern "C" fn nemo_flow_deregister_llm_execution_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_deregister_llm_execution_intercept(&name) {
+    match core::deregister_llm_execution_intercept(&name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -2012,7 +2003,7 @@ pub unsafe extern "C" fn nemo_flow_register_llm_stream_execution_intercept(
         Err(status) => return status,
     };
     let exec = wrap_llm_stream_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nemo_flow_register_llm_stream_execution_intercept(&name, priority, exec) {
+    match core::register_llm_stream_execution_intercept(&name, priority, exec) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -2031,7 +2022,7 @@ pub unsafe extern "C" fn nemo_flow_deregister_llm_stream_execution_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_deregister_llm_stream_execution_intercept(&name) {
+    match core::deregister_llm_stream_execution_intercept(&name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -2065,7 +2056,7 @@ pub unsafe extern "C" fn nemo_flow_register_subscriber(
         Err(status) => return status,
     };
     let wrapped = wrap_event_subscriber(cb, user_data, free_fn);
-    match core::nemo_flow_register_subscriber(&name, wrapped) {
+    match core::register_subscriber(&name, wrapped) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -2082,7 +2073,7 @@ pub unsafe extern "C" fn nemo_flow_deregister_subscriber(name: *const c_char) ->
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_deregister_subscriber(&name) {
+    match core::deregister_subscriber(&name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -2204,7 +2195,7 @@ pub unsafe extern "C" fn nemo_flow_atif_exporter_create(
         }
     };
 
-    let agent_info = nemo_flow_core::atif::AtifAgentInfo {
+    let agent_info = nemo_flow::atif::AtifAgentInfo {
         name: agent_name,
         version: agent_version,
         model_name: model_name_opt,
@@ -2212,7 +2203,7 @@ pub unsafe extern "C" fn nemo_flow_atif_exporter_create(
         extra: None,
     };
 
-    let exporter = nemo_flow_core::atif::AtifExporter::new(session_id, agent_info);
+    let exporter = nemo_flow::atif::AtifExporter::new(session_id, agent_info);
     unsafe { *out = Box::into_raw(Box::new(FfiAtifExporter(exporter))) };
     NemoFlowStatus::Ok
 }
@@ -2240,7 +2231,7 @@ pub unsafe extern "C" fn nemo_flow_atif_exporter_register(
         Err(status) => return status,
     };
     let subscriber = unsafe { &*exporter }.0.subscriber();
-    match core::nemo_flow_register_subscriber(&name, subscriber) {
+    match core::register_subscriber(&name, subscriber) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -2260,7 +2251,7 @@ pub unsafe extern "C" fn nemo_flow_atif_exporter_deregister(name: *const c_char)
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_deregister_subscriber(&name) {
+    match core::deregister_subscriber(&name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -2406,8 +2397,10 @@ pub unsafe extern "C" fn nemo_flow_otel_subscriber_create(
     };
 
     let mut config = match transport.as_str() {
-        "http_binary" => nemo_flow_otel::OpenTelemetryConfig::http_binary(service_name),
-        "grpc" => nemo_flow_otel::OpenTelemetryConfig::grpc(service_name),
+        "http_binary" => {
+            nemo_flow::observability::otel::OpenTelemetryConfig::http_binary(service_name)
+        }
+        "grpc" => nemo_flow::observability::otel::OpenTelemetryConfig::grpc(service_name),
         other => {
             set_last_error(&format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}"
@@ -2463,7 +2456,7 @@ pub unsafe extern "C" fn nemo_flow_otel_subscriber_create(
     }
 
     let _runtime_guard = tokio_runtime().enter();
-    let subscriber_result = nemo_flow_otel::OpenTelemetrySubscriber::new(config);
+    let subscriber_result = nemo_flow::observability::otel::OpenTelemetrySubscriber::new(config);
     match subscriber_result {
         Ok(subscriber) => {
             unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetrySubscriber(subscriber))) };
@@ -2518,7 +2511,7 @@ pub unsafe extern "C" fn nemo_flow_otel_subscriber_deregister(
         Err(status) => return status,
     };
 
-    match core::nemo_flow_deregister_subscriber(&name) {
+    match core::deregister_subscriber(&name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -2606,10 +2599,13 @@ pub unsafe extern "C" fn nemo_flow_openinference_subscriber_create(
         }
     };
 
-    let mut config = nemo_flow_openinference::OpenInferenceConfig::new();
+    let mut config = nemo_flow::observability::openinference::OpenInferenceConfig::new();
     config = match transport.as_str() {
-        "http_binary" => config.with_transport(nemo_flow_openinference::OtlpTransport::HttpBinary),
-        "grpc" => config.with_transport(nemo_flow_openinference::OtlpTransport::Grpc),
+        "http_binary" => config
+            .with_transport(nemo_flow::observability::openinference::OtlpTransport::HttpBinary),
+        "grpc" => {
+            config.with_transport(nemo_flow::observability::openinference::OtlpTransport::Grpc)
+        }
         other => {
             set_last_error(&format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}"
@@ -2672,7 +2668,8 @@ pub unsafe extern "C" fn nemo_flow_openinference_subscriber_create(
     }
 
     let _runtime_guard = tokio_runtime().enter();
-    let subscriber_result = nemo_flow_openinference::OpenInferenceSubscriber::new(config);
+    let subscriber_result =
+        nemo_flow::observability::openinference::OpenInferenceSubscriber::new(config);
     match subscriber_result {
         Ok(subscriber) => {
             unsafe { *out = Box::into_raw(Box::new(FfiOpenInferenceSubscriber(subscriber))) };
@@ -2727,7 +2724,7 @@ pub unsafe extern "C" fn nemo_flow_openinference_subscriber_deregister(
         Err(status) => return status,
     };
 
-    match core::nemo_flow_deregister_subscriber(&name) {
+    match core::deregister_subscriber(&name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -2864,8 +2861,8 @@ ffi_scope_guardrail_tool_api!(
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings.
     nemo_flow_scope_deregister_tool_sanitize_request_guardrail,
-    core::nemo_flow_scope_register_tool_sanitize_request_guardrail,
-    core::nemo_flow_scope_deregister_tool_sanitize_request_guardrail,
+    core::scope_register_tool_sanitize_request_guardrail,
+    core::scope_deregister_tool_sanitize_request_guardrail,
     wrap_tool_sanitize_fn
 );
 
@@ -2888,8 +2885,8 @@ ffi_scope_guardrail_tool_api!(
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings.
     nemo_flow_scope_deregister_tool_sanitize_response_guardrail,
-    core::nemo_flow_scope_register_tool_sanitize_response_guardrail,
-    core::nemo_flow_scope_deregister_tool_sanitize_response_guardrail,
+    core::scope_register_tool_sanitize_response_guardrail,
+    core::scope_deregister_tool_sanitize_response_guardrail,
     wrap_tool_sanitize_fn
 );
 
@@ -2928,9 +2925,8 @@ pub unsafe extern "C" fn nemo_flow_scope_register_tool_conditional_execution_gua
         Err(status) => return status,
     };
     let wrapped = wrap_tool_conditional_fn(cb, user_data, free_fn);
-    match core::nemo_flow_scope_register_tool_conditional_execution_guardrail(
-        &uuid, &name, priority, wrapped,
-    ) {
+    match core::scope_register_tool_conditional_execution_guardrail(&uuid, &name, priority, wrapped)
+    {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -2954,7 +2950,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_tool_conditional_execution_g
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_scope_deregister_tool_conditional_execution_guardrail(&uuid, &name) {
+    match core::scope_deregister_tool_conditional_execution_guardrail(&uuid, &name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3041,8 +3037,8 @@ ffi_scope_intercept_tool_api!(
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings.
     nemo_flow_scope_deregister_tool_request_intercept,
-    core::nemo_flow_scope_register_tool_request_intercept,
-    core::nemo_flow_scope_deregister_tool_request_intercept,
+    core::scope_register_tool_request_intercept,
+    core::scope_deregister_tool_request_intercept,
     wrap_tool_request_intercept_fn
 );
 
@@ -3078,7 +3074,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_tool_execution_intercept(
         Err(status) => return status,
     };
     let exec = wrap_tool_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nemo_flow_scope_register_tool_execution_intercept(&uuid, &name, priority, exec) {
+    match core::scope_register_tool_execution_intercept(&uuid, &name, priority, exec) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3102,7 +3098,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_tool_execution_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_scope_deregister_tool_execution_intercept(&uuid, &name) {
+    match core::scope_deregister_tool_execution_intercept(&uuid, &name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3143,9 +3139,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_sanitize_request_guardrail
         Err(status) => return status,
     };
     let wrapped = wrap_llm_sanitize_request_fn(cb, user_data, free_fn);
-    match core::nemo_flow_scope_register_llm_sanitize_request_guardrail(
-        &uuid, &name, priority, wrapped,
-    ) {
+    match core::scope_register_llm_sanitize_request_guardrail(&uuid, &name, priority, wrapped) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3169,7 +3163,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_sanitize_request_guardra
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_scope_deregister_llm_sanitize_request_guardrail(&uuid, &name) {
+    match core::scope_deregister_llm_sanitize_request_guardrail(&uuid, &name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3206,9 +3200,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_sanitize_response_guardrai
         Err(status) => return status,
     };
     let wrapped = wrap_llm_response_fn(cb, user_data, free_fn);
-    match core::nemo_flow_scope_register_llm_sanitize_response_guardrail(
-        &uuid, &name, priority, wrapped,
-    ) {
+    match core::scope_register_llm_sanitize_response_guardrail(&uuid, &name, priority, wrapped) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3232,7 +3224,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_sanitize_response_guardr
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_scope_deregister_llm_sanitize_response_guardrail(&uuid, &name) {
+    match core::scope_deregister_llm_sanitize_response_guardrail(&uuid, &name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3273,9 +3265,8 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_conditional_execution_guar
         Err(status) => return status,
     };
     let wrapped = wrap_llm_conditional_fn(cb, user_data, free_fn);
-    match core::nemo_flow_scope_register_llm_conditional_execution_guardrail(
-        &uuid, &name, priority, wrapped,
-    ) {
+    match core::scope_register_llm_conditional_execution_guardrail(&uuid, &name, priority, wrapped)
+    {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3299,7 +3290,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_conditional_execution_gu
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_scope_deregister_llm_conditional_execution_guardrail(&uuid, &name) {
+    match core::scope_deregister_llm_conditional_execution_guardrail(&uuid, &name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3345,13 +3336,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_request_intercept(
         Err(status) => return status,
     };
     let wrapped = wrap_llm_request_intercept_fn(cb, user_data, free_fn);
-    match core::nemo_flow_scope_register_llm_request_intercept(
-        &uuid,
-        &name,
-        priority,
-        break_chain,
-        wrapped,
-    ) {
+    match core::scope_register_llm_request_intercept(&uuid, &name, priority, break_chain, wrapped) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3375,7 +3360,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_request_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_scope_deregister_llm_request_intercept(&uuid, &name) {
+    match core::scope_deregister_llm_request_intercept(&uuid, &name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3413,7 +3398,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_execution_intercept(
         Err(status) => return status,
     };
     let exec = wrap_llm_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nemo_flow_scope_register_llm_execution_intercept(&uuid, &name, priority, exec) {
+    match core::scope_register_llm_execution_intercept(&uuid, &name, priority, exec) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3437,7 +3422,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_execution_intercept(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_scope_deregister_llm_execution_intercept(&uuid, &name) {
+    match core::scope_deregister_llm_execution_intercept(&uuid, &name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3475,9 +3460,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_stream_execution_intercept
         Err(status) => return status,
     };
     let exec = wrap_llm_stream_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
-    match core::nemo_flow_scope_register_llm_stream_execution_intercept(
-        &uuid, &name, priority, exec,
-    ) {
+    match core::scope_register_llm_stream_execution_intercept(&uuid, &name, priority, exec) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3501,7 +3484,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_stream_execution_interce
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_scope_deregister_llm_stream_execution_intercept(&uuid, &name) {
+    match core::scope_deregister_llm_stream_execution_intercept(&uuid, &name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3540,7 +3523,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_subscriber(
         Err(status) => return status,
     };
     let wrapped = wrap_event_subscriber(cb, user_data, free_fn);
-    match core::nemo_flow_scope_register_subscriber(&uuid, &name, wrapped) {
+    match core::scope_register_subscriber(&uuid, &name, wrapped) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3564,7 +3547,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_subscriber(
         Ok(s) => s,
         Err(status) => return status,
     };
-    match core::nemo_flow_scope_deregister_subscriber(&uuid, &name) {
+    match core::scope_deregister_subscriber(&uuid, &name) {
         Ok(_) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3599,7 +3582,7 @@ pub unsafe extern "C" fn nemo_flow_tool_request_intercepts(
         Some(a) => a,
         None => return NemoFlowStatus::InvalidJson,
     };
-    match core::nemo_flow_tool_request_intercepts(&name, args) {
+    match core::tool_request_intercepts(&name, args) {
         Ok(result) => {
             unsafe { *out = json_to_c_string(&result) };
             NemoFlowStatus::Ok
@@ -3633,7 +3616,7 @@ pub unsafe extern "C" fn nemo_flow_tool_conditional_execution(
         Some(a) => a,
         None => return NemoFlowStatus::InvalidJson,
     };
-    match core::nemo_flow_tool_conditional_execution(&name, &args) {
+    match core::tool_conditional_execution(&name, &args) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -3674,7 +3657,7 @@ pub unsafe extern "C" fn nemo_flow_llm_request_intercepts(
             return NemoFlowStatus::InvalidJson;
         }
     };
-    match core::nemo_flow_llm_request_intercepts(name_str, request) {
+    match core::llm_request_intercepts(name_str, request) {
         Ok(transformed) => {
             let result_json = serde_json::to_value(&transformed).unwrap_or(serde_json::Value::Null);
             unsafe { *out = json_to_c_string(&result_json) };
@@ -3711,7 +3694,7 @@ pub unsafe extern "C" fn nemo_flow_llm_conditional_execution(
             return NemoFlowStatus::InvalidJson;
         }
     };
-    match core::nemo_flow_llm_conditional_execution(&request) {
+    match core::llm_conditional_execution(&request) {
         Ok(()) => NemoFlowStatus::Ok,
         Err(e) => status_from_error(&e),
     }

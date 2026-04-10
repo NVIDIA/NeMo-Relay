@@ -34,7 +34,7 @@ pub use context_helpers::{
 pub use error::{AdaptiveError, Result};
 pub use intercepts::AGENT_HINTS_HEADER_KEY;
 pub use learner::{LatencySensitivityLearner, Learner, compute_default_hints};
-pub use nemo_flow_core::{
+pub use nemo_flow::{
     ConfigDiagnostic, ConfigPolicy, ConfigReport, DiagnosticLevel, UnsupportedBehavior,
 };
 pub use plugin_component::{

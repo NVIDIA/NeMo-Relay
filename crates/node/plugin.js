@@ -41,11 +41,11 @@ function listKinds() {
   return lib.listPluginKinds();
 }
 
-function register(pluginKind, handler) {
+function register(pluginKind, plugin) {
   return lib.registerPlugin(
     pluginKind,
-    handler.validate ? (pluginConfig) => handler.validate(pluginConfig) : null,
-    (pluginConfig, context) => handler.register(pluginConfig, context),
+    plugin.validate ? (pluginConfig) => plugin.validate(pluginConfig) : null,
+    (pluginConfig, context) => plugin.register(pluginConfig, context),
   );
 }
 

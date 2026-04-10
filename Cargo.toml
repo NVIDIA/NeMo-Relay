@@ -9,11 +9,7 @@ members = [
     "crates/python",
     "crates/ffi",
     "crates/node",
-    "crates/wasm",
-    # Adaptive
-    # Observability Subscribers
-    "crates/otel",
-    "crates/openinference"
+    "crates/wasm"
 ]
 resolver = "2"
 

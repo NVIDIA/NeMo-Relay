@@ -7,11 +7,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use nemo_flow_core::plugin::Result as CorePluginResult;
-use nemo_flow_core::{
-    ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, PluginComponentSpec, PluginError,
-    PluginHandler as CorePluginHandler, PluginRegistration, PluginRegistrationContext,
-    UnsupportedBehavior, deregister_plugin_handler, plugin_handler, register_plugin_handler,
+use nemo_flow::plugin::Result as CorePluginResult;
+use nemo_flow::{
+    ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
+    PluginRegistration, PluginRegistrationContext, UnsupportedBehavior, deregister_plugin,
+    lookup_plugin, register_plugin,
 };
 use serde_json::{Map, Value as Json};
 
@@ -57,9 +57,9 @@ impl From<ComponentSpec> for PluginComponentSpec {
     }
 }
 
-struct AdaptivePluginHandler;
+struct AdaptivePlugin;
 
-impl CorePluginHandler for AdaptivePluginHandler {
+impl Plugin for AdaptivePlugin {
     fn plugin_kind(&self) -> &str {
         ADAPTIVE_PLUGIN_KIND
     }
@@ -111,11 +111,11 @@ impl CorePluginHandler for AdaptivePluginHandler {
 /// Call this during startup before validating or initializing plugin configs
 /// that contain adaptive components.
 pub fn register_adaptive_component() -> CorePluginResult<()> {
-    match register_plugin_handler(Arc::new(AdaptivePluginHandler)) {
+    match register_plugin(Arc::new(AdaptivePlugin)) {
         Ok(()) => Ok(()),
         Err(PluginError::RegistrationFailed(message))
             if message.contains("already registered")
-                && plugin_handler(ADAPTIVE_PLUGIN_KIND).is_some() =>
+                && lookup_plugin(ADAPTIVE_PLUGIN_KIND).is_some() =>
         {
             Ok(())
         }
@@ -128,7 +128,7 @@ pub fn register_adaptive_component() -> CorePluginResult<()> {
 /// This affects future validation and initialization only. Active adaptive
 /// runtime registrations remain until cleared or replaced.
 pub fn deregister_adaptive_component() -> bool {
-    deregister_plugin_handler(ADAPTIVE_PLUGIN_KIND)
+    deregister_plugin(ADAPTIVE_PLUGIN_KIND)
 }
 
 fn parse_adaptive_config(plugin_config: &Map<String, Json>) -> CorePluginResult<AdaptiveConfig> {

@@ -110,23 +110,23 @@ type PluginContext struct {
 	ptr *C.FfiPluginContext
 }
 
-// PluginHandler is the hosted plugin callback contract.
+// Plugin is the hosted plugin callback contract.
 //
 // Validate receives one component-local config object and returns diagnostics.
 // Register installs middleware and subscribers for one component instance.
-type PluginHandler interface {
+type Plugin interface {
 	Validate(pluginConfig map[string]any) ([]ConfigDiagnostic, error)
 	Register(pluginConfig map[string]any, ctx *PluginContext) error
 }
 
-// PluginHandlerFuncs adapts plain functions to the PluginHandler interface.
-type PluginHandlerFuncs struct {
+// PluginFuncs adapts plain functions to the Plugin interface.
+type PluginFuncs struct {
 	ValidateFunc func(pluginConfig map[string]any) ([]ConfigDiagnostic, error)
 	RegisterFunc func(pluginConfig map[string]any, ctx *PluginContext) error
 }
 
 // Validate delegates to ValidateFunc when provided.
-func (h PluginHandlerFuncs) Validate(pluginConfig map[string]any) ([]ConfigDiagnostic, error) {
+func (h PluginFuncs) Validate(pluginConfig map[string]any) ([]ConfigDiagnostic, error) {
 	if h.ValidateFunc == nil {
 		return nil, nil
 	}
@@ -134,7 +134,7 @@ func (h PluginHandlerFuncs) Validate(pluginConfig map[string]any) ([]ConfigDiagn
 }
 
 // Register delegates to RegisterFunc when provided.
-func (h PluginHandlerFuncs) Register(pluginConfig map[string]any, ctx *PluginContext) error {
+func (h PluginFuncs) Register(pluginConfig map[string]any, ctx *PluginContext) error {
 	if h.RegisterFunc == nil {
 		return nil
 	}
@@ -238,7 +238,7 @@ func ActivePluginReport() (*ConfigReport, error) {
 	return &report, nil
 }
 
-// ListPluginKinds lists hosted plugin kinds registered with the handler registry.
+// ListPluginKinds lists plugin kinds registered with the registry.
 func ListPluginKinds() ([]string, error) {
 	var out *C.char
 	status := C.nemo_flow_list_plugin_kinds_json(&out)
@@ -254,13 +254,13 @@ func ListPluginKinds() ([]string, error) {
 	return kinds, nil
 }
 
-// RegisterPlugin registers a hosted plugin kind for later validation and initialization.
+// RegisterPlugin registers a plugin kind for later validation and initialization.
 //
 // Registering the same kind twice returns an error.
-func RegisterPlugin(pluginKind string, handler PluginHandler) error {
+func RegisterPlugin(pluginKind string, plugin Plugin) error {
 	cPluginKind := C.CString(pluginKind)
 	defer C.free(unsafe.Pointer(cPluginKind))
-	userData := registerClosure(handler)
+	userData := registerClosure(plugin)
 	status := C.nemo_flow_register_plugin(
 		cPluginKind,
 		(C.NemoFlowPluginValidateCb)(C.goPluginValidateTrampoline),
@@ -271,7 +271,7 @@ func RegisterPlugin(pluginKind string, handler PluginHandler) error {
 	return checkStatus(status)
 }
 
-// DeregisterPlugin removes a previously registered hosted plugin kind.
+// DeregisterPlugin removes a previously registered plugin kind.
 //
 // This affects future validation and initialization only. Active runtime
 // registrations remain until cleared or replaced.

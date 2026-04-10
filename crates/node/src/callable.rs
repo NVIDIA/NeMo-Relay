@@ -17,9 +17,9 @@ use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFun
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
-use nemo_flow_core::codec::{AnnotatedLLMRequest, LlmCodec};
-use nemo_flow_core::types::LLMRequest;
-use nemo_flow_core::{
+use nemo_flow::codec::{AnnotatedLLMRequest, LlmCodec};
+use nemo_flow::types::LLMRequest;
+use nemo_flow::{
     FlowError, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
     LlmStreamExecutionNextFn, Result, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
 };
@@ -444,9 +444,9 @@ pub fn wrap_js_finalizer_fn(
 /// Wrap a JS function for event subscriber: `(event: JsEvent) => void`.
 pub fn wrap_js_event_subscriber(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> nemo_flow_core::EventSubscriberFn {
+) -> nemo_flow::EventSubscriberFn {
     let func = Arc::new(func);
-    Arc::new(move |event: &nemo_flow_core::Event| {
+    Arc::new(move |event: &nemo_flow::Event| {
         let event_json = serde_json::to_value(JsEvent::from(event)).unwrap_or(Json::Null);
         let status = func.call(event_json, ThreadsafeFunctionCallMode::NonBlocking);
         if status != napi::Status::Ok {
@@ -537,11 +537,11 @@ struct NapiResponseCodec {
     decode_response: Arc<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 }
 
-impl nemo_flow_core::codec::LlmResponseCodec for NapiResponseCodec {
+impl nemo_flow::codec::LlmResponseCodec for NapiResponseCodec {
     fn decode_response(
         &self,
         response: &Json,
-    ) -> nemo_flow_core::Result<nemo_flow_core::codec::AnnotatedLLMResponse> {
+    ) -> nemo_flow::Result<nemo_flow::codec::AnnotatedLLMResponse> {
         let (tx, rx) = std::sync::mpsc::channel();
         let status = self.decode_response.call_with_return_value(
             response.clone(),
@@ -552,15 +552,15 @@ impl nemo_flow_core::codec::LlmResponseCodec for NapiResponseCodec {
             },
         );
         if status != napi::Status::Ok {
-            return Err(nemo_flow_core::FlowError::Internal(format!(
+            return Err(nemo_flow::FlowError::Internal(format!(
                 "decode_response call failed: {status:?}"
             )));
         }
         let result = rx.recv().map_err(|_| {
-            nemo_flow_core::FlowError::Internal("decode_response callback did not return".into())
+            nemo_flow::FlowError::Internal("decode_response callback did not return".into())
         })?;
         serde_json::from_value(result).map_err(|e| {
-            nemo_flow_core::FlowError::Internal(format!(
+            nemo_flow::FlowError::Internal(format!(
                 "decode_response returned invalid AnnotatedLLMResponse: {e}"
             ))
         })
@@ -570,7 +570,7 @@ impl nemo_flow_core::codec::LlmResponseCodec for NapiResponseCodec {
 /// Wrap a JS decode_response function into an `Arc<dyn LlmResponseCodec>`.
 pub fn wrap_js_response_codec(
     decode_response: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Arc<dyn nemo_flow_core::codec::LlmResponseCodec> {
+) -> Arc<dyn nemo_flow::codec::LlmResponseCodec> {
     Arc::new(NapiResponseCodec {
         decode_response: Arc::new(decode_response),
     })

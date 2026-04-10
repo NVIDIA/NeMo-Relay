@@ -15,7 +15,7 @@
 //! - [`is_run_boundary`] — detects Agent scope start/end events that
 //!   delineate run boundaries.
 
-use nemo_flow_core::{Event, EventSubscriberFn, ScopeType};
+use nemo_flow::{Event, EventSubscriberFn, ScopeType};
 
 use crate::types::{CallKind, CallRecord};
 
@@ -89,7 +89,7 @@ pub(crate) fn is_run_boundary(event: &Event) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nemo_flow_core::{Event, ScopeType};
+    use nemo_flow::{Event, ScopeType};
     use uuid::Uuid;
 
     #[derive(Clone, Copy)]
@@ -114,7 +114,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nemo_flow_core::LLMAttributes::empty(),
+                nemo_flow::LLMAttributes::empty(),
                 None,
                 None,
                 None,
@@ -125,7 +125,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nemo_flow_core::ToolAttributes::empty(),
+                nemo_flow::ToolAttributes::empty(),
                 None,
                 None,
             ),
@@ -135,7 +135,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nemo_flow_core::ScopeAttributes::empty(),
+                nemo_flow::ScopeAttributes::empty(),
                 scope_type,
             ),
             (EventType::End, Some(ScopeType::Llm)) => Event::llm_end(
@@ -144,7 +144,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nemo_flow_core::LLMAttributes::empty(),
+                nemo_flow::LLMAttributes::empty(),
                 None,
                 None,
                 None,
@@ -155,7 +155,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nemo_flow_core::ToolAttributes::empty(),
+                nemo_flow::ToolAttributes::empty(),
                 None,
                 None,
             ),
@@ -165,7 +165,7 @@ mod tests {
                 event_name,
                 None,
                 None,
-                nemo_flow_core::ScopeAttributes::empty(),
+                nemo_flow::ScopeAttributes::empty(),
                 scope_type,
             ),
             (EventType::Mark, _) | (_, None) => {

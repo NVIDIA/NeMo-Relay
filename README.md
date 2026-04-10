@@ -18,10 +18,9 @@ NeMo Flow is a multi-language agent runtime framework that gives AI agent develo
 Write your agent logic once and instrument it with NeMo Flow middleware and events that work consistently across all supported languages.
 
 All bindings also expose OTLP-backed observability subscribers. Direct Rust
-users can depend on the separate workspace crates
-`nemo-flow-otel` and `nemo-flow-openinference`, while Python,
-Node.js, Go, and WASM expose binding-native config objects on top of those
-implementations. See
+users can import them from `nemo_flow::observability::{otel, openinference}`,
+while Python, Node.js, Go, and WASM expose binding-native config objects on top
+of those implementations. See
 [Observability with OpenTelemetry](docs/observability-with-opentelemetry.md)
 and [Observability with OpenInference](docs/observability-with-openinference.md)
 for the canonical setup guides.
@@ -71,6 +70,7 @@ Comprehensive documentation lives in the [docs/](docs/) directory. The canonical
 | [Language Bindings](docs/language-bindings.md) | Per-language usage guides and naming conventions |
 | [Recipes](docs/recipes.md) | Task-oriented patterns for logging, ATIF, adaptive setup, and context propagation |
 | [Adaptive Layer](docs/adaptive-layer.md) | Dynamic adaptive config, flat adaptive sections, and plugin-host integration |
+| [Plugins](docs/hosted-plugins.md) | Practical guide for configuring plugins and writing plugin handlers |
 | [Online Learning Engine](docs/online-learning-engine.md) | Prediction trie, sensitivity scoring, Redis persistence, and learner pipeline |
 | [Integration Best Practices](docs/integration-best-practices.md) | Patterns for integrating NeMo Flow into existing agent frameworks |
 | [Testing](docs/testing.md) | Testing strategy and how to run tests across all languages |
@@ -79,9 +79,7 @@ Comprehensive documentation lives in the [docs/](docs/) directory. The canonical
 
 ```
 crates/
-  core/       # Core runtime library (nemo-flow-core)
-  otel/       # OpenTelemetry OTLP subscriber crate (nemo-flow-otel)
-  openinference/ # OpenInference OTLP subscriber crate (nemo-flow-openinference)
+  core/       # Core runtime library (nemo-flow)
   python/     # PyO3 Python bindings (_native C extension)
   ffi/        # C FFI layer (used by Go, generates header via cbindgen)
   node/       # NAPI Node.js bindings
@@ -110,9 +108,7 @@ examples/     # Runnable example scripts
 
 ```bash
 cargo build --workspace
-cargo build -p nemo-flow-core          # Core only
-cargo build -p nemo-flow-otel          # OpenTelemetry OTLP subscriber
-cargo build -p nemo-flow-openinference # OpenInference OTLP subscriber
+cargo build -p nemo-flow          # Core only
 ```
 
 ### Python

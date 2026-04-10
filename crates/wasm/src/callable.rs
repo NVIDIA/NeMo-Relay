@@ -26,9 +26,9 @@ use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::JsFuture;
 
-use nemo_flow_core::codec::{AnnotatedLLMRequest, LlmCodec};
-use nemo_flow_core::types::LLMRequest;
-use nemo_flow_core::{
+use nemo_flow::codec::{AnnotatedLLMRequest, LlmCodec};
+use nemo_flow::types::LLMRequest;
+use nemo_flow::{
     FlowError, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
     LlmStreamExecutionNextFn, Result, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
 };
@@ -196,7 +196,7 @@ pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn
         move |name: &str,
               request: LLMRequest,
               annotated: Option<AnnotatedLLMRequest>|
-              -> nemo_flow_core::Result<(LLMRequest, Option<AnnotatedLLMRequest>)> {
+              -> nemo_flow::Result<(LLMRequest, Option<AnnotatedLLMRequest>)> {
             let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             let js_name = JsValue::from_str(name);
             let js_req = json_to_js(&req_json);
@@ -439,14 +439,14 @@ pub fn wrap_js_finalizer_fn(func: Function) -> Box<dyn FnOnce() -> Json + Send> 
 
 /// Wrap a JS function for event subscriber: `(event) => void`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn wrap_js_event_subscriber(_func: Function) -> nemo_flow_core::EventSubscriberFn {
-    std::sync::Arc::new(move |_event: &nemo_flow_core::Event| {})
+pub fn wrap_js_event_subscriber(_func: Function) -> nemo_flow::EventSubscriberFn {
+    std::sync::Arc::new(move |_event: &nemo_flow::Event| {})
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn wrap_js_event_subscriber(func: Function) -> nemo_flow_core::EventSubscriberFn {
+pub fn wrap_js_event_subscriber(func: Function) -> nemo_flow::EventSubscriberFn {
     let func = SendWrapper::new(func);
-    std::sync::Arc::new(move |event: &nemo_flow_core::Event| {
+    std::sync::Arc::new(move |event: &nemo_flow::Event| {
         let wasm_event = WasmEvent::from(event);
         let js_event = wasm_event
             .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
@@ -712,7 +712,7 @@ unsafe impl Sync for WasmCodec {}
 
 #[cfg(target_arch = "wasm32")]
 impl LlmCodec for WasmCodec {
-    fn decode(&self, request: &LLMRequest) -> nemo_flow_core::Result<AnnotatedLLMRequest> {
+    fn decode(&self, request: &LLMRequest) -> nemo_flow::Result<AnnotatedLLMRequest> {
         let req_json = serde_json::to_value(request).unwrap_or(Json::Null);
         let js_req = json_to_js(&req_json);
         let result = self
@@ -730,7 +730,7 @@ impl LlmCodec for WasmCodec {
         &self,
         annotated: &AnnotatedLLMRequest,
         original: &LLMRequest,
-    ) -> nemo_flow_core::Result<LLMRequest> {
+    ) -> nemo_flow::Result<LLMRequest> {
         let annotated_json = serde_json::to_value(annotated).unwrap_or(Json::Null);
         let js_annotated = json_to_js(&annotated_json);
         let original_json = serde_json::to_value(original).unwrap_or(Json::Null);
@@ -753,7 +753,7 @@ pub fn wrap_js_codec(_decode_fn: Function, _encode_fn: Function) -> Arc<dyn LlmC
     struct UnsupportedCodec;
 
     impl LlmCodec for UnsupportedCodec {
-        fn decode(&self, _request: &LLMRequest) -> nemo_flow_core::Result<AnnotatedLLMRequest> {
+        fn decode(&self, _request: &LLMRequest) -> nemo_flow::Result<AnnotatedLLMRequest> {
             Err(wasm_only_error())
         }
 
@@ -761,7 +761,7 @@ pub fn wrap_js_codec(_decode_fn: Function, _encode_fn: Function) -> Arc<dyn LlmC
             &self,
             _annotated: &AnnotatedLLMRequest,
             _original: &LLMRequest,
-        ) -> nemo_flow_core::Result<LLMRequest> {
+        ) -> nemo_flow::Result<LLMRequest> {
             Err(wasm_only_error())
         }
     }
@@ -799,25 +799,25 @@ unsafe impl Send for WasmResponseCodec {}
 unsafe impl Sync for WasmResponseCodec {}
 
 #[cfg(target_arch = "wasm32")]
-impl nemo_flow_core::codec::LlmResponseCodec for WasmResponseCodec {
+impl nemo_flow::codec::LlmResponseCodec for WasmResponseCodec {
     fn decode_response(
         &self,
         response: &Json,
-    ) -> nemo_flow_core::Result<nemo_flow_core::codec::AnnotatedLLMResponse> {
+    ) -> nemo_flow::Result<nemo_flow::codec::AnnotatedLLMResponse> {
         let js_resp = json_to_js(response);
         let result = self
             .decode_response_fn
             .call1(&JsValue::NULL, &js_resp)
             .map_err(|e| {
-                nemo_flow_core::FlowError::Internal(format!("decode_response() failed: {e:?}"))
+                nemo_flow::FlowError::Internal(format!("decode_response() failed: {e:?}"))
             })?;
         let result_json = js_to_json(&result).map_err(|e| {
-            nemo_flow_core::FlowError::Internal(format!(
+            nemo_flow::FlowError::Internal(format!(
                 "decode_response() returned invalid JSON: {e:?}"
             ))
         })?;
         serde_json::from_value(result_json).map_err(|e| {
-            nemo_flow_core::FlowError::Internal(format!(
+            nemo_flow::FlowError::Internal(format!(
                 "decode_response() returned unexpected type: {e}"
             ))
         })
@@ -828,7 +828,7 @@ impl nemo_flow_core::codec::LlmResponseCodec for WasmResponseCodec {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn wrap_js_response_codec(
     _decode_response_fn: Function,
-) -> Arc<dyn nemo_flow_core::codec::LlmResponseCodec> {
+) -> Arc<dyn nemo_flow::codec::LlmResponseCodec> {
     panic!("wrap_js_response_codec is only available on wasm32")
 }
 
@@ -836,7 +836,7 @@ pub fn wrap_js_response_codec(
 #[cfg(target_arch = "wasm32")]
 pub fn wrap_js_response_codec(
     decode_response_fn: Function,
-) -> Arc<dyn nemo_flow_core::codec::LlmResponseCodec> {
+) -> Arc<dyn nemo_flow::codec::LlmResponseCodec> {
     Arc::new(WasmResponseCodec {
         decode_response_fn: SendWrapper::new(decode_response_fn),
     })

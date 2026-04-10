@@ -15,7 +15,7 @@ NeMo Flow is a multi-language agent runtime framework providing execution scope 
 
 ```
 crates/
-  core/           # Core runtime library (nemo-flow-core)
+  core/           # Core runtime library (nemo-flow)
     src/          #   lib.rs, api.rs, atif.rs, context.rs, types.rs, registry.rs, stream.rs, error.rs, json.rs
     tests/        #   context_isolation_tests.rs, stream_tests.rs, scope_local_tests.rs
   python/         # PyO3 Python bindings (_native C extension, abi3 stable ABI)
@@ -47,12 +47,12 @@ go/nemo_flow/     # Go CGo bindings
 ```bash
 # Build
 cargo build --workspace
-cargo build -p nemo-flow-core            # Core only
+cargo build -p nemo-flow                 # Core only
 cargo build --release -p nemo-flow-ffi   # FFI shared lib (needed for Go)
 
 # Test — Rust
 cargo test --workspace                   # All Rust tests (excludes nemo-flow-python if Python < 3.11)
-cargo test -p nemo-flow-core             # Core tests only
+cargo test -p nemo-flow                  # Core tests only
 cargo test -p nemo-flow-wasm                    # WASM tests (unit tests via cargo test)
 wasm-pack test --node crates/wasm        # WASM integration tests (wasm-bindgen-test)
 cargo nextest run --workspace            # CI uses nextest (install: cargo install cargo-nextest --locked)
@@ -71,7 +71,7 @@ cd crates/node && npm install && npm test        # Build debug addon and run all
 wasm-pack build crates/wasm  --scope nvidia      # Produces pkg/ with .wasm, .js, .d.ts
 
 # Run a single test
-cargo test -p nemo-flow-core -- <test_name>   # Rust (substring match)
+cargo test -p nemo-flow -- <test_name>        # Rust (substring match)
 uv run pytest python/tests/test_scope.py             # Python (single file)
 uv run pytest -k "test_name"                         # Python (by name)
 cd go/nemo_flow && CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="../../target/release" go test -race -v -run TestFoo ./...

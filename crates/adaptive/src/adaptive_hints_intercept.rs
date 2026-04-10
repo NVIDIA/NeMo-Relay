@@ -12,7 +12,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 
-use nemo_flow_core::{LLMRequest, LlmRequestInterceptFn};
+use nemo_flow::{LLMRequest, LlmRequestInterceptFn};
 
 use crate::context_helpers::{
     extract_scope_path, read_manual_latency_sensitivity, resolve_agent_id,
@@ -72,7 +72,7 @@ impl AdaptiveHintsIntercept {
     }
 
     /// Converts this intercept into an [`LlmRequestInterceptFn`] suitable for
-    /// registration with [`nemo_flow_register_llm_request_intercept`].
+    /// registration with [`register_llm_request_intercept`].
     ///
     /// The returned closure reads the HotCache trie, builds AgentHints,
     /// injects them into the request headers and body, and returns the
@@ -82,7 +82,7 @@ impl AdaptiveHintsIntercept {
         Box::new(
             move |_name: &str,
                   mut request: LLMRequest,
-                  annotated: Option<nemo_flow_core::AnnotatedLLMRequest>| {
+                  annotated: Option<nemo_flow::AnnotatedLLMRequest>| {
                 // LOCK ORDERING: scope_stack first, hot_cache second.
                 let scope_path = extract_scope_path();
                 let manual_ls = read_manual_latency_sensitivity();

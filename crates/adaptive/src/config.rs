@@ -3,7 +3,7 @@
 
 //! Canonical adaptive config and diagnostics types.
 
-use nemo_flow_core::ConfigPolicy;
+use nemo_flow::ConfigPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
@@ -178,7 +178,7 @@ mod tests {
         assert!(config.tool_parallelism.is_none());
         assert_eq!(
             config.policy.unknown_component,
-            nemo_flow_core::UnsupportedBehavior::Warn
+            nemo_flow::UnsupportedBehavior::Warn
         );
     }
 

@@ -15,7 +15,7 @@ The model is intentionally simple:
 - `adaptive` is one of those top-level components.
 - adaptive built-ins are flat config sections: `telemetry`, `adaptive_hints`,
   and `tool_parallelism`.
-- hosted plugins are separate top-level plugin components, not children of the
+- custom plugins are separate top-level plugin components, not children of the
   adaptive config.
 
 ## Canonical Shape
@@ -74,24 +74,16 @@ The model is intentionally simple:
 The adaptive component is flat by design. If you want to activate another
 plugin, add another top-level `PluginComponentSpec`.
 
-## Hosted Plugins
+## Plugins
 
-Hosted plugins are managed by the core plugin host:
+Custom plugins are managed by the shared core plugin host:
 
-- register a handler with the core `plugin.register(...)` API in the binding
-  you are using
-- activate that plugin with another top-level plugin component
+- register a plugin kind with the host
+- activate it with another top-level component in `PluginConfig.components`
 - configure adaptive separately with its own `adaptive` component
 
-Hosted plugin registration contexts expose the same middleware and subscriber
-registration APIs regardless of language:
-
-- subscriber registration
-- LLM request intercept registration
-- LLM execution intercept registration
-- LLM stream execution intercept registration
-- tool request intercept registration
-- tool execution intercept registration
+See [Plugins](hosted-plugins.md) for the focused guide on configuring plugins,
+writing plugin handlers, registration context behavior, and rollback semantics.
 
 ## Examples
 
@@ -148,19 +140,18 @@ await plugin.initialize(config);
 
 ```go
 import (
-    adaptive "github.com/NVIDIA/NeMo-Flow/go/nemo_flow/adaptive"
     nemo_flow "github.com/NVIDIA/NeMo-Flow/go/nemo_flow"
 )
 
 config := nemo_flow.NewPluginConfig()
-adaptiveConfig := adaptive.NewConfig()
-adaptiveConfig.State = &adaptive.StateConfig{
-    Backend: adaptive.NewInMemoryBackend(),
+adaptiveConfig := nemo_flow.NewAdaptiveConfig()
+adaptiveConfig.State = &nemo_flow.AdaptiveStateConfig{
+    Backend: nemo_flow.NewInMemoryAdaptiveBackend(),
 }
-telemetry := adaptive.NewTelemetryConfig()
+telemetry := nemo_flow.NewTelemetryConfig()
 telemetry.Learners = []string{"latency_sensitivity"}
 adaptiveConfig.Telemetry = &telemetry
-adaptiveConfig.AdaptiveHints = &adaptive.AdaptiveHintsConfig{
+adaptiveConfig.AdaptiveHints = &nemo_flow.AdaptiveHintsConfig{
     Priority:       100,
     InjectHeader:   true,
     InjectBodyPath: "nvext.agent_hints",
@@ -168,7 +159,7 @@ adaptiveConfig.AdaptiveHints = &adaptive.AdaptiveHintsConfig{
 
 config.Components = append(
     config.Components,
-    adaptive.NewComponentSpec(adaptiveConfig).PluginComponent(),
+    nemo_flow.NewAdaptiveComponentSpec(adaptiveConfig).PluginComponent(),
 )
 
 report, err := nemo_flow.ValidatePluginConfig(config)
@@ -190,7 +181,7 @@ use nemo_flow_adaptive::{
     AdaptiveConfig, AdaptiveHintsComponentConfig, BackendSpec, ComponentSpec, StateConfig,
     TelemetryComponentConfig, ToolParallelismComponentConfig,
 };
-use nemo_flow_core::{initialize_plugins, PluginConfig};
+use nemo_flow::{initialize_plugins, PluginConfig};
 
 let config = PluginConfig {
     components: vec![ComponentSpec::new(AdaptiveConfig {
@@ -225,5 +216,6 @@ Validate through the core plugin host, not through an adaptive-specific runtime:
 ## Related Docs
 
 - [Adaptive API Reference](adaptive-api-reference.md)
+- [Plugins](hosted-plugins.md)
 - [Online Learning Engine](online-learning-engine.md)
 - [Language Bindings](language-bindings.md)

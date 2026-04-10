@@ -11,9 +11,7 @@ license.workspace = true
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-nemo-flow-core = { path = "../core" }
-nemo-flow-openinference = { path = "../openinference" }
-nemo-flow-otel = { path = "../otel" }
+nemo-flow = { path = "../core" }
 nemo-flow-adaptive = { path = "../adaptive", features = ["redis-backend"] }
 libc = "0.2"
 serde_json = "1"

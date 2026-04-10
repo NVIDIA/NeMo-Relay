@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# nemo-flow-core
+# nemo-flow
 
 Rust core runtime library for the NeMo Flow framework.
 
@@ -37,8 +37,8 @@ This crate provides the foundational runtime that all language bindings build up
 ## Build
 
 ```bash
-cargo build -p nemo-flow-core
-cargo test -p nemo-flow-core
+cargo build -p nemo-flow
+cargo test -p nemo-flow
 ```
 
 ## Documentation

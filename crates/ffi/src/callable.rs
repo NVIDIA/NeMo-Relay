@@ -24,9 +24,9 @@ use libc::c_char;
 use serde_json::Value as Json;
 use tokio_stream::{Stream, StreamExt};
 
-use nemo_flow_core::codec::{AnnotatedLLMRequest, LlmCodec};
-use nemo_flow_core::types::LLMRequest;
-use nemo_flow_core::{
+use nemo_flow::codec::{AnnotatedLLMRequest, LlmCodec};
+use nemo_flow::types::LLMRequest;
+use nemo_flow::{
     FlowError, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
     LlmStreamExecutionNextFn, Result, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
 };
@@ -803,9 +803,9 @@ pub fn wrap_event_subscriber(
     cb: NemoFlowEventSubscriberCb,
     user_data: *mut libc::c_void,
     free_fn: NemoFlowFreeFn,
-) -> nemo_flow_core::EventSubscriberFn {
+) -> nemo_flow::EventSubscriberFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |event: &nemo_flow_core::Event| {
+    Arc::new(move |event: &nemo_flow::Event| {
         let ffi_event = FfiEvent(event.clone());
         unsafe { cb(ud.ptr, &ffi_event) };
     })
@@ -826,7 +826,7 @@ unsafe impl Send for FfiCodec {}
 unsafe impl Sync for FfiCodec {}
 
 impl LlmCodec for FfiCodec {
-    fn decode(&self, request: &LLMRequest) -> nemo_flow_core::Result<AnnotatedLLMRequest> {
+    fn decode(&self, request: &LLMRequest) -> nemo_flow::Result<AnnotatedLLMRequest> {
         clear_last_error();
         let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request.clone())));
         let result_ptr = unsafe { (self.decode_cb)(self.user_data.ptr, ffi_req) };
@@ -850,7 +850,7 @@ impl LlmCodec for FfiCodec {
         &self,
         annotated: &AnnotatedLLMRequest,
         original: &LLMRequest,
-    ) -> nemo_flow_core::Result<LLMRequest> {
+    ) -> nemo_flow::Result<LLMRequest> {
         clear_last_error();
         let annotated_str = serde_json::to_string(annotated)
             .map_err(|e| FlowError::Internal(format!("codec encode: serialize failed: {e}")))?;
@@ -937,7 +937,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use nemo_flow_core::types::{Event, LLMAttributes, LLMHandle};
+    use nemo_flow::types::{Event, LLMAttributes, LLMHandle};
     use serde_json::json;
     use tokio_stream::StreamExt;
     use uuid::Uuid;

@@ -66,9 +66,10 @@ Choose the path that matches what you are trying to do:
 
 1. [Adaptive Layer](adaptive-layer.md)
 2. [Adaptive API Reference](adaptive-api-reference.md)
-3. [Online Learning Engine](online-learning-engine.md)
-4. [Context Isolation](context-isolation.md)
-5. [Testing](testing.md)
+3. [Plugins](hosted-plugins.md)
+4. [Online Learning Engine](online-learning-engine.md)
+5. [Context Isolation](context-isolation.md)
+6. [Testing](testing.md)
 
 ### Contributing or Extending Bindings
 
@@ -101,6 +102,7 @@ Choose the path that matches what you are trying to do:
 | [Recipes](recipes.md) | Task-oriented patterns for logging, ATIF, adaptive setup, and context propagation |
 | [Adaptive Layer](adaptive-layer.md) | Dynamic adaptive config, flat adaptive sections, and plugin-host integration |
 | [Adaptive API Reference](adaptive-api-reference.md) | Public adaptive config types, diagnostics, runtime helpers, and plugin registration APIs |
+| [Plugins](hosted-plugins.md) | Practical guide for configuring plugins and writing plugin handlers |
 | [Online Learning Engine](online-learning-engine.md) | Prediction trie, sensitivity scoring, Redis persistence, and learner pipeline |
 | [Testing](testing.md) | Test commands, helpers, coverage, and conventions |
 | [Integration Best Practices](integration-best-practices.md) | Patterns for integrating NeMo Flow into agent frameworks |

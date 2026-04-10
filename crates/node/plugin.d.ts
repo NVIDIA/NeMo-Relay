@@ -90,7 +90,7 @@ export interface PluginContext {
 }
 
 /** Hosted plugin callback contract. */
-export interface PluginHandler {
+export interface Plugin {
   /** Validate one component-local config object. */
   validate?(pluginConfig: Record<string, Json>): ConfigDiagnostic[] | null | undefined;
   /**
@@ -123,16 +123,16 @@ export declare function validate(config: PluginConfig): ConfigReport;
  * failure.
  */
 export declare function initialize(config: PluginConfig): Promise<ConfigReport>;
-/** Clear the active plugin configuration while leaving handler kinds registered. */
+/** Clear the active plugin configuration while leaving plugin kinds registered. */
 export declare function clear(): void;
 /** Return the last successfully activated plugin report, if any. */
 export declare function report(): ConfigReport | null;
-/** List registered hosted plugin kinds known to the handler registry. */
+/** List registered plugin kinds known to the registry. */
 export declare function listKinds(): string[];
-/** Register a hosted plugin kind for later validation and initialization. */
-export declare function register(pluginKind: string, handler: PluginHandler): void;
+/** Register a plugin kind for later validation and initialization. */
+export declare function register(pluginKind: string, plugin: Plugin): void;
 /**
- * Remove a previously registered hosted plugin kind.
+ * Remove a previously registered plugin kind.
  *
  * Active runtime registrations remain until `clear()` or the next successful
  * `initialize(...)`.
