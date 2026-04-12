@@ -233,7 +233,7 @@ jobs:
           set -e
           eval "$(cargo llvm-cov show-env --sh)"
           cargo llvm-cov clean --workspace
-          cargo nextest run --workspace --release --profile ci --all-features
+          cargo nextest run --workspace --profile ci --all-features
 
       - name: Run Go tests with coverage
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
@@ -290,7 +290,7 @@ jobs:
           set -e
           eval "$(cargo llvm-cov show-env --sh)"
           uv sync --active --reinstall-package nemo-flow
-          uv run maturin develop --release
+          uv run maturin develop
           uv run pytest python/tests \
             --cov=nemo_flow \
             --cov-report term-missing \
@@ -305,11 +305,11 @@ jobs:
           # eval "$(cargo llvm-cov show-env --sh)"
 
           echo "Run WASM behavior tests"
-          wasm-pack test --release --node crates/wasm
+          wasm-pack test --node crates/wasm
 
           echo "Build WASM Node package for JS coverage"
           rm -rf crates/wasm/pkg
-          wasm-pack build --release crates/wasm --target nodejs --out-dir pkg
+          wasm-pack build crates/wasm --target nodejs --out-dir pkg
 
           echo "Run WASM Node coverage harness"
           npx --yes c8 \
@@ -333,7 +333,6 @@ jobs:
           set -e
           eval "$(cargo llvm-cov show-env --sh)"
           cargo llvm-cov report \
-            --release \
             --ignore-filename-regex '.*/tests/.*\.rs$' \
             --cobertura \
             --output-path ${{ github.workspace }}/rust_coverage_report.xml
