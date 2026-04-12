@@ -44,6 +44,12 @@ go/nemo_flow/     # Go CGo bindings
 
 ## Build & Test Commands
 
+Minimum supported external test tools:
+
+- `cargo-nextest >= 0.9.111`
+- `cargo-llvm-cov >= 0.8.5`
+- `wasm-pack >= 0.14.0`
+
 ```bash
 # Build
 cargo build --workspace
@@ -55,7 +61,7 @@ cargo test --workspace                   # All Rust tests (excludes nemo-flow-py
 cargo test -p nemo-flow                  # Core tests only
 cargo test -p nemo-flow-wasm                    # WASM tests (unit tests via cargo test)
 wasm-pack test --node crates/wasm        # WASM integration tests (wasm-bindgen-test)
-cargo nextest run --workspace            # CI uses nextest (install: cargo install cargo-nextest --locked)
+cargo nextest run --workspace            # CI uses nextest (install: cargo install cargo-nextest --version 0.9.111 --locked)
 
 # Test — Python
 uv sync                                  # Create venv, install deps, build native extension

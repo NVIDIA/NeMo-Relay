@@ -232,7 +232,7 @@ test:node:
           --test-reporter=junit --test-reporter-destination="${CI_PROJECT_DIR}/target/coverage/nodejs_junit.xml" \
           tests/*.mjs
       popd
-    - cargo llvm-cov report -p nemo-flow-node --ignore-filename-regex '.*/src/.*_tests\.rs$' --cobertura --output-path target/coverage/node-rust.xml
+    - cargo llvm-cov report -p nemo-flow-node --ignore-filename-regex '.*/tests/.*\.rs$' --cobertura --output-path target/coverage/node-rust.xml
 
 test:python:
   stage: test
@@ -273,7 +273,7 @@ test:python:
         --cov=nemo_flow --cov-report term-missing \
         --junit-xml=${CI_PROJECT_DIR}/target/coverage/pytest_junit_report.xml \
         --cov-report xml:${CI_PROJECT_DIR}/target/coverage/pytest_coverage_report.xml
-      cargo llvm-cov report -p nemo-flow-python --ignore-filename-regex '.*/src/.*_tests\.rs$' --cobertura --output-path target/coverage/python-rust.xml
+      cargo llvm-cov report -p nemo-flow-python --ignore-filename-regex '.*/tests/.*\.rs$' --cobertura --output-path target/coverage/python-rust.xml
 
 test:rust:
   stage: test
@@ -301,7 +301,7 @@ test:rust:
     - eval "$(cargo llvm-cov show-env --sh)"
     - cargo llvm-cov clean --workspace
     - cargo nextest run --workspace ${NEMO_FLOW_CI_RUST_ONLY_EXCLUDES} --release --profile ci
-    - cargo llvm-cov report --release --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/src/(coverage_tests|.*_tests)\.rs$)' --cobertura --output-path target/coverage/rust-workspace.xml
+    - cargo llvm-cov report --release --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/tests/.*\.rs$)' --cobertura --output-path target/coverage/rust-workspace.xml
 
 test:wasm:
   stage: test
@@ -335,7 +335,7 @@ test:wasm:
         cargo llvm-cov clean --workspace
         cargo test -p nemo-flow-wasm --lib --release
         cargo llvm-cov report -p nemo-flow-wasm --release \
-          --ignore-filename-regex '.*/src/.*_tests\.rs$' \
+          --ignore-filename-regex '.*/tests/.*\.rs$' \
           --cobertura --output-path target/coverage/wasm-rust.xml
       )
     - echo "Running WASM behavior tests"

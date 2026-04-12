@@ -9,6 +9,25 @@ NeMo Flow maintains test coverage across the core runtime, all language bindings
 and the adaptive layer. Every binding mirrors the same major test domains so that
 behavioral parity is verified at each layer.
 
+## Minimum Supported Test Tool Versions
+
+When reproducing CI locally or updating automation, use at least these tool
+versions:
+
+| Tool | Minimum supported version | Why |
+|------|---------------------------|-----|
+| `cargo-nextest` | `0.9.111` | Baseline version for the repo's `nextest`-based Rust test flow |
+| `cargo-llvm-cov` | `0.8.5` | Required for the documented `cargo llvm-cov show-env --sh` coverage flow |
+| `wasm-pack` | `0.14.0` | Baseline version for the documented WASM build and test commands |
+
+Install or upgrade them explicitly when needed:
+
+```bash
+cargo install cargo-nextest --version 0.9.111 --locked
+cargo install cargo-llvm-cov --version 0.8.5 --locked
+cargo install wasm-pack --version 0.14.0 --locked
+```
+
 ## Fast Local Sanity
 
 Use this path when you want the shortest high-signal verification loop:
@@ -86,7 +105,7 @@ cargo nextest run --workspace \
   --exclude nemo-flow-wasm \
   --release --profile ci
 cargo llvm-cov report --release \
-  --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/src/(coverage_tests|.*_tests)\.rs$)' \
+  --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/tests/.*\.rs$)' \
   --cobertura --output-path target/coverage/rust-workspace.xml
 ```
 
@@ -162,6 +181,7 @@ The `.pre-commit-config.yaml` enforces quality gates before every commit:
 | `check-yaml` / `check-toml` / `check-json` | Config file syntax |
 | `ruff` (lint + format) | Python style and lint rules |
 | `ty` | Python type checking |
+| `ffi header sync` | Runs Cargo for `nemo-flow-ffi`, regenerating `crates/ffi/nemo_flow.h` via `build.rs` when needed |
 | `cargo fmt` | Rust formatting |
 | `cargo clippy` | Rust lints (`-D warnings`) |
 | `cargo-deny` | Dependency audit via `deny.toml` |
@@ -222,7 +242,7 @@ every binding-level wrapper around the core runtime.
 For line coverage across the native Rust workspace, use `cargo-llvm-cov`:
 
 ```bash
-cargo install cargo-llvm-cov
+cargo install cargo-llvm-cov --version 0.8.5 --locked
 eval "$(cargo llvm-cov show-env --sh)"
 cargo llvm-cov clean --workspace
 cargo nextest run --workspace \
@@ -231,7 +251,7 @@ cargo nextest run --workspace \
   --exclude nemo-flow-wasm \
   --release --profile ci
 cargo llvm-cov report --release \
-  --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/src/(coverage_tests|.*_tests)\.rs$)' \
+  --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/tests/.*\.rs$)' \
   --cobertura --output-path target/coverage/rust-workspace.xml
 ```
 
@@ -251,7 +271,7 @@ source <(cargo llvm-cov show-env --sh)
 cargo test -p nemo-flow-node --lib
 cd crates/node && npm install && npm run build-debug && npm test && cd ../..
 cargo llvm-cov report -p nemo-flow-node \
-  --ignore-filename-regex '.*/src/(coverage_tests|.*_tests)\.rs$' \
+  --ignore-filename-regex '.*/tests/.*\.rs$' \
   --cobertura --output-path target/coverage/node-rust.xml
 
 # Python binding Rust coverage
@@ -278,7 +298,7 @@ cargo test -p nemo-flow-python --lib
 uv run maturin develop
 uv run pytest python/tests
 cargo llvm-cov report -p nemo-flow-python \
-  --ignore-filename-regex '.*/src/(coverage_tests|.*_tests)\.rs$' \
+  --ignore-filename-regex '.*/tests/.*\.rs$' \
   --cobertura --output-path target/coverage/python-rust.xml
 ```
 
@@ -393,7 +413,7 @@ WASM coverage is collected in three parts:
    `target/coverage/wasm-rust.xml` for the native Rust crate surface.
 2. `wasm-pack test --node crates/wasm` validates the actual `wasm-bindgen`
    behavior path.
-3. `wasm-pack build --target nodejs --out-dir pkg-test` plus a Node.js test
+3. `wasm-pack build --target nodejs --out-dir pkg` plus a Node.js test
    harness under `crates/wasm/tests-js/` lets `c8` emit
    `target/coverage/wasm-js.xml` for the generated JavaScript wrapper.
 
@@ -411,15 +431,21 @@ implementation details.
 
 1. **Split by domain**: Each test file covers one domain (types, scope, tools,
    llm, scope_local, etc.). Add tests to the appropriate file.
-2. **Mirror across bindings**: When adding a new feature, add tests in every
+2. **Use the standard Rust layout**: Put internal/module tests in
+   `tests/unit`, public behavior tests in `tests/integration`, and targeted
+   branch/error-path tests in `tests/coverage`.
+3. **Wire private Rust tests from `src`**: If a Rust unit or coverage test
+   needs private module access, keep the test file under `tests/unit` or
+   `tests/coverage` and include it from `src` with `#[cfg(test)] #[path = ...]`.
+4. **Mirror across bindings**: When adding a new feature, add tests in every
    binding that exposes it.
-3. **Use descriptive names**: `test_<domain>_<behavior>_<condition>`, e.g.
+5. **Use descriptive names**: `test_<domain>_<behavior>_<condition>`, e.g.
    `test_exporter_merged_tool_observations`.
-4. **Isolate global state**: In Rust integration tests, acquire `TEST_MUTEX`
+6. **Isolate global state**: In Rust integration tests, acquire `TEST_MUTEX`
    and call `reset_global()` before touching the default context.
-5. **Async by default** (Python): Use `async def test_*` — `pytest-asyncio`
+7. **Async by default** (Python): Use `async def test_*` — `pytest-asyncio`
    handles the event loop.
-6. **WASM has three test modes**: Unit tests run via `cargo test -p nemo-flow-wasm`
+8. **WASM has three test modes**: Unit tests run via `cargo test -p nemo-flow-wasm`
    (standard Rust test harness). Integration tests that exercise the full
    `wasm-bindgen` JavaScript interop require `wasm-pack test --node crates/wasm`,
    which compiles to WebAssembly and runs under Node.js. Coverage for the
@@ -431,20 +457,13 @@ implementation details.
 
 ```rust
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
+#[path = "../tests/unit/my_domain_tests.rs"]
+mod tests;
+```
 
-    #[test]
-    fn test_my_new_behavior() {
-        // Arrange
-        let exporter = AtifExporter::new("s".into(), make_agent_info());
-        // Act
-        let trajectory = exporter.export();
-        // Assert
-        assert!(trajectory.steps.is_empty());
-    }
-}
+```rust
+// tests/integration/main.rs
+mod my_domain_tests;
 ```
 
 ### Adding a Python Test

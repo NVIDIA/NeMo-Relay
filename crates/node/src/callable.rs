@@ -14,15 +14,19 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use nemo_flow::context::callbacks::{
+    EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
+    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
+};
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
-use nemo_flow::codec::{AnnotatedLLMRequest, LlmCodec};
-use nemo_flow::types::LLMRequest;
-use nemo_flow::{
-    FlowError, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
-    LlmStreamExecutionNextFn, Result, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
-};
+use nemo_flow::codec::request::AnnotatedLLMRequest;
+use nemo_flow::codec::response::AnnotatedLLMResponse;
+use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_flow::error::{FlowError, Result};
+use nemo_flow::types::event::Event;
+use nemo_flow::types::llm::LLMRequest;
 
 use crate::convert::record_callback_error;
 use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
@@ -444,9 +448,9 @@ pub fn wrap_js_finalizer_fn(
 /// Wrap a JS function for event subscriber: `(event: JsEvent) => void`.
 pub fn wrap_js_event_subscriber(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> nemo_flow::EventSubscriberFn {
+) -> EventSubscriberFn {
     let func = Arc::new(func);
-    Arc::new(move |event: &nemo_flow::Event| {
+    Arc::new(move |event: &Event| {
         let event_json = serde_json::to_value(JsEvent::from(event)).unwrap_or(Json::Null);
         let status = func.call(event_json, ThreadsafeFunctionCallMode::NonBlocking);
         if status != napi::Status::Ok {
@@ -537,11 +541,8 @@ struct NapiResponseCodec {
     decode_response: Arc<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
 }
 
-impl nemo_flow::codec::LlmResponseCodec for NapiResponseCodec {
-    fn decode_response(
-        &self,
-        response: &Json,
-    ) -> nemo_flow::Result<nemo_flow::codec::AnnotatedLLMResponse> {
+impl LlmResponseCodec for NapiResponseCodec {
+    fn decode_response(&self, response: &Json) -> Result<AnnotatedLLMResponse> {
         let (tx, rx) = std::sync::mpsc::channel();
         let status = self.decode_response.call_with_return_value(
             response.clone(),
@@ -552,15 +553,15 @@ impl nemo_flow::codec::LlmResponseCodec for NapiResponseCodec {
             },
         );
         if status != napi::Status::Ok {
-            return Err(nemo_flow::FlowError::Internal(format!(
+            return Err(FlowError::Internal(format!(
                 "decode_response call failed: {status:?}"
             )));
         }
-        let result = rx.recv().map_err(|_| {
-            nemo_flow::FlowError::Internal("decode_response callback did not return".into())
-        })?;
+        let result = rx
+            .recv()
+            .map_err(|_| FlowError::Internal("decode_response callback did not return".into()))?;
         serde_json::from_value(result).map_err(|e| {
-            nemo_flow::FlowError::Internal(format!(
+            FlowError::Internal(format!(
                 "decode_response returned invalid AnnotatedLLMResponse: {e}"
             ))
         })
@@ -570,14 +571,14 @@ impl nemo_flow::codec::LlmResponseCodec for NapiResponseCodec {
 /// Wrap a JS decode_response function into an `Arc<dyn LlmResponseCodec>`.
 pub fn wrap_js_response_codec(
     decode_response: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Arc<dyn nemo_flow::codec::LlmResponseCodec> {
+) -> Arc<dyn LlmResponseCodec> {
     Arc::new(NapiResponseCodec {
         decode_response: Arc::new(decode_response),
     })
 }
 
 #[cfg(test)]
-#[path = "callable_coverage_tests.rs"]
+#[path = "../tests/coverage/callable_coverage_tests.rs"]
 mod coverage_tests;
 
 /// Wrap a JS function `(args, next) => result` for tool execution intercept.

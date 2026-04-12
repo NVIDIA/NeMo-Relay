@@ -24,16 +24,20 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use nemo_flow::context::callbacks::{
+    EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
+    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
+};
+use nemo_flow::error::{FlowError, Result as FlowResult};
 use pyo3::prelude::*;
 use serde_json::Value as Json;
 use tokio_stream::Stream;
 
-use nemo_flow::codec::{AnnotatedLLMRequest, LlmCodec};
-use nemo_flow::types::LLMRequest;
-use nemo_flow::{
-    FlowError, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
-    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
-};
+use nemo_flow::codec::request::AnnotatedLLMRequest;
+use nemo_flow::codec::response::AnnotatedLLMResponse;
+use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_flow::types::event::Event;
+use nemo_flow::types::llm::LLMRequest;
 
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_types::{PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest};
@@ -114,14 +118,13 @@ pub fn wrap_py_tool_request_intercept_fn(py_fn: Py<PyAny>) -> ToolInterceptFn {
 /// coroutine, it is awaited via the pyo3-async-runtimes bridge.
 pub fn wrap_py_tool_exec_fn(
     py_fn: Py<PyAny>,
-) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = nemo_flow::Result<Json>> + Send>> + Send + Sync>
-{
+) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync> {
     let py_fn = std::sync::Arc::new(py_fn);
     Box::new(move |args: Json| {
         let py_fn = py_fn.clone();
         Box::pin(async move {
             // Call the Python function and check if it returns a coroutine
-            let outcome: nemo_flow::Result<
+            let outcome: FlowResult<
                 Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
             > = Python::attach(|py| {
                 let py_args =
@@ -230,7 +233,7 @@ impl PyLlmStreamNextFn {
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
             // Drain into mpsc channel and return PyLlmStream
-            let (tx, rx) = tokio::sync::mpsc::channel::<nemo_flow::Result<Json>>(32);
+            let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<Json>>(32);
             tokio::spawn(async move {
                 use tokio_stream::StreamExt;
                 let mut stream = rust_stream;
@@ -257,7 +260,7 @@ pub fn wrap_py_tool_exec_intercept_fn(
             &str,
             Json,
             ToolExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = nemo_flow::Result<Json>> + Send>>
+        ) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>>
         + Send
         + Sync,
 > {
@@ -266,7 +269,7 @@ pub fn wrap_py_tool_exec_intercept_fn(
         let py_fn = py_fn.clone();
         let name = name.to_string();
         Box::pin(async move {
-            let outcome: nemo_flow::Result<
+            let outcome: FlowResult<
                 Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
             > = Python::attach(|py| {
                 let py_args =
@@ -325,7 +328,7 @@ pub fn wrap_py_llm_exec_intercept_fn(
             &str,
             LLMRequest,
             LlmExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = nemo_flow::Result<Json>> + Send>>
+        ) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>>
         + Send
         + Sync,
 > {
@@ -335,7 +338,7 @@ pub fn wrap_py_llm_exec_intercept_fn(
             let py_fn = py_fn.clone();
             let name = name.to_string();
             Box::pin(async move {
-                let outcome: nemo_flow::Result<
+                let outcome: FlowResult<
                     Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
                 > = Python::attach(|py| {
                     let py_req = PyLLMRequest { inner: request };
@@ -400,9 +403,7 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
         ) -> Pin<
             Box<
                 dyn Future<
-                        Output = nemo_flow::Result<
-                            Pin<Box<dyn Stream<Item = nemo_flow::Result<Json>> + Send>>,
-                        >,
+                        Output = FlowResult<Pin<Box<dyn Stream<Item = FlowResult<Json>> + Send>>>,
                     > + Send,
             >,
         > + Send
@@ -456,7 +457,7 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                         .map_err(|e| FlowError::Internal(e.to_string()))?,
                 };
 
-                let (tx, rx) = tokio::sync::mpsc::channel::<nemo_flow::Result<Json>>(32);
+                let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<Json>>(32);
 
                 let task_locals = Python::attach(|py| {
                     pyo3_async_runtimes::tokio::get_current_locals(py)
@@ -530,10 +531,7 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                 }));
 
                 let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-                Ok(Box::pin(stream)
-                    as Pin<
-                        Box<dyn Stream<Item = nemo_flow::Result<Json>> + Send>,
-                    >)
+                Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = FlowResult<Json>> + Send>>)
             })
         },
     )
@@ -603,7 +601,7 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
         move |name: &str,
               request: LLMRequest,
               annotated: Option<AnnotatedLLMRequest>|
-              -> nemo_flow::Result<(LLMRequest, Option<AnnotatedLLMRequest>)> {
+              -> FlowResult<(LLMRequest, Option<AnnotatedLLMRequest>)> {
             Python::attach(|py| {
                 let py_req = PyLLMRequest {
                     inner: request.clone(),
@@ -672,16 +670,13 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
 /// Supports both sync and async Python callables.
 pub fn wrap_py_llm_exec_fn(
     py_fn: Py<PyAny>,
-) -> Box<
-    dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = nemo_flow::Result<Json>> + Send>>
-        + Send
-        + Sync,
-> {
+) -> Box<dyn Fn(LLMRequest) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>
+{
     let py_fn = std::sync::Arc::new(py_fn);
     Box::new(move |request: LLMRequest| {
         let py_fn = py_fn.clone();
         Box::pin(async move {
-            let outcome: nemo_flow::Result<
+            let outcome: FlowResult<
                 Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
             > = Python::attach(|py| {
                 let py_req = PyLLMRequest { inner: request };
@@ -730,9 +725,7 @@ pub fn wrap_py_llm_stream_exec_fn(
         ) -> Pin<
             Box<
                 dyn Future<
-                        Output = nemo_flow::Result<
-                            Pin<Box<dyn Stream<Item = nemo_flow::Result<Json>> + Send>>,
-                        >,
+                        Output = FlowResult<Pin<Box<dyn Stream<Item = FlowResult<Json>> + Send>>>,
                     > + Send,
             >,
         > + Send
@@ -750,7 +743,7 @@ pub fn wrap_py_llm_stream_exec_fn(
                     .map_err(|e: PyErr| FlowError::Internal(e.to_string()))
             })?;
 
-            let (tx, rx) = tokio::sync::mpsc::channel::<nemo_flow::Result<Json>>(32);
+            let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<Json>>(32);
 
             // Capture the Python event loop context so the spawned task can use
             // pyo3_async_runtimes::tokio::into_future (which needs TaskLocals).
@@ -829,10 +822,7 @@ pub fn wrap_py_llm_stream_exec_fn(
             }));
 
             let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-            Ok(Box::pin(stream)
-                as Pin<
-                    Box<dyn Stream<Item = nemo_flow::Result<Json>> + Send>,
-                >)
+            Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = FlowResult<Json>> + Send>>)
         })
     })
 }
@@ -914,47 +904,47 @@ pub fn wrap_py_llm_sanitize_response_fn(
 }
 
 /// Wrap a Python callable `(Event) -> None` for event subscribers.
-pub fn wrap_py_event_subscriber(py_fn: Py<PyAny>) -> nemo_flow::EventSubscriberFn {
-    Arc::new(move |event: &nemo_flow::Event| {
+pub fn wrap_py_event_subscriber(py_fn: Py<PyAny>) -> EventSubscriberFn {
+    Arc::new(move |event: &Event| {
         Python::attach(|py| {
             let result = match event {
-                nemo_flow::Event::ScopeStart(inner) => py_fn.call1(
+                Event::ScopeStart(inner) => py_fn.call1(
                     py,
                     (crate::py_types::PyScopeStartEvent {
                         inner: inner.clone(),
                     },),
                 ),
-                nemo_flow::Event::ScopeEnd(inner) => py_fn.call1(
+                Event::ScopeEnd(inner) => py_fn.call1(
                     py,
                     (crate::py_types::PyScopeEndEvent {
                         inner: inner.clone(),
                     },),
                 ),
-                nemo_flow::Event::ToolStart(inner) => py_fn.call1(
+                Event::ToolStart(inner) => py_fn.call1(
                     py,
                     (crate::py_types::PyToolStartEvent {
                         inner: inner.clone(),
                     },),
                 ),
-                nemo_flow::Event::ToolEnd(inner) => py_fn.call1(
+                Event::ToolEnd(inner) => py_fn.call1(
                     py,
                     (crate::py_types::PyToolEndEvent {
                         inner: inner.clone(),
                     },),
                 ),
-                nemo_flow::Event::LLMStart(inner) => py_fn.call1(
+                Event::LLMStart(inner) => py_fn.call1(
                     py,
                     (crate::py_types::PyLLMStartEvent {
                         inner: inner.clone(),
                     },),
                 ),
-                nemo_flow::Event::LLMEnd(inner) => py_fn.call1(
+                Event::LLMEnd(inner) => py_fn.call1(
                     py,
                     (crate::py_types::PyLLMEndEvent {
                         inner: inner.clone(),
                     },),
                 ),
-                nemo_flow::Event::Mark(inner) => py_fn.call1(
+                Event::Mark(inner) => py_fn.call1(
                     py,
                     (crate::py_types::PyMarkEvent {
                         inner: inner.clone(),
@@ -988,7 +978,7 @@ unsafe impl Send for PyLlmCodecWrapper {}
 unsafe impl Sync for PyLlmCodecWrapper {}
 
 impl LlmCodec for PyLlmCodecWrapper {
-    fn decode(&self, request: &LLMRequest) -> nemo_flow::Result<AnnotatedLLMRequest> {
+    fn decode(&self, request: &LLMRequest) -> FlowResult<AnnotatedLLMRequest> {
         Python::attach(|py| {
             let py_req = PyLLMRequest {
                 inner: request.clone(),
@@ -1012,7 +1002,7 @@ impl LlmCodec for PyLlmCodecWrapper {
         &self,
         annotated: &AnnotatedLLMRequest,
         original: &LLMRequest,
-    ) -> nemo_flow::Result<LLMRequest> {
+    ) -> FlowResult<LLMRequest> {
         Python::attach(|py| {
             let py_ann = PyAnnotatedLLMRequest {
                 inner: annotated.clone(),
@@ -1053,11 +1043,8 @@ pub(crate) struct PyLlmResponseCodecWrapper {
 unsafe impl Send for PyLlmResponseCodecWrapper {}
 unsafe impl Sync for PyLlmResponseCodecWrapper {}
 
-impl nemo_flow::codec::LlmResponseCodec for PyLlmResponseCodecWrapper {
-    fn decode_response(
-        &self,
-        response: &Json,
-    ) -> nemo_flow::Result<nemo_flow::codec::AnnotatedLLMResponse> {
+impl LlmResponseCodec for PyLlmResponseCodecWrapper {
+    fn decode_response(&self, response: &Json) -> FlowResult<AnnotatedLLMResponse> {
         Python::attach(|py| {
             let py_resp = json_to_py(py, response).map_err(|e| {
                 FlowError::Internal(format!(

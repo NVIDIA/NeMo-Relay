@@ -20,9 +20,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-use nemo_flow::{Json, ToolExecutionFn, ToolExecutionNextFn};
+use nemo_flow::context::callbacks::{ToolExecutionFn, ToolExecutionNextFn};
+use nemo_flow::error::Result as FlowResult;
+use nemo_flow::json::Json;
 
-use crate::types::HotCache;
+use crate::types::cache::HotCache;
 
 /// Header key used to inject agent hints into LLM requests.
 pub const AGENT_HINTS_HEADER_KEY: &str = "x-nemo-flow-adaptive-agent-hints";
@@ -67,91 +69,10 @@ pub(crate) fn create_tool_execution_intercept(hot_cache: Arc<RwLock<HotCache>>) 
             }
             // Always continue the middleware chain in v1
             next(args).await
-        }) as Pin<Box<dyn Future<Output = nemo_flow::Result<Json>> + Send>>
+        }) as Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>>
     })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::{ExecutionPlan, HotCache, MetadataEnvelope, ParallelGroup, ParallelHint};
-    use serde_json::json;
-    use uuid::Uuid;
-
-    /// Builds a test [`ExecutionPlan`] with one parallel hint.
-    fn make_test_plan(agent_id: &str) -> ExecutionPlan {
-        ExecutionPlan {
-            agent_id: agent_id.to_string(),
-            parallel_groups: vec![ParallelGroup {
-                group_id: "pg-1".to_string(),
-                tool_names: vec!["search".to_string(), "fetch".to_string()],
-            }],
-            metadata_template: MetadataEnvelope {
-                run_id: Uuid::nil(),
-                agent_id: agent_id.to_string(),
-                parallel_hints: vec![ParallelHint {
-                    tool_name: "search".to_string(),
-                    group_id: "pg-1".to_string(),
-                    explicit: true,
-                }],
-                extensions: json!({"version": 1}),
-            },
-        }
-    }
-
-    // ---- Tool execution intercept tests ----
-
-    #[tokio::test]
-    async fn test_tool_intercept_calls_next() {
-        let hot_cache = Arc::new(RwLock::new(HotCache {
-            plan: None,
-            trie: None,
-            agent_hints_default: None,
-        }));
-        let intercept = create_tool_execution_intercept(hot_cache);
-
-        let next: ToolExecutionNextFn =
-            Arc::new(|_args| Box::pin(async move { Ok(json!({"result": "ok"})) }));
-
-        let result = intercept("test", json!({"input": 1}), next).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), json!({"result": "ok"}));
-    }
-
-    #[tokio::test]
-    async fn test_tool_intercept_with_populated_cache() {
-        let plan = make_test_plan("test-agent");
-        let hot_cache = Arc::new(RwLock::new(HotCache {
-            plan: Some(plan),
-            trie: None,
-            agent_hints_default: None,
-        }));
-        let intercept = create_tool_execution_intercept(hot_cache);
-
-        let next: ToolExecutionNextFn =
-            Arc::new(|_args| Box::pin(async move { Ok(json!({"from_next": true})) }));
-
-        // Should not panic and should return next's result
-        let result = intercept("test", json!({"tool_input": "data"}), next).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), json!({"from_next": true}));
-    }
-
-    #[tokio::test]
-    async fn test_tool_intercept_passes_args_to_next() {
-        let hot_cache = Arc::new(RwLock::new(HotCache {
-            plan: None,
-            trie: None,
-            agent_hints_default: None,
-        }));
-        let intercept = create_tool_execution_intercept(hot_cache);
-
-        // next captures and returns the args it received, proving pass-through
-        let next: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
-
-        let input = json!({"tool_arg": "value", "count": 42});
-        let result = intercept("test", input.clone(), next).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), input);
-    }
-}
+#[path = "../tests/unit/intercepts_tests.rs"]
+mod tests;

@@ -45,6 +45,42 @@ export interface Config {
 export interface PluginContext {
   /** Register an infallible event subscriber for this component. */
   registerSubscriber(name: string, callback: (event: JsonValue) => void): void;
+  /** Register a tool sanitize-request guardrail for this component. */
+  registerToolSanitizeRequestGuardrail(
+    name: string,
+    priority: number,
+    callback: (name: string, args: JsonValue) => JsonValue,
+  ): void;
+  /** Register a tool sanitize-response guardrail for this component. */
+  registerToolSanitizeResponseGuardrail(
+    name: string,
+    priority: number,
+    callback: (name: string, result: JsonValue) => JsonValue,
+  ): void;
+  /** Register a tool conditional-execution guardrail for this component. */
+  registerToolConditionalExecutionGuardrail(
+    name: string,
+    priority: number,
+    callback: (name: string, args: JsonValue) => string | null,
+  ): void;
+  /** Register an LLM sanitize-request guardrail for this component. */
+  registerLlmSanitizeRequestGuardrail(
+    name: string,
+    priority: number,
+    callback: (request: LlmRequestShape) => LlmRequestShape,
+  ): void;
+  /** Register an LLM sanitize-response guardrail for this component. */
+  registerLlmSanitizeResponseGuardrail(
+    name: string,
+    priority: number,
+    callback: (response: JsonValue) => JsonValue,
+  ): void;
+  /** Register an LLM conditional-execution guardrail for this component. */
+  registerLlmConditionalExecutionGuardrail(
+    name: string,
+    priority: number,
+    callback: (request: LlmRequestShape) => string | null,
+  ): void;
   /** Register an LLM request intercept for this component. */
   registerLlmRequestIntercept(
     name: string,

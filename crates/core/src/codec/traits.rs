@@ -5,7 +5,7 @@
 
 use crate::error::Result;
 use crate::json::Json;
-use crate::types::LLMRequest;
+use crate::types::llm::LLMRequest;
 
 use super::request::AnnotatedLLMRequest;
 use super::response::AnnotatedLLMResponse;

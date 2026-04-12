@@ -140,6 +140,12 @@ _, err = nemo_flow.InitializePlugins(nemo_flow.PluginConfig{
 `PluginContext` exposes:
 
 - `RegisterSubscriber(...)`
+- `RegisterToolSanitizeRequestGuardrail(...)`
+- `RegisterToolSanitizeResponseGuardrail(...)`
+- `RegisterToolConditionalExecutionGuardrail(...)`
+- `RegisterLlmSanitizeRequestGuardrail(...)`
+- `RegisterLlmSanitizeResponseGuardrail(...)`
+- `RegisterLlmConditionalExecutionGuardrail(...)`
 - `RegisterLlmRequestIntercept(...)`
 - `RegisterLlmExecutionIntercept(...)`
 - `RegisterLlmStreamExecutionIntercept(...)`

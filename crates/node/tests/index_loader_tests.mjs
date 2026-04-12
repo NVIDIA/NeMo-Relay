@@ -186,6 +186,17 @@ describe('index.js loader', () => {
   });
 
   it('falls back from darwin universal to arch-specific binaries', () => {
+    const universalLocal = loadIndexForTest({
+      platform: 'darwin',
+      arch: 'arm64',
+      existingFiles: ['nemo-flow.darwin-universal.node'],
+      providedModules: {
+        './nemo-flow.darwin-universal.node': binding,
+      },
+    });
+    assert.equal(universalLocal.exports.toolCall, binding.toolCall);
+    assert.ok(universalLocal.calls.includes('./nemo-flow.darwin-universal.node'));
+
     const x64 = loadIndexForTest({
       platform: 'darwin',
       arch: 'x64',
@@ -198,6 +209,17 @@ describe('index.js loader', () => {
     assert.equal(x64.exports.toolCall, binding.toolCall);
     assert.ok(x64.calls.includes('@nvidia/nemo-flow-node-darwin-universal'));
     assert.ok(x64.calls.includes('./nemo-flow.darwin-x64.node'));
+
+    const x64PackageFallback = loadIndexForTest({
+      platform: 'darwin',
+      arch: 'x64',
+      providedModules: {
+        '@nvidia/nemo-flow-node-darwin-universal': new Error('universal missing'),
+        '@nvidia/nemo-flow-node-darwin-x64': binding,
+      },
+    });
+    assert.equal(x64PackageFallback.exports.toolCall, binding.toolCall);
+    assert.ok(x64PackageFallback.calls.includes('@nvidia/nemo-flow-node-darwin-x64'));
 
     const arm64 = loadIndexForTest({
       platform: 'darwin',
@@ -230,6 +252,96 @@ describe('index.js loader', () => {
   });
 
   it('covers remaining linux loader error branches', () => {
+    const androidArm64Failure = new Error('android arm64 package missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'android',
+      arch: 'arm64',
+      providedModules: { '@nvidia/nemo-flow-node-android-arm64': androidArm64Failure },
+    }), /android arm64 package missing/);
+
+    const androidArmFailure = new Error('android arm package missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'android',
+      arch: 'arm',
+      providedModules: { '@nvidia/nemo-flow-node-android-arm-eabi': androidArmFailure },
+    }), /android arm package missing/);
+
+    const win32X64Failure = new Error('win32 x64 package missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'win32',
+      arch: 'x64',
+      providedModules: { '@nvidia/nemo-flow-node-win32-x64-msvc': win32X64Failure },
+    }), /win32 x64 package missing/);
+
+    const win32Ia32Failure = new Error('win32 ia32 package missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'win32',
+      arch: 'ia32',
+      providedModules: { '@nvidia/nemo-flow-node-win32-ia32-msvc': win32Ia32Failure },
+    }), /win32 ia32 package missing/);
+
+    const win32Arm64Failure = new Error('win32 arm64 package missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'win32',
+      arch: 'arm64',
+      providedModules: { '@nvidia/nemo-flow-node-win32-arm64-msvc': win32Arm64Failure },
+    }), /win32 arm64 package missing/);
+
+    const darwinX64LocalFailure = new Error('darwin x64 local missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'darwin',
+      arch: 'x64',
+      existingFiles: ['nemo-flow.darwin-x64.node'],
+      providedModules: {
+        '@nvidia/nemo-flow-node-darwin-universal': new Error('universal missing'),
+        './nemo-flow.darwin-x64.node': darwinX64LocalFailure,
+      },
+    }), /darwin x64 local missing/);
+
+    const darwinArm64LocalFailure = new Error('darwin arm64 local missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'darwin',
+      arch: 'arm64',
+      existingFiles: ['nemo-flow.darwin-arm64.node'],
+      providedModules: {
+        '@nvidia/nemo-flow-node-darwin-universal': new Error('universal missing'),
+        './nemo-flow.darwin-arm64.node': darwinArm64LocalFailure,
+      },
+    }), /darwin arm64 local missing/);
+
+    const x64MuslLocalFailure = new Error('x64 musl local missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'linux',
+      arch: 'x64',
+      processReport: { header: { glibcVersionRuntime: null } },
+      existingFiles: ['nemo-flow.linux-x64-musl.node'],
+      providedModules: { './nemo-flow.linux-x64-musl.node': x64MuslLocalFailure },
+    }), /x64 musl local missing/);
+
+    const x64GnuLocalFailure = new Error('x64 gnu local missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'linux',
+      arch: 'x64',
+      existingFiles: ['nemo-flow.linux-x64-gnu.node'],
+      providedModules: { './nemo-flow.linux-x64-gnu.node': x64GnuLocalFailure },
+    }), /x64 gnu local missing/);
+
+    const arm64MuslLocalFailure = new Error('arm64 musl local missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'linux',
+      arch: 'arm64',
+      processReport: { header: { glibcVersionRuntime: null } },
+      existingFiles: ['nemo-flow.linux-arm64-musl.node'],
+      providedModules: { './nemo-flow.linux-arm64-musl.node': arm64MuslLocalFailure },
+    }), /arm64 musl local missing/);
+
+    const arm64GnuFailure = new Error('arm64 gnu package missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'linux',
+      arch: 'arm64',
+      providedModules: { '@nvidia/nemo-flow-node-linux-arm64-gnu': arm64GnuFailure },
+    }), /arm64 gnu package missing/);
+
     const armMuslLocalFailure = new Error('arm musl local missing');
     assert.throws(() => loadIndexForTest({
       platform: 'linux',
@@ -238,6 +350,22 @@ describe('index.js loader', () => {
       existingFiles: ['nemo-flow.linux-arm-musleabihf.node'],
       providedModules: { './nemo-flow.linux-arm-musleabihf.node': armMuslLocalFailure },
     }), /arm musl local missing/);
+
+    const armGnuFailure = new Error('arm gnu package missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'linux',
+      arch: 'arm',
+      providedModules: { '@nvidia/nemo-flow-node-linux-arm-gnueabihf': armGnuFailure },
+    }), /arm gnu package missing/);
+
+    const riscvMuslLocalFailure = new Error('riscv musl local missing');
+    assert.throws(() => loadIndexForTest({
+      platform: 'linux',
+      arch: 'riscv64',
+      processReport: { header: { glibcVersionRuntime: null } },
+      existingFiles: ['nemo-flow.linux-riscv64-musl.node'],
+      providedModules: { './nemo-flow.linux-riscv64-musl.node': riscvMuslLocalFailure },
+    }), /riscv musl local missing/);
 
     const riscvMuslFailure = new Error('riscv musl package missing');
     assert.throws(() => loadIndexForTest({

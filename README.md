@@ -81,7 +81,7 @@ Comprehensive documentation lives in the [docs/](docs/) directory. The canonical
 crates/
   core/       # Core runtime library (nemo-flow)
   python/     # PyO3 Python bindings (_native C extension)
-  ffi/        # C FFI layer (used by Go, generates header via cbindgen)
+  ffi/        # C FFI layer (used by Go, committed header regenerated via build.rs/cbindgen)
   node/       # NAPI Node.js bindings
   wasm/       # wasm-bindgen WebAssembly bindings
   adaptive/      # Adaptive layer with online learning and scheduling hints
@@ -161,7 +161,7 @@ Pre-commit hooks run automatically on `git commit` after setup (`uv run pre-comm
 
 **Python** -- [Ruff](https://docs.astral.sh/ruff/) for linting (`E`, `F`, `W`, `I` rules) and formatting (line length 120, double quotes). [ty](https://github.com/astral-sh/ty) for type checking.
 
-**Rust** -- `cargo fmt` for formatting, `cargo clippy` with `-D warnings` for lints, `cargo deny` for license/advisory auditing (configured in `deny.toml`).
+**Rust** -- FFI header sync for `crates/ffi/nemo_flow.h` via Cargo/build.rs, `cargo fmt` for formatting, `cargo clippy` with `-D warnings` for lints, `cargo deny` for license/advisory auditing (configured in `deny.toml`).
 
 **Go** -- `gofmt` for formatting, `go vet` for static analysis.
 

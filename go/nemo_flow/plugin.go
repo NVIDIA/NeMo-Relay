@@ -14,6 +14,10 @@ typedef char* (*NemoFlowPluginValidateCb)(void* user_data, const char* plugin_co
 typedef int32_t (*NemoFlowPluginRegisterCb)(void* user_data, const char* plugin_config_json, FfiPluginContext* ctx);
 typedef void (*NemoFlowEventSubscriberFn)(void* user_data, const void* event);
 typedef char* (*NemoFlowToolSanitizeFn)(void* user_data, const char* name, const char* args_json);
+typedef char* (*NemoFlowToolConditionalFn)(void* user_data, const char* name, const char* args_json);
+typedef void* (*NemoFlowLlmRequestCb)(void* user_data, const void* request);
+typedef char* (*NemoFlowLlmResponseFn)(void* user_data, const char* response_json);
+typedef char* (*NemoFlowLlmConditionalCb)(void* user_data, const void* request);
 typedef int32_t (*NemoFlowLlmRequestInterceptCb)(void* user_data, const char* name, const void* request, const char* annotated_json, void** out_request, char** out_annotated_json);
 typedef char* (*NemoFlowLlmExecNextFn)(const char* native_json, void* next_ctx);
 typedef char* (*NemoFlowLlmExecInterceptCb)(void* user_data, const char* native_json, NemoFlowLlmExecNextFn next_fn, void* next_ctx);
@@ -30,6 +34,12 @@ extern int32_t nemo_flow_deregister_plugin(const char* plugin_kind);
 extern void nemo_flow_string_free(char* ptr);
 
 extern int32_t nemo_flow_plugin_context_register_subscriber(FfiPluginContext* ctx, const char* name, NemoFlowEventSubscriberFn cb, void* user_data, NemoFlowFreeFn free_fn);
+extern int32_t nemo_flow_plugin_context_register_tool_sanitize_request_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoFlowToolSanitizeFn cb, void* user_data, NemoFlowFreeFn free_fn);
+extern int32_t nemo_flow_plugin_context_register_tool_sanitize_response_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoFlowToolSanitizeFn cb, void* user_data, NemoFlowFreeFn free_fn);
+extern int32_t nemo_flow_plugin_context_register_tool_conditional_execution_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoFlowToolConditionalFn cb, void* user_data, NemoFlowFreeFn free_fn);
+extern int32_t nemo_flow_plugin_context_register_llm_sanitize_request_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoFlowLlmRequestCb cb, void* user_data, NemoFlowFreeFn free_fn);
+extern int32_t nemo_flow_plugin_context_register_llm_sanitize_response_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoFlowLlmResponseFn cb, void* user_data, NemoFlowFreeFn free_fn);
+extern int32_t nemo_flow_plugin_context_register_llm_conditional_execution_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoFlowLlmConditionalCb cb, void* user_data, NemoFlowFreeFn free_fn);
 extern int32_t nemo_flow_plugin_context_register_llm_request_intercept(FfiPluginContext* ctx, const char* name, int32_t priority, _Bool break_chain, NemoFlowLlmRequestInterceptCb cb, void* user_data, NemoFlowFreeFn free_fn);
 extern int32_t nemo_flow_plugin_context_register_tool_request_intercept(FfiPluginContext* ctx, const char* name, int32_t priority, _Bool break_chain, NemoFlowToolSanitizeFn cb, void* user_data, NemoFlowFreeFn free_fn);
 extern int32_t nemo_flow_plugin_context_register_llm_execution_intercept(FfiPluginContext* ctx, const char* name, int32_t priority, NemoFlowLlmExecInterceptCb cb, void* user_data, NemoFlowFreeFn free_fn);
@@ -41,6 +51,10 @@ extern int32_t goPluginRegisterTrampoline(void*, const char*, FfiPluginContext*)
 extern void goEventSubscriberTrampoline(void*, const void*);
 extern void goFreeTrampoline(void*);
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
+extern char* goToolConditionalTrampoline(void*, const char*, const char*);
+extern void* goLlmRequestTrampoline(void*, const void*);
+extern char* goLlmResponseTrampoline(void*, const char*);
+extern char* goLlmConditionalTrampoline(void*, const void*);
 extern char* goLlmExecInterceptTrampoline(void*, const char*, NemoFlowLlmExecNextFn, void*);
 extern int32_t goLlmRequestInterceptTrampoline(void*, const char*, const void*, const char*, void**, char**);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NemoFlowToolExecNextFn, void*);
@@ -281,7 +295,9 @@ func DeregisterPlugin(pluginKind string) error {
 	return checkStatus(C.nemo_flow_deregister_plugin(cPluginKind))
 }
 
-// RegisterSubscriber registers an infallible event subscriber for this component.
+// RegisterSubscriber registers an infallible event subscriber for this
+// component. The callback receives an owned [Event] snapshot that is safe to
+// retain after the callback returns.
 func (ctx *PluginContext) RegisterSubscriber(name string, fn EventSubscriberFunc) error {
 	if ctx == nil || ctx.ptr == nil {
 		return errors.New("plugin context is closed")
@@ -293,6 +309,114 @@ func (ctx *PluginContext) RegisterSubscriber(name string, fn EventSubscriberFunc
 		ctx.ptr,
 		cName,
 		(C.NemoFlowEventSubscriberFn)(C.goEventSubscriberTrampoline),
+		userData,
+		(C.NemoFlowFreeFn)(C.goFreeTrampoline),
+	))
+}
+
+// RegisterToolSanitizeRequestGuardrail registers a tool sanitize-request guardrail for this component.
+func (ctx *PluginContext) RegisterToolSanitizeRequestGuardrail(name string, priority int32, fn ToolSanitizeFunc) error {
+	if ctx == nil || ctx.ptr == nil {
+		return errors.New("plugin context is closed")
+	}
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	userData := registerClosure(fn)
+	return checkStatus(C.nemo_flow_plugin_context_register_tool_sanitize_request_guardrail(
+		ctx.ptr,
+		cName,
+		C.int32_t(priority),
+		(C.NemoFlowToolSanitizeFn)(C.goToolSanitizeTrampoline),
+		userData,
+		(C.NemoFlowFreeFn)(C.goFreeTrampoline),
+	))
+}
+
+// RegisterToolSanitizeResponseGuardrail registers a tool sanitize-response guardrail for this component.
+func (ctx *PluginContext) RegisterToolSanitizeResponseGuardrail(name string, priority int32, fn ToolSanitizeFunc) error {
+	if ctx == nil || ctx.ptr == nil {
+		return errors.New("plugin context is closed")
+	}
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	userData := registerClosure(fn)
+	return checkStatus(C.nemo_flow_plugin_context_register_tool_sanitize_response_guardrail(
+		ctx.ptr,
+		cName,
+		C.int32_t(priority),
+		(C.NemoFlowToolSanitizeFn)(C.goToolSanitizeTrampoline),
+		userData,
+		(C.NemoFlowFreeFn)(C.goFreeTrampoline),
+	))
+}
+
+// RegisterToolConditionalExecutionGuardrail registers a tool conditional-execution guardrail for this component.
+func (ctx *PluginContext) RegisterToolConditionalExecutionGuardrail(name string, priority int32, fn ToolConditionalFunc) error {
+	if ctx == nil || ctx.ptr == nil {
+		return errors.New("plugin context is closed")
+	}
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	userData := registerClosure(fn)
+	return checkStatus(C.nemo_flow_plugin_context_register_tool_conditional_execution_guardrail(
+		ctx.ptr,
+		cName,
+		C.int32_t(priority),
+		(C.NemoFlowToolConditionalFn)(C.goToolConditionalTrampoline),
+		userData,
+		(C.NemoFlowFreeFn)(C.goFreeTrampoline),
+	))
+}
+
+// RegisterLlmSanitizeRequestGuardrail registers an LLM sanitize-request guardrail for this component.
+func (ctx *PluginContext) RegisterLlmSanitizeRequestGuardrail(name string, priority int32, fn LLMRequestFunc) error {
+	if ctx == nil || ctx.ptr == nil {
+		return errors.New("plugin context is closed")
+	}
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	userData := registerClosure(fn)
+	return checkStatus(C.nemo_flow_plugin_context_register_llm_sanitize_request_guardrail(
+		ctx.ptr,
+		cName,
+		C.int32_t(priority),
+		(C.NemoFlowLlmRequestCb)(C.goLlmRequestTrampoline),
+		userData,
+		(C.NemoFlowFreeFn)(C.goFreeTrampoline),
+	))
+}
+
+// RegisterLlmSanitizeResponseGuardrail registers an LLM sanitize-response guardrail for this component.
+func (ctx *PluginContext) RegisterLlmSanitizeResponseGuardrail(name string, priority int32, fn LLMResponseFunc) error {
+	if ctx == nil || ctx.ptr == nil {
+		return errors.New("plugin context is closed")
+	}
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	userData := registerClosure(fn)
+	return checkStatus(C.nemo_flow_plugin_context_register_llm_sanitize_response_guardrail(
+		ctx.ptr,
+		cName,
+		C.int32_t(priority),
+		(C.NemoFlowLlmResponseFn)(C.goLlmResponseTrampoline),
+		userData,
+		(C.NemoFlowFreeFn)(C.goFreeTrampoline),
+	))
+}
+
+// RegisterLlmConditionalExecutionGuardrail registers an LLM conditional-execution guardrail for this component.
+func (ctx *PluginContext) RegisterLlmConditionalExecutionGuardrail(name string, priority int32, fn LLMConditionalFunc) error {
+	if ctx == nil || ctx.ptr == nil {
+		return errors.New("plugin context is closed")
+	}
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	userData := registerClosure(fn)
+	return checkStatus(C.nemo_flow_plugin_context_register_llm_conditional_execution_guardrail(
+		ctx.ptr,
+		cName,
+		C.int32_t(priority),
+		(C.NemoFlowLlmConditionalCb)(C.goLlmConditionalTrampoline),
 		userData,
 		(C.NemoFlowFreeFn)(C.goFreeTrampoline),
 	))

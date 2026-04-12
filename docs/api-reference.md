@@ -475,6 +475,12 @@ class Plugin(Protocol):
 `PluginContext` exposes these registration methods:
 
 - `register_subscriber(name, callback)`
+- `register_tool_sanitize_request_guardrail(name, priority, callback)`
+- `register_tool_sanitize_response_guardrail(name, priority, callback)`
+- `register_tool_conditional_execution_guardrail(name, priority, callback)`
+- `register_llm_sanitize_request_guardrail(name, priority, callback)`
+- `register_llm_sanitize_response_guardrail(name, priority, callback)`
+- `register_llm_conditional_execution_guardrail(name, priority, callback)`
 - `register_llm_request_intercept(name, priority, break_chain, callback)`
 - `register_llm_execution_intercept(name, priority, callback)`
 - `register_llm_stream_execution_intercept(name, priority, callback)`

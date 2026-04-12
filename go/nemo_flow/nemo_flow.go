@@ -1232,8 +1232,8 @@ func DeregisterLlmStreamExecutionIntercept(name string) error {
 // RegisterSubscriber registers a named event subscriber that will be called for
 // every lifecycle event (Start, End, Mark) emitted by the runtime. Subscribers
 // are identified by a unique name; registering a duplicate returns an
-// AlreadyExists error. The callback receives an [Event] pointer that is only
-// valid for the duration of the call; callers must not retain it.
+// AlreadyExists error. The callback receives an owned [Event] snapshot that is
+// safe to retain after the callback returns.
 func RegisterSubscriber(name string, fn EventSubscriberFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
@@ -2006,7 +2006,9 @@ func ScopeDeregisterLlmStreamExecutionIntercept(scopeUUID string, name string) e
 // Scope-local subscriber registration
 // ---------------------------------------------------------------------------
 
-// ScopeRegisterSubscriber registers a scope-local event subscriber.
+// ScopeRegisterSubscriber registers a scope-local event subscriber. The
+// callback receives an owned [Event] snapshot that is safe to retain after the
+// callback returns.
 func ScopeRegisterSubscriber(scopeUUID string, name string, fn EventSubscriberFunc) error {
 	id := registerClosure(fn)
 	cScopeUUID := C.CString(scopeUUID)

@@ -57,7 +57,6 @@ jobs:
       is_main_branch: ${{ github.ref_name == 'main' }}
       has_skip_ci_label: ${{ steps.get-pr-info.outcome == 'success' && contains(fromJSON(steps.get-pr-info.outputs.pr-info).labels.*.name, 'skip-ci') || false }}
       pr_info: ${{ steps.get-pr-info.outcome == 'success' && steps.get-pr-info.outputs.pr-info || '' }}
-      base_sha: ${{ steps.get-pr-info.outcome == 'success' && fromJSON(steps.get-pr-info.outputs.pr-info).base.sha || '' }}
 
 
   ci_pipe:
@@ -65,10 +64,10 @@ jobs:
     needs: [prepare]
     uses: ./.github/workflows/ci_pipe.yml
     if: ${{ ! fromJSON(needs.prepare.outputs.has_skip_ci_label) }}
+    secrets: inherit
     with:
       # Info about the PR. Empty for non PR branches. Useful for extracting PR number, title, etc.
       pr_info: ${{ needs.prepare.outputs.pr_info }}
-      base_sha: ${{ needs.prepare.outputs.base_sha }}
-      before_sha: ${{ github.event.before || '' }}
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
+      publish: ${{ github.ref_type == 'tag' }}

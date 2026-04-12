@@ -17,10 +17,11 @@ use pyo3::prelude::*;
 use pyo3_async_runtimes::TaskLocals;
 
 use nemo_flow_adaptive::error::{AdaptiveError, Result};
-use nemo_flow_adaptive::storage::StorageBackendDyn;
-use nemo_flow_adaptive::trie::AccumulatorState;
+use nemo_flow_adaptive::storage::traits::StorageBackendDyn;
+use nemo_flow_adaptive::trie::accumulator::AccumulatorState;
 use nemo_flow_adaptive::trie::serialization::TrieEnvelope;
-use nemo_flow_adaptive::types::{ExecutionPlan, RunRecord};
+use nemo_flow_adaptive::types::plan::ExecutionPlan;
+use nemo_flow_adaptive::types::records::RunRecord;
 
 use crate::convert::{json_to_py, py_to_json};
 
@@ -304,5 +305,5 @@ impl StorageBackendDyn for PyStorageBackend {
 }
 
 #[cfg(test)]
-#[path = "py_storage_coverage_tests.rs"]
+#[path = "../tests/coverage/py_storage_coverage_tests.rs"]
 mod coverage_tests;

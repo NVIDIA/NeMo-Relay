@@ -6,6 +6,9 @@ name = "nemo-flow-wasm"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "WebAssembly bindings for NeMo Flow targeting JavaScript bundlers and browsers."
+readme = "README.md"
 
 [lib]
 name = "nemo_flow_wasm"
@@ -21,10 +24,42 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde-wasm-bindgen = "0.6"
 send_wrapper = { version = "0.6", features = ["futures"] }
-uuid = { version = "1", features = ["v4", "js"] }
+uuid = { workspace = true, features = ["v7", "js"] }
 tokio = { version = "1", default-features = false, features = ["sync"] }
 tokio-stream = { version = "0.1", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
 wasm-bindgen-test = "0.3"
+
+[[test]]
+name = "adaptive_integration"
+path = "tests/integration/adaptive_tests.rs"
+
+[[test]]
+name = "codec_integration"
+path = "tests/integration/codec_tests.rs"
+
+[[test]]
+name = "context_integration"
+path = "tests/integration/context_tests.rs"
+
+[[test]]
+name = "deregister_integration"
+path = "tests/integration/deregister_tests.rs"
+
+[[test]]
+name = "llm_integration"
+path = "tests/integration/llm_tests.rs"
+
+[[test]]
+name = "scope_integration"
+path = "tests/integration/scope_tests.rs"
+
+[[test]]
+name = "scope_local_integration"
+path = "tests/integration/scope_local_tests.rs"
+
+[[test]]
+name = "tools_integration"
+path = "tests/integration/tools_tests.rs"

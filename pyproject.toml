@@ -19,7 +19,8 @@ features = ["pyo3/extension-module"]
 [dependency-groups]
 dev = [
     "ipython~=8.20",
-    "maturin>=1.0,<2.0",
+    "maturin[zig]>=1.0,<2.0; sys_platform == 'linux'",
+    "maturin>=1.0,<2.0; sys_platform != 'linux'",
     "pre-commit~=4.0",
     "ruff~=0.11",
     "ty>=0.0.1a7",

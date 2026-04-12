@@ -21,26 +21,32 @@
 //! - `py_plugin` — Python-facing generic plugin config/registration helpers
 //! - `convert` — JSON ↔ Python conversion utilities
 
+use nemo_flow::shared_runtime::initialize_shared_runtime_binding;
+use nemo_flow_adaptive::plugin_component::register_adaptive_component;
 use pyo3::prelude::*;
 
 mod convert;
-mod py_adaptive;
-mod py_api;
+#[doc(hidden)]
+pub mod py_adaptive;
+#[doc(hidden)]
+pub mod py_api;
 mod py_callable;
 mod py_context;
-mod py_plugin;
+#[doc(hidden)]
+pub mod py_plugin;
 mod py_storage;
-mod py_types;
+#[doc(hidden)]
+pub mod py_types;
 
 /// The `_native` PyO3 module entry point. Registers all types and functions.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    nemo_flow::initialize_shared_runtime_binding("python").map_err(|e| {
+    initialize_shared_runtime_binding("python").map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!(
             "failed to initialize NeMo Flow runtime ownership: {e}"
         ))
     })?;
-    nemo_flow_adaptive::register_adaptive_component().map_err(|e| {
+    register_adaptive_component().map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!(
             "failed to register adaptive plugin component: {e}"
         ))
@@ -53,4 +59,5 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[cfg(test)]
+#[path = "../tests/coverage/coverage_tests.rs"]
 mod coverage_tests;

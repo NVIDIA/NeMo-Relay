@@ -31,11 +31,14 @@ use std::task::{Context, Poll};
 
 use tokio_stream::Stream;
 
-use crate::codec::{AnnotatedLLMResponse, LlmResponseCodec};
-use crate::context::{NemoFlowContextState, ScopeStackHandle, current_scope_stack, global_context};
+use crate::codec::response::AnnotatedLLMResponse;
+use crate::codec::traits::LlmResponseCodec;
+use crate::context::global::global_context;
+use crate::context::scope_stack::{ScopeStackHandle, current_scope_stack};
+use crate::context::state::NemoFlowContextState;
 use crate::error::Result;
 use crate::json::Json;
-use crate::types::*;
+use crate::types::llm::LLMHandle;
 
 /// Wraps an inner `Stream<Item = Result<Json>>` of raw chunks and:
 ///

@@ -23,14 +23,6 @@ on:
         description: 'The JSON string containing the PR information'
         required: true
         type: string
-      base_sha:
-        description: 'The base SHA of the PR'
-        required: true
-        type: string
-      before_sha:
-        description: 'The previous SHA from the triggering push event'
-        required: true
-        type: string
       ref_type:
         description: 'The ref type from the triggering workflow'
         required: true
@@ -39,6 +31,11 @@ on:
         description: 'The ref name from the triggering workflow'
         required: true
         type: string
+      publish:
+        description: 'Whether to publish packages to registries'
+        required: false
+        type: boolean
+        default: false
 
 defaults:
   run:
@@ -52,10 +49,13 @@ env:
   NEMO_FLOW_CI_RUST_VERSION: "1.94.0"
   NEMO_FLOW_CI_NODE_VERSION: "24"
   NEMO_FLOW_CI_UV_VERSION: "0.9.28"
+  NEMO_FLOW_CI_WASM_PACK_VERSION: "0.14.0"
+  NEMO_FLOW_CI_CARGO_NEXTEST_VERSION: "0.9.132"
+  NEMO_FLOW_CI_CARGO_LLVM_COV_VERSION: "0.8.5"
+  NEMO_FLOW_CI_CARGO_DENY_VERSION: "0.19.1"
+  NEMO_FLOW_CI_SONAR_SCANNER_VERSION: "7.0.2.4839"
   NEMO_FLOW_CI_WORKSPACE: "${{ github.workspace }}/NeMo-Flow"
   NEMO_FLOW_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
-  UV_CACHE_DIR: .uv-cache
-  UV_INSTALL_DIR: /usr/local/bin
   UV_PYTHON_DOWNLOADS: never
 
 permissions:
@@ -74,42 +74,8 @@ permissions:
   statuses: none
 
 jobs:
-  changes:
-    name: Changes
-    runs-on: linux-amd64-cpu4
-    outputs:
-      run_all: ${{ steps.classify.outputs.run_all }}
-      docs_only: ${{ steps.classify.outputs.docs_only }}
-      run_python: ${{ steps.classify.outputs.run_python }}
-      run_go: ${{ steps.classify.outputs.run_go }}
-      run_node: ${{ steps.classify.outputs.run_node }}
-      run_wasm: ${{ steps.classify.outputs.run_wasm }}
-      run_rust: ${{ steps.classify.outputs.run_rust }}
-      run_check: ${{ steps.classify.outputs.run_check }}
-      run_packages: ${{ steps.classify.outputs.run_packages }}
-      run_coverage_aggregate: ${{ steps.classify.outputs.run_coverage_aggregate }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          fetch-depth: 0
-          path: 'NeMo-Flow'
-
-      - name: Classify changed files
-        id: classify
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
-        run: |
-          bash scripts/classify_ci_changes.sh \
-            "${{ inputs.base_sha }}" \
-            "${{ inputs.before_sha }}" \
-            "${{ github.sha }}" \
-            "${{ inputs.ref_type }}"
-
   check:
     name: Check
-    needs: [changes]
-    if: ${{ needs.changes.outputs.run_check == 'true' }}
     runs-on: linux-amd64-cpu4
     timeout-minutes: 30
 
@@ -117,21 +83,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          path: 'NeMo-Flow'
+          path: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
 
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
         with:
           version: ${{ env.NEMO_FLOW_CI_UV_VERSION }}
           enable-cache: true
-          cache-dependency-glob: NeMo-Flow/uv.lock
+          cache-dependency-glob: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/uv.lock
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: ${{ env.NEMO_FLOW_CI_GO_VERSION }}
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        with:
-          python-version: ${{ env.NEMO_FLOW_CI_DEFAULT_PYTHON_VER }}
+      - name: Install managed Python
+        run: |
+          set -e
+          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ env.NEMO_FLOW_CI_DEFAULT_PYTHON_VER }}
 
       - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606
         with:
@@ -144,18 +111,20 @@ jobs:
           workspaces: NeMo-Flow -> target
 
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
+        uses: taiki-e/install-action@60581cd7025e0e855cebd745379013e286d9c787 # v2.64.2
+        with:
+          tool: cargo-deny@${{ env.NEMO_FLOW_CI_CARGO_DENY_VERSION }}
 
       - name: pre-commit
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: |
+          set -e
           uv tool install pre-commit==4.5
           pre-commit run --all-files --show-diff-on-failure
 
-  ci-platform:
-    name: CI / ${{ matrix.platform }}
-    needs: [changes, check]
-    if: ${{ needs.changes.outputs.run_check == 'true' }}
+  test:
+    name: Test / ${{ matrix.platform }}
+    needs: [check]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -164,13 +133,10 @@ jobs:
         include:
           - platform: linux-amd64
             runner: linux-amd64-cpu4
-            wheel_target: x86_64-unknown-linux-gnu
           - platform: linux-arm64
             runner: linux-arm64-cpu4
-            wheel_target: aarch64-unknown-linux-gnu
           - platform: macos-arm64
             runner: macos-15
-            wheel_target: aarch64-apple-darwin
 
     env:
       CGO_LDFLAGS: "-L${{ github.workspace }}/NeMo-Flow/target/release"
@@ -181,7 +147,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          path: 'NeMo-Flow'
+          path: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
 
       - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606
         with:
@@ -189,80 +155,94 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
-          shared-key: nemo-flow-rust-${{ runner.os }}-${{ runner.arch }}-${{ env.NEMO_FLOW_CI_RUST_VERSION }}
+          shared-key: nemo-flow-${{ runner.os }}-${{ runner.arch }}-${{ env.NEMO_FLOW_CI_RUST_VERSION }}
           workspaces: NeMo-Flow -> target
+          cache-all-crates: true
+          cache-bin: false
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
-        if: ${{ needs.changes.outputs.run_go == 'true' }}
         with:
           go-version: ${{ env.NEMO_FLOW_CI_GO_VERSION }}
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
-        if: ${{ needs.changes.outputs.run_node == 'true' || needs.changes.outputs.run_wasm == 'true' || needs.changes.outputs.run_packages == 'true' }}
         with:
           node-version: ${{ env.NEMO_FLOW_CI_NODE_VERSION }}
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        if: ${{ needs.changes.outputs.run_python == 'true' || needs.changes.outputs.run_packages == 'true' }}
-        with:
-          python-version: ${{ env.NEMO_FLOW_CI_DEFAULT_PYTHON_VER }}
-
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
-        if: ${{ needs.changes.outputs.run_python == 'true' || needs.changes.outputs.run_packages == 'true' }}
         with:
           version: ${{ env.NEMO_FLOW_CI_UV_VERSION }}
           enable-cache: true
-          cache-dependency-glob: NeMo-Flow/uv.lock
+          cache-dependency-glob: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/uv.lock
 
-      - name: Install build-essential
-        if: ${{ runner.os == 'Linux' }}
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends build-essential
-
-      - name: Install Rust CI tools
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+      - name: Install managed Python
         run: |
-          cargo install cargo-nextest --locked
-          cargo install cargo-llvm-cov --locked
-          if [[ "${{ needs.changes.outputs.run_wasm }}" == "true" || "${{ needs.changes.outputs.run_packages }}" == "true" ]]; then
-            cargo install wasm-pack
+          set -e
+          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ env.NEMO_FLOW_CI_DEFAULT_PYTHON_VER }}
+
+      - name: Export managed Python runtime
+        run: |
+          set -e
+          PYO3_PYTHON="$(uv python find --managed-python ${{ env.NEMO_FLOW_CI_DEFAULT_PYTHON_VER }})"
+          export PYO3_PYTHON
+          eval "$("$PYO3_PYTHON" - <<'PY'
+          import shlex
+          import sys
+          import sysconfig
+
+          def emit(name, value):
+              print(f"export {name}={shlex.quote('' if value is None else str(value))}")
+
+          emit("PYTHONHOME", sys.base_prefix)
+          emit("PYTHON_STDLIB", sysconfig.get_path("stdlib"))
+          emit("PYTHON_PLATSTDLIB", sysconfig.get_path("platstdlib"))
+          emit("PYTHON_LIBDIR", sysconfig.get_config_var("LIBDIR"))
+          PY
+          )"
+          export PYTHONPATH="${PYTHON_STDLIB}:${PYTHON_PLATSTDLIB}"
+          if [ -n "${PYTHON_LIBDIR}" ]; then
+            export LD_LIBRARY_PATH="${PYTHON_LIBDIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+            export DYLD_LIBRARY_PATH="${PYTHON_LIBDIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
           fi
+          {
+            printf 'PYO3_PYTHON=%s\n' "$PYO3_PYTHON"
+            printf 'PYTHONHOME=%s\n' "$PYTHONHOME"
+            printf 'PYTHON_STDLIB=%s\n' "$PYTHON_STDLIB"
+            printf 'PYTHON_PLATSTDLIB=%s\n' "$PYTHON_PLATSTDLIB"
+            printf 'PYTHON_LIBDIR=%s\n' "$PYTHON_LIBDIR"
+            printf 'PYTHONPATH=%s\n' "$PYTHONPATH"
+            if [ -n "${PYTHON_LIBDIR}" ]; then
+              printf 'LD_LIBRARY_PATH=%s\n' "$LD_LIBRARY_PATH"
+              printf 'DYLD_LIBRARY_PATH=%s\n' "$DYLD_LIBRARY_PATH"
+            fi
+          } >> "$GITHUB_ENV"
 
-      - name: Prepare artifact directories
+      - name: Install Linux build dependencies
+        if: ${{ startsWith(matrix.platform, 'linux-') }}
         run: |
-          mkdir -p ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage
-          mkdir -p ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/npm
-          mkdir -p ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wasm
-          mkdir -p ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wheels
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config
+
+      - uses: taiki-e/install-action@60581cd7025e0e855cebd745379013e286d9c787 # v2.64.2
+        with:
+          tool: cargo-nextest@${{ env.NEMO_FLOW_CI_CARGO_NEXTEST_VERSION }},cargo-llvm-cov@${{ env.NEMO_FLOW_CI_CARGO_LLVM_COV_VERSION }},wasm-pack@${{ env.NEMO_FLOW_CI_WASM_PACK_VERSION }}
 
       - name: Run Rust tests with coverage
-        if: ${{ needs.changes.outputs.run_rust == 'true' }}
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
-        run: |
-          eval "$(cargo llvm-cov show-env --sh)"
-          cargo llvm-cov clean --workspace
-          cargo nextest run \
-            --workspace \
-            --exclude nemo-flow-node \
-            --exclude nemo-flow-python \
-            --exclude nemo-flow-wasm \
-            --release \
-            --profile ci
-          cargo llvm-cov report \
-            --release \
-            --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/src/(coverage_tests|.*_tests)\.rs$)' \
-            --cobertura \
-            --output-path ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/rust-workspace.xml
-          [ -f target/nextest/ci/rust_junit_report.xml ] && \
-            cp target/nextest/ci/rust_junit_report.xml ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/rust_junit_report.xml || true
-
-      - name: Run Go tests with coverage
-        if: ${{ needs.changes.outputs.run_go == 'true' }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: |
           set -e
+          eval "$(cargo llvm-cov show-env --sh)"
+          cargo llvm-cov clean --workspace
+          cargo nextest run --workspace --release --profile ci --all-features
 
+      - name: Run Go tests with coverage
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: |
+          set -e
           cargo build --release -p nemo-flow-ffi
-
+          if [ "${{ matrix.platform }}" = "macos-arm64" ]; then
+            export CGO_LDFLAGS="-Wl,-w ${CGO_LDFLAGS}"
+          fi
           pushd go/nemo_flow
           echo "Go version:"
           go version
@@ -270,112 +250,372 @@ jobs:
           go install github.com/jstemmer/go-junit-report/v2@latest
           go install github.com/boumenot/gocover-cobertura@latest
           echo "Running Go tests"
-          go test -v -coverprofile=coverage.out ./... 2>&1 \
+          go test -race -v -coverprofile=coverage.out ./... 2>&1 \
             | tee /dev/stderr \
-            | go-junit-report -set-exit-code > ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/go_junit_report.xml
-          gocover-cobertura < coverage.out > ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/go_coverage_report.xml
+            | go-junit-report -set-exit-code > ${{ github.workspace }}/go_junit_report.xml
+          cp coverage.out ${{ github.workspace }}/go_coverage.out
+          gocover-cobertura < coverage.out > ${{ github.workspace }}/go_coverage_report.xml
           popd
 
-      - name: Run Node.js tests with coverage
-        if: ${{ needs.changes.outputs.run_node == 'true' }}
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
-        run: |
-          eval "$(cargo llvm-cov show-env --sh)"
-          cargo llvm-cov clean --workspace
-          cargo test -p nemo-flow-node --lib
-          pushd crates/node
-          npm install
-          npm install -g c8
-          npm run build-debug
-          c8 --reporter=cobertura --reporter=json-summary \
-            --reports-dir="${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage" \
-            node --test \
-              --test-force-exit \
-              --test-reporter=spec --test-reporter-destination=stdout \
-              --test-reporter=junit \
-              --test-reporter-destination="${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/nodejs_junit.xml" \
-              tests/*.mjs
-          popd
-          cargo llvm-cov report -p nemo-flow-node \
-            --ignore-filename-regex '.*/src/.*_tests\.rs$' \
-            --cobertura \
-            --output-path ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/node-rust.xml
-
-      - name: Run Python tests with coverage
-        if: ${{ needs.changes.outputs.run_python == 'true' }}
+      - name: Run Node tests with coverage
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: |
           set -e
-
-          echo "Install managed Python"
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ env.NEMO_FLOW_CI_DEFAULT_PYTHON_VER }}
-          export PYO3_PYTHON="$(uv python find --managed-python ${{ env.NEMO_FLOW_CI_DEFAULT_PYTHON_VER }})"
-
-          PYTHON_LIBDIR="$("$PYO3_PYTHON" -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR") or "")')"
-          if [ -n "$PYTHON_LIBDIR" ]; then
-            export LD_LIBRARY_PATH="${PYTHON_LIBDIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-            export DYLD_LIBRARY_PATH="${PYTHON_LIBDIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
-          fi
-
           eval "$(cargo llvm-cov show-env --sh)"
-          cargo llvm-cov clean --workspace
-          cargo test -p nemo-flow-python --lib
-          mkdir -p ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}
-          uv venv --python=${{ env.NEMO_FLOW_CI_DEFAULT_PYTHON_VER }} --seed ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/.venv
-          source ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/.venv/bin/activate
-          uv sync --active --reinstall-package nemo-flow
-          uv run maturin develop
-          uv run pytest python/tests \
-            --cov=nemo_flow --cov-report term-missing \
-            --junit-xml=${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/pytest_junit_report.xml \
-            --cov-report xml:${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/pytest_coverage_report.xml
-          cargo llvm-cov report -p nemo-flow-python \
-            --ignore-filename-regex '.*/src/.*_tests\.rs$' \
-            --cobertura \
-            --output-path ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/python-rust.xml
+          pushd crates/node
+          npm install
+          npm run build
+          npx \
+            --yes \
+            c8 \
+              --reporter=cobertura \
+              --reporter=lcov \
+              --reporter=json-summary \
+              --reports-dir="." \
+              node \
+                --test \
+                --test-force-exit \
+                --test-reporter=spec \
+                --test-reporter-destination=stdout \
+                --test-reporter=junit \
+                --test-reporter-destination="nodejs_junit.xml" \
+                tests/**/*.mjs
+          popd
+          mv ./crates/node/cobertura-coverage.xml ${{ github.workspace }}/nodejs_coverage_report.xml
+          mv ./crates/node/lcov.info ${{ github.workspace }}/nodejs_lcov.info
 
-      - name: Run WASM tests with coverage
-        if: ${{ needs.changes.outputs.run_wasm == 'true' }}
+      - name: Run Python tests with coverage
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: |
-          (
-            eval "$(cargo llvm-cov show-env --sh)"
-            cargo llvm-cov clean --workspace
-            cargo test -p nemo-flow-wasm --lib --release
-            cargo llvm-cov report -p nemo-flow-wasm \
-              --release \
-              --ignore-filename-regex '.*/src/.*_tests\.rs$' \
-              --cobertura \
-              --output-path ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/wasm-rust.xml
-          )
+          set -e
+          eval "$(cargo llvm-cov show-env --sh)"
+          uv sync --active --reinstall-package nemo-flow
+          uv run maturin develop --release
+          uv run pytest python/tests \
+            --cov=nemo_flow \
+            --cov-report term-missing \
+            --junit-xml ${{ github.workspace }}/pytest_junit_report.xml \
+            --cov-report xml:${{ github.workspace }}/pytest_coverage_report.xml
+
+      - name: Run WASM tests with coverage
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: |
+          set -e
+          # Currently unsupported for wasm32-unknown-unknown
+          # eval "$(cargo llvm-cov show-env --sh)"
 
           echo "Run WASM behavior tests"
           wasm-pack test --release --node crates/wasm
 
           echo "Build WASM Node package for JS coverage"
-          wasm-pack build --release crates/wasm --target nodejs --out-dir pkg-test
+          rm -rf crates/wasm/pkg
+          wasm-pack build --release crates/wasm --target nodejs --out-dir pkg
 
           echo "Run WASM Node coverage harness"
           npx --yes c8 \
-            --include="crates/wasm/pkg-test/**/*.js" \
+            --include="crates/wasm/pkg/**/*.js" \
             --exclude="crates/wasm/tests-js/**" \
             --reporter=cobertura \
-            --reports-dir="${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/wasm-c8" \
+            --reporter=lcov \
+            --reports-dir="." \
             node --test \
               --test-force-exit \
               --test-reporter=spec --test-reporter-destination=stdout \
               --test-reporter=junit \
-              --test-reporter-destination="${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/wasm_junit.xml" \
+              --test-reporter-destination="./wasm_junit.xml" \
               crates/wasm/tests-js/*.mjs
-          mv ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/wasm-c8/cobertura-coverage.xml \
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/wasm-js.xml
+          mv ./cobertura-coverage.xml ${{ github.workspace }}/wasm_coverage_report.xml
+          mv ./lcov.info ${{ github.workspace }}/wasm_lcov.info
 
-      - name: Package Node.js
-        if: ${{ needs.changes.outputs.run_packages == 'true' }}
+      - name: Collect Rust test coverage report
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: |
           set -e
-          mkdir -p ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/npm
+          eval "$(cargo llvm-cov show-env --sh)"
+          cargo llvm-cov report \
+            --release \
+            --ignore-filename-regex '.*/tests/.*\.rs$' \
+            --cobertura \
+            --output-path ${{ github.workspace }}/rust_coverage_report.xml
+
+      - name: Print overall coverage
+        run: |
+          uv run python - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          import os
+
+          workspace = Path("${{ github.workspace }}")
+          files = [
+              ("Rust", "rust_coverage_report.xml"),
+              ("Go", "go_coverage_report.xml"),
+              ("Node", "nodejs_coverage_report.xml"),
+              ("Python", "pytest_coverage_report.xml"),
+              ("WASM", "wasm_coverage_report.xml"),
+          ]
+
+          total_covered = 0
+          total_valid = 0
+          rows = []
+
+          for label, name in files:
+              root = ET.parse(workspace / name).getroot()
+              covered = int(root.attrib["lines-covered"])
+              valid = int(root.attrib["lines-valid"])
+              rate = covered / valid if valid else 0.0
+              rows.append((label, covered, valid, rate))
+              total_covered += covered
+              total_valid += valid
+
+          overall = total_covered / total_valid if total_valid else 0.0
+
+          print("Coverage summary:")
+          for label, covered, valid, rate in rows:
+              print(f"  {label}: {covered}/{valid} ({rate:.2%})")
+          print(f"OVERALL COVERAGE: {overall:.2%}")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write("## Coverage Summary\n\n")
+              for label, covered, valid, rate in rows:
+                  fh.write(f"- {label}: {covered}/{valid} ({rate:.2%})\n")
+              fh.write(f"\n**Overall coverage:** {overall:.2%}\n")
+          PY
+
+      - name: Upload results to Codecov
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          disable_search: true
+          files: rust_coverage_report.xml,go_coverage_report.xml,nodejs_coverage_report.xml,pytest_coverage_report.xml,wasm_coverage_report.xml
+          verbose: true
+
+      - name: Upload Sonar coverage artifact
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-sonarqube
+          path: |
+            ${{ github.workspace }}/go_coverage.out
+            ${{ github.workspace }}/nodejs_lcov.info
+            ${{ github.workspace }}/pytest_coverage_report.xml
+            ${{ github.workspace }}/rust_coverage_report.xml
+            ${{ github.workspace }}/wasm_lcov.info
+          if-no-files-found: error
+
+      - name: Upload Sonar WASM package artifact
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-sonarqube-wasm-pkg
+          path: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/crates/wasm/pkg
+          if-no-files-found: error
+
+      - name: Prune uv cache
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: uv cache prune --ci
+
+  sonarqube:
+    name: SonarQube
+    needs: [test]
+    runs-on: linux-amd64-cpu4
+    timeout-minutes: 30
+
+    steps:
+      - name: Check SonarQube reachability
+        id: sonar_preflight
+        env:
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set +e
+          python3 - <<'PY'
+          import os
+          import socket
+          import sys
+          from urllib.parse import urlparse
+
+          host_url = os.environ.get("SONAR_HOST_URL", "").strip()
+          token = os.environ.get("SONAR_TOKEN", "").strip()
+          if not host_url or not token:
+              sys.exit(2)
+
+          parsed = urlparse(host_url)
+          host = parsed.hostname
+          port = parsed.port or (443 if parsed.scheme == "https" else 80)
+          if not host:
+              sys.exit(3)
+
+          socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+          with socket.create_connection((host, port), timeout=5):
+              pass
+          PY
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo "can_run=true" >> "$GITHUB_OUTPUT"
+            echo "SonarQube preflight passed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "can_run=false" >> "$GITHUB_OUTPUT"
+            if [ "$status" -eq 2 ]; then
+              echo "SonarQube scan skipped because the required SonarQube secrets are unavailable." >> "$GITHUB_STEP_SUMMARY"
+              echo "::notice::Skipping SonarQube scan because the required SonarQube secrets are unavailable."
+            else
+              echo "SonarQube scan skipped because the runner cannot resolve or reach the configured SonarQube host." >> "$GITHUB_STEP_SUMMARY"
+              echo "::notice::Skipping SonarQube scan because the runner cannot resolve or reach the configured SonarQube host."
+            fi
+          fi
+
+      - name: Checkout
+        if: ${{ steps.sonar_preflight.outputs.can_run == 'true' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          path: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+
+      - name: Download Sonar coverage artifact
+        if: ${{ steps.sonar_preflight.outputs.can_run == 'true' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage-sonarqube
+          path: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/.sonar-reports
+
+      - name: Download Sonar WASM package artifact
+        if: ${{ steps.sonar_preflight.outputs.can_run == 'true' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage-sonarqube-wasm-pkg
+          path: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/crates/wasm/pkg
+
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606
+        if: ${{ steps.sonar_preflight.outputs.can_run == 'true' }}
+        with:
+          toolchain: ${{ env.NEMO_FLOW_CI_RUST_VERSION }}
+          components: clippy
+
+      - name: SonarQube Scan
+        if: ${{ steps.sonar_preflight.outputs.can_run == 'true' }}
+        uses: SonarSource/sonarqube-scan-action@299e4b793aaa83bf2aba7c9c14bedbb485688ec4 # v7
+        with:
+          projectBaseDir: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+          scannerVersion: ${{ env.NEMO_FLOW_CI_SONAR_SCANNER_VERSION }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  package:
+    name: Package / ${{ matrix.platform }}
+    needs: [test]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-amd64
+            runner: linux-amd64-cpu4
+            wheel_build_extra_args: --target x86_64-unknown-linux-gnu --zig
+            wheel_compatibility: manylinux2014
+          - platform: linux-arm64
+            runner: linux-arm64-cpu4
+            wheel_build_extra_args: --target aarch64-unknown-linux-gnu --zig
+            wheel_compatibility: manylinux2014
+          - platform: macos-arm64
+            runner: macos-15
+            wheel_build_extra_args: --target aarch64-apple-darwin
+            wheel_compatibility: pypi
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          path: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606
+        with:
+          toolchain: ${{ env.NEMO_FLOW_CI_RUST_VERSION }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          shared-key: nemo-flow-${{ runner.os }}-${{ runner.arch }}-${{ env.NEMO_FLOW_CI_RUST_VERSION }}
+          workspaces: NeMo-Flow -> target
+          cache-all-crates: true
+          save-if: false
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: ${{ env.NEMO_FLOW_CI_NODE_VERSION }}
+
+      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
+        with:
+          version: ${{ env.NEMO_FLOW_CI_UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/uv.lock
+
+      - name: Install managed Python
+        run: |
+          set -e
+          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ env.NEMO_FLOW_CI_DEFAULT_PYTHON_VER }}
+
+      - name: Export managed Python runtime
+        run: |
+          set -e
+          PYO3_PYTHON="$(uv python find --managed-python ${{ env.NEMO_FLOW_CI_DEFAULT_PYTHON_VER }})"
+          export PYO3_PYTHON
+          eval "$("$PYO3_PYTHON" - <<'PY'
+          import shlex
+          import sys
+          import sysconfig
+
+          def emit(name, value):
+              print(f"export {name}={shlex.quote('' if value is None else str(value))}")
+
+          emit("PYTHONHOME", sys.base_prefix)
+          emit("PYTHON_STDLIB", sysconfig.get_path("stdlib"))
+          emit("PYTHON_PLATSTDLIB", sysconfig.get_path("platstdlib"))
+          emit("PYTHON_LIBDIR", sysconfig.get_config_var("LIBDIR"))
+          PY
+          )"
+          export PYTHONPATH="${PYTHON_STDLIB}:${PYTHON_PLATSTDLIB}"
+          if [ -n "${PYTHON_LIBDIR}" ]; then
+            export LD_LIBRARY_PATH="${PYTHON_LIBDIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+            export DYLD_LIBRARY_PATH="${PYTHON_LIBDIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+          fi
+          {
+            printf 'PYO3_PYTHON=%s\n' "$PYO3_PYTHON"
+            printf 'PYTHONHOME=%s\n' "$PYTHONHOME"
+            printf 'PYTHON_STDLIB=%s\n' "$PYTHON_STDLIB"
+            printf 'PYTHON_PLATSTDLIB=%s\n' "$PYTHON_PLATSTDLIB"
+            printf 'PYTHON_LIBDIR=%s\n' "$PYTHON_LIBDIR"
+            printf 'PYTHONPATH=%s\n' "$PYTHONPATH"
+            if [ -n "${PYTHON_LIBDIR}" ]; then
+              printf 'LD_LIBRARY_PATH=%s\n' "$LD_LIBRARY_PATH"
+              printf 'DYLD_LIBRARY_PATH=%s\n' "$DYLD_LIBRARY_PATH"
+            fi
+          } >> "$GITHUB_ENV"
+
+      - name: Install Linux build dependencies
+        if: ${{ startsWith(matrix.platform, 'linux-') }}
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config
+
+      - uses: taiki-e/install-action@60581cd7025e0e855cebd745379013e286d9c787 # v2.64.2
+        with:
+          tool: wasm-pack@${{ env.NEMO_FLOW_CI_WASM_PACK_VERSION }}
+
+      - name: Create packaging output directories
+        run: |
+          set -e
+          mkdir -p \
+            "${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/npm" \
+            "${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wasm" \
+            "${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wheels"
+
+      - name: Package Node
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: |
+          set -e
           if [ "${{ inputs.ref_type }}" != "tag" ]; then
             echo "Non-release build: appending commit hash to version"
             node -e "
@@ -414,19 +654,16 @@ jobs:
             echo "Tagged release ${{ inputs.ref_name }}: using version as-is"
           fi
           pushd crates/node
-          if [ ! -d node_modules ]; then
-            npm install
-          fi
+          npm install
           npm run build
           npm pack --pack-destination ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/npm
           popd
 
       - name: Package WASM bundler
-        if: ${{ needs.changes.outputs.run_packages == 'true' && matrix.platform == 'linux-amd64' }}
+        if: ${{ matrix.platform == 'linux-amd64' }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: |
           set -e
-          mkdir -p ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wasm
           wasm-pack build --release crates/wasm --scope nvidia
           if [ "${{ inputs.ref_type }}" != "tag" ]; then
             echo "Non-release build: appending commit hash to version"
@@ -457,131 +694,160 @@ jobs:
           popd
 
       - name: Package Python wheel
-        if: ${{ needs.changes.outputs.run_packages == 'true' }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: |
           set -e
-          mkdir -p ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}
-          uv venv --clear --python=${{ env.NEMO_FLOW_CI_DEFAULT_PYTHON_VER }} --seed ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/.venv
-          source ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/.venv/bin/activate
           uv sync --active --reinstall-package nemo-flow
           if [ "${{ inputs.ref_type }}" != "tag" ]; then
             echo "Non-release build: appending commit hash to version"
-            python -c 'from pathlib import Path; import os, re, sys; path = Path("Cargo.toml"); text = path.read_text(); sha = os.environ["GITHUB_SHA"][:8]; updated, count = re.subn(r"^version = \"(.*)\"$", f"version = \"\\1+{sha}\"", text, count=1, flags=re.MULTILINE); count == 1 or sys.exit("Failed to update version in Cargo.toml"); path.write_text(updated)'
+            uv run python -c 'from pathlib import Path; import os, re, sys; path = Path("Cargo.toml"); text = path.read_text(); sha = os.environ["GITHUB_SHA"][:8]; updated, count = re.subn(r"^version = \"(.*)\"$", f"version = \"\\1+{sha}\"", text, count=1, flags=re.MULTILINE); count == 1 or sys.exit("Failed to update version in Cargo.toml"); path.write_text(updated)'
           else
             echo "Tagged release ${{ inputs.ref_name }}: using version as-is"
           fi
-          maturin build --release \
-            --target ${{ matrix.wheel_target }} \
-            --out ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wheels
+          uv run maturin build --release \
+            --compatibility "${{ matrix.wheel_compatibility }}" \
+            ${{ matrix.wheel_build_extra_args }} \
+            --out "${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wheels"
           if [ ! -d ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wheels ] || \
              [ -z "$(ls -A ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wheels/*.whl 2>/dev/null)" ]; then
             echo "Error: No wheels found in ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wheels/"
             exit 1
           fi
 
-      - name: Upload coverage artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: ${{ always() }}
-        with:
-          name: coverage-${{ matrix.platform }}
-          path: |
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/go_junit_report.xml
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/go_coverage_report.xml
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/nodejs_junit.xml
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/cobertura-coverage.xml
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/coverage-summary.json
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/node-rust.xml
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/pytest_junit_report.xml
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/pytest_coverage_report.xml
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/python-rust.xml
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/rust_junit_report.xml
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/rust-workspace.xml
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/wasm_junit.xml
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/wasm-rust.xml
-            ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/coverage/wasm-js.xml
-          if-no-files-found: warn
-
       - name: Upload npm package artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: ${{ needs.changes.outputs.run_packages == 'true' }}
         with:
           name: npm-${{ matrix.platform }}
           path: ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/npm/*.tgz
           if-no-files-found: error
 
-      - name: Upload wheel artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: ${{ needs.changes.outputs.run_packages == 'true' }}
-        with:
-          name: wheel-${{ matrix.platform }}
-          path: ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wheels/*.whl
-          if-no-files-found: error
-
       - name: Upload WASM package artifact
+        if: ${{ matrix.platform == 'linux-amd64' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: ${{ needs.changes.outputs.run_packages == 'true' && matrix.platform == 'linux-amd64' }}
         with:
           name: wasm-bundler
           path: ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wasm/*.tgz
           if-no-files-found: error
 
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wheel-${{ matrix.platform }}
+          path: ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wheels/*.whl
+          if-no-files-found: error
+
       - name: Prune uv cache
-        if: ${{ needs.changes.outputs.run_python == 'true' || needs.changes.outputs.run_packages == 'true' }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: uv cache prune --ci
 
-  coverage-aggregate:
-    name: Coverage / Aggregate
-    needs: [changes, ci-platform]
+  publish-rust:
+    name: Publish / crates.io
+    needs: [package]
+    if: ${{ inputs.publish }}
     runs-on: linux-amd64-cpu4
-    if: ${{ always() && needs.changes.outputs.run_coverage_aggregate == 'true' && needs.ci-platform.result != 'cancelled' }}
-
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          path: 'NeMo-Flow'
-
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        with:
-          python-version: ${{ env.NEMO_FLOW_CI_DEFAULT_PYTHON_VER }}
-
-      - name: Download canonical Linux coverage artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: coverage-linux-amd64
           path: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
 
-      - name: Restore coverage directory structure
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
-        run: |
-          mkdir -p target/coverage
-          for f in go_coverage_report.xml \
-                   go_junit_report.xml \
-                   nodejs_junit.xml \
-                   cobertura-coverage.xml \
-                   coverage-summary.json \
-                   node-rust.xml \
-                   pytest_junit_report.xml \
-                   pytest_coverage_report.xml \
-                   python-rust.xml \
-                   rust_junit_report.xml \
-                   rust-workspace.xml \
-                   wasm_junit.xml \
-                   wasm-js.xml \
-                   wasm-rust.xml; do
-            [ -f "$f" ] && mv "$f" "target/coverage/$f" || true
-          done
-
-      - name: Aggregate coverage
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
-        run: python3 scripts/aggregate_coverage.py target/coverage
-
-      - name: Upload coverage summary
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606
         with:
-          name: coverage-summary
-          path: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/target/coverage/project-coverage-summary.md
-          if-no-files-found: warn
+          toolchain: ${{ env.NEMO_FLOW_CI_RUST_VERSION }}
+
+      - name: Publish to crates.io
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --workspace --no-verify
+
+  publish-python:
+    name: Publish / PyPI
+    needs: [package]
+    if: ${{ inputs.publish }}
+    runs-on: linux-amd64-cpu4
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+    steps:
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: wheel-*
+          merge-multiple: true
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0 # v1.9.0
+
+  publish-npm:
+    name: Publish / npm
+    needs: [package]
+    if: ${{ inputs.publish }}
+    runs-on: linux-amd64-cpu4
+    timeout-minutes: 30
+    permissions: {}
+    steps:
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: ${{ env.NEMO_FLOW_CI_NODE_VERSION }}
+
+      - name: Download npm linux-amd64 artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: npm-linux-amd64
+          path: npm-linux-amd64/
+
+      - name: Download npm linux-arm64 artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: npm-linux-arm64
+          path: npm-linux-arm64/
+
+      - name: Download npm macos-arm64 artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: npm-macos-arm64
+          path: npm-macos-arm64/
+
+      - name: Download WASM artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: wasm-bundler
+          path: wasm-package/
+
+      - name: Configure npm authentication
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+
+      - name: Publish Node.js package to npm
+        run: |
+          set -e
+          mkdir -p combined
+          first=true
+          for dir in npm-linux-amd64 npm-linux-arm64 npm-macos-arm64; do
+            for tgz in "${dir}"/*.tgz; do
+              [ -f "${tgz}" ] || continue
+              if [ "${first}" = true ]; then
+                tar xzf "${tgz}" -C combined
+                first=false
+              else
+                tar xzf "${tgz}" -C combined --wildcards '*.node'
+              fi
+            done
+          done
+          echo "Platform binaries included:"
+          ls -la combined/package/*.node
+          npm publish combined/package --access public
+
+      - name: Publish WASM package to npm
+        run: |
+          set -e
+          for pkg in wasm-package/*.tgz; do
+            echo "Publishing ${pkg}..."
+            npm publish "${pkg}" --access public
+          done

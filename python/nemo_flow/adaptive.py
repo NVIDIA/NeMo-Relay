@@ -260,19 +260,20 @@ class ComponentSpec:
         }
 
 
-def set_latency_sensitivity(level: float | None) -> None:
+def set_latency_sensitivity(level: int) -> None:
     """Set a request-local latency-sensitivity hint.
 
     Args:
-        level: Sensitivity value for the current execution context, or `None`
-            when clearing the hint.
+        level: Positive integer sensitivity value for the current execution
+            context.
 
     Returns:
         `None`.
 
     Behavior:
         This is an execution-time hint for the current request/scope context,
-        not persistent adaptive configuration.
+        not persistent adaptive configuration. The native adaptive layer stores
+        this as a positive integer.
     """
     _set_latency_sensitivity(level)
 

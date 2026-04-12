@@ -177,6 +177,16 @@ class TestPydanticCodec:
 
 
 class TestTypedHelpers:
+    def test_serialize_value_normalizes_nested_collections(self):
+        serialized = typed._serialize_value(
+            {"items": [DcArgs(x=3, y=4)], "labels": ["alpha", "beta"]},
+        )
+
+        assert serialized == {
+            "items": [{"x": 3, "y": 4}],
+            "labels": ["alpha", "beta"],
+        }
+
     def test_register_and_resolve_runtime_type(self):
         token = typed._register_runtime_type(SearchArgs)
         assert typed._resolve_runtime_type(token) is SearchArgs

@@ -17,3 +17,7 @@ resolver = "2"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+repository = "https://github.com/NVIDIA/NeMo-Flow"
+
+[workspace.dependencies]
+uuid = "=1.18.1"

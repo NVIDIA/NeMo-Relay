@@ -96,7 +96,7 @@ The hooks enforce:
 
 - **General**: trailing whitespace removal, end-of-file fixup, YAML/TOML/JSON validity, merge conflict marker detection, large file check (500 KB max)
 - **Python**: Ruff linting and formatting, ty type checking
-- **Rust**: `cargo fmt` formatting check, `cargo clippy` lints, `cargo deny` auditing
+- **Rust**: FFI header sync for `crates/ffi/nemo_flow.h` via Cargo/build.rs, `cargo fmt` formatting check, `cargo clippy` lints, `cargo deny` auditing
 - **Go**: `gofmt` formatting, `go vet` static analysis
 
 To run all hooks manually against the entire codebase:

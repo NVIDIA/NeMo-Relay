@@ -6,10 +6,13 @@ name = "nemo-flow-adaptive"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Adaptive runtime primitives and Redis-backed learning components for NeMo Flow."
+readme = "README.md"
 
 [dependencies]
 nemo-flow = { path = "../core", default-features = false }
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { workspace = true, features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -25,3 +28,11 @@ redis-backend = ["redis"]
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "sync", "test-util", "rt-multi-thread"] }
 tokio-stream = { version = "0.1", default-features = false }
+
+[[test]]
+name = "redis_integration"
+path = "tests/integration/redis_tests.rs"
+
+[[test]]
+name = "runtime_integration"
+path = "tests/integration/runtime_integration_tests.rs"

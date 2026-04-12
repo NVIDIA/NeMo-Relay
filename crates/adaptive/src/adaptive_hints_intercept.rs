@@ -12,15 +12,18 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 
-use nemo_flow::{LLMRequest, LlmRequestInterceptFn};
+use nemo_flow::codec::request::AnnotatedLLMRequest;
+use nemo_flow::context::callbacks::LlmRequestInterceptFn;
+use nemo_flow::types::llm::LLMRequest;
 
 use crate::context_helpers::{
     extract_scope_path, read_manual_latency_sensitivity, resolve_agent_id,
 };
 use crate::intercepts::AGENT_HINTS_HEADER_KEY;
-use crate::trie::SensitivityConfig;
+use crate::trie::builder::SensitivityConfig;
 use crate::trie::lookup::PredictionTrieLookup;
-use crate::types::{AgentHints, HotCache};
+use crate::types::cache::HotCache;
+use crate::types::metadata::AgentHints;
 
 /// Builds [`AgentHints`] from a trie prediction and optional default hints.
 ///
@@ -80,9 +83,7 @@ impl AdaptiveHintsIntercept {
     pub fn into_request_fn(self) -> LlmRequestInterceptFn {
         let this = Arc::new(self);
         Box::new(
-            move |_name: &str,
-                  mut request: LLMRequest,
-                  annotated: Option<nemo_flow::AnnotatedLLMRequest>| {
+            move |_name: &str, mut request: LLMRequest, annotated: Option<AnnotatedLLMRequest>| {
                 // LOCK ORDERING: scope_stack first, hot_cache second.
                 let scope_path = extract_scope_path();
                 let manual_ls = read_manual_latency_sensitivity();
@@ -175,88 +176,5 @@ impl AdaptiveHintsIntercept {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::trie::data_models::{LlmCallPrediction, PredictionMetrics};
-
-    #[test]
-    fn test_build_agent_hints_from_prediction() {
-        let pred = LlmCallPrediction {
-            remaining_calls: PredictionMetrics {
-                sample_count: 10,
-                mean: 5.0,
-                p50: 5.0,
-                p90: 8.0,
-                p95: 9.0,
-            },
-            interarrival_ms: PredictionMetrics {
-                sample_count: 10,
-                mean: 200.0,
-                p50: 180.0,
-                p90: 300.0,
-                p95: 350.0,
-            },
-            output_tokens: PredictionMetrics {
-                sample_count: 10,
-                mean: 100.0,
-                p50: 90.0,
-                p90: 150.0,
-                p95: 180.0,
-            },
-            latency_sensitivity: Some(4),
-        };
-
-        let hints = build_agent_hints(Some(&pred), &None, "test-agent", 2, 3).unwrap();
-        assert_eq!(hints.osl, 150, "osl = output_tokens.p90");
-        assert_eq!(hints.iat, 200, "iat = interarrival_ms.mean");
-        assert_eq!(hints.priority, 1, "priority = 5 - 4 = 1");
-        assert!((hints.latency_sensitivity - 4.0).abs() < f64::EPSILON);
-        assert_eq!(hints.prefix_id, "test-agent-d3");
-        assert_eq!(hints.total_requests, 7, "total_requests = 5 + 2 = 7");
-    }
-
-    #[test]
-    fn test_build_agent_hints_falls_back_to_defaults() {
-        let defaults = AgentHints {
-            osl: 42,
-            iat: 99,
-            priority: 1,
-            latency_sensitivity: 4.0,
-            prefix_id: "fallback".into(),
-            total_requests: 10,
-        };
-        let hints = build_agent_hints(None, &Some(defaults.clone()), "agent", 1, 0).unwrap();
-        assert_eq!(hints.osl, 42);
-        assert_eq!(hints.prefix_id, "fallback");
-    }
-
-    #[test]
-    fn test_build_agent_hints_none_when_no_prediction_and_no_defaults() {
-        let hints = build_agent_hints(None, &None, "agent", 1, 0);
-        assert!(hints.is_none());
-    }
-
-    #[test]
-    fn test_adaptive_hints_intercept_new() {
-        let hot_cache = Arc::new(RwLock::new(HotCache {
-            plan: None,
-            trie: None,
-            agent_hints_default: None,
-        }));
-        let intercept = AdaptiveHintsIntercept::new(hot_cache, "test".to_string());
-        assert_eq!(intercept.call_counter.load(Ordering::Relaxed), 1);
-        assert_eq!(intercept.agent_id, "test");
-    }
-
-    #[test]
-    fn test_adaptive_hints_intercept_into_request_fn_compiles() {
-        let hot_cache = Arc::new(RwLock::new(HotCache {
-            plan: None,
-            trie: None,
-            agent_hints_default: None,
-        }));
-        let intercept = AdaptiveHintsIntercept::new(hot_cache, "test".to_string());
-        let _req_fn: LlmRequestInterceptFn = intercept.into_request_fn();
-        // If this compiles and runs, the type is correct.
-    }
-}
+#[path = "../tests/unit/adaptive_hints_intercept_tests.rs"]
+mod tests;
