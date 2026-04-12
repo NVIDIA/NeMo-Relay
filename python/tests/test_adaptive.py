@@ -3,7 +3,10 @@
 
 """Tests for the adaptive plugin component API."""
 
+from dataclasses import dataclass
+
 from nemo_flow import LLMRequest, llm, plugin, tools
+from nemo_flow import adaptive as adaptive_module
 from nemo_flow.adaptive import (
     ADAPTIVE_PLUGIN_KIND,
     AdaptiveConfig,
@@ -24,6 +27,22 @@ class TestAdaptiveConfigHelpers:
             "config": {"url": "redis://127.0.0.1:6379", "key_prefix": "nemo_flow:"},
         }
 
+    def test_backend_helper_normalizes_nested_dataclass_config(self):
+        @dataclass
+        class NestedHint:
+            path: str
+            enabled: bool = True
+
+        backend = BackendSpec(
+            kind="custom",
+            config={"hints": [NestedHint(path="nvext.agent_hints")]},
+        )
+
+        assert backend.to_dict() == {
+            "kind": "custom",
+            "config": {"hints": [{"path": "nvext.agent_hints", "enabled": True}]},
+        }
+
     def test_section_helpers(self):
         assert TelemetryConfig(learners=["latency_sensitivity"]).to_dict() == {"learners": ["latency_sensitivity"]}
         assert AdaptiveHintsConfig().to_dict()["priority"] == 100
@@ -38,6 +57,24 @@ class TestAdaptiveConfigHelpers:
             plugin.PluginConfig(components=[ComponentSpec(AdaptiveConfig(telemetry=TelemetryConfig()))])
         )
         assert any(diag["code"] == "adaptive.section_disabled_missing_state" for diag in report["diagnostics"])
+
+    def test_plugin_component_spec_normalizes_lists_of_dataclasses(self):
+        @dataclass
+        class ExampleConfig:
+            name: str
+            weights: list[int]
+
+        component = plugin.ComponentSpec(
+            kind="python.example_plugin",
+            config={"rules": [ExampleConfig(name="alpha", weights=[1, 2, 3])]},
+        )
+
+        assert component.to_dict()["config"] == {
+            "rules": [{"name": "alpha", "weights": [1, 2, 3]}],
+        }
+
+    def test_set_latency_sensitivity_accepts_positive_integer(self):
+        adaptive_module.set_latency_sensitivity(1)
 
 
 class TestAdaptivePluginConfiguration:
@@ -209,3 +246,17 @@ class TestAdaptivePluginConfiguration:
         finally:
             plugin.clear()
             plugin.deregister("python.test_plugin")
+
+    def test_list_kinds_includes_registered_plugin(self):
+        class MarkerPlugin(plugin.Plugin):
+            def validate(self, plugin_config):
+                return None
+
+            def register(self, plugin_config, context):
+                return None
+
+        plugin.register("python.list_kinds_plugin", MarkerPlugin())
+        try:
+            assert "python.list_kinds_plugin" in plugin.list_kinds()
+        finally:
+            plugin.deregister("python.list_kinds_plugin")

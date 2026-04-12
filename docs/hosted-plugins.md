@@ -173,6 +173,12 @@ Registration only runs during `initialize(...)` for enabled components.
 The plugin registration context exposes these operations:
 
 - subscriber registration
+- tool sanitize-request guardrail registration
+- tool sanitize-response guardrail registration
+- tool conditional-execution guardrail registration
+- LLM sanitize-request guardrail registration
+- LLM sanitize-response guardrail registration
+- LLM conditional-execution guardrail registration
 - LLM request intercept registration
 - LLM execution intercept registration
 - LLM stream execution intercept registration
@@ -181,9 +187,9 @@ The plugin registration context exposes these operations:
 
 The exact method names follow the binding you are using:
 
-- Python: `register_subscriber`, `register_tool_request_intercept`, ...
-- Node.js and WASM: `registerSubscriber`, `registerToolRequestIntercept`, ...
-- Go: `RegisterSubscriber`, `RegisterToolRequestIntercept`, ...
+- Python: `register_subscriber`, `register_tool_sanitize_request_guardrail`, ...
+- Node.js and WASM: `registerSubscriber`, `registerToolSanitizeRequestGuardrail`, ...
+- Go: `RegisterSubscriber`, `RegisterToolSanitizeRequestGuardrail`, ...
 - Rust: methods on `PluginRegistrationContext`
 
 ### Registration Naming

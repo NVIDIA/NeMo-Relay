@@ -9,6 +9,7 @@
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use nemo_flow::error::Result as FlowResult;
 use serde_json::Value as Json;
 
 /// An async iterator over chunks from a streaming LLM response.
@@ -17,7 +18,7 @@ use serde_json::Value as Json;
 /// response chunks. Returns `null` when the stream is fully consumed.
 #[napi]
 pub struct LlmStream {
-    pub(crate) receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<nemo_flow::Result<Json>>>,
+    pub(crate) receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<Json>>>,
 }
 
 #[napi]
@@ -39,5 +40,9 @@ impl LlmStream {
 }
 
 #[cfg(test)]
-#[path = "stream_coverage_tests.rs"]
+#[path = "../tests/unit/stream_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "../tests/coverage/stream_coverage_tests.rs"]
 mod coverage_tests;

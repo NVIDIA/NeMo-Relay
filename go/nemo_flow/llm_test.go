@@ -139,6 +139,83 @@ func TestLlmCallExecuteBasic(t *testing.T) {
 	}
 }
 
+func TestCodecHandleConstructors(t *testing.T) {
+	if NewOpenAIChatCodec() == nil {
+		t.Fatal("expected OpenAI chat codec handle")
+	}
+	if NewOpenAIResponsesCodec() == nil {
+		t.Fatal("expected OpenAI responses codec handle")
+	}
+	if NewAnthropicMessagesCodec() == nil {
+		t.Fatal("expected Anthropic messages codec handle")
+	}
+}
+
+func TestLlmCallExecuteWithRequestAndResponseCodecs(t *testing.T) {
+	codec := CodecFunc{
+		Decode: func(headersJSON, contentJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"messages":[{"role":"user","content":"decoded"}],"model":"decoded-model"}`), nil
+		},
+		Encode: func(annotatedJSON json.RawMessage, originalHeadersJSON, originalContentJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"messages":[{"role":"user","content":"encoded"}],"model":"encoded-model"}`), nil
+		},
+	}
+
+	var events []Event
+	if err := RegisterSubscriber("go_llm_codec_events", func(event Event) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatalf("RegisterSubscriber failed: %v", err)
+	}
+	defer DeregisterSubscriber("go_llm_codec_events")
+
+	result, err := LlmCallExecute(
+		"codec_llm",
+		makeRequest(),
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			var request struct {
+				Content map[string]any `json:"content"`
+			}
+			if err := json.Unmarshal(nativeJSON, &request); err != nil {
+				return nil, err
+			}
+			if request.Content["model"] != "encoded-model" {
+				t.Fatalf("expected encoded model in execution payload, got %#v", request.Content)
+			}
+			return json.RawMessage(`{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`), nil
+		},
+		WithLLMAttributes(LLMAttrStreaming),
+		WithLLMCodec(codec),
+		WithLLMResponseCodec(NewOpenAIChatCodec()),
+	)
+	if err != nil {
+		t.Fatalf("LlmCallExecute failed: %v", err)
+	}
+	if len(result) == 0 {
+		t.Fatal("expected JSON response from codec-backed execute")
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected start/end events, got %d", len(events))
+	}
+
+	var startEvent, endEvent Event
+	for _, event := range events {
+		switch event.(type) {
+		case *LLMStartEvent:
+			startEvent = event
+		case *LLMEndEvent:
+			endEvent = event
+		}
+	}
+	if startEvent == nil || endEvent == nil {
+		t.Fatalf("expected LLM start and end events, got %#v", events)
+	}
+
+	_ = startEvent.Attributes()
+	_ = startEvent.AnnotatedRequest()
+	_ = endEvent.AnnotatedResponse()
+}
+
 // ============================================================================
 // LLM guardrails
 // ============================================================================

@@ -10,6 +10,35 @@ const plugin = require('../plugin.js');
 const adaptive = require('../adaptive.js');
 
 describe('core hosted plugins', () => {
+  it('reports active config and lists registered plugin kinds', async () => {
+    const pluginKind = `node.test.report.${Date.now()}`;
+
+    plugin.register(pluginKind, {
+      register() {},
+    });
+
+    try {
+      assert.equal(plugin.report(), null);
+      assert.equal(plugin.listKinds().includes(pluginKind), true);
+
+      const report = await plugin.initialize({
+        version: 1,
+        components: [
+          adaptive.ComponentSpec({
+            version: 1,
+            state: { backend: adaptive.inMemoryBackend() },
+          }),
+          plugin.ComponentSpec(pluginKind, {}),
+        ],
+      });
+
+      assert.deepEqual(plugin.report(), report);
+    } finally {
+      plugin.clear();
+      plugin.deregister(pluginKind);
+    }
+  });
+
   it('routes validation diagnostics through a registered JS plugin', () => {
     const pluginKind = `node.test.validate.${Date.now()}`;
 
@@ -108,5 +137,14 @@ describe('core hosted plugins', () => {
       plugin.clear();
       plugin.deregister(pluginKind);
     }
+  });
+});
+
+describe('adaptive helpers', () => {
+  it('builds a redis backend with the default key prefix', () => {
+    assert.deepEqual(adaptive.redisBackend('redis://127.0.0.1:6379'), {
+      kind: 'redis',
+      config: { url: 'redis://127.0.0.1:6379', key_prefix: 'nemo_flow:' },
+    });
   });
 });

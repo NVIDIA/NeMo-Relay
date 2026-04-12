@@ -348,8 +348,8 @@ func (r *LLMRequest) Content() json.RawMessage {
 // [ScopeStartEvent], [ScopeEndEvent], [ToolStartEvent], [ToolEndEvent],
 // [LLMStartEvent], [LLMEndEvent], or [MarkEvent].
 //
-// The underlying C pointer is only valid for the duration of the subscriber
-// call; callers must copy any data they want to retain.
+// Go subscriber callbacks receive an owned snapshot of the underlying FFI
+// event, so it is safe to retain the Event after the callback returns.
 type Event interface {
 	Kind() string
 	UUID() string
@@ -369,40 +369,119 @@ type Event interface {
 }
 
 type eventBase struct {
-	ptr *C.FfiEvent
+	ptr      *C.FfiEvent
+	snapshot *eventSnapshot
 }
 
-func (e eventBase) UUID() string { return goString(C.nemo_flow_event_uuid(e.ptr)) }
-func (e eventBase) Name() string { return goStringOpt(C.nemo_flow_event_name(e.ptr)) }
-func (e eventBase) Kind() string { return goStringOpt(C.nemo_flow_event_kind(e.ptr)) }
+type eventSnapshot struct {
+	kind              string
+	uuid              string
+	name              string
+	parentUUID        string
+	scopeType         string
+	attributes        uint32
+	data              json.RawMessage
+	metadata          json.RawMessage
+	timestamp         string
+	input             json.RawMessage
+	output            json.RawMessage
+	modelName         string
+	toolCallID        string
+	annotatedRequest  json.RawMessage
+	annotatedResponse json.RawMessage
+}
+
+func (e eventBase) UUID() string {
+	if e.snapshot != nil {
+		return e.snapshot.uuid
+	}
+	return goString(C.nemo_flow_event_uuid(e.ptr))
+}
+
+func (e eventBase) Name() string {
+	if e.snapshot != nil {
+		return e.snapshot.name
+	}
+	return goStringOpt(C.nemo_flow_event_name(e.ptr))
+}
+
+func (e eventBase) Kind() string {
+	if e.snapshot != nil {
+		return e.snapshot.kind
+	}
+	return goStringOpt(C.nemo_flow_event_kind(e.ptr))
+}
+
 func (e eventBase) ScopeType() string {
+	if e.snapshot != nil {
+		return e.snapshot.scopeType
+	}
 	return goStringOpt((*C.char)(C.nemo_flow_event_scope_type(unsafe.Pointer(e.ptr))))
 }
 func (e eventBase) Attributes() uint32 {
+	if e.snapshot != nil {
+		return e.snapshot.attributes
+	}
 	return uint32(C.nemo_flow_event_attributes(e.ptr))
 }
-func (e eventBase) Data() json.RawMessage     { return goJSONOpt(C.nemo_flow_event_data(e.ptr)) }
-func (e eventBase) Metadata() json.RawMessage { return goJSONOpt(C.nemo_flow_event_metadata(e.ptr)) }
-func (e eventBase) Timestamp() string         { return goString(C.nemo_flow_event_timestamp(e.ptr)) }
+func (e eventBase) Data() json.RawMessage {
+	if e.snapshot != nil {
+		return cloneJSON(e.snapshot.data)
+	}
+	return goJSONOpt(C.nemo_flow_event_data(e.ptr))
+}
+func (e eventBase) Metadata() json.RawMessage {
+	if e.snapshot != nil {
+		return cloneJSON(e.snapshot.metadata)
+	}
+	return goJSONOpt(C.nemo_flow_event_metadata(e.ptr))
+}
+func (e eventBase) Timestamp() string {
+	if e.snapshot != nil {
+		return e.snapshot.timestamp
+	}
+	return goString(C.nemo_flow_event_timestamp(e.ptr))
+}
 func (e eventBase) Input() json.RawMessage {
+	if e.snapshot != nil {
+		return cloneJSON(e.snapshot.input)
+	}
 	return goJSONOpt((*C.char)(C.nemo_flow_event_input(unsafe.Pointer(e.ptr))))
 }
 func (e eventBase) Output() json.RawMessage {
+	if e.snapshot != nil {
+		return cloneJSON(e.snapshot.output)
+	}
 	return goJSONOpt((*C.char)(C.nemo_flow_event_output(unsafe.Pointer(e.ptr))))
 }
 func (e eventBase) ModelName() string {
+	if e.snapshot != nil {
+		return e.snapshot.modelName
+	}
 	return goStringOpt((*C.char)(C.nemo_flow_event_model_name(unsafe.Pointer(e.ptr))))
 }
 func (e eventBase) ToolCallID() string {
+	if e.snapshot != nil {
+		return e.snapshot.toolCallID
+	}
 	return goStringOpt((*C.char)(C.nemo_flow_event_tool_call_id(unsafe.Pointer(e.ptr))))
 }
 func (e eventBase) ParentUUID() string {
+	if e.snapshot != nil {
+		return e.snapshot.parentUUID
+	}
 	return goStringOpt((*C.char)(C.nemo_flow_event_parent_uuid(unsafe.Pointer(e.ptr))))
 }
 func (e eventBase) AnnotatedRequest() json.RawMessage {
+	if e.snapshot != nil {
+		return cloneJSON(e.snapshot.annotatedRequest)
+	}
 	return goJSONOpt(C.nemo_flow_event_annotated_request(e.ptr))
 }
 func (e eventBase) AnnotatedResponse() json.RawMessage {
+	if e.snapshot != nil {
+		return cloneJSON(e.snapshot.annotatedResponse)
+	}
 	return goJSONOpt(C.nemo_flow_event_annotated_response(e.ptr))
 }
 
@@ -415,7 +494,25 @@ type LLMEndEvent struct{ eventBase }
 type MarkEvent struct{ eventBase }
 
 func newEvent(ptr *C.FfiEvent) Event {
-	base := eventBase{ptr: ptr}
+	base := eventBase{
+		snapshot: &eventSnapshot{
+			kind:              goStringOpt(C.nemo_flow_event_kind(ptr)),
+			uuid:              goString(C.nemo_flow_event_uuid(ptr)),
+			name:              goStringOpt(C.nemo_flow_event_name(ptr)),
+			parentUUID:        goStringOpt((*C.char)(C.nemo_flow_event_parent_uuid(unsafe.Pointer(ptr)))),
+			scopeType:         goStringOpt((*C.char)(C.nemo_flow_event_scope_type(unsafe.Pointer(ptr)))),
+			attributes:        uint32(C.nemo_flow_event_attributes(ptr)),
+			data:              goJSONOpt(C.nemo_flow_event_data(ptr)),
+			metadata:          goJSONOpt(C.nemo_flow_event_metadata(ptr)),
+			timestamp:         goString(C.nemo_flow_event_timestamp(ptr)),
+			input:             goJSONOpt((*C.char)(C.nemo_flow_event_input(unsafe.Pointer(ptr)))),
+			output:            goJSONOpt((*C.char)(C.nemo_flow_event_output(unsafe.Pointer(ptr)))),
+			modelName:         goStringOpt((*C.char)(C.nemo_flow_event_model_name(unsafe.Pointer(ptr)))),
+			toolCallID:        goStringOpt((*C.char)(C.nemo_flow_event_tool_call_id(unsafe.Pointer(ptr)))),
+			annotatedRequest:  goJSONOpt(C.nemo_flow_event_annotated_request(ptr)),
+			annotatedResponse: goJSONOpt(C.nemo_flow_event_annotated_response(ptr)),
+		},
+	}
 	switch base.Kind() {
 	case "ScopeStart":
 		return &ScopeStartEvent{eventBase: base}
@@ -466,4 +563,11 @@ func goJSONOpt(cstr *C.char) json.RawMessage {
 	s := C.GoString(cstr)
 	C.nemo_flow_string_free(cstr)
 	return json.RawMessage(s)
+}
+
+func cloneJSON(raw json.RawMessage) json.RawMessage {
+	if raw == nil {
+		return nil
+	}
+	return append(json.RawMessage(nil), raw...)
 }

@@ -40,3 +40,7 @@ pub fn opt_json_to_py(py: Python<'_>, value: &Option<Json>) -> PyResult<Py<PyAny
         None => Ok(py.None()),
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/convert_tests.rs"]
+mod tests;

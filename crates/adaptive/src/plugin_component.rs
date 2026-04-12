@@ -8,7 +8,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use nemo_flow::plugin::Result as CorePluginResult;
-use nemo_flow::{
+use nemo_flow::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistration, PluginRegistrationContext, UnsupportedBehavior, deregister_plugin,
     lookup_plugin, register_plugin,
@@ -17,7 +17,7 @@ use serde_json::{Map, Value as Json};
 
 use crate::config::AdaptiveConfig;
 use crate::error::AdaptiveError;
-use crate::runtime::AdaptiveRuntime;
+use crate::runtime::features::AdaptiveRuntime;
 
 /// The plugin kind registered by the adaptive crate.
 pub const ADAPTIVE_PLUGIN_KIND: &str = "adaptive";
@@ -335,3 +335,7 @@ fn adaptive_to_plugin_error(err: AdaptiveError) -> PluginError {
         AdaptiveError::Redis(err) => PluginError::Internal(err.to_string()),
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/plugin_component_tests.rs"]
+mod tests;

@@ -159,10 +159,12 @@ export async function typedLlmStreamExecute(
   const opts = options || {};
 
   // Wrap func: convert typed chunks to JSON
-  const jsonFunc = async function*(nativeInner) {
+  const jsonFunc = async (nativeInner) => {
+    const chunks = [];
     for await (const typedChunk of func(nativeInner)) {
-      yield chunkCodec.toJson(typedChunk);
+      chunks.push(chunkCodec.toJson(typedChunk));
     }
+    return chunks;
   };
 
   const jsonCollector = collector

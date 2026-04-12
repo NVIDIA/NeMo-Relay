@@ -24,10 +24,11 @@ use std::pin::Pin;
 use redis::aio::ConnectionManager;
 
 use crate::error::{AdaptiveError, Result};
-use crate::storage::{StorageBackend, StorageBackendDyn};
-use crate::trie::AccumulatorState;
+use crate::storage::traits::{StorageBackend, StorageBackendDyn};
+use crate::trie::accumulator::AccumulatorState;
 use crate::trie::serialization::TrieEnvelope;
-use crate::types::{ExecutionPlan, RunRecord};
+use crate::types::plan::ExecutionPlan;
+use crate::types::records::RunRecord;
 
 /// A Redis-backed storage backend for cross-process shared state.
 ///
@@ -269,3 +270,7 @@ impl StorageBackendDyn for RedisBackend {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/redis_tests.rs"]
+mod tests;

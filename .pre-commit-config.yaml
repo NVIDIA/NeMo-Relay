@@ -50,6 +50,13 @@ repos:
   # Rust — fmt + clippy + cargo-deny
   - repo: local
     hooks:
+      - id: ffi-header-sync
+        name: ffi header sync
+        entry: cargo check -p nemo-flow-ffi
+        language: system
+        files: '^crates/ffi/(Cargo\.toml|cbindgen\.toml|nemo_flow\.h|src/.*\.rs)$'
+        pass_filenames: false
+
       - id: cargo-fmt
         name: cargo fmt
         entry: cargo fmt --all --

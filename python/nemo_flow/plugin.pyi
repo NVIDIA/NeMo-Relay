@@ -7,11 +7,16 @@ from typing import Literal, Protocol, TypedDict
 from nemo_flow import (
     Event,
     JsonObject,
+    LlmConditionalExecutionGuardrail,
     LlmExecutionIntercept,
     LlmRequestIntercept,
+    LlmSanitizeRequestGuardrail,
+    LlmSanitizeResponseGuardrail,
     LlmStreamExecutionIntercept,
+    ToolConditionalExecutionGuardrail,
     ToolExecutionIntercept,
     ToolRequestIntercept,
+    ToolSanitizeGuardrail,
 )
 
 UnsupportedBehavior = Literal["ignore", "warn", "error"]
@@ -30,6 +35,24 @@ class ConfigReport(TypedDict):
 
 class PluginContext(Protocol):
     def register_subscriber(self, name: str, callback: Callable[[Event], None]) -> None: ...
+    def register_tool_sanitize_request_guardrail(
+        self, name: str, priority: int, callback: ToolSanitizeGuardrail
+    ) -> None: ...
+    def register_tool_sanitize_response_guardrail(
+        self, name: str, priority: int, callback: ToolSanitizeGuardrail
+    ) -> None: ...
+    def register_tool_conditional_execution_guardrail(
+        self, name: str, priority: int, callback: ToolConditionalExecutionGuardrail
+    ) -> None: ...
+    def register_llm_sanitize_request_guardrail(
+        self, name: str, priority: int, callback: LlmSanitizeRequestGuardrail
+    ) -> None: ...
+    def register_llm_sanitize_response_guardrail(
+        self, name: str, priority: int, callback: LlmSanitizeResponseGuardrail
+    ) -> None: ...
+    def register_llm_conditional_execution_guardrail(
+        self, name: str, priority: int, callback: LlmConditionalExecutionGuardrail
+    ) -> None: ...
     def register_llm_request_intercept(
         self, name: str, priority: int, break_chain: bool, callback: LlmRequestIntercept
     ) -> None: ...

@@ -16,11 +16,16 @@ from typing import TYPE_CHECKING, Callable, Literal, Protocol, TypedDict, cast
 from nemo_flow import (
     Json,
     JsonObject,
+    LlmConditionalExecutionGuardrail,
     LlmExecutionIntercept,
     LlmRequestIntercept,
+    LlmSanitizeRequestGuardrail,
+    LlmSanitizeResponseGuardrail,
     LlmStreamExecutionIntercept,
+    ToolConditionalExecutionGuardrail,
     ToolExecutionIntercept,
     ToolRequestIntercept,
+    ToolSanitizeGuardrail,
     UnsupportedBehavior,
 )
 from nemo_flow._native import (
@@ -73,6 +78,42 @@ class PluginContext(Protocol):
 
     def register_subscriber(self, name: str, callback: Callable[[Event], None]) -> None:
         """Register an infallible event subscriber for this component."""
+        ...
+
+    def register_tool_sanitize_request_guardrail(
+        self, name: str, priority: int, callback: ToolSanitizeGuardrail
+    ) -> None:
+        """Register a tool sanitize-request guardrail for this component."""
+        ...
+
+    def register_tool_sanitize_response_guardrail(
+        self, name: str, priority: int, callback: ToolSanitizeGuardrail
+    ) -> None:
+        """Register a tool sanitize-response guardrail for this component."""
+        ...
+
+    def register_tool_conditional_execution_guardrail(
+        self, name: str, priority: int, callback: ToolConditionalExecutionGuardrail
+    ) -> None:
+        """Register a tool conditional-execution guardrail for this component."""
+        ...
+
+    def register_llm_sanitize_request_guardrail(
+        self, name: str, priority: int, callback: LlmSanitizeRequestGuardrail
+    ) -> None:
+        """Register an LLM sanitize-request guardrail for this component."""
+        ...
+
+    def register_llm_sanitize_response_guardrail(
+        self, name: str, priority: int, callback: LlmSanitizeResponseGuardrail
+    ) -> None:
+        """Register an LLM sanitize-response guardrail for this component."""
+        ...
+
+    def register_llm_conditional_execution_guardrail(
+        self, name: str, priority: int, callback: LlmConditionalExecutionGuardrail
+    ) -> None:
+        """Register an LLM conditional-execution guardrail for this component."""
         ...
 
     def register_llm_request_intercept(

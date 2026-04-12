@@ -327,6 +327,12 @@ await plugin.initialize(config)
 `plugin.PluginContext` exposes:
 
 - `register_subscriber(...)`
+- `register_tool_sanitize_request_guardrail(...)`
+- `register_tool_sanitize_response_guardrail(...)`
+- `register_tool_conditional_execution_guardrail(...)`
+- `register_llm_sanitize_request_guardrail(...)`
+- `register_llm_sanitize_response_guardrail(...)`
+- `register_llm_conditional_execution_guardrail(...)`
 - `register_llm_request_intercept(...)`
 - `register_llm_execution_intercept(...)`
 - `register_llm_stream_execution_intercept(...)`
@@ -565,6 +571,12 @@ await plugin.initialize(config);
 Node plugin contexts expose:
 
 - `registerSubscriber(...)`
+- `registerToolSanitizeRequestGuardrail(...)`
+- `registerToolSanitizeResponseGuardrail(...)`
+- `registerToolConditionalExecutionGuardrail(...)`
+- `registerLlmSanitizeRequestGuardrail(...)`
+- `registerLlmSanitizeResponseGuardrail(...)`
+- `registerLlmConditionalExecutionGuardrail(...)`
 - `registerLlmRequestIntercept(...)`
 - `registerLlmExecutionIntercept(...)`
 - `registerLlmStreamExecutionIntercept(...)`
@@ -776,6 +788,12 @@ if err != nil {
 `PluginContext` exposes:
 
 - `RegisterSubscriber(...)`
+- `RegisterToolSanitizeRequestGuardrail(...)`
+- `RegisterToolSanitizeResponseGuardrail(...)`
+- `RegisterToolConditionalExecutionGuardrail(...)`
+- `RegisterLlmSanitizeRequestGuardrail(...)`
+- `RegisterLlmSanitizeResponseGuardrail(...)`
+- `RegisterLlmConditionalExecutionGuardrail(...)`
 - `RegisterLlmRequestIntercept(...)`
 - `RegisterLlmExecutionIntercept(...)`
 - `RegisterLlmStreamExecutionIntercept(...)`
@@ -980,6 +998,12 @@ await plugin.initialize(config);
 WASM plugin contexts expose:
 
 - `registerSubscriber(...)`
+- `registerToolSanitizeRequestGuardrail(...)`
+- `registerToolSanitizeResponseGuardrail(...)`
+- `registerToolConditionalExecutionGuardrail(...)`
+- `registerLlmSanitizeRequestGuardrail(...)`
+- `registerLlmSanitizeResponseGuardrail(...)`
+- `registerLlmConditionalExecutionGuardrail(...)`
 - `registerLlmRequestIntercept(...)`
 - `registerLlmExecutionIntercept(...)`
 - `registerLlmStreamExecutionIntercept(...)`

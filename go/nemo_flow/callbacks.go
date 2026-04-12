@@ -196,7 +196,8 @@ type FinalizerFunc func() string
 
 // EventSubscriberFunc is a callback invoked for each lifecycle event emitted
 // by the runtime. The concrete value is one of the event variant types that
-// implement [Event] and is only valid for the duration of the callback.
+// implement [Event]. The Go binding snapshots FFI event fields before invoking
+// the callback, so it is safe to retain the event after the callback returns.
 type EventSubscriberFunc func(event Event)
 
 // CodecFunc is a bidirectional codec with decode and encode methods.

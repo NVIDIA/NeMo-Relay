@@ -20,7 +20,7 @@ use napi::threadsafe_function::{ThreadSafeCallContext, ThreadsafeFunction};
 use napi::{Env, JsFunction, JsUnknown, NapiRaw, NapiValue};
 use serde_json::Value as Json;
 
-use nemo_flow::{FlowError, Result as FlowResult};
+use nemo_flow::error::{FlowError, Result as FlowResult};
 
 pub type JsonNextFn =
     Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>;
@@ -275,5 +275,5 @@ impl Drop for PromiseAwareFn {
 }
 
 #[cfg(test)]
-#[path = "promise_call_coverage_tests.rs"]
+#[path = "../tests/coverage/promise_call_coverage_tests.rs"]
 mod coverage_tests;

@@ -16,8 +16,8 @@ use std::ffi::CString;
 
 use libc::c_char;
 
-use nemo_flow::FlowError;
-use nemo_flow::PluginError;
+use nemo_flow::error::FlowError;
+use nemo_flow::plugin::PluginError;
 
 /// Status codes returned by all FFI functions.
 ///
@@ -144,78 +144,5 @@ pub fn status_from_plugin_error(e: &PluginError) -> NemoFlowStatus {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::ffi::{CStr, CString};
-
-    #[test]
-    fn test_last_error_round_trip_and_clear() {
-        clear_last_error();
-        assert_eq!(last_error_message(), None);
-        assert!(nemo_flow_last_error().is_null());
-
-        set_last_error("ffi failure");
-        assert_eq!(last_error_message(), Some("ffi failure".into()));
-
-        let raw = nemo_flow_last_error();
-        assert_eq!(
-            unsafe { CStr::from_ptr(raw) }.to_str().unwrap(),
-            "ffi failure"
-        );
-
-        clear_last_error();
-        assert_eq!(last_error_message(), None);
-        assert!(nemo_flow_last_error().is_null());
-    }
-
-    #[test]
-    fn test_set_last_error_message_handles_null_and_invalid_utf8() {
-        unsafe { nemo_flow_set_last_error_message(std::ptr::null()) };
-        assert_eq!(last_error_message(), Some("unknown callback error".into()));
-
-        let invalid_utf8 = [0xffu8, 0];
-        unsafe {
-            nemo_flow_set_last_error_message(invalid_utf8.as_ptr() as *const c_char);
-        }
-        assert_eq!(
-            last_error_message(),
-            Some("callback error was not valid UTF-8".into())
-        );
-
-        let valid = CString::new("callback failed").unwrap();
-        unsafe { nemo_flow_set_last_error_message(valid.as_ptr()) };
-        assert_eq!(last_error_message(), Some("callback failed".into()));
-    }
-
-    #[test]
-    fn test_status_from_error_maps_variants_and_sets_message() {
-        let cases = [
-            (
-                FlowError::AlreadyExists("dup".into()),
-                NemoFlowStatus::AlreadyExists,
-            ),
-            (
-                FlowError::NotFound("missing".into()),
-                NemoFlowStatus::NotFound,
-            ),
-            (
-                FlowError::InvalidArgument("bad arg".into()),
-                NemoFlowStatus::InvalidArg,
-            ),
-            (
-                FlowError::GuardrailRejected("blocked".into()),
-                NemoFlowStatus::GuardrailRejected,
-            ),
-            (FlowError::Internal("boom".into()), NemoFlowStatus::Internal),
-            (FlowError::ScopeStackEmpty, NemoFlowStatus::ScopeStackEmpty),
-        ];
-
-        for (error, expected_status) in cases {
-            clear_last_error();
-            let status = status_from_error(&error);
-            assert_eq!(status, expected_status);
-            assert_eq!(NemoFlowStatus::from(&error), expected_status);
-            assert!(last_error_message().unwrap().contains(&error.to_string()));
-        }
-    }
-}
+#[path = "../tests/coverage/error_tests.rs"]
+mod tests;

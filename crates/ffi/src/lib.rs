@@ -4,9 +4,9 @@
 //! C FFI layer for NeMo Flow.
 //!
 //! This crate exposes the NeMo Flow core runtime as a C-compatible shared library.
-//! It is consumed by the Go bindings via CGo and generates a C header file
-//! (`nemo_flow.h`) through `cbindgen`. All exported symbols use the `nemo_flow_`
-//! prefix.
+//! It is consumed by the Go bindings via CGo and regenerates the committed
+//! `nemo_flow.h` header through `cbindgen` during Cargo builds. All exported
+//! symbols use the `nemo_flow_` prefix.
 //!
 //! # Middleware Pipeline
 //!

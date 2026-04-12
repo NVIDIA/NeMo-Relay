@@ -10,7 +10,7 @@ use std::sync::{LazyLock, Mutex};
 
 use serde_json::Value as Json;
 
-use nemo_flow::FlowError;
+use nemo_flow::error::FlowError;
 
 static LAST_CALLBACK_ERROR: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 
@@ -52,5 +52,9 @@ pub fn opt_json(val: Option<Json>) -> Option<Json> {
 }
 
 #[cfg(test)]
-#[path = "convert_coverage_tests.rs"]
+#[path = "../tests/unit/convert_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "../tests/coverage/convert_coverage_tests.rs"]
 mod coverage_tests;

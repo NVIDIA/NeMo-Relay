@@ -8,57 +8,6 @@
 #include <stddef.h>
 
 /**
- * The type of scope in the agent execution hierarchy.
- */
-enum NemoFlowScopeType {
-  /**
-   * Top-level agent scope.
-   */
-  NEMO_FLOW_SCOPE_TYPE_AGENT = 0,
-  /**
-   * Generic function scope.
-   */
-  NEMO_FLOW_SCOPE_TYPE_FUNCTION = 1,
-  /**
-   * Tool invocation scope.
-   */
-  NEMO_FLOW_SCOPE_TYPE_TOOL = 2,
-  /**
-   * LLM call scope.
-   */
-  NEMO_FLOW_SCOPE_TYPE_LLM = 3,
-  /**
-   * Retriever scope (e.g., RAG lookup).
-   */
-  NEMO_FLOW_SCOPE_TYPE_RETRIEVER = 4,
-  /**
-   * Embedder scope.
-   */
-  NEMO_FLOW_SCOPE_TYPE_EMBEDDER = 5,
-  /**
-   * Reranker scope.
-   */
-  NEMO_FLOW_SCOPE_TYPE_RERANKER = 6,
-  /**
-   * Guardrail evaluation scope.
-   */
-  NEMO_FLOW_SCOPE_TYPE_GUARDRAIL = 7,
-  /**
-   * Evaluator scope.
-   */
-  NEMO_FLOW_SCOPE_TYPE_EVALUATOR = 8,
-  /**
-   * User-defined custom scope.
-   */
-  NEMO_FLOW_SCOPE_TYPE_CUSTOM = 9,
-  /**
-   * Unknown or unspecified scope type.
-   */
-  NEMO_FLOW_SCOPE_TYPE_UNKNOWN = 10,
-};
-typedef int32_t NemoFlowScopeType;
-
-/**
  * Status codes returned by all FFI functions.
  *
  * Every `extern "C"` function in this library returns an `NemoFlowStatus`.
@@ -110,6 +59,57 @@ enum NemoFlowStatus {
 typedef int32_t NemoFlowStatus;
 
 /**
+ * The type of scope in the agent execution hierarchy.
+ */
+enum NemoFlowScopeType {
+  /**
+   * Top-level agent scope.
+   */
+  NEMO_FLOW_SCOPE_TYPE_AGENT = 0,
+  /**
+   * Generic function scope.
+   */
+  NEMO_FLOW_SCOPE_TYPE_FUNCTION = 1,
+  /**
+   * Tool invocation scope.
+   */
+  NEMO_FLOW_SCOPE_TYPE_TOOL = 2,
+  /**
+   * LLM call scope.
+   */
+  NEMO_FLOW_SCOPE_TYPE_LLM = 3,
+  /**
+   * Retriever scope (e.g., RAG lookup).
+   */
+  NEMO_FLOW_SCOPE_TYPE_RETRIEVER = 4,
+  /**
+   * Embedder scope.
+   */
+  NEMO_FLOW_SCOPE_TYPE_EMBEDDER = 5,
+  /**
+   * Reranker scope.
+   */
+  NEMO_FLOW_SCOPE_TYPE_RERANKER = 6,
+  /**
+   * Guardrail evaluation scope.
+   */
+  NEMO_FLOW_SCOPE_TYPE_GUARDRAIL = 7,
+  /**
+   * Evaluator scope.
+   */
+  NEMO_FLOW_SCOPE_TYPE_EVALUATOR = 8,
+  /**
+   * User-defined custom scope.
+   */
+  NEMO_FLOW_SCOPE_TYPE_CUSTOM = 9,
+  /**
+   * Unknown or unspecified scope type.
+   */
+  NEMO_FLOW_SCOPE_TYPE_UNKNOWN = 10,
+};
+typedef int32_t NemoFlowScopeType;
+
+/**
  * Opaque ATIF exporter handle.
  */
 typedef struct FfiAtifExporter FfiAtifExporter;
@@ -153,7 +153,7 @@ typedef struct FfiOpenTelemetrySubscriber FfiOpenTelemetrySubscriber;
  * Opaque plugin registration context.
  *
  * This wrapper contains a borrowed raw pointer to an
- * `nemo_flow::PluginRegistrationContext`, not an owned heap allocation.
+ * `nemo_flow::plugin::PluginRegistrationContext`, not an owned heap allocation.
  * It is only valid for the duration of the hosted plugin registration callback that receives
  * it. C callers must not store the pointer, use it after the callback returns, or attempt to
  * free or drop it.
@@ -212,6 +212,39 @@ typedef void (*NemoFlowFreeFn)(void *user_data);
 typedef void (*NemoFlowEventSubscriberCb)(void *user_data, const struct FfiEvent *event);
 
 /**
+ * Callback for tool request/response sanitization guardrails and intercepts.
+ * Receives tool name and arguments as JSON, returns sanitized arguments as JSON.
+ * The returned string must be allocated with `malloc` or equivalent.
+ */
+typedef char *(*NemoFlowToolSanitizeCb)(void *user_data, const char *name, const char *args_json);
+
+/**
+ * Callback for tool conditional execution guardrails.
+ * Receives tool name and arguments as JSON.
+ * Returns NULL to allow execution, or an error message string to reject.
+ */
+typedef char *(*NemoFlowToolConditionalCb)(void *user_data, const char *name, const char *args_json);
+
+/**
+ * Callback for LLM request sanitization. Receives an `FfiLLMRequest` and returns
+ * a new (possibly modified) `FfiLLMRequest`. Return null to use defaults.
+ */
+typedef struct FfiLLMRequest *(*NemoFlowLlmRequestCb)(void *user_data,
+                                                      const struct FfiLLMRequest *request);
+
+/**
+ * Generic JSON-to-JSON callback, used for LLM response sanitization and intercepts.
+ * The returned string must be allocated with `malloc` or equivalent.
+ */
+typedef char *(*NemoFlowJsonCb)(void *user_data, const char *json);
+
+/**
+ * Callback for LLM conditional execution guardrails.
+ * Returns NULL to allow execution, or an error message string to reject.
+ */
+typedef char *(*NemoFlowLlmConditionalCb)(void *user_data, const struct FfiLLMRequest *request);
+
+/**
  * C callback type for LLM request intercepts with unified annotated-aware
  * signature. Receives the intercept name, the opaque `FfiLLMRequest`, and
  * optionally the annotated request as a JSON C string (null if no Codec
@@ -224,13 +257,6 @@ typedef NemoFlowStatus (*NemoFlowLlmRequestInterceptCb)(void *user_data,
                                                         const char *annotated_json,
                                                         struct FfiLLMRequest **out_request,
                                                         char **out_annotated_json);
-
-/**
- * Callback for tool request/response sanitization guardrails and intercepts.
- * Receives tool name and arguments as JSON, returns sanitized arguments as JSON.
- * The returned string must be allocated with `malloc` or equivalent.
- */
-typedef char *(*NemoFlowToolSanitizeCb)(void *user_data, const char *name, const char *args_json);
 
 /**
  * Runtime-provided "next" callback for LLM execution middleware chain.
@@ -290,32 +316,6 @@ typedef char *(*NemoFlowCodecDecodeFn)(void *user_data, const struct FfiLLMReque
 typedef char *(*NemoFlowCodecEncodeFn)(void *user_data,
                                        const char *annotated_json,
                                        const struct FfiLLMRequest *original_request);
-
-/**
- * Callback for tool conditional execution guardrails.
- * Receives tool name and arguments as JSON.
- * Returns NULL to allow execution, or an error message string to reject.
- */
-typedef char *(*NemoFlowToolConditionalCb)(void *user_data, const char *name, const char *args_json);
-
-/**
- * Callback for LLM request sanitization. Receives an `FfiLLMRequest` and returns
- * a new (possibly modified) `FfiLLMRequest`. Return null to use defaults.
- */
-typedef struct FfiLLMRequest *(*NemoFlowLlmRequestCb)(void *user_data,
-                                                      const struct FfiLLMRequest *request);
-
-/**
- * Generic JSON-to-JSON callback, used for LLM response sanitization and intercepts.
- * The returned string must be allocated with `malloc` or equivalent.
- */
-typedef char *(*NemoFlowJsonCb)(void *user_data, const char *json);
-
-/**
- * Callback for LLM conditional execution guardrails.
- * Returns NULL to allow execution, or an error message string to reject.
- */
-typedef char *(*NemoFlowLlmConditionalCb)(void *user_data, const struct FfiLLMRequest *request);
 
 /**
  * Validate a generic plugin config document and return the diagnostics report as JSON.
@@ -386,6 +386,90 @@ NemoFlowStatus nemo_flow_plugin_context_register_subscriber(struct FfiPluginCont
                                                             NemoFlowEventSubscriberCb cb,
                                                             void *user_data,
                                                             NemoFlowFreeFn free_fn);
+
+/**
+ * Register a tool sanitize-request guardrail into the plugin registration context.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+ * of the hosted plugin registration lifetime.
+ */
+NemoFlowStatus nemo_flow_plugin_context_register_tool_sanitize_request_guardrail(struct FfiPluginContext *ctx,
+                                                                                 const char *name,
+                                                                                 int32_t priority,
+                                                                                 NemoFlowToolSanitizeCb cb,
+                                                                                 void *user_data,
+                                                                                 NemoFlowFreeFn free_fn);
+
+/**
+ * Register a tool sanitize-response guardrail into the plugin registration context.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+ * of the hosted plugin registration lifetime.
+ */
+NemoFlowStatus nemo_flow_plugin_context_register_tool_sanitize_response_guardrail(struct FfiPluginContext *ctx,
+                                                                                  const char *name,
+                                                                                  int32_t priority,
+                                                                                  NemoFlowToolSanitizeCb cb,
+                                                                                  void *user_data,
+                                                                                  NemoFlowFreeFn free_fn);
+
+/**
+ * Register a tool conditional-execution guardrail into the plugin registration context.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+ * of the hosted plugin registration lifetime.
+ */
+NemoFlowStatus nemo_flow_plugin_context_register_tool_conditional_execution_guardrail(struct FfiPluginContext *ctx,
+                                                                                      const char *name,
+                                                                                      int32_t priority,
+                                                                                      NemoFlowToolConditionalCb cb,
+                                                                                      void *user_data,
+                                                                                      NemoFlowFreeFn free_fn);
+
+/**
+ * Register an LLM sanitize-request guardrail into the plugin registration context.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+ * of the hosted plugin registration lifetime.
+ */
+NemoFlowStatus nemo_flow_plugin_context_register_llm_sanitize_request_guardrail(struct FfiPluginContext *ctx,
+                                                                                const char *name,
+                                                                                int32_t priority,
+                                                                                NemoFlowLlmRequestCb cb,
+                                                                                void *user_data,
+                                                                                NemoFlowFreeFn free_fn);
+
+/**
+ * Register an LLM sanitize-response guardrail into the plugin registration context.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+ * of the hosted plugin registration lifetime.
+ */
+NemoFlowStatus nemo_flow_plugin_context_register_llm_sanitize_response_guardrail(struct FfiPluginContext *ctx,
+                                                                                 const char *name,
+                                                                                 int32_t priority,
+                                                                                 NemoFlowJsonCb cb,
+                                                                                 void *user_data,
+                                                                                 NemoFlowFreeFn free_fn);
+
+/**
+ * Register an LLM conditional-execution guardrail into the plugin registration context.
+ *
+ * # Safety
+ * `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+ * of the hosted plugin registration lifetime.
+ */
+NemoFlowStatus nemo_flow_plugin_context_register_llm_conditional_execution_guardrail(struct FfiPluginContext *ctx,
+                                                                                     const char *name,
+                                                                                     int32_t priority,
+                                                                                     NemoFlowLlmConditionalCb cb,
+                                                                                     void *user_data,
+                                                                                     NemoFlowFreeFn free_fn);
 
 /**
  * Register an LLM request intercept into the plugin registration context.

@@ -6,6 +6,9 @@ name = "nemo-flow"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Core Rust SDK for NeMo Flow observability, scope management, and runtime instrumentation."
+readme = "README.md"
 
 [features]
 default = ["otel", "openinference"]
@@ -38,7 +41,7 @@ openinference = [
 ]
 
 [dependencies]
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { workspace = true, features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -62,6 +65,34 @@ tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-mu
 futures = "0.3"
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace", "testing"] }
 serde_json = "1"
+
+[[test]]
+name = "codec_integration"
+path = "tests/integration/codec_tests.rs"
+
+[[test]]
+name = "context_isolation_integration"
+path = "tests/integration/context_isolation_tests.rs"
+
+[[test]]
+name = "middleware_integration"
+path = "tests/integration/middleware_tests.rs"
+
+[[test]]
+name = "pipeline_integration"
+path = "tests/integration/pipeline_tests.rs"
+
+[[test]]
+name = "scope_local_integration"
+path = "tests/integration/scope_local_tests.rs"
+
+[[test]]
+name = "stream_integration"
+path = "tests/integration/stream_tests.rs"
+
+[[test]]
+name = "api_surface_integration"
+path = "tests/integration/api_surface_tests.rs"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto"], optional = true }

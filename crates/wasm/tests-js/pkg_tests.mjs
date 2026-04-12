@@ -9,7 +9,7 @@ import { startCollector } from '../../../scripts/otel_test_utils.mjs';
 const require = createRequire(import.meta.url);
 // These tests intentionally exercise only the public generated package API.
 // Avoid asserting against wasm-bindgen implementation details or private helpers.
-const wasm = require('../pkg-test');
+const wasm = require('../pkg');
 
 function unique(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;

@@ -28,8 +28,9 @@ import (
 // Register registers a named event subscriber that will be called for every
 // lifecycle event emitted by the runtime. The name must be unique;
 // registering a duplicate returns an AlreadyExists error. The callback
-// receives an [nemo_flow.Event] that is only valid for the duration of the
-// call. This is a shorthand for [nemo_flow.RegisterSubscriber].
+// receives an owned [nemo_flow.Event] snapshot that is safe to retain after
+// the callback returns. This is a shorthand for
+// [nemo_flow.RegisterSubscriber].
 func Register(name string, fn nemo_flow.EventSubscriberFunc) error {
 	return nemo_flow.RegisterSubscriber(name, fn)
 }

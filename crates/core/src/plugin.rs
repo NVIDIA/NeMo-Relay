@@ -19,17 +19,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 use thiserror::Error;
 
-use crate::api::{
-    deregister_llm_execution_intercept, deregister_llm_request_intercept,
-    deregister_llm_stream_execution_intercept, deregister_subscriber,
-    deregister_tool_execution_intercept, deregister_tool_request_intercept,
+use crate::api::registry::{
+    deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
+    deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
+    deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
+    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
+    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
+    deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
     register_llm_execution_intercept, register_llm_request_intercept,
-    register_llm_stream_execution_intercept, register_subscriber,
+    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
+    register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
     register_tool_execution_intercept, register_tool_request_intercept,
+    register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
 };
-use crate::context::{
-    EventSubscriberFn, LlmExecutionFn, LlmRequestInterceptFn, LlmStreamExecutionFn,
-    ToolExecutionFn, ToolInterceptFn,
+use crate::api::subscriber::{deregister_subscriber, register_subscriber};
+use crate::context::callbacks::{
+    EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
+    ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 
 type PluginMap = HashMap<String, Arc<dyn Plugin>>;
@@ -161,7 +168,7 @@ pub enum DiagnosticLevel {
 }
 
 /// Policy for how unsupported plugin/runtime config is handled.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ConfigPolicy {
     /// Policy applied when a component kind is unknown to the plugin registry.
     #[serde(default = "default_warn")]
@@ -172,6 +179,16 @@ pub struct ConfigPolicy {
     /// Policy applied when a known field contains an unsupported value.
     #[serde(default = "default_error")]
     pub unsupported_value: UnsupportedBehavior,
+}
+
+impl Default for ConfigPolicy {
+    fn default() -> Self {
+        Self {
+            unknown_component: default_warn(),
+            unknown_field: default_warn(),
+            unsupported_value: default_error(),
+        }
+    }
 }
 
 /// Per-policy behavior for unsupported configuration.
@@ -319,6 +336,193 @@ impl PluginRegistrationContext {
                     .map_err(|err| {
                         PluginError::RegistrationFailed(format!(
                             "llm request intercept deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a tool sanitize-request guardrail and records its rollback closure.
+    pub fn register_tool_sanitize_request_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolSanitizeFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_tool_sanitize_request_guardrail(&qualified_name, priority, callback).map_err(
+            |err| {
+                PluginError::RegistrationFailed(format!("tool sanitize request guardrail: {err}"))
+            },
+        )?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_tool_sanitize_request_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "tool sanitize request guardrail deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a tool sanitize-response guardrail and records its rollback closure.
+    pub fn register_tool_sanitize_response_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolSanitizeFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_tool_sanitize_response_guardrail(&qualified_name, priority, callback).map_err(
+            |err| {
+                PluginError::RegistrationFailed(format!("tool sanitize response guardrail: {err}"))
+            },
+        )?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_tool_sanitize_response_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "tool sanitize response guardrail deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a tool conditional-execution guardrail and records its rollback closure.
+    pub fn register_tool_conditional_execution_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolConditionalFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_tool_conditional_execution_guardrail(&qualified_name, priority, callback)
+            .map_err(|err| {
+                PluginError::RegistrationFailed(format!(
+                    "tool conditional execution guardrail: {err}"
+                ))
+            })?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_tool_conditional_execution_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "tool conditional execution guardrail deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers an LLM sanitize-request guardrail and records its rollback closure.
+    pub fn register_llm_sanitize_request_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmSanitizeRequestFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_llm_sanitize_request_guardrail(&qualified_name, priority, callback).map_err(
+            |err| PluginError::RegistrationFailed(format!("llm sanitize request guardrail: {err}")),
+        )?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_llm_sanitize_request_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "llm sanitize request guardrail deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers an LLM sanitize-response guardrail and records its rollback closure.
+    pub fn register_llm_sanitize_response_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmSanitizeResponseFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_llm_sanitize_response_guardrail(&qualified_name, priority, callback).map_err(
+            |err| {
+                PluginError::RegistrationFailed(format!("llm sanitize response guardrail: {err}"))
+            },
+        )?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_llm_sanitize_response_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "llm sanitize response guardrail deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers an LLM conditional-execution guardrail and records its rollback closure.
+    pub fn register_llm_conditional_execution_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmConditionalFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_llm_conditional_execution_guardrail(&qualified_name, priority, callback).map_err(
+            |err| {
+                PluginError::RegistrationFailed(format!(
+                    "llm conditional execution guardrail: {err}"
+                ))
+            },
+        )?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_llm_conditional_execution_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "llm conditional execution guardrail deregistration failed: {err}"
                         ))
                     })
             }),
@@ -807,164 +1011,5 @@ fn join_error_messages(report: &ConfigReport) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{Arc, Mutex, OnceLock};
-
-    use serde_json::json;
-
-    use crate::{NemoFlowContextState, global_context, llm_request_intercepts};
-
-    struct TestPlugin;
-
-    static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-
-    fn test_mutex() -> &'static Mutex<()> {
-        TEST_MUTEX.get_or_init(|| Mutex::new(()))
-    }
-
-    impl Plugin for TestPlugin {
-        fn plugin_kind(&self) -> &str {
-            "test.plugin"
-        }
-
-        fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
-            vec![ConfigDiagnostic {
-                level: DiagnosticLevel::Warning,
-                code: "test.warning".into(),
-                component: Some("test.plugin".into()),
-                field: None,
-                message: "validated".into(),
-            }]
-        }
-
-        fn register<'a>(
-            &'a self,
-            _plugin_config: &Map<String, Json>,
-            ctx: &'a mut PluginRegistrationContext,
-        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-            Box::pin(async move {
-                ctx.register_llm_request_intercept(
-                    "intercept",
-                    1,
-                    false,
-                    Box::new(|_name, mut request, annotated| {
-                        request.headers.insert("x-plugin".into(), json!(true));
-                        Ok((request, annotated))
-                    }),
-                )
-            })
-        }
-    }
-
-    fn reset_global() {
-        let ctx = global_context();
-        let mut state = ctx.write().unwrap();
-        *state = NemoFlowContextState::new();
-        clear_plugin_configuration().unwrap();
-        let _ = deregister_plugin("test.plugin");
-    }
-
-    #[test]
-    fn test_config_report_has_errors() {
-        let report = ConfigReport {
-            diagnostics: vec![ConfigDiagnostic {
-                level: DiagnosticLevel::Error,
-                code: "x".into(),
-                component: None,
-                field: None,
-                message: "boom".into(),
-            }],
-        };
-        assert!(report.has_errors());
-    }
-
-    #[test]
-    fn test_register_and_deregister_plugin() {
-        let _guard = test_mutex().lock().unwrap();
-        reset_global();
-        assert!(register_plugin(Arc::new(TestPlugin)).is_ok());
-        assert!(list_plugin_kinds().contains(&"test.plugin".to_string()));
-        assert!(lookup_plugin("test.plugin").is_some());
-        assert!(deregister_plugin("test.plugin"));
-    }
-
-    #[test]
-    fn test_plugin_registration_context_registers_and_rolls_back() {
-        let _guard = test_mutex().lock().unwrap();
-        reset_global();
-
-        let mut ctx = PluginRegistrationContext::new();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime
-            .block_on(TestPlugin.register(&Map::new(), &mut ctx))
-            .unwrap();
-
-        let request = llm_request_intercepts(
-            "model",
-            crate::LLMRequest {
-                headers: Map::new(),
-                content: json!({"messages": []}),
-            },
-        )
-        .unwrap();
-        assert_eq!(request.headers.get("x-plugin"), Some(&json!(true)));
-
-        let mut registrations = ctx.into_registrations();
-        rollback_registrations(&mut registrations);
-
-        let request = llm_request_intercepts(
-            "model",
-            crate::LLMRequest {
-                headers: Map::new(),
-                content: json!({"messages": []}),
-            },
-        )
-        .unwrap();
-        assert_eq!(request.headers.get("x-plugin"), None);
-    }
-
-    #[test]
-    fn test_initialize_plugins_registers_and_clears_components() {
-        let _guard = test_mutex().lock().unwrap();
-        reset_global();
-        register_plugin(Arc::new(TestPlugin)).unwrap();
-
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let report = runtime
-            .block_on(initialize_plugins(PluginConfig {
-                components: vec![PluginComponentSpec::new("test.plugin")],
-                ..PluginConfig::default()
-            }))
-            .unwrap();
-        assert!(!report.has_errors());
-        assert!(active_plugin_report().is_some());
-
-        let request = llm_request_intercepts(
-            "model",
-            crate::LLMRequest {
-                headers: Map::new(),
-                content: json!({"messages": []}),
-            },
-        )
-        .unwrap();
-        assert_eq!(request.headers.get("x-plugin"), Some(&json!(true)));
-
-        clear_plugin_configuration().unwrap();
-        let request = llm_request_intercepts(
-            "model",
-            crate::LLMRequest {
-                headers: Map::new(),
-                content: json!({"messages": []}),
-            },
-        )
-        .unwrap();
-        assert_eq!(request.headers.get("x-plugin"), None);
-    }
-}
+#[path = "../tests/unit/plugin_tests.rs"]
+mod tests;
