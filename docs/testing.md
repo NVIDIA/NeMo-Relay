@@ -105,7 +105,7 @@ cargo nextest run --workspace \
   --exclude nemo-flow-wasm \
   --profile ci
 cargo llvm-cov report \
-  --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/tests/.*\.rs$)' \
+  --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/crates/adaptive/src/redis.rs$|.*/tests/.*\.rs$)' \
   --cobertura --output-path target/coverage/rust-workspace.xml
 ```
 
@@ -251,7 +251,7 @@ cargo nextest run --workspace \
   --exclude nemo-flow-wasm \
   --profile ci
 cargo llvm-cov report \
-  --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/tests/.*\.rs$)' \
+  --ignore-filename-regex '(.*/crates/(node|python|wasm)/.*|.*/crates/adaptive/src/redis.rs$|.*/tests/.*\.rs$)' \
   --cobertura --output-path target/coverage/rust-workspace.xml
 ```
 

@@ -4,6 +4,8 @@
 use super::*;
 use std::ffi::{CStr, CString};
 
+use nemo_flow::plugin::PluginError;
+
 #[test]
 fn test_last_error_round_trip_and_clear() {
     clear_last_error();
@@ -72,5 +74,48 @@ fn test_status_from_error_maps_variants_and_sets_message() {
         assert_eq!(status, expected_status);
         assert_eq!(NemoFlowStatus::from(&error), expected_status);
         assert!(last_error_message().unwrap().contains(&error.to_string()));
+    }
+}
+
+#[test]
+fn test_status_from_plugin_error_maps_variants_and_sets_message() {
+    let serialization_error = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
+    let cases = [
+        (
+            PluginError::NotFound("missing plugin".into()),
+            NemoFlowStatus::NotFound,
+            "missing plugin",
+        ),
+        (
+            PluginError::InvalidConfig("bad config".into()),
+            NemoFlowStatus::InvalidArg,
+            "bad config",
+        ),
+        (
+            PluginError::Serialization(serialization_error),
+            NemoFlowStatus::InvalidArg,
+            "serialization error",
+        ),
+        (
+            PluginError::Internal("plugin blew up".into()),
+            NemoFlowStatus::Internal,
+            "plugin blew up",
+        ),
+        (
+            PluginError::RegistrationFailed("register failed".into()),
+            NemoFlowStatus::Internal,
+            "register failed",
+        ),
+    ];
+
+    for (error, expected_status, message_fragment) in cases {
+        clear_last_error();
+        let status = status_from_plugin_error(&error);
+        assert_eq!(status, expected_status);
+        assert!(
+            last_error_message()
+                .unwrap_or_default()
+                .contains(message_fragment)
+        );
     }
 }

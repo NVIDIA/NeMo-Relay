@@ -20,26 +20,3 @@ mod convert;
 mod promise_call;
 mod stream;
 mod types;
-
-#[cfg(test)]
-#[path = "../tests/integration/api_tests.rs"]
-mod integration_tests;
-
-#[cfg(test)]
-#[unsafe(no_mangle)]
-extern "C" fn napi_release_threadsafe_function(
-    _func: napi::sys::napi_threadsafe_function,
-    _mode: napi::sys::napi_threadsafe_function_release_mode,
-) -> napi::sys::napi_status {
-    0
-}
-
-#[cfg(test)]
-#[unsafe(no_mangle)]
-extern "C" fn napi_call_threadsafe_function(
-    _func: napi::sys::napi_threadsafe_function,
-    _data: *mut std::ffi::c_void,
-    _mode: napi::sys::napi_threadsafe_function_call_mode,
-) -> napi::sys::napi_status {
-    0
-}

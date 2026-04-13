@@ -377,3 +377,7 @@ fn build_learners(agent_id: &str, learners: &[String]) -> Vec<Box<dyn Learner>> 
     }
     built
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/runtime_features_tests.rs"]
+mod tests;

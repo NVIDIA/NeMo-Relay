@@ -313,6 +313,26 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
 }
 
 #[test]
+fn test_wrap_llm_request_intercept_with_annotated_input() {
+    let request_intercept =
+        wrap_llm_request_intercept_fn(llm_request_intercept_cb, std::ptr::null_mut(), None);
+    let annotated = nemo_flow::codec::request::AnnotatedLLMRequest {
+        messages: vec![],
+        model: Some("test-model".into()),
+        params: None,
+        tools: None,
+        tool_choice: None,
+        extra: serde_json::Map::from_iter([("annotated".into(), json!(true))]),
+    };
+    let (intercepted, annotated_out) =
+        request_intercept("llm", make_request(), Some(annotated)).unwrap();
+    assert_eq!(intercepted.content["intercepted"], json!(true));
+    let annotated_out = annotated_out.expect("expected annotated request output");
+    assert_eq!(annotated_out.model.as_deref(), Some("test-model"));
+    assert_eq!(annotated_out.extra.get("annotated"), Some(&json!(true)));
+}
+
+#[test]
 fn test_wrap_llm_exec_stream_and_event_callbacks() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

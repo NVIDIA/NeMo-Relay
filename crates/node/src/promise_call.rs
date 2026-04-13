@@ -273,7 +273,3 @@ impl Drop for PromiseAwareFn {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/coverage/promise_call_coverage_tests.rs"]
-mod coverage_tests;

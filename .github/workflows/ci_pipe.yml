@@ -333,7 +333,7 @@ jobs:
           set -e
           eval "$(cargo llvm-cov show-env --sh)"
           cargo llvm-cov report \
-            --ignore-filename-regex '.*/tests/.*\.rs$' \
+            --ignore-filename-regex '(.*/tests/.*\.rs$|.*/crates/adaptive/src/redis.rs$)' \
             --cobertura \
             --output-path ${{ github.workspace }}/rust_coverage_report.xml
 

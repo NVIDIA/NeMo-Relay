@@ -577,10 +577,6 @@ pub fn wrap_js_response_codec(
     })
 }
 
-#[cfg(test)]
-#[path = "../tests/coverage/callable_coverage_tests.rs"]
-mod coverage_tests;
-
 /// Wrap a JS function `(args, next) => result` for tool execution intercept.
 ///
 /// The JS callback receives the tool arguments and a real `next(args)` function

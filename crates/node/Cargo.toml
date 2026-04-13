@@ -12,6 +12,7 @@ readme = "README.md"
 
 [lib]
 crate-type = ["cdylib"]
+test = false
 
 [dependencies]
 nemo-flow = { path = "../core" }

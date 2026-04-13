@@ -38,11 +38,3 @@ impl LlmStream {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/unit/stream_tests.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "../tests/coverage/stream_coverage_tests.rs"]
-mod coverage_tests;

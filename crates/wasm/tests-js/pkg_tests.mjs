@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { startCollector } from '../../../scripts/otel_test_utils.mjs';
 
 const require = createRequire(import.meta.url);
@@ -48,6 +50,8 @@ function expectClassError(fn) {
 function expectAlreadyExists(fn) {
   assert.throws(fn, /already exists/i);
 }
+
+const testsJsDir = fileURLToPath(new URL('.', import.meta.url));
 
 async function drainStream(stream) {
   const chunks = [];
@@ -389,6 +393,8 @@ test('WASM JS wrappers reject wrong handle classes and support async scope callb
   expectClassError(() => wasm.setThreadScopeStack({}));
   expectClassError(() => wasm.popScope({}));
   expectClassError(() => wasm.event('bad_parent', {}, null, null));
+  expectClassError(() => wasm.event('bad_parent_map', new Map(), null, null));
+  expectClassError(() => wasm.event('bad_parent_error', new Error('boom'), null, null));
   expectClassError(() => wasm.pushScope('bad_push', 1, {}, 0, null, null));
   expectClassError(() => wasm.toolCall('bad_tool', {}, {}, 0, null, null));
   expectClassError(() => wasm.toolCallEnd({}, {}, null, null));
@@ -461,6 +467,73 @@ test('WASM JS registration wrappers cover duplicate and invalid UUID errors', ()
   wasm.popScope(scope);
   scope.free();
   stack.free();
+});
+
+test('WASM JS wrapper covers TextEncoder fallback for unicode strings', () => {
+  const child = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `
+        import assert from 'node:assert/strict';
+        import { createRequire } from 'node:module';
+
+        delete TextEncoder.prototype.encodeInto;
+
+        const require = createRequire(import.meta.url);
+        const wasm = require('../pkg');
+        const stack = new wasm.WasmScopeStack();
+        wasm.setThreadScopeStack(stack);
+
+        const scope = wasm.pushScope('ascii-é', 1, null, 0, null, null);
+        assert.equal(scope.name, 'ascii-é');
+        wasm.event('ascii-é-mark', scope, { ok: true }, null);
+      `,
+    ],
+    {
+      cwd: testsJsDir,
+      encoding: 'utf8',
+      env: process.env,
+    },
+  );
+
+  assert.equal(child.status, 0, child.stderr || child.stdout);
+});
+
+test('WASM JS wrapper tolerates throwing subscriber callbacks', () => {
+  const child = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `
+        import assert from 'node:assert/strict';
+        import { createRequire } from 'node:module';
+
+        const require = createRequire(import.meta.url);
+        const wasm = require('../pkg');
+        const stack = wasm.createScopeStack();
+        wasm.setThreadScopeStack(stack);
+
+        const scope = wasm.pushScope('subscriber_throw_scope', 1, null, 0, null, null);
+        const name = 'throwing_subscriber';
+        wasm.registerSubscriber(name, () => {
+          throw new Error('expected subscriber failure');
+        });
+
+        assert.equal(wasm.event('subscriber_throw_mark', scope, { ok: true }, null), undefined);
+        assert.equal(wasm.deregisterSubscriber(name), true);
+      `,
+    ],
+    {
+      cwd: testsJsDir,
+      encoding: 'utf8',
+      env: process.env,
+    },
+  );
+
+  assert.equal(child.status, 0, child.stderr || child.stdout);
 });
 
 test('tool, llm, stream, and exporter flows work from the generated Node package', async () => {

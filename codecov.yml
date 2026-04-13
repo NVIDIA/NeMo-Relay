@@ -1,0 +1,112 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+codecov:
+  require_ci_to_pass: true
+  notify:
+    # CI uploads coverage once per platform in a 3-way matrix.
+    after_n_builds: 3
+    wait_for_ci: true
+
+coverage:
+  round: nearest
+  precision: 2
+  range: "94...100"
+  status:
+    project:
+      default:
+        target: 88%
+        threshold: 0.5%
+        base: auto
+        if_ci_failed: error
+    patch:
+      default:
+        target: 90%
+        threshold: 5%
+        base: auto
+        if_ci_failed: error
+
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: auto
+        threshold: 0.5%
+        base: auto
+        if_ci_failed: error
+  individual_components:
+    - component_id: rust_runtime
+      name: Rust Runtime
+      paths:
+        - "NeMo-Flow/crates/core/src"
+        - "NeMo-Flow/crates/adaptive/src"
+      statuses:
+        - type: project
+          target: 95%
+          threshold: 0.5%
+          base: auto
+          if_ci_failed: error
+    - component_id: go_binding
+      name: Go Binding
+      paths:
+        - "NeMo-Flow/go/nemo_flow"
+        - "NeMo-Flow/crates/ffi/src"
+      statuses:
+        - type: project
+          target: 95%
+          threshold: 0.5%
+          base: auto
+          if_ci_failed: error
+    - component_id: python_binding
+      name: Python Binding
+      paths:
+        - "NeMo-Flow/python/nemo_flow"
+        - "NeMo-Flow/crates/python/src"
+      statuses:
+        - type: project
+          target: 95%
+          threshold: 0.5%
+          base: auto
+          if_ci_failed: error
+    - component_id: node_binding
+      name: Node Binding
+      paths:
+        - "NeMo-Flow/crates/node/*.js"
+      statuses:
+        - type: project
+          target: 95%
+          threshold: 0.5%
+          base: auto
+          if_ci_failed: error
+    - component_id: wasm_binding
+      name: WASM Binding
+      paths:
+        - "NeMo-Flow/crates/wasm/pkg/nemo_flow_wasm.js"
+      statuses:
+        - type: project
+          target: 84% # cannot be any higher due to internals
+          threshold: 0.5%
+          base: auto
+          if_ci_failed: error
+
+comment:
+  after_n_builds: 3
+  layout: "header, diff, components, files, footer"
+  behavior: default
+  require_changes: false
+  require_base: false
+  require_head: false
+
+github_checks:
+  annotations: false
+
+ignore:
+  - "**/examples/**"
+  - "**/third_party/**"
+  - "**/tests/**"
+  - "**/tests-js/**"
+  - "**/crates/node/coverage/**"
+  - "**/target/**"
+  - "**/*.d.ts"
+  - "**/*.pyi"
+  - "**/python/nemo_flow/lib_native*.dylib.dSYM/**"

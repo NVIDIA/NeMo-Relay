@@ -191,13 +191,10 @@ typedef struct Option_NemoFlowFinalizerCb Option_NemoFlowFinalizerCb;
 typedef struct Option_NemoFlowPluginValidateCb Option_NemoFlowPluginValidateCb;
 
 /**
- * Callback for hosted plugin registration.
- * Receives plugin config JSON and a plugin context pointer that is
- * only valid for the duration of the call.
+ * Callback for LLM execution (default callable). Receives a native JSON C string,
+ * returns the response as a JSON C string.
  */
-typedef NemoFlowStatus (*NemoFlowPluginRegisterCb)(void *user_data,
-                                                   const char *plugin_config_json,
-                                                   struct FfiPluginContext *ctx);
+typedef char *(*NemoFlowLlmExecCb)(void *user_data, const char *native_json);
 
 /**
  * Optional destructor for user data passed to callbacks.
@@ -206,24 +203,18 @@ typedef NemoFlowStatus (*NemoFlowPluginRegisterCb)(void *user_data,
 typedef void (*NemoFlowFreeFn)(void *user_data);
 
 /**
- * Callback for event subscribers. Invoked on each lifecycle event emitted by
- * the runtime. The `FfiEvent` pointer is only valid for the duration of the call.
+ * Nullable version of [`NemoFlowCodecDecodeCb`] for use as an optional
+ * parameter in FFI execute functions. Pass null to indicate no codec.
  */
-typedef void (*NemoFlowEventSubscriberCb)(void *user_data, const struct FfiEvent *event);
+typedef char *(*NemoFlowCodecDecodeFn)(void *user_data, const struct FfiLLMRequest *request);
 
 /**
- * Callback for tool request/response sanitization guardrails and intercepts.
- * Receives tool name and arguments as JSON, returns sanitized arguments as JSON.
- * The returned string must be allocated with `malloc` or equivalent.
+ * Nullable version of [`NemoFlowCodecEncodeCb`] for use as an optional
+ * parameter in FFI execute functions. Pass null to indicate no codec.
  */
-typedef char *(*NemoFlowToolSanitizeCb)(void *user_data, const char *name, const char *args_json);
-
-/**
- * Callback for tool conditional execution guardrails.
- * Receives tool name and arguments as JSON.
- * Returns NULL to allow execution, or an error message string to reject.
- */
-typedef char *(*NemoFlowToolConditionalCb)(void *user_data, const char *name, const char *args_json);
+typedef char *(*NemoFlowCodecEncodeFn)(void *user_data,
+                                       const char *annotated_json,
+                                       const struct FfiLLMRequest *original_request);
 
 /**
  * Callback for LLM request sanitization. Receives an `FfiLLMRequest` and returns
@@ -274,6 +265,35 @@ typedef char *(*NemoFlowLlmExecInterceptCb)(void *user_data,
                                             void *next_ctx);
 
 /**
+ * Callback for event subscribers. Invoked on each lifecycle event emitted by
+ * the runtime. The `FfiEvent` pointer is only valid for the duration of the call.
+ */
+typedef void (*NemoFlowEventSubscriberCb)(void *user_data, const struct FfiEvent *event);
+
+/**
+ * Callback for hosted plugin registration.
+ * Receives plugin config JSON and a plugin context pointer that is
+ * only valid for the duration of the call.
+ */
+typedef NemoFlowStatus (*NemoFlowPluginRegisterCb)(void *user_data,
+                                                   const char *plugin_config_json,
+                                                   struct FfiPluginContext *ctx);
+
+/**
+ * Callback for tool request/response sanitization guardrails and intercepts.
+ * Receives tool name and arguments as JSON, returns sanitized arguments as JSON.
+ * The returned string must be allocated with `malloc` or equivalent.
+ */
+typedef char *(*NemoFlowToolSanitizeCb)(void *user_data, const char *name, const char *args_json);
+
+/**
+ * Callback for tool conditional execution guardrails.
+ * Receives tool name and arguments as JSON.
+ * Returns NULL to allow execution, or an error message string to reject.
+ */
+typedef char *(*NemoFlowToolConditionalCb)(void *user_data, const char *name, const char *args_json);
+
+/**
  * Runtime-provided "next" callback for tool execution middleware chain.
  * Call this from an intercept to invoke the next layer (or original function).
  * `next_ctx` is an opaque pointer managed by the runtime.
@@ -298,24 +318,638 @@ typedef char *(*NemoFlowToolExecInterceptCb)(void *user_data,
 typedef char *(*NemoFlowToolExecCb)(void *user_data, const char *args_json);
 
 /**
- * Callback for LLM execution (default callable). Receives a native JSON C string,
- * returns the response as a JSON C string.
+ * Run the registered tool request intercept chain on the given arguments.
+ *
+ * # Parameters
+ * - `name`: Tool name (null-terminated C string).
+ * - `args_json`: Tool arguments as a JSON C string.
+ * - `out`: On success, receives the transformed JSON string (caller must free
+ *   with `nemo_flow_string_free`).
+ *
+ * # Safety
+ * All pointers must be valid. `out` must be non-null.
  */
-typedef char *(*NemoFlowLlmExecCb)(void *user_data, const char *native_json);
+NemoFlowStatus nemo_flow_tool_request_intercepts(const char *name,
+                                                 const char *args_json,
+                                                 char **out);
 
 /**
- * Nullable version of [`NemoFlowCodecDecodeCb`] for use as an optional
- * parameter in FFI execute functions. Pass null to indicate no codec.
+ * Run the registered tool conditional execution guardrail chain.
+ *
+ * Returns `NemoFlowStatus::Ok` if all guardrails pass, or
+ * `NemoFlowStatus::GuardrailRejected` if blocked.
+ *
+ * # Parameters
+ * - `name`: Tool name (null-terminated C string).
+ * - `args_json`: Tool arguments as a JSON C string.
+ *
+ * # Safety
+ * All pointers must be valid.
  */
-typedef char *(*NemoFlowCodecDecodeFn)(void *user_data, const struct FfiLLMRequest *request);
+NemoFlowStatus nemo_flow_tool_conditional_execution(const char *name, const char *args_json);
 
 /**
- * Nullable version of [`NemoFlowCodecEncodeCb`] for use as an optional
- * parameter in FFI execute functions. Pass null to indicate no codec.
+ * Run the registered LLM request intercept chain on the given request.
+ *
+ * # Parameters
+ * - `native_json`: The request payload as a JSON C string representing an
+ *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
+ * - `out`: On success, receives the transformed JSON string (caller must free
+ *   with `nemo_flow_string_free`). The output is a serialized `LLMRequest`.
+ *
+ * # Safety
+ * All pointers must be valid. `out` must be non-null.
  */
-typedef char *(*NemoFlowCodecEncodeFn)(void *user_data,
-                                       const char *annotated_json,
-                                       const struct FfiLLMRequest *original_request);
+NemoFlowStatus nemo_flow_llm_request_intercepts(const char *name,
+                                                const char *native_json,
+                                                char **out);
+
+/**
+ * Run the registered LLM conditional execution guardrail chain.
+ *
+ * Returns `NemoFlowStatus::Ok` if all guardrails pass, or
+ * `NemoFlowStatus::GuardrailRejected` if blocked.
+ *
+ * # Parameters
+ * - `native_json`: The request payload as a JSON C string representing an
+ *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
+ *
+ * # Safety
+ * All pointers must be valid.
+ */
+NemoFlowStatus nemo_flow_llm_conditional_execution(const char *native_json);
+
+/**
+ * Begin an LLM call, running pre-call guardrails and intercepts.
+ *
+ * # Parameters
+ * - `name`: Null-terminated LLM provider name.
+ * - `native_json`: The request payload as a JSON C string representing an
+ *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
+ * - `parent`: Optional parent scope handle, or null.
+ * - `attributes`: Bitfield of LLM attributes.
+ * - `data_json`: Optional JSON data, or null.
+ * - `metadata_json`: Optional JSON metadata, or null.
+ * - `model_name`: Optional LLM model identifier, or null.
+ * - `out`: On success, receives a heap-allocated `FfiLLMHandle`.
+ *
+ * # Safety
+ * `name`, `native_json`, and `out` must be valid, non-null pointers.
+ */
+NemoFlowStatus nemo_flow_llm_call(const char *name,
+                                  const char *native_json,
+                                  const struct FfiScopeHandle *parent,
+                                  uint32_t attributes,
+                                  const char *data_json,
+                                  const char *metadata_json,
+                                  const char *model_name,
+                                  struct FfiLLMHandle **out);
+
+/**
+ * End an LLM call, running post-call guardrails and intercepts.
+ *
+ * # Parameters
+ * - `handle`: The LLM handle from `nemo_flow_llm_call`.
+ * - `response_json`: LLM response as a JSON C string.
+ * - `data_json`: Optional JSON data, or null.
+ * - `metadata_json`: Optional JSON metadata, or null.
+ *
+ * # Safety
+ * `handle` and `response_json` must be valid, non-null pointers.
+ */
+NemoFlowStatus nemo_flow_llm_call_end(const struct FfiLLMHandle *handle,
+                                      const char *response_json,
+                                      const char *data_json,
+                                      const char *metadata_json);
+
+/**
+ * Create a new OpenAI Chat Completions codec handle.
+ *
+ * The returned handle implements both request codec (decode/encode) and
+ * response codec (decode_response). Free with `nemo_flow_codec_free`.
+ *
+ * # Safety
+ * Caller must free the returned handle via `nemo_flow_codec_free`.
+ */
+struct FfiCodecHandle *nemo_flow_openai_chat_codec_new(void);
+
+/**
+ * Create a new OpenAI Responses API codec handle.
+ *
+ * The returned handle implements both request codec (decode/encode) and
+ * response codec (decode_response). Free with `nemo_flow_codec_free`.
+ *
+ * # Safety
+ * Caller must free the returned handle via `nemo_flow_codec_free`.
+ */
+struct FfiCodecHandle *nemo_flow_openai_responses_codec_new(void);
+
+/**
+ * Create a new Anthropic Messages API codec handle.
+ *
+ * The returned handle implements both request codec (decode/encode) and
+ * response codec (decode_response). Free with `nemo_flow_codec_free`.
+ *
+ * # Safety
+ * Caller must free the returned handle via `nemo_flow_codec_free`.
+ */
+struct FfiCodecHandle *nemo_flow_anthropic_messages_codec_new(void);
+
+/**
+ * Execute an LLM call end-to-end: run conditional-execution guardrails (on raw
+ * request), then request intercepts, sanitize-request guardrails, execution
+ * intercepts, the callback, and sanitize-response
+ * guardrails. On rejection, only a standalone Mark event is emitted (no
+ * Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
+ * thread until completion.
+ *
+ * # Parameters
+ * - `name`: Null-terminated LLM provider name.
+ * - `native_json`: The request payload as a JSON C string representing an
+ *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
+ * - `func`: C callback that performs the actual LLM call.
+ * - `func_user_data`: Opaque pointer passed to `func`.
+ * - `func_free`: Optional destructor for `func_user_data`.
+ * - `parent`: Optional parent scope handle, or null.
+ * - `attributes`: Bitfield of LLM attributes.
+ * - `data_json`: Optional JSON data, or null.
+ * - `metadata_json`: Optional JSON metadata, or null.
+ * - `model_name`: Optional LLM model identifier, or null.
+ * - `out`: On success, receives the response as a JSON C string. Caller must
+ *   free with `nemo_flow_string_free`.
+ *
+ * # Safety
+ * `name`, `native_json`, and `out` must be valid, non-null pointers.
+ */
+NemoFlowStatus nemo_flow_llm_call_execute(const char *name,
+                                          const char *native_json,
+                                          NemoFlowLlmExecCb func,
+                                          void *func_user_data,
+                                          NemoFlowFreeFn func_free,
+                                          const struct FfiScopeHandle *parent,
+                                          uint32_t attributes,
+                                          const char *data_json,
+                                          const char *metadata_json,
+                                          const char *model_name,
+                                          NemoFlowCodecDecodeFn codec_decode,
+                                          NemoFlowCodecEncodeFn codec_encode,
+                                          void *codec_user_data,
+                                          NemoFlowFreeFn codec_free_fn,
+                                          const struct FfiCodecHandle *response_codec,
+                                          char **out);
+
+/**
+ * Execute a streaming LLM call end-to-end. Conditional-execution guardrails
+ * run first on the raw request. Returns a stream handle that can be polled
+ * with `nemo_flow_stream_next`. Blocks until the stream is set up.
+ *
+ * # Parameters
+ * - `name`: Null-terminated LLM provider name.
+ * - `native_json`: The request payload as a JSON C string representing an
+ *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
+ * - `func`: C callback that performs the actual LLM call.
+ * - `func_user_data`: Opaque pointer passed to `func`.
+ * - `func_free`: Optional destructor for `func_user_data`.
+ * - `collector`: Callback invoked with each intercepted chunk as a JSON string.
+ *   May be null, in which case chunks are not collected.
+ * - `finalizer`: Callback invoked once when the stream is exhausted to produce
+ *   the aggregated response as a JSON C string. May be null, in which case the
+ *   finalizer returns `Json::Null`.
+ * - `parent`: Optional parent scope handle, or null.
+ * - `attributes`: Bitfield of LLM attributes.
+ * - `data_json`: Optional JSON data, or null.
+ * - `metadata_json`: Optional JSON metadata, or null.
+ * - `model_name`: Optional LLM model identifier, or null.
+ * - `out`: On success, receives a heap-allocated `FfiStream`.
+ *
+ * # Safety
+ * `name`, `native_json`, and `out` must be valid, non-null pointers. `collector`
+ * and `finalizer` may be null.
+ */
+NemoFlowStatus nemo_flow_llm_stream_call_execute(const char *name,
+                                                 const char *native_json,
+                                                 NemoFlowLlmExecCb func,
+                                                 void *func_user_data,
+                                                 NemoFlowFreeFn func_free,
+                                                 struct Option_NemoFlowCollectorCb collector,
+                                                 struct Option_NemoFlowFinalizerCb finalizer,
+                                                 const struct FfiScopeHandle *parent,
+                                                 uint32_t attributes,
+                                                 const char *data_json,
+                                                 const char *metadata_json,
+                                                 const char *model_name,
+                                                 NemoFlowCodecDecodeFn codec_decode,
+                                                 NemoFlowCodecEncodeFn codec_encode,
+                                                 void *codec_user_data,
+                                                 NemoFlowFreeFn codec_free_fn,
+                                                 const struct FfiCodecHandle *response_codec,
+                                                 struct FfiStream **out);
+
+/**
+ * Poll the next chunk from a streaming LLM response. Blocks until a chunk is
+ * available.
+ *
+ * # Returns
+ * - `1`: A chunk was written to `*out_chunk`. Caller must free with
+ *   `nemo_flow_string_free`.
+ * - `0`: The stream is complete (no more chunks).
+ * - `-1`: An error occurred. Call `nemo_flow_last_error` for details.
+ *
+ * # Safety
+ * `stream` and `out_chunk` must be valid, non-null pointers.
+ */
+int32_t nemo_flow_stream_next(struct FfiStream *stream, char **out_chunk);
+
+/**
+ * Free a stream handle and release its resources.
+ *
+ * # Safety
+ * `stream` must be a valid `FfiStream` pointer returned by
+ * `nemo_flow_llm_stream_call_execute`, or null.
+ */
+void nemo_flow_stream_free(struct FfiStream *stream);
+
+/**
+ * Register an LLM request sanitization guardrail. The callback can modify or
+ * replace the LLM request before it is sent.
+ *
+ * # Parameters
+ * - `name`: Unique guardrail name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `cb`: Request sanitize callback.
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * # Safety
+ * `name` must be a valid C string. `cb` must be a valid function pointer.
+ */
+NemoFlowStatus nemo_flow_register_llm_sanitize_request_guardrail(const char *name,
+                                                                 int32_t priority,
+                                                                 NemoFlowLlmRequestCb cb,
+                                                                 void *user_data,
+                                                                 NemoFlowFreeFn free_fn);
+
+/**
+ * Deregister an LLM request sanitization guardrail by name.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoFlowStatus nemo_flow_deregister_llm_sanitize_request_guardrail(const char *name);
+
+/**
+ * Register an LLM response sanitization guardrail. The callback can inspect
+ * and modify the LLM response after it is received.
+ *
+ * # Parameters
+ * - `name`: Unique guardrail name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `cb`: JSON-to-JSON callback that receives the response JSON and returns sanitized JSON.
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * # Safety
+ * `name` must be a valid C string. `cb` must be a valid function pointer.
+ */
+NemoFlowStatus nemo_flow_register_llm_sanitize_response_guardrail(const char *name,
+                                                                  int32_t priority,
+                                                                  NemoFlowJsonCb cb,
+                                                                  void *user_data,
+                                                                  NemoFlowFreeFn free_fn);
+
+/**
+ * Deregister an LLM response sanitization guardrail by name.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoFlowStatus nemo_flow_deregister_llm_sanitize_response_guardrail(const char *name);
+
+/**
+ * Register an LLM conditional execution guardrail. The callback decides
+ * whether an LLM call should proceed.
+ *
+ * # Parameters
+ * - `name`: Unique guardrail name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `cb`: Conditional callback. Returns null to allow, or error message to reject.
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * The callback is fallible. To signal an internal callback failure instead of
+ * allow/reject, call [`crate::error::nemo_flow_set_last_error_message`] from C
+ * and return null.
+ *
+ * # Safety
+ * `name` must be a valid C string. `cb` must be a valid function pointer.
+ */
+NemoFlowStatus nemo_flow_register_llm_conditional_execution_guardrail(const char *name,
+                                                                      int32_t priority,
+                                                                      NemoFlowLlmConditionalCb cb,
+                                                                      void *user_data,
+                                                                      NemoFlowFreeFn free_fn);
+
+/**
+ * Deregister an LLM conditional execution guardrail by name.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoFlowStatus nemo_flow_deregister_llm_conditional_execution_guardrail(const char *name);
+
+/**
+ * Register an LLM request intercept. The callback can transform the
+ * `LLMRequest` before it reaches the LLM provider.
+ *
+ * # Parameters
+ * - `name`: Unique intercept name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `break_chain`: If true, stop processing further intercepts after this one.
+ * - `cb`: LLM request transform callback (receives/returns `FfiLLMRequest`).
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * The callback is fallible. To signal failure, call
+ * [`crate::error::nemo_flow_set_last_error_message`] from C and return null.
+ *
+ * # Safety
+ * `name` must be a valid C string. `cb` must be a valid function pointer.
+ */
+NemoFlowStatus nemo_flow_register_llm_request_intercept(const char *name,
+                                                        int32_t priority,
+                                                        bool break_chain,
+                                                        NemoFlowLlmRequestInterceptCb cb,
+                                                        void *user_data,
+                                                        NemoFlowFreeFn free_fn);
+
+/**
+ * Deregister an LLM request intercept by name.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoFlowStatus nemo_flow_deregister_llm_request_intercept(const char *name);
+
+/**
+ * Register an LLM execution intercept following the middleware chain pattern.
+ * The callback receives `(request, next_fn, next_ctx)` — call
+ * `next_fn(request, next_ctx)` to invoke the next intercept or the original
+ * LLM call, or skip calling it to short-circuit.
+ *
+ * # Parameters
+ * - `name`: Unique intercept name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_user_data`: Opaque pointer for the execution callback.
+ * - `exec_free`: Optional destructor for `exec_user_data`.
+ *
+ * # Safety
+ * `name` must be a valid C string. Callback pointers must be valid.
+ */
+NemoFlowStatus nemo_flow_register_llm_execution_intercept(const char *name,
+                                                          int32_t priority,
+                                                          NemoFlowLlmExecInterceptCb exec_cb,
+                                                          void *exec_user_data,
+                                                          NemoFlowFreeFn exec_free);
+
+/**
+ * Deregister an LLM execution intercept by name.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoFlowStatus nemo_flow_deregister_llm_execution_intercept(const char *name);
+
+/**
+ * Register an LLM streaming execution intercept following the middleware chain
+ * pattern. The callback receives `(request, next_fn, next_ctx)` — call
+ * `next_fn(request, next_ctx)` to invoke the next intercept or the original
+ * streaming LLM call, or skip calling it to short-circuit.
+ *
+ * # Parameters
+ * - `name`: Unique intercept name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_user_data`: Opaque pointer for the execution callback.
+ * - `exec_free`: Optional destructor for `exec_user_data`.
+ *
+ * # Safety
+ * `name` must be a valid C string. Callback pointers must be valid.
+ */
+NemoFlowStatus nemo_flow_register_llm_stream_execution_intercept(const char *name,
+                                                                 int32_t priority,
+                                                                 NemoFlowLlmExecInterceptCb exec_cb,
+                                                                 void *exec_user_data,
+                                                                 NemoFlowFreeFn exec_free);
+
+/**
+ * Deregister an LLM streaming execution intercept by name.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoFlowStatus nemo_flow_deregister_llm_stream_execution_intercept(const char *name);
+
+/**
+ * Register an event subscriber. The callback is invoked for every lifecycle
+ * event emitted by the runtime.
+ *
+ * # Parameters
+ * - `name`: Unique subscriber name.
+ * - `cb`: Event callback. The `FfiEvent` is valid only during the call.
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * # Safety
+ * `name` must be a valid C string. `cb` must be a valid function pointer.
+ */
+NemoFlowStatus nemo_flow_register_subscriber(const char *name,
+                                             NemoFlowEventSubscriberCb cb,
+                                             void *user_data,
+                                             NemoFlowFreeFn free_fn);
+
+/**
+ * Deregister an event subscriber by name.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoFlowStatus nemo_flow_deregister_subscriber(const char *name);
+
+/**
+ * Creates a new ATIF exporter.
+ *
+ * # Parameters
+ * - `session_id`: Session identifier string (required, non-null).
+ * - `agent_name`: Agent name string (required, non-null).
+ * - `agent_version`: Agent version string (required, non-null).
+ * - `model_name`: Default model name (nullable).
+ * - `out`: On success, receives a heap-allocated `FfiAtifExporter`.
+ *
+ * # Safety
+ * All non-null string pointers must be valid C strings. `out` must be valid.
+ */
+NemoFlowStatus nemo_flow_atif_exporter_create(const char *session_id,
+                                              const char *agent_name,
+                                              const char *agent_version,
+                                              const char *model_name,
+                                              struct FfiAtifExporter **out);
+
+/**
+ * Registers the exporter as an event subscriber.
+ *
+ * # Parameters
+ * - `exporter`: The exporter handle.
+ * - `name`: Subscriber name (required, non-null).
+ *
+ * # Safety
+ * `exporter` and `name` must be valid, non-null pointers.
+ */
+NemoFlowStatus nemo_flow_atif_exporter_register(const struct FfiAtifExporter *exporter,
+                                                const char *name);
+
+/**
+ * Deregisters the exporter subscriber.
+ *
+ * # Parameters
+ * - `name`: Subscriber name (required, non-null).
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoFlowStatus nemo_flow_atif_exporter_deregister(const char *name);
+
+/**
+ * Exports collected events as an ATIF trajectory JSON string.
+ *
+ * # Parameters
+ * - `exporter`: The exporter handle.
+ * - `out`: On success, receives a JSON string (caller must free with
+ *   `nemo_flow_string_free`).
+ *
+ * # Safety
+ * `exporter` and `out` must be valid, non-null pointers.
+ */
+NemoFlowStatus nemo_flow_atif_exporter_export(const struct FfiAtifExporter *exporter, char **out);
+
+/**
+ * Clears all collected events from the exporter.
+ *
+ * # Parameters
+ * - `exporter`: The exporter handle.
+ *
+ * # Safety
+ * `exporter` must be a valid, non-null `FfiAtifExporter` pointer.
+ */
+NemoFlowStatus nemo_flow_atif_exporter_clear(const struct FfiAtifExporter *exporter);
+
+/**
+ * Creates a new OpenTelemetry subscriber.
+ *
+ * Nullable strings use crate defaults when omitted. `headers_json` and
+ * `resource_attributes_json` must be JSON objects of string values when
+ * provided.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoFlowStatus nemo_flow_otel_subscriber_create(const char *transport,
+                                                const char *endpoint,
+                                                const char *headers_json,
+                                                const char *resource_attributes_json,
+                                                const char *service_name,
+                                                const char *service_namespace,
+                                                const char *service_version,
+                                                const char *instrumentation_scope,
+                                                uint64_t timeout_millis,
+                                                struct FfiOpenTelemetrySubscriber **out);
+
+/**
+ * Registers the OpenTelemetry subscriber as an event subscriber.
+ *
+ * # Safety
+ * `subscriber` and `name` must be valid, non-null pointers.
+ */
+NemoFlowStatus nemo_flow_otel_subscriber_register(const struct FfiOpenTelemetrySubscriber *subscriber,
+                                                  const char *name);
+
+/**
+ * Deregisters the OpenTelemetry subscriber by name.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoFlowStatus nemo_flow_otel_subscriber_deregister(const char *name);
+
+/**
+ * Forces a flush of finished spans through the exporter.
+ *
+ * # Safety
+ * `subscriber` must be a valid, non-null pointer.
+ */
+NemoFlowStatus nemo_flow_otel_subscriber_force_flush(const struct FfiOpenTelemetrySubscriber *subscriber);
+
+/**
+ * Shuts down the underlying tracer provider.
+ *
+ * # Safety
+ * `subscriber` must be a valid, non-null pointer.
+ */
+NemoFlowStatus nemo_flow_otel_subscriber_shutdown(const struct FfiOpenTelemetrySubscriber *subscriber);
+
+/**
+ * Creates a new OpenInference subscriber.
+ *
+ * Nullable strings use crate defaults when omitted. `headers_json` and
+ * `resource_attributes_json` must be JSON objects of string values when
+ * provided.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoFlowStatus nemo_flow_openinference_subscriber_create(const char *transport,
+                                                         const char *endpoint,
+                                                         const char *headers_json,
+                                                         const char *resource_attributes_json,
+                                                         const char *service_name,
+                                                         const char *service_namespace,
+                                                         const char *service_version,
+                                                         const char *instrumentation_scope,
+                                                         uint64_t timeout_millis,
+                                                         struct FfiOpenInferenceSubscriber **out);
+
+/**
+ * Registers the OpenInference subscriber as an event subscriber.
+ *
+ * # Safety
+ * `subscriber` and `name` must be valid, non-null pointers.
+ */
+NemoFlowStatus nemo_flow_openinference_subscriber_register(const struct FfiOpenInferenceSubscriber *subscriber,
+                                                           const char *name);
+
+/**
+ * Deregisters the OpenInference subscriber by name.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoFlowStatus nemo_flow_openinference_subscriber_deregister(const char *name);
+
+/**
+ * Forces a flush of finished spans through the exporter.
+ *
+ * # Safety
+ * `subscriber` must be a valid, non-null pointer.
+ */
+NemoFlowStatus nemo_flow_openinference_subscriber_force_flush(const struct FfiOpenInferenceSubscriber *subscriber);
+
+/**
+ * Shuts down the underlying tracer provider.
+ *
+ * # Safety
+ * `subscriber` must be a valid, non-null pointer.
+ */
+NemoFlowStatus nemo_flow_openinference_subscriber_shutdown(const struct FfiOpenInferenceSubscriber *subscriber);
 
 /**
  * Validate a generic plugin config document and return the diagnostics report as JSON.
@@ -608,759 +1242,6 @@ NemoFlowStatus nemo_flow_event(const char *name,
                                const char *metadata_json);
 
 /**
- * Begin a tool call, running pre-call guardrails and intercepts.
- *
- * # Parameters
- * - `name`: Null-terminated tool name.
- * - `args_json`: Tool arguments as a JSON C string.
- * - `parent`: Optional parent scope handle, or null.
- * - `attributes`: Bitfield of tool attributes.
- * - `data_json`: Optional JSON data, or null.
- * - `metadata_json`: Optional JSON metadata, or null.
- * - `tool_call_id`: Optional external correlation ID for the tool call, or null.
- * - `out`: On success, receives a heap-allocated `FfiToolHandle`.
- *
- * # Safety
- * `name` and `args_json` must be valid C strings. `out` must be non-null.
- */
-NemoFlowStatus nemo_flow_tool_call(const char *name,
-                                   const char *args_json,
-                                   const struct FfiScopeHandle *parent,
-                                   uint32_t attributes,
-                                   const char *data_json,
-                                   const char *metadata_json,
-                                   const char *tool_call_id,
-                                   struct FfiToolHandle **out);
-
-/**
- * End a tool call, running post-call guardrails and intercepts.
- *
- * # Parameters
- * - `handle`: The tool handle from `nemo_flow_tool_call`.
- * - `result_json`: Tool result as a JSON C string.
- * - `data_json`: Optional JSON data, or null.
- * - `metadata_json`: Optional JSON metadata, or null.
- *
- * # Safety
- * `handle` and `result_json` must be valid, non-null pointers.
- */
-NemoFlowStatus nemo_flow_tool_call_end(const struct FfiToolHandle *handle,
-                                       const char *result_json,
-                                       const char *data_json,
-                                       const char *metadata_json);
-
-/**
- * Execute a tool call end-to-end: run conditional-execution guardrails (on raw
- * args), then request intercepts, sanitize-request guardrails, execution
- * intercepts, the callback, and sanitize-response
- * guardrails. On rejection, only a standalone Mark event is emitted (no
- * Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
- * thread until completion.
- *
- * # Parameters
- * - `name`: Null-terminated tool name.
- * - `args_json`: Tool arguments as a JSON C string.
- * - `func`: C callback that performs the actual tool execution.
- * - `func_user_data`: Opaque pointer passed to `func`.
- * - `func_free`: Optional destructor for `func_user_data`.
- * - `parent`: Optional parent scope handle, or null.
- * - `attributes`: Bitfield of tool attributes.
- * - `data_json`: Optional JSON data, or null.
- * - `metadata_json`: Optional JSON metadata, or null.
- * - `out`: On success, receives the result as a JSON C string. Caller must free
- *   with `nemo_flow_string_free`.
- *
- * # Safety
- * `name`, `args_json`, and `out` must be valid, non-null pointers.
- */
-NemoFlowStatus nemo_flow_tool_call_execute(const char *name,
-                                           const char *args_json,
-                                           NemoFlowToolExecCb func,
-                                           void *func_user_data,
-                                           NemoFlowFreeFn func_free,
-                                           const struct FfiScopeHandle *parent,
-                                           uint32_t attributes,
-                                           const char *data_json,
-                                           const char *metadata_json,
-                                           char **out);
-
-/**
- * Begin an LLM call, running pre-call guardrails and intercepts.
- *
- * # Parameters
- * - `name`: Null-terminated LLM provider name.
- * - `native_json`: The request payload as a JSON C string representing an
- *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
- * - `parent`: Optional parent scope handle, or null.
- * - `attributes`: Bitfield of LLM attributes.
- * - `data_json`: Optional JSON data, or null.
- * - `metadata_json`: Optional JSON metadata, or null.
- * - `model_name`: Optional LLM model identifier, or null.
- * - `out`: On success, receives a heap-allocated `FfiLLMHandle`.
- *
- * # Safety
- * `name`, `native_json`, and `out` must be valid, non-null pointers.
- */
-NemoFlowStatus nemo_flow_llm_call(const char *name,
-                                  const char *native_json,
-                                  const struct FfiScopeHandle *parent,
-                                  uint32_t attributes,
-                                  const char *data_json,
-                                  const char *metadata_json,
-                                  const char *model_name,
-                                  struct FfiLLMHandle **out);
-
-/**
- * End an LLM call, running post-call guardrails and intercepts.
- *
- * # Parameters
- * - `handle`: The LLM handle from `nemo_flow_llm_call`.
- * - `response_json`: LLM response as a JSON C string.
- * - `data_json`: Optional JSON data, or null.
- * - `metadata_json`: Optional JSON metadata, or null.
- *
- * # Safety
- * `handle` and `response_json` must be valid, non-null pointers.
- */
-NemoFlowStatus nemo_flow_llm_call_end(const struct FfiLLMHandle *handle,
-                                      const char *response_json,
-                                      const char *data_json,
-                                      const char *metadata_json);
-
-/**
- * Create a new OpenAI Chat Completions codec handle.
- *
- * The returned handle implements both request codec (decode/encode) and
- * response codec (decode_response). Free with `nemo_flow_codec_free`.
- *
- * # Safety
- * Caller must free the returned handle via `nemo_flow_codec_free`.
- */
-struct FfiCodecHandle *nemo_flow_openai_chat_codec_new(void);
-
-/**
- * Create a new OpenAI Responses API codec handle.
- *
- * The returned handle implements both request codec (decode/encode) and
- * response codec (decode_response). Free with `nemo_flow_codec_free`.
- *
- * # Safety
- * Caller must free the returned handle via `nemo_flow_codec_free`.
- */
-struct FfiCodecHandle *nemo_flow_openai_responses_codec_new(void);
-
-/**
- * Create a new Anthropic Messages API codec handle.
- *
- * The returned handle implements both request codec (decode/encode) and
- * response codec (decode_response). Free with `nemo_flow_codec_free`.
- *
- * # Safety
- * Caller must free the returned handle via `nemo_flow_codec_free`.
- */
-struct FfiCodecHandle *nemo_flow_anthropic_messages_codec_new(void);
-
-/**
- * Execute an LLM call end-to-end: run conditional-execution guardrails (on raw
- * request), then request intercepts, sanitize-request guardrails, execution
- * intercepts, the callback, and sanitize-response
- * guardrails. On rejection, only a standalone Mark event is emitted (no
- * Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
- * thread until completion.
- *
- * # Parameters
- * - `name`: Null-terminated LLM provider name.
- * - `native_json`: The request payload as a JSON C string representing an
- *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
- * - `func`: C callback that performs the actual LLM call.
- * - `func_user_data`: Opaque pointer passed to `func`.
- * - `func_free`: Optional destructor for `func_user_data`.
- * - `parent`: Optional parent scope handle, or null.
- * - `attributes`: Bitfield of LLM attributes.
- * - `data_json`: Optional JSON data, or null.
- * - `metadata_json`: Optional JSON metadata, or null.
- * - `model_name`: Optional LLM model identifier, or null.
- * - `out`: On success, receives the response as a JSON C string. Caller must
- *   free with `nemo_flow_string_free`.
- *
- * # Safety
- * `name`, `native_json`, and `out` must be valid, non-null pointers.
- */
-NemoFlowStatus nemo_flow_llm_call_execute(const char *name,
-                                          const char *native_json,
-                                          NemoFlowLlmExecCb func,
-                                          void *func_user_data,
-                                          NemoFlowFreeFn func_free,
-                                          const struct FfiScopeHandle *parent,
-                                          uint32_t attributes,
-                                          const char *data_json,
-                                          const char *metadata_json,
-                                          const char *model_name,
-                                          NemoFlowCodecDecodeFn codec_decode,
-                                          NemoFlowCodecEncodeFn codec_encode,
-                                          void *codec_user_data,
-                                          NemoFlowFreeFn codec_free_fn,
-                                          const struct FfiCodecHandle *response_codec,
-                                          char **out);
-
-/**
- * Execute a streaming LLM call end-to-end. Conditional-execution guardrails
- * run first on the raw request. Returns a stream handle that can be polled
- * with `nemo_flow_stream_next`. Blocks until the stream is set up.
- *
- * # Parameters
- * - `name`: Null-terminated LLM provider name.
- * - `native_json`: The request payload as a JSON C string representing an
- *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
- * - `func`: C callback that performs the actual LLM call.
- * - `func_user_data`: Opaque pointer passed to `func`.
- * - `func_free`: Optional destructor for `func_user_data`.
- * - `collector`: Callback invoked with each intercepted chunk as a JSON string.
- *   May be null, in which case chunks are not collected.
- * - `finalizer`: Callback invoked once when the stream is exhausted to produce
- *   the aggregated response as a JSON C string. May be null, in which case the
- *   finalizer returns `Json::Null`.
- * - `parent`: Optional parent scope handle, or null.
- * - `attributes`: Bitfield of LLM attributes.
- * - `data_json`: Optional JSON data, or null.
- * - `metadata_json`: Optional JSON metadata, or null.
- * - `model_name`: Optional LLM model identifier, or null.
- * - `out`: On success, receives a heap-allocated `FfiStream`.
- *
- * # Safety
- * `name`, `native_json`, and `out` must be valid, non-null pointers. `collector`
- * and `finalizer` may be null.
- */
-NemoFlowStatus nemo_flow_llm_stream_call_execute(const char *name,
-                                                 const char *native_json,
-                                                 NemoFlowLlmExecCb func,
-                                                 void *func_user_data,
-                                                 NemoFlowFreeFn func_free,
-                                                 struct Option_NemoFlowCollectorCb collector,
-                                                 struct Option_NemoFlowFinalizerCb finalizer,
-                                                 const struct FfiScopeHandle *parent,
-                                                 uint32_t attributes,
-                                                 const char *data_json,
-                                                 const char *metadata_json,
-                                                 const char *model_name,
-                                                 NemoFlowCodecDecodeFn codec_decode,
-                                                 NemoFlowCodecEncodeFn codec_encode,
-                                                 void *codec_user_data,
-                                                 NemoFlowFreeFn codec_free_fn,
-                                                 const struct FfiCodecHandle *response_codec,
-                                                 struct FfiStream **out);
-
-/**
- * Poll the next chunk from a streaming LLM response. Blocks until a chunk is
- * available.
- *
- * # Returns
- * - `1`: A chunk was written to `*out_chunk`. Caller must free with
- *   `nemo_flow_string_free`.
- * - `0`: The stream is complete (no more chunks).
- * - `-1`: An error occurred. Call `nemo_flow_last_error` for details.
- *
- * # Safety
- * `stream` and `out_chunk` must be valid, non-null pointers.
- */
-int32_t nemo_flow_stream_next(struct FfiStream *stream, char **out_chunk);
-
-/**
- * Free a stream handle and release its resources.
- *
- * # Safety
- * `stream` must be a valid `FfiStream` pointer returned by
- * `nemo_flow_llm_stream_call_execute`, or null.
- */
-void nemo_flow_stream_free(struct FfiStream *stream);
-
-/**
- * Register a tool conditional execution guardrail. The callback decides whether
- * a tool call should proceed. Returns an error message to reject, or null to allow.
- *
- * # Parameters
- * - `name`: Unique guardrail name.
- * - `priority`: Execution priority (lower runs first).
- * - `cb`: Conditional callback.
- * - `user_data`: Opaque pointer passed to `cb`.
- * - `free_fn`: Optional destructor for `user_data`.
- *
- * The callback is fallible. To signal an internal callback failure instead of
- * allow/reject, call [`crate::error::nemo_flow_set_last_error_message`] from C
- * and return null.
- *
- * # Safety
- * `name` must be a valid C string. `cb` must be a valid function pointer.
- */
-NemoFlowStatus nemo_flow_register_tool_conditional_execution_guardrail(const char *name,
-                                                                       int32_t priority,
-                                                                       NemoFlowToolConditionalCb cb,
-                                                                       void *user_data,
-                                                                       NemoFlowFreeFn free_fn);
-
-/**
- * Deregister a tool conditional execution guardrail by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NemoFlowStatus nemo_flow_deregister_tool_conditional_execution_guardrail(const char *name);
-
-/**
- * Register a tool execution intercept following the middleware chain pattern.
- * The callback receives `(args, next_fn, next_ctx)` — call
- * `next_fn(args, next_ctx)` to invoke the next intercept or the original
- * tool function, or skip calling it to short-circuit.
- *
- * # Parameters
- * - `name`: Unique intercept name.
- * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving args and a next function.
- * - `exec_user_data`: Opaque pointer for the execution callback.
- * - `exec_free`: Optional destructor for `exec_user_data`.
- *
- * # Safety
- * `name` must be a valid C string. Callback pointers must be valid.
- */
-NemoFlowStatus nemo_flow_register_tool_execution_intercept(const char *name,
-                                                           int32_t priority,
-                                                           NemoFlowToolExecInterceptCb exec_cb,
-                                                           void *exec_user_data,
-                                                           NemoFlowFreeFn exec_free);
-
-/**
- * Deregister a tool execution intercept by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NemoFlowStatus nemo_flow_deregister_tool_execution_intercept(const char *name);
-
-/**
- * Register an LLM request sanitization guardrail. The callback can modify or
- * replace the LLM request before it is sent.
- *
- * # Parameters
- * - `name`: Unique guardrail name.
- * - `priority`: Execution priority (lower runs first).
- * - `cb`: Request sanitize callback.
- * - `user_data`: Opaque pointer passed to `cb`.
- * - `free_fn`: Optional destructor for `user_data`.
- *
- * # Safety
- * `name` must be a valid C string. `cb` must be a valid function pointer.
- */
-NemoFlowStatus nemo_flow_register_llm_sanitize_request_guardrail(const char *name,
-                                                                 int32_t priority,
-                                                                 NemoFlowLlmRequestCb cb,
-                                                                 void *user_data,
-                                                                 NemoFlowFreeFn free_fn);
-
-/**
- * Deregister an LLM request sanitization guardrail by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NemoFlowStatus nemo_flow_deregister_llm_sanitize_request_guardrail(const char *name);
-
-/**
- * Register an LLM response sanitization guardrail. The callback can inspect
- * and modify the LLM response after it is received.
- *
- * # Parameters
- * - `name`: Unique guardrail name.
- * - `priority`: Execution priority (lower runs first).
- * - `cb`: JSON-to-JSON callback that receives the response JSON and returns sanitized JSON.
- * - `user_data`: Opaque pointer passed to `cb`.
- * - `free_fn`: Optional destructor for `user_data`.
- *
- * # Safety
- * `name` must be a valid C string. `cb` must be a valid function pointer.
- */
-NemoFlowStatus nemo_flow_register_llm_sanitize_response_guardrail(const char *name,
-                                                                  int32_t priority,
-                                                                  NemoFlowJsonCb cb,
-                                                                  void *user_data,
-                                                                  NemoFlowFreeFn free_fn);
-
-/**
- * Deregister an LLM response sanitization guardrail by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NemoFlowStatus nemo_flow_deregister_llm_sanitize_response_guardrail(const char *name);
-
-/**
- * Register an LLM conditional execution guardrail. The callback decides
- * whether an LLM call should proceed.
- *
- * # Parameters
- * - `name`: Unique guardrail name.
- * - `priority`: Execution priority (lower runs first).
- * - `cb`: Conditional callback. Returns null to allow, or error message to reject.
- * - `user_data`: Opaque pointer passed to `cb`.
- * - `free_fn`: Optional destructor for `user_data`.
- *
- * The callback is fallible. To signal an internal callback failure instead of
- * allow/reject, call [`crate::error::nemo_flow_set_last_error_message`] from C
- * and return null.
- *
- * # Safety
- * `name` must be a valid C string. `cb` must be a valid function pointer.
- */
-NemoFlowStatus nemo_flow_register_llm_conditional_execution_guardrail(const char *name,
-                                                                      int32_t priority,
-                                                                      NemoFlowLlmConditionalCb cb,
-                                                                      void *user_data,
-                                                                      NemoFlowFreeFn free_fn);
-
-/**
- * Deregister an LLM conditional execution guardrail by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NemoFlowStatus nemo_flow_deregister_llm_conditional_execution_guardrail(const char *name);
-
-/**
- * Register an LLM request intercept. The callback can transform the
- * `LLMRequest` before it reaches the LLM provider.
- *
- * # Parameters
- * - `name`: Unique intercept name.
- * - `priority`: Execution priority (lower runs first).
- * - `break_chain`: If true, stop processing further intercepts after this one.
- * - `cb`: LLM request transform callback (receives/returns `FfiLLMRequest`).
- * - `user_data`: Opaque pointer passed to `cb`.
- * - `free_fn`: Optional destructor for `user_data`.
- *
- * The callback is fallible. To signal failure, call
- * [`crate::error::nemo_flow_set_last_error_message`] from C and return null.
- *
- * # Safety
- * `name` must be a valid C string. `cb` must be a valid function pointer.
- */
-NemoFlowStatus nemo_flow_register_llm_request_intercept(const char *name,
-                                                        int32_t priority,
-                                                        bool break_chain,
-                                                        NemoFlowLlmRequestInterceptCb cb,
-                                                        void *user_data,
-                                                        NemoFlowFreeFn free_fn);
-
-/**
- * Deregister an LLM request intercept by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NemoFlowStatus nemo_flow_deregister_llm_request_intercept(const char *name);
-
-/**
- * Register an LLM execution intercept following the middleware chain pattern.
- * The callback receives `(request, next_fn, next_ctx)` — call
- * `next_fn(request, next_ctx)` to invoke the next intercept or the original
- * LLM call, or skip calling it to short-circuit.
- *
- * # Parameters
- * - `name`: Unique intercept name.
- * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving request and a next function.
- * - `exec_user_data`: Opaque pointer for the execution callback.
- * - `exec_free`: Optional destructor for `exec_user_data`.
- *
- * # Safety
- * `name` must be a valid C string. Callback pointers must be valid.
- */
-NemoFlowStatus nemo_flow_register_llm_execution_intercept(const char *name,
-                                                          int32_t priority,
-                                                          NemoFlowLlmExecInterceptCb exec_cb,
-                                                          void *exec_user_data,
-                                                          NemoFlowFreeFn exec_free);
-
-/**
- * Deregister an LLM execution intercept by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NemoFlowStatus nemo_flow_deregister_llm_execution_intercept(const char *name);
-
-/**
- * Register an LLM streaming execution intercept following the middleware chain
- * pattern. The callback receives `(request, next_fn, next_ctx)` — call
- * `next_fn(request, next_ctx)` to invoke the next intercept or the original
- * streaming LLM call, or skip calling it to short-circuit.
- *
- * # Parameters
- * - `name`: Unique intercept name.
- * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving request and a next function.
- * - `exec_user_data`: Opaque pointer for the execution callback.
- * - `exec_free`: Optional destructor for `exec_user_data`.
- *
- * # Safety
- * `name` must be a valid C string. Callback pointers must be valid.
- */
-NemoFlowStatus nemo_flow_register_llm_stream_execution_intercept(const char *name,
-                                                                 int32_t priority,
-                                                                 NemoFlowLlmExecInterceptCb exec_cb,
-                                                                 void *exec_user_data,
-                                                                 NemoFlowFreeFn exec_free);
-
-/**
- * Deregister an LLM streaming execution intercept by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NemoFlowStatus nemo_flow_deregister_llm_stream_execution_intercept(const char *name);
-
-/**
- * Register an event subscriber. The callback is invoked for every lifecycle
- * event emitted by the runtime.
- *
- * # Parameters
- * - `name`: Unique subscriber name.
- * - `cb`: Event callback. The `FfiEvent` is valid only during the call.
- * - `user_data`: Opaque pointer passed to `cb`.
- * - `free_fn`: Optional destructor for `user_data`.
- *
- * # Safety
- * `name` must be a valid C string. `cb` must be a valid function pointer.
- */
-NemoFlowStatus nemo_flow_register_subscriber(const char *name,
-                                             NemoFlowEventSubscriberCb cb,
-                                             void *user_data,
-                                             NemoFlowFreeFn free_fn);
-
-/**
- * Deregister an event subscriber by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NemoFlowStatus nemo_flow_deregister_subscriber(const char *name);
-
-/**
- * Create a new isolated scope stack with its own root scope.
- *
- * Each scope stack is independent: scopes pushed on one do not appear on another.
- * Use `nemo_flow_scope_stack_set_thread` to bind a stack to the current thread
- * before making other NeMo Flow API calls.
- *
- * # Parameters
- * - `out`: On success, receives a heap-allocated `FfiScopeStack` that must be
- *   freed with `nemo_flow_scope_stack_free`.
- *
- * # Safety
- * `out` must be a valid, non-null pointer.
- */
-NemoFlowStatus nemo_flow_scope_stack_create(struct FfiScopeStack **out);
-
-/**
- * Bind an isolated scope stack to the current OS thread.
- *
- * After this call, all NeMo Flow scope operations on the current thread
- * (e.g. `nemo_flow_push_scope`, `nemo_flow_get_handle`) will use the
- * given scope stack. This is typically used from Go goroutines that have
- * called `runtime.LockOSThread()`.
- *
- * The `FfiScopeStack` is **not** consumed — the caller retains ownership
- * and must still free it when done.
- *
- * # Safety
- * `stack` must be a valid, non-null `FfiScopeStack` pointer.
- */
-NemoFlowStatus nemo_flow_scope_stack_set_thread(const struct FfiScopeStack *stack);
-
-/**
- * Returns whether the current execution context has an explicitly-initialized
- * scope stack.
- *
- * Returns `true` if `nemo_flow_scope_stack_set_thread` has been called on the
- * current OS thread (or the caller is inside a tokio task-local scope).
- * Returns `false` when only the auto-created default is present.
- */
-bool nemo_flow_scope_stack_active(void);
-
-/**
- * Creates a new ATIF exporter.
- *
- * # Parameters
- * - `session_id`: Session identifier string (required, non-null).
- * - `agent_name`: Agent name string (required, non-null).
- * - `agent_version`: Agent version string (required, non-null).
- * - `model_name`: Default model name (nullable).
- * - `out`: On success, receives a heap-allocated `FfiAtifExporter`.
- *
- * # Safety
- * All non-null string pointers must be valid C strings. `out` must be valid.
- */
-NemoFlowStatus nemo_flow_atif_exporter_create(const char *session_id,
-                                              const char *agent_name,
-                                              const char *agent_version,
-                                              const char *model_name,
-                                              struct FfiAtifExporter **out);
-
-/**
- * Registers the exporter as an event subscriber.
- *
- * # Parameters
- * - `exporter`: The exporter handle.
- * - `name`: Subscriber name (required, non-null).
- *
- * # Safety
- * `exporter` and `name` must be valid, non-null pointers.
- */
-NemoFlowStatus nemo_flow_atif_exporter_register(const struct FfiAtifExporter *exporter,
-                                                const char *name);
-
-/**
- * Deregisters the exporter subscriber.
- *
- * # Parameters
- * - `name`: Subscriber name (required, non-null).
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NemoFlowStatus nemo_flow_atif_exporter_deregister(const char *name);
-
-/**
- * Exports collected events as an ATIF trajectory JSON string.
- *
- * # Parameters
- * - `exporter`: The exporter handle.
- * - `out`: On success, receives a JSON string (caller must free with
- *   `nemo_flow_string_free`).
- *
- * # Safety
- * `exporter` and `out` must be valid, non-null pointers.
- */
-NemoFlowStatus nemo_flow_atif_exporter_export(const struct FfiAtifExporter *exporter, char **out);
-
-/**
- * Clears all collected events from the exporter.
- *
- * # Parameters
- * - `exporter`: The exporter handle.
- *
- * # Safety
- * `exporter` must be a valid, non-null `FfiAtifExporter` pointer.
- */
-NemoFlowStatus nemo_flow_atif_exporter_clear(const struct FfiAtifExporter *exporter);
-
-/**
- * Creates a new OpenTelemetry subscriber.
- *
- * Nullable strings use crate defaults when omitted. `headers_json` and
- * `resource_attributes_json` must be JSON objects of string values when
- * provided.
- *
- * # Safety
- * Any non-null C strings must be valid and `out` must be non-null.
- */
-NemoFlowStatus nemo_flow_otel_subscriber_create(const char *transport,
-                                                const char *endpoint,
-                                                const char *headers_json,
-                                                const char *resource_attributes_json,
-                                                const char *service_name,
-                                                const char *service_namespace,
-                                                const char *service_version,
-                                                const char *instrumentation_scope,
-                                                uint64_t timeout_millis,
-                                                struct FfiOpenTelemetrySubscriber **out);
-
-/**
- * Registers the OpenTelemetry subscriber as an event subscriber.
- *
- * # Safety
- * `subscriber` and `name` must be valid, non-null pointers.
- */
-NemoFlowStatus nemo_flow_otel_subscriber_register(const struct FfiOpenTelemetrySubscriber *subscriber,
-                                                  const char *name);
-
-/**
- * Deregisters the OpenTelemetry subscriber by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NemoFlowStatus nemo_flow_otel_subscriber_deregister(const char *name);
-
-/**
- * Forces a flush of finished spans through the exporter.
- *
- * # Safety
- * `subscriber` must be a valid, non-null pointer.
- */
-NemoFlowStatus nemo_flow_otel_subscriber_force_flush(const struct FfiOpenTelemetrySubscriber *subscriber);
-
-/**
- * Shuts down the underlying tracer provider.
- *
- * # Safety
- * `subscriber` must be a valid, non-null pointer.
- */
-NemoFlowStatus nemo_flow_otel_subscriber_shutdown(const struct FfiOpenTelemetrySubscriber *subscriber);
-
-/**
- * Creates a new OpenInference subscriber.
- *
- * Nullable strings use crate defaults when omitted. `headers_json` and
- * `resource_attributes_json` must be JSON objects of string values when
- * provided.
- *
- * # Safety
- * Any non-null C strings must be valid and `out` must be non-null.
- */
-NemoFlowStatus nemo_flow_openinference_subscriber_create(const char *transport,
-                                                         const char *endpoint,
-                                                         const char *headers_json,
-                                                         const char *resource_attributes_json,
-                                                         const char *service_name,
-                                                         const char *service_namespace,
-                                                         const char *service_version,
-                                                         const char *instrumentation_scope,
-                                                         uint64_t timeout_millis,
-                                                         struct FfiOpenInferenceSubscriber **out);
-
-/**
- * Registers the OpenInference subscriber as an event subscriber.
- *
- * # Safety
- * `subscriber` and `name` must be valid, non-null pointers.
- */
-NemoFlowStatus nemo_flow_openinference_subscriber_register(const struct FfiOpenInferenceSubscriber *subscriber,
-                                                           const char *name);
-
-/**
- * Deregisters the OpenInference subscriber by name.
- *
- * # Safety
- * `name` must be a valid C string.
- */
-NemoFlowStatus nemo_flow_openinference_subscriber_deregister(const char *name);
-
-/**
- * Forces a flush of finished spans through the exporter.
- *
- * # Safety
- * `subscriber` must be a valid, non-null pointer.
- */
-NemoFlowStatus nemo_flow_openinference_subscriber_force_flush(const struct FfiOpenInferenceSubscriber *subscriber);
-
-/**
- * Shuts down the underlying tracer provider.
- *
- * # Safety
- * `subscriber` must be a valid, non-null pointer.
- */
-NemoFlowStatus nemo_flow_openinference_subscriber_shutdown(const struct FfiOpenInferenceSubscriber *subscriber);
-
-/**
  * Register a scope-local tool conditional execution guardrail.
  *
  * # Parameters
@@ -1644,66 +1525,185 @@ NemoFlowStatus nemo_flow_scope_register_subscriber(const char *scope_uuid,
 NemoFlowStatus nemo_flow_scope_deregister_subscriber(const char *scope_uuid, const char *name);
 
 /**
- * Run the registered tool request intercept chain on the given arguments.
+ * Create a new isolated scope stack with its own root scope.
+ *
+ * Each scope stack is independent: scopes pushed on one do not appear on another.
+ * Use `nemo_flow_scope_stack_set_thread` to bind a stack to the current thread
+ * before making other NeMo Flow API calls.
  *
  * # Parameters
- * - `name`: Tool name (null-terminated C string).
+ * - `out`: On success, receives a heap-allocated `FfiScopeStack` that must be
+ *   freed with `nemo_flow_scope_stack_free`.
+ *
+ * # Safety
+ * `out` must be a valid, non-null pointer.
+ */
+NemoFlowStatus nemo_flow_scope_stack_create(struct FfiScopeStack **out);
+
+/**
+ * Bind an isolated scope stack to the current OS thread.
+ *
+ * After this call, all NeMo Flow scope operations on the current thread
+ * (e.g. `nemo_flow_push_scope`, `nemo_flow_get_handle`) will use the
+ * given scope stack. This is typically used from Go goroutines that have
+ * called `runtime.LockOSThread()`.
+ *
+ * The `FfiScopeStack` is **not** consumed — the caller retains ownership
+ * and must still free it when done.
+ *
+ * # Safety
+ * `stack` must be a valid, non-null `FfiScopeStack` pointer.
+ */
+NemoFlowStatus nemo_flow_scope_stack_set_thread(const struct FfiScopeStack *stack);
+
+/**
+ * Returns whether the current execution context has an explicitly-initialized
+ * scope stack.
+ *
+ * Returns `true` if `nemo_flow_scope_stack_set_thread` has been called on the
+ * current OS thread (or the caller is inside a tokio task-local scope).
+ * Returns `false` when only the auto-created default is present.
+ */
+bool nemo_flow_scope_stack_active(void);
+
+/**
+ * Begin a tool call, running pre-call guardrails and intercepts.
+ *
+ * # Parameters
+ * - `name`: Null-terminated tool name.
  * - `args_json`: Tool arguments as a JSON C string.
- * - `out`: On success, receives the transformed JSON string (caller must free
- *   with `nemo_flow_string_free`).
+ * - `parent`: Optional parent scope handle, or null.
+ * - `attributes`: Bitfield of tool attributes.
+ * - `data_json`: Optional JSON data, or null.
+ * - `metadata_json`: Optional JSON metadata, or null.
+ * - `tool_call_id`: Optional external correlation ID for the tool call, or null.
+ * - `out`: On success, receives a heap-allocated `FfiToolHandle`.
  *
  * # Safety
- * All pointers must be valid. `out` must be non-null.
+ * `name` and `args_json` must be valid C strings. `out` must be non-null.
  */
-NemoFlowStatus nemo_flow_tool_request_intercepts(const char *name,
-                                                 const char *args_json,
-                                                 char **out);
+NemoFlowStatus nemo_flow_tool_call(const char *name,
+                                   const char *args_json,
+                                   const struct FfiScopeHandle *parent,
+                                   uint32_t attributes,
+                                   const char *data_json,
+                                   const char *metadata_json,
+                                   const char *tool_call_id,
+                                   struct FfiToolHandle **out);
 
 /**
- * Run the registered tool conditional execution guardrail chain.
- *
- * Returns `NemoFlowStatus::Ok` if all guardrails pass, or
- * `NemoFlowStatus::GuardrailRejected` if blocked.
+ * End a tool call, running post-call guardrails and intercepts.
  *
  * # Parameters
- * - `name`: Tool name (null-terminated C string).
+ * - `handle`: The tool handle from `nemo_flow_tool_call`.
+ * - `result_json`: Tool result as a JSON C string.
+ * - `data_json`: Optional JSON data, or null.
+ * - `metadata_json`: Optional JSON metadata, or null.
+ *
+ * # Safety
+ * `handle` and `result_json` must be valid, non-null pointers.
+ */
+NemoFlowStatus nemo_flow_tool_call_end(const struct FfiToolHandle *handle,
+                                       const char *result_json,
+                                       const char *data_json,
+                                       const char *metadata_json);
+
+/**
+ * Execute a tool call end-to-end: run conditional-execution guardrails (on raw
+ * args), then request intercepts, sanitize-request guardrails, execution
+ * intercepts, the callback, and sanitize-response
+ * guardrails. On rejection, only a standalone Mark event is emitted (no
+ * Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
+ * thread until completion.
+ *
+ * # Parameters
+ * - `name`: Null-terminated tool name.
  * - `args_json`: Tool arguments as a JSON C string.
+ * - `func`: C callback that performs the actual tool execution.
+ * - `func_user_data`: Opaque pointer passed to `func`.
+ * - `func_free`: Optional destructor for `func_user_data`.
+ * - `parent`: Optional parent scope handle, or null.
+ * - `attributes`: Bitfield of tool attributes.
+ * - `data_json`: Optional JSON data, or null.
+ * - `metadata_json`: Optional JSON metadata, or null.
+ * - `out`: On success, receives the result as a JSON C string. Caller must free
+ *   with `nemo_flow_string_free`.
  *
  * # Safety
- * All pointers must be valid.
+ * `name`, `args_json`, and `out` must be valid, non-null pointers.
  */
-NemoFlowStatus nemo_flow_tool_conditional_execution(const char *name, const char *args_json);
+NemoFlowStatus nemo_flow_tool_call_execute(const char *name,
+                                           const char *args_json,
+                                           NemoFlowToolExecCb func,
+                                           void *func_user_data,
+                                           NemoFlowFreeFn func_free,
+                                           const struct FfiScopeHandle *parent,
+                                           uint32_t attributes,
+                                           const char *data_json,
+                                           const char *metadata_json,
+                                           char **out);
 
 /**
- * Run the registered LLM request intercept chain on the given request.
+ * Register a tool conditional execution guardrail. The callback decides whether
+ * a tool call should proceed. Returns an error message to reject, or null to allow.
  *
  * # Parameters
- * - `native_json`: The request payload as a JSON C string representing an
- *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
- * - `out`: On success, receives the transformed JSON string (caller must free
- *   with `nemo_flow_string_free`). The output is a serialized `LLMRequest`.
+ * - `name`: Unique guardrail name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `cb`: Conditional callback.
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data`.
+ *
+ * The callback is fallible. To signal an internal callback failure instead of
+ * allow/reject, call [`crate::error::nemo_flow_set_last_error_message`] from C
+ * and return null.
  *
  * # Safety
- * All pointers must be valid. `out` must be non-null.
+ * `name` must be a valid C string. `cb` must be a valid function pointer.
  */
-NemoFlowStatus nemo_flow_llm_request_intercepts(const char *name,
-                                                const char *native_json,
-                                                char **out);
+NemoFlowStatus nemo_flow_register_tool_conditional_execution_guardrail(const char *name,
+                                                                       int32_t priority,
+                                                                       NemoFlowToolConditionalCb cb,
+                                                                       void *user_data,
+                                                                       NemoFlowFreeFn free_fn);
 
 /**
- * Run the registered LLM conditional execution guardrail chain.
- *
- * Returns `NemoFlowStatus::Ok` if all guardrails pass, or
- * `NemoFlowStatus::GuardrailRejected` if blocked.
- *
- * # Parameters
- * - `native_json`: The request payload as a JSON C string representing an
- *   `LLMRequest` (`{"headers": {...}, "content": {...}}`).
+ * Deregister a tool conditional execution guardrail by name.
  *
  * # Safety
- * All pointers must be valid.
+ * `name` must be a valid C string.
  */
-NemoFlowStatus nemo_flow_llm_conditional_execution(const char *native_json);
+NemoFlowStatus nemo_flow_deregister_tool_conditional_execution_guardrail(const char *name);
+
+/**
+ * Register a tool execution intercept following the middleware chain pattern.
+ * The callback receives `(args, next_fn, next_ctx)` — call
+ * `next_fn(args, next_ctx)` to invoke the next intercept or the original
+ * tool function, or skip calling it to short-circuit.
+ *
+ * # Parameters
+ * - `name`: Unique intercept name.
+ * - `priority`: Execution priority (lower runs first).
+ * - `exec_cb`: Middleware callback receiving args and a next function.
+ * - `exec_user_data`: Opaque pointer for the execution callback.
+ * - `exec_free`: Optional destructor for `exec_user_data`.
+ *
+ * # Safety
+ * `name` must be a valid C string. Callback pointers must be valid.
+ */
+NemoFlowStatus nemo_flow_register_tool_execution_intercept(const char *name,
+                                                           int32_t priority,
+                                                           NemoFlowToolExecInterceptCb exec_cb,
+                                                           void *exec_user_data,
+                                                           NemoFlowFreeFn exec_free);
+
+/**
+ * Deregister a tool execution intercept by name.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoFlowStatus nemo_flow_deregister_tool_execution_intercept(const char *name);
 
 /**
  * Free a C string previously returned by any `nemo_flow_*` accessor function.

@@ -4,12 +4,18 @@
 use super::*;
 use crate::storage::memory::InMemoryBackend;
 use crate::storage::traits::{StorageBackend, StorageBackendDyn};
+use crate::trie::accumulator::AccumulatorState;
+use crate::trie::serialization::TrieEnvelope;
 use crate::types::cache::HotCache;
 use crate::types::metadata::MetadataEnvelope;
 use crate::types::plan::{ExecutionPlan, ParallelGroup};
+use crate::types::records::RunRecord;
 use nemo_flow::types::event::Event;
 use nemo_flow::types::scope::ScopeType;
 use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use uuid::{Uuid, Version};
 
@@ -136,6 +142,143 @@ fn make_test_plan(agent_id: &str) -> ExecutionPlan {
     }
 }
 
+struct StoreFailBackend;
+
+impl StorageBackendDyn for StoreFailBackend {
+    fn store_run_dyn<'a>(
+        &'a self,
+        _record: &'a RunRecord,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + 'a>> {
+        Box::pin(async { Err(crate::error::AdaptiveError::Storage("store failed".into())) })
+    }
+
+    fn load_plan_dyn<'a>(
+        &'a self,
+        _agent_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<Option<ExecutionPlan>>> + Send + 'a>>
+    {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn list_runs_dyn<'a>(
+        &'a self,
+        _agent_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<Vec<RunRecord>>> + Send + 'a>> {
+        Box::pin(async { Ok(vec![]) })
+    }
+
+    fn store_trie<'a>(
+        &'a self,
+        _agent_id: &'a str,
+        _envelope: &'a TrieEnvelope,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn load_trie<'a>(
+        &'a self,
+        _agent_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<Option<TrieEnvelope>>> + Send + 'a>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn store_accumulators<'a>(
+        &'a self,
+        _agent_id: &'a str,
+        _state: &'a AccumulatorState,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn load_accumulators<'a>(
+        &'a self,
+        _agent_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<Option<AccumulatorState>>> + Send + 'a>>
+    {
+        Box::pin(async { Ok(None) })
+    }
+}
+
+struct LoadPlanFailBackend {
+    inner: InMemoryBackend,
+}
+
+impl StorageBackendDyn for LoadPlanFailBackend {
+    fn store_run_dyn<'a>(
+        &'a self,
+        record: &'a RunRecord,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + 'a>> {
+        Box::pin(self.inner.store_run(record))
+    }
+
+    fn load_plan_dyn<'a>(
+        &'a self,
+        _agent_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<Option<ExecutionPlan>>> + Send + 'a>>
+    {
+        Box::pin(async {
+            Err(crate::error::AdaptiveError::Storage(
+                "load_plan failed".into(),
+            ))
+        })
+    }
+
+    fn list_runs_dyn<'a>(
+        &'a self,
+        agent_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<Vec<RunRecord>>> + Send + 'a>> {
+        Box::pin(self.inner.list_runs(agent_id))
+    }
+
+    fn store_trie<'a>(
+        &'a self,
+        agent_id: &'a str,
+        envelope: &'a TrieEnvelope,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + 'a>> {
+        self.inner.store_trie(agent_id, envelope)
+    }
+
+    fn load_trie<'a>(
+        &'a self,
+        agent_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<Option<TrieEnvelope>>> + Send + 'a>> {
+        self.inner.load_trie(agent_id)
+    }
+
+    fn store_accumulators<'a>(
+        &'a self,
+        agent_id: &'a str,
+        state: &'a AccumulatorState,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + 'a>> {
+        self.inner.store_accumulators(agent_id, state)
+    }
+
+    fn load_accumulators<'a>(
+        &'a self,
+        agent_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<Option<AccumulatorState>>> + Send + 'a>>
+    {
+        self.inner.load_accumulators(agent_id)
+    }
+}
+
+struct FailingLearner;
+
+impl Learner for FailingLearner {
+    fn process_run<'a>(
+        &'a self,
+        _run: &'a RunRecord,
+        _backend: &'a dyn StorageBackendDyn,
+        _hot_cache: &'a Arc<RwLock<HotCache>>,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + 'a>> {
+        Box::pin(async {
+            Err(crate::error::AdaptiveError::Internal(
+                "learner failed".to_string(),
+            ))
+        })
+    }
+}
+
 // -----------------------------------------------------------------------
 // RunAccumulator tests
 // -----------------------------------------------------------------------
@@ -236,6 +379,66 @@ fn test_accumulator_collects_calls() {
         run.calls[1].ended_at.is_some(),
         "llm call should have ended_at"
     );
+}
+
+#[test]
+fn test_accumulator_tracks_non_agent_scope_roots_and_cleans_them_up() {
+    let mut acc = RunAccumulator::new("agent-1".to_string());
+
+    let agent_start = make_agent_start();
+    let root_uuid = agent_start.uuid();
+    acc.process_event(&agent_start);
+
+    let function_uuid = Uuid::now_v7();
+    let function_start = make_event(
+        EventType::Start,
+        Some(ScopeType::Function),
+        Some("helper"),
+        function_uuid,
+        Some(root_uuid),
+    );
+    acc.process_event(&function_start);
+    assert_eq!(acc.event_roots.get(&function_uuid), Some(&root_uuid));
+
+    let function_end = make_event(
+        EventType::End,
+        Some(ScopeType::Function),
+        Some("helper"),
+        function_uuid,
+        Some(root_uuid),
+    );
+    acc.process_event(&function_end);
+    assert!(!acc.event_roots.contains_key(&function_uuid));
+}
+
+#[test]
+fn test_accumulator_llm_end_clears_event_root_mapping() {
+    let mut acc = RunAccumulator::new("agent-1".to_string());
+
+    let agent_start = make_agent_start();
+    let root_uuid = agent_start.uuid();
+    acc.process_event(&agent_start);
+
+    let llm_uuid = Uuid::now_v7();
+    let llm_start = make_event(
+        EventType::Start,
+        Some(ScopeType::Llm),
+        Some("gpt-4"),
+        llm_uuid,
+        Some(root_uuid),
+    );
+    acc.process_event(&llm_start);
+    assert_eq!(acc.event_roots.get(&llm_uuid), Some(&root_uuid));
+
+    let llm_end = make_event(
+        EventType::End,
+        Some(ScopeType::Llm),
+        Some("gpt-4"),
+        llm_uuid,
+        Some(root_uuid),
+    );
+    acc.process_event(&llm_end);
+    assert!(!acc.event_roots.contains_key(&llm_uuid));
 }
 
 #[test]
@@ -478,6 +681,82 @@ async fn test_drain_task_updates_hot_cache() {
     let cached_plan = guard.plan.as_ref().unwrap();
     assert_eq!(cached_plan.agent_id, "agent-1");
     assert_eq!(cached_plan.parallel_groups.len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_drain_task_continues_when_store_run_fails() {
+    let backend: Arc<dyn StorageBackendDyn + Send + Sync> = Arc::new(StoreFailBackend);
+    let hot_cache = Arc::new(RwLock::new(HotCache {
+        plan: None,
+        trie: None,
+        agent_hints_default: None,
+    }));
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let handle = tokio::spawn(drain_task(
+        rx,
+        backend,
+        hot_cache.clone(),
+        "agent-drain".to_string(),
+        vec![],
+    ));
+
+    let start = make_agent_start();
+    let end = make_agent_end(start.uuid());
+    tx.send(start).unwrap();
+    tx.send(end).unwrap();
+    drop(tx);
+
+    tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("drain task should exit")
+        .unwrap();
+    assert!(hot_cache.read().unwrap().plan.is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_drain_task_continues_when_learner_and_plan_refresh_fail() {
+    let backend_impl = Arc::new(LoadPlanFailBackend {
+        inner: InMemoryBackend::new(),
+    });
+    let backend: Arc<dyn StorageBackendDyn + Send + Sync> = backend_impl.clone();
+    let hot_cache = Arc::new(RwLock::new(HotCache {
+        plan: None,
+        trie: None,
+        agent_hints_default: None,
+    }));
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let learners: Vec<Box<dyn Learner>> = vec![Box::new(FailingLearner)];
+    let handle = tokio::spawn(drain_task(
+        rx,
+        backend,
+        hot_cache.clone(),
+        "agent-drain".to_string(),
+        learners,
+    ));
+
+    let start = make_agent_start();
+    let end = make_agent_end(start.uuid());
+    tx.send(start).unwrap();
+    tx.send(end).unwrap();
+    drop(tx);
+
+    tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("drain task should exit")
+        .unwrap();
+
+    assert_eq!(
+        backend_impl
+            .inner
+            .list_runs("agent-drain")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(hot_cache.read().unwrap().plan.is_none());
 }
 
 // -----------------------------------------------------------------------
