@@ -37,6 +37,8 @@ pub mod py_plugin;
 mod py_storage;
 #[doc(hidden)]
 pub mod py_types;
+#[cfg(test)]
+mod test_support;
 
 /// The `_native` PyO3 module entry point. Registers all types and functions.
 #[pymodule]

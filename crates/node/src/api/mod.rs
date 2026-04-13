@@ -1712,10 +1712,6 @@ pub fn llm_stream_call_execute(
     )
 }
 
-#[cfg(test)]
-#[path = "../../tests/coverage/api_coverage_tests.rs"]
-mod coverage_tests;
-
 // ---------------------------------------------------------------------------
 // Tool guardrail registrations
 // ---------------------------------------------------------------------------

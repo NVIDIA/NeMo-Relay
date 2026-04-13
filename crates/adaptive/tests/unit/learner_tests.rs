@@ -97,6 +97,52 @@ fn compute_default_hints_maps_prediction_metrics_to_agent_hints() {
     assert_eq!(hints.total_requests, 3);
 }
 
+#[test]
+fn compute_default_hints_returns_none_without_any_index_prediction() {
+    let trie_root = PredictionTrieNode::new("root");
+    assert!(compute_default_hints(&trie_root, 5).is_none());
+}
+
+#[test]
+fn compute_default_hints_uses_zero_latency_when_prediction_lacks_sensitivity() {
+    let trie_root = PredictionTrieNode {
+        name: "root".to_string(),
+        children: HashMap::new(),
+        predictions_by_call_index: HashMap::new(),
+        predictions_any_index: Some(LlmCallPrediction {
+            remaining_calls: PredictionMetrics {
+                sample_count: 1,
+                mean: 0.0,
+                p50: 0.0,
+                p90: 0.0,
+                p95: 0.0,
+            },
+            interarrival_ms: PredictionMetrics {
+                sample_count: 1,
+                mean: 12.0,
+                p50: 12.0,
+                p90: 12.0,
+                p95: 12.0,
+            },
+            output_tokens: PredictionMetrics {
+                sample_count: 1,
+                mean: 42.0,
+                p50: 42.0,
+                p90: 42.0,
+                p95: 42.0,
+            },
+            latency_sensitivity: None,
+        }),
+    };
+
+    let hints = compute_default_hints(&trie_root, 5).unwrap();
+    assert_eq!(hints.osl, 42);
+    assert_eq!(hints.iat, 12);
+    assert_eq!(hints.priority, 4);
+    assert_eq!(hints.latency_sensitivity, 0.0);
+    assert_eq!(hints.total_requests, 1);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn latency_learner_persists_trie_accumulators_and_hot_cache() {
     let backend = InMemoryBackend::new();
@@ -120,4 +166,37 @@ async fn latency_learner_persists_trie_accumulators_and_hot_cache() {
     assert!(accumulators.is_some());
     assert!(cache.trie.is_some());
     assert!(cache.agent_hints_default.is_some());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn latency_learner_reports_hot_cache_lock_poisoning() {
+    let backend = InMemoryBackend::new();
+    let learner = LatencySensitivityLearner::new("agent-c", SensitivityConfig::default());
+    let hot_cache = Arc::new(RwLock::new(HotCache {
+        plan: None,
+        trie: None,
+        agent_hints_default: None,
+    }));
+    let poisoned = hot_cache.clone();
+    let _ = std::panic::catch_unwind(move || {
+        let _guard = poisoned.write().unwrap();
+        panic!("poison hot cache");
+    });
+
+    let err = learner
+        .process_run(&sample_run("agent-c"), &backend, &hot_cache)
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(err, crate::error::AdaptiveError::Internal(message) if message.contains("hot cache lock poisoned"))
+    );
+    assert!(backend.load_trie("agent-c").await.unwrap().is_some());
+    assert!(
+        backend
+            .load_accumulators("agent-c")
+            .await
+            .unwrap()
+            .is_some()
+    );
 }

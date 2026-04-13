@@ -7,7 +7,7 @@ use pyo3::types::PyModule;
 
 #[test]
 fn set_latency_sensitivity_rejects_zero_and_registers_binding() {
-    Python::initialize();
+    let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
         let module = PyModule::new(py, "_adaptive_cov").unwrap();
         register(&module).unwrap();

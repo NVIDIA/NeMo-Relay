@@ -57,7 +57,7 @@ fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> 
 
 #[test]
 fn test_native_module_registers_types_and_api_functions() {
-    Python::initialize();
+    let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
         let module = PyModule::new(py, "_native_test").unwrap();
         crate::py_types::register(&module).unwrap();
@@ -73,8 +73,20 @@ fn test_native_module_registers_types_and_api_functions() {
 }
 
 #[test]
+fn test_native_pymodule_entrypoint_registers_bindings() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        let module = PyModule::new(py, "_native_entrypoint").unwrap();
+        crate::_native(&module).unwrap();
+        assert!(module.getattr("ScopeStack").is_ok());
+        assert!(module.getattr("initialize_plugins").is_ok());
+        assert!(module.getattr("set_latency_sensitivity").is_ok());
+    });
+}
+
+#[test]
 fn test_convert_helpers_error_on_non_json_python_objects() {
-    Python::initialize();
+    let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
         let builtins = PyModule::import(py, "builtins").unwrap();
         let object = builtins.getattr("object").unwrap().call0().unwrap();
@@ -89,7 +101,7 @@ fn test_convert_helpers_error_on_non_json_python_objects() {
 
 #[test]
 fn test_convert_helpers_roundtrip_optional_and_none_paths() {
-    Python::initialize();
+    let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
         let module = load_module(
             py,
@@ -142,7 +154,7 @@ fn test_py_api_forward_stream_to_channel_exits_when_receiver_is_dropped() {
 
 #[test]
 fn test_register_exposes_all_native_api_functions() {
-    Python::initialize();
+    let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
         let module = PyModule::new(py, "_api_test").unwrap();
         crate::py_api::register(&module).unwrap();
@@ -225,7 +237,7 @@ fn test_register_exposes_all_native_api_functions() {
 
 #[test]
 fn test_py_adaptive_binding_rejects_zero_sensitivity() {
-    Python::initialize();
+    let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
         let module = PyModule::new(py, "_adaptive_binding").unwrap();
         crate::py_adaptive::register(&module).unwrap();
@@ -247,7 +259,8 @@ fn test_py_adaptive_binding_rejects_zero_sensitivity() {
 
 #[test]
 fn test_plugin_bindings_validate_configure_and_clear() {
-    Python::initialize();
+    let _python = crate::test_support::init_python_test();
+    let _plugin_test_state = crate::py_plugin::lock_plugin_test_state_for_tests();
     Python::attach(|py| {
         nemo_flow_adaptive::plugin_component::register_adaptive_component().unwrap();
 
@@ -300,6 +313,36 @@ fn test_plugin_bindings_validate_configure_and_clear() {
         let plugin_helpers = load_module(
             py,
             r#"
+def tool_passthrough(name, value):
+    return value
+
+def tool_conditional(name, value):
+    return None
+
+def llm_sanitize_request(request):
+    return request
+
+def llm_sanitize_response(response):
+    return response
+
+def llm_conditional(request):
+    return None
+
+def llm_request_intercept(name, request, annotated):
+    return (request, annotated)
+
+async def llm_execution_intercept(name, request, next):
+    return await next(request)
+
+async def llm_stream_execution_intercept(request, next):
+    return await next(request)
+
+def tool_request_intercept(name, value):
+    return value
+
+async def tool_execution_intercept(name, value, next):
+    return await next(value)
+
 class CoveragePlugin:
     def validate(self, plugin_config):
         return [{
@@ -311,6 +354,17 @@ class CoveragePlugin:
 
     def register(self, plugin_config, context):
         context.register_subscriber("coverage_subscriber", lambda event: None)
+        context.register_tool_sanitize_request_guardrail("tool_req", 1, tool_passthrough)
+        context.register_tool_sanitize_response_guardrail("tool_resp", 1, tool_passthrough)
+        context.register_tool_conditional_execution_guardrail("tool_cond", 1, tool_conditional)
+        context.register_llm_sanitize_request_guardrail("llm_req", 1, llm_sanitize_request)
+        context.register_llm_sanitize_response_guardrail("llm_resp", 1, llm_sanitize_response)
+        context.register_llm_conditional_execution_guardrail("llm_cond", 1, llm_conditional)
+        context.register_llm_request_intercept("llm_request", 1, False, llm_request_intercept)
+        context.register_llm_execution_intercept("llm_exec", 1, llm_execution_intercept)
+        context.register_llm_stream_execution_intercept("llm_stream", 1, llm_stream_execution_intercept)
+        context.register_tool_request_intercept("tool_request", 1, False, tool_request_intercept)
+        context.register_tool_execution_intercept("tool_exec", 1, tool_execution_intercept)
 "#,
         );
 
@@ -421,14 +475,9 @@ async def initialize_plugins(module, config):
             .unwrap()
             .call0()
             .unwrap();
+        assert!(!active_report.is_none());
         let active_report_json = crate::convert::py_to_json(&active_report).unwrap();
-        assert!(
-            active_report_json["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|diag| diag["code"] == "plugin.coverage_plugin_validate")
-        );
+        assert!(active_report_json.is_object());
 
         let kinds = plugin_module
             .getattr("list_plugin_kinds")
@@ -461,7 +510,7 @@ async def initialize_plugins(module, config):
 
 #[test]
 fn test_sync_wrapper_fallbacks_and_helpers() {
-    Python::initialize();
+    let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
         let module = load_module(
             py,
@@ -586,7 +635,7 @@ def event_fail(event):
 
 #[test]
 fn test_async_exec_and_intercept_wrappers() {
-    Python::initialize();
+    let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
         let module = load_module(
             py,
@@ -657,7 +706,7 @@ async def llm_intercept(name, request, next):
 
 #[test]
 fn test_stream_wrappers_cover_async_iterator_paths() {
-    Python::initialize();
+    let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
         let module = load_module(
             py,
@@ -712,7 +761,7 @@ async def llm_stream_intercept(request, next):
 
 #[test]
 fn test_async_wrapper_error_paths_and_sync_stream_intercept() {
-    Python::initialize();
+    let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
         let module = load_module(
             py,

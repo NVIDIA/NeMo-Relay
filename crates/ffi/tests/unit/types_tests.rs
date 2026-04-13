@@ -5,6 +5,7 @@ use super::*;
 use std::ffi::{CStr, CString};
 use std::sync::Arc;
 
+use nemo_flow::context::scope_stack::create_scope_stack;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -204,6 +205,107 @@ fn test_llm_request_null_inputs_event_null_guards_and_free_nulls() {
         nemo_flow_otel_subscriber_free(std::ptr::null_mut());
         nemo_flow_openinference_subscriber_free(std::ptr::null_mut());
     }
+}
+
+#[test]
+fn test_valid_free_functions_and_none_backed_accessors() {
+    let scope_ptr = Box::into_raw(Box::new(FfiScopeHandle(ScopeHandle::new(
+        "scope-none".into(),
+        ScopeType::Function,
+        ScopeAttributes::empty(),
+        None,
+        None,
+        None,
+    ))));
+    assert_eq!(
+        take_string(unsafe { nemo_flow_scope_handle_parent_uuid(scope_ptr) }),
+        None
+    );
+    assert_eq!(
+        take_string(unsafe { nemo_flow_scope_handle_data(scope_ptr) }),
+        None
+    );
+    assert_eq!(
+        take_string(unsafe { nemo_flow_scope_handle_metadata(scope_ptr) }),
+        None
+    );
+    unsafe { nemo_flow_scope_handle_free(scope_ptr) };
+
+    let tool_ptr = Box::into_raw(Box::new(FfiToolHandle(ToolHandle::new(
+        "tool-none".into(),
+        ToolAttributes::empty(),
+        None,
+        None,
+        None,
+    ))));
+    assert_eq!(
+        take_string(unsafe { nemo_flow_tool_handle_parent_uuid(tool_ptr) }),
+        None
+    );
+    unsafe { nemo_flow_tool_handle_free(tool_ptr) };
+
+    let llm_ptr = Box::into_raw(Box::new(FfiLLMHandle(LLMHandle::new(
+        "llm-none".into(),
+        LLMAttributes::empty(),
+        None,
+        None,
+        None,
+    ))));
+    assert_eq!(
+        take_string(unsafe { nemo_flow_llm_handle_parent_uuid(llm_ptr) }),
+        None
+    );
+    unsafe { nemo_flow_llm_handle_free(llm_ptr) };
+
+    let request_ptr = Box::into_raw(Box::new(FfiLLMRequest(LLMRequest {
+        headers: serde_json::Map::new(),
+        content: json!(null),
+    })));
+    unsafe { nemo_flow_llm_request_free(request_ptr) };
+
+    let event_ptr = Box::into_raw(Box::new(FfiEvent(Event::mark(
+        None,
+        Uuid::now_v7(),
+        "free-event",
+        None,
+        None,
+    ))));
+    unsafe { nemo_flow_event_free(event_ptr) };
+
+    let stack_ptr = Box::into_raw(Box::new(FfiScopeStack(create_scope_stack())));
+    unsafe { nemo_flow_scope_stack_free(stack_ptr) };
+
+    let exporter_ptr = Box::into_raw(Box::new(FfiAtifExporter(
+        nemo_flow::atif::AtifExporter::new(
+            "session".into(),
+            nemo_flow::atif::AtifAgentInfo {
+                name: "ffi-agent".into(),
+                version: "1.0.0".into(),
+                model_name: None,
+                tool_definitions: None,
+                extra: None,
+            },
+        ),
+    )));
+    unsafe { nemo_flow_atif_exporter_free(exporter_ptr) };
+}
+
+#[test]
+fn test_llm_request_new_invalid_inputs_fall_back_to_defaults() {
+    let invalid_headers = CString::new(r#"["not-an-object"]"#).unwrap();
+    let invalid_content = CString::new("{").unwrap();
+    let request_ptr =
+        unsafe { nemo_flow_llm_request_new(invalid_headers.as_ptr(), invalid_content.as_ptr()) };
+    assert!(!request_ptr.is_null());
+    assert_eq!(
+        take_string(unsafe { nemo_flow_llm_request_headers(request_ptr) }),
+        Some("{}".into())
+    );
+    assert_eq!(
+        take_string(unsafe { nemo_flow_llm_request_content(request_ptr) }),
+        Some("null".into())
+    );
+    unsafe { nemo_flow_llm_request_free(request_ptr) };
 }
 
 #[test]
@@ -447,4 +549,40 @@ fn test_annotated_event_accessors_and_codec_handles() {
         nemo_flow_codec_free(anthropic);
         nemo_flow_codec_free(std::ptr::null_mut());
     }
+}
+
+#[test]
+fn test_event_accessor_none_and_null_pointer_paths_for_annotations() {
+    assert!(unsafe { nemo_flow_event_annotated_request(std::ptr::null()) }.is_null());
+    assert!(unsafe { nemo_flow_event_annotated_response(std::ptr::null()) }.is_null());
+
+    let plain_start = FfiEvent(Event::llm_start(
+        None,
+        Uuid::now_v7(),
+        "plain-start",
+        None,
+        None,
+        LLMAttributes::empty(),
+        None,
+        None,
+        None,
+    ));
+    assert_eq!(
+        take_string(unsafe { nemo_flow_event_parent_uuid(&plain_start) }),
+        None
+    );
+    assert!(unsafe { nemo_flow_event_annotated_request(&plain_start) }.is_null());
+
+    let plain_end = FfiEvent(Event::llm_end(
+        None,
+        Uuid::now_v7(),
+        "plain-end",
+        None,
+        None,
+        LLMAttributes::empty(),
+        None,
+        None,
+        None,
+    ));
+    assert!(unsafe { nemo_flow_event_annotated_response(&plain_end) }.is_null());
 }

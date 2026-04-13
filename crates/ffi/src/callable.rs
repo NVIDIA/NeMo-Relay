@@ -934,3 +934,7 @@ unsafe fn nemo_flow_string_free_internal(ptr: *mut c_char) {
 #[cfg(test)]
 #[path = "../tests/unit/callable_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/callable_private_tests.rs"]
+mod private_tests;

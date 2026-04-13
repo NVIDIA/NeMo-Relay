@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use nemo_flow::context::scope_stack::{create_scope_stack, set_thread_scope_stack};
 
 #[test]
 fn test_latency_sensitivity_pointer_is_valid_json_pointer() {
@@ -55,5 +56,39 @@ fn test_set_latency_sensitivity_read_roundtrip() {
     // Clean up
     let stack_handle = current_scope_stack();
     let mut stack = stack_handle.write().unwrap();
+    stack.top_mut().metadata = None;
+}
+
+#[test]
+fn test_helpers_return_defaults_when_scope_stack_lock_is_poisoned() {
+    let poisoned = create_scope_stack();
+    let poisoned_for_panic = poisoned.clone();
+    let _ = std::panic::catch_unwind(move || {
+        let _guard = poisoned_for_panic.write().unwrap();
+        panic!("poison scope stack");
+    });
+
+    set_thread_scope_stack(poisoned);
+    assert!(extract_scope_path().is_empty());
+    assert_eq!(read_manual_latency_sensitivity(), None);
+    assert_eq!(resolve_agent_id(), None);
+
+    set_thread_scope_stack(create_scope_stack());
+}
+
+#[test]
+fn test_set_latency_sensitivity_ignores_non_object_metadata() {
+    let stack_handle = current_scope_stack();
+    let mut stack = stack_handle.write().unwrap();
+    stack.top_mut().metadata = Some(serde_json::json!("metadata"));
+    drop(stack);
+
+    set_latency_sensitivity(9).unwrap();
+
+    let mut stack = stack_handle.write().unwrap();
+    assert_eq!(
+        stack.top_mut().metadata,
+        Some(serde_json::json!("metadata"))
+    );
     stack.top_mut().metadata = None;
 }

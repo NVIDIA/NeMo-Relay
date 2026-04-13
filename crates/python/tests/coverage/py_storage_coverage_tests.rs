@@ -103,7 +103,7 @@ fn sample_accumulators() -> AccumulatorState {
 
 #[test]
 fn test_py_storage_backend_roundtrips_all_supported_methods() {
-    Python::initialize();
+    let _python = crate::test_support::init_python_test();
 
     let agent_id = "agent-storage";
     let plan = sample_plan(agent_id);
@@ -243,7 +243,7 @@ class Backend:
 
 #[test]
 fn test_py_storage_backend_covers_none_and_error_paths() {
-    Python::initialize();
+    let _python = crate::test_support::init_python_test();
 
     let trie = sample_trie("agent-storage");
 
@@ -371,7 +371,7 @@ class FailingBackend:
 
 #[test]
 fn test_py_storage_backend_reuses_cached_task_locals_in_background_tasks() {
-    Python::initialize();
+    let _python = crate::test_support::init_python_test();
 
     let run = sample_run("agent-storage");
 

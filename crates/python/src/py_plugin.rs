@@ -6,6 +6,8 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+#[cfg(test)]
+use std::{collections::HashSet, sync::LazyLock};
 
 use pyo3::prelude::*;
 use serde_json::{Map, Value as Json};
@@ -38,6 +40,125 @@ use crate::py_callable::{
     wrap_py_tool_conditional_fn, wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn,
     wrap_py_tool_request_intercept_fn,
 };
+
+#[cfg(test)]
+static FORCE_VALIDATE_CONFIG_TO_PY_ERROR: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+#[cfg(test)]
+static FORCE_PLUGIN_CONTEXT_NEW_ERROR: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+#[cfg(test)]
+static PLUGIN_TEST_STATE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+#[cfg(test)]
+enum ForcedPluginTestFlagKind {
+    ValidateConfigToPyError,
+    PluginContextNewError,
+}
+
+#[cfg(test)]
+pub(crate) struct ForcedPluginTestFlagGuard {
+    kind: ForcedPluginTestFlagKind,
+    plugin_kind: String,
+}
+
+#[cfg(test)]
+impl Drop for ForcedPluginTestFlagGuard {
+    fn drop(&mut self) {
+        match self.kind {
+            ForcedPluginTestFlagKind::ValidateConfigToPyError => {
+                if let Ok(mut forced_kinds) = FORCE_VALIDATE_CONFIG_TO_PY_ERROR.lock() {
+                    forced_kinds.remove(&self.plugin_kind);
+                }
+            }
+            ForcedPluginTestFlagKind::PluginContextNewError => {
+                if let Ok(mut forced_kinds) = FORCE_PLUGIN_CONTEXT_NEW_ERROR.lock() {
+                    forced_kinds.remove(&self.plugin_kind);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn force_validate_config_to_py_error_for_tests(
+    plugin_kind: &str,
+) -> ForcedPluginTestFlagGuard {
+    FORCE_VALIDATE_CONFIG_TO_PY_ERROR
+        .lock()
+        .expect("forced validate hook mutex poisoned")
+        .insert(plugin_kind.to_string());
+    ForcedPluginTestFlagGuard {
+        kind: ForcedPluginTestFlagKind::ValidateConfigToPyError,
+        plugin_kind: plugin_kind.to_string(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn force_plugin_context_new_error_for_tests(
+    plugin_kind: &str,
+) -> ForcedPluginTestFlagGuard {
+    FORCE_PLUGIN_CONTEXT_NEW_ERROR
+        .lock()
+        .expect("forced plugin context hook mutex poisoned")
+        .insert(plugin_kind.to_string());
+    ForcedPluginTestFlagGuard {
+        kind: ForcedPluginTestFlagKind::PluginContextNewError,
+        plugin_kind: plugin_kind.to_string(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn lock_plugin_test_state_for_tests() -> std::sync::MutexGuard<'static, ()> {
+    PLUGIN_TEST_STATE_LOCK
+        .lock()
+        .expect("plugin test state lock poisoned")
+}
+
+fn plugin_config_to_py(
+    py: Python<'_>,
+    _plugin_kind: &str,
+    plugin_config: &Map<String, Json>,
+) -> PyResult<Py<PyAny>> {
+    #[cfg(test)]
+    if FORCE_VALIDATE_CONFIG_TO_PY_ERROR
+        .lock()
+        .map(|forced_kinds| forced_kinds.contains(_plugin_kind))
+        .unwrap_or(false)
+    {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "forced plugin config conversion failure",
+        ));
+    }
+
+    json_to_py(py, &Json::Object(plugin_config.clone()))
+}
+
+fn new_py_plugin_context(
+    py: Python<'_>,
+    _plugin_kind: &str,
+    registrations: Arc<Mutex<Vec<PluginRegistration>>>,
+    namespace_prefix: String,
+) -> PyResult<Py<PyPluginContext>> {
+    #[cfg(test)]
+    if FORCE_PLUGIN_CONTEXT_NEW_ERROR
+        .lock()
+        .map(|forced_kinds| forced_kinds.contains(_plugin_kind))
+        .unwrap_or(false)
+    {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "forced plugin context allocation failure",
+        ));
+    }
+
+    Py::new(
+        py,
+        PyPluginContext {
+            registrations,
+            namespace_prefix,
+        },
+    )
+}
 
 #[pyclass(name = "PluginContext")]
 pub struct PyPluginContext {
@@ -508,7 +629,7 @@ impl Plugin for PyPlugin {
                 return vec![];
             };
 
-            let plugin_config_py = match json_to_py(py, &Json::Object(plugin_config.clone())) {
+            let plugin_config_py = match plugin_config_to_py(py, &self.plugin_kind, plugin_config) {
                 Ok(value) => value,
                 Err(err) => {
                     return vec![plugin_callback_diag(
@@ -574,12 +695,11 @@ impl Plugin for PyPlugin {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {
             let registrations = Python::attach(|py| -> PyResult<Vec<PluginRegistration>> {
-                let py_ctx = Py::new(
+                let py_ctx = new_py_plugin_context(
                     py,
-                    PyPluginContext {
-                        registrations: Arc::new(Mutex::new(vec![])),
-                        namespace_prefix,
-                    },
+                    &self.plugin_kind,
+                    Arc::new(Mutex::new(vec![])),
+                    namespace_prefix,
                 )?;
                 let plugin_config_py = json_to_py(py, &Json::Object(plugin_config.clone()))?;
                 self.plugin.call_method1(

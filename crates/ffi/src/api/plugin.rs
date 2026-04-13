@@ -1,0 +1,692 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+use super::*;
+
+struct FfiHostedPluginUserData {
+    ptr: *mut libc::c_void,
+    free_fn: NemoFlowFreeFn,
+}
+
+unsafe impl Send for FfiHostedPluginUserData {}
+unsafe impl Sync for FfiHostedPluginUserData {}
+
+impl Drop for FfiHostedPluginUserData {
+    fn drop(&mut self) {
+        if let Some(free_fn) = self.free_fn {
+            unsafe { free_fn(self.ptr) };
+        }
+    }
+}
+
+struct FfiHostedPluginAdapter {
+    plugin_kind: String,
+    validate_cb: Option<NemoFlowPluginValidateCb>,
+    register_cb: NemoFlowPluginRegisterCb,
+    user_data: Arc<FfiHostedPluginUserData>,
+}
+
+impl Plugin for FfiHostedPluginAdapter {
+    fn plugin_kind(&self) -> &str {
+        &self.plugin_kind
+    }
+
+    fn validate(
+        &self,
+        plugin_config: &serde_json::Map<String, serde_json::Value>,
+    ) -> Vec<ConfigDiagnostic> {
+        let Some(validate_cb) = self.validate_cb else {
+            return vec![];
+        };
+
+        clear_last_error();
+        let plugin_config_json =
+            json_to_c_string(&serde_json::Value::Object(plugin_config.clone()));
+        let result_ptr = unsafe { validate_cb(self.user_data.ptr, plugin_config_json) };
+        unsafe { nemo_flow_string_free(plugin_config_json) };
+
+        if result_ptr.is_null() {
+            let message = last_error_message().unwrap_or_else(|| {
+                format!(
+                    "hosted plugin '{}' validate callback returned null",
+                    self.plugin_kind
+                )
+            });
+            return vec![ConfigDiagnostic {
+                level: DiagnosticLevel::Error,
+                code: "plugin.validate_failed".to_string(),
+                component: Some(self.plugin_kind.clone()),
+                field: None,
+                message,
+            }];
+        }
+
+        let diagnostics = unsafe { CStr::from_ptr(result_ptr) }
+            .to_str()
+            .ok()
+            .and_then(|text| serde_json::from_str::<Vec<ConfigDiagnostic>>(text).ok());
+        unsafe { nemo_flow_string_free(result_ptr) };
+        diagnostics.unwrap_or_else(|| {
+            vec![ConfigDiagnostic {
+                level: DiagnosticLevel::Error,
+                code: "plugin.validate_failed".to_string(),
+                component: Some(self.plugin_kind.clone()),
+                field: None,
+                message: format!(
+                    "hosted plugin '{}' validate callback returned invalid diagnostics JSON",
+                    self.plugin_kind
+                ),
+            }]
+        })
+    }
+
+    fn register<'a>(
+        &'a self,
+        plugin_config: &serde_json::Map<String, serde_json::Value>,
+        ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
+        let plugin_config = plugin_config.clone();
+        Box::pin(async move {
+            clear_last_error();
+            let plugin_config_json = json_to_c_string(&serde_json::Value::Object(plugin_config));
+            let mut ffi_ctx = FfiPluginContext(ctx as *mut _);
+            let status =
+                unsafe { (self.register_cb)(self.user_data.ptr, plugin_config_json, &mut ffi_ctx) };
+            unsafe { nemo_flow_string_free(plugin_config_json) };
+            if status == NemoFlowStatus::Ok {
+                Ok(())
+            } else if let Some(message) = last_error_message() {
+                Err(PluginError::RegistrationFailed(message))
+            } else {
+                Err(PluginError::RegistrationFailed(format!(
+                    "hosted plugin '{}' register callback failed with status {:?}",
+                    self.plugin_kind, status
+                )))
+            }
+        })
+    }
+}
+
+fn ensure_adaptive_component_registered() -> std::result::Result<(), NemoFlowStatus> {
+    register_adaptive_component().map_err(|err| status_from_plugin_error(&err))
+}
+
+/// Validate a generic plugin config document and return the diagnostics report as JSON.
+///
+/// # Safety
+/// `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_validate_plugin_config(
+    config_json: *const c_char,
+    out_json: *mut *mut c_char,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if out_json.is_null() {
+        set_last_error("out_json pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    if let Err(status) = ensure_adaptive_component_registered() {
+        return status;
+    }
+    let config_value = match c_str_to_json(config_json) {
+        Some(value) => value,
+        None => return NemoFlowStatus::InvalidJson,
+    };
+    let config: PluginConfig = match serde_json::from_value(config_value) {
+        Ok(config) => config,
+        Err(err) => {
+            set_last_error(&err.to_string());
+            return NemoFlowStatus::InvalidJson;
+        }
+    };
+    let report_json = match serde_json::to_value(validate_plugin_config(&config)) {
+        Ok(value) => value,
+        Err(err) => {
+            set_last_error(&err.to_string());
+            return NemoFlowStatus::Internal;
+        }
+    };
+    unsafe { *out_json = json_to_c_string(&report_json) };
+    NemoFlowStatus::Ok
+}
+
+/// Initialize the active global plugin components and return the resulting diagnostics report.
+///
+/// # Safety
+/// `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_initialize_plugins(
+    config_json: *const c_char,
+    out_json: *mut *mut c_char,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if out_json.is_null() {
+        set_last_error("out_json pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    if let Err(status) = ensure_adaptive_component_registered() {
+        return status;
+    }
+    let config_value = match c_str_to_json(config_json) {
+        Some(value) => value,
+        None => return NemoFlowStatus::InvalidJson,
+    };
+    let config: PluginConfig = match serde_json::from_value(config_value) {
+        Ok(config) => config,
+        Err(err) => {
+            set_last_error(&err.to_string());
+            return NemoFlowStatus::InvalidJson;
+        }
+    };
+    let report = match tokio_runtime().block_on(initialize_plugins(config)) {
+        Ok(report) => report,
+        Err(err) => return status_from_plugin_error(&err),
+    };
+    let report_json = match serde_json::to_value(report) {
+        Ok(value) => value,
+        Err(err) => {
+            set_last_error(&err.to_string());
+            return NemoFlowStatus::Internal;
+        }
+    };
+    unsafe { *out_json = json_to_c_string(&report_json) };
+    NemoFlowStatus::Ok
+}
+
+/// Clear the active global plugin configuration.
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_flow_clear_plugin_configuration() -> NemoFlowStatus {
+    clear_last_error();
+    match clear_plugin_configuration() {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Return the last successfully configured plugin report as JSON.
+///
+/// # Safety
+/// `out_json` must be a valid, non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_active_plugin_report_json(
+    out_json: *mut *mut c_char,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if out_json.is_null() {
+        set_last_error("out_json pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let report_json = match serde_json::to_value(active_plugin_report()) {
+        Ok(value) => value,
+        Err(err) => {
+            set_last_error(&err.to_string());
+            return NemoFlowStatus::Internal;
+        }
+    };
+    unsafe { *out_json = json_to_c_string(&report_json) };
+    NemoFlowStatus::Ok
+}
+
+/// Return the registered plugin kinds as JSON.
+///
+/// # Safety
+/// `out_json` must be a valid, non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_list_plugin_kinds_json(
+    out_json: *mut *mut c_char,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if out_json.is_null() {
+        set_last_error("out_json pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    if let Err(status) = ensure_adaptive_component_registered() {
+        return status;
+    }
+    let kinds_json = match serde_json::to_value(list_plugin_kinds()) {
+        Ok(value) => value,
+        Err(err) => {
+            set_last_error(&err.to_string());
+            return NemoFlowStatus::Internal;
+        }
+    };
+    unsafe { *out_json = json_to_c_string(&kinds_json) };
+    NemoFlowStatus::Ok
+}
+
+/// Register a plugin backed by foreign callbacks.
+///
+/// # Safety
+/// `plugin_kind` must be a valid C string and `register_cb` must be a valid function pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_register_plugin(
+    plugin_kind: *const c_char,
+    validate_cb: Option<NemoFlowPluginValidateCb>,
+    register_cb: NemoFlowPluginRegisterCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
+    clear_last_error();
+    let plugin_kind = match c_str_to_string(plugin_kind) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+
+    let plugin = Arc::new(FfiHostedPluginAdapter {
+        plugin_kind: plugin_kind.clone(),
+        validate_cb,
+        register_cb,
+        user_data: Arc::new(FfiHostedPluginUserData {
+            ptr: user_data,
+            free_fn,
+        }),
+    });
+    match register_plugin(plugin) {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Deregister a plugin by kind.
+///
+/// # Safety
+/// `plugin_kind` must be a valid C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_deregister_plugin(plugin_kind: *const c_char) -> NemoFlowStatus {
+    clear_last_error();
+    let plugin_kind = match c_str_to_string(plugin_kind) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    if deregister_plugin(&plugin_kind) {
+        NemoFlowStatus::Ok
+    } else {
+        set_last_error(&format!("not found: plugin '{plugin_kind}'"));
+        NemoFlowStatus::NotFound
+    }
+}
+
+/// Register an event subscriber into the plugin registration context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_plugin_context_register_subscriber(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    cb: NemoFlowEventSubscriberCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_event_subscriber(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }.register_subscriber(&name, wrapped) {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Register a tool sanitize-request guardrail into the plugin registration context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_sanitize_request_guardrail(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoFlowToolSanitizeCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_tool_sanitize_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }
+        .register_tool_sanitize_request_guardrail(&name, priority, wrapped)
+    {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Register a tool sanitize-response guardrail into the plugin registration context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_sanitize_response_guardrail(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoFlowToolSanitizeCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_tool_sanitize_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }
+        .register_tool_sanitize_response_guardrail(&name, priority, wrapped)
+    {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Register a tool conditional-execution guardrail into the plugin registration context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_conditional_execution_guardrail(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoFlowToolConditionalCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_tool_conditional_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }
+        .register_tool_conditional_execution_guardrail(&name, priority, wrapped)
+    {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Register an LLM sanitize-request guardrail into the plugin registration context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_sanitize_request_guardrail(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoFlowLlmRequestCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_llm_sanitize_request_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }
+        .register_llm_sanitize_request_guardrail(&name, priority, wrapped)
+    {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Register an LLM sanitize-response guardrail into the plugin registration context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_sanitize_response_guardrail(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoFlowJsonCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_llm_response_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }
+        .register_llm_sanitize_response_guardrail(&name, priority, wrapped)
+    {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Register an LLM conditional-execution guardrail into the plugin registration context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_conditional_execution_guardrail(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoFlowLlmConditionalCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_llm_conditional_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }
+        .register_llm_conditional_execution_guardrail(&name, priority, wrapped)
+    {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Register an LLM request intercept into the plugin registration context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_request_intercept(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    break_chain: bool,
+    cb: NemoFlowLlmRequestInterceptCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_llm_request_intercept_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }.register_llm_request_intercept(
+        &name,
+        priority,
+        break_chain,
+        wrapped,
+    ) {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Register a tool request intercept into the plugin registration context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_request_intercept(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    break_chain: bool,
+    cb: NemoFlowToolSanitizeCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_tool_request_intercept_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }.register_tool_request_intercept(
+        &name,
+        priority,
+        break_chain,
+        wrapped,
+    ) {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Register an LLM execution intercept into the plugin registration context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_execution_intercept(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoFlowLlmExecInterceptCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_llm_exec_intercept_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }.register_llm_execution_intercept(&name, priority, wrapped) {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Register an LLM stream execution intercept into the plugin registration context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_stream_execution_intercept(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoFlowLlmExecInterceptCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_llm_stream_exec_intercept_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }
+        .register_llm_stream_execution_intercept(&name, priority, wrapped)
+    {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Register a tool execution intercept into the plugin registration context.
+///
+/// # Safety
+/// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
+/// of the hosted plugin registration lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_execution_intercept(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoFlowToolExecInterceptCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoFlowFreeFn,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let wrapped = wrap_tool_exec_intercept_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }.register_tool_execution_intercept(&name, priority, wrapped) {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(err) => status_from_plugin_error(&err),
+    }
+}

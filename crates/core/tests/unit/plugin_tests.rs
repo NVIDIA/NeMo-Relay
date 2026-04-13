@@ -19,13 +19,17 @@ struct TestPlugin;
 
 struct SingletonPlugin;
 struct RecordingPlugin;
+struct ReplacementPlugin;
 struct RestoreFailPlugin;
+struct RestoreBreakPlugin;
 struct PartialFailPlugin;
 struct VanishingPlugin;
 
 static RECORDED_NAMES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 static PARTIAL_FAIL_ROLLBACKS: AtomicUsize = AtomicUsize::new(0);
 static RESTORE_FAIL_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
+static RESTORE_BREAK_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
+static REPLACEMENT_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 
 fn recorded_names() -> &'static Mutex<Vec<String>> {
     RECORDED_NAMES.get_or_init(|| Mutex::new(Vec::new()))
@@ -36,6 +40,33 @@ fn lock_runtime_owner() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(|err| err.into_inner())
 }
+
+fn expect_registration_failed(result: Result<()>, message_fragment: &str) {
+    match result {
+        Err(PluginError::RegistrationFailed(message)) => {
+            assert!(message.contains(message_fragment), "{message}");
+        }
+        Err(other) => panic!("unexpected registration failure: {other}"),
+        Ok(_) => panic!("expected registration to fail"),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn set_conflicting_runtime_owner_for_tests() {
+    unsafe {
+        std::env::set_var(
+            "NEMO_FLOW_RUNTIME_OWNER",
+            format!(
+                "pid={};binding=python;version={}",
+                std::process::id(),
+                env!("CARGO_PKG_VERSION")
+            ),
+        )
+    };
+}
+
+#[cfg(target_arch = "wasm32")]
+fn set_conflicting_runtime_owner_for_tests() {}
 
 impl Plugin for TestPlugin {
     fn plugin_kind(&self) -> &str {
@@ -120,6 +151,38 @@ impl Plugin for RecordingPlugin {
     }
 }
 
+impl Plugin for ReplacementPlugin {
+    fn plugin_kind(&self) -> &str {
+        "replacement.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![ConfigDiagnostic {
+            level: DiagnosticLevel::Warning,
+            code: "replacement.warning".into(),
+            component: Some("replacement.plugin".into()),
+            field: None,
+            message: "replacement validated".into(),
+        }]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            REPLACEMENT_REGISTRATIONS.fetch_add(1, Ordering::SeqCst);
+            ctx.add_registration(PluginRegistration::new(
+                "plugin",
+                ctx.qualify_name("replacement"),
+                Box::new(|| Ok(())),
+            ));
+            Ok(())
+        })
+    }
+}
+
 impl Plugin for RestoreFailPlugin {
     fn plugin_kind(&self) -> &str {
         "restore.fail.plugin"
@@ -144,6 +207,37 @@ impl Plugin for RestoreFailPlugin {
             Err(PluginError::RegistrationFailed(
                 "restore.fail.plugin refused to initialize".into(),
             ))
+        })
+    }
+}
+
+impl Plugin for RestoreBreakPlugin {
+    fn plugin_kind(&self) -> &str {
+        "restore.break.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            if RESTORE_BREAK_REGISTRATIONS.fetch_add(1, Ordering::SeqCst) == 0 {
+                ctx.add_registration(PluginRegistration::new(
+                    "plugin",
+                    ctx.qualify_name("restore-break"),
+                    Box::new(|| Ok(())),
+                ));
+                Ok(())
+            } else {
+                Err(PluginError::RegistrationFailed(
+                    "restore.break.plugin refused to restore".into(),
+                ))
+            }
         })
     }
 }
@@ -206,10 +300,14 @@ fn reset_global() {
     recorded_names().lock().unwrap().clear();
     PARTIAL_FAIL_ROLLBACKS.store(0, Ordering::SeqCst);
     RESTORE_FAIL_REGISTRATIONS.store(0, Ordering::SeqCst);
+    RESTORE_BREAK_REGISTRATIONS.store(0, Ordering::SeqCst);
+    REPLACEMENT_REGISTRATIONS.store(0, Ordering::SeqCst);
     let _ = deregister_plugin("test.plugin");
     let _ = deregister_plugin("singleton.plugin");
     let _ = deregister_plugin("recording.plugin");
+    let _ = deregister_plugin("replacement.plugin");
     let _ = deregister_plugin("restore.fail.plugin");
+    let _ = deregister_plugin("restore.break.plugin");
     let _ = deregister_plugin("partial.fail.plugin");
     let _ = deregister_plugin("vanishing.plugin");
 }
@@ -846,5 +944,372 @@ fn test_plugin_registration_context_supports_guardrail_helpers() {
         .is_ok()
     );
 
+    reset_global();
+}
+
+#[test]
+fn test_plugin_registration_context_maps_duplicate_registration_errors() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    let mut ctx = PluginRegistrationContext::with_namespace("duplicate::");
+    ctx.register_llm_request_intercept(
+        "llm-request",
+        1,
+        false,
+        Box::new(|_name, request, annotated| Ok((request, annotated))),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_llm_request_intercept(
+            "llm-request",
+            1,
+            false,
+            Box::new(|_name, request, annotated| Ok((request, annotated))),
+        ),
+        "llm request intercept:",
+    );
+
+    ctx.register_tool_sanitize_request_guardrail(
+        "tool-sanitize-request",
+        1,
+        Box::new(|_, args| args),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_tool_sanitize_request_guardrail(
+            "tool-sanitize-request",
+            1,
+            Box::new(|_, args| args),
+        ),
+        "tool sanitize request guardrail:",
+    );
+
+    ctx.register_tool_sanitize_response_guardrail(
+        "tool-sanitize-response",
+        1,
+        Box::new(|_, response| response),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_tool_sanitize_response_guardrail(
+            "tool-sanitize-response",
+            1,
+            Box::new(|_, response| response),
+        ),
+        "tool sanitize response guardrail:",
+    );
+
+    ctx.register_tool_conditional_execution_guardrail(
+        "tool-conditional",
+        1,
+        Box::new(|_, _| Ok(None)),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_tool_conditional_execution_guardrail(
+            "tool-conditional",
+            1,
+            Box::new(|_, _| Ok(None)),
+        ),
+        "tool conditional execution guardrail:",
+    );
+
+    ctx.register_llm_sanitize_request_guardrail(
+        "llm-sanitize-request",
+        1,
+        Box::new(|request| request),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_llm_sanitize_request_guardrail(
+            "llm-sanitize-request",
+            1,
+            Box::new(|request| request),
+        ),
+        "llm sanitize request guardrail:",
+    );
+
+    ctx.register_llm_sanitize_response_guardrail(
+        "llm-sanitize-response",
+        1,
+        Box::new(|response| response),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_llm_sanitize_response_guardrail(
+            "llm-sanitize-response",
+            1,
+            Box::new(|response| response),
+        ),
+        "llm sanitize response guardrail:",
+    );
+
+    ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, Box::new(|_| Ok(None)))
+        .unwrap();
+    expect_registration_failed(
+        ctx.register_llm_conditional_execution_guardrail(
+            "llm-conditional",
+            1,
+            Box::new(|_| Ok(None)),
+        ),
+        "llm conditional execution guardrail:",
+    );
+
+    ctx.register_llm_execution_intercept(
+        "llm-exec",
+        1,
+        Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_llm_execution_intercept(
+            "llm-exec",
+            1,
+            Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
+        ),
+        "llm execution intercept:",
+    );
+
+    ctx.register_llm_stream_execution_intercept(
+        "llm-stream",
+        1,
+        Arc::new(|_name, request, _next| {
+            Box::pin(async move {
+                Ok(Box::pin(tokio_stream::iter(vec![Ok(request.content)]))
+                    as Pin<
+                        Box<dyn tokio_stream::Stream<Item = crate::error::Result<Json>> + Send>,
+                    >)
+            })
+        }),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_llm_stream_execution_intercept(
+            "llm-stream",
+            1,
+            Arc::new(|_name, request, _next| {
+                Box::pin(async move {
+                    Ok(Box::pin(tokio_stream::iter(vec![Ok(request.content)]))
+                        as Pin<
+                            Box<dyn tokio_stream::Stream<Item = crate::error::Result<Json>> + Send>,
+                        >)
+                })
+            }),
+        ),
+        "llm stream execution intercept:",
+    );
+
+    ctx.register_tool_request_intercept("tool-request", 1, false, Box::new(|_name, args| Ok(args)))
+        .unwrap();
+    expect_registration_failed(
+        ctx.register_tool_request_intercept(
+            "tool-request",
+            1,
+            false,
+            Box::new(|_name, args| Ok(args)),
+        ),
+        "tool request intercept:",
+    );
+
+    ctx.register_tool_execution_intercept(
+        "tool-exec",
+        1,
+        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_tool_execution_intercept(
+            "tool-exec",
+            1,
+            Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+        ),
+        "tool execution intercept:",
+    );
+
+    let mut registrations = ctx.into_registrations();
+    rollback_registrations(&mut registrations);
+    reset_global();
+}
+
+#[test]
+fn test_plugin_registration_context_maps_deregistration_errors() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    let mut ctx = PluginRegistrationContext::with_namespace("teardown::");
+    ctx.register_subscriber("subscriber", Arc::new(|_event| {}))
+        .unwrap();
+    ctx.register_llm_request_intercept(
+        "llm-request",
+        1,
+        false,
+        Box::new(|_name, request, annotated| Ok((request, annotated))),
+    )
+    .unwrap();
+    ctx.register_tool_sanitize_request_guardrail(
+        "tool-sanitize-request",
+        1,
+        Box::new(|_, args| args),
+    )
+    .unwrap();
+    ctx.register_tool_sanitize_response_guardrail(
+        "tool-sanitize-response",
+        1,
+        Box::new(|_, response| response),
+    )
+    .unwrap();
+    ctx.register_tool_conditional_execution_guardrail(
+        "tool-conditional",
+        1,
+        Box::new(|_, _| Ok(None)),
+    )
+    .unwrap();
+    ctx.register_llm_sanitize_request_guardrail(
+        "llm-sanitize-request",
+        1,
+        Box::new(|request| request),
+    )
+    .unwrap();
+    ctx.register_llm_sanitize_response_guardrail(
+        "llm-sanitize-response",
+        1,
+        Box::new(|response| response),
+    )
+    .unwrap();
+    ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, Box::new(|_| Ok(None)))
+        .unwrap();
+    ctx.register_llm_execution_intercept(
+        "llm-exec",
+        1,
+        Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
+    )
+    .unwrap();
+    ctx.register_llm_stream_execution_intercept(
+        "llm-stream",
+        1,
+        Arc::new(|_name, request, _next| {
+            Box::pin(async move {
+                Ok(Box::pin(tokio_stream::iter(vec![Ok(request.content)]))
+                    as Pin<
+                        Box<dyn tokio_stream::Stream<Item = crate::error::Result<Json>> + Send>,
+                    >)
+            })
+        }),
+    )
+    .unwrap();
+    ctx.register_tool_request_intercept("tool-request", 1, false, Box::new(|_name, args| Ok(args)))
+        .unwrap();
+    ctx.register_tool_execution_intercept(
+        "tool-exec",
+        1,
+        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
+
+    let mut registrations = ctx.into_registrations();
+    let expected_messages = [
+        "subscriber deregistration failed:",
+        "llm request intercept deregistration failed:",
+        "tool sanitize request guardrail deregistration failed:",
+        "tool sanitize response guardrail deregistration failed:",
+        "tool conditional execution guardrail deregistration failed:",
+        "llm sanitize request guardrail deregistration failed:",
+        "llm sanitize response guardrail deregistration failed:",
+        "llm conditional execution guardrail deregistration failed:",
+        "llm execution intercept deregistration failed:",
+        "llm stream execution intercept deregistration failed:",
+        "tool request intercept deregistration failed:",
+        "tool execution intercept deregistration failed:",
+    ];
+
+    set_conflicting_runtime_owner_for_tests();
+    for (registration, expected) in registrations.iter_mut().zip(expected_messages) {
+        match (registration.deregister)() {
+            Err(PluginError::RegistrationFailed(message)) => {
+                assert!(message.contains(expected), "{message}");
+            }
+            Err(other) => panic!("unexpected deregistration failure: {other}"),
+            Ok(()) => panic!("expected deregistration to fail"),
+        }
+    }
+
+    reset_global();
+}
+
+#[test]
+fn test_initialize_plugins_replaces_previous_configuration_on_success() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(RecordingPlugin)).unwrap();
+    register_plugin(Arc::new(ReplacementPlugin)).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    runtime
+        .block_on(initialize_plugins(PluginConfig {
+            components: vec![PluginComponentSpec::new("recording.plugin")],
+            ..PluginConfig::default()
+        }))
+        .unwrap();
+
+    let report = runtime
+        .block_on(initialize_plugins(PluginConfig {
+            components: vec![PluginComponentSpec::new("replacement.plugin")],
+            ..PluginConfig::default()
+        }))
+        .unwrap();
+
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.code == "replacement.warning")
+    );
+    assert_eq!(active_plugin_report().unwrap().diagnostics.len(), 1);
+    assert_eq!(REPLACEMENT_REGISTRATIONS.load(Ordering::SeqCst), 1);
+
+    reset_global();
+}
+
+#[test]
+fn test_initialize_plugins_reports_failed_restore_when_previous_configuration_cannot_be_restored() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(RestoreBreakPlugin)).unwrap();
+    register_plugin(Arc::new(RestoreFailPlugin)).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    runtime
+        .block_on(initialize_plugins(PluginConfig {
+            components: vec![PluginComponentSpec::new("restore.break.plugin")],
+            ..PluginConfig::default()
+        }))
+        .unwrap();
+
+    let error = runtime
+        .block_on(initialize_plugins(PluginConfig {
+            components: vec![PluginComponentSpec::new("restore.fail.plugin")],
+            ..PluginConfig::default()
+        }))
+        .unwrap_err();
+
+    match error {
+        PluginError::RegistrationFailed(message) => {
+            assert!(message.contains("restore.fail.plugin refused to initialize"));
+            assert!(message.contains("previous plugin configuration could not be restored"));
+            assert!(message.contains("restore.break.plugin refused to restore"));
+        }
+        other => panic!("unexpected failed-restore error: {other}"),
+    }
+
+    assert!(active_plugin_report().is_none());
     reset_global();
 }

@@ -682,7 +682,3 @@ impl JsAnthropicMessagesCodec {
         serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/coverage/types_coverage_tests.rs"]
-mod coverage_tests;
