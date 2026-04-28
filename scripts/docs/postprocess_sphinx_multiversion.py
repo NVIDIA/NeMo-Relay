@@ -8,8 +8,11 @@ import re
 import sys
 from pathlib import Path
 
+from packaging.version import InvalidVersion, Version
+
 PATCH_RELEASE_DIR = re.compile(r"^(?:v)?(\d+)\.(\d+)\.(\d+)$")
 MINOR_RELEASE_DIR = re.compile(r"^(?:v)?(\d+)\.(\d+)$")
+PRERELEASE_DIR = re.compile(r"^(?:v)?\d+\.\d+\.\d+-(?:alpha|beta|rc)\.\d+$")
 INDEX_HTML = "index.html"
 
 
@@ -27,6 +30,21 @@ def parse_minor_release_key(name: str) -> tuple[int, int] | None:
         return None
     major, minor = match.groups()
     return (int(major), int(minor))
+
+
+def parse_prerelease_version(name: str) -> Version | None:
+    if PRERELEASE_DIR.fullmatch(name) is None:
+        return None
+
+    try:
+        parsed = Version(name.lstrip("v"))
+    except InvalidVersion:
+        return None
+
+    if parsed.is_prerelease:
+        return parsed
+
+    return None
 
 
 def iter_version_directories(build_dir: Path):
@@ -68,16 +86,39 @@ def latest_stable_version(build_dir: Path) -> str | None:
     if not candidates:
         return None
 
-    candidates.sort(reverse=True)
+    candidates.sort(key=lambda entry: entry[0], reverse=True)
     return candidates[0][1]
 
 
+def latest_prerelease_version(build_dir: Path) -> str | None:
+    candidates: list[tuple[Version, Path]] = []
+
+    for child in iter_version_directories(build_dir):
+        version = parse_prerelease_version(child.name)
+        if version is not None:
+            candidates.append((version, child))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda entry: entry[0], reverse=True)
+    latest = candidates[0][1]
+    if (latest / INDEX_HTML).exists():
+        return latest.name
+
+    return None
+
+
 def resolve_default_version(build_dir: Path) -> str | None:
-    # Prefer the newest stable release for the site root redirect, but fall
-    # back to `main` when no release directories were built.
+    # Prefer the newest stable release for the site root redirect. Prereleases
+    # can be the default only when the most recent included prerelease was built.
     stable = latest_stable_version(build_dir)
     if stable is not None:
         return stable
+
+    prerelease = latest_prerelease_version(build_dir)
+    if prerelease is not None:
+        return prerelease
 
     if (build_dir / "main" / INDEX_HTML).exists():
         return "main"

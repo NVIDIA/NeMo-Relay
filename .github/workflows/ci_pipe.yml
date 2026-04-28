@@ -257,6 +257,11 @@ jobs:
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/crates/node
         run: npm ci --ignore-scripts
 
+      - name: Materialize Main Branch For Versioned Docs
+        if: ${{ inputs.ref_type == 'tag' }}
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: git fetch --force origin +refs/heads/main:refs/heads/main
+
       - name: Check Documentation Links
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         env:
