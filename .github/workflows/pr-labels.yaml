@@ -38,7 +38,7 @@ jobs:
           set -euo pipefail
 
           size_labels=("size:XS" "size:S" "size:M" "size:L" "size:XL" "size:XXL")
-          classifier_labels=("build" "chore" "ci" "doc" "feat" "fix" "perf" "refactor" "revert" "style" "test")
+          classifier_labels=("build" "chore" "ci" "docs" "feat" "fix" "perf" "refactor" "revert" "style" "test")
           lang_labels=("lang:go" "lang:js" "lang:python" "lang:rust")
           controlled_labels=("${size_labels[@]}" "${classifier_labels[@]}" "${lang_labels[@]}")
 
@@ -112,13 +112,10 @@ jobs:
 
           title_lower="${PR_TITLE,,}"
           classifier_label=""
-          title_pattern='^(build|chore|ci|doc|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?(!)?:'
-          breaking_pattern='^(build|chore|ci|doc|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?!:'
+          title_pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?(!)?:'
+          breaking_pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?!:'
           if [[ "$title_lower" =~ $title_pattern ]]; then
             classifier_label="${BASH_REMATCH[1]}"
-            if [[ "$classifier_label" == "docs" ]]; then
-              classifier_label="doc"
-            fi
             desired_labels+=("$classifier_label")
           fi
           if [[ "$PR_TITLE" =~ $breaking_pattern ]]; then
