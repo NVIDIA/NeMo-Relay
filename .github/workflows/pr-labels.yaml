@@ -154,11 +154,12 @@ jobs:
           done
 
           for label in "${remove_labels[@]}"; do
-            gh issue edit "$PR_NUMBER" --repo "$REPO" --remove-label "$label"
+            gh api --method DELETE "repos/${REPO}/issues/${PR_NUMBER}/labels/${label}" >/dev/null
           done
 
           for label in "${add_labels[@]}"; do
-            gh issue edit "$PR_NUMBER" --repo "$REPO" --add-label "$label"
+            gh api --method POST "repos/${REPO}/issues/${PR_NUMBER}/labels" \
+              --field "labels[]=$label" >/dev/null
           done
 
           printf 'Changed lines: %s\n' "$changed_lines"
