@@ -32,7 +32,7 @@ changelog:
         - test
     - title: 📝 Documentation Updates
       labels:
-        - doc
+        - docs
     - title: Other Changes
       labels:
         - "*"
