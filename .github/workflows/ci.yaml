@@ -17,7 +17,6 @@ concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
   cancel-in-progress: true
 
-
 env:
   NEMO_FLOW_CI_RUST_VERSION: "1.93.0"
   NEMO_FLOW_CI_NODE_VERSION: "24"
