@@ -153,14 +153,22 @@ jobs:
         working-directory: ${{ github.workspace }}/NeMo-Flow
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
-        run: cargo publish --workspace --no-verify --allow-dirty
+        run: |
+          set -euo pipefail
+          for package in nemo-flow nemo-flow-adaptive nemo-flow-ffi; do
+            cargo publish --package "$package" --no-verify --allow-dirty
+          done
 
       - name: Publish to crates.io with registry token
         if: ${{ vars.NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING != 'true' }}
         working-directory: ${{ github.workspace }}/NeMo-Flow
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --workspace --no-verify --allow-dirty
+        run: |
+          set -euo pipefail
+          for package in nemo-flow nemo-flow-adaptive nemo-flow-ffi; do
+            cargo publish --package "$package" --no-verify --allow-dirty
+          done
 
   publish-python:
     name: Publish / PyPI

@@ -30,7 +30,7 @@ The release pipeline publishes these package surfaces from a tag push:
 
 | Ecosystem | Published Surface |
 |---|---|
-| crates.io | `nemo-flow`, `nemo-flow-adaptive`, `nemo-flow-ffi`, `nemo-flow-node`, `nemo-flow-python`, `nemo-flow-wasm` |
+| crates.io | `nemo-flow`, `nemo-flow-adaptive`, `nemo-flow-ffi` |
 | PyPI | `nemo-flow` |
 | npm | `nemo-flow-node`, `nemo-flow-wasm` |
 | GitHub Pages | The documentation site, including the versioned docs build |
@@ -203,7 +203,8 @@ The release pipeline then:
 4. Publishes packages from the top-level workflow after the reusable packaging
    jobs complete:
    - `publish-rust` stamps Cargo workspace versions from the release tag, then
-     runs `cargo publish --workspace --no-verify`
+     runs `cargo publish --package` for `nemo-flow`, `nemo-flow-adaptive`, and
+     `nemo-flow-ffi`
      through either trusted publishing or `CARGO_REGISTRY_TOKEN`, depending on
      `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING`
    - `publish-python` uploads the wheel artifacts to PyPI and uses one of two
