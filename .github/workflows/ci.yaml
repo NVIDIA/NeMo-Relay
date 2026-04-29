@@ -131,14 +131,14 @@ jobs:
         working-directory: ${{ github.workspace }}/NeMo-Flow
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
-        run: cargo publish --workspace --no-verify
+        run: cargo publish -p nemo-flow -p nemo-flow-adaptive -p nemo-flow-ffi --no-verify
 
       - name: Publish to crates.io with registry token
         if: ${{ vars.NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING != 'true' }}
         working-directory: ${{ github.workspace }}/NeMo-Flow
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --workspace --no-verify
+        run: cargo publish -p nemo-flow -p nemo-flow-adaptive -p nemo-flow-ffi --no-verify
 
   publish-python:
     name: Publish / PyPI
@@ -159,7 +159,7 @@ jobs:
           path: dist/
 
       - name: Publish to PyPI with trusted publishing
-        uses: pypa/gh-action-pypi-publish@ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0 # v1.9.0
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
 
   publish-npm:
     name: Publish / npm
@@ -211,7 +211,7 @@ jobs:
           unzip -q ./consolidated.zip -d combined
           echo "Platform binaries included:"
           ls -la combined/package/*.node
-          npm publish combined/package --access public --tag "${NEMO_FLOW_NPM_DIST_TAG}"
+          npm publish ./combined/package --access public --tag "${NEMO_FLOW_NPM_DIST_TAG}"
 
       - name: Publish WASM package to npm
         if: false
