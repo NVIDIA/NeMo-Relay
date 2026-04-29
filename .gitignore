@@ -66,6 +66,8 @@ $RECYCLE.BIN/
 .tmp/
 .planning/
 .claude/commands/
+/.codex/
+/.cursor/
 .env
 benchmarks/
 
