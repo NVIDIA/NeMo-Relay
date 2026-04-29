@@ -15,6 +15,21 @@ const rootJsFiles = ['index.js'];
 const jsWrapperFiles = ['typed.js', 'plugin.js', 'adaptive.js'];
 const typeWrapperFiles = ['typed.d.ts', 'plugin.d.ts', 'adaptive.d.ts'];
 const wrapperFiles = [...rootJsFiles, ...jsWrapperFiles, ...typeWrapperFiles];
+const packageMetadata = {
+  description: 'WebAssembly bindings for the NeMo Flow agent runtime.',
+  keywords: ['agents', 'ai', 'llm', 'middleware', 'nemo-flow', 'observability', 'runtime', 'tools', 'wasm'],
+  homepage: 'https://github.com/NVIDIA/NeMo-Flow#readme',
+  bugs: {
+    url: 'https://github.com/NVIDIA/NeMo-Flow/issues',
+  },
+  repository: {
+    type: 'git',
+    url: 'git+https://github.com/NVIDIA/NeMo-Flow.git',
+    directory: 'crates/wasm',
+  },
+  author: 'NVIDIA Corporation & Affiliates',
+  license: 'Apache-2.0',
+};
 
 // Wrapper sources refer to the crate-local dev layout; published files need to
 // point at the package-local wasm entrypoint inside pkg/.
@@ -54,6 +69,8 @@ function updatePackageManifest(manifest) {
   const manifestPath = path.join(pkgDir, 'package.json');
   const existingFiles = Array.isArray(manifest.files) ? manifest.files : [];
   const rootTypes = 'nemo_flow_wasm.d.ts';
+
+  Object.assign(manifest, packageMetadata);
 
   // wasm-pack generates a restrictive files allowlist, so the copied helper
   // wrappers must be added here or npm pack/publish will drop them.

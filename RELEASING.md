@@ -202,7 +202,8 @@ The release pipeline then:
    - `package-wasm` packs the npm WASM package.
 4. Publishes packages from the top-level workflow after the reusable packaging
    jobs complete:
-   - `publish-rust` runs `cargo publish --workspace --no-verify`
+   - `publish-rust` stamps Cargo workspace versions from the release tag, then
+     runs `cargo publish --workspace --no-verify`
      through either trusted publishing or `CARGO_REGISTRY_TOKEN`, depending on
      `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING`
    - `publish-python` uploads the wheel artifacts to PyPI and uses one of two

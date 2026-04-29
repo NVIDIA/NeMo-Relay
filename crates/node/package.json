@@ -1,7 +1,27 @@
 {
   "name": "nemo-flow-node",
   "version": "0.1.0",
-  "description": "NeMo Flow Node.js bindings via napi-rs",
+  "description": "Node.js bindings for the NeMo Flow agent runtime.",
+  "keywords": [
+    "agents",
+    "ai",
+    "llm",
+    "middleware",
+    "nemo-flow",
+    "observability",
+    "runtime",
+    "tools"
+  ],
+  "homepage": "https://github.com/NVIDIA/NeMo-Flow#readme",
+  "bugs": {
+    "url": "https://github.com/NVIDIA/NeMo-Flow/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NVIDIA/NeMo-Flow.git",
+    "directory": "crates/node"
+  },
+  "author": "NVIDIA Corporation & Affiliates",
   "main": "index.js",
   "types": "index.d.ts",
   "exports": {

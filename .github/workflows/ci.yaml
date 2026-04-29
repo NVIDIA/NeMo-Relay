@@ -20,6 +20,7 @@ concurrency:
 env:
   NEMO_FLOW_CI_RUST_VERSION: "1.93.0"
   NEMO_FLOW_CI_NODE_VERSION: "24"
+  NEMO_FLOW_CI_JUST_VERSION: "1.47.1"
 
 jobs:
 
@@ -121,6 +122,14 @@ jobs:
           cache: false
           toolchain: ${{ env.NEMO_FLOW_CI_RUST_VERSION }}
 
+      - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+        with:
+          tool: just@${{ env.NEMO_FLOW_CI_JUST_VERSION }}
+
+      - name: Stamp Cargo release version
+        working-directory: ${{ github.workspace }}/NeMo-Flow
+        run: just --set ref_name "${{ github.ref_name }}" stamp-cargo-release-version
+
       - name: Authenticate to crates.io with trusted publishing
         if: ${{ vars.NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING == 'true' }}
         id: crates-io-auth
@@ -131,14 +140,14 @@ jobs:
         working-directory: ${{ github.workspace }}/NeMo-Flow
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
-        run: cargo publish -p nemo-flow -p nemo-flow-adaptive -p nemo-flow-ffi --no-verify
+        run: cargo publish --workspace --no-verify
 
       - name: Publish to crates.io with registry token
         if: ${{ vars.NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING != 'true' }}
         working-directory: ${{ github.workspace }}/NeMo-Flow
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p nemo-flow -p nemo-flow-adaptive -p nemo-flow-ffi --no-verify
+        run: cargo publish --workspace --no-verify
 
   publish-python:
     name: Publish / PyPI
@@ -184,7 +193,6 @@ jobs:
           path: .
 
       - name: Download WASM artifact
-        if: false
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: wasm-bundler
@@ -214,7 +222,6 @@ jobs:
           npm publish ./combined/package --access public --tag "${NEMO_FLOW_NPM_DIST_TAG}"
 
       - name: Publish WASM package to npm
-        if: false
         run: |
           set -e
           for pkg in wasm-package/*.tgz; do

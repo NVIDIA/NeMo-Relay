@@ -267,6 +267,106 @@ print(match.group(1))
 PY
 }
 
+set_cargo_workspace_versions() {
+    local version="$1"
+
+    python3 - "$version" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+version = sys.argv[1]
+if version.startswith("v"):
+    raise SystemExit("Release tags must not start with 'v'; use raw SemVer such as 0.1.0")
+if not re.fullmatch(r"\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?", version):
+    raise SystemExit(f"Unsupported release tag '{version}'; use 0.1.0 or prereleases like 0.1.0-rc.1")
+
+path = Path("Cargo.toml")
+text = path.read_text()
+section = ""
+output = []
+changed = []
+found_workspace_version = False
+local_dependencies = ("nemo-flow", "nemo-flow-adaptive", "nemo-flow-ffi")
+found_dependencies = set()
+
+for line in text.splitlines(keepends=True):
+    section_match = re.match(r"^\s*\[([^\]]+)\]\s*(?:#.*)?$", line)
+    if section_match:
+        section = section_match.group(1)
+
+    updated = line
+    if section == "workspace.package":
+        updated, count = re.subn(
+            r'^(version\s*=\s*")([^"]+)(".*)$',
+            rf"\g<1>{version}\g<3>",
+            line,
+        )
+        if count == 1:
+            found_workspace_version = True
+            if updated != line:
+                changed.append("workspace.package.version")
+    elif section == "workspace.dependencies":
+        for dependency in local_dependencies:
+            updated, count = re.subn(
+                rf"^({re.escape(dependency)}\s*=\s*\{{[^}}]*\bversion\s*=\s*\")([^\"]+)(\".*)$",
+                rf"\g<1>{version}\g<3>",
+                updated,
+            )
+            if count == 1:
+                found_dependencies.add(dependency)
+                if updated != line:
+                    changed.append(f"workspace.dependencies.{dependency}.version")
+                break
+
+    output.append(updated)
+
+missing = []
+if not found_workspace_version:
+    missing.append("workspace.package.version")
+for dependency in local_dependencies:
+    if dependency not in found_dependencies:
+        missing.append(f"workspace.dependencies.{dependency}.version")
+if missing:
+    raise SystemExit(f"Failed to find expected Cargo version fields: {', '.join(missing)}")
+
+path.write_text("".join(output))
+if changed:
+    print(f"Cargo.toml stamped for {version}: {', '.join(changed)}")
+else:
+    print(f"Cargo.toml already stamped for {version}")
+PY
+
+    local metadata_file=""
+    metadata_file="$(mktemp)"
+    trap 'rm -f "$metadata_file"' RETURN
+    cargo metadata --no-deps --format-version 1 > "$metadata_file"
+    python3 - "$version" "$metadata_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+version = sys.argv[1]
+metadata = json.loads(Path(sys.argv[2]).read_text())
+workspace_members = set(metadata["workspace_members"])
+mismatched = []
+checked = 0
+
+for package in metadata["packages"]:
+    if package["id"] not in workspace_members or not package["name"].startswith("nemo-flow"):
+        continue
+    checked += 1
+    if package["version"] != version:
+        mismatched.append(f"{package['name']}={package['version']}")
+
+if checked == 0:
+    raise SystemExit("Cargo metadata did not include any nemo-flow workspace packages")
+if mismatched:
+    raise SystemExit(f"Cargo workspace packages do not all resolve to {version}: {', '.join(mismatched)}")
+print(f"Cargo metadata resolves {checked} nemo-flow workspace packages to {version}")
+PY
+}
+
 set_python_package_versions() {
     local version="$1"
     local python_executable=""
@@ -729,6 +829,17 @@ test-wasm:
 
 # --set [output_dir=<path>] [ci=true|false]
 test-all: test-rust test-python test-go test-node test-wasm
+
+# --set ref_name=<version>
+stamp-cargo-release-version:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    if [[ -z "{{ ref_name }}" ]]; then
+        echo "Error: ref_name is required for stamp-cargo-release-version" >&2
+        exit 1
+    fi
+    cd "$NEMO_FLOW_REPO_ROOT"
+    set_cargo_workspace_versions "{{ ref_name }}"
 
 # --set [output_dir=<path>] [ref_name=<name>]
 package-node:
