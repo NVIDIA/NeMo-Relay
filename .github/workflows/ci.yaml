@@ -18,8 +18,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  NEMO_FLOW_CI_DEFAULT_PYTHON_VER: "3.11"
   NEMO_FLOW_CI_RUST_VERSION: "1.93.0"
   NEMO_FLOW_CI_NODE_VERSION: "24"
+  NEMO_FLOW_CI_UV_VERSION: "0.9.28"
   NEMO_FLOW_CI_JUST_VERSION: "1.47.1"
 
 jobs:
@@ -121,6 +123,17 @@ jobs:
         with:
           cache: false
           toolchain: ${{ env.NEMO_FLOW_CI_RUST_VERSION }}
+
+      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
+        with:
+          version: ${{ env.NEMO_FLOW_CI_UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: ${{ github.workspace }}/NeMo-Flow/uv.lock
+
+      - name: Install managed Python
+        run: |
+          set -e
+          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ env.NEMO_FLOW_CI_DEFAULT_PYTHON_VER }}
 
       - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
         with:

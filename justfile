@@ -269,8 +269,10 @@ PY
 
 set_cargo_workspace_versions() {
     local version="$1"
+    local python_executable=""
+    python_executable="$(uv_python_executable)"
 
-    python3 - "$version" <<'PY'
+    "$python_executable" - "$version" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -341,7 +343,7 @@ PY
     metadata_file="$(mktemp)"
     trap 'rm -f "$metadata_file"' RETURN
     cargo metadata --no-deps --format-version 1 > "$metadata_file"
-    python3 - "$version" "$metadata_file" <<'PY'
+    "$python_executable" - "$version" "$metadata_file" <<'PY'
 import json
 import sys
 from pathlib import Path
