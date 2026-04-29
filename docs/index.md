@@ -178,6 +178,7 @@ Basic Guide: Define a Plugin <build-plugins/basic-guide>
 Basic Guide: Validate Plugin Configuration <build-plugins/validate-configuration>
 Basic Guide: Register Plugin Behavior <build-plugins/register-behavior>
 Advanced Guide: Design Plugin Configuration <build-plugins/advanced-configuration>
+NeMo Guardrails Example Plugin <build-plugins/nemoguardrails>
 Code Examples <build-plugins/code-examples>
 ```
 

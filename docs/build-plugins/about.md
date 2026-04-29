@@ -35,6 +35,7 @@ Use these guide links to move from the overview into task-specific instructions.
 - [Basic Guide: Validate Plugin Configuration](validate-configuration.md) covers JSON-compatible config, validation rules, and structured diagnostics.
 - [Basic Guide: Register Plugin Behavior](register-behavior.md) shows how to initialize config and install subscribers or middleware through `PluginContext`.
 - [Advanced Guide: Design Plugin Configuration](advanced-configuration.md) covers validation rules, advanced configuration patterns, rollout controls, and `PluginContext` usage.
+- [NeMo Guardrails Example Plugin](nemoguardrails.md) shows an external Python plugin that applies NeMo Guardrails checks around NeMo Flow LLM and tool calls.
 - [Code Examples](code-examples.md) provides patterns for dynamic header injection, subscriber-oriented export, multi-surface bundles, and framework-facing plugins.
 
 Start by deciding which runtime surfaces the plugin owns: middleware,
