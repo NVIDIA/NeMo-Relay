@@ -153,14 +153,14 @@ jobs:
         working-directory: ${{ github.workspace }}/NeMo-Flow
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
-        run: cargo publish --workspace --no-verify
+        run: cargo publish --workspace --no-verify --allow-dirty
 
       - name: Publish to crates.io with registry token
         if: ${{ vars.NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING != 'true' }}
         working-directory: ${{ github.workspace }}/NeMo-Flow
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --workspace --no-verify
+        run: cargo publish --workspace --no-verify --allow-dirty
 
   publish-python:
     name: Publish / PyPI
@@ -237,7 +237,7 @@ jobs:
       - name: Publish WASM package to npm
         run: |
           set -e
-          for pkg in wasm-package/*.tgz; do
+          for pkg in ./wasm-package/*.tgz; do
             echo "Publishing ${pkg}..."
             npm publish "${pkg}" --access public --tag "${NEMO_FLOW_NPM_DIST_TAG}"
           done
