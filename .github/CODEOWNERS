@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Default ownership for repository files.
-* @nat-developers
+* @nvidia/nat-developers
 
 # Project configurations and lockfiles require dependency approver review.
-Cargo.toml @nat-dep-approvers
-Cargo.lock @nat-dep-approvers
+Cargo.toml @nvidia/nat-dep-approvers
+Cargo.lock @nvidia/nat-dep-approvers
 
-pyproject.toml @nat-dep-approvers
-uv.lock @nat-dep-approvers
+pyproject.toml @nvidia/nat-dep-approvers
+uv.lock @nvidia/nat-dep-approvers
 
-package.json @nat-dep-approvers
-package-lock.json @nat-dep-approvers
+package.json @nvidia/nat-dep-approvers
+package-lock.json @nvidia/nat-dep-approvers
