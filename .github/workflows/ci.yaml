@@ -211,12 +211,6 @@ jobs:
           name: wasm-bundler
           path: wasm-package/
 
-      - name: Configure npm authentication
-        if: ${{ vars.NEMO_FLOW_ENABLE_NPM_TRUSTED_PUBLISHING != 'true' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-
       - name: Select npm dist-tag
         run: |
           set -e

@@ -87,15 +87,16 @@ Before you create a release tag, confirm the following:
 4. Registry credentials and repository settings are in place:
    - `CARGO_REGISTRY_TOKEN` for crates.io publishing when
      `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING` is not enabled
-   - `NPM_TOKEN` for npm publishing when
-     `NEMO_FLOW_ENABLE_NPM_TRUSTED_PUBLISHING` is not enabled
    - `PYPI_API_TOKEN` for PyPI publishing when
      `NEMO_FLOW_ENABLE_PYTHON_TRUSTED_PUBLISHING` is not enabled
    - GitHub Actions `id-token: write` access for the top-level crates.io
      publish job when
      `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING=true`
-   - GitHub Actions `id-token: write` access for the top-level npm publish job
-     when `NEMO_FLOW_ENABLE_NPM_TRUSTED_PUBLISHING=true`
+   - GitHub Actions `id-token: write` access is available for the top-level npm
+     publish job
+   - npm trusted publishers for `nemo-flow-node` and `nemo-flow-wasm` are
+     configured for the top-level
+     [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
    - GitHub Actions `id-token: write` access for the top-level PyPI publish job
      when `NEMO_FLOW_ENABLE_PYTHON_TRUSTED_PUBLISHING=true`
 5. The repository variable `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING` matches the
@@ -108,13 +109,7 @@ Before you create a release tag, confirm the following:
      [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
    - `false` uses the `PYPI_API_TOKEN` secret from the top-level
      [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
-7. The repository variable `NEMO_FLOW_ENABLE_NPM_TRUSTED_PUBLISHING` matches
-   the intended npm auth path for this release:
-   - `true` uses npm trusted publishing from the top-level
-     [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
-   - `false` uses the `NPM_TOKEN` secret from the top-level
-     [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
-8. The GitHub Release entry is ready to become the only canonical release-notes
+7. The GitHub Release entry is ready to become the only canonical release-notes
    surface.
 
 ## Prepare The Release Commit
@@ -212,12 +207,8 @@ The release pipeline then:
        `NEMO_FLOW_ENABLE_PYTHON_TRUSTED_PUBLISHING=true`
      - `PYPI_API_TOKEN` from the top-level workflow when
        `NEMO_FLOW_ENABLE_PYTHON_TRUSTED_PUBLISHING=false`
-   - `publish-npm` publishes the Node.js and WASM npm packages and uses one of
-     two auth paths:
-     - npm trusted publishing from the top-level workflow when
-       `NEMO_FLOW_ENABLE_NPM_TRUSTED_PUBLISHING=true`
-     - `NPM_TOKEN` from the top-level workflow when
-       `NEMO_FLOW_ENABLE_NPM_TRUSTED_PUBLISHING=false`
+   - `publish-npm` publishes the Node.js and WASM npm packages through npm
+     trusted publishing from the top-level workflow
      - stable tags publish to the npm `latest` dist-tag
      - prerelease tags such as `0.1.0-rc.1` publish to the npm `next`
        dist-tag so they do not become the default upgrade target
@@ -240,7 +231,7 @@ npm trusted publishing has its own registry-side constraints:
 - Each npm package can only have one trusted publisher configured at a time.
 - Because this repository publishes both `nemo-flow-node` and
   `nemo-flow-wasm`, configure trusted publishers for both packages before
-  enabling `NEMO_FLOW_ENABLE_NPM_TRUSTED_PUBLISHING`.
+  pushing a release tag.
 - npm trusted publishing currently supports GitHub-hosted runners, not
   self-hosted runners.
 
