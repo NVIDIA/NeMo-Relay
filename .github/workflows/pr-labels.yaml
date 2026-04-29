@@ -70,25 +70,25 @@ jobs:
             changed_lines=$((changed_lines + additions + deletions))
 
             case "$path" in
-              *.go|go/*|*/go.mod|*/go.sum|go.mod|go.sum)
+              *.go)
                 has_go=true
                 ;;
             esac
 
             case "$path" in
-              *.cjs|*.cts|*.js|*.jsx|*.mjs|*.mts|*.ts|*.tsx|crates/node/*|*/package.json|*/package-lock.json|package.json|package-lock.json)
+              *.cjs|*.cts|*.js|*.jsx|*.mjs|*.mts|*.ts|*.tsx)
                 has_js=true
                 ;;
             esac
 
             case "$path" in
-              *.py|*.pyi|python/*|crates/python/*|pyproject.toml|uv.lock)
+              *.py|*.pyi)
                 has_python=true
                 ;;
             esac
 
             case "$path" in
-              *.rs|Cargo.toml|Cargo.lock|crates/*/Cargo.toml)
+              *.rs)
                 has_rust=true
                 ;;
             esac
