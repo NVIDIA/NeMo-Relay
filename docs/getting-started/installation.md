@@ -20,7 +20,11 @@ Python wrapper.
 uv add nemo-flow
 ```
 
-You can also use `pip install nemo-flow` if you are not managing the environment with `uv`.
+Use `uv add` from an application project that has a `pyproject.toml`; it records
+`nemo-flow` as a project dependency. If you are only installing into an active
+virtual environment and do not have project metadata, use `uv pip install
+nemo-flow` instead. You can also use `pip install nemo-flow` if you are not
+managing the environment with `uv`.
 
 ### Node.js
 
@@ -61,7 +65,17 @@ checkout.
 pip install -e ../NeMo-Flow
 ```
 
-If you use `uv`, you can run `uv sync` from the cloned `../NeMo-Flow` checkout.
+If your application is a `uv` project, add the local checkout as an editable
+dependency from the application directory:
+
+```bash
+uv add --editable ../NeMo-Flow
+```
+
+That command records the source path in your application's `pyproject.toml`.
+
+Run `uv sync` from the cloned `../NeMo-Flow` checkout when you are developing
+the NeMo Flow repository itself.
 
 ### Node.js
 

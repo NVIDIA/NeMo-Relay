@@ -204,6 +204,11 @@ Supported state backends are `in_memory` and `redis`. Supported tool-parallelism
 
 These defaults are important when reading or overriding adaptive configuration examples.
 
+Middleware priorities are ordered by ascending number. For example,
+`adaptive_hints.priority = 100` is not a percentage or severity level; it places
+adaptive hint injection after middleware with lower numeric priorities and before
+middleware with higher numeric priorities.
+
 - `version = 1`
 - `agent_id = None`
 - `state = None`
