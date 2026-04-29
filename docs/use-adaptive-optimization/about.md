@@ -43,10 +43,12 @@ Use these guide links to move from the overview into task-specific instructions.
 - [Advanced Guide: Tune Adaptive Behavior](advanced-guide.md) explains state tuning, telemetry tuning, adaptive hints, tool parallelism, cache-governor tuning, and diagnostics.
 - [Code Examples](code-examples.md) provides binding-level adaptive helper names, defaults, ACG threshold overrides, and runtime-adjacent variables.
 
-Start with telemetry and in-memory state so adaptive can observe representative
-workflows without changing execution. Keep tool parallelism in `observe_only`,
-leave cache planning disabled until you have stable prompt samples, and enable
-active behavior one area at a time.
+Validate the basic workflow before tuning lower-level adaptive settings. First
+confirm that instrumented work emits lifecycle events with the configuration in
+[Basic Guide: Configure Adaptive Optimization](configure.md). After that
+baseline is visible, keep tool parallelism in `observe_only`, leave cache
+planning disabled until you have stable prompt samples, and enable active
+behavior one area at a time.
 
 Treat every adaptive change as a measured rollout. Record a baseline, change one
 setting, compare events and reports, and keep rollback as a configuration

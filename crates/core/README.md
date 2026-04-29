@@ -5,24 +5,96 @@ SPDX-License-Identifier: Apache-2.0
 
 # nemo-flow
 
-`nemo-flow` is the core Rust runtime crate for NeMo Flow.
+`nemo-flow` is the core Rust SDK for NeMo Flow, a portable execution
+runtime for agent systems. Use it when a Rust application, framework adapter,
+or service needs one consistent way to scope, control, and observe tool and LLM
+calls.
 
-It provides:
+Rust is the source of truth for NeMo Flow runtime behavior. The Python and
+Node.js bindings mirror the semantics exposed by this crate.
 
-- hierarchical scopes and scope-local state
-- tool and LLM lifecycle helpers
-- guardrails and intercept chains
-- subscribers and observability exporters
-- plugin registration and activation primitives
-- stream wrapping and typed runtime data structures
+## Why Use It?
 
-Use this crate when you want the Rust-first runtime surface. Pair it with
-`nemo-flow-adaptive` when you need adaptive runtime behavior.
+- 🧭 **Own Rust execution context**: Hierarchical scopes preserve parent-child
+  relationships across tools, LLM calls, middleware, subscribers, and events.
+- 🛡️ **Put policy around real calls**: Guardrails and intercepts can block work,
+  sanitize observability payloads, rewrite requests, or wrap execution.
+- 📡 **Emit one lifecycle stream**: Subscribers can consume canonical runtime
+  events in-process or export them to ATIF, OpenTelemetry, and OpenInference.
+- 🧩 **Integrate without changing orchestration**: Wrap framework and provider
+  callbacks while leaving scheduling, retries, memory, and result handling in
+  the owning application.
 
-For project-level documentation, start with:
+## What You Get
 
-- the repo root `README.md`
-- `docs/getting-started/rust.md`
-- `docs/instrument-applications/about.md`
-- `docs/integrate-frameworks/about.md`
-- `docs/reference/api/index.md`
+- ✅ **Managed tool and LLM execution**: Run call boundaries through consistent
+  lifecycle helpers and middleware ordering.
+- ✅ **Scope-local runtime behavior**: Attach middleware and subscribers to the
+  scope that owns them and clean them up when that scope closes.
+- ✅ **Plugin primitives**: Register reusable runtime behavior configured from
+  one shared plugin system.
+- ✅ **Codec and typed helpers**: Normalize provider requests and responses for
+  framework integrations.
+- ✅ **Binding source of truth**: Use the runtime semantics mirrored by the
+  Python and Node.js bindings.
+
+## Installation
+
+Install the published crate in a Rust application:
+
+```bash
+cargo add nemo-flow serde_json
+```
+
+To add adaptive runtime behavior, install the companion crate too:
+
+```bash
+cargo add nemo-flow-adaptive
+```
+
+When consuming a local checkout, use path dependencies:
+
+```toml
+[dependencies]
+nemo-flow = { path = "../NeMo-Flow/crates/core" }
+nemo-flow-adaptive = { path = "../NeMo-Flow/crates/adaptive" }
+serde_json = "1"
+```
+
+## Getting Started
+
+The smallest useful workflow is to create a scope, emit a mark event, and close
+the scope:
+
+```rust
+use nemo_flow::api::scope::{
+    self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
+};
+use serde_json::json;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = scope::push_scope(
+        PushScopeParams::builder()
+            .name("demo-agent")
+            .scope_type(ScopeType::Agent)
+            .attributes(ScopeAttributes::empty())
+            .data(json!({"binding": "rust"}))
+            .build(),
+    )?;
+
+    scope::event(
+        EmitMarkEventParams::builder()
+            .name("initialized")
+            .parent(&handle)
+            .data(json!({"ok": true}))
+            .build(),
+    )?;
+
+    scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
+    Ok(())
+}
+```
+
+## Documentation
+
+NeMo Flow Documentation: https://nvidia.github.io/NeMo-Flow

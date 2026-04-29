@@ -24,6 +24,16 @@ uv sync
 
 This is the right path when you are working from a local checkout and want the editable package plus the native extension build.
 
+If you are consuming the local checkout from another `uv` project, add the source
+path from that application's directory instead:
+
+```bash
+uv add --editable ../NeMo-Flow
+```
+
+This records the local source in the application's `pyproject.toml` through
+`[tool.uv.sources]`.
+
 ### Install from a Package Manager
 
 Use this path when you want the published package for application development.
@@ -32,7 +42,10 @@ Use this path when you want the published package for application development.
 uv add nemo-flow
 ```
 
-If you are not using `uv`, install the published package with `pip install nemo-flow`.
+Run `uv add` from an application project that has a `pyproject.toml`; it records
+`nemo-flow` as a dependency. If you are only installing into an active virtual
+environment, use `uv pip install nemo-flow`. If you are not using `uv`, install
+the published package with `pip install nemo-flow`.
 
 ## Run One Scope, One Tool Call, and One LLM Call
 

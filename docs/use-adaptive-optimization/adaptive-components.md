@@ -60,12 +60,20 @@ Configure the request-intercept behavior that injects adaptive hints:
 - `inject_header`
 - `inject_body_path`
 
+Adaptive hints register as request intercepts. Lower numeric priority values run
+earlier in the intercept chain, so the default priority is chosen relative to
+other middleware rather than as a standalone importance score.
+
 ### Tool Parallelism
 
 Configure the tool scheduling behavior:
 
 - `priority`
 - `mode`
+
+Tool-parallelism priority follows the same middleware ordering rule: lower
+numbers run earlier, higher numbers leave earlier intercepts and guardrails in
+front of adaptive scheduling behavior.
 
 Supported modes include:
 
@@ -215,7 +223,13 @@ Set `subscriber_name` when you want the adaptive subscriber to appear under a pr
 
 ### `adaptive_hints`
 
-Use this when you want the runtime to add hint metadata into outgoing model requests. The most important controls are priority, whether the request-intercept chain should stop, and where the injected data should live.
+Use this when you want the runtime to add hint metadata into outgoing model
+requests. The most important controls are priority, whether the request-intercept
+chain should stop, and where the injected data should live. The default
+`adaptive_hints.priority`, `100`, means the hint injector runs after intercepts
+with lower numeric values and before intercepts with higher numeric values;
+adjust it only when you need adaptive hints to run before or after known
+application middleware.
 
 ### `tool_parallelism`
 

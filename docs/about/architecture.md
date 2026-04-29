@@ -8,6 +8,77 @@ SPDX-License-Identifier: Apache-2.0
 This page explains how NeMo Flow connects scopes, middleware, plugins, events,
 subscribers, and exporters.
 
+## Architecture Diagram
+
+This diagram connects the runtime pieces to the layers they inhabit.
+
+```{mermaid}
+flowchart TB
+    subgraph AppLayer[Framework Integrations and Application Code]
+        App[Application Code]
+        Framework[Framework Integration]
+    end
+
+    subgraph BindingLayer[Language Bindings]
+        Bindings[Language Bindings]
+    end
+
+    subgraph PluginLayer[Plugin and Adaptive Layer]
+        PluginSystem[Plugin System]
+        Adaptive[Adaptive Component]
+    end
+
+    subgraph CoreLayer[Core Runtime]
+        Core[Rust Core Runtime]
+
+        subgraph RuntimeState[Runtime State]
+            Scope[Scope Stack]
+            Registry[Middleware Registries]
+        end
+
+        Events[Event Stream]
+    end
+
+    subgraph ObsLayer[Subscribers and Observability Backends]
+        Subs[Subscribers / Exporters]
+        Backends[Files / OTLP / Other Backends]
+    end
+
+    App -->|uses| Framework
+    App -. direct use .-> Bindings
+    App -->|registers and configures| PluginSystem
+    Framework -->|calls| Bindings
+    Bindings --> Core
+    Adaptive -->|activates via| PluginSystem
+    PluginSystem -->|installs| Registry
+    PluginSystem -->|installs| Subs
+    Core -->|updates| Scope
+    Core -->|resolves| Registry
+    Core -->|emits| Events
+    Events -->|fan out to| Subs
+    Subs -->|export to| Backends
+
+    class AppLayer grey-hint;
+    class BindingLayer grey-hint;
+    class PluginLayer grey-hint;
+    class CoreLayer grey-hint;
+    class ObsLayer grey-hint;
+    class RuntimeState grey-lightest;
+    class App purple-lightest;
+    class Framework yellow-lightest;
+    class Bindings green-lightest;
+    class PluginSystem green-light;
+    class Adaptive blue-lightest;
+    class Core green-light;
+    class Scope green-light;
+    class Registry green-light;
+    class Events green-light;
+    class Subs green-light;
+    class Backends grey-light;
+```
+
+Adaptive appears here as a built-in plugin component rather than a separate runtime model because it activates through the same plugin lifecycle.
+
 ## Runtime Model
 
 NeMo Flow combines a small number of runtime pieces into one shared execution model:
@@ -101,77 +172,6 @@ From bottom to top, NeMo Flow is organized as:
 5. subscribers and observability backends
 
 The details of a binding can vary, but the conceptual model stays the same across those layers.
-
-## Architecture Diagram
-
-This diagram connects the runtime pieces above to the layers they inhabit.
-
-```{mermaid}
-flowchart TB
-    subgraph AppLayer[Framework Integrations and Application Code]
-        App[Application Code]
-        Framework[Framework Integration]
-    end
-
-    subgraph BindingLayer[Language Bindings]
-        Bindings[Language Bindings]
-    end
-
-    subgraph PluginLayer[Plugin and Adaptive Layer]
-        PluginSystem[Plugin System]
-        Adaptive[Adaptive Component]
-    end
-
-    subgraph CoreLayer[Core Runtime]
-        Core[Rust Core Runtime]
-
-        subgraph RuntimeState[Runtime State]
-            Scope[Scope Stack]
-            Registry[Middleware Registries]
-        end
-
-        Events[Event Stream]
-    end
-
-    subgraph ObsLayer[Subscribers and Observability Backends]
-        Subs[Subscribers / Exporters]
-        Backends[Files / OTLP / Other Backends]
-    end
-
-    App -->|uses| Framework
-    App -. direct use .-> Bindings
-    App -->|registers and configures| PluginSystem
-    Framework -->|calls| Bindings
-    Bindings --> Core
-    Adaptive -->|activates via| PluginSystem
-    PluginSystem -->|installs| Registry
-    PluginSystem -->|installs| Subs
-    Core -->|updates| Scope
-    Core -->|resolves| Registry
-    Core -->|emits| Events
-    Events -->|fan out to| Subs
-    Subs -->|export to| Backends
-
-    class AppLayer grey-hint;
-    class BindingLayer grey-hint;
-    class PluginLayer grey-hint;
-    class CoreLayer grey-hint;
-    class ObsLayer grey-hint;
-    class RuntimeState grey-lightest;
-    class App purple-lightest;
-    class Framework yellow-lightest;
-    class Bindings green-lightest;
-    class PluginSystem green-light;
-    class Adaptive blue-lightest;
-    class Core green-light;
-    class Scope green-light;
-    class Registry green-light;
-    class Events green-light;
-    class Subs green-light;
-    class Backends grey-light;
-```
-
-Adaptive appears here as a built-in plugin component rather than a separate runtime model because it activates through the same plugin lifecycle.
 
 ## Design Goal
 

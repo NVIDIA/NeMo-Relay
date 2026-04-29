@@ -298,13 +298,20 @@ NeMo Flow keeps sample third-party integrations as patch sets under `patches/` a
 | OpenClaw | `third_party/openclaw` |
 | opencode | `third_party/opencode` |
 
-## Repository Utility Scripts
+## Quickstart: Apply Maintained Patches
 
-Use these repository scripts when validating or refreshing third-party integration patches:
+From the repository root, use the wrapper scripts when you want the maintained
+NeMo Flow patches applied to the pinned third-party checkouts:
+
 
 | Script | Purpose |
 |---|---|
 | `./scripts/bootstrap-third-party.sh` | Clone pinned third-party upstream checkouts from `third_party/sources.lock`. |
 | `./scripts/apply-patches.sh` | Apply NeMo Flow integration patches to third-party checkouts. |
+| `./scripts/apply-patches.sh --check` | Ensure the patches apply cleanly to all third-party checkouts. |
 | `./scripts/generate-patches.sh` | Regenerate patch files from local third-party checkout changes. |
 | `./scripts/build-docs.sh` | Build the documentation site after integration docs change. |
+
+The dry run checks that patches apply cleanly before modifying the local
+checkouts. Use manual `git clone`, `git checkout`, and `git apply` commands only
+when you need to work on one integration outside the standard wrapper flow.
