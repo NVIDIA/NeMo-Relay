@@ -123,6 +123,7 @@ jobs:
   check:
     name: Check
     needs: [changes]
+    if: ${{ inputs.ref_type != 'tag' }}
     runs-on: linux-amd64-cpu4
     timeout-minutes: 30
     permissions:
@@ -203,7 +204,14 @@ jobs:
   docs:
     name: Documentation
     needs: [changes, check]
-    if: ${{ (startsWith(inputs.ref_name, 'pull-request/') || inputs.ref_name == 'main' || inputs.ref_name == github.event.repository.default_branch || inputs.ref_type == 'tag') && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.docs == 'true') }}
+    if: >-
+      ${{
+        !cancelled()
+        && needs.changes.result == 'success'
+        && (inputs.ref_type == 'tag' || needs.check.result == 'success')
+        && (startsWith(inputs.ref_name, 'pull-request/') || inputs.ref_name == 'main' || inputs.ref_name == github.event.repository.default_branch || inputs.ref_type == 'tag')
+        && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.docs == 'true')
+      }}
     runs-on: linux-amd64-cpu4
     timeout-minutes: 60
     permissions:
@@ -263,6 +271,7 @@ jobs:
         run: git fetch --force origin +refs/heads/main:refs/heads/main
 
       - name: Check Documentation Links
+        if: ${{ inputs.ref_type != 'tag' }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         env:
           NEMO_FLOW_DOCS_DEPS_READY: "1"
@@ -291,7 +300,7 @@ jobs:
   test-rust:
     name: Test / Rust / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ needs.changes.outputs.run_all == 'true' || needs.changes.outputs.rust == 'true' }}
+    if: ${{ inputs.ref_type != 'tag' && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.rust == 'true') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -416,7 +425,7 @@ jobs:
   test-go:
     name: Test / Go / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ needs.changes.outputs.run_all == 'true' || needs.changes.outputs.go == 'true' }}
+    if: ${{ inputs.ref_type != 'tag' && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.go == 'true') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -483,7 +492,7 @@ jobs:
   test-node:
     name: Test / Node / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ needs.changes.outputs.run_all == 'true' || needs.changes.outputs.node == 'true' }}
+    if: ${{ inputs.ref_type != 'tag' && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.node == 'true') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -548,7 +557,7 @@ jobs:
   test-python:
     name: Test / Python / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ needs.changes.outputs.run_all == 'true' || needs.changes.outputs.python == 'true' }}
+    if: ${{ inputs.ref_type != 'tag' && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.python == 'true') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -640,7 +649,7 @@ jobs:
   test-wasm:
     name: Test / WASM / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ needs.changes.outputs.run_all == 'true' || needs.changes.outputs.wasm == 'true' }}
+    if: ${{ inputs.ref_type != 'tag' && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.wasm == 'true') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -740,7 +749,18 @@ jobs:
   package-node:
     name: Package / Node / ${{ matrix.platform }}
     needs: [changes, test-node]
-    if: ${{ needs.changes.outputs.run_all == 'true' || needs.changes.outputs.node == 'true' }}
+    if: >-
+      ${{
+        !cancelled()
+        && needs.changes.result == 'success'
+        && (
+          inputs.ref_type == 'tag'
+          || (
+            needs.test-node.result == 'success'
+            && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.node == 'true')
+          )
+        )
+      }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
@@ -914,7 +934,18 @@ jobs:
   package-python:
     name: Package / Python / ${{ matrix.platform }}
     needs: [changes, test-python]
-    if: ${{ needs.changes.outputs.run_all == 'true' || needs.changes.outputs.python == 'true' }}
+    if: >-
+      ${{
+        !cancelled()
+        && needs.changes.result == 'success'
+        && (
+          inputs.ref_type == 'tag'
+          || (
+            needs.test-python.result == 'success'
+            && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.python == 'true')
+          )
+        )
+      }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
@@ -1029,7 +1060,18 @@ jobs:
   package-wasm:
     name: Package / WASM / linux-amd64
     needs: [changes, test-wasm]
-    if: ${{ needs.changes.outputs.run_all == 'true' || needs.changes.outputs.wasm == 'true' }}
+    if: >-
+      ${{
+        !cancelled()
+        && needs.changes.result == 'success'
+        && (
+          inputs.ref_type == 'tag'
+          || (
+            needs.test-wasm.result == 'success'
+            && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.wasm == 'true')
+          )
+        )
+      }}
     runs-on: linux-amd64-cpu4
     timeout-minutes: 30
     permissions:

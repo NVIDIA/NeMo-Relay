@@ -169,18 +169,19 @@ git push origin 0.1.0-rc.1
 
 Pushing a valid tag triggers [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml).
 That workflow then calls [`.github/workflows/ci_pipe.yml`](.github/workflows/ci_pipe.yml)
-for the shared build, test, docs, and packaging stages.
+for the shared release documentation and packaging stages.
 
 The release pipeline then:
 
 1. Validates the tag format in the `prepare` job.
-2. Runs repo checks, docs, and the Rust, Python, Go, Node.js, and WASM test
-   jobs.
-3. Builds publishable package artifacts with the exact tag version:
+2. Skips repo checks and the Rust, Python, Go, Node.js, and WASM test jobs.
+   Run those checks before creating and pushing the release tag.
+3. Builds and uploads the versioned GitHub Pages documentation artifact.
+4. Builds publishable package artifacts with the exact tag version:
    - `package-node` packs the npm Node.js package.
    - `package-python` builds platform wheels.
    - `package-wasm` packs the npm WASM package.
-4. Publishes packages from the top-level workflow after the reusable packaging
+5. Publishes packages from the top-level workflow after the reusable packaging
    jobs complete:
    - `publish-rust` stamps Cargo workspace versions from the release tag, then
      runs `cargo publish --package` for `nemo-flow`, `nemo-flow-adaptive`, and
@@ -194,7 +195,7 @@ The release pipeline then:
      - stable tags publish to the npm `latest` dist-tag
      - prerelease tags such as `0.1.0-rc.1` publish to the npm `next`
        dist-tag so they do not become the default upgrade target
-5. Builds and deploys the GitHub Pages docs site.
+6. Deploys the GitHub Pages docs site.
 
 The workflow boundary is split intentionally:
 
