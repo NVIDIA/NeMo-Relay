@@ -858,6 +858,7 @@ jobs:
   consolidate-node:
     name: Consolidate / Node
     needs: [package-node]
+    if: ${{ !cancelled() && needs.package-node.result == 'success' }}
     runs-on: linux-amd64-cpu4
     timeout-minutes: 30
     permissions:
