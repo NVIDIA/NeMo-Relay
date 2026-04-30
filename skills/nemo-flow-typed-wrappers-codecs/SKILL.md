@@ -57,7 +57,7 @@ tool or LLM integration.
 - `DataclassCodec` or `PydanticCodec` in Python when the models already exist
 - Custom codecs for domain-specific wire shapes
 - `BestEffortAnyCodec` only when broad flexibility is worth the looser contract
-- Provider codecs for LLM provider payloads, not application domain object
+- Provider codecs for LLM provider payloads, not application domain objects
   conversion
 
 ## Validation Checklist

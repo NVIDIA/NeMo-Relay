@@ -59,7 +59,7 @@ pre-release or build-metadata variants used during packaging.
      `./scripts/generate_attributions.sh node`.
    - If the change needs WebAssembly publish validation, rebuild the generated package
      with `just build-wasm` or
-     `NEMO_FLOW_WebAssembly_RELEASE=1 npm --prefix crates/wasm run build:pkg`. Inspect
+     `NEMO_FLOW_WASM_RELEASE=1 npm --prefix crates/wasm run build:pkg`. Inspect
      `crates/wasm/pkg/package.json`, not `crates/wasm/package.json`.
 5. Audit remaining references to the old version with targeted search. Separate
    true version pins from examples, generated attribution files, and unrelated

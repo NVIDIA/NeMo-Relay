@@ -519,8 +519,9 @@ Choose the smallest validation set that covers the touched surface:
 - Python binding changes: `uv run pytest`.
 - Node.js binding changes: `cd crates/node && npm test`.
 - Go binding changes: build the release FFI library first, then run Go tests under `go/nemo_flow`.
-- WebAssembly changes: run the WebAssembly crate tests and
-  `wasm-pack test --node crates/wasm` when integration behavior changed.
+- WebAssembly changes: run `just test-wasm` and the WebAssembly crate tests
+  (`cargo test -p nemo-flow-wasm`) when integration behavior changed. For
+  focused debugging, you can run `wasm-pack test --node crates/wasm` directly.
 - Documentation changes: run `./scripts/build-docs.sh html`.
 
 Refer to [Testing and Documentation](../contribute/testing-and-docs.md) for the
