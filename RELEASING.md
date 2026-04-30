@@ -85,16 +85,14 @@ Before you create a release tag, confirm the following:
    public API changes that belong in the release.
 3. The working tree you use for local validation is clean or disposable.
 4. Registry credentials and repository settings are in place:
-   - `CARGO_REGISTRY_TOKEN` for crates.io publishing when `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING` is not enabled
-   - GitHub Actions `id-token: write` access for the top-level crates.io publish job when `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING=true`
+   - GitHub Actions `id-token: write` access for the top-level crates.io publish job
+   - crates.io trusted publishers for `nemo-flow`, `nemo-flow-adaptive`, and
+     `nemo-flow-ffi` are configured for the top-level
+     [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
    - GitHub Actions `id-token: write` access is available for the top-level npm publish job
    - npm trusted publishers for `nemo-flow-node` and `nemo-flow-wasm` are configured for the top-level [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
    - GitHub Actions `id-token: write` access for the top-level PyPI publish job
-5. The repository variable `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING` matches the
-   intended crates.io auth path for this release:
-   - `true` uses GitHub OIDC plus `rust-lang/crates-io-auth-action`
-   - `false` uses the `CARGO_REGISTRY_TOKEN` secret
-6. The GitHub Release entry is ready to become the only canonical release-notes
+5. The GitHub Release entry is ready to become the only canonical release-notes
    surface.
 
 ## Prepare The Release Commit
@@ -185,9 +183,7 @@ The release pipeline then:
    jobs complete:
    - `publish-rust` stamps Cargo workspace versions from the release tag, then
      runs `cargo publish --package` for `nemo-flow`, `nemo-flow-adaptive`, and
-     `nemo-flow-ffi`
-     through either trusted publishing or `CARGO_REGISTRY_TOKEN`, depending on
-     `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING`
+     `nemo-flow-ffi` through trusted publishing from the top-level workflow
    - `publish-python` uploads the wheel artifacts to PyPI with trusted
      publishing from the top-level workflow
    - `publish-npm` publishes the Node.js and WASM npm packages through npm
