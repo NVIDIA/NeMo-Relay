@@ -55,8 +55,38 @@ repos:
     hooks:
       - id: lychee
         name: docs markdown linkcheck
-        args: ["--no-progress", "--include-fragments"]
-        files: '^(README\.md|CONTRIBUTING\.md|docs/.*\.md)$'
+        args:
+          - --no-progress
+          - --include-fragments
+          - README.md
+          - CONTRIBUTING.md
+          - docs/**/*.md
+        always_run: true
+        pass_filenames: false
+
+  # Lockfiles — manifest freshness
+  - repo: local
+    hooks:
+      - id: cargo-lockfile-check
+        name: Cargo.lock is up to date
+        entry: bash -c 'cargo metadata --format-version 1 --no-deps >/dev/null'
+        language: system
+        files: '^(Cargo\.toml|Cargo\.lock|crates/.*/Cargo\.toml)$'
+        pass_filenames: false
+
+      - id: uv-lockfile-check
+        name: uv.lock is up to date
+        entry: uv lock
+        language: system
+        files: '^(pyproject\.toml|uv\.lock)$'
+        pass_filenames: false
+
+      - id: node-lockfile-check
+        name: package-lock.json is up to date
+        entry: bash -c 'cd crates/node && npm install --package-lock-only --ignore-scripts --audit=false --fund=false'
+        language: system
+        files: '^crates/node/package(?:-lock)?\.json$'
+        pass_filenames: false
 
   # Rust — fmt + clippy + cargo-deny
   - repo: local
