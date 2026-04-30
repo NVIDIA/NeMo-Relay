@@ -8,14 +8,14 @@ import * as adaptive from '../pkg/adaptive.js';
 import * as plugin from '../pkg/plugin.js';
 import { unique } from './test_support.mjs';
 
-test('WASM plugin wrappers expose default config', () => {
+test('WebAssembly plugin wrappers expose default config', () => {
   assert.deepEqual(plugin.defaultConfig(), {
     version: 1,
     components: [],
   });
 });
 
-test('WASM plugin wrappers register and validate components', () => {
+test('WebAssembly plugin wrappers register and validate components', () => {
   const pluginKind = unique('wasm.wrapper.plugin');
   const validatedConfigs = [];
 
@@ -54,7 +54,7 @@ test('WASM plugin wrappers register and validate components', () => {
   }
 });
 
-test('WASM plugin wrappers initialize components and report state', async () => {
+test('WebAssembly plugin wrappers initialize components and report state', async () => {
   const pluginKind = unique('wasm.wrapper.plugin.init');
   plugin.register(pluginKind, {
     register() {},
@@ -80,7 +80,7 @@ test('WASM plugin wrappers initialize components and report state', async () => 
   }
 });
 
-test('WASM plugin wrappers treat implicit undefined validation as no diagnostics', () => {
+test('WebAssembly plugin wrappers treat implicit undefined validation as no diagnostics', () => {
   const pluginKind = unique('wasm.wrapper.validate_undefined');
   plugin.register(pluginKind, {
     validate() {},

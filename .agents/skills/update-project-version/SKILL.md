@@ -1,6 +1,6 @@
 ---
 name: update-project-version
-description: Update the NeMo Flow project version across Cargo, Node, generated WASM package metadata, and lockfiles without leaving release surfaces out of sync
+description: Update the NeMo Flow project version across Cargo, Node, generated WebAssembly package metadata, and lockfiles without leaving release surfaces out of sync
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -29,7 +29,7 @@ pre-release or build-metadata variants used during packaging.
   root entry under `packages[""].version` updated together.
 - `crates/wasm/package.json` is a local dev manifest. Do not treat it as the
   publishable package manifest unless it gains an explicit `version` field.
-- The publishable WASM npm package version is derived from
+- The publishable WebAssembly npm package version is derived from
   `crates/wasm/Cargo.toml` through `wasm-pack` output plus
   `crates/wasm/scripts/prepare_pkg.mjs`.
 
@@ -57,9 +57,9 @@ pre-release or build-metadata variants used during packaging.
    - If `crates/node/package-lock.json` changed, regenerate
      `ATTRIBUTIONS-Node.md` with
      `./scripts/generate_attributions.sh node`.
-   - If the change needs WASM publish validation, rebuild the generated package
+   - If the change needs WebAssembly publish validation, rebuild the generated package
      with `just build-wasm` or
-     `NEMO_FLOW_WASM_RELEASE=1 npm --prefix crates/wasm run build:pkg`. Inspect
+     `NEMO_FLOW_WebAssembly_RELEASE=1 npm --prefix crates/wasm run build:pkg`. Inspect
      `crates/wasm/pkg/package.json`, not `crates/wasm/package.json`.
 5. Audit remaining references to the old version with targeted search. Separate
    true version pins from examples, generated attribution files, and unrelated
@@ -74,7 +74,7 @@ pre-release or build-metadata variants used during packaging.
   `./scripts/generate_attributions.sh rust`
 - If Node packaging changed materially: run `npm install --ignore-scripts` or
   stronger Node validation in `crates/node`
-- If validating the WASM publish surface: inspect the regenerated
+- If validating the WebAssembly publish surface: inspect the regenerated
   `crates/wasm/pkg/package.json`
 
 ## Release Notes

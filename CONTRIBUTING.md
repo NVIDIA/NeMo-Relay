@@ -21,7 +21,7 @@ the published package for your language:
 - **Python package** -- `uv add nemo-flow` or `pip install nemo-flow`
 - **Node.js package** -- `npm install nemo-flow-node`
 
-Go, WASM, and the raw FFI surface are currently experimental and remain
+Go, WebAssembly, and the raw FFI surface are currently experimental and remain
 source-first.
 
 ### Source Development
@@ -36,7 +36,7 @@ Install these tools before you start:
 - **wasm-pack** -- `cargo install wasm-pack`
 - **cargo-deny** -- `cargo install cargo-deny`
 
-When you work in Go, WASM, or the raw FFI surface, build and validate those
+When you work in Go, WebAssembly, or the raw FFI surface, build and validate those
 bindings from source in the same branch.
 
 Clone the repository and build the workspace:
@@ -60,7 +60,7 @@ cd go/nemo_flow
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" go test -v ./...
 cd ../..
 
-# WASM binding
+# WebAssembly binding
 wasm-pack test --node crates/wasm
 ```
 
@@ -184,7 +184,7 @@ just test-go
 # Node.js (requires native addon built)
 just test-node
 
-# WASM (unit tests)
+# WebAssembly (unit tests)
 just test-wasm
 ```
 
@@ -280,7 +280,7 @@ Valid types:
 Examples:
 
 ```
-feat: add scope context managers for automatic cleanup in Go, Node.js, and WASM
+feat: add scope context managers for automatic cleanup in Go, Node.js, and WebAssembly
 fix: propagate JS callback errors instead of silent null fallback
 docs: update API reference for typed wrapper methods
 test: add context isolation tests for concurrent scope stacks
@@ -330,4 +330,4 @@ Before making significant changes, read through the documentation in
 - [Middleware](docs/about/concepts/middleware.md) -- execution ordering and middleware behavior
 - [API Reference](docs/reference/api/index.md) -- public surfaces across Rust, Python, and Node.js
 
-The codebase follows a layered architecture: **Core (Rust)** provides the runtime, with bindings through **FFI (C, used by Go through CGo)**, **PyO3 (Python)**, **NAPI (Node.js)**, and **wasm-bindgen (WASM)**. Each binding mirrors the full API surface.
+The codebase follows a layered architecture: **Core (Rust)** provides the runtime, with bindings through **FFI (C, used by Go through CGo)**, **PyO3 (Python)**, **NAPI (Node.js)**, and **wasm-bindgen (WebAssembly)**. Each binding mirrors the full API surface.

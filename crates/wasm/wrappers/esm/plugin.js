@@ -126,7 +126,7 @@ export function listKinds() {
  * Register a plugin kind with JavaScript validation and registration hooks.
  *
  * Adapts the higher-level `Plugin` object contract to the lower-level callback
- * shape expected by the WASM wrapper surface.
+ * shape expected by the WebAssembly wrapper surface.
  *
  * @param {string} pluginKind - Unique plugin kind identifier to register.
  * @param {object} plugin - Plugin implementation with `validate` and `register` hooks.

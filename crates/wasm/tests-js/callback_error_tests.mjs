@@ -7,7 +7,7 @@ import { test } from 'node:test';
 
 import { expectClassError, makeLlmRequest, resetScopeStack, testsJsDir, wasm } from './test_support.mjs';
 
-test('WASM JS wrappers reject wrong handle classes', () => {
+test('WebAssembly JS wrappers reject wrong handle classes', () => {
   const stack = resetScopeStack();
   const scope = wasm.pushScope('assert_scope', wasm.ScopeType.Function, null, 0, null, null);
   const llmHandle = wasm.llmCall('assert_llm', makeLlmRequest(), null, 0, null, null);
@@ -54,7 +54,7 @@ test('WASM JS wrappers reject wrong handle classes', () => {
   }
 });
 
-test('WASM JS wrapper tolerates throwing subscriber callbacks', () => {
+test('WebAssembly JS wrapper tolerates throwing subscriber callbacks', () => {
   const child = spawnSync(
     process.execPath,
     [

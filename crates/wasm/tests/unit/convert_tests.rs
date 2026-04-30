@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for convert in the NeMo Flow WASM crate.
+//! Unit tests for convert in the NeMo Flow WebAssembly crate.
 
 use super::*;
 

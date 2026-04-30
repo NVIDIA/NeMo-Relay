@@ -54,12 +54,12 @@ NeMo Flow versions are anchored on the workspace SemVer in the repository root
   stays `dynamic = ["version"]` in the repository, and the packaging recipe
   writes a concrete version into `pyproject.toml` and `crates/python/Cargo.toml`
   in the ephemeral packaging workspace.
-- The published WASM npm package version is derived from the Rust workspace
+- The published WebAssembly npm package version is derived from the Rust workspace
   version during `wasm-pack` packaging.
 
 For non-tag CI builds, packaging recipes append a commit-derived suffix:
 
-- Node.js and WASM use `-<short_sha>`.
+- Node.js and WebAssembly use `-<short_sha>`.
 - Python uses `+<short_sha>` and converts prerelease labels into PEP 440 form.
   For example, `0.2.0-rc.1` becomes `0.2.0rc1` when packaged for PyPI.
 
@@ -171,13 +171,13 @@ for the shared release documentation and packaging stages.
 The release pipeline then:
 
 1. Validates the tag format in the `prepare` job.
-2. Skips repo checks and the Rust, Python, Go, Node.js, and WASM test jobs.
+2. Skips repo checks and the Rust, Python, Go, Node.js, and WebAssembly test jobs.
    Run those checks before creating and pushing the release tag.
 3. Builds and uploads the versioned GitHub Pages documentation artifact.
 4. Builds publishable package artifacts with the exact tag version:
    - `package-node` packs the npm Node.js package.
    - `package-python` builds platform wheels.
-   - `package-wasm` packs the npm WASM package.
+   - `package-wasm` packs the npm WebAssembly package.
 5. Publishes packages from the top-level workflow after the reusable packaging
    jobs complete:
    - `publish-rust` stamps Cargo workspace versions from the release tag, then
@@ -185,7 +185,7 @@ The release pipeline then:
      `nemo-flow-ffi` through trusted publishing from the top-level workflow
    - `publish-python` uploads the wheel artifacts to PyPI with trusted
      publishing from the top-level workflow
-   - `publish-npm` publishes the Node.js and WASM npm packages through npm
+   - `publish-npm` publishes the Node.js and WebAssembly npm packages through npm
      trusted publishing from the top-level workflow
      - Stable tags publish to the npm `latest` dist-tag
      - Prerelease tags such as `0.1.0-rc.1` publish to the npm `next`

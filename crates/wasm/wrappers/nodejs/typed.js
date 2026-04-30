@@ -172,7 +172,7 @@ async function typedLlmExecute(name, request, func, responseCodec, options) {
  * @param {{ toJson(value: TResponse): *, fromJson(data: *): TResponse }} responseCodec - Codec used to serialize and deserialize the final response.
  * @param {object} [options] - Optional execution-scoping metadata and codec hooks.
  * @returns {Promise<*>} A promise resolving to the native stream handle.
- * @remarks The wrapper buffers encoded chunks into the array-based WASM stream
+ * @remarks The wrapper buffers encoded chunks into the array-based WebAssembly stream
  * bridge and still runs the finalizer-driven response path for END-event
  * processing.
  */

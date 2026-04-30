@@ -3,7 +3,7 @@
 
 //! Conversion utilities between JavaScript (`JsValue`) and Rust (`serde_json::Value`).
 //!
-//! These helpers are used throughout the WASM bindings to marshal data across
+//! These helpers are used throughout the WebAssembly bindings to marshal data across
 //! the JS/Rust boundary via `serde_wasm_bindgen`.
 
 use std::sync::{LazyLock, Mutex};
@@ -20,7 +20,7 @@ pub fn to_js_err(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
-/// Record the most recent callback error observed inside the WASM binding.
+/// Record the most recent callback error observed inside the WebAssembly binding.
 pub fn record_callback_error(message: impl Into<String>) {
     let message = message.into();
     if let Ok(mut guard) = LAST_CALLBACK_ERROR.lock() {
@@ -28,7 +28,7 @@ pub fn record_callback_error(message: impl Into<String>) {
     }
 }
 
-/// Read the most recent callback error observed inside the WASM binding.
+/// Read the most recent callback error observed inside the WebAssembly binding.
 pub fn get_last_callback_error() -> Option<String> {
     LAST_CALLBACK_ERROR
         .lock()
@@ -36,7 +36,7 @@ pub fn get_last_callback_error() -> Option<String> {
         .and_then(|guard| guard.clone())
 }
 
-/// Clear the most recent callback error observed inside the WASM binding.
+/// Clear the most recent callback error observed inside the WebAssembly binding.
 pub fn clear_last_callback_error() {
     if let Ok(mut guard) = LAST_CALLBACK_ERROR.lock() {
         *guard = None;

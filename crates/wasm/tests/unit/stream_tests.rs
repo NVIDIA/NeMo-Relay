@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for stream in the NeMo Flow WASM crate.
+//! Unit tests for stream in the NeMo Flow WebAssembly crate.
 
 #[cfg(target_arch = "wasm32")]
 fn block_on<F: std::future::Future>(future: F) -> F::Output {

@@ -45,7 +45,7 @@ ancestry and shared scope-local middleware.
   usage
 - **Node.js**: create and set a scope stack explicitly for the current execution
   path with `createScopeStack()` and `setThreadScopeStack(...)`
-- **WASM**: use `createScopeStack()` and `setThreadScopeStack(...)`;
+- **WebAssembly**: use `createScopeStack()` and `setThreadScopeStack(...)`;
   single-threaded execution does not remove the need for isolation between
   logical runs
 

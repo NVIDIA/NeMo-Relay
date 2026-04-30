@@ -6,7 +6,7 @@ import { test } from 'node:test';
 
 import * as adaptive from '../pkg/adaptive.js';
 
-test('WASM adaptive wrappers expose default config and helper defaults', () => {
+test('WebAssembly adaptive wrappers expose default config and helper defaults', () => {
   assert.deepEqual(adaptive.defaultConfig(), {
     version: 1,
   });
@@ -24,7 +24,7 @@ test('WASM adaptive wrappers expose default config and helper defaults', () => {
   });
 });
 
-test('WASM adaptive wrappers expose backend and telemetry helpers', () => {
+test('WebAssembly adaptive wrappers expose backend and telemetry helpers', () => {
   assert.deepEqual(adaptive.inMemoryBackend(), {
     kind: 'in_memory',
     config: {},
@@ -46,7 +46,7 @@ test('WASM adaptive wrappers expose backend and telemetry helpers', () => {
   );
 });
 
-test('WASM adaptive wrappers build adaptive component specs', () => {
+test('WebAssembly adaptive wrappers build adaptive component specs', () => {
   assert.deepEqual(
     adaptive.ComponentSpec({
       version: 1,

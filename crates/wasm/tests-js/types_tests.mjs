@@ -6,7 +6,7 @@ import { test } from 'node:test';
 
 import { resetScopeStack, wasm } from './test_support.mjs';
 
-test('WASM package exports canonical runtime classes and scope type enum values', () => {
+test('WebAssembly package exports canonical runtime classes and scope type enum values', () => {
   assert.equal(typeof wasm.ScopeStack, 'function');
   assert.equal(typeof wasm.ScopeHandle, 'function');
   assert.equal(typeof wasm.ToolHandle, 'function');
@@ -28,7 +28,7 @@ test('WASM package exports canonical runtime classes and scope type enum values'
   assert.equal(wasm.ScopeType.Unknown, 10);
 });
 
-test('WASM LlmRequest getters and setters round-trip JS values', () => {
+test('WebAssembly LlmRequest getters and setters round-trip JS values', () => {
   const request = new wasm.LlmRequest(
     {
       trace: '1',
@@ -69,7 +69,7 @@ test('WASM LlmRequest getters and setters round-trip JS values', () => {
   }
 });
 
-test('WASM scope stack helpers expose current scope stack instances', () => {
+test('WebAssembly scope stack helpers expose current scope stack instances', () => {
   const stack = resetScopeStack();
   const currentStack = wasm.currentScopeStack();
 

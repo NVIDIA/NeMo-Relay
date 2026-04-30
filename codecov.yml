@@ -79,7 +79,7 @@ component_management:
           base: auto
           if_ci_failed: error
     - component_id: wasm_binding
-      name: WASM Binding
+      name: WebAssembly Binding
       paths:
         - "NeMo-Flow/crates/wasm/pkg/*.js"
       statuses:

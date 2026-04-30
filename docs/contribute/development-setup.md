@@ -17,7 +17,7 @@ the published package for your language:
 - Python: `uv add nemo-flow` or `pip install nemo-flow`
 - Node.js: `npm install nemo-flow-node`
 
-Go, WASM, and the raw FFI surface are currently experimental and remain
+Go, WebAssembly, and the raw FFI surface are currently experimental and remain
 source-first.
 
 ## Source Development
@@ -33,7 +33,7 @@ Install these tools before you start:
 - `wasm-pack`
 - `cargo-deny`
 
-If you touch Go, WASM, or the raw FFI surface, build and validate those
+If you touch Go, WebAssembly, or the raw FFI surface, build and validate those
 bindings from source in the same branch.
 
 Clone the repository and build the workspace:

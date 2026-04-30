@@ -20,7 +20,7 @@ needs to run them through NeMo Flow correctly.
   - Python: `tools.execute(...)`, `llm.execute(...)`
   - Node.js: `toolCallExecute(...)`, `llmCallExecute(...)`
   - Go: `tools.Execute(...)`, `llm.Execute(...)` or the top-level wrappers
-  - WASM: `toolCallExecute(...)`, `llmCallExecute(...)`
+  - WebAssembly: `toolCallExecute(...)`, `llmCallExecute(...)`
 - Use manual lifecycle APIs only when the host framework cannot be wrapped by the
   managed execute helpers.
 

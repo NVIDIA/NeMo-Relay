@@ -25,7 +25,7 @@ Use these skills for tasks such as:
 - Setting up observability and trace export
 - Debugging application-side NeMo Flow integrations
 
-When a skill mentions Go, WASM, or raw FFI, treat those as source-first
+When a skill mentions Go, WebAssembly, or raw FFI, treat those as source-first
 advanced surfaces. Their APIs are tracked in `go/nemo_flow`, `crates/wasm`, and
 `crates/ffi`, but the primary end-user docs and quick starts focus on Rust,
 Python, and Node.js.

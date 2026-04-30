@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # nemo-flow-wasm
 
 `nemo-flow-wasm` is the NeMo Flow WebAssembly package for JavaScript
-environments that load the runtime through WASM. It exposes the same execution
+environments that load the runtime through WebAssembly. It exposes the same execution
 scope, middleware, plugin, lifecycle event, and observability concepts as the
 Rust runtime.
 
@@ -17,7 +17,7 @@ the Rust crate directly.
 ## Why Use It?
 
 - 🌐 **Bring NeMo Flow to WebAssembly**: Use the shared runtime model from
-  JavaScript environments that load the package through WASM.
+  JavaScript environments that load the package through WebAssembly.
 - 🧭 **Keep execution context visible**: Group scope, tool, LLM, middleware, and
   subscriber behavior into the same runtime event tree.
 - 🛡️ **Register JavaScript policy callbacks**: Apply guardrails and intercepts
@@ -27,7 +27,7 @@ the Rust crate directly.
 
 ## What You Get
 
-- ✅ **WASM runtime bindings**: Access to NeMo Flow scope, tool, LLM,
+- ✅ **WebAssembly runtime bindings**: Access to NeMo Flow scope, tool, LLM,
   middleware, subscriber, plugin, typed, and adaptive APIs.
 - ✅ **Managed tool and LLM execution**: Helpers that emit lifecycle events for
   JavaScript-managed callbacks.

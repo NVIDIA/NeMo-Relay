@@ -25,7 +25,7 @@ working.
 - Python native extension missing
 - Go dynamic library not on the loader path
 - Node native addon not built or not loading
-- WASM package not initialized
+- WebAssembly package not initialized
 - Execute call outside a scope
 - Missing events because registration never happened
 - Concurrency causing the wrong scope stack to be active
@@ -43,7 +43,7 @@ working.
 - **Go loader failure**: build the release FFI shared library and point both the
   linker and runtime loader at the release output directory; use the macOS
   dynamic-library path variable (`DYLD_LIBRARY_PATH`) on macOS.
-- **WASM failure**: verify `wasm-pack` is installed, rebuild the package, and
+- **WebAssembly failure**: verify `wasm-pack` is installed, rebuild the package, and
   clear stale generated output if the build changed.
 - **Scope stack empty**: the work is outside an active scope or crossed a thread,
   task, goroutine, or worker boundary without the intended stack.

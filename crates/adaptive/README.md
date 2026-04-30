@@ -91,9 +91,4 @@ of the adaptive pipeline.
 
 ## Documentation
 
-Start with:
-
-- The repo root `README.md`
-- `docs/use-adaptive-optimization/configure.md`
-- `docs/use-adaptive-optimization/adaptive-components.md`
-- `docs/about/concepts/plugins.md`
+NeMo Flow Documentation: https://nvidia.github.io/NeMo-Flow

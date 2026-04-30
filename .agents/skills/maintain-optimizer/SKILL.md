@@ -42,7 +42,7 @@ See `docs/use-adaptive-optimization/configure.md` and
   `python/nemo_flow/plugin.py`
 - Go adaptive helpers under `go/nemo_flow/adaptive` plus shared plugin
   helpers in `go/nemo_flow`
-- Node/WASM adaptive helpers and plugin wrappers
+- Node/WebAssembly adaptive helpers and plugin wrappers
 - Docs and examples that show canonical config shapes
 
 ## Checklist

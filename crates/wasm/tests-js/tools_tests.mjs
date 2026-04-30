@@ -6,7 +6,7 @@ import { test } from 'node:test';
 
 import { currentScope, resetScopeStack, unique, waitFor, wasm } from './test_support.mjs';
 
-test('WASM tool handles preserve nullable inputs and handle properties', () => {
+test('WebAssembly tool handles preserve nullable inputs and handle properties', () => {
   const stack = resetScopeStack();
   const scope = wasm.pushScope('tool_scope', wasm.ScopeType.Function, null, 0, null, null);
   let toolHandle;
@@ -44,7 +44,7 @@ test('WASM tool handles preserve nullable inputs and handle properties', () => {
   }
 });
 
-test('WASM tool execute returns null when the JS callback yields undefined', async () => {
+test('WebAssembly tool execute returns null when the JS callback yields undefined', async () => {
   const toolNullResult = await wasm.toolCallExecute(
     'optional_tool_exec_null',
     {
@@ -55,7 +55,7 @@ test('WASM tool execute returns null when the JS callback yields undefined', asy
   assert.equal(toolNullResult, null);
 });
 
-test('WASM tool request intercepts modify arguments in the generated package flow', () => {
+test('WebAssembly tool request intercepts modify arguments in the generated package flow', () => {
   const toolInterceptName = unique('tool_req');
 
   wasm.registerToolRequestIntercept(toolInterceptName, 1, false, (_name, args) => ({
@@ -81,7 +81,7 @@ test('WASM tool request intercepts modify arguments in the generated package flo
   }
 });
 
-test('WASM tool lifecycle flows emit events from the generated Node package', async () => {
+test('WebAssembly tool lifecycle flows emit events from the generated Node package', async () => {
   const stack = resetScopeStack();
   const events = [];
   const subscriberName = unique('event_subscriber');
@@ -128,7 +128,7 @@ test('WASM tool lifecycle flows emit events from the generated Node package', as
   }
 });
 
-test('WASM tool execute runs through the generated Node package flow', async () => {
+test('WebAssembly tool execute runs through the generated Node package flow', async () => {
   const toolInterceptName = unique('tool_req_exec');
 
   wasm.registerToolRequestIntercept(toolInterceptName, 1, false, (_name, args) => ({

@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
 import { unique, wasm } from './test_support.mjs';
 
-test('WASM package exposes OpenTelemetry config defaults', () => {
+test('WebAssembly package exposes OpenTelemetry config defaults', () => {
   const config = wasm.defaultOpenTelemetryConfig();
   assert.equal(config.transport, 'http_binary');
   assert.equal(config.endpoint, undefined);
@@ -20,7 +20,7 @@ test('WASM package exposes OpenTelemetry config defaults', () => {
   assert.equal(config.resourceAttributes.size, 0);
 });
 
-test('WASM OpenTelemetry subscriber supports lifecycle methods from mutable config objects', () => {
+test('WebAssembly OpenTelemetry subscriber supports lifecycle methods from mutable config objects', () => {
   const config = wasm.defaultOpenTelemetryConfig();
   config.endpoint = 'http://localhost:4318/v1/traces';
   config.serviceName = 'wasm-agent';
@@ -44,7 +44,7 @@ test('WASM OpenTelemetry subscriber supports lifecycle methods from mutable conf
   subscriber.shutdown();
 });
 
-test('WASM OpenTelemetry subscriber rejects invalid config values', () => {
+test('WebAssembly OpenTelemetry subscriber rejects invalid config values', () => {
   assert.throws(
     () =>
       new wasm.OpenTelemetrySubscriber({
@@ -79,7 +79,7 @@ test('WASM OpenTelemetry subscriber rejects invalid config values', () => {
   );
 });
 
-test('WASM package exports scope push/pop and mark events end to end', async () => {
+test('WebAssembly package exports scope push/pop and mark events end to end', async () => {
   const collector = await startCollector();
   const config = wasm.defaultOpenTelemetryConfig();
   config.endpoint = collector.endpoint;

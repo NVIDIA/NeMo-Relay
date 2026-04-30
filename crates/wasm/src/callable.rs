@@ -146,7 +146,9 @@ fn json_to_result_stream(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn wasm_only_error() -> FlowError {
-    FlowError::Internal("WASM callback wrappers are only supported on wasm32 targets".to_string())
+    FlowError::Internal(
+        "WebAssembly callback wrappers are only supported on wasm32 targets".to_string(),
+    )
 }
 
 /// Wrap a JS function `(name, args) => result` for tool sanitize/intercept.
@@ -745,12 +747,12 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
 // Codec wrappers
 // ---------------------------------------------------------------------------
 
-/// WASM implementation of `LlmCodec` backed by two JS functions (decode + encode).
+/// WebAssembly implementation of `LlmCodec` backed by two JS functions (decode + encode).
 ///
 /// # Safety
 ///
 /// `SendWrapper` is used because JS functions are not `Send`. This is safe in
-/// WASM because the runtime is single-threaded. The pattern matches all other
+/// WebAssembly because the runtime is single-threaded. The pattern matches all other
 /// JS-function wrappers in this file.
 #[cfg(target_arch = "wasm32")]
 struct WasmCodec {
@@ -758,7 +760,7 @@ struct WasmCodec {
     encode_fn: SendWrapper<Function>,
 }
 
-// SAFETY: WASM is single-threaded; SendWrapper guarantees these are only accessed
+// SAFETY: WebAssembly is single-threaded; SendWrapper guarantees these are only accessed
 // from the thread that created them.
 #[cfg(target_arch = "wasm32")]
 unsafe impl Send for WasmCodec {}
@@ -838,7 +840,7 @@ pub fn wrap_js_codec(decode_fn: Function, encode_fn: Function) -> Arc<dyn LlmCod
 /// # Safety
 ///
 /// `SendWrapper` is used because JS functions are not `Send`. This is safe in
-/// WASM because the runtime is single-threaded.
+/// WebAssembly because the runtime is single-threaded.
 #[cfg(target_arch = "wasm32")]
 struct WasmResponseCodec {
     decode_response_fn: SendWrapper<Function>,

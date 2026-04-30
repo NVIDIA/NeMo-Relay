@@ -24,7 +24,7 @@ tool or LLM integration.
   middleware, then converts JSON back into the framework callback or caller type.
 - Python exposes `JsonPassthrough`, `DataclassCodec`, `PydanticCodec`, and
   `BestEffortAnyCodec`. Node.js exposes `JsonPassthrough` plus custom
-  `Codec<T>` implementations. WASM has generated typed wrappers mirroring the
+  `Codec<T>` implementations. WebAssembly has generated typed wrappers mirroring the
   Node shape.
 - Use `BestEffortAnyCodec` only at boundaries where strict schemas are not
   available. Prefer dataclass, Pydantic, or explicit Node.js codecs when the
@@ -34,7 +34,7 @@ tool or LLM integration.
   inspect messages, tools, model names, generation parameters, and response
   annotations.
 - Built-in provider codecs include `OpenAIChatCodec`, `OpenAIResponsesCodec`,
-  and `AnthropicMessagesCodec` in Python, Node.js, WASM, and Rust. Choose the
+  and `AnthropicMessagesCodec` in Python, Node.js, WebAssembly, and Rust. Choose the
   codec that matches the actual provider payload shape.
 - Response codecs annotate LLM end events with fields such as `id`, `model`,
   `message`, `tool_calls`, `finish_reason`, `usage`, provider-specific data, and
@@ -45,7 +45,7 @@ tool or LLM integration.
 
 ## Key Rules
 
-- Typed wrappers are currently a first-class path for Python and Node.js; WASM
+- Typed wrappers are currently a first-class path for Python and Node.js; WebAssembly
   exposes analogous generated JS wrappers; Rust uses codec traits directly
 - Request/response conversion belongs in codecs
 - Intercepts and guardrails see JSON values after encoding

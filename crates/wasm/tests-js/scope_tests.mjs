@@ -6,7 +6,7 @@ import { test } from 'node:test';
 
 import { currentScope, resetScopeStack, SCOPE_ATTR_PARALLEL, SCOPE_ATTR_RELOCATABLE, wasm } from './test_support.mjs';
 
-test('WASM scope stack exposes the generated root scope handle', () => {
+test('WebAssembly scope stack exposes the generated root scope handle', () => {
   const stack = resetScopeStack();
   const root = wasm.getHandle();
 
@@ -24,7 +24,7 @@ test('WASM scope stack exposes the generated root scope handle', () => {
   }
 });
 
-test('WASM pushScope preserves attributes, data, and metadata', () => {
+test('WebAssembly pushScope preserves attributes, data, and metadata', () => {
   const stack = resetScopeStack();
   let scope;
 
@@ -60,7 +60,7 @@ test('WASM pushScope preserves attributes, data, and metadata', () => {
   }
 });
 
-test('WASM pushScope supports nullable inputs and root parent handles', () => {
+test('WebAssembly pushScope supports nullable inputs and root parent handles', () => {
   const stack = resetScopeStack();
   const root = currentScope();
   const rootUuid = root.uuid;
@@ -81,7 +81,7 @@ test('WASM pushScope supports nullable inputs and root parent handles', () => {
   }
 });
 
-test('WASM withScope returns callback data for synchronous callbacks', async () => {
+test('WebAssembly withScope returns callback data for synchronous callbacks', async () => {
   const stack = resetScopeStack();
 
   try {
@@ -111,7 +111,7 @@ test('WASM withScope returns callback data for synchronous callbacks', async () 
   }
 });
 
-test('WASM withScope supports async callbacks', async () => {
+test('WebAssembly withScope supports async callbacks', async () => {
   const stack = resetScopeStack();
 
   try {

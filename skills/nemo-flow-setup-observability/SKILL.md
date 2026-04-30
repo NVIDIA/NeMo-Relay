@@ -57,7 +57,7 @@ activity but has not yet decided which output they need.
 - Node.js: root exports `registerSubscriber(...)`, `AtifExporter`,
   `OpenTelemetrySubscriber`, and `OpenInferenceSubscriber`
 - Rust: `nemo_flow::api::subscriber` and `nemo_flow::observability::*`
-- Go and WASM: source-first wrappers expose equivalent register, exporter, and
+- Go and WebAssembly: source-first wrappers expose equivalent register, exporter, and
   subscriber lifecycle methods
 
 ## Use Another Skill When

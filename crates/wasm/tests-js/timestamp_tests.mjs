@@ -14,7 +14,7 @@ const parseTimestampMicros = (value) => {
   return Date.parse(`${base}${zone}`) * 1000 + Number(fraction.padEnd(6, '0').slice(0, 6));
 };
 
-test('WASM manual lifecycle APIs accept optional timestamp arguments', async () => {
+test('WebAssembly manual lifecycle APIs accept optional timestamp arguments', async () => {
   const stack = resetScopeStack();
   const events = [];
   const timestamps = [
@@ -71,7 +71,7 @@ test('WASM manual lifecycle APIs accept optional timestamp arguments', async () 
   );
 });
 
-test('WASM manual lifecycle APIs reject invalid timestamp microseconds', () => {
+test('WebAssembly manual lifecycle APIs reject invalid timestamp microseconds', () => {
   const stack = resetScopeStack();
   const invalidTimestamps = [
     timestampMicros('2026-01-01T00:00:00.000Z') + 0.5,

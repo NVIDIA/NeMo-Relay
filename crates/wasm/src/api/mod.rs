@@ -132,7 +132,7 @@ impl Default for WasmOpenInferenceConfig {
 
 #[wasm_bindgen(typescript_custom_section)]
 const TYPESCRIPT_SHARED_DECLARATIONS: &str = r#"
-/** One JSON scalar value accepted by the root WASM API. */
+/** One JSON scalar value accepted by the root WebAssembly API. */
 export type JsonPrimitive = string | number | boolean | null;
 /** A JSON object with recursively JSON-serializable values. */
 export interface JsonObject {
@@ -140,7 +140,7 @@ export interface JsonObject {
 }
 /** A JSON array with recursively JSON-serializable values. */
 export interface JsonArray extends Array<Json> {}
-/** Any JSON-serializable value accepted by the root WASM API. */
+/** Any JSON-serializable value accepted by the root WebAssembly API. */
 export type Json = JsonPrimitive | JsonObject | JsonArray;
 
 /** Mutable configuration object for `OpenTelemetrySubscriber`. */
@@ -427,7 +427,7 @@ pub fn get_last_callback_error() -> JsValue {
     }
 }
 
-/// Clears the most recent callback error recorded by the WASM binding.
+/// Clears the most recent callback error recorded by the WebAssembly binding.
 #[wasm_bindgen(js_name = "clearLastCallbackError")]
 pub fn clear_last_callback_error() {
     crate::convert::clear_last_callback_error();
@@ -2729,7 +2729,9 @@ impl Plugin for WasmPlugin {
                         code: "plugin.validate_failed".into(),
                         component: Some(self.plugin_kind.clone()),
                         field: None,
-                        message: format!("WASM plugin validate returned invalid diagnostics: {e}"),
+                        message: format!(
+                            "WebAssembly plugin validate returned invalid diagnostics: {e}"
+                        ),
                     }]
                 }),
             Err(err) => vec![ConfigDiagnostic {
@@ -2739,7 +2741,7 @@ impl Plugin for WasmPlugin {
                 field: None,
                 message: err
                     .as_string()
-                    .unwrap_or_else(|| "WASM plugin validate failed".to_string()),
+                    .unwrap_or_else(|| "WebAssembly plugin validate failed".to_string()),
             }],
         }
     }
@@ -2763,15 +2765,14 @@ impl Plugin for WasmPlugin {
                 .map_err(|err| {
                     PluginError::RegistrationFailed(
                         err.as_string()
-                            .unwrap_or_else(|| "WASM plugin register failed".to_string()),
+                            .unwrap_or_else(|| "WebAssembly plugin register failed".to_string()),
                     )
                 })?;
 
             ctx.extend_registrations(plugin_context.drain_registrations().map_err(|err| {
-                PluginError::RegistrationFailed(
-                    err.as_string()
-                        .unwrap_or_else(|| "failed to drain WASM plugin registrations".to_string()),
-                )
+                PluginError::RegistrationFailed(err.as_string().unwrap_or_else(|| {
+                    "failed to drain WebAssembly plugin registrations".to_string()
+                }))
             })?);
             Ok(())
         })

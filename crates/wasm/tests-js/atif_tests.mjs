@@ -6,7 +6,7 @@ import { test } from 'node:test';
 
 import { resetScopeStack, unique, wasm } from './test_support.mjs';
 
-test('WASM AtifExporter accepts a null model name and exports schema metadata', () => {
+test('WebAssembly AtifExporter accepts a null model name and exports schema metadata', () => {
   const exporter = new wasm.AtifExporter('session-js', 'wasm-js', '1.0.0', null);
 
   try {
@@ -16,7 +16,7 @@ test('WASM AtifExporter accepts a null model name and exports schema metadata', 
   }
 });
 
-test('WASM AtifExporter registers, captures steps, and clears state', async () => {
+test('WebAssembly AtifExporter registers, captures steps, and clears state', async () => {
   const stack = resetScopeStack();
   const exporter = new wasm.AtifExporter('session-js', 'wasm-js', '1.0.0', 'demo-model');
   const exporterName = unique('exporter');

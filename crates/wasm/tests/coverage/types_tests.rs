@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for types in the NeMo Flow WASM crate.
+//! Coverage tests for types in the NeMo Flow WebAssembly crate.
 
 use super::*;
 use nemo_flow::api::event::{BaseEvent, EventCategory, MarkEvent, ScopeCategory, ScopeEvent};

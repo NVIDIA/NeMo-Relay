@@ -34,7 +34,7 @@ Do not use this skill for:
    module, re-export them through `crates/ffi/src/api/mod.rs`, and ensure the
    generated `crates/ffi/nemo_flow.h` stays correct.
 3. **Language-native bindings**
-   Update Python, Go, Node.js, and WASM for every surface that should expose the
+   Update Python, Go, Node.js, and WebAssembly for every surface that should expose the
    capability.
 4. **Language wrapper helpers**
    Update Python wrapper modules, Go shorthand packages, typed helpers, or
@@ -48,14 +48,14 @@ Do not use this skill for:
 
 ## Naming Conventions
 
-| Layer   | Convention        | Example                              |
-|---------|-------------------|--------------------------------------|
-| Rust    | `snake_case`      | `nemo_flow_tool_call`                |
-| C FFI   | `nemo_flow_` prefix | `nemo_flow_tool_call`              |
-| Python  | `snake_case`      | `nemo_flow.tools.call`               |
-| Go      | `PascalCase`      | `nemo_flow.ToolCall`                 |
-| Node.js | `camelCase`       | `toolCall`                           |
-| WASM    | `camelCase`       | `toolCall`                           |
+| Layer       | Convention        | Example                              |
+|-------------|-------------------|--------------------------------------|
+| Rust        | `snake_case`      | `nemo_flow_tool_call`                |
+| C FFI       | `nemo_flow_` prefix | `nemo_flow_tool_call`              |
+| Python      | `snake_case`      | `nemo_flow.tools.call`               |
+| Go          | `PascalCase`      | `nemo_flow.ToolCall`                 |
+| Node.js     | `camelCase`       | `toolCall`                           |
+| WebAssembly | `camelCase`       | `toolCall`                           |
 
 ## Parity Checklist
 
@@ -71,7 +71,7 @@ Do not use this skill for:
 - [ ] Go wrapper in `go/nemo_flow/nemo_flow.go` with doc comment
 - [ ] Go shorthand package updated if the capability belongs there
 - [ ] Node.js binding in `crates/node/src/api/mod.rs`
-- [ ] WASM binding in `crates/wasm/src/api/mod.rs`
+- [ ] WebAssembly binding in `crates/wasm/src/api/mod.rs`
 - [ ] Typed wrapper or adaptive/plugin helper surfaces updated when applicable
 - [ ] Tests added in every affected language surface
 - [ ] SPDX license header on any new files
@@ -103,4 +103,4 @@ Lock these before implementing:
 - Adaptive config/plugins: `docs/about/concepts/plugins.md`,
   `docs/build-plugins/about.md`, `docs/use-adaptive-optimization/configure.md`
 - Existing pattern: follow a surface already implemented across core, FFI,
-  Python, Go, Node.js, and WASM rather than inventing a new shape
+  Python, Go, Node.js, and WebAssembly rather than inventing a new shape

@@ -9,7 +9,7 @@ import { test } from 'node:test';
 
 import { pkgDir, testsJsDir, wasm } from './test_support.mjs';
 
-test('WASM generated package exposes the expected package metadata', () => {
+test('WebAssembly generated package exposes the expected package metadata', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
   assert.equal(packageJson.name, 'nemo-flow-wasm');
   assert.equal(packageJson.types, 'nemo_flow_wasm.d.ts');
@@ -22,7 +22,7 @@ test('WASM generated package exposes the expected package metadata', () => {
   assert.equal(wasm.ScopeType.Agent, 0);
 });
 
-test('WASM generated package includes the expected wrapper files', () => {
+test('WebAssembly generated package includes the expected wrapper files', () => {
   const expectedFiles = [
     'index.js',
     'nemo_flow_wasm.d.ts',
@@ -39,13 +39,13 @@ test('WASM generated package includes the expected wrapper files', () => {
   }
 });
 
-test('WASM package keeps the generated root declaration as the source of truth for exports metadata', () => {
+test('WebAssembly package keeps the generated root declaration as the source of truth for exports metadata', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
   assert.equal(packageJson.types, 'nemo_flow_wasm.d.ts');
   assert.equal(packageJson.exports['.'].types, './nemo_flow_wasm.d.ts');
 });
 
-test('WASM package root declaration contains the documented public types and exports', () => {
+test('WebAssembly package root declaration contains the documented public types and exports', () => {
   const indexJs = fs.readFileSync(path.join(pkgDir, 'index.js'), 'utf8');
   const wasmDts = fs.readFileSync(path.join(pkgDir, 'nemo_flow_wasm.d.ts'), 'utf8');
 
@@ -59,7 +59,7 @@ test('WASM package root declaration contains the documented public types and exp
   }
 });
 
-test('WASM JS wrapper covers TextEncoder fallback for unicode strings', () => {
+test('WebAssembly JS wrapper covers TextEncoder fallback for unicode strings', () => {
   const child = spawnSync(
     process.execPath,
     [

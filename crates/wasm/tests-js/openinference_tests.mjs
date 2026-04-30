@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
 import { assertBodyContains, unique, wasm } from './test_support.mjs';
 
-test('WASM package exposes OpenInference config defaults', () => {
+test('WebAssembly package exposes OpenInference config defaults', () => {
   const config = wasm.defaultOpenInferenceConfig();
   assert.equal(config.transport, 'http_binary');
   assert.equal(config.endpoint, undefined);
@@ -20,7 +20,7 @@ test('WASM package exposes OpenInference config defaults', () => {
   assert.equal(config.resourceAttributes.size, 0);
 });
 
-test('WASM OpenInference subscriber supports lifecycle methods from mutable config objects', () => {
+test('WebAssembly OpenInference subscriber supports lifecycle methods from mutable config objects', () => {
   const config = wasm.defaultOpenInferenceConfig();
   config.endpoint = 'http://localhost:4318/v1/traces';
   config.serviceName = 'wasm-agent';
@@ -44,7 +44,7 @@ test('WASM OpenInference subscriber supports lifecycle methods from mutable conf
   subscriber.shutdown();
 });
 
-test('WASM OpenInference subscriber rejects invalid config values', () => {
+test('WebAssembly OpenInference subscriber rejects invalid config values', () => {
   assert.throws(
     () =>
       new wasm.OpenInferenceSubscriber({
@@ -79,7 +79,7 @@ test('WASM OpenInference subscriber rejects invalid config values', () => {
   );
 });
 
-test('WASM package exports OpenInference scope push/pop and mark events end to end', async () => {
+test('WebAssembly package exports OpenInference scope push/pop and mark events end to end', async () => {
   const collector = await startCollector();
   const config = wasm.defaultOpenInferenceConfig();
   config.endpoint = collector.endpoint;

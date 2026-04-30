@@ -10,12 +10,12 @@ license: Apache-2.0
 
 Use this skill for first-time users who want the shortest path to a working
 example. Rust, Python, and Node.js are the primary quick-start and hosted-docs
-paths. Go, WASM, and the raw FFI surface are source-first advanced paths.
+paths. Go, WebAssembly, and the raw FFI surface are source-first advanced paths.
 
 ## Default Path
 
 - Pick the user's host language first: Rust, Python, or Node.js. If they are
-  using Go, WASM, or raw FFI, verify names against tracked source and tests.
+  using Go, WebAssembly, or raw FFI, verify names against tracked source and tests.
 - Prefer the managed execution APIs over manual lifecycle APIs.
 - Start with one scope, one tool call, and one LLM call.
 - Add observability only after the basic flow works.
@@ -32,7 +32,7 @@ paths. Go, WASM, and the raw FFI surface are source-first advanced paths.
 - **Go**: use source-first wrappers such as `scope.Push(...)`,
   `tools.Execute(...)`, `llm.Execute(...)`, or top-level `PushScope(...)`,
   `ToolCallExecute(...)`, and `LlmCallExecute(...)`
-- **WASM**: use the generated JS-facing API such as `withScope(...)`,
+- **WebAssembly**: use the generated JS-facing API such as `withScope(...)`,
   `toolCallExecute(...)`, `llmCallExecute(...)`, and `createScopeStack()`
 - **FFI**: recommend only for binding or embedding work; verify C names such as
   `nemo_flow_push_scope`, `nemo_flow_tool_call_execute`, and
@@ -42,7 +42,7 @@ paths. Go, WASM, and the raw FFI surface are source-first advanced paths.
 
 - Calling execute APIs without an active scope
 - Skipping the build step for Rust, Python, or Node.js
-- Assuming source-first Go/WASM/FFI bindings have the same hosted-doc coverage
+- Assuming source-first Go/WebAssembly/FFI bindings have the same hosted-doc coverage
   as Rust, Python, and Node.js
 - Mixing manual lifecycle APIs into a first example
 

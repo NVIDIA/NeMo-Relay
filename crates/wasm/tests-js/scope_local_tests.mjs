@@ -53,7 +53,7 @@ test('scope-local registration wrappers cover invalid UUID and duplicate errors'
   }
 });
 
-test('WASM scope-local llm stream execution intercept composes with next', async () => {
+test('WebAssembly scope-local llm stream execution intercept composes with next', async () => {
   const stack = resetScopeStack();
   const scope = wasm.pushScope('scope_stream_compose', wasm.ScopeType.Function, null, 0, null, null);
   const interceptName = unique('scope_llm_stream_exec');

@@ -16,7 +16,7 @@ import {
   wasm,
 } from './test_support.mjs';
 
-test('WASM llm handles preserve nullable inputs and handle properties', () => {
+test('WebAssembly llm handles preserve nullable inputs and handle properties', () => {
   const stack = resetScopeStack();
   const scope = wasm.pushScope('llm_scope', wasm.ScopeType.Function, null, 0, null, null);
   const llmRequest = makeLlmRequest();
@@ -48,7 +48,7 @@ test('WASM llm handles preserve nullable inputs and handle properties', () => {
   }
 });
 
-test('WASM llm execute returns results and nulls through the wrapper surface', async () => {
+test('WebAssembly llm execute returns results and nulls through the wrapper surface', async () => {
   const llmResult = await wasm.llmCallExecute('optional_llm_exec', makeLlmRequest(), async () => ({
     role: 'assistant',
     content: 'ok',
@@ -60,7 +60,7 @@ test('WASM llm execute returns results and nulls through the wrapper surface', a
   assert.equal(llmNullResult, null);
 });
 
-test('WASM llm wrappers reject invalid request shapes', async () => {
+test('WebAssembly llm wrappers reject invalid request shapes', async () => {
   expectInvalidLlmRequest(() =>
     wasm.llmRequestIntercepts('bad_llm', {
       headers: [],
@@ -97,7 +97,7 @@ test('WASM llm wrappers reject invalid request shapes', async () => {
   );
 });
 
-test('WASM llm stream execution intercept composes with next', async () => {
+test('WebAssembly llm stream execution intercept composes with next', async () => {
   const interceptName = unique('wasm_llm_stream_exec');
   let stream;
 
@@ -151,7 +151,7 @@ test('WASM llm stream execution intercept composes with next', async () => {
   }
 });
 
-test('WASM llm stream execution intercept rejects invalid next payloads', async () => {
+test('WebAssembly llm stream execution intercept rejects invalid next payloads', async () => {
   const interceptName = unique('wasm_llm_stream_invalid');
   wasm.registerLlmStreamExecutionIntercept(interceptName, 10, async (_request, next) =>
     next({
@@ -188,7 +188,7 @@ test('WASM llm stream execution intercept rejects invalid next payloads', async 
   }
 });
 
-test('WASM llm and stream flows work from the generated Node package', async () => {
+test('WebAssembly llm and stream flows work from the generated Node package', async () => {
   const stack = resetScopeStack();
   const events = [];
   const subscriberName = unique('llm_event_subscriber');
@@ -226,7 +226,7 @@ test('WASM llm and stream flows work from the generated Node package', async () 
   }
 });
 
-test('WASM llm lifecycle flows work from the generated Node package', async () => {
+test('WebAssembly llm lifecycle flows work from the generated Node package', async () => {
   const request = {
     headers: {
       trace: '1',
@@ -274,7 +274,7 @@ test('WASM llm lifecycle flows work from the generated Node package', async () =
   }
 });
 
-test('WASM llm execute flow works from the generated Node package', async () => {
+test('WebAssembly llm execute flow works from the generated Node package', async () => {
   const stack = resetScopeStack();
   const events = [];
   const subscriberName = unique('llm_event_subscriber_exec');
@@ -318,7 +318,7 @@ test('WASM llm execute flow works from the generated Node package', async () => 
   }
 });
 
-test('WASM llm stream flow works from the generated Node package', async () => {
+test('WebAssembly llm stream flow works from the generated Node package', async () => {
   const request = {
     headers: {
       trace: '1',

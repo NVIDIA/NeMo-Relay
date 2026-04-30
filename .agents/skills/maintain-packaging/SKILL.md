@@ -23,7 +23,7 @@ consumed outside the source tree.
 - Python packaging in `pyproject.toml`
 - Go module path in `go/nemo_flow/go.mod`
 - Node package metadata in `crates/node/package.json`
-- WASM package naming and generated package expectations
+- WebAssembly package naming and generated package expectations
 - FFI header and library naming
 - CI workflows, install commands, and example commands
 - Release tags, release-note surfaces, and registry-facing version translation

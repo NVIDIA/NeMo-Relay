@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! WASM-friendly wrapper types for the NeMo Flow runtime.
+//! WebAssembly-friendly wrapper types for the NeMo Flow runtime.
 //!
 //! This module mirrors the Node binding pattern: exported Rust wrapper types
 //! use the canonical JS-facing names, while imported core runtime types are
@@ -27,7 +27,7 @@ use nemo_flow::error::FlowError;
 use nemo_flow::json::Json;
 
 // ---------------------------------------------------------------------------
-// Enums and constants used by the WASM bindings.
+// Enums and constants used by the WebAssembly bindings.
 // ---------------------------------------------------------------------------
 
 fn string_to_js(value: &str) -> JsValue {
@@ -299,7 +299,7 @@ impl From<CoreLlmHandle> for LlmHandle {
 
 /// Handle to an isolated scope stack for per-request/per-task isolation.
 ///
-/// In a WASM environment (browser/Node.js), there is no native async-local
+/// In a WebAssembly environment (browser/Node.js), there is no native async-local
 /// storage, so scope stacks are passed explicitly. Create one per logical
 /// request and pass it to scope-stack-aware API variants.
 #[wasm_bindgen(js_name = ScopeStack)]

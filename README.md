@@ -101,7 +101,7 @@ End-user documentation lives at [nvidia.github.io/NeMo-Flow](https://nvidia.gith
 
 The primary documentation track covers Rust, Python, and Node.js.
 
-The Go, WASM, and raw FFI surfaces are currently experimental and remain source-first under
+The Go, WebAssembly, and raw FFI surfaces are currently experimental and remain source-first under
 `go/nemo_flow`, `crates/wasm`, and `crates/ffi`.
 
 ## Binding Status
@@ -114,7 +114,7 @@ The table below summarizes the support level for each binding surface.
 | Node.js | ✅ Fully Supported | Fully documented with Quick Start and Guides  |
 | Rust | ✅ Fully Supported | Fully documented with Quick Start and Guides  |
 | Go | 🚧 Experimental | Source-first under `go/nemo_flow`. |
-| WASM | 🚧 Experimental | Source-first under `crates/wasm`. |
+| WebAssembly | 🚧 Experimental | Source-first under `crates/wasm`. |
 | FFI | 🚧 Experimental | Source-first under `crates/ffi`. |
 
 ## Third-Party Integrations

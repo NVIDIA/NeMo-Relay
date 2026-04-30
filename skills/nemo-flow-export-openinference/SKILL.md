@@ -26,7 +26,7 @@ for example Arize Phoenix or another OpenInference-aware OTLP backend.
 - Configure `transport`, `endpoint`, `service_name`, optional namespace and
   version, instrumentation scope, headers, resource attributes, and timeout.
 - Start with `http_binary` transport and an OTLP/HTTP traces endpoint. Native
-  targets can use `grpc` only when a Tokio runtime is active; WASM rejects
+  targets can use `grpc` only when a Tokio runtime is active; WebAssembly rejects
   `grpc`.
 - Scope, tool, and LLM start inputs become `input.value`.
 - Scope, tool, and LLM end outputs become `output.value`.

@@ -13,7 +13,7 @@
 //! - [`api`] -- Public `#[wasm_bindgen]` functions that form the top-level API
 //!   surface: scope operations, tool/LLM lifecycle, guardrail and intercept
 //!   registration, and event subscribers.
-//! - [`types`] -- WASM-friendly wrapper types (`ScopeHandle`, `ToolHandle`,
+//! - [`types`] -- WebAssembly-friendly wrapper types (`ScopeHandle`, `ToolHandle`,
 //!   `LlmHandle`, `LlmRequest`, internal `WasmEvent`) and integer constants
 //!   for scope types and attribute flags. `WasmEvent` emits the canonical ATOF
 //!   event envelope, including `data`, `category`, `scope_category`, and
@@ -56,5 +56,5 @@ mod callable;
 mod convert;
 /// Streaming LLM response wrapper for async iteration from JavaScript.
 pub mod stream;
-/// WASM-friendly wrapper types and integer constants exposed to JavaScript.
+/// WebAssembly-friendly wrapper types and integer constants exposed to JavaScript.
 pub mod types;

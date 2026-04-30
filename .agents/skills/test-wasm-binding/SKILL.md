@@ -1,12 +1,12 @@
 ---
 name: test-wasm-binding
-description: Build and test the NeMo Flow WASM binding; use this for crates/wasm changes or WASM-facing integration checks
+description: Build and test the NeMo Flow WebAssembly binding; use this for crates/wasm changes or WebAssembly-facing integration checks
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
 
 
-# Build And Test WASM Binding
+# Build And Test WebAssembly Binding
 
 ## Companion Guidance
 
@@ -15,30 +15,30 @@ work. Keep changes scoped, surface assumptions, and define focused validation
 before editing.
 
 Use this skill when the change is primarily in `crates/wasm`, its JS wrappers,
-or the WASM-facing runtime surface.
+or the WebAssembly-facing runtime surface.
 
 ## Default Path
 
-1. Format changed WASM JS/TS wrapper files with
+1. Format changed WebAssembly JS/TS wrapper files with
    `npm --prefix crates/node run precommit:format -- crates/wasm/wrappers crates/wasm/tests-js crates/wasm/scripts`.
-2. Run the WASM tests with `just test-wasm`.
-3. If any Rust files changed as part of the WASM work, also run
+2. Run the WebAssembly tests with `just test-wasm`.
+3. If any Rust files changed as part of the WebAssembly work, also run
    `cargo fmt --all`, `just test-rust`, and
    `cargo clippy --workspace --all-targets -- -D warnings`.
 4. Use `just build-wasm` when you want an explicit packaging/build pass.
 5. Use `just ci=true test-wasm` when you need coverage reports.
-6. Add `cargo test -p nemo-flow-wasm` when Rust-only WASM helpers changed.
+6. Add `cargo test -p nemo-flow-wasm` when Rust-only WebAssembly helpers changed.
 
 ## Common Commands
 
 ```bash
-# JS/WASM integration tests
+# JS/WebAssembly integration tests
 just test-wasm
 
-# Format WASM JS/TS wrapper files
+# Format WebAssembly JS/TS wrapper files
 npm --prefix crates/node run precommit:format -- crates/wasm/wrappers crates/wasm/tests-js crates/wasm/scripts
 
-# Required when the WASM change also touched Rust code
+# Required when the WebAssembly change also touched Rust code
 cargo fmt --all
 just test-rust
 cargo clippy --workspace --all-targets -- -D warnings
@@ -52,7 +52,7 @@ just ci=true build-wasm
 # Coverage-oriented test path
 just ci=true test-wasm
 
-# Rust-side WASM crate tests when needed
+# Rust-side WebAssembly crate tests when needed
 cargo test -p nemo-flow-wasm
 ```
 

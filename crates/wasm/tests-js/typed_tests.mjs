@@ -13,7 +13,7 @@ import {
 } from '../pkg/typed.js';
 import { drainStream, makeLlmRequest, unique, waitFor, wasm } from './test_support.mjs';
 
-test('WASM typed codec helper preserves annotated and original values', () => {
+test('WebAssembly typed codec helper preserves annotated and original values', () => {
   const annotatedCodec = {
     encode(annotated, original) {
       return {
@@ -43,7 +43,7 @@ test('WASM typed codec helper preserves annotated and original values', () => {
   );
 });
 
-test('WASM typed tool wrappers execute synchronous flows', async () => {
+test('WebAssembly typed tool wrappers execute synchronous flows', async () => {
   const passthrough = new JsonPassthrough();
 
   const syncToolResult = await typedToolExecute(
@@ -71,7 +71,7 @@ test('WASM typed tool wrappers execute synchronous flows', async () => {
   });
 });
 
-test('WASM typed tool wrappers execute asynchronous flows', async () => {
+test('WebAssembly typed tool wrappers execute asynchronous flows', async () => {
   const passthrough = new JsonPassthrough();
   const asyncToolResult = await typedToolExecute(
     'wrapper_tool_async',
@@ -89,7 +89,7 @@ test('WASM typed tool wrappers execute asynchronous flows', async () => {
   });
 });
 
-test('WASM typed llm wrappers support response codecs', async () => {
+test('WebAssembly typed llm wrappers support response codecs', async () => {
   const passthrough = new JsonPassthrough();
 
   const llmResult = await typedLlmExecute(
@@ -112,7 +112,7 @@ test('WASM typed llm wrappers support response codecs', async () => {
   });
 });
 
-test('WASM typed llm wrappers execute synchronous flows', async () => {
+test('WebAssembly typed llm wrappers execute synchronous flows', async () => {
   const passthrough = new JsonPassthrough();
   const syncLlmResult = await typedLlmExecute(
     'wrapper_llm_sync',
@@ -137,7 +137,7 @@ test('WASM typed llm wrappers execute synchronous flows', async () => {
   });
 });
 
-test('WASM typed llm wrappers execute asynchronous flows', async () => {
+test('WebAssembly typed llm wrappers execute asynchronous flows', async () => {
   const passthrough = new JsonPassthrough();
   const asyncLlmResult = await typedLlmExecute(
     'wrapper_llm_async',
@@ -152,7 +152,7 @@ test('WASM typed llm wrappers execute asynchronous flows', async () => {
   });
 });
 
-test('WASM typed llm wrappers preserve falsy metadata/model options and use request event data', async () => {
+test('WebAssembly typed llm wrappers preserve falsy metadata/model options and use request event data', async () => {
   const passthrough = new JsonPassthrough();
   const falsyOptionEvents = [];
   const subscriberName = unique('wrapper_falsy_opts');
@@ -189,7 +189,7 @@ test('WASM typed llm wrappers preserve falsy metadata/model options and use requ
   }
 });
 
-test('WASM typed llm stream wrappers collect chunks with hooks', async () => {
+test('WebAssembly typed llm stream wrappers collect chunks with hooks', async () => {
   const passthrough = new JsonPassthrough();
   const seen = [];
 
@@ -228,7 +228,7 @@ test('WASM typed llm stream wrappers collect chunks with hooks', async () => {
   assert.deepEqual(seen, chunks);
 });
 
-test('WASM typed llm stream wrappers collect chunks without hooks', async () => {
+test('WebAssembly typed llm stream wrappers collect chunks without hooks', async () => {
   const passthrough = new JsonPassthrough();
   const streamWithoutHooks = await typedLlmStreamExecute(
     'wrapper_stream_no_hooks',

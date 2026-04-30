@@ -24,7 +24,7 @@ or binding parity for ATIF, OpenTelemetry, or OpenInference.
 - `crates/core/src/observability/otel.rs`
 - `crates/core/src/observability/openinference.rs`
 - FFI and binding-native wrappers where the config or lifecycle is exposed
-- Python, Go, Node.js, and WASM config objects and subscriber/exporter methods
+- Python, Go, Node.js, and WebAssembly config objects and subscriber/exporter methods
 - Docs under `docs/about/concepts/subscribers.md` and
   `docs/export-observability-data/about.md`
 

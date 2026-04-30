@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for context in the NeMo Flow WASM crate.
+//! Integration tests for context in the NeMo Flow WebAssembly crate.
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
