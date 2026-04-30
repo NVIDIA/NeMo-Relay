@@ -55,8 +55,14 @@ repos:
     hooks:
       - id: lychee
         name: docs markdown linkcheck
-        args: ["--no-progress", "--include-fragments"]
-        files: '^(README\.md|CONTRIBUTING\.md|docs/.*\.md)$'
+        args:
+          - --no-progress
+          - --include-fragments
+          - README.md
+          - CONTRIBUTING.md
+          - docs/**/*.md
+        always_run: true
+        pass_filenames: false
 
   # Rust — fmt + clippy + cargo-deny
   - repo: local

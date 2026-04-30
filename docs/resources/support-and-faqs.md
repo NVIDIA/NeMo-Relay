@@ -440,7 +440,7 @@ upstream source checkouts under `third_party/`. Use the repository wrapper
 scripts when checking or applying those patches, and regenerate the patch after
 changing files inside a submodule.
 
-Refer to [Framework Integration Code Examples](../integrate-frameworks/code-examples.md#repository-utility-scripts)
+Refer to [Framework Integration Code Examples](../integrate-frameworks/code-examples.md#quickstart-apply-maintained-patches)
 and the repository root `third_party/README.md`.
 
 ### Where Are The API Docs?
