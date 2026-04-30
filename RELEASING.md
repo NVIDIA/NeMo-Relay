@@ -88,7 +88,6 @@ Before you create a release tag, confirm the following:
    - `CARGO_REGISTRY_TOKEN` for crates.io publishing when `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING` is not enabled
    - GitHub Actions `id-token: write` access for the top-level crates.io publish job when `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING=true`
    - GitHub Actions `id-token: write` access is available for the top-level npm publish job
-   - Npm trusted publishers for `nemo-flow-node` and `nemo-flow-wasm` are configured for the top-level [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
    - GitHub Actions `id-token: write` access for the top-level PyPI publish job
 5. The repository variable `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING` matches the
    intended crates.io auth path for this release:
