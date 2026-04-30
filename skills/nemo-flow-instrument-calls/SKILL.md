@@ -65,10 +65,10 @@ needs to run them through NeMo Flow correctly.
 
 ## Use Another Skill When
 
-- you need traces, ATIF, or export setup -> `nemo-flow-setup-observability`
-- you are debugging missing events or load failures ->
+- You need traces, ATIF, or export setup -> `nemo-flow-setup-observability`
+- You are debugging missing events or load failures ->
   `nemo-flow-debug-runtime-integration`
-- you need per-request isolation or worker-pool advice ->
+- You need per-request isolation or worker-pool advice ->
   `nemo-flow-use-context-isolation`
 
 ## Related Skills

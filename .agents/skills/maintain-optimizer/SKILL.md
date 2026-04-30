@@ -23,11 +23,11 @@ APIs.
 The stable adaptive boundary is the config document plus the shared plugin
 lifecycle:
 
-- config types and policies
-- built-in adaptive section helpers
-- plugin registration and composition
-- plugin lifecycle
-- reports and diagnostics
+- Config types and policies
+- Built-in adaptive section helpers
+- Plugin registration and composition
+- Plugin lifecycle
+- Reports and diagnostics
 
 There is no separate public adaptive runtime handle.
 
@@ -37,13 +37,13 @@ See `docs/use-adaptive-optimization/configure.md` and
 ## Keep In Sync
 
 - `crates/adaptive`
-- shared plugin behavior in core and bindings
+- Shared plugin behavior in core and bindings
 - Python adaptive/plugin wrappers in `python/nemo_flow/adaptive.py` and
   `python/nemo_flow/plugin.py`
 - Go adaptive helpers under `go/nemo_flow/adaptive` plus shared plugin
   helpers in `go/nemo_flow`
 - Node/WASM adaptive helpers and plugin wrappers
-- docs and examples that show canonical config shapes
+- Docs and examples that show canonical config shapes
 
 ## Checklist
 

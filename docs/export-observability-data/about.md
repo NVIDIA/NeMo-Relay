@@ -22,11 +22,11 @@ Node.js.
 
 Start here when you need to perform one of the following checks:
 
-- verify that instrumentation is attached to the right scope
-- inspect tool and LLM inputs and outputs after sanitization
-- correlate concurrent agent runs by root scope
-- export traces to existing OTLP-compatible infrastructure
-- produce trajectory data for analysis, replay, or evaluation workflows
+- Verify that instrumentation is attached to the right scope
+- Inspect tool and LLM inputs and outputs after sanitization
+- Correlate concurrent agent runs by root scope
+- Export traces to existing OTLP-compatible infrastructure
+- Produce trajectory data for analysis, replay, or evaluation workflows
 
 If you have not instrumented any scopes, tools, or LLM calls yet, start with [Instrument Applications](../instrument-applications/about.md).
 

@@ -83,10 +83,10 @@ Adaptive appears here as a built-in plugin component rather than a separate runt
 
 NeMo Flow combines a small number of runtime pieces into one shared execution model:
 
-- the **scope stack** answers where work belongs
-- the **middleware registries** answer what should happen around that work
-- the **plugin system** installs reusable runtime behavior from configuration
-- the **event stream** records what happened
+- The **scope stack** answers where work belongs
+- The **middleware registries** answer what should happen around that work
+- The **plugin system** installs reusable runtime behavior from configuration
+- The **event stream** records what happened
 - **subscribers** consume those events
 
 Every emitted scope, tool, LLM, or mark event attaches to the active scope stack. Every managed tool or LLM call resolves the currently visible middleware before it executes.
@@ -99,10 +99,10 @@ These components are the primary building blocks that make up the runtime model.
 
 The active scope stack defines the ownership tree for runtime work. It establishes:
 
-- parent-child relationships between events
-- scope-local visibility for middleware and subscribers
-- cleanup boundaries for scope-owned registrations
-- isolation across concurrent requests or workers
+- Parent-child relationships between events
+- Scope-local visibility for middleware and subscribers
+- Cleanup boundaries for scope-owned registrations
+- Isolation across concurrent requests or workers
 
 ### Middleware Registries
 
@@ -129,10 +129,10 @@ registration.
 
 The scope stack defines:
 
-- where work belongs
-- which scope-local behavior is visible
-- when scope-local registrations are cleaned up
-- whether concurrent requests stay isolated
+- Where work belongs
+- Which scope-local behavior is visible
+- When scope-local registrations are cleaned up
+- Whether concurrent requests stay isolated
 
 ### Middleware Ownership
 
@@ -156,8 +156,8 @@ Managed tool and LLM execution follows the same high-level order:
 
 Two distinctions matter:
 
-- intercepts affect the real execution path
-- sanitize guardrails affect the emitted observability payload
+- Intercepts affect the real execution path
+- Sanitize guardrails affect the emitted observability payload
 
 For the expanded request-to-response runtime path, including streaming and subscriber handoff, see [Middleware](concepts/middleware.md#detailed-execution-flow).
 
@@ -165,11 +165,11 @@ For the expanded request-to-response runtime path, including streaming and subsc
 
 From bottom to top, NeMo Flow is organized as:
 
-1. the Rust core runtime
-2. the plugin and adaptive layer
-3. language bindings
-4. framework integrations and application code
-5. subscribers and observability backends
+1. The Rust core runtime
+2. The plugin and adaptive layer
+3. Language bindings
+4. Framework integrations and application code
+5. Subscribers and observability backends
 
 The details of a binding can vary, but the conceptual model stays the same across those layers.
 

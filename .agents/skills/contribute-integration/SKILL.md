@@ -19,18 +19,18 @@ as LangChain, LangGraph, or another patched third-party project.
 
 ## Default Guidance
 
-- keep NeMo Flow optional
-- preserve the framework's original behavior when NeMo Flow is absent
-- wrap tool and LLM paths at the correct framework boundary
-- keep the tracked patch artifact minimal and reproducible
+- Keep NeMo Flow optional
+- Preserve the framework's original behavior when NeMo Flow is absent
+- Wrap tool and LLM paths at the correct framework boundary
+- Keep the tracked patch artifact minimal and reproducible
 
 ## Checklist
 
-- [ ] integration pattern follows `docs/integrate-frameworks/adding-scopes.md`
-- [ ] patch applies cleanly via `./scripts/apply-patches.sh --check`
-- [ ] patch artifact regenerated if the local checkout changed
-- [ ] relevant integration tests or smoke path pass
-- [ ] docs updated if activation or usage changed
+- [ ] Integration pattern follows `docs/integrate-frameworks/adding-scopes.md`
+- [ ] Patch applies cleanly via `./scripts/apply-patches.sh --check`
+- [ ] Patch artifact regenerated if the local checkout changed
+- [ ] Relevant integration tests or smoke path pass
+- [ ] Docs updated if activation or usage changed
 
 Use the root `./scripts/*.sh` commands in docs and contributor guidance. Their
 implementations now live under `scripts/third-party/`.

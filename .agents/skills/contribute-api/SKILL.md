@@ -19,16 +19,16 @@ runtime or bindings.
 
 ## Default Guidance
 
-- start from the shared core behavior first
-- decide which bindings must expose the new surface
-- follow the parity checklist in `add-binding-feature`
-- update docs and examples in the same branch
+- Start from the shared core behavior first
+- Decide which bindings must expose the new surface
+- Follow the parity checklist in `add-binding-feature`
+- Update docs and examples in the same branch
 
 ## Minimum Acceptance
 
-- public behavior is clearly described
-- every affected binding is covered
-- the validation matrix matches the changed surfaces
+- Public behavior is clearly described
+- Every affected binding is covered
+- The validation matrix matches the changed surfaces
 - PR notes explain the user-facing change
 
 ## References

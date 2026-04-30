@@ -20,10 +20,10 @@ and NeMo Flow repo conventions.
 
 ## Review Priorities
 
-- prioritize factual accuracy over copy polish
-- flag stale commands, package names, APIs, bindings, repo paths, or support claims before stylistic issues
-- keep docs aligned with current NeMo Flow behavior, repo layout, and entry points
-- apply NVIDIA technical-writing guidance where it improves clarity and consistency without watering down technical precision
+- Prioritize factual accuracy over copy polish
+- Flag stale commands, package names, APIs, bindings, repo paths, or support claims before stylistic issues
+- Keep docs aligned with current NeMo Flow behavior, repo layout, and entry points
+- Apply NVIDIA technical-writing guidance where it improves clarity and consistency without watering down technical precision
 
 ## Review Flow
 
@@ -32,8 +32,8 @@ and NeMo Flow repo conventions.
 3. Check whether entry-point docs also need updates:
    - `README.md`
    - `docs/index.md`
-   - package or crate READMEs
-   - binding-level source READMEs such as `python/nemo_flow/README.md` or `crates/core/README.md`
+   - Package or crate READMEs
+   - Binding-level source READMEs such as `python/nemo_flow/README.md` or `crates/core/README.md`
 4. Start with `assets/nvidia-style-guide.md`, then open only the focused support document needed for the issue under review.
 5. Scan for high-signal style issues in headings, links, code formatting, terminology, procedures, and plain-English readability.
 6. Report findings in severity order with file references and concrete rewrites.
@@ -42,24 +42,24 @@ and NeMo Flow repo conventions.
 
 Treat these as blocking issues:
 
-- commands, package names, file paths, or APIs are incorrect or stale
-- public behavior changed but the corresponding entry-point docs were not updated
-- a doc claims support for a binding, feature, or workflow that the repo no longer provides
-- examples or procedures are likely to fail as written
-- user-facing naming is inconsistent with current repo terminology
+- Commands, package names, file paths, or APIs are incorrect or stale
+- Public behavior changed but the corresponding entry-point docs were not updated
+- A doc claims support for a binding, feature, or workflow that the repo no longer provides
+- Examples or procedures are likely to fail as written
+- User-facing naming is inconsistent with current repo terminology
 - NVIDIA is not capitalized correctly
-- code, commands, paths, or filenames are not formatted as inline code where needed
+- Code, commands, paths, or filenames are not formatted as inline code where needed
 
 ## Should-Fix Findings
 
 Flag these when they materially improve clarity or consistency:
 
-- headings are not in title case for technical documentation
-- code blocks, tables, or lists are introduced with incomplete lead-in sentences
-- raw URLs or generic link text such as "here" appear in prose
-- passive voice, long sentences, or vague wording bury the action
-- terminology changes within the same document for the same concept
-- procedures are not imperative, not parallel, or too long for one sequence
+- Headings are not in title case for technical documentation
+- Code blocks, tables, or lists are introduced with incomplete lead-in sentences
+- Raw URLs or generic link text such as "here" appear in prose
+- Passive voice, long sentences, or vague wording bury the action
+- Terminology changes within the same document for the same concept
+- Procedures are not imperative, not parallel, or too long for one sequence
 - "once" is used where "after" is clearer
 - "may" is used when the meaning is possibility rather than permission and "can" would be clearer
 
@@ -88,10 +88,10 @@ When performing a docs review, lead with findings and keep them actionable:
 
 Each finding should include:
 
-- file path and line reference
-- what is wrong now
-- why it conflicts with repo or style guidance
-- a concrete rewrite or direction
+- File path and line reference
+- What is wrong now
+- Why it conflicts with repo or style guidance
+- A concrete rewrite or direction
 
 If no issues are found, say so explicitly and mention any residual risk, such as commands or examples that were not executed.
 

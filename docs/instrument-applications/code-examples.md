@@ -414,11 +414,11 @@ std::thread::spawn(move || {
 
 The runtime exposes the same registration families for tool and LLM calls:
 
-- sanitize-request guardrails change emitted start-event payloads only
-- sanitize-response guardrails change emitted end-event payloads only
-- conditional-execution guardrails return an allow-or-block decision
-- request intercepts change the real request before execution
-- execution intercepts wrap the callback and may post-process or short-circuit
+- Sanitize-request guardrails change emitted start-event payloads only
+- Sanitize-response guardrails change emitted end-event payloads only
+- Conditional-execution guardrails return an allow-or-block decision
+- Request intercepts change the real request before execution
+- Execution intercepts wrap the callback and may post-process or short-circuit
 - LLM stream execution intercepts wrap streaming provider callbacks
 
 Every family also has a scope-local surface:

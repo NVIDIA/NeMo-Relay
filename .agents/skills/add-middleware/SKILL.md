@@ -82,13 +82,13 @@ Follow the `add-binding-feature` skill for the cross-binding implementation chec
 
 ## Required Tests
 
-- [ ] registration and duplicate-name behavior
-- [ ] deregistration and no-op missing-name behavior
-- [ ] ordering by priority
-- [ ] callback error propagation
-- [ ] scope-local registration, inheritance, and cleanup on pop
-- [ ] event input/output semantics after middleware mutation
-- [ ] parity coverage in every affected binding
+- [ ] Registration and duplicate-name behavior
+- [ ] Deregistration and no-op missing-name behavior
+- [ ] Ordering by priority
+- [ ] Callback error propagation
+- [ ] Scope-local registration, inheritance, and cleanup on pop
+- [ ] Event input/output semantics after middleware mutation
+- [ ] Parity coverage in every affected binding
 
 ## Key References
 

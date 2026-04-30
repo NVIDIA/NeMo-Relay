@@ -119,11 +119,11 @@ Execution Intercept
 
   Use this when behavior belongs around the invocation boundary itself, such as:
 
-  - retries
-  - timing
-  - routing
-  - wrapper logic
-  - framework integration
+  - Retries
+  - Timing
+  - Routing
+  - Wrapper logic
+  - Framework integration
 
 Explicit Lifecycle API
   An **explicit lifecycle API** is a manual start, end, or mark helper used when
@@ -271,9 +271,9 @@ Plugin
 
   Plugins let you package behavior such as:
 
-  - reusable policy bundles
-  - observability components
-  - adaptive behavior
+  - Reusable policy bundles
+  - Observability components
+  - Adaptive behavior
 
 Plugin Component
   A **plugin component** is one configured unit inside plugin configuration.
@@ -389,7 +389,7 @@ Subscriber
 
   Examples include:
 
-  - custom event consumers
+  - Custom event consumers
   - ATIF export
   - OpenTelemetry export
   - OpenInference export

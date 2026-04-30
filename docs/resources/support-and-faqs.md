@@ -36,12 +36,12 @@ plugins, and observability inside an agent system to follow one runtime model.
 
 NeMo Flow is not:
 
-- a model provider
-- a vector database
-- a hosted tracing service
-- a prompt authoring environment
-- a full agent framework or agent workbench
-- a replacement for application, framework, or provider SDK code
+- A model provider
+- A vector database
+- A hosted tracing service
+- A prompt authoring environment
+- A full agent framework or agent workbench
+- A replacement for application, framework, or provider SDK code
 
 It is the runtime layer that gives those systems shared execution scopes,
 middleware, lifecycle events, subscribers, plugins, and adaptive behavior.

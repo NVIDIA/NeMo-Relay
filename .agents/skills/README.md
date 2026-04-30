@@ -10,10 +10,10 @@ itself.
 
 Use these skills for repository work such as:
 
-- changing core or binding APIs
-- maintaining patches, packaging, CI, and docs
-- extending middleware or observability internals
-- validating library changes across bindings
+- Changing core or binding APIs
+- Maintaining patches, packaging, CI, and docs
+- Extending middleware or observability internals
+- Validating library changes across bindings
 
 Consumer-facing NeMo Flow usage skills live in the top-level `skills/`
 directory so they can be exported separately for integrators and end users.

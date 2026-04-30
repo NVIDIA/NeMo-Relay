@@ -14,9 +14,9 @@ application wants to act on its outputs.
 ## Focus Areas
 
 - `adaptive_hints` or model request hints injected by adaptive components
-- latency sensitivity and scheduling advice
-- parallel groups or tool-parallelism guidance
-- config reports and diagnostics during rollout
+- Latency sensitivity and scheduling advice
+- Parallel groups or tool-parallelism guidance
+- Config reports and diagnostics during rollout
 
 ## Embedded Hint Semantics
 
@@ -42,10 +42,10 @@ application wants to act on its outputs.
 
 ## Rules
 
-- treat adaptive output as guidance unless the consuming API explicitly requires
+- Treat adaptive output as guidance unless the consuming API explicitly requires
   stronger semantics
-- confirm where the hint is injected or surfaced in the chosen binding
-- keep the app behavior understandable when no prediction is available
+- Confirm where the hint is injected or surfaced in the chosen binding
+- Keep the app behavior understandable when no prediction is available
 
 ## Related Skills
 

@@ -44,8 +44,8 @@ everything in application code.
 
 NeMo Flow has two major middleware families:
 
-- **intercepts** change the real execution path
-- **guardrails** block work or rewrite emitted observability payloads
+- **Intercepts** change the real execution path
+- **Guardrails** block work or rewrite emitted observability payloads
 
 ## Intercepts
 
@@ -57,10 +57,10 @@ Request intercepts rewrite the real request before execution continues.
 
 Use them when the next stage of execution should receive changed input, such as:
 
-- header injection
-- request normalization
-- argument enrichment
-- provider-specific request rewriting
+- Header injection
+- Request normalization
+- Argument enrichment
+- Provider-specific request rewriting
 
 ### Execution Intercepts
 
@@ -68,11 +68,11 @@ Execution intercepts wrap or replace the real callback.
 
 Use them when behavior belongs around the invocation boundary itself, such as:
 
-- retries
-- timing
-- routing
-- wrapper logic
-- framework integration
+- Retries
+- Timing
+- Routing
+- Wrapper logic
+- Framework integration
 
 ### Stream Execution Intercepts
 
@@ -141,12 +141,12 @@ sequenceDiagram
     end
 ```
 
-1. conditional-execution guardrails
-2. request intercepts
-3. sanitize-request guardrails for emitted start events
-4. execution intercepts
-5. the real callback
-6. sanitize-response guardrails for emitted end events
+1. Conditional-execution guardrails
+2. Request intercepts
+3. Sanitize-request guardrails for emitted start events
+4. Execution intercepts
+5. The real callback
+6. Sanitize-response guardrails for emitted end events
 
 For streaming LLM flows, **stream execution intercepts** sit inside the
 execution path between items 4 and 6. `sanitize-request` guardrails still apply
@@ -158,8 +158,8 @@ the emitted response-side payloads at item 6.
 This ordering is what makes the semantic split between intercepts and
 guardrails important:
 
-- if you need to change the real execution path, use an intercept
-- if you need to change only the emitted payload, use a sanitize guardrail
+- If you need to change the real execution path, use an intercept
+- If you need to change only the emitted payload, use a sanitize guardrail
 
 ## Detailed Execution Flow
 

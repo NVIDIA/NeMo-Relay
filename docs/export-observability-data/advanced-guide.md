@@ -44,8 +44,8 @@ Set these fields first:
 
 OpenInference exports semantic lifecycle payloads directly:
 
-- scope, tool, and LLM start inputs become `input.value`
-- scope, tool, and LLM end outputs become `output.value`
+- Scope, tool, and LLM start inputs become `input.value`
+- Scope, tool, and LLM end outputs become `output.value`
 - LLM usage metadata maps token counters when the provider response includes usage information
 
 `OTEL_*` variables may be used by the underlying OpenTelemetry exporter when values are not set directly in config. Prefer explicit config fields for endpoint, headers, resource attributes, and service identity in application code.

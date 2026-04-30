@@ -40,11 +40,11 @@ paths. Go, WASM, and the raw FFI surface are source-first advanced paths.
 
 ## Common Pitfalls
 
-- calling execute APIs without an active scope
-- skipping the build step for Rust, Python, or Node.js
-- assuming source-first Go/WASM/FFI bindings have the same hosted-doc coverage
+- Calling execute APIs without an active scope
+- Skipping the build step for Rust, Python, or Node.js
+- Assuming source-first Go/WASM/FFI bindings have the same hosted-doc coverage
   as Rust, Python, and Node.js
-- mixing manual lifecycle APIs into a first example
+- Mixing manual lifecycle APIs into a first example
 
 ## Embedded Quick-Start Notes
 

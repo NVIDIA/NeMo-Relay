@@ -23,11 +23,11 @@ Complete one binding Quick Start guide first:
 
 You should know which application boundary should own the trace. Common scope boundaries include:
 
-- one HTTP request
-- one agent run
-- one workflow step
-- one background job
-- one tenant-isolated experiment
+- One HTTP request
+- One agent run
+- One workflow step
+- One background job
+- One tenant-isolated experiment
 
 ## Integration Pattern
 
@@ -172,12 +172,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Use marks for checkpoints that should appear in the event stream but do not wrap a callback:
 
-- request accepted
-- plan created
-- memory loaded
-- routing decision made
-- final answer assembled
-- retry scheduled
+- Request accepted
+- Plan created
+- Memory loaded
+- Routing decision made
+- Final answer assembled
+- Retry scheduled
 
 Use a nested scope instead of a mark when the work has a meaningful start and end boundary, child work, or a duration that matters.
 
@@ -185,10 +185,10 @@ Use a nested scope instead of a mark when the work has a meaningful start and en
 
 Check that the subscriber prints:
 
-- one scope start event for `agent-run`
-- one mark event for `planning-started`
-- one mark event for `planning-finished`
-- one scope end event for `agent-run`
+- One scope start event for `agent-run`
+- One mark event for `planning-started`
+- One mark event for `planning-finished`
+- One scope end event for `agent-run`
 
 If marks appear outside the intended trace, pass the active scope handle explicitly or make sure the mark is emitted while the scope is active.
 

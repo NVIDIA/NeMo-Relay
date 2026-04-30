@@ -110,9 +110,9 @@ behavior. This is where plugins connect configuration to real runtime state.
 
 Depending on the component, a plugin can register:
 
-- middleware
-- subscribers
-- related runtime helpers
+- Middleware
+- Subscribers
+- Related runtime helpers
 
 This is what makes plugins a packaging mechanism rather than a separate runtime
 model. Plugins do not replace scopes, middleware, or subscribers. They install
@@ -134,9 +134,9 @@ runtime model. It uses the same plugin system as custom components.
 This matters conceptually because adaptive behavior is configured and activated
 through the same component lifecycle as other plugins:
 
-- validate the config
-- initialize the plugin system
-- inspect the activation result if needed
+- Validate the config
+- Initialize the plugin system
+- Inspect the activation result if needed
 
 Detailed adaptive configuration belongs in [Configure Adaptive Optimization](../../use-adaptive-optimization/configure.md), [Adaptive Code Examples](../../use-adaptive-optimization/code-examples.md), and [Advanced Guide: Configure Adaptive Components](../../use-adaptive-optimization/adaptive-components.md).
 

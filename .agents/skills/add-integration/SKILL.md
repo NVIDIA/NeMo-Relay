@@ -25,11 +25,11 @@ exists and you are refreshing an existing patch set, use
 ## Required Patterns
 
 - `nemo_flow` stays an optional dependency
-- framework behavior must fall back cleanly when NeMo Flow is unavailable
-- tool calls and LLM calls should use NeMo Flow managed execution where possible
-- scope creation should mirror the framework's natural agent, graph, or function
+- Framework behavior must fall back cleanly when NeMo Flow is unavailable
+- Tool calls and LLM calls should use NeMo Flow managed execution where possible
+- Scope creation should mirror the framework's natural agent, graph, or function
   boundaries
-- scope stack propagation must be explicit across worker threads or async
+- Scope stack propagation must be explicit across worker threads or async
   boundaries
 
 See `docs/integrate-frameworks/about.md`,

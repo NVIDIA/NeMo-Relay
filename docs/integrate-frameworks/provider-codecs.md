@@ -11,9 +11,9 @@ Use this guide when a framework integration needs NeMo Flow middleware, intercep
 
 You will attach request and response codecs to a managed LLM wrapper so that:
 
-- request intercepts can work with normalized messages, model names, tools, generation parameters, and provider-specific extras
-- the provider callback still receives the provider payload that the framework expects
-- response subscribers can receive normalized response annotations without changing the caller-visible provider response
+- Request intercepts can work with normalized messages, model names, tools, generation parameters, and provider-specific extras
+- The provider callback still receives the provider payload that the framework expects
+- Response subscribers can receive normalized response annotations without changing the caller-visible provider response
 
 ## Before You Start
 

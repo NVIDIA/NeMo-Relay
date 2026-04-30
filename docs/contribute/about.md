@@ -19,11 +19,11 @@ validated.
 
 Use these signals to decide whether this documentation path matches your current task.
 
-- setting up the repository for source development
-- choosing which language tests apply to a change
-- updating docs or examples alongside behavior
-- preparing a pull request for review
-- looking for contribution workflow details beyond user-facing product docs
+- Setting up the repository for source development
+- Choosing which language tests apply to a change
+- Updating docs or examples alongside behavior
+- Preparing a pull request for review
+- Looking for contribution workflow details beyond user-facing product docs
 
 If you are only consuming NeMo Flow packages, start with [Getting Started](../getting-started/quick-start.md) instead.
 

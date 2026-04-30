@@ -52,9 +52,9 @@ translate that to the current adaptive/plugin model.
 
 ## Use Another Skill When
 
-- you already know the configuration shape you need ->
+- You already know the configuration shape you need ->
   `nemo-flow-configure-optimizer`
-- you need to consume the hints/predictions in app logic ->
+- You need to consume the hints/predictions in app logic ->
   `nemo-flow-use-optimizer-hints`
 
 ## Related Skills

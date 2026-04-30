@@ -93,7 +93,7 @@ of the adaptive pipeline.
 
 Start with:
 
-- the repo root `README.md`
+- The repo root `README.md`
 - `docs/use-adaptive-optimization/configure.md`
 - `docs/use-adaptive-optimization/adaptive-components.md`
 - `docs/about/concepts/plugins.md`

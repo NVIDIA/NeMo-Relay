@@ -19,29 +19,29 @@ pull request.
 
 ## Checklist
 
-- [ ] branch scope is coherent and reviewable
-- [ ] relevant tests passed under `validate-change`
-- [ ] changed files were formatted with the language-native formatter
-- [ ] any Rust change ran `just test-rust`
-- [ ] any Rust change ran `cargo fmt --all`
-- [ ] any Rust change ran `cargo clippy --workspace --all-targets -- -D warnings`
+- [ ] Branch scope is coherent and reviewable
+- [ ] Relevant tests passed under `validate-change`
+- [ ] Changed files were formatted with the language-native formatter
+- [ ] Any Rust change ran `just test-rust`
+- [ ] Any Rust change ran `cargo fmt --all`
+- [ ] Any Rust change ran `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] `crates/core` or `crates/adaptive` changes ran the full language matrix
-- [ ] targeted `uv run pre-commit run --files <changed files...>` checks were used during iteration where useful
+- [ ] Targeted `uv run pre-commit run --files <changed files...>` checks were used during iteration where useful
 - [ ] `uv run pre-commit run --all-files` passed or issues are understood
-- [ ] docs and examples updated for any public behavior changes
-- [ ] dependent maintainer or consumer skills updated when code changes affected
+- [ ] Docs and examples updated for any public behavior changes
+- [ ] Dependent maintainer or consumer skills updated when code changes affected
       their APIs, bindings, commands, paths, packaging guidance, or best
       practices
-- [ ] commit messages and PR summary explain what changed, why, and how it was tested
-- [ ] breaking changes or renamed surfaces are called out explicitly
+- [ ] Commit messages and PR summary explain what changed, why, and how it was tested
+- [ ] Breaking changes or renamed surfaces are called out explicitly
 
 ## PR Description Should Cover
 
-- what changed
-- why the change exists
-- key implementation notes
-- tests run
-- any breaking behavior or migration notes
+- What changed
+- Why the change exists
+- Key implementation notes
+- Tests run
+- Any breaking behavior or migration notes
 
 ## References
 

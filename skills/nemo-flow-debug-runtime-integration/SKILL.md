@@ -26,10 +26,10 @@ working.
 - Go dynamic library not on the loader path
 - Node native addon not built or not loading
 - WASM package not initialized
-- execute call outside a scope
-- missing events because registration never happened
-- concurrency causing the wrong scope stack to be active
-- adaptive component never initialized or config validation ignored
+- Execute call outside a scope
+- Missing events because registration never happened
+- Concurrency causing the wrong scope stack to be active
+- Adaptive component never initialized or config validation ignored
 
 ## Embedded Troubleshooting Matrix
 

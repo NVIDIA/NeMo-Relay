@@ -56,14 +56,14 @@ reliability, or reproducibility.
 
 ## Review Checklist
 
-- [ ] each job has the minimum permissions it needs
-- [ ] reusable workflow callers grant only the scopes their callees require
-- [ ] every external action is pinned to a full SHA
-- [ ] cache settings are tied to lockfiles, manifests, or explicit tool versions
-- [ ] secrets are only passed to the jobs that consume them
-- [ ] concurrency, branch filters, and publish guards still reflect release intent
-- [ ] artifact upload, download, and Pages deploy steps have matching permissions
-- [ ] tag-triggered release workflows fail early when a tag violates repo policy
+- [ ] Each job has the minimum permissions it needs
+- [ ] Reusable workflow callers grant only the scopes their callees require
+- [ ] Every external action is pinned to a full SHA
+- [ ] Cache settings are tied to lockfiles, manifests, or explicit tool versions
+- [ ] Secrets are only passed to the jobs that consume them
+- [ ] Concurrency, branch filters, and publish guards still reflect release intent
+- [ ] Artifact upload, download, and Pages deploy steps have matching permissions
+- [ ] Tag-triggered release workflows fail early when a tag violates repo policy
 
 ## Validation
 

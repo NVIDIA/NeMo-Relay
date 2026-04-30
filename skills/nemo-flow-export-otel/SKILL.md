@@ -40,19 +40,19 @@ OpenTelemetry Collector, Jaeger, Tempo, or Honeycomb.
 
 ## Things To Confirm
 
-- transport: `http_binary` vs `grpc`
-- endpoint and auth headers
-- service naming and resource attributes
-- whether deterministic flush-before-exit is required
-- whether the chosen binding and target support the desired transport
+- Transport: `http_binary` vs `grpc`
+- Endpoint and auth headers
+- Service naming and resource attributes
+- Whether deterministic flush-before-exit is required
+- Whether the chosen binding and target support the desired transport
 
 ## Troubleshooting Focus
 
-- no spans visible
-- wrong endpoint or auth headers
-- events emitted outside active scopes
+- No spans visible
+- Wrong endpoint or auth headers
+- Events emitted outside active scopes
 - `grpc` selected without a native Tokio runtime or on a WASM target
-- forgetting register/deregister or flush/shutdown steps
+- Forgetting register/deregister or flush/shutdown steps
 
 ## Related Skills
 

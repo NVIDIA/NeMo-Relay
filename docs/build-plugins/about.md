@@ -20,10 +20,10 @@ kind name, a structured config document, and a clear activation lifecycle.
 
 Use these signals to decide whether this documentation path matches your current task.
 
-- ship policy bundles across applications
-- install observability exporters consistently
-- package framework-agnostic request transforms
-- validate operator-supplied config before runtime behavior changes
+- Ship policy bundles across applications
+- Install observability exporters consistently
+- Package framework-agnostic request transforms
+- Validate operator-supplied config before runtime behavior changes
 
 If the behavior applies to only one request or tenant, consider scope-local middleware before turning it into a process-level plugin.
 

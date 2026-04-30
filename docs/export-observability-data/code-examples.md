@@ -338,8 +338,8 @@ The table below summarizes which exporter or subscriber to start with for each g
 
 OpenInference maps lifecycle payloads directly:
 
-- start inputs become `input.value`
-- end outputs become `output.value`
+- Start inputs become `input.value`
+- End outputs become `output.value`
 - LLM usage metadata maps to OpenInference token-count attributes when the response includes usage
 
 `OTEL_*` variables may be used by the underlying OpenTelemetry exporter when endpoint settings are not passed directly in config, but prefer explicit config objects for application code.

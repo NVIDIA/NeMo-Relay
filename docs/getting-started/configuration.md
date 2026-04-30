@@ -22,9 +22,9 @@ Use scope-local registration when behavior must be tied to one request, session,
 
 Plugins use a structured plugin configuration with:
 
-- a version
-- one or more component definitions
-- optional component policy
+- A version
+- One or more component definitions
+- Optional component policy
 
 Start with [Basic Guide: Define a Plugin](../build-plugins/basic-guide.md) when you need reusable middleware, subscribers, or adaptive behavior.
 

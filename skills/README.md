@@ -18,12 +18,12 @@ documentation, embed those details directly in the skill.
 
 Use these skills for tasks such as:
 
-- getting started with a binding
-- instrumenting tool and LLM calls
-- choosing the current primary documentation track: Rust, Python, or Node.js
-- configuring adaptive features
-- setting up observability and trace export
-- debugging application-side NeMo Flow integrations
+- Getting started with a binding
+- Instrumenting tool and LLM calls
+- Choosing the current primary documentation track: Rust, Python, or Node.js
+- Configuring adaptive features
+- Setting up observability and trace export
+- Debugging application-side NeMo Flow integrations
 
 When a skill mentions Go, WASM, or raw FFI, treat those as source-first
 advanced surfaces. Their APIs are tracked in `go/nemo_flow`, `crates/wasm`, and

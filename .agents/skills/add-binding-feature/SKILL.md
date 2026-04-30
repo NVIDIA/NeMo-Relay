@@ -19,9 +19,9 @@ parity across the Rust core, FFI, and one or more bindings.
 
 Do not use this skill for:
 
-- internal-only core refactors with no public API change
-- binding-local bug fixes that do not change shared behavior
-- docs-only or example-only updates
+- Internal-only core refactors with no public API change
+- Binding-local bug fixes that do not change shared behavior
+- Docs-only or example-only updates
 
 ## Implementation Order
 

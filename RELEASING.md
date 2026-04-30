@@ -88,7 +88,7 @@ Before you create a release tag, confirm the following:
    - `CARGO_REGISTRY_TOKEN` for crates.io publishing when `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING` is not enabled
    - GitHub Actions `id-token: write` access for the top-level crates.io publish job when `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING=true`
    - GitHub Actions `id-token: write` access is available for the top-level npm publish job
-   - npm trusted publishers for `nemo-flow-node` and `nemo-flow-wasm` are configured for the top-level [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
+   - Npm trusted publishers for `nemo-flow-node` and `nemo-flow-wasm` are configured for the top-level [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
    - GitHub Actions `id-token: write` access for the top-level PyPI publish job
 5. The repository variable `NEMO_FLOW_ENABLE_TRUSTED_PUBLISHING` matches the
    intended crates.io auth path for this release:
@@ -111,7 +111,7 @@ Update the versioned source files in the release PR or release-prep commit:
    - [`README.md`](README.md)
    - [`CONTRIBUTING.md`](CONTRIBUTING.md)
    - [`docs/getting-started/installation.md`](docs/getting-started/installation.md)
-   - any binding README or example that pins a release number
+   - Any binding README or example that pins a release number
 
 Do not commit a static Python package version into `pyproject.toml` just to cut
 the release. The packaging workflow stamps that file during the build.
@@ -191,8 +191,8 @@ The release pipeline then:
      publishing from the top-level workflow
    - `publish-npm` publishes the Node.js and WASM npm packages through npm
      trusted publishing from the top-level workflow
-     - stable tags publish to the npm `latest` dist-tag
-     - prerelease tags such as `0.1.0-rc.1` publish to the npm `next`
+     - Stable tags publish to the npm `latest` dist-tag
+     - Prerelease tags such as `0.1.0-rc.1` publish to the npm `next`
        dist-tag so they do not become the default upgrade target
 5. Builds and deploys the GitHub Pages docs site.
 

@@ -62,10 +62,10 @@ activity but has not yet decided which output they need.
 
 ## Use Another Skill When
 
-- you already know you need ATIF -> `nemo-flow-export-atif-trajectories`
-- you already know you need OTEL -> `nemo-flow-export-otel`
-- you already know you need OpenInference -> `nemo-flow-export-openinference`
-- you are debugging missing telemetry -> `nemo-flow-debug-runtime-integration`
+- You already know you need ATIF -> `nemo-flow-export-atif-trajectories`
+- You already know you need OTEL -> `nemo-flow-export-otel`
+- You already know you need OpenInference -> `nemo-flow-export-openinference`
+- You are debugging missing telemetry -> `nemo-flow-debug-runtime-integration`
 
 ## Related Skills
 

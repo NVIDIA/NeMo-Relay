@@ -20,9 +20,9 @@ events.
 
 That separation matters:
 
-- the runtime can emit one canonical event stream
-- many subscribers can consume that same stream
-- observability behavior stays downstream from execution semantics
+- The runtime can emit one canonical event stream
+- Many subscribers can consume that same stream
+- Observability behavior stays downstream from execution semantics
 
 ## Registration Levels
 

@@ -19,13 +19,13 @@ or binding parity for ATIF, OpenTelemetry, or OpenInference.
 
 ## Surfaces To Keep In Sync
 
-- core event model and emitted fields
+- Core event model and emitted fields
 - `crates/core/src/observability/atif.rs`
 - `crates/core/src/observability/otel.rs`
 - `crates/core/src/observability/openinference.rs`
 - FFI and binding-native wrappers where the config or lifecycle is exposed
 - Python, Go, Node.js, and WASM config objects and subscriber/exporter methods
-- docs under `docs/about/concepts/subscribers.md` and
+- Docs under `docs/about/concepts/subscribers.md` and
   `docs/export-observability-data/about.md`
 
 ## Design Checklist

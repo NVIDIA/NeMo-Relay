@@ -18,15 +18,15 @@ Prefer a managed execution wrapper around a stable tool or LLM callback. When
 that is not possible, use explicit lifecycle calls, standalone guardrail or
 intercept helpers, or mark events.
 
-## Start Here When
+## Start Here
 
 Use these signals to decide whether this documentation path matches your current task.
 
-- maintain a framework integration for NeMo Flow
-- need to instrument calls without rewriting framework internals
-- need to handle provider-specific request or response payloads
-- need to keep non-serializable framework objects outside NeMo Flow payloads
-- are building or reviewing third-party integration patches
+- Maintain a framework integration for NeMo Flow
+- Need to instrument calls without rewriting framework internals
+- Need to handle provider-specific request or response payloads
+- Need to keep non-serializable framework objects outside NeMo Flow payloads
+- Are building or reviewing third-party integration patches
 
 If you own the application call sites directly, use [Instrument Applications](../instrument-applications/about.md) first.
 

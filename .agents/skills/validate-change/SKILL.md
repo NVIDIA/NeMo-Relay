@@ -161,8 +161,8 @@ uv run pre-commit run --all-files
 If the change is large or public-facing, also verify:
 
 - README and docs entry points still match current package names and paths
-- examples still run with the documented commands
-- any renamed public surfaces are reflected consistently in manifests and docs
+- Examples still run with the documented commands
+- Any renamed public surfaces are reflected consistently in manifests and docs
 
 ## References
 

@@ -26,7 +26,7 @@ consumed outside the source tree.
 - WASM package naming and generated package expectations
 - FFI header and library naming
 - CI workflows, install commands, and example commands
-- release tags, release-note surfaces, and registry-facing version translation
+- Release tags, release-note surfaces, and registry-facing version translation
 
 ## Checklist
 

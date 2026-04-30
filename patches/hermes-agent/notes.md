@@ -182,8 +182,8 @@ PY
 
 Success signal:
 
-- the snippet prints `entrypoint: plugins.nemo_flow`
-- the snippet prints `register(): ok`
+- The snippet prints `entrypoint: plugins.nemo_flow`
+- The snippet prints `register(): ok`
 
 ### Lifecycle smoke without a model key
 
@@ -269,9 +269,9 @@ ls -lt "$ATIF_DIR" | head
 
 Success signal:
 
-- the Python snippet prints a fresh `phoenix-smoke-...` session ID
+- The Python snippet prints a fresh `phoenix-smoke-...` session ID
 - `ls -lt "$ATIF_DIR"` shows a fresh session JSON written by the finalize hook
-- the plugin manager reports `nemo_flow` as enabled before the smoke emits any
+- The plugin manager reports `nemo_flow` as enabled before the smoke emits any
   events
 
 ### Verify ingestion in Phoenix
@@ -288,12 +288,12 @@ curl -s --get 'http://127.0.0.1:6006/v1/projects/default/spans' \
 
 Success signal:
 
-- the response includes one `AGENT` span named
+- The response includes one `AGENT` span named
   `hermes-session-${SESSION_ID}`
-- the trace also contains child `LLM` and `TOOL` spans beneath that root span
-- the `LLM` span carries OpenInference LLM attributes such as `input.value`,
+- The trace also contains child `LLM` and `TOOL` spans beneath that root span
+- The `LLM` span carries OpenInference LLM attributes such as `input.value`,
   `output.value`, and `llm.model_name`
-- the `TOOL` span carries OpenInference tool attributes such as
+- The `TOOL` span carries OpenInference tool attributes such as
   `tool.name`, `tool_call.function.arguments`, and `output.value`
 
 ### Optional live Anthropic smoke
@@ -410,5 +410,5 @@ Success signal:
   Hermes delta
 - `bash ./scripts/apply-patches.sh --check` still returns without patch
   failures
-- the structural and live smoke steps in the `Smoke Validation` section still
+- The structural and live smoke steps in the `Smoke Validation` section still
   work before you hand the patch to another operator

@@ -45,19 +45,19 @@ tool or LLM integration.
 
 ## Key Rules
 
-- typed wrappers are currently a first-class path for Python and Node.js; WASM
+- Typed wrappers are currently a first-class path for Python and Node.js; WASM
   exposes analogous generated JS wrappers; Rust uses codec traits directly
-- request/response conversion belongs in codecs
-- intercepts and guardrails see JSON values after encoding
-- changes made by middleware survive into the decode step
+- Request/response conversion belongs in codecs
+- Intercepts and guardrails see JSON values after encoding
+- Changes made by middleware survive into the decode step
 
 ## Choose A Codec
 
 - `JsonPassthrough` for JSON-native values
 - `DataclassCodec` or `PydanticCodec` in Python when the models already exist
-- custom codecs for domain-specific wire shapes
+- Custom codecs for domain-specific wire shapes
 - `BestEffortAnyCodec` only when broad flexibility is worth the looser contract
-- provider codecs for LLM provider payloads, not application domain object
+- Provider codecs for LLM provider payloads, not application domain object
   conversion
 
 ## Validation Checklist

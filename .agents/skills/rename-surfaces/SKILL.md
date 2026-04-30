@@ -20,14 +20,14 @@ or branding text updates that must preserve functional identifiers.
 
 ## Rename Buckets To Audit
 
-- repository references
+- Repository references
 - Rust crate names and module prefixes
 - Python package name and top-level module
 - Go module path and package paths
 - Node package names
 - WASM crate or generated package names
 - C header names and symbol prefixes
-- docs, examples, CI, and patch artifacts
+- Docs, examples, CI, and patch artifacts
 
 ## Rules
 

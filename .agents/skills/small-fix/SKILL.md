@@ -18,17 +18,17 @@ Use this skill for narrowly scoped bug fixes or behavior corrections.
 
 ## Rules
 
-- reproduce or identify the failing behavior first
-- keep the change as small as possible
-- avoid opportunistic refactors unless they are required to fix the bug safely
-- add or update the smallest meaningful test that proves the fix
+- Reproduce or identify the failing behavior first
+- Keep the change as small as possible
+- Avoid opportunistic refactors unless they are required to fix the bug safely
+- Add or update the smallest meaningful test that proves the fix
 
 ## Checklist
 
-- [ ] scope of the fix is explicit
-- [ ] affected language surfaces are understood
-- [ ] a regression test or focused validation path exists
-- [ ] docs updated if public behavior changed
+- [ ] Scope of the fix is explicit
+- [ ] Affected language surfaces are understood
+- [ ] A regression test or focused validation path exists
+- [ ] Docs updated if public behavior changed
 - [ ] PR notes can explain what failed before and why the fix is safe
 
 ## References

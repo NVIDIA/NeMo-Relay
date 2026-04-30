@@ -23,12 +23,12 @@ application.
 
 Use these signals to decide whether this documentation path matches your current task.
 
-- collect runtime signals before changing behavior
-- evaluate tool parallelism opportunities
-- add model-request hints in a controlled way
-- plan prompt-cache breakpoints for supported providers
-- share adaptive state across workers when needed
-- roll out optimization through config instead of code changes
+- Collect runtime signals before changing behavior
+- Evaluate tool parallelism opportunities
+- Add model-request hints in a controlled way
+- Plan prompt-cache breakpoints for supported providers
+- Share adaptive state across workers when needed
+- Roll out optimization through config instead of code changes
 
 If instrumentation is not in place yet, start with
 [Instrument Applications](../instrument-applications/about.md) or

@@ -38,17 +38,17 @@ for example Arize Phoenix or another OpenInference-aware OTLP backend.
 
 ## Important Semantics
 
-- spans include OpenInference semantic attributes
+- Spans include OpenInference semantic attributes
 - LLM spans derive `input.value` from request content, not request headers
-- scope types map to OpenInference span kinds
-- orphan mark events still export as zero-duration spans
+- Scope types map to OpenInference span kinds
+- Orphan mark events still export as zero-duration spans
 
 ## Troubleshooting Focus
 
-- no spans in the OpenInference-aware backend
-- expected semantic attributes missing
-- wrong scope types or no active scope
-- wrong OTLP transport for the chosen binding or target
+- No spans in the OpenInference-aware backend
+- Expected semantic attributes missing
+- Wrong scope types or no active scope
+- Wrong OTLP transport for the chosen binding or target
 
 ## Related Skills
 

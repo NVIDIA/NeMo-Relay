@@ -29,16 +29,16 @@ Prefer a wrapper or context manager when the framework gives you control around 
 
 The scope start hook should:
 
-- create one NeMo Flow scope for the framework request or agent run
-- store the returned handle in framework request state
-- include only JSON-compatible request identifiers, tenant identifiers, or safe summary input
+- Create one NeMo Flow scope for the framework request or agent run
+- Store the returned handle in framework request state
+- Include only JSON-compatible request identifiers, tenant identifiers, or safe summary input
 
 The scope end hook should:
 
-- retrieve the same handle
-- close the scope in every success, cancellation, and error path
-- include only safe summary output
-- clear any framework request state used for handle lookup
+- Retrieve the same handle
+- Close the scope in every success, cancellation, and error path
+- Include only safe summary output
+- Clear any framework request state used for handle lookup
 
 ::::{tab-set}
 :sync-group: language
@@ -156,12 +156,12 @@ For frameworks that dispatch work onto worker threads, task queues, or backgroun
 
 Marks are useful for framework milestones that are important but are not full nested calls:
 
-- request accepted
-- tool selected
-- provider selected
-- retry scheduled
-- queue wait finished
-- final response assembled
+- Request accepted
+- Tool selected
+- Provider selected
+- Retry scheduled
+- Queue wait finished
+- Final response assembled
 
 Do not use marks as verbose debug logs. Keep mark names stable enough for filtering and dashboards.
 

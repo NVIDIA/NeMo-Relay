@@ -15,21 +15,21 @@ mark event attaches to a scope hierarchy.
 
 That hierarchy lets the runtime:
 
-- model nested agent work
-- preserve parent-child relationships
-- expose scope-local middleware and subscribers
-- clean up scope-owned runtime state automatically
-- isolate concurrent work
+- Model nested agent work
+- Preserve parent-child relationships
+- Expose scope-local middleware and subscribers
+- Clean up scope-owned runtime state automatically
+- Isolate concurrent work
 
 ## What a Scope Represents
 
 A scope represents a logical unit of work such as:
 
-- an agent run
-- a request
-- a workflow step
-- a background task
-- a nested function or tool orchestration boundary
+- An agent run
+- A request
+- A workflow step
+- A background task
+- A nested function or tool orchestration boundary
 
 Scopes are not just labels. They define ownership and visibility for other
 runtime behavior.
@@ -41,10 +41,10 @@ parent and contributes new nested work beneath it.
 
 That hierarchy determines:
 
-- event parentage
-- lifetime boundaries
-- scope-local middleware visibility
-- scope-local subscriber visibility
+- Event parentage
+- Lifetime boundaries
+- Scope-local middleware visibility
+- Scope-local subscriber visibility
 
 ## Scope Types
 
@@ -116,9 +116,9 @@ local state accidentally.
 Concurrent requests must not share the same active scope stack accidentally.
 Otherwise:
 
-- unrelated work can appear under the wrong parent
-- scope-local middleware can leak across requests
-- scope-local subscribers can observe the wrong execution tree
+- Unrelated work can appear under the wrong parent
+- Scope-local middleware can leak across requests
+- Scope-local subscribers can observe the wrong execution tree
 
 ## Reuse an Existing Logical Trace
 
@@ -127,9 +127,9 @@ same logical request or agent trace.
 
 Use this when:
 
-- worker events should appear under the same parent request
-- scope-local middleware from the parent should still apply
-- subscribers should observe one continuous execution tree
+- Worker events should appear under the same parent request
+- Scope-local middleware from the parent should still apply
+- Subscribers should observe one continuous execution tree
 
 ## Start a Fresh Isolated Context
 
@@ -137,9 +137,9 @@ Create and bind a fresh stack when detached work should be independent.
 
 Use this when:
 
-- the worker is a separate job rather than part of the parent trace
-- the boundary cannot safely carry a native stack handle
-- you want a clean root scope with isolated scope-local registrations
+- The worker is a separate job rather than part of the parent trace
+- The boundary cannot safely carry a native stack handle
+- You want a clean root scope with isolated scope-local registrations
 
 ## Practical Guidance
 

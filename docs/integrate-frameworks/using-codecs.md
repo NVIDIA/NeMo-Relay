@@ -11,10 +11,10 @@ Use this guide when a framework integration needs typed application values at it
 
 You will choose typed value codecs for framework-facing wrappers so that:
 
-- application code can pass native objects to framework callbacks
+- Application code can pass native objects to framework callbacks
 - NeMo Flow can emit JSON-compatible lifecycle payloads
-- middleware and subscribers receive predictable serialized values
-- the framework callback still receives the application type it expects
+- Middleware and subscribers receive predictable serialized values
+- The framework callback still receives the application type it expects
 
 For provider-native LLM payload normalization, use [Advanced Guide: Provider Codecs](provider-codecs.md).
 

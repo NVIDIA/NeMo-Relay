@@ -168,11 +168,11 @@ A plugin can register more than one runtime surface when one configuration docum
 
 For example, a policy bundle can install:
 
-- a telemetry subscriber
+- A telemetry subscriber
 - LLM request intercepts for request metadata
-- tool guardrails for policy enforcement
-- sanitize guardrails for exported payloads
-- shared component-local state used by those hooks
+- Tool guardrails for policy enforcement
+- Sanitize guardrails for exported payloads
+- Shared component-local state used by those hooks
 
 Use this pattern when the configured behavior is easier to reason about as one component than as several unrelated plugin components. Keep each registered surface small and make the component config explicit about which surfaces are enabled.
 

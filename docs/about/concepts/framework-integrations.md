@@ -15,11 +15,11 @@ Framework integrations often cannot.
 
 A framework may already own:
 
-- the real invocation boundary
-- the scheduling model
-- the retry loop
-- the callback signature
-- the provider payload shape
+- The real invocation boundary
+- The scheduling model
+- The retry loop
+- The callback signature
+- The provider payload shape
 
 That means framework integrations must choose the best instrumentation boundary
 available rather than assuming direct runtime ownership.
@@ -29,9 +29,9 @@ available rather than assuming direct runtime ownership.
 When integrating NeMo Flow into an existing framework, prefer these choices in
 order:
 
-1. execution wrappers through managed execute helpers
-2. explicit API calls for lifecycle emission, conditional execution, or request intercepts
-3. mark events only
+1. Execution wrappers through managed execute helpers
+2. Explicit API calls for lifecycle emission, conditional execution, or request intercepts
+3. Mark events only
 
 This order preserves the most runtime semantics with the least distortion.
 
@@ -49,10 +49,10 @@ boundary that NeMo Flow can wrap.
 
 This is the best integration shape because it preserves:
 
-- correct lifecycle ordering
-- the full middleware pipeline
-- natural parent-child scope relationships
-- the cleanest wrapper point for retries, routing, and timing
+- Correct lifecycle ordering
+- The full middleware pipeline
+- Natural parent-child scope relationships
+- The cleanest wrapper point for retries, routing, and timing
 
 Execution wrappers are also the natural place to align framework semantics with
 NeMo Flow execution intercepts.
@@ -69,11 +69,11 @@ client while still using selected NeMo Flow runtime behavior.
 Explicit API calls are useful, but they are narrower than managed execution
 wrappers. Depending on which explicit APIs you call, you can lose:
 
-- automatic start-to-end lifecycle pairing
-- automatic execution-intercept chaining around the real callback
-- automatic request and response guardrail placement
-- one canonical parent-child relationship for the wrapped span
-- one call site that applies the full middleware pipeline
+- Automatic start-to-end lifecycle pairing
+- Automatic execution-intercept chaining around the real callback
+- Automatic request and response guardrail placement
+- One canonical parent-child relationship for the wrapped span
+- One call site that applies the full middleware pipeline
 
 Use explicit APIs when they match the framework boundary. Prefer managed
 execution wrappers whenever the framework can expose the real callback.
@@ -117,11 +117,11 @@ start/end lifecycle boundary.
 
 Mark events are useful for:
 
-- retries
-- queue transitions
-- scheduler milestones
-- state changes
-- debugging checkpoints
+- Retries
+- Queue transitions
+- Scheduler milestones
+- State changes
+- Debugging checkpoints
 
 They provide visibility, but they are not a replacement for full lifecycle
 instrumentation.

@@ -86,11 +86,11 @@ pre-release or build-metadata variants used during packaging.
 
 ## Avoid
 
-- updating only `Cargo.toml` or only Node package metadata
-- assuming `crates/wasm/package.json` is the published npm manifest
-- forgetting `Cargo.lock`, `ATTRIBUTIONS-Rust.md`, or `ATTRIBUTIONS-Node.md`
+- Updating only `Cargo.toml` or only Node package metadata
+- Assuming `crates/wasm/package.json` is the published npm manifest
+- Forgetting `Cargo.lock`, `ATTRIBUTIONS-Rust.md`, or `ATTRIBUTIONS-Node.md`
   after changing versioned inputs that feed them
-- doing blind repository-wide search/replace across docs, patches, and
+- Doing blind repository-wide search/replace across docs, patches, and
   generated attribution files
 
 ## References

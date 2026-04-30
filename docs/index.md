@@ -15,7 +15,7 @@ abstraction. A production stack might combine NeMo Agent Toolkit, LangChain,
 LangGraph, provider SDKs, custom harness code, NeMo Guardrails, tracing systems,
 and evaluation pipelines. NeMo Flow sits underneath those choices as the shared
 runtime contract for scopes, middleware, plugins, lifecycle events, adaptive
-behavior, and observability.
+behavior, and observability. Under the NeMo Flow scope stack and middleware, the scoped execution path is referred to as work.
 
 The result is a framework-neutral substrate for agent execution. Applications
 keep their orchestration model, providers keep their native clients, and
@@ -62,8 +62,11 @@ These paths map common reader goals to the most relevant documentation entry poi
 
 ## Conceptual Diagram
 
-The diagram below shows how applications, runtime components, and exporters relate to
-each other.
+The diagram below shows how applications, runtime components, and exporters relate to each other.
+The diagram shows how application code, framework integrations, and plugins meet
+at the same runtime. Scopes define where work belongs, middleware registries
+define what runs around that work, and subscribers consume the lifecycle events
+that the core emits.
 
 ```{mermaid}
 flowchart TB
@@ -113,10 +116,6 @@ flowchart TB
     class Subs green-light;
 ```
 
-The diagram shows how application code, framework integrations, and plugins meet
-at the same runtime. Scopes define where work belongs, middleware registries
-define what runs around that work, and subscribers consume the lifecycle events
-that the core emits.
 
 ```{toctree}
 :hidden:

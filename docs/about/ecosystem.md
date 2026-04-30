@@ -13,9 +13,9 @@ observability around tool and LLM calls.
 
 Use this page to understand where NeMo Flow fits:
 
-- inside the NVIDIA NeMo software stack
-- inside agent frameworks, harnesses, and provider adapters
-- across the Rust, Python, Node.js, Go, WebAssembly, and C FFI surfaces in this
+- Inside the NVIDIA NeMo software stack
+- Inside agent frameworks, harnesses, and provider adapters
+- Across the Rust, Python, Node.js, Go, WebAssembly, and C FFI surfaces in this
   repository
 
 ## How NeMo Flow Fits In The NVIDIA NeMo Ecosystem
@@ -92,12 +92,11 @@ request transformation hooks.
 This lets NeMo Flow provide consistent runtime semantics without forcing a
 framework migration:
 
-- applications keep their existing agent orchestration model
-- framework adapters preserve public behavior and callback signatures
-- non-serializable provider objects stay in framework-owned storage
+- Applications keep their existing agent orchestration model
+- Framework adapters preserve public behavior and callback signatures
+- Non-serializable provider objects stay in framework-owned storage
 - NeMo Flow receives JSON-compatible payloads for middleware and events
-- subscribers see a consistent scope, tool, and LLM event stream across
-  integrations
+- Subscribers see a consistent scope, tool, and LLM event stream across integrations
 
 ## Related Topics
 
