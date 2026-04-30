@@ -62,9 +62,8 @@ These paths map common reader goals to the most relevant documentation entry poi
 
 ## Conceptual Diagram
 
-The diagram below shows how applications, runtime components, and exporters relate to each other.
-The diagram shows how application code, framework integrations, and plugins meet
-at the same runtime. Scopes define where work belongs, middleware registries
+The diagram below shows how applications, runtime components, and exporters
+relate to each other. Scopes define where work belongs, middleware registries
 define what runs around that work, and subscribers consume the lifecycle events
 that the core emits.
 
