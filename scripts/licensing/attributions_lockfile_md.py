@@ -110,6 +110,34 @@ def _md_inline_safe(s: str) -> str:
     return f"`{s}`"
 
 
+def _is_unknown_value(s: str) -> bool:
+    """Return true for empty metadata values and common unknown placeholders."""
+    return not s.strip() or s.strip().upper() == "UNKNOWN"
+
+
+def _is_useful_license_text(text: str) -> bool:
+    """Return true when text is usable license content rather than a placeholder."""
+    return not _is_unknown_value(text)
+
+
+def _license_name_from_file_heading(text: str) -> str | None:
+    """Infer a license label from the first non-empty line of a license file."""
+    heading_map = {
+        "BSD 2-Clause License": "BSD-2-Clause",
+        "BSD 3-Clause License": "BSD-3-Clause",
+        "ISC License": "ISC",
+        "MIT License": "MIT",
+        "Mozilla Public License Version 2.0": "MPL-2.0",
+        "The MIT License": "MIT",
+        "The MIT License (MIT)": "MIT",
+    }
+    for line in text.splitlines():
+        heading = line.strip()
+        if heading:
+            return heading_map.get(heading)
+    return None
+
+
 def _normalize_package_name(name: str) -> str:
     """Normalize names per Python package matching rules so lockfile/install rows can be joined reliably."""
     return re.sub(r"[-_.]+", "-", name).lower()
@@ -374,7 +402,7 @@ def _declared_wheel_license_texts(
         candidates = [f"{dist_info_dir}/licenses/{rel}", f"{dist_info_dir}/{rel}"]
         for candidate in candidates:
             text = _extract_zip_text(zf, candidate)
-            if text:
+            if text and _is_useful_license_text(text):
                 declared_candidates.append(
                     (declared_index, rel, _pypi_license_path_display(candidate), text),
                 )
@@ -395,7 +423,7 @@ def _heuristic_wheel_license_texts(zf: zipfile.ZipFile, dist_info_dir: str) -> l
     heuristic_candidates: list[tuple[str, str, str]] = []
     for candidate in heuristic_paths:
         text = _extract_zip_text(zf, candidate)
-        if text:
+        if text and _is_useful_license_text(text):
             display_path = _pypi_license_path_display(candidate)
             heuristic_candidates.append((display_path, display_path, text))
     selected_heuristic = _choose_heuristic_license(heuristic_candidates)
@@ -427,7 +455,7 @@ def _declared_sdist_license_texts(
     for declared_index, rel in enumerate(declared_files):
         candidate = f"{root_dir}/{rel}"
         text = _extract_tar_text(tf, candidate)
-        if text:
+        if text and _is_useful_license_text(text):
             declared_candidates.append(
                 (declared_index, rel, _relative_archive_path_display(candidate), text),
             )
@@ -441,7 +469,7 @@ def _heuristic_sdist_license_texts(tf: tarfile.TarFile, root_dir: str) -> list[t
     heuristic_candidates: list[tuple[str, str, str]] = []
     for candidate in heuristic_paths:
         text = _extract_tar_text(tf, candidate)
-        if text:
+        if text and _is_useful_license_text(text):
             display_path = _relative_archive_path_display(candidate)
             heuristic_candidates.append((display_path, display_path, text))
     selected_heuristic = _choose_heuristic_license(heuristic_candidates)
@@ -507,14 +535,29 @@ def _installed_python_packages(
         license_file = (row.get("LicenseFile") or "").strip()
         path_label = _pypi_license_path_display(license_file)
         text = "\n".join(line.rstrip() for line in (row.get("LicenseText") or "").splitlines()).strip()
-        if not text:
-            text = f"(No license text bundled in site-packages for {name}; see package metadata or PyPI.)\n"
+        license_texts: list[tuple[str, str]] = [(path_label, text)] if _is_useful_license_text(text) else []
+
+        if _is_unknown_value(license_file) or not license_texts:
+            _, artifact_license_texts = _artifact_metadata_from_lockfile(lockfile_pkgs[normalized])
+            if artifact_license_texts:
+                license_texts = artifact_license_texts
+
+        if not license_texts:
+            license_texts = [
+                ("LICENSE", f"(No license text bundled in site-packages for {name}; see package metadata or PyPI.)\n")
+            ]
+        if _is_unknown_value(lic):
+            for _, license_text in license_texts:
+                inferred_license = _license_name_from_file_heading(license_text)
+                if inferred_license:
+                    lic = inferred_license
+                    break
         packages.append(
             RenderedPythonPackage(
                 name=name,
                 version=row.get("Version", ""),
                 license_name=lic,
-                license_texts=[(path_label, text)],
+                license_texts=license_texts,
             )
         )
 
