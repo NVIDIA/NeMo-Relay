@@ -5,6 +5,7 @@
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == 'schedule'
+    - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH
     - when: never
 
 stages:
@@ -35,6 +36,9 @@ check:sonar:
     key: "${CI_JOB_NAME}"
     paths:
       - .sonar/cache
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH
+    - when: never
   script:
     - sonar-scanner
   allow_failure: true
@@ -44,6 +48,9 @@ collect:github-artifacts:
   image:
     name: alpine:3.22
     pull_policy: if-not-present
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'schedule'
+    - when: never
   before_script:
     - apk add --no-cache findutils github-cli unzip
   script:
@@ -152,6 +159,9 @@ publish:artifactory:wheels:
   image:
     name: ghcr.io/astral-sh/uv:${NEMO_FLOW_CI_UV_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}-slim
     pull_policy: if-not-present
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'schedule'
+    - when: never
   needs:
     - job: collect:github-artifacts
       artifacts: true
@@ -178,6 +188,9 @@ publish:artifactory:npm:
   image:
     name: node:${NEMO_FLOW_CI_NODE_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'schedule'
+    - when: never
   needs:
     - job: collect:github-artifacts
       artifacts: true
