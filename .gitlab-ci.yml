@@ -1,232 +1,26 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+# Configure the GitLab pipeline schedule with cron `12 9 * * *`.
 workflow:
   rules:
-    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
-    - if: $CI_COMMIT_TAG
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == 'schedule'
+    - when: never
 
 stages:
   - check
-  - test
-  - package
+  - collect
   - publish
 
 variables:
-  NEMO_FLOW_CI_GO_VERSION: "1.26.1"
   NEMO_FLOW_CI_DEBIAN_VERSION: "trixie"
-  NEMO_FLOW_CI_DEFAULT_PYTHON_VER: "3.13"
-  NEMO_FLOW_CI_RUST_VERSION: "1.94.0"
   NEMO_FLOW_CI_NODE_VERSION: "24"
-  NEMO_FLOW_CI_NVM_VERSION: "0.40.4"
   NEMO_FLOW_CI_UV_VERSION: "0.9.28"
-  NEMO_FLOW_CI_JUST_VERSION: "1.47.1"
-  NEMO_FLOW_CI_CARGO_LLVM_COV_VERSION: "0.8.5"
-  NEMO_FLOW_CI_CARGO_NEXTEST_VERSION: "0.9.133"
-  NEMO_FLOW_CI_CARGO_DENY_VERSION: "0.19.1"
-  NEMO_FLOW_CI_CARGO_ABOUT_VERSION: "0.8.4"
-  NEMO_FLOW_CI_WASM_PACK_VERSION: "0.14.0"
-  NEMO_FLOW_CI_WORKSPACE_TMP: "${CI_PROJECT_DIR}/.tmp"
-  NEMO_FLOW_CI_UV_SYNC_ARGS: "--no-group docs"
-  UV_CACHE_DIR: .uv-cache
-  UV_INSTALL_DIR: /usr/local/bin
-  UV_PYTHON_DOWNLOADS: never
-
-default:
-  cache:
-    - key: $CI_COMMIT_REF_SLUG
-      paths:
-        - $UV_CACHE_DIR
-  before_script:
-    - mkdir -p ${NEMO_FLOW_CI_WORKSPACE_TMP}
-    - |
-      install_github_release_binary() {
-        local repo="$1"
-        local tag="$2"
-        local asset="$3"
-        local binary="$4"
-        local tmp_dir
-        local found_bin
-        local asset_url
-
-        tmp_dir="$(mktemp -d)" || {
-          echo "Error: failed to create temporary directory for ${binary}" >&2
-          return 1
-        }
-        if [ -z "${tmp_dir}" ] || [ ! -d "${tmp_dir}" ]; then
-          echo "Error: invalid temporary directory created for ${binary}" >&2
-          return 1
-        fi
-        trap 'rm -rf "$tmp_dir"' EXIT
-
-        asset_url="https://github.com/${repo}/releases/download/${tag}/${asset}"
-        if ! (set -o pipefail; curl -fsSL "${asset_url}" | tar -xzf - -C "${tmp_dir}"); then
-          echo "Error: failed to download or extract ${binary} from ${asset_url}" >&2
-          trap - EXIT
-          rm -rf "${tmp_dir}"
-          return 1
-        fi
-
-        found_bin="$(find "${tmp_dir}" -type f -name "${binary}" -print -quit)"
-        if [ -z "${found_bin}" ]; then
-          echo "Error: could not find extracted binary ${binary} in ${tmp_dir}" >&2
-          trap - EXIT
-          rm -rf "${tmp_dir}"
-          return 1
-        fi
-        if [ ! -f "${found_bin}" ]; then
-          echo "Error: extracted path for ${binary} is not a file: ${found_bin}" >&2
-          trap - EXIT
-          rm -rf "${tmp_dir}"
-          return 1
-        fi
-        if [ ! -x "${found_bin}" ]; then
-          chmod +x "${found_bin}" || true
-        fi
-        if [ ! -x "${found_bin}" ]; then
-          echo "Error: extracted binary ${binary} is not executable: ${found_bin}" >&2
-          trap - EXIT
-          rm -rf "${tmp_dir}"
-          return 1
-        fi
-
-        if ! install -m 0755 "${found_bin}" /usr/local/bin/"${binary}"; then
-          echo "Error: failed to install ${binary} to /usr/local/bin/${binary}" >&2
-          trap - EXIT
-          rm -rf "${tmp_dir}"
-          return 1
-        fi
-
-        trap - EXIT
-        rm -rf "${tmp_dir}"
-      }
-
-.install_just: &install_just
-    - |
-      if ! command -v just >/dev/null 2>&1; then
-        echo "Installing just ${NEMO_FLOW_CI_JUST_VERSION}"
-        install_github_release_binary \
-          casey/just \
-          ${NEMO_FLOW_CI_JUST_VERSION} \
-          just-${NEMO_FLOW_CI_JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz \
-          just
-      fi
-
-.install_build_essential: &install_build_essential
-    - echo "Installing build-essential"
-    - apt-get update -qq && apt-get install -y --no-install-recommends build-essential
-
-.install_cargo_llvm_cov: &install_cargo_llvm_cov
-    - echo "Installing llvm-tools-preview"
-    - rustup component add llvm-tools-preview
-    - echo "Installing cargo-llvm-cov ${NEMO_FLOW_CI_CARGO_LLVM_COV_VERSION}"
-    - |
-      if ! command -v cargo-llvm-cov >/dev/null 2>&1; then
-        install_github_release_binary \
-          taiki-e/cargo-llvm-cov \
-          v${NEMO_FLOW_CI_CARGO_LLVM_COV_VERSION} \
-          cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz \
-          cargo-llvm-cov
-      fi
-
-.install_cargo_nextest: &install_cargo_nextest
-    - echo "Installing cargo-nextest ${NEMO_FLOW_CI_CARGO_NEXTEST_VERSION}"
-    - |
-      if ! command -v cargo-nextest >/dev/null 2>&1; then
-        install_github_release_binary \
-          nextest-rs/nextest \
-          cargo-nextest-${NEMO_FLOW_CI_CARGO_NEXTEST_VERSION} \
-          cargo-nextest-${NEMO_FLOW_CI_CARGO_NEXTEST_VERSION}-x86_64-unknown-linux-gnu.tar.gz \
-          cargo-nextest
-      fi
-
-.install_nodejs: &install_nodejs
-    - echo "Installing NodeJS"
-    - curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NEMO_FLOW_CI_NVM_VERSION}/install.sh | bash
-    - \. "$HOME/.nvm/nvm.sh"
-    - nvm install ${NEMO_FLOW_CI_NODE_VERSION}
-    - echo "NodeJS and NPM versions:"
-    - node --version && npm --version
-
-.install_uv_and_python: &install_uv_and_python
-    - echo "Installing uv"
-    - curl -LsSf https://astral.sh/uv/${NEMO_FLOW_CI_UV_VERSION}/install.sh | sh
-    - echo "Installing Python"
-    - UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${NEMO_FLOW_CI_DEFAULT_PYTHON_VER}
-    - export PYO3_PYTHON=$(uv python find --managed-python ${NEMO_FLOW_CI_DEFAULT_PYTHON_VER})
-
-.install_go: &install_go
-    - echo "Installing Go"
-    - curl -LsSf https://go.dev/dl/go${NEMO_FLOW_CI_GO_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xzf -
-    - export PATH=$PATH:/usr/local/go/bin
-
-.install_wasm_pack: &install_wasm_pack
-    - echo "Installing wasm-pack ${NEMO_FLOW_CI_WASM_PACK_VERSION}"
-    - |
-      if ! command -v wasm-pack >/dev/null 2>&1; then
-        install_github_release_binary \
-          rustwasm/wasm-pack \
-          v${NEMO_FLOW_CI_WASM_PACK_VERSION} \
-          wasm-pack-v${NEMO_FLOW_CI_WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz \
-          wasm-pack
-      fi
-
-.setup_venv: &setup_venv
-    - uv venv --python=${NEMO_FLOW_CI_DEFAULT_PYTHON_VER} --seed ${NEMO_FLOW_CI_WORKSPACE_TMP}/.venv
-    - source ${NEMO_FLOW_CI_WORKSPACE_TMP}/.venv/bin/activate
-    - uv sync --active --reinstall-package nemo-flow ${NEMO_FLOW_CI_UV_SYNC_ARGS}
-
-check:precommit:
-  stage: check
-  image:
-    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
-    pull_policy: if-not-present
-  variables:
-    PRE_COMMIT_HOME: ${CI_PROJECT_DIR}/.cache/pre-commit
-  rules:
-    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
-  cache:
-    - key:
-        files:
-          - .pre-commit-config.yaml
-      paths:
-        - ${CI_PROJECT_DIR}/.cache/pre-commit
-  script:
-    - echo "Installing Rust tools"
-    - rustup component add rustfmt clippy
-    - cargo fetch --locked
-    - |
-      if ! command -v cargo-deny >/dev/null 2>&1; then
-        install_github_release_binary \
-          EmbarkStudios/cargo-deny \
-          ${NEMO_FLOW_CI_CARGO_DENY_VERSION} \
-          cargo-deny-${NEMO_FLOW_CI_CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz \
-          cargo-deny
-      fi
-    - |
-      if ! command -v cargo-about >/dev/null 2>&1; then
-        install_github_release_binary \
-          EmbarkStudios/cargo-about \
-          ${NEMO_FLOW_CI_CARGO_ABOUT_VERSION} \
-          cargo-about-${NEMO_FLOW_CI_CARGO_ABOUT_VERSION}-x86_64-unknown-linux-musl.tar.gz \
-          cargo-about
-      fi
-    - *install_go
-    - *install_uv_and_python
-    - *install_nodejs
-    - *setup_venv
-    - echo "Running pre-commit"
-    - |
-      if [ -n "${CI_MERGE_REQUEST_DIFF_BASE_SHA}" ]; then
-        echo "Running pre-commit on changed files between ${CI_MERGE_REQUEST_DIFF_BASE_SHA} and ${CI_COMMIT_SHA}"
-        pre-commit run --show-diff-on-failure --from-ref "${CI_MERGE_REQUEST_DIFF_BASE_SHA}" --to-ref "${CI_COMMIT_SHA}"
-      else
-        echo "Warning: Base SHA not available, checking all files"
-        pre-commit run --show-diff-on-failure --all-files
-      fi
-  after_script:
-    - uv cache prune --ci
+  NEMO_FLOW_CI_GITHUB_REPOSITORY: "NVIDIA/NeMo-Flow"
+  NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE: "ci.yaml"
+  NEMO_FLOW_CI_GITHUB_BRANCH: "main"
+  NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS: "7200"
+  NEMO_FLOW_CI_GITHUB_RUN_POLL_SECONDS: "60"
 
 check:sonar:
   stage: check
@@ -235,11 +29,8 @@ check:sonar:
     pull_policy: if-not-present
     entrypoint: [""]
   variables:
-    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"  # Caching
-    GIT_DEPTH: "0"  # Full clone for better analysis
-  rules:
-    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+    GIT_DEPTH: "0"
   cache:
     key: "${CI_JOB_NAME}"
     paths:
@@ -248,265 +39,139 @@ check:sonar:
     - sonar-scanner
   allow_failure: true
 
-# Test stages are listed in alphabetical order
-test:go:
-  stage: test
-  timeout: 30 minutes
+collect:github-artifacts:
+  stage: collect
   image:
-    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
+    name: alpine:3.22
     pull_policy: if-not-present
-  artifacts:
-    when: always
-    reports:
-      junit: go-junit.xml
-    paths:
-      - go-coverage.xml
-      - go-junit.xml
-  variables:
-    CGO_LDFLAGS: "-L${CI_PROJECT_DIR}/target/release"
-    LD_LIBRARY_PATH: "${CI_PROJECT_DIR}/target/release"
+  before_script:
+    - apk add --no-cache findutils github-cli unzip
   script:
-    - *install_build_essential
-    - *install_go
-    - echo "Go Versions:"
-    - go version
-    - *install_just
-    - just --set ci true --set output_dir "${CI_PROJECT_DIR}" test-go
-
-test:node:
-  stage: test
-  timeout: 30 minutes
-  image:
-    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
-    pull_policy: if-not-present
-  artifacts:
-    when: always
-    reports:
-      junit: node-junit.xml
-    paths:
-      - node-coverage.xml
-      - node-junit.xml
-      - node-rust.xml
-  script:
-    - *install_build_essential
-    - *install_nodejs
-    - *install_cargo_llvm_cov
-    - *install_just
-    - just --set ci true --set output_dir "${CI_PROJECT_DIR}" test-node
-
-test:python:
-  stage: test
-  timeout: 30 minutes
-  image:
-    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
-    pull_policy: if-not-present
-  artifacts:
-    when: always
-    reports:
-      junit: python-junit.xml
-    paths:
-      - python-coverage.xml
-      - python-junit.xml
-      - python-rust.xml
-  after_script:
-    - uv cache prune --ci
-  script:
-    - *install_build_essential
-    - *install_uv_and_python
-    - *install_cargo_llvm_cov
-    - *install_just
-    - just --set ci true --set output_dir "${CI_PROJECT_DIR}" test-python
-
-test:rust:
-  stage: test
-  timeout: 30 minutes
-  image:
-    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
-    pull_policy: if-not-present
-  artifacts:
-    when: always
-    reports:
-      junit: rust_junit_report.xml
-    paths:
-      - rust-workspace.xml
-      - rust_junit_report.xml
-  script:
-    - *install_build_essential
-    - *install_uv_and_python
-    - *install_cargo_llvm_cov
-    - *install_cargo_nextest
-    - *install_just
-    - just --set ci true --set output_dir "${CI_PROJECT_DIR}" test-rust
-
-test:wasm:
-  stage: test
-  timeout: 30 minutes
-  image:
-    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
-    pull_policy: if-not-present
-  artifacts:
-    when: always
-    reports:
-      junit: wasm-junit.xml
-    paths:
-      - wasm-js.xml
-      - wasm-junit.xml
-  script:
-    - *install_nodejs
-    - *install_wasm_pack
-    - *install_just
-    - just --set ci true --set output_dir "${CI_PROJECT_DIR}" test-wasm
-
-package:nodejs:x86_64:
-  stage: package
-  image:
-    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
-    pull_policy: if-not-present
-  needs:
-    - job: test:rust
-    - job: test:node
-  artifacts:
-    name: "nodejs-x86_64"
-    when: on_success
-    paths:
-      - ${NEMO_FLOW_CI_WORKSPACE_TMP}/npm/*.tgz
-  script:
-    - *install_build_essential
-    - *install_nodejs
-    - *install_just
     - |
-      set -e
-      args=(
-        --set output_dir "${NEMO_FLOW_CI_WORKSPACE_TMP}"
-      )
-      if [ -n "${CI_COMMIT_TAG}" ]; then
-        args+=(--set ref_name "${CI_COMMIT_TAG}")
-      fi
-      just "${args[@]}" package-node
-    - |
-      set -e
-      if [ -z "${CI_COMMIT_TAG}" ]; then
-        NPM_PUBLISH_ARGS="--tag dev"
-      else
-        NPM_PUBLISH_ARGS=""
-      fi
-      echo "Publishing npm package to GitLab package registry"
-      REGISTRY_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/npm/"
-      REGISTRY_KEY="${REGISTRY_URL#https:}"
-      npm config set registry "${REGISTRY_URL}"
-      npm config set "${REGISTRY_KEY}:_authToken" "${CI_JOB_TOKEN}"
-      npm publish ${NPM_PUBLISH_ARGS} ${NEMO_FLOW_CI_WORKSPACE_TMP}/npm/*.tgz
+      set -eu
 
-package:wasm:bundler:
-  stage: package
-  image:
-    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
-    pull_policy: if-not-present
-  needs:
-    - job: test:rust
-    - job: test:wasm
-  artifacts:
-    name: "wasm-bundler"
-    when: on_success
-    paths:
-      - ${NEMO_FLOW_CI_WORKSPACE_TMP}/wasm/*.tgz
-  script:
-    - *install_build_essential
-    - *install_nodejs
-    - *install_wasm_pack
-    - *install_just
-    - |
-      set -e
-      args=(
-        --set output_dir "${NEMO_FLOW_CI_WORKSPACE_TMP}"
-      )
-      if [ -n "${CI_COMMIT_TAG}" ]; then
-        args+=(--set ref_name "${CI_COMMIT_TAG}")
-      fi
-      just "${args[@]}" package-wasm
-    - |
-      set -e
-      if [ -z "${CI_COMMIT_TAG}" ]; then
-        NPM_PUBLISH_ARGS="--tag dev"
-      else
-        NPM_PUBLISH_ARGS=""
-      fi
-      echo "Publishing wasm package to GitLab package registry"
-      REGISTRY_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/npm/"
-      REGISTRY_KEY="${REGISTRY_URL#https:}"
-      npm config set registry "${REGISTRY_URL}"
-      npm config set "${REGISTRY_KEY}:_authToken" "${CI_JOB_TOKEN}"
-      npm publish ${NPM_PUBLISH_ARGS} ${NEMO_FLOW_CI_WORKSPACE_TMP}/wasm/*.tgz
-
-package:wheel:x86_64:
-  stage: package
-  image:
-    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
-    pull_policy: if-not-present
-  needs:
-    - job: test:rust
-    - job: test:python
-  artifacts:
-    name: "wheel-x86_64"
-    when: on_success
-    paths:
-      - ${NEMO_FLOW_CI_WORKSPACE_TMP}/wheels/
-  script:
-    - *install_build_essential
-    - *install_uv_and_python
-    - *install_just
-    - |
-      set -e
-      args=(
-        --set output_dir "${NEMO_FLOW_CI_WORKSPACE_TMP}"
-      )
-      if [ -n "${CI_COMMIT_TAG}" ]; then
-        args+=(--set ref_name "${CI_COMMIT_TAG}")
-      fi
-      just "${args[@]}" package-python
-    - |
-      if [ ! -d ${NEMO_FLOW_CI_WORKSPACE_TMP}/wheels ] || [ -z "$(ls -A ${NEMO_FLOW_CI_WORKSPACE_TMP}/wheels/*.whl 2>/dev/null)" ]; then
-        echo "Error: No wheels found in ${NEMO_FLOW_CI_WORKSPACE_TMP}/wheels/"
+      if [ -z "${NEMO_FLOW_CI_GITHUB_TOKEN:-}" ]; then
+        echo "Error: NEMO_FLOW_CI_GITHUB_TOKEN is required to download GitHub Actions artifacts." >&2
         exit 1
       fi
-    - echo "Uploading wheel to GitLab package registry"
-    - |
-      set -e
-      UV_PUBLISH_USERNAME=gitlab-ci-token \
-      UV_PUBLISH_PASSWORD="${CI_JOB_TOKEN}" \
-      UV_PUBLISH_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi" \
-      uv publish --no-progress ${NEMO_FLOW_CI_WORKSPACE_TMP}/wheels/*.whl
-  after_script:
-    - uv cache prune --ci
+      export GH_TOKEN="${NEMO_FLOW_CI_GITHUB_TOKEN}"
 
+      mkdir -p collected/wheels collected/wasm collected/node downloaded
 
-publish:artifactory:wheel:
+      run_id="$(
+        gh run list \
+          --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" \
+          --workflow "$NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE" \
+          --event schedule \
+          --branch "$NEMO_FLOW_CI_GITHUB_BRANCH" \
+          --limit 1 \
+          --json databaseId \
+          --jq '.[0].databaseId // ""'
+      )"
+      if [ -z "$run_id" ]; then
+        echo "Error: no scheduled GitHub Actions run found for ${NEMO_FLOW_CI_GITHUB_REPOSITORY}/${NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE} on ${NEMO_FLOW_CI_GITHUB_BRANCH}." >&2
+        exit 1
+      fi
+
+      elapsed_seconds=0
+      while :; do
+        run_state="$(
+          gh run view "$run_id" \
+            --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" \
+            --json status,conclusion,url \
+            --jq '[.status, (.conclusion // ""), .url] | @tsv'
+        )"
+        run_status="$(printf '%s\n' "$run_state" | cut -f 1)"
+        run_conclusion="$(printf '%s\n' "$run_state" | cut -f 2)"
+        run_html_url="$(printf '%s\n' "$run_state" | cut -f 3)"
+
+        if [ "$run_status" = "completed" ]; then
+          break
+        fi
+        if [ "$elapsed_seconds" -ge "$NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS" ]; then
+          echo "Error: scheduled GitHub Actions run ${run_id} did not complete within ${NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS} seconds: ${run_html_url}" >&2
+          exit 1
+        fi
+
+        echo "Waiting for scheduled GitHub Actions run ${run_id}: ${run_html_url}"
+        sleep "$NEMO_FLOW_CI_GITHUB_RUN_POLL_SECONDS"
+        elapsed_seconds=$((elapsed_seconds + NEMO_FLOW_CI_GITHUB_RUN_POLL_SECONDS))
+      done
+
+      if [ "$run_conclusion" != "success" ]; then
+        echo "Error: scheduled GitHub Actions run ${run_id} concluded ${run_conclusion}: ${run_html_url}" >&2
+        exit 1
+      fi
+
+      gh run download "$run_id" --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" --pattern 'wheel-*' --dir downloaded/wheels
+      gh run download "$run_id" --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" --name wasm-bundler --dir downloaded/wasm
+      gh run download "$run_id" --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" --name npm-consolidated --dir downloaded/node
+
+      find downloaded/wheels -type f -name '*.whl' -exec cp {} collected/wheels/ \;
+      find downloaded/wasm -type f -name '*.tgz' -exec cp {} collected/wasm/ \;
+      node_zip="$(find downloaded/node -type f -name consolidated.zip -print -quit)"
+      if [ -z "$node_zip" ]; then
+        echo "Error: collected GitHub npm-consolidated artifact did not contain consolidated.zip." >&2
+        exit 1
+      fi
+      cp "$node_zip" collected/node/consolidated.zip
+
+      if ! ls collected/wheels/*.whl >/dev/null 2>&1; then
+        echo "Error: collected GitHub wheel artifacts did not contain any .whl files." >&2
+        exit 1
+      fi
+      if ! ls collected/wasm/*.tgz >/dev/null 2>&1; then
+        echo "Error: collected GitHub WASM artifact did not contain any .tgz files." >&2
+        exit 1
+      fi
+      if [ ! -f collected/node/consolidated.zip ]; then
+        echo "Error: collected GitHub npm-consolidated artifact did not contain consolidated.zip." >&2
+        exit 1
+      fi
+
+      {
+        printf '{\n'
+        printf '  "run_id": "%s",\n' "$run_id"
+        printf '  "run_url": "%s",\n' "$run_html_url"
+        printf '  "workflow": "%s",\n' "$NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE"
+        printf '  "branch": "%s"\n' "$NEMO_FLOW_CI_GITHUB_BRANCH"
+        printf '}\n'
+      } > collected/github-run.json
+  artifacts:
+    name: github-scheduled-package-artifacts
+    when: on_success
+    expire_in: 7 days
+    paths:
+      - collected/wheels/*.whl
+      - collected/wasm/*.tgz
+      - collected/node/consolidated.zip
+      - collected/github-run.json
+
+publish:artifactory:wheels:
   stage: publish
   image:
     name: ghcr.io/astral-sh/uv:${NEMO_FLOW_CI_UV_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}-slim
     pull_policy: if-not-present
   needs:
-    - job: package:wheel:x86_64
+    - job: collect:github-artifacts
       artifacts: true
   script:
     - |
-      if [[ -z "${NEMO_FLOW_CI_ARTIFACTORY_USER}" || -z "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" || -z "${NEMO_FLOW_CI_ARTIFACTORY_PYPI_URL}" ]]; then
-        echo "Error: uploading to artifactory requires the following environment variables: NEMO_FLOW_CI_ARTIFACTORY_USER, NEMO_FLOW_CI_ARTIFACTORY_KEY, NEMO_FLOW_CI_ARTIFACTORY_PYPI_URL."
+      set -eu
+
+      if [ -z "${NEMO_FLOW_CI_ARTIFACTORY_USER:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_PYPI_URL:-}" ]; then
+        echo "Error: uploading wheels to Artifactory requires NEMO_FLOW_CI_ARTIFACTORY_USER, NEMO_FLOW_CI_ARTIFACTORY_KEY, and NEMO_FLOW_CI_ARTIFACTORY_PYPI_URL." >&2
+        exit 1
+      fi
+      if ! ls collected/wheels/*.whl >/dev/null 2>&1; then
+        echo "Error: no collected wheel artifacts found." >&2
         exit 1
       fi
 
-      echo "Uploading wheels to Artifactory"
       UV_PUBLISH_USERNAME="${NEMO_FLOW_CI_ARTIFACTORY_USER}" \
         UV_PUBLISH_PASSWORD="${NEMO_FLOW_CI_ARTIFACTORY_KEY}" \
         UV_PUBLISH_URL="${NEMO_FLOW_CI_ARTIFACTORY_PYPI_URL}" \
-        uv publish --no-progress ${NEMO_FLOW_CI_WORKSPACE_TMP}/wheels/*.whl
-      RETURN_CODE=$?
-      if [ $RETURN_CODE -ne 0 ]; then
-        echo "Error: Failed to publish wheels to Artifactory"
-        exit $RETURN_CODE
-      fi
-  rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+        uv publish --no-progress collected/wheels/*.whl
 
 publish:artifactory:npm:
   stage: publish
@@ -514,42 +179,43 @@ publish:artifactory:npm:
     name: node:${NEMO_FLOW_CI_NODE_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   needs:
-    - job: package:nodejs:x86_64
+    - job: collect:github-artifacts
       artifacts: true
-    - job: package:wasm:bundler
-      artifacts: true
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends unzip ca-certificates && rm -rf /var/lib/apt/lists/*
   script:
     - |
-      if [[ -z "${NEMO_FLOW_CI_ARTIFACTORY_USER}" || -z "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" || -z "${NEMO_FLOW_CI_ARTIFACTORY_NPM_URL}" ]]; then
-        echo "Error: uploading to artifactory requires the following environment variables: NEMO_FLOW_CI_ARTIFACTORY_USER, NEMO_FLOW_CI_ARTIFACTORY_KEY, NEMO_FLOW_CI_ARTIFACTORY_NPM_URL."
+      set -eu
+
+      if [ -z "${NEMO_FLOW_CI_ARTIFACTORY_USER:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_NPM_URL:-}" ]; then
+        echo "Error: uploading npm packages to Artifactory requires NEMO_FLOW_CI_ARTIFACTORY_USER, NEMO_FLOW_CI_ARTIFACTORY_KEY, and NEMO_FLOW_CI_ARTIFACTORY_NPM_URL." >&2
         exit 1
       fi
-      echo "Uploading npm packages to Artifactory"
-      REGISTRY_URL="${NEMO_FLOW_CI_ARTIFACTORY_NPM_URL%/}/"
-      REGISTRY_KEY="${REGISTRY_URL#https:}"
-      NPM_AUTH=$(printf '%s:%s' "${NEMO_FLOW_CI_ARTIFACTORY_USER}" "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" | base64 | tr -d '\n')
-      npm config set registry "${REGISTRY_URL}"
-      npm config set "${REGISTRY_KEY}:_auth" "${NPM_AUTH}"
-      npm config set "${REGISTRY_KEY}:email" "ci@nvidia.com"
-      if [ -z "${CI_COMMIT_TAG}" ]; then
-        NPM_PUBLISH_ARGS="--tag dev"
-      else
-        NPM_PUBLISH_ARGS=""
+      if [ ! -f collected/node/consolidated.zip ]; then
+        echo "Error: no collected consolidated Node package artifact found." >&2
+        exit 1
       fi
-      RETURN_CODE=0
-      for pkg in $(ls ${NEMO_FLOW_CI_WORKSPACE_TMP}/npm/*.tgz ${NEMO_FLOW_CI_WORKSPACE_TMP}/wasm/*.tgz 2>/dev/null); do
-        filename=$(basename "$pkg")
-        echo "Uploading ${filename} to Artifactory"
-        npm publish ${NPM_PUBLISH_ARGS} "$pkg"
-        RC=$?
-        if [ $RC -ne 0 ]; then
-          echo "Error: Failed to publish ${filename} to Artifactory"
-          RETURN_CODE=1
-        fi
+      if ! ls collected/wasm/*.tgz >/dev/null 2>&1; then
+        echo "Error: no collected WASM package artifacts found." >&2
+        exit 1
+      fi
+
+      mkdir -p collected/node/consolidated
+      unzip -q collected/node/consolidated.zip -d collected/node/consolidated
+      if [ ! -d collected/node/consolidated/package ]; then
+        echo "Error: consolidated Node artifact did not contain a package directory." >&2
+        exit 1
+      fi
+
+      registry_url="${NEMO_FLOW_CI_ARTIFACTORY_NPM_URL%/}/"
+      registry_key="${registry_url#https:}"
+      npm_auth="$(printf '%s:%s' "${NEMO_FLOW_CI_ARTIFACTORY_USER}" "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" | base64 | tr -d '\n')"
+      npm config set registry "$registry_url"
+      npm config set "${registry_key}:_auth" "$npm_auth"
+      npm config set "${registry_key}:email" "ci@nvidia.com"
+      npm config set "${registry_key}:always-auth" "true"
+
+      npm publish --tag dev collected/node/consolidated/package
+      for package_path in collected/wasm/*.tgz; do
+        npm publish --tag dev "$package_path"
       done
-      if [ $RETURN_CODE -ne 0 ]; then
-        echo "Error: One or more npm packages failed to publish to Artifactory"
-        exit $RETURN_CODE
-      fi
-  rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
