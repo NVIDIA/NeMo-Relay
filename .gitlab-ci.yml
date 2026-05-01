@@ -80,33 +80,19 @@ collect:github-artifacts:
         exit 1
       fi
 
-      elapsed_seconds=0
-      while :; do
-        run_state="$(
-          gh run view "$run_id" \
-            --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" \
-            --json status,conclusion,url \
-            --jq '[.status, (.conclusion // ""), .url] | @tsv'
-        )"
-        run_status="$(printf '%s\n' "$run_state" | cut -f 1)"
-        run_conclusion="$(printf '%s\n' "$run_state" | cut -f 2)"
-        run_html_url="$(printf '%s\n' "$run_state" | cut -f 3)"
-
-        if [ "$run_status" = "completed" ]; then
-          break
-        fi
-        if [ "$elapsed_seconds" -ge "$NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS" ]; then
-          echo "Error: scheduled GitHub Actions run ${run_id} did not complete within ${NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS} seconds: ${run_html_url}" >&2
-          exit 1
-        fi
-
-        echo "Waiting for scheduled GitHub Actions run ${run_id}: ${run_html_url}"
-        sleep "$NEMO_FLOW_CI_GITHUB_RUN_POLL_SECONDS"
-        elapsed_seconds=$((elapsed_seconds + NEMO_FLOW_CI_GITHUB_RUN_POLL_SECONDS))
-      done
-
-      if [ "$run_conclusion" != "success" ]; then
-        echo "Error: scheduled GitHub Actions run ${run_id} concluded ${run_conclusion}: ${run_html_url}" >&2
+      run_html_url="$(
+        gh run view "$run_id" \
+          --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" \
+          --json url \
+          --jq '.url'
+      )"
+      echo "Waiting for scheduled GitHub Actions run ${run_id}: ${run_html_url}"
+      if ! timeout "$NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS" \
+        gh run watch "$run_id" \
+          --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" \
+          --interval "$NEMO_FLOW_CI_GITHUB_RUN_POLL_SECONDS" \
+          --exit-status; then
+        echo "Error: scheduled GitHub Actions run ${run_id} failed, was cancelled, or did not complete within ${NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS} seconds: ${run_html_url}" >&2
         exit 1
       fi
 
