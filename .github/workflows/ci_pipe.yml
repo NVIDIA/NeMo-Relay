@@ -192,6 +192,8 @@ jobs:
         env:
           FULL_CI: ${{ inputs.full_ci }}
           PRE_COMMIT_BASE: ${{ needs.changes.outputs.base }}
+          # The attribution hook syncs docs deps; do not apply repo warning policy to third-party Rust builds.
+          RUSTFLAGS: ""
         run: |
           set -e
           uv tool install pre-commit==4.5
