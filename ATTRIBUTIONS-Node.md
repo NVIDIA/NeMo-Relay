@@ -1584,14 +1584,6 @@ without any warranty or condition, and no contributor
 will be liable to anyone for any damages related to this
 software or this license, under any kind of legal claim.***```
 
-## nemo-flow-node - 0.1.0
-**Repository URL**: https://github.com/NVIDIA/NeMo-Flow
-**License Type(s)**: Apache-2.0
-### License: https://spdx.org/licenses/Apache-2.0.html
-```
-(No license file read from node_modules for nemo-flow-node; see npm metadata.)
-```
-
 ## p-limit - 3.1.0
 **Repository URL**: https://github.com/sindresorhus/p-limit
 **License Type(s)**: MIT

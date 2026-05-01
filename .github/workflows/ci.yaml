@@ -171,9 +171,9 @@ jobs:
         with:
           tool: just@${{ env.NEMO_FLOW_CI_JUST_VERSION }}
 
-      - name: Stamp Cargo release version
+      - name: Set project release version
         working-directory: ${{ github.workspace }}/NeMo-Flow
-        run: just --set ref_name "${{ github.ref_name }}" stamp-cargo-release-version
+        run: just set-version "${{ github.ref_name }}"
 
       - name: Authenticate to crates.io with trusted publishing
         id: crates-io-auth

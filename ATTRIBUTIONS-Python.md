@@ -14,9 +14,9 @@ Please do not edit it directly. Regenerate with `./scripts/generate_attributions
 ## accessible-pygments (0.0.5)
 
 ### Licenses
-License: `BSD-3-Clause`
+License: `BSD License`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 BSD 3-Clause License
 
@@ -127,7 +127,7 @@ SOFTWARE.
 ### Licenses
 License: `LGPL-2.1-or-later`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 GNU LESSER GENERAL PUBLIC LICENSE
                        Version 2.1, February 1999
@@ -853,7 +853,7 @@ Apache License
 ### Licenses
 License: `MIT`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 The MIT License (MIT)
 
@@ -881,9 +881,9 @@ SOFTWARE.
 ## babel (2.18.0)
 
 ### Licenses
-License: `BSD-3-Clause`
+License: `BSD License`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 Copyright (c) 2013-2026 by the Babel Team, see AUTHORS for more information.
 
@@ -919,7 +919,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ### Licenses
 License: `MIT License`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 Beautiful Soup is made available under the MIT license:
 
@@ -957,9 +957,9 @@ Isaac Muse
 ## cattrs (24.1.3)
 
 ### Licenses
-License: `MIT`
+License: `MIT License`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 MIT License
 
@@ -975,9 +975,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ## certifi (2026.2.25)
 
 ### Licenses
-License: `MPL-2.0`
+License: `Mozilla Public License 2.0 (MPL 2.0)`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 This package contains a modified version of ca-bundle.crt:
 
@@ -1034,7 +1034,7 @@ THE SOFTWARE.
 ### Licenses
 License: `MIT`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 MIT License
 
@@ -1612,7 +1612,7 @@ OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ## docutils (0.21.2)
 
 ### Licenses
-License: `Public Domain OR Python Software Foundation License OR BSD License OR GNU General Public License (GPL)`
+License: `BSD License; GNU General Public License (GPL); Public Domain; Python Software Foundation License`
 
   - `COPYING.txt`:
 ```
@@ -1870,7 +1870,7 @@ THE SOFTWARE.
 ### Licenses
 License: `BSD-3-Clause`
 
-  - `LICENSE.md`:
+  - `licenses/LICENSE.md`:
 ```
 BSD 3-Clause License
 
@@ -1908,9 +1908,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## imagesize (2.0.0)
 
 ### Licenses
-License: `MIT`
+License: `MIT License`
 
-  - `LICENSE.rst`:
+  - `licenses/LICENSE.rst`:
 ```
 The MIT License (MIT)
 ----------------------------
@@ -2046,12 +2046,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-## jinja2 (3.1.6)
+## Jinja2 (3.1.6)
 
 ### Licenses
 License: `BSD License`
 
-  - `LICENSE.txt`:
+  - `licenses/LICENSE.txt`:
 ```
 Copyright 2007 Pallets
 
@@ -2113,12 +2113,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## markupsafe (3.0.3)
+## MarkupSafe (3.0.3)
 
 ### Licenses
 License: `BSD-3-Clause`
 
-  - `LICENSE.txt`:
+  - `licenses/LICENSE.txt`:
 ```
 Copyright 2010 Pallets
 
@@ -2403,7 +2403,7 @@ limitations under the License.
 ### Licenses
 License: `MIT License`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 MIT License
 
@@ -2557,7 +2557,7 @@ DAMAGE.
 ## nvidia-sphinx-theme (0.0.9.post1)
 
 ### Licenses
-License: `See package metadata`
+License: `Other/Proprietary License`
 
   - `LICENSE`:
 ```
@@ -2630,7 +2630,7 @@ under the terms of *both* these licenses.
 ## parsimonious (0.10.0)
 
 ### Licenses
-License: `MIT`
+License: `MIT License`
 
   - `LICENSE`:
 ```
@@ -3090,7 +3090,7 @@ SOFTWARE.
 ### Licenses
 License: `BSD License`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 BSD 3-Clause License
 
@@ -3488,7 +3488,7 @@ SOFTWARE.
 ### Licenses
 License: `Apache-2.0 AND CNRI-Python`
 
-  - `LICENSE.txt`:
+  - `licenses/LICENSE.txt`:
 ```
 This work was derived from the 're' module of CPython 2.6 and CPython 3.1,
 copyright (c) 1998-2001 by Secret Labs AB and licensed under CNRI's Python 1.6
@@ -3703,9 +3703,9 @@ All additions and alterations are licensed under the Apache 2.0 License.
 ## requests (2.33.1)
 
 ### Licenses
-License: `Apache-2.0`
+License: `Apache Software License`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 Apache License
                            Version 2.0, January 2004
@@ -3888,7 +3888,7 @@ Apache License
 ### Licenses
 License: `0BSD OR CC0-1.0`
 
-  - `LICENCE.rst`:
+  - `licenses/LICENCE.rst`:
 ```
 =========
  Licence
@@ -4043,7 +4043,7 @@ d. Affirmer understands and acknowledges that Creative Commons is not a
 ### Licenses
 License: `0BSD OR CC0-1.0`
 
-  - `LICENCE.rst`:
+  - `licenses/LICENCE.rst`:
 ```
 =========
  Licence
@@ -4635,9 +4635,9 @@ are:
 ## snowballstemmer (3.0.1)
 
 ### Licenses
-License: `BSD-3-Clause`
+License: `BSD License`
 
-  - `COPYING`:
+  - `licenses/COPYING`:
 ```
 Copyright (c) 2001, Dr Martin Porter
 Copyright (c) 2004,2005, Richard Boulton
@@ -4675,7 +4675,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ### Licenses
 License: `MIT`
 
-  - `LICENSE.md`:
+  - `licenses/LICENSE.md`:
 ```
 MIT License
 
@@ -4700,12 +4700,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## sphinx (8.2.3)
+## Sphinx (8.2.3)
 
 ### Licenses
 License: `BSD-2-Clause`
 
-  - `LICENSE.rst`:
+  - `licenses/LICENSE.rst`:
 ```
 License for Sphinx
 ==================
@@ -4745,7 +4745,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ### Licenses
 License: `MIT License`
 
-  - `LICENSE.rst`:
+  - `licenses/LICENSE.rst`:
 ```
 The MIT License (MIT)
 =====================
@@ -4774,42 +4774,12 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-## sphinx-design (0.7.0)
+## sphinx-js (5.0.3)
 
 ### Licenses
 License: `MIT License`
 
-  - `LICENSE`:
-```
-MIT License Copyright (c) 2023 Chris Sewell
-
-Permission is hereby granted, free
-of charge, to any person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the Software without
-restriction, including without limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to the
-following conditions:
-
-The above copyright notice and this permission notice
-(including the next paragraph) shall be included in all copies or substantial
-portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
-EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-```
-
-## sphinx-js (5.0.3)
-
-### Licenses
-License: `MIT`
-
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 MIT License
 
@@ -4837,11 +4807,65 @@ SOFTWARE.
 ## sphinx-multiversion (0.2.4)
 
 ### Licenses
-License: `BSD`
+License: `BSD-2-Clause`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
-(No license file found in locked artifact for sphinx-multiversion; see package metadata or PyPI.)
+BSD 2-Clause License
+
+Copyright (c) 2020, Jan Holthuis <jan.holthuis@ruhr-uni-bochum.de>
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+## sphinx_design (0.7.0)
+
+### Licenses
+License: `MIT License`
+
+  - `licenses/LICENSE`:
+```
+MIT License Copyright (c) 2023 Chris Sewell
+
+Permission is hereby granted, free
+of charge, to any person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to the
+following conditions:
+
+The above copyright notice and this permission notice
+(including the next paragraph) shall be included in all copies or substantial
+portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ```
 
 ## sphinxcontrib-applehelp (2.0.0)
@@ -4849,37 +4873,9 @@ License: `BSD`
 ### Licenses
 License: `BSD License`
 
-  - `LICENCE.rst`:
+  - `LICENSE`:
 ```
-License for sphinxcontrib-applehelp
-===================================
-
-Copyright (c) 2007-2019 by the Sphinx team
-(see https://github.com/sphinx-doc/sphinx/blob/master/AUTHORS).
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are
-met:
-
-* Redistributions of source code must retain the above copyright
-  notice, this list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright
-  notice, this list of conditions and the following disclaimer in the
-  documentation and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+UNKNOWN
 ```
 
 ## sphinxcontrib-devhelp (2.0.0)
@@ -4887,37 +4883,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ### Licenses
 License: `BSD License`
 
-  - `LICENCE.rst`:
+  - `LICENSE`:
 ```
-License for sphinxcontrib-devhelp
-=================================
-
-Copyright (c) 2007-2019 by the Sphinx team
-(see https://github.com/sphinx-doc/sphinx/blob/master/AUTHORS).
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are
-met:
-
-* Redistributions of source code must retain the above copyright
-  notice, this list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright
-  notice, this list of conditions and the following disclaimer in the
-  documentation and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+UNKNOWN
 ```
 
 ## sphinxcontrib-htmlhelp (2.1.0)
@@ -4925,43 +4893,15 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ### Licenses
 License: `BSD License`
 
-  - `LICENCE.rst`:
+  - `LICENSE`:
 ```
-License for sphinxcontrib-htmlhelp
-==================================
-
-Copyright (c) 2007-2019 by the Sphinx team
-(see https://github.com/sphinx-doc/sphinx/blob/master/AUTHORS).
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are
-met:
-
-* Redistributions of source code must retain the above copyright
-  notice, this list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright
-  notice, this list of conditions and the following disclaimer in the
-  documentation and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+UNKNOWN
 ```
 
 ## sphinxcontrib-jsmath (1.0.1)
 
 ### Licenses
-License: `BSD`
+License: `BSD License`
 
   - `LICENSE`:
 ```
@@ -4999,9 +4939,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## sphinxcontrib-mermaid (1.2.3)
 
 ### Licenses
-License: `BSD`
+License: `BSD License`
 
-  - `LICENSE.rst`:
+  - `licenses/LICENSE.rst`:
 ```
 | sphinxcontrib-mermaid is a Sphinx extension for Mermaid Diagrams
 | Copyright (c) 2016 by Martín Gaitán
@@ -5036,45 +4976,17 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ### Licenses
 License: `BSD License`
 
-  - `LICENCE.rst`:
+  - `LICENSE`:
 ```
-License for sphinxcontrib-qthelp
-================================
-
-Copyright (c) 2007-2019 by the Sphinx team
-(see https://github.com/sphinx-doc/sphinx/blob/master/AUTHORS).
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are
-met:
-
-* Redistributions of source code must retain the above copyright
-  notice, this list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright
-  notice, this list of conditions and the following disclaimer in the
-  documentation and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+UNKNOWN
 ```
 
 ## sphinxcontrib-rust (1.0.1)
 
 ### Licenses
-License: `GPL-3.0-or-later`
+License: `GNU General Public License v3 or later (GPLv3+)`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 GNU GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007
@@ -5704,37 +5616,9 @@ copy of the Program in return for a fee.
 ### Licenses
 License: `BSD License`
 
-  - `LICENCE.rst`:
+  - `LICENSE`:
 ```
-License for sphinxcontrib-serializinghtml
-=========================================
-
-Copyright (c) 2007-2019 by the Sphinx team
-(see https://github.com/sphinx-doc/sphinx/blob/master/AUTHORS).
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are
-met:
-
-* Redistributions of source code must retain the above copyright
-  notice, this list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright
-  notice, this list of conditions and the following disclaimer in the
-  documentation and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+UNKNOWN
 ```
 
 ## stack-data (0.6.3)
@@ -6189,7 +6073,7 @@ PERFORMANCE OF THIS SOFTWARE.
 ### Licenses
 License: `MIT`
 
-  - `LICENSE.txt`:
+  - `licenses/LICENSE.txt`:
 ```
 MIT License
 

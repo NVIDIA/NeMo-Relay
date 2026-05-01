@@ -37,17 +37,18 @@ pre-release or build-metadata variants used during packaging.
 
 1. Read the current version from `Cargo.toml` and decide the exact target
    version string.
-2. Update `Cargo.toml`:
+2. Run `just set-version <version>` to update release-version source files:
    - `[workspace.package].version`
    - `workspace.dependencies.nemo-flow.version`
    - `workspace.dependencies.nemo-flow-adaptive.version`
-3. Update Node package metadata manually. `set_npm_version` in `justfile` is a
-   bash helper used by packaging recipes such as `package-node`; it is not a
-   callable `just` recipe. Use `set_npm_version` only as a reference for which
-   fields must change together:
+   - `workspace.dependencies.nemo-flow-ffi.version`
    - `crates/node/package.json` `version`
    - `crates/node/package-lock.json` top-level `version`
    - `crates/node/package-lock.json` `packages[""].version`
+3. If editing helper code, keep `set_project_version`,
+   `set_cargo_workspace_version`, and `set_node_package_version` aligned with
+   those same fields. `set_npm_package_version` remains the reusable npm JSON
+   helper for Node and WebAssembly packaging recipes.
 4. Refresh generated surfaces:
    - Run `cargo check --workspace` to refresh `Cargo.lock` if workspace package
      entries changed.
@@ -79,7 +80,7 @@ pre-release or build-metadata variants used during packaging.
 
 ## Release Notes
 
-- `just package-node`, `just package-python`, and `just package-wasm` may stamp
+- `just package-node`, `just package-python`, and `just package-wasm` may set
   temporary non-release versions for packaging. Do not commit those temporary
   suffixes as the canonical project version unless the release process requires
   that exact string.

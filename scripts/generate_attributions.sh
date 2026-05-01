@@ -17,13 +17,13 @@ case "${LANG}" in
       echo "error: cargo-about not found. Install with: cargo install cargo-about --locked" >&2
       exit 1
     fi
-    cargo about generate about.hbs -m "${ROOT}/Cargo.toml" --all-features --workspace --fail -o "${ROOT}/ATTRIBUTIONS-Rust.md"
+    uv run --no-sync python "${ROOT}/scripts/licensing/attributions_lockfile_md.py" rust
     ;;
   python)
-    uv run python "${ROOT}/scripts/licensing/attributions_lockfile_md.py" python
+    uv run --no-sync python "${ROOT}/scripts/licensing/attributions_lockfile_md.py" python
     ;;
   node)
-    uv run python "${ROOT}/scripts/licensing/attributions_lockfile_md.py" node
+    uv run --no-sync python "${ROOT}/scripts/licensing/attributions_lockfile_md.py" node
     ;;
   *)
     echo "Usage: $0 <rust|python|node>" >&2
