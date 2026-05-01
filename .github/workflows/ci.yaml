@@ -87,8 +87,10 @@ jobs:
           if [[ "$EVENT_NAME" == "schedule" || "$REF_TYPE" == "tag" ]]; then
             publish_docs=true
           fi
-          if [[ "$REF_TYPE" == "tag" ]]; then
+          if [[ "$REF_TYPE" == "tag" && ! "$REF_NAME" =~ -alpha\.[0-9]+$ ]]; then
             publish_packages=true
+          fi
+          if [[ "$REF_TYPE" == "tag" ]]; then
             run_tests=false
           fi
 
