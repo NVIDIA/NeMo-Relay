@@ -284,7 +284,7 @@ jobs:
         run: just docs-linkcheck
 
       - name: Build Documentation Site
-        if: ${{ startsWith(inputs.ref_name, 'pull-request/') }}
+        if: ${{ startsWith(inputs.ref_name, 'pull-request/') || inputs.ref_name == 'main' }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         env:
           NEMO_FLOW_DOCS_DEPS_READY: "1"
