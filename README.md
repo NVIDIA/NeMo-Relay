@@ -125,6 +125,26 @@ projects rather than as packages in this repository.
 Use [third_party/README.md](third_party/README.md) for the clone, checkout, and
 patch-application workflow for those integrations.
 
+### Support Matrix
+
+| Integration | Method | Observability | Request Intercepts | Execution Intercepts | Conditional Execution |
+|---|---|---|---|---|---|
+| [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| [opencode](third_party/README-opencode.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| [OpenClaw](third_party/README-openclaw.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| [Hermes Agent](third_party/README-hermes-agent.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+
+All patches offer experimental support. Our roadmap includes switching over to first-party plugins and packages.
+
+## Roadmap
+
+- NemoClaw support and integration for managed tool and LLM execution flows.
+- Deeper NVIDIA NeMo ecosystem integration across agent, guardrail, evaluation, and
+  observability workflows.
+- Expanded adaptive optimization capabilities for performance-aware scheduling,
+  hints, and cache behavior.
+- First-party plugins and/or packages for common agent runtimes and frameworks.
+
 ## License
 
 NeMo Flow is licensed under the [Apache License 2.0](LICENSE). All source files must include SPDX license headers.
