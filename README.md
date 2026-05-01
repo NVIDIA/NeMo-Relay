@@ -127,6 +127,8 @@ patch-application workflow for those integrations.
 
 ### Support Matrix
 
+The following table summarizes maintained third-party patch integrations and whether each provides observability, request intercepts, execution intercepts, and conditional execution.
+
 | Integration | Method | Observability | Request Intercepts | Execution Intercepts | Conditional Execution |
 |---|---|---|---|---|---|
 | [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
@@ -137,6 +139,8 @@ patch-application workflow for those integrations.
 All patches offer experimental support. Our roadmap includes switching over to first-party plugins and packages.
 
 ## Roadmap
+
+The following roadmap outlines planned features and integrations for upcoming releases.
 
 - NemoClaw support and integration for managed tool and LLM execution flows.
 - Deeper NVIDIA NeMo ecosystem integration across agent, guardrail, evaluation, and
