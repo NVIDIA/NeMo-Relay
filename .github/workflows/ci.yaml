@@ -79,6 +79,7 @@ jobs:
           full_ci=false
           publish_docs=false
           publish_packages=false
+          run_tests=true
 
           if [[ "$REF_TYPE" == "tag" || "$REF_NAME" == "$DEFAULT_BRANCH" ]]; then
             full_ci=true
@@ -88,11 +89,13 @@ jobs:
           fi
           if [[ "$REF_TYPE" == "tag" ]]; then
             publish_packages=true
+            run_tests=false
           fi
 
           printf 'full_ci=%s\n' "$full_ci" >> "$GITHUB_OUTPUT"
           printf 'publish_docs=%s\n' "$publish_docs" >> "$GITHUB_OUTPUT"
           printf 'publish_packages=%s\n' "$publish_packages" >> "$GITHUB_OUTPUT"
+          printf 'run_tests=%s\n' "$run_tests" >> "$GITHUB_OUTPUT"
     outputs:
       full_ci: ${{ steps.policy.outputs.full_ci }}
       is_pr: ${{ startsWith(github.ref_name, 'pull-request/') }}
@@ -101,6 +104,7 @@ jobs:
       publish_docs: ${{ steps.policy.outputs.publish_docs }}
       publish_packages: ${{ steps.policy.outputs.publish_packages }}
       pr_info: ${{ steps.get-pr-info.outcome == 'success' && steps.get-pr-info.outputs.pr-info || '' }}
+      run_tests: ${{ steps.policy.outputs.run_tests }}
 
 
   ci_pipe:
@@ -121,6 +125,7 @@ jobs:
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
       publish_docs: ${{ needs.prepare.outputs.publish_docs == 'true' }}
+      run_tests: ${{ needs.prepare.outputs.run_tests == 'true' }}
 
   deploy-docs:
     name: Deploy Documentation

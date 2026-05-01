@@ -41,6 +41,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_tests:
+        description: 'Whether to run language test jobs before packaging'
+        required: false
+        default: true
+        type: boolean
     secrets:
       CODECOV_TOKEN:
         required: false
@@ -306,7 +311,7 @@ jobs:
   test-rust:
     name: Test / Rust / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_rust == 'true' }}
+    if: ${{ inputs.run_tests && needs.check.result == 'success' && needs.changes.outputs.run_rust == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -431,7 +436,7 @@ jobs:
   test-go:
     name: Test / Go / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_go == 'true' }}
+    if: ${{ inputs.run_tests && needs.check.result == 'success' && needs.changes.outputs.run_go == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -498,7 +503,7 @@ jobs:
   test-node:
     name: Test / Node / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_node == 'true' }}
+    if: ${{ inputs.run_tests && needs.check.result == 'success' && needs.changes.outputs.run_node == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -563,7 +568,7 @@ jobs:
   test-python:
     name: Test / Python / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_python == 'true' }}
+    if: ${{ inputs.run_tests && needs.check.result == 'success' && needs.changes.outputs.run_python == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -655,7 +660,7 @@ jobs:
   test-wasm:
     name: Test / WASM / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_wasm == 'true' }}
+    if: ${{ inputs.run_tests && needs.check.result == 'success' && needs.changes.outputs.run_wasm == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -759,7 +764,7 @@ jobs:
       ${{
         !cancelled()
         && needs.changes.result == 'success'
-        && needs.test-node.result == 'success'
+        && (inputs.ref_type == 'tag' || needs.test-node.result == 'success')
         && needs.changes.outputs.run_node == 'true'
       }}
     runs-on: ${{ matrix.runner }}
@@ -940,7 +945,7 @@ jobs:
       ${{
         !cancelled()
         && needs.changes.result == 'success'
-        && needs.test-python.result == 'success'
+        && (inputs.ref_type == 'tag' || needs.test-python.result == 'success')
         && needs.changes.outputs.run_python == 'true'
       }}
     runs-on: ${{ matrix.runner }}
@@ -1061,7 +1066,7 @@ jobs:
       ${{
         !cancelled()
         && needs.changes.result == 'success'
-        && needs.test-wasm.result == 'success'
+        && (inputs.ref_type == 'tag' || needs.test-wasm.result == 'success')
         && needs.changes.outputs.run_wasm == 'true'
       }}
     runs-on: linux-amd64-cpu4
