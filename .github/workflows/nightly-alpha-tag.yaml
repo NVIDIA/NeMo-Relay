@@ -48,13 +48,18 @@ jobs:
             exit 1
           fi
 
-          tag="${version}-alpha.$(date -u +%Y%m%d)"
+          tag_date="$(date -u +%Y%m%d)"
+          tag="${version}-alpha.${tag_date}"
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
             echo "Nightly alpha tag already exists: ${tag}"
             exit 0
           fi
 
-          git tag "$tag" "$GITHUB_SHA"
+          git tag \
+            --annotate \
+            --message "NeMo Flow ${version} Nightly ${tag_date}" \
+            "$tag" \
+            "$GITHUB_SHA"
           git remote set-url origin "https://x-access-token:${NEMO_FLOW_NIGHTLY_TAG_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "refs/tags/${tag}"
           echo "Created nightly alpha tag: ${tag}"
