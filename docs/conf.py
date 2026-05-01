@@ -215,7 +215,10 @@ def _selected_release_tag_whitelist() -> str:
     return r"^(?:" + "|".join(re.escape(name) for name in tag_names) + r")$"
 
 
-smv_branch_whitelist = r"^main$"
+# sphinx-multiversion defaults to publishing all branches. Publish tags only.
+# `main` still runs regular docs builds in CI, but it should not become a
+# published version.
+smv_branch_whitelist = r"$^"
 smv_tag_whitelist = _selected_release_tag_whitelist()
 smv_remote_whitelist = None
 smv_released_pattern = r"^refs/tags/\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?$"

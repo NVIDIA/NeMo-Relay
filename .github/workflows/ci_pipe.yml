@@ -23,6 +23,11 @@ on:
         description: 'The JSON string containing the PR information'
         required: true
         type: string
+      full_ci:
+        description: 'Whether to run the full CI matrix without path filtering'
+        required: false
+        default: false
+        type: boolean
       ref_type:
         description: 'The ref type from the triggering workflow'
         required: true
@@ -31,6 +36,11 @@ on:
         description: 'The ref name from the triggering workflow'
         required: true
         type: string
+      publish_docs:
+        description: 'Whether to upload a GitHub Pages artifact for deployment'
+        required: false
+        default: false
+        type: boolean
     secrets:
       CODECOV_TOKEN:
         required: false
@@ -71,18 +81,16 @@ jobs:
       contents: read
     outputs:
       base: ${{ steps.comparison-base.outputs.base }}
-      # Tags and default-branch commits bypass path filtering so packaging always runs.
-      run_all: ${{ inputs.ref_type == 'tag' || inputs.ref_name == 'main' || inputs.ref_name == github.event.repository.default_branch || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' }}
-      docs: ${{ steps.filter.outputs.docs }}
-      go: ${{ steps.filter.outputs.go }}
-      node: ${{ steps.filter.outputs.node }}
-      python: ${{ steps.filter.outputs.python }}
-      rust: ${{ steps.filter.outputs.rust }}
-      wasm: ${{ steps.filter.outputs.wasm }}
+      run_docs: ${{ (inputs.full_ci || startsWith(inputs.ref_name, 'pull-request/')) && (inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.docs == 'true') }}
+      run_go: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.go == 'true' }}
+      run_node: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.node == 'true' }}
+      run_python: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.python == 'true' }}
+      run_rust: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.rust == 'true' }}
+      run_wasm: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.wasm == 'true' }}
 
     steps:
       - name: Checkout
-        if: ${{ !(inputs.ref_type == 'tag' || inputs.ref_name == 'main' || inputs.ref_name == github.event.repository.default_branch) }}
+        if: ${{ ! inputs.full_ci }}
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
@@ -90,7 +98,7 @@ jobs:
 
       - name: Resolve comparison base
         id: comparison-base
-        if: ${{ !(inputs.ref_type == 'tag' || inputs.ref_name == 'main' || inputs.ref_name == github.event.repository.default_branch) }}
+        if: ${{ ! inputs.full_ci }}
         env:
           EVENT_BEFORE: ${{ github.event.before }}
           PR_INFO: ${{ inputs.pr_info }}
@@ -113,7 +121,7 @@ jobs:
 
       - name: Detect changed paths
         id: filter
-        if: ${{ !(inputs.ref_type == 'tag' || inputs.ref_name == 'main' || inputs.ref_name == github.event.repository.default_branch) }}
+        if: ${{ ! inputs.full_ci }}
         uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.01
         with:
           base: ${{ steps.comparison-base.outputs.base }}
@@ -123,7 +131,6 @@ jobs:
   check:
     name: Check
     needs: [changes]
-    if: ${{ inputs.ref_type != 'tag' }}
     runs-on: linux-amd64-cpu4
     timeout-minutes: 30
     permissions:
@@ -183,11 +190,14 @@ jobs:
       - name: pre-commit
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         env:
+          FULL_CI: ${{ inputs.full_ci }}
           PRE_COMMIT_BASE: ${{ needs.changes.outputs.base }}
+          # The attribution hook syncs docs deps; do not apply repo warning policy to third-party Rust builds.
+          RUSTFLAGS: ""
         run: |
           set -e
           uv tool install pre-commit==4.5
-          if [[ "${{ inputs.ref_type }}" == "tag" || "${{ inputs.ref_name }}" == "main" || "${{ inputs.ref_name }}" == "${{ github.event.repository.default_branch }}" || -z "$PRE_COMMIT_BASE" ]]; then
+          if [[ "$FULL_CI" == "true" || -z "$PRE_COMMIT_BASE" ]]; then
             pre-commit run --all-files --show-diff-on-failure
           else
             if [[ "$PRE_COMMIT_BASE" =~ ^[0-9a-f]{40}$ || "$PRE_COMMIT_BASE" == refs/* ]]; then
@@ -208,9 +218,8 @@ jobs:
       ${{
         !cancelled()
         && needs.changes.result == 'success'
-        && (inputs.ref_type == 'tag' || needs.check.result == 'success')
-        && (startsWith(inputs.ref_name, 'pull-request/') || inputs.ref_name == 'main' || inputs.ref_name == github.event.repository.default_branch || inputs.ref_type == 'tag')
-        && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.docs == 'true')
+        && needs.check.result == 'success'
+        && needs.changes.outputs.run_docs == 'true'
       }}
     runs-on: linux-amd64-cpu4
     timeout-minutes: 60
@@ -271,28 +280,27 @@ jobs:
         run: git fetch --force origin +refs/heads/main:refs/heads/main
 
       - name: Check Documentation Links
-        if: ${{ inputs.ref_type != 'tag' }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         env:
           NEMO_FLOW_DOCS_DEPS_READY: "1"
         run: just docs-linkcheck
 
       - name: Build Documentation Site
-        if: ${{ startsWith(inputs.ref_name, 'pull-request/') }}
+        if: ${{ startsWith(inputs.ref_name, 'pull-request/') || inputs.ref_name == 'main' }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         env:
           NEMO_FLOW_DOCS_DEPS_READY: "1"
         run: just docs
 
       - name: Build Versioned Documentation Site
-        if: ${{ inputs.ref_name == 'main' || inputs.ref_type == 'tag' }}
+        if: ${{ inputs.publish_docs }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         env:
           NEMO_FLOW_DOCS_DEPS_READY: "1"
         run: just docs-github-pages
 
       - name: Upload GitHub Pages Artifact
-        if: ${{ inputs.ref_name == 'main' || inputs.ref_type == 'tag' }}
+        if: ${{ inputs.publish_docs }}
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/docs/_build/pages
@@ -300,7 +308,7 @@ jobs:
   test-rust:
     name: Test / Rust / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ inputs.ref_type != 'tag' && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.rust == 'true') }}
+    if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_rust == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -425,7 +433,7 @@ jobs:
   test-go:
     name: Test / Go / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ inputs.ref_type != 'tag' && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.go == 'true') }}
+    if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_go == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -492,7 +500,7 @@ jobs:
   test-node:
     name: Test / Node / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ inputs.ref_type != 'tag' && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.node == 'true') }}
+    if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_node == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -557,7 +565,7 @@ jobs:
   test-python:
     name: Test / Python / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ inputs.ref_type != 'tag' && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.python == 'true') }}
+    if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_python == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -649,7 +657,7 @@ jobs:
   test-wasm:
     name: Test / WASM / ${{ matrix.platform }}
     needs: [changes, check]
-    if: ${{ inputs.ref_type != 'tag' && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.wasm == 'true') }}
+    if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_wasm == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -753,13 +761,8 @@ jobs:
       ${{
         !cancelled()
         && needs.changes.result == 'success'
-        && (
-          inputs.ref_type == 'tag'
-          || (
-            needs.test-node.result == 'success'
-            && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.node == 'true')
-          )
-        )
+        && needs.test-node.result == 'success'
+        && needs.changes.outputs.run_node == 'true'
       }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -939,13 +942,8 @@ jobs:
       ${{
         !cancelled()
         && needs.changes.result == 'success'
-        && (
-          inputs.ref_type == 'tag'
-          || (
-            needs.test-python.result == 'success'
-            && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.python == 'true')
-          )
-        )
+        && needs.test-python.result == 'success'
+        && needs.changes.outputs.run_python == 'true'
       }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -1065,13 +1063,8 @@ jobs:
       ${{
         !cancelled()
         && needs.changes.result == 'success'
-        && (
-          inputs.ref_type == 'tag'
-          || (
-            needs.test-wasm.result == 'success'
-            && (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.wasm == 'true')
-          )
-        )
+        && needs.test-wasm.result == 'success'
+        && needs.changes.outputs.run_wasm == 'true'
       }}
     runs-on: linux-amd64-cpu4
     timeout-minutes: 30

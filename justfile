@@ -198,8 +198,8 @@ head_git_sha() {
 }
 
 # Version helpers intentionally mutate package metadata in-place to match how CI
-# stamps release and non-release artifacts before building them.
-read_npm_version() {
+# sets release and non-release artifact versions before building them.
+read_npm_package_version() {
     local pkg_path="$1"
 
     node - "$pkg_path" <<'NODE'
@@ -215,7 +215,7 @@ console.log(manifest.version);
 NODE
 }
 
-set_npm_version() {
+set_npm_package_version() {
     local pkg_path="$1"
     local lock_path="${2:-}"
     local version="$3"
@@ -224,25 +224,63 @@ set_npm_version() {
 const fs = require('fs');
 const [pkgPath, lockPath, version] = process.argv.slice(2);
 
-function updateVersion(path) {
-  const manifest = JSON.parse(fs.readFileSync(path, 'utf8'));
-  if (!manifest.version) {
-    throw new Error(`${path} missing version field`);
+function readJson(path) {
+  return JSON.parse(fs.readFileSync(path, 'utf8'));
+}
+
+function writeJson(path, value) {
+  fs.writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
+}
+
+function requireVersion(value, label) {
+  if (
+    !Object.prototype.hasOwnProperty.call(value, 'version') ||
+    typeof value.version !== 'string' ||
+    value.version.length === 0
+  ) {
+    throw new Error(`${label} missing version field`);
   }
-  manifest.version = version;
-  fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
-  console.log(`${path} version updated to ${manifest.version}`);
-  return manifest;
 }
 
 try {
-  updateVersion(pkgPath);
+  const manifest = readJson(pkgPath);
+  requireVersion(manifest, pkgPath);
+  const manifestChanged = manifest.version !== version;
+  let lock = null;
+  let lockChanged = false;
+  let rootPackageChanged = false;
+
   if (lockPath) {
-    const lock = updateVersion(lockPath);
-    if (lock.packages && lock.packages[''] && lock.packages[''].version) {
-      lock.packages[''].version = version;
-      fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
-      console.log(`${lockPath} root package version updated to ${lock.packages[''].version}`);
+    lock = readJson(lockPath);
+    requireVersion(lock, lockPath);
+    if (!lock.packages || !lock.packages['']) {
+      throw new Error(`${lockPath} missing packages[""] root package entry`);
+    }
+    requireVersion(lock.packages[''], `${lockPath} packages[""]`);
+
+    lockChanged = lock.version !== version;
+    rootPackageChanged = lock.packages[''].version !== version;
+  }
+
+  manifest.version = version;
+  if (lock) {
+    lock.version = version;
+    lock.packages[''].version = version;
+  }
+
+  if (manifestChanged) {
+    writeJson(pkgPath, manifest);
+    console.log(`${pkgPath} version updated to ${version}`);
+  } else {
+    console.log(`${pkgPath} already set to ${version}`);
+  }
+
+  if (lockPath) {
+    if (lockChanged || rootPackageChanged) {
+      writeJson(lockPath, lock);
+      console.log(`${lockPath} version updated to ${version}`);
+    } else {
+      console.log(`${lockPath} already set to ${version}`);
     }
   }
 } catch (error) {
@@ -252,7 +290,7 @@ try {
 NODE
 }
 
-read_cargo_version() {
+read_workspace_version() {
     local python_executable=""
     python_executable="$(uv_python_executable)"
     "$python_executable" - <<'PY'
@@ -267,7 +305,7 @@ print(match.group(1))
 PY
 }
 
-set_cargo_workspace_versions() {
+set_cargo_workspace_version() {
     local version="$1"
     local python_executable=""
     python_executable="$(uv_python_executable)"
@@ -334,16 +372,18 @@ if missing:
 
 path.write_text("".join(output))
 if changed:
-    print(f"Cargo.toml stamped for {version}: {', '.join(changed)}")
+    print(f"Cargo.toml version set to {version}: {', '.join(changed)}")
 else:
-    print(f"Cargo.toml already stamped for {version}")
+    print(f"Cargo.toml already set to {version}")
 PY
 
     local metadata_file=""
     metadata_file="$(mktemp)"
-    trap 'rm -f "$metadata_file"' RETURN
-    cargo metadata --no-deps --format-version 1 > "$metadata_file"
-    "$python_executable" - "$version" "$metadata_file" <<'PY'
+    if ! cargo metadata --no-deps --format-version 1 > "$metadata_file"; then
+        rm -f "$metadata_file"
+        return 1
+    fi
+    if ! "$python_executable" - "$version" "$metadata_file" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -367,9 +407,25 @@ if mismatched:
     raise SystemExit(f"Cargo workspace packages do not all resolve to {version}: {', '.join(mismatched)}")
 print(f"Cargo metadata resolves {checked} nemo-flow workspace packages to {version}")
 PY
+    then
+        rm -f "$metadata_file"
+        return 1
+    fi
+    rm -f "$metadata_file"
 }
 
-set_python_package_versions() {
+set_node_package_version() {
+    local version="$1"
+    set_npm_package_version crates/node/package.json crates/node/package-lock.json "$version"
+}
+
+set_project_version() {
+    local version="$1"
+    set_cargo_workspace_version "$version"
+    set_node_package_version "$version"
+}
+
+set_python_package_version() {
     local version="$1"
     local python_executable=""
     python_executable="$(uv_python_executable)"
@@ -832,16 +888,20 @@ test-wasm:
 # --set [output_dir=<path>] [ci=true|false]
 test-all: test-rust test-python test-go test-node test-wasm
 
-# --set ref_name=<version>
-stamp-cargo-release-version:
+# [version] or --set ref_name=<version>
+set-version version="":
     #!/usr/bin/env bash
     {{ bash_helpers }}
-    if [[ -z "{{ ref_name }}" ]]; then
-        echo "Error: ref_name is required for stamp-cargo-release-version" >&2
+    version="{{ version }}"
+    if [[ -z "$version" ]]; then
+        version="{{ ref_name }}"
+    fi
+    if [[ -z "$version" ]]; then
+        echo "Error: version is required for set-version" >&2
         exit 1
     fi
     cd "$NEMO_FLOW_REPO_ROOT"
-    set_cargo_workspace_versions "{{ ref_name }}"
+    set_project_version "$version"
 
 # --set [output_dir=<path>] [ref_name=<name>]
 package-node:
@@ -855,12 +915,12 @@ package-node:
     package_dir="$(prepare_package_dir npm)"
     if [[ -z "{{ ref_name }}" ]]; then
         sha="$(head_git_sha)"
-        version="$(read_npm_version crates/node/package.json)"
+        version="$(read_npm_package_version crates/node/package.json)"
         echo "Non-release build: appending commit hash to version"
-        set_npm_version crates/node/package.json crates/node/package-lock.json "${version}-${sha}"
+        set_npm_package_version crates/node/package.json crates/node/package-lock.json "${version}-${sha}"
     else
         echo "Using explicit version {{ ref_name }}"
-        set_npm_version crates/node/package.json crates/node/package-lock.json "{{ ref_name }}"
+        set_npm_package_version crates/node/package.json crates/node/package-lock.json "{{ ref_name }}"
     fi
     build_args=(build)
     if is_true "{{ ci }}" && [[ "$(uname -s)" == "Linux" ]]; then
@@ -899,12 +959,12 @@ package-python:
     activate_project_venv
     if [[ -z "{{ ref_name }}" ]]; then
         sha="$(head_git_sha)"
-        version="$(read_cargo_version)"
+        version="$(read_workspace_version)"
         echo "Non-release build: appending commit hash to version"
-        set_python_package_versions "${version}+${sha}"
+        set_python_package_version "${version}+${sha}"
     else
         echo "Using explicit version {{ ref_name }}"
-        set_python_package_versions "{{ ref_name }}"
+        set_python_package_version "{{ ref_name }}"
     fi
     build_args=()
     while IFS= read -r -d '' arg; do
@@ -923,7 +983,7 @@ package-wasm:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     # `prepare_pkg.mjs` rewrites the wasm-pack output into the publishable npm
-    # layout before this target applies version stamping and packs the tarball.
+    # layout before this target sets the package version and packs the tarball.
     output_dir="{{ output_dir }}"
     cd "$NEMO_FLOW_REPO_ROOT"
     package_dir="$(prepare_package_dir wasm)"
@@ -931,12 +991,12 @@ package-wasm:
     node crates/wasm/scripts/prepare_pkg.mjs
     if [[ -z "{{ ref_name }}" ]]; then
         sha="$(head_git_sha)"
-        version="$(read_npm_version crates/wasm/pkg/package.json)"
+        version="$(read_npm_package_version crates/wasm/pkg/package.json)"
         echo "Non-release build: appending commit hash to version"
-        set_npm_version crates/wasm/pkg/package.json "" "${version}-${sha}"
+        set_npm_package_version crates/wasm/pkg/package.json "" "${version}-${sha}"
     else
         echo "Using explicit version {{ ref_name }}"
-        set_npm_version crates/wasm/pkg/package.json "" "{{ ref_name }}"
+        set_npm_package_version crates/wasm/pkg/package.json "" "{{ ref_name }}"
     fi
     pushd crates/wasm/pkg >/dev/null
     npm pack --pack-destination "$package_dir"

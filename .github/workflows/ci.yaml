@@ -14,7 +14,7 @@ on:
 
 # This allows a subsequently queued workflow run to interrupt previous runs
 concurrency:
-  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  group: '${{ github.workflow }} @ ${{ github.event_name }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
   cancel-in-progress: true
 
 env:
@@ -30,7 +30,7 @@ jobs:
     needs:
       - prepare
       - ci_pipe
-    if: ${{ github.ref_type != 'tag' }}
+    if: ${{ needs.prepare.outputs.publish_docs != 'true' }}
     permissions:
       contents: read
     uses: rapidsai/shared-workflows/.github/workflows/pr-builder.yaml@4866bb5437e913caf5bf775f57c91abd144ed391 # main
@@ -63,10 +63,40 @@ jobs:
             echo "Error: unsupported release tag format '$tag'; use 0.1.0 or prereleases like 0.1.0-rc.1" >&2
             exit 1
           fi
+
+      - name: Derive workflow policy
+        id: policy
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          full_ci=false
+          publish_docs=false
+          publish_packages=false
+
+          if [[ "$REF_TYPE" == "tag" || "$REF_NAME" == "$DEFAULT_BRANCH" ]]; then
+            full_ci=true
+          fi
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            publish_docs=true
+          fi
+          if [[ "$REF_TYPE" == "tag" && ! "$REF_NAME" =~ -alpha\.[0-9]+$ ]]; then
+            publish_packages=true
+          fi
+
+          printf 'full_ci=%s\n' "$full_ci" >> "$GITHUB_OUTPUT"
+          printf 'publish_docs=%s\n' "$publish_docs" >> "$GITHUB_OUTPUT"
+          printf 'publish_packages=%s\n' "$publish_packages" >> "$GITHUB_OUTPUT"
     outputs:
+      full_ci: ${{ steps.policy.outputs.full_ci }}
       is_pr: ${{ startsWith(github.ref_name, 'pull-request/') }}
       is_main_branch: ${{ github.ref_name == 'main' }}
       has_skip_ci_label: ${{ steps.get-pr-info.outcome == 'success' && contains(fromJSON(steps.get-pr-info.outputs.pr-info).labels.*.name, 'skip-ci') || false }}
+      publish_docs: ${{ steps.policy.outputs.publish_docs }}
+      publish_packages: ${{ steps.policy.outputs.publish_packages }}
       pr_info: ${{ steps.get-pr-info.outcome == 'success' && steps.get-pr-info.outputs.pr-info || '' }}
 
 
@@ -84,13 +114,15 @@ jobs:
     with:
       # Info about the PR. Empty for non PR branches. Useful for extracting PR number, title, etc.
       pr_info: ${{ needs.prepare.outputs.pr_info }}
+      full_ci: ${{ needs.prepare.outputs.full_ci == 'true' }}
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
+      publish_docs: ${{ needs.prepare.outputs.publish_docs == 'true' }}
 
   deploy-docs:
     name: Deploy Documentation
-    needs: [ci_pipe]
-    if: ${{ needs.ci_pipe.result == 'success' && (github.ref_name == 'main' || github.ref_type == 'tag') }}
+    needs: [prepare, ci_pipe]
+    if: ${{ needs.prepare.outputs.publish_docs == 'true' && needs.ci_pipe.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -105,8 +137,8 @@ jobs:
 
   publish-rust:
     name: Publish / crates.io
-    needs: [ci_pipe]
-    if: ${{ github.ref_type == 'tag' }}
+    needs: [prepare, ci_pipe]
+    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_pipe.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -139,9 +171,9 @@ jobs:
         with:
           tool: just@${{ env.NEMO_FLOW_CI_JUST_VERSION }}
 
-      - name: Stamp Cargo release version
+      - name: Set project release version
         working-directory: ${{ github.workspace }}/NeMo-Flow
-        run: just --set ref_name "${{ github.ref_name }}" stamp-cargo-release-version
+        run: just set-version "${{ github.ref_name }}"
 
       - name: Authenticate to crates.io with trusted publishing
         id: crates-io-auth
@@ -159,8 +191,8 @@ jobs:
 
   publish-python:
     name: Publish / PyPI
-    needs: [ci_pipe]
-    if: ${{ github.ref_type == 'tag' }}
+    needs: [prepare, ci_pipe]
+    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_pipe.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -180,8 +212,8 @@ jobs:
 
   publish-npm:
     name: Publish / npm
-    needs: [ci_pipe]
-    if: ${{ github.ref_type == 'tag' }}
+    needs: [prepare, ci_pipe]
+    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_pipe.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

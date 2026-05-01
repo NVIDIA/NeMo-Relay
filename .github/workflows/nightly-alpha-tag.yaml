@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Create nightly alpha tag
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Create the nightly alpha tag at 08:12 UTC (04:12 UTC-4).
+    - cron: '12 8 * * *'
+
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.ref }}'
+  cancel-in-progress: false
+
+jobs:
+  tag-nightly-alpha:
+    name: Tag nightly alpha
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Create nightly alpha tag
+        env:
+          NEMO_FLOW_NIGHTLY_TAG_TOKEN: ${{ secrets.NEMO_FLOW_NIGHTLY_TAG_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$NEMO_FLOW_NIGHTLY_TAG_TOKEN" ]]; then
+            echo "Error: NEMO_FLOW_NIGHTLY_TAG_TOKEN is required so the tag push can trigger tag CI." >&2
+            exit 1
+          fi
+
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [[ -z "$version" ]]; then
+            echo "Error: failed to read workspace version from Cargo.toml" >&2
+            exit 1
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: workspace version must be a stable SemVer base for nightly alpha tags: ${version}" >&2
+            exit 1
+          fi
+
+          tag_date="$(date -u +%Y%m%d)"
+          tag="${version}-alpha.${tag_date}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "Nightly alpha tag already exists: ${tag}"
+            exit 0
+          fi
+
+          git tag \
+            --annotate \
+            --message "NeMo Flow ${version} Nightly ${tag_date}" \
+            "$tag" \
+            "$GITHUB_SHA"
+          git remote set-url origin "https://x-access-token:${NEMO_FLOW_NIGHTLY_TAG_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "refs/tags/${tag}"
+          echo "Created nightly alpha tag: ${tag}"
