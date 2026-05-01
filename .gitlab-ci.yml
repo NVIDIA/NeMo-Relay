@@ -19,7 +19,6 @@ variables:
   NEMO_FLOW_CI_UV_VERSION: "0.9.28"
   NEMO_FLOW_CI_GITHUB_REPOSITORY: "NVIDIA/NeMo-Flow"
   NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE: "ci.yaml"
-  NEMO_FLOW_CI_GITHUB_BRANCH: "main"
   NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS: "7200"
   NEMO_FLOW_CI_GITHUB_RUN_POLL_SECONDS: "60"
 
@@ -65,18 +64,54 @@ collect:github-artifacts:
 
       mkdir -p collected/wheels collected/wasm collected/node downloaded
 
-      run_id="$(
-        gh run list \
-          --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" \
-          --workflow "$NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE" \
-          --event schedule \
-          --branch "$NEMO_FLOW_CI_GITHUB_BRANCH" \
-          --limit 1 \
-          --json databaseId \
-          --jq '.[0].databaseId // ""'
-      )"
+      version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+      if [ -z "$version" ]; then
+        echo "Error: failed to read workspace version from Cargo.toml." >&2
+        exit 1
+      fi
+      if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo "Error: workspace version must be a stable SemVer base for nightly alpha tags: ${version}" >&2
+        exit 1
+      fi
+
+      tag_date="$(date -u +%Y%m%d)"
+      tag="${version}-alpha.${tag_date}"
+      tag_ref="tags/${tag}"
+      deadline="$(( $(date -u +%s) + NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS ))"
+
+      echo "Waiting for nightly alpha tag ${tag} in ${NEMO_FLOW_CI_GITHUB_REPOSITORY}"
+      while ! gh api "repos/${NEMO_FLOW_CI_GITHUB_REPOSITORY}/git/ref/${tag_ref}" >/dev/null 2>&1; do
+        if [ "$(date -u +%s)" -ge "$deadline" ]; then
+          echo "Error: nightly alpha tag ${tag} did not appear within ${NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS} seconds." >&2
+          exit 1
+        fi
+        sleep "$NEMO_FLOW_CI_GITHUB_RUN_POLL_SECONDS"
+      done
+
+      echo "Waiting for ${NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE} run for tag ${tag}"
+      run_id=""
+      while [ -z "$run_id" ]; do
+        run_id="$(
+          gh run list \
+            --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" \
+            --workflow "$NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE" \
+            --event push \
+            --branch "$tag" \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // ""'
+        )"
+        if [ -n "$run_id" ]; then
+          break
+        fi
+        if [ "$(date -u +%s)" -ge "$deadline" ]; then
+          echo "Error: no GitHub Actions run found for nightly alpha tag ${tag} within ${NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS} seconds." >&2
+          exit 1
+        fi
+        sleep "$NEMO_FLOW_CI_GITHUB_RUN_POLL_SECONDS"
+      done
       if [ -z "$run_id" ]; then
-        echo "Error: no scheduled GitHub Actions run found for ${NEMO_FLOW_CI_GITHUB_REPOSITORY}/${NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE} on ${NEMO_FLOW_CI_GITHUB_BRANCH}." >&2
+        echo "Error: no GitHub Actions run found for nightly alpha tag ${tag}." >&2
         exit 1
       fi
 
@@ -86,13 +121,13 @@ collect:github-artifacts:
           --json url \
           --jq '.url'
       )"
-      echo "Waiting for scheduled GitHub Actions run ${run_id}: ${run_html_url}"
+      echo "Watching GitHub Actions run ${run_id} for nightly alpha tag ${tag}: ${run_html_url}"
       if ! timeout "$NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS" \
         gh run watch "$run_id" \
           --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" \
           --interval "$NEMO_FLOW_CI_GITHUB_RUN_POLL_SECONDS" \
           --exit-status; then
-        echo "Error: scheduled GitHub Actions run ${run_id} failed, was cancelled, or did not complete within ${NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS} seconds: ${run_html_url}" >&2
+        echo "Error: GitHub Actions run ${run_id} for nightly alpha tag ${tag} failed, was cancelled, or did not complete within ${NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS} seconds: ${run_html_url}" >&2
         exit 1
       fi
 
@@ -127,11 +162,11 @@ collect:github-artifacts:
         printf '  "run_id": "%s",\n' "$run_id"
         printf '  "run_url": "%s",\n' "$run_html_url"
         printf '  "workflow": "%s",\n' "$NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE"
-        printf '  "branch": "%s"\n' "$NEMO_FLOW_CI_GITHUB_BRANCH"
+        printf '  "tag": "%s"\n' "$tag"
         printf '}\n'
       } > collected/github-run.json
   artifacts:
-    name: github-scheduled-package-artifacts
+    name: github-nightly-package-artifacts
     when: on_success
     expire_in: 7 days
     paths:
