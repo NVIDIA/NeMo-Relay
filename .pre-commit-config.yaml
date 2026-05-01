@@ -130,21 +130,21 @@ repos:
         name: ATTRIBUTIONS-Rust.md (Cargo.lock)
         entry: bash scripts/generate_attributions.sh rust
         language: system
-        files: '^Cargo\.lock$'
+        files: '^(Cargo\.lock|ATTRIBUTIONS-Rust\.md)$'
         pass_filenames: false
 
       - id: attributions-python
         name: ATTRIBUTIONS-Python.md (uv.lock)
         entry: bash scripts/generate_attributions.sh python
         language: system
-        files: '^uv\.lock$'
+        files: '^(uv\.lock|ATTRIBUTIONS-Python\.md)$'
         pass_filenames: false
 
       - id: attributions-node
         name: ATTRIBUTIONS-Node.md (crates/node/package-lock.json)
         entry: bash scripts/generate_attributions.sh node
         language: system
-        files: '^crates/node/package-lock\.json$'
+        files: '^(crates/node/package-lock\.json|ATTRIBUTIONS-Node\.md)$'
         pass_filenames: false
 
   # Go — fmt + vet
