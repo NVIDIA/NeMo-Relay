@@ -3,6 +3,8 @@
 
 [bans]
 skip = [
+    { crate = "getrandom@0.4.2", reason = "build-only duplicate internal to cbindgen's tempfile stack" },
+    { crate = "r-efi@6.0.0", reason = "target-specific build-only duplicate from cbindgen's tempfile stack" },
     { crate = "winnow@1.0.1", reason = "build-only duplicate internal to cbindgen's TOML parser stack" },
 ]
 

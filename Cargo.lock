@@ -1032,7 +1032,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-flow"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bitflags",
@@ -1060,7 +1060,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-flow-adaptive"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "nemo-flow",
@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-flow-ffi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cbindgen",
  "chrono",
@@ -1094,7 +1094,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-flow-node"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "napi",
@@ -1111,7 +1111,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-flow-python"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "nemo-flow",
@@ -1128,7 +1128,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-flow-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "js-sys",
