@@ -246,8 +246,6 @@ publish:artifactory:npm:
       npm_auth="$(printf '%s:%s' "${NEMO_FLOW_CI_ARTIFACTORY_USER}" "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" | base64 | tr -d '\n')"
       npm config set registry "$registry_url"
       npm config set "${registry_key}:_auth" "$npm_auth"
-      npm config set "${registry_key}:email" "ci@nvidia.com"
-      npm config set "${registry_key}:always-auth" "true"
 
       npm publish --tag dev collected/node/consolidated/package
       for package_path in collected/wasm/*.tgz; do
