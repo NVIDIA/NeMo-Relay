@@ -1,0 +1,241 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Python
+
+on:
+  workflow_call:
+    inputs:
+      ref_type:
+        description: 'The ref type from the triggering workflow'
+        required: true
+        type: string
+      ref_name:
+        description: 'The ref name from the triggering workflow'
+        required: true
+        type: string
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GH_TOKEN: "${{ github.token }}"
+  GIT_COMMIT: "${{ github.sha }}"
+  NEMO_FLOW_CI_WORKSPACE: "${{ github.workspace }}"
+  NEMO_FLOW_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
+  UV_PYTHON_DOWNLOADS: never
+
+jobs:
+  test-python:
+    name: Test / Python / ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-amd64
+            runner: linux-amd64-cpu4
+          - platform: linux-arm64
+            runner: linux-arm64-cpu4
+          - platform: macos-arm64
+            runner: macos-15
+          - platform: windows-amd64
+            runner: windows-2022
+          - platform: windows-arm64
+            runner: windows-11-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        with:
+          cache: false
+          toolchain: ${{ steps.ci-config.outputs.rust_version }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: nemo-flow-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          workspaces: . -> target
+          cache-all-crates: true
+          cache-bin: false
+          save-if: false
+
+      - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+        with:
+          tool: cargo-llvm-cov@${{ steps.ci-config.outputs.cargo_llvm_cov_version }},just@${{ steps.ci-config.outputs.just_version }}
+
+      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
+        with:
+          version: ${{ steps.ci-config.outputs.uv_version }}
+          enable-cache: true
+          cache-dependency-glob: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/uv.lock
+
+      - name: Set up Windows ARM Python
+        if: ${{ matrix.platform == 'windows-arm64' }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
+          architecture: arm64
+
+      - name: Select setup-python interpreter for uv
+        if: ${{ matrix.platform == 'windows-arm64' }}
+        run: |
+          set -e
+          python - <<'PY' >> "$GITHUB_ENV"
+          import sys
+          print(f"UV_PYTHON={sys.executable}")
+          PY
+
+      - name: Install managed Python
+        if: ${{ matrix.platform != 'windows-arm64' }}
+        run: |
+          set -e
+          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
+
+      - name: Run Python tests with coverage
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: just --set ci true --set output_dir "${{ github.workspace }}" test-python
+
+      - name: Upload Python coverage to Codecov
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          disable_search: true
+          files: ${{ matrix.platform == 'windows-arm64' && 'python-coverage.xml' || 'python-coverage.xml,python-rust.xml' }}
+          flags: python-${{ matrix.platform }}
+          name: python-${{ matrix.platform }}
+          verbose: true
+
+      - name: Prune uv cache
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: uv cache prune --ci
+
+  package-python:
+    name: Package / Python / ${{ matrix.platform }}
+    needs: [test-python]
+    if: ${{ !cancelled() && needs.test-python.result == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-amd64
+            runner: linux-amd64-cpu4
+          - platform: linux-arm64
+            runner: linux-arm64-cpu4
+          - platform: macos-arm64
+            runner: macos-15
+          - platform: windows-amd64
+            runner: windows-2022
+          - platform: windows-arm64
+            runner: windows-11-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        with:
+          cache: false
+          toolchain: ${{ steps.ci-config.outputs.rust_version }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: nemo-flow-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          workspaces: . -> target
+          cache-all-crates: true
+          cache-bin: false
+
+      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
+        with:
+          version: ${{ steps.ci-config.outputs.uv_version }}
+          enable-cache: true
+          cache-dependency-glob: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/uv.lock
+
+      - name: Set up Windows ARM Python
+        if: ${{ matrix.platform == 'windows-arm64' }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
+          architecture: arm64
+
+      - name: Select setup-python interpreter for uv
+        if: ${{ matrix.platform == 'windows-arm64' }}
+        run: |
+          set -e
+          python - <<'PY' >> "$GITHUB_ENV"
+          import sys
+          print(f"UV_PYTHON={sys.executable}")
+          PY
+
+      - name: Install managed Python
+        if: ${{ matrix.platform != 'windows-arm64' }}
+        run: |
+          set -e
+          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
+
+      - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+        with:
+          tool: just@${{ steps.ci-config.outputs.just_version }}
+
+      - name: Create packaging output directory
+        run: |
+          set -e
+          mkdir -p "${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wheels"
+
+      - name: Derive Python package version
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: |
+          set -e
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [ -z "$version" ]; then
+            echo "Error: failed to read workspace version from Cargo.toml" >&2
+            exit 1
+          fi
+          sha="${GITHUB_SHA::8}"
+          if [ "${{ inputs.ref_type }}" = "tag" ]; then
+            version="${{ inputs.ref_name }}"
+          else
+            version="${version}+${sha}"
+          fi
+          printf 'NEMO_FLOW_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+
+      - name: Package Python wheel
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: |
+          set -e
+          just \
+            --set output_dir "${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}" \
+            --set ref_name "${NEMO_FLOW_PACKAGE_VERSION}" \
+            package-python
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: wheel-${{ matrix.platform }}
+          path: ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wheels/*.whl
+          if-no-files-found: error
+
+      - name: Prune uv cache
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: uv cache prune --ci

@@ -1,0 +1,148 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Rust
+
+on:
+  workflow_call:
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GH_TOKEN: "${{ github.token }}"
+  GIT_COMMIT: "${{ github.sha }}"
+  NEMO_FLOW_CI_WORKSPACE: "${{ github.workspace }}"
+  NEMO_FLOW_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
+  UV_PYTHON_DOWNLOADS: never
+
+jobs:
+  test-rust:
+    name: Test / Rust / ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
+    permissions:
+      contents: read
+    services:
+      redis:
+        image: ${{ matrix.redis_service_image }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-amd64
+            runner: linux-amd64-cpu4
+            run_redis_tests: true
+            redis_service_image: redis:7.4.7-alpine
+          - platform: linux-arm64
+            runner: linux-arm64-cpu4
+            run_redis_tests: false
+            redis_service_image: ''
+          - platform: macos-arm64
+            runner: macos-15
+            run_redis_tests: false
+            redis_service_image: ''
+          - platform: windows-amd64
+            runner: windows-2022
+            run_redis_tests: false
+            redis_service_image: ''
+          - platform: windows-arm64
+            runner: windows-11-arm
+            run_redis_tests: false
+            redis_service_image: ''
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        with:
+          cache: false
+          toolchain: ${{ steps.ci-config.outputs.rust_version }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: nemo-flow-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          workspaces: . -> target
+          cache-all-crates: true
+          cache-bin: false
+
+      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
+        with:
+          version: ${{ steps.ci-config.outputs.uv_version }}
+          enable-cache: true
+          cache-dependency-glob: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/uv.lock
+
+      - name: Set up Windows ARM Python
+        if: ${{ matrix.platform == 'windows-arm64' }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
+          architecture: arm64
+
+      - name: Select setup-python interpreter for uv
+        if: ${{ matrix.platform == 'windows-arm64' }}
+        run: |
+          set -e
+          python - <<'PY' >> "$GITHUB_ENV"
+          import sys
+          print(f"UV_PYTHON={sys.executable}")
+          PY
+
+      - name: Install managed Python
+        if: ${{ matrix.platform != 'windows-arm64' }}
+        run: |
+          set -e
+          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
+
+      - name: Add Python DLL directory to PATH on Windows
+        if: runner.os == 'Windows'
+        run: |
+          set -e
+          python_exe="$(uv python find)"
+          python_home="$("$python_exe" -c 'import sys; print(sys.base_prefix)')"
+          echo "$python_home" >> "$GITHUB_PATH"
+
+      - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+        with:
+          tool: cargo-llvm-cov@${{ steps.ci-config.outputs.cargo_llvm_cov_version }},cargo-nextest@${{ steps.ci-config.outputs.cargo_nextest_version }},just@${{ steps.ci-config.outputs.just_version }}
+
+      - name: Run Rust tests with coverage
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: |
+          set -e
+          args=(
+            --set ci true
+            --set output_dir "${{ github.workspace }}"
+          )
+          if [ "${{ matrix.run_redis_tests }}" = "true" ]; then
+            export NEMO_FLOW_RUN_REDIS_TESTS=1
+          fi
+          just "${args[@]}" test-rust
+
+      - name: Upload Rust coverage to Codecov
+        if: ${{ matrix.platform != 'windows-arm64' }}
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          disable_search: true
+          files: rust-workspace.xml
+          flags: rust-${{ matrix.platform }}
+          name: rust-${{ matrix.platform }}
+          verbose: true

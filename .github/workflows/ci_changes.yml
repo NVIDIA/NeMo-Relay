@@ -1,0 +1,97 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Changes
+
+on:
+  workflow_call:
+    inputs:
+      pr_info:
+        description: 'The JSON string containing the PR information'
+        required: true
+        type: string
+      full_ci:
+        description: 'Whether to run the full CI matrix without path filtering'
+        required: false
+        default: false
+        type: boolean
+      ref_name:
+        description: 'The ref name from the triggering workflow'
+        required: true
+        type: string
+    outputs:
+      base:
+        description: 'The comparison base used for filtered checks'
+        value: ${{ jobs.changes.outputs.base }}
+      run_docs:
+        description: 'Whether documentation jobs should run'
+        value: ${{ jobs.changes.outputs.run_docs }}
+      run_go:
+        description: 'Whether Go jobs should run'
+        value: ${{ jobs.changes.outputs.run_go }}
+      run_node:
+        description: 'Whether Node.js jobs should run'
+        value: ${{ jobs.changes.outputs.run_node }}
+      run_python:
+        description: 'Whether Python jobs should run'
+        value: ${{ jobs.changes.outputs.run_python }}
+      run_rust:
+        description: 'Whether Rust jobs should run'
+        value: ${{ jobs.changes.outputs.run_rust }}
+      run_wasm:
+        description: 'Whether WASM jobs should run'
+        value: ${{ jobs.changes.outputs.run_wasm }}
+
+jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      base: ${{ steps.comparison-base.outputs.base }}
+      run_docs: ${{ (inputs.full_ci || startsWith(inputs.ref_name, 'pull-request/')) && (inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.docs == 'true') }}
+      run_go: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.go == 'true' }}
+      run_node: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.node == 'true' }}
+      run_python: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.python == 'true' }}
+      run_rust: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.rust == 'true' }}
+      run_wasm: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.wasm == 'true' }}
+
+    steps:
+      - name: Checkout
+        if: ${{ ! inputs.full_ci }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve comparison base
+        id: comparison-base
+        if: ${{ ! inputs.full_ci }}
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+          PR_INFO: ${{ inputs.pr_info }}
+          REF_NAME: ${{ inputs.ref_name }}
+        run: |
+          set -euo pipefail
+          base=""
+          if [[ "$REF_NAME" == pull-request/* ]]; then
+            base="$(jq -r '.base.ref // empty' <<< "$PR_INFO")"
+            if [[ -z "$base" ]]; then
+              echo "Error: failed to resolve PR base branch from pr_info" >&2
+              exit 1
+            fi
+          elif [[ -n "$EVENT_BEFORE" && "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]]; then
+            base="$EVENT_BEFORE"
+          else
+            base="${GITHUB_REF}"
+          fi
+          printf 'base=%s\n' "$base" >> "$GITHUB_OUTPUT"
+
+      - name: Detect changed paths
+        id: filter
+        if: ${{ ! inputs.full_ci }}
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.01
+        with:
+          base: ${{ steps.comparison-base.outputs.base }}
+          filters: .github/ci-path-filters.yml

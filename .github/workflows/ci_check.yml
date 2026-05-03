@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Check
+
+on:
+  workflow_call:
+    inputs:
+      full_ci:
+        description: 'Whether to run checks across all files'
+        required: false
+        default: false
+        type: boolean
+      base:
+        description: 'The comparison base used for filtered pre-commit checks'
+        required: false
+        default: ''
+        type: string
+defaults:
+  run:
+    shell: bash
+
+env:
+  GH_TOKEN: "${{ github.token }}"
+  GIT_COMMIT: "${{ github.sha }}"
+  NEMO_FLOW_CI_WORKSPACE: "${{ github.workspace }}"
+  NEMO_FLOW_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
+  UV_PYTHON_DOWNLOADS: never
+
+jobs:
+  check:
+    name: Check
+    runs-on: linux-amd64-cpu4
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
+      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
+        with:
+          version: ${{ steps.ci-config.outputs.uv_version }}
+          enable-cache: true
+          cache-dependency-glob: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/uv.lock
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: ${{ steps.ci-config.outputs.go_version }}
+          cache: false
+
+      - name: Install managed Python
+        run: |
+          set -e
+          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: ${{ steps.ci-config.outputs.node_version }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        with:
+          cache: false
+          toolchain: ${{ steps.ci-config.outputs.rust_version }}
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: nemo-flow-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          workspaces: . -> target
+          cache-all-crates: true
+          cache-bin: false
+          save-if: false
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+        with:
+          tool: cargo-deny@${{ steps.ci-config.outputs.cargo_deny_version }}
+
+      - name: Install cargo-about
+        uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+        with:
+          tool: cargo-about@${{ steps.ci-config.outputs.cargo_about_version }}
+
+      - name: pre-commit
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        env:
+          FULL_CI: ${{ inputs.full_ci }}
+          PRE_COMMIT_BASE: ${{ inputs.base }}
+          # The attribution hook syncs docs deps; do not apply repo warning policy to third-party Rust builds.
+          RUSTFLAGS: ""
+        run: |
+          set -e
+          uv tool install pre-commit==4.5
+          if [[ "$FULL_CI" == "true" || -z "$PRE_COMMIT_BASE" ]]; then
+            pre-commit run --all-files --show-diff-on-failure
+          else
+            if [[ "$PRE_COMMIT_BASE" =~ ^[0-9a-f]{40}$ || "$PRE_COMMIT_BASE" == refs/* ]]; then
+              base_ref="$PRE_COMMIT_BASE"
+            else
+              base_ref="origin/$PRE_COMMIT_BASE"
+            fi
+            if [[ ! "$PRE_COMMIT_BASE" =~ ^[0-9a-f]{40}$ && "$base_ref" != "$GITHUB_REF" ]]; then
+              base_ref="$(git merge-base "$base_ref" HEAD)"
+            fi
+            pre-commit run --from-ref "$base_ref" --to-ref HEAD --show-diff-on-failure
+          fi

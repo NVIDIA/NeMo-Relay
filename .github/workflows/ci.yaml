@@ -17,19 +17,12 @@ concurrency:
   group: '${{ github.workflow }} @ ${{ github.event_name }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
   cancel-in-progress: true
 
-env:
-  NEMO_FLOW_CI_DEFAULT_PYTHON_VER: "3.11"
-  NEMO_FLOW_CI_RUST_VERSION: "1.93.0"
-  NEMO_FLOW_CI_NODE_VERSION: "24"
-  NEMO_FLOW_CI_UV_VERSION: "0.9.28"
-  NEMO_FLOW_CI_JUST_VERSION: "1.47.1"
-
 jobs:
 
   pr-builder:
     needs:
       - prepare
-      - ci_pipe
+      - ci_required
     if: ${{ needs.prepare.outputs.publish_docs != 'true' }}
     permissions:
       contents: read
@@ -90,6 +83,7 @@ jobs:
           printf 'full_ci=%s\n' "$full_ci" >> "$GITHUB_OUTPUT"
           printf 'publish_docs=%s\n' "$publish_docs" >> "$GITHUB_OUTPUT"
           printf 'publish_packages=%s\n' "$publish_packages" >> "$GITHUB_OUTPUT"
+
     outputs:
       full_ci: ${{ steps.policy.outputs.full_ci }}
       is_pr: ${{ startsWith(github.ref_name, 'pull-request/') }}
@@ -100,29 +94,173 @@ jobs:
       pr_info: ${{ steps.get-pr-info.outcome == 'success' && steps.get-pr-info.outputs.pr-info || '' }}
 
 
-  ci_pipe:
-    name: CI Pipeline
+  ci_changes:
+    name: Changes
     needs: [prepare]
-    uses: ./.github/workflows/ci_pipe.yml
+    uses: ./.github/workflows/ci_changes.yml
     if: ${{ ! fromJSON(needs.prepare.outputs.has_skip_ci_label) }}
     permissions:
       contents: read
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     with:
       # Info about the PR. Empty for non PR branches. Useful for extracting PR number, title, etc.
       pr_info: ${{ needs.prepare.outputs.pr_info }}
       full_ci: ${{ needs.prepare.outputs.full_ci == 'true' }}
+      ref_name: ${{ github.ref_name }}
+
+  ci_check:
+    name: Check
+    needs: [prepare, ci_changes]
+    uses: ./.github/workflows/ci_check.yml
+    if: ${{ needs.ci_changes.result == 'success' }}
+    permissions:
+      contents: read
+    with:
+      full_ci: ${{ needs.prepare.outputs.full_ci == 'true' }}
+      base: ${{ needs.ci_changes.outputs.base }}
+
+  ci_docs:
+    name: Documentation
+    needs: [prepare, ci_changes, ci_check]
+    uses: ./.github/workflows/ci_docs.yml
+    if: >-
+      ${{
+        !cancelled()
+        && needs.ci_changes.result == 'success'
+        && needs.ci_check.result == 'success'
+        && needs.ci_changes.outputs.run_docs == 'true'
+      }}
+    permissions:
+      contents: read
+    with:
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
       publish_docs: ${{ needs.prepare.outputs.publish_docs == 'true' }}
 
+  ci_rust:
+    name: Rust
+    needs: [prepare, ci_changes, ci_check]
+    uses: ./.github/workflows/ci_rust.yml
+    if: ${{ needs.ci_check.result == 'success' && needs.ci_changes.outputs.run_rust == 'true' }}
+    permissions:
+      contents: read
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  ci_go:
+    name: Go
+    needs: [prepare, ci_changes, ci_check]
+    uses: ./.github/workflows/ci_go.yml
+    if: ${{ needs.ci_check.result == 'success' && needs.ci_changes.outputs.run_go == 'true' }}
+    permissions:
+      contents: read
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  ci_node:
+    name: Node.js
+    needs: [prepare, ci_changes, ci_check]
+    uses: ./.github/workflows/ci_node.yml
+    if: ${{ needs.ci_check.result == 'success' && needs.ci_changes.outputs.run_node == 'true' }}
+    permissions:
+      contents: read
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    with:
+      ref_type: ${{ github.ref_type }}
+      ref_name: ${{ github.ref_name }}
+
+  ci_python:
+    name: Python
+    needs: [prepare, ci_changes, ci_check]
+    uses: ./.github/workflows/ci_python.yml
+    if: ${{ needs.ci_check.result == 'success' && needs.ci_changes.outputs.run_python == 'true' }}
+    permissions:
+      contents: read
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    with:
+      ref_type: ${{ github.ref_type }}
+      ref_name: ${{ github.ref_name }}
+
+  ci_wasm:
+    name: WASM
+    needs: [prepare, ci_changes, ci_check]
+    uses: ./.github/workflows/ci_wasm.yml
+    if: ${{ needs.ci_check.result == 'success' && needs.ci_changes.outputs.run_wasm == 'true' }}
+    permissions:
+      contents: read
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    with:
+      ref_type: ${{ github.ref_type }}
+      ref_name: ${{ github.ref_name }}
+
+  ci_required:
+    name: CI Pipeline
+    needs:
+      - prepare
+      - ci_changes
+      - ci_check
+      - ci_docs
+      - ci_rust
+      - ci_go
+      - ci_node
+      - ci_python
+      - ci_wasm
+    if: ${{ always() && !cancelled() && needs.prepare.result == 'success' && ! fromJSON(needs.prepare.outputs.has_skip_ci_label) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Verify required CI jobs
+        env:
+          CHANGES_RESULT: ${{ needs.ci_changes.result }}
+          CHECK_RESULT: ${{ needs.ci_check.result }}
+          DOCS_RESULT: ${{ needs.ci_docs.result }}
+          RUST_RESULT: ${{ needs.ci_rust.result }}
+          GO_RESULT: ${{ needs.ci_go.result }}
+          NODE_RESULT: ${{ needs.ci_node.result }}
+          PYTHON_RESULT: ${{ needs.ci_python.result }}
+          WASM_RESULT: ${{ needs.ci_wasm.result }}
+        run: |
+          set -euo pipefail
+          failed=false
+
+          require_success() {
+            local name="$1"
+            local result="$2"
+            if [[ "$result" != "success" ]]; then
+              echo "Error: ${name} finished with result '${result}', expected success" >&2
+              failed=true
+            fi
+          }
+
+          allow_success_or_skipped() {
+            local name="$1"
+            local result="$2"
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "Error: ${name} finished with result '${result}', expected success or skipped" >&2
+              failed=true
+            fi
+          }
+
+          require_success "Changes" "$CHANGES_RESULT"
+          require_success "Check" "$CHECK_RESULT"
+          allow_success_or_skipped "Documentation" "$DOCS_RESULT"
+          allow_success_or_skipped "Rust" "$RUST_RESULT"
+          allow_success_or_skipped "Go" "$GO_RESULT"
+          allow_success_or_skipped "Node.js" "$NODE_RESULT"
+          allow_success_or_skipped "Python" "$PYTHON_RESULT"
+          allow_success_or_skipped "WASM" "$WASM_RESULT"
+
+          if [[ "$failed" == "true" ]]; then
+            exit 1
+          fi
+
   deploy-docs:
     name: Deploy Documentation
-    needs: [prepare, ci_pipe]
-    if: ${{ needs.prepare.outputs.publish_docs == 'true' && needs.ci_pipe.result == 'success' }}
+    needs: [prepare, ci_required]
+    if: ${{ needs.prepare.outputs.publish_docs == 'true' && needs.ci_required.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -137,8 +275,8 @@ jobs:
 
   publish-rust:
     name: Publish / crates.io
-    needs: [prepare, ci_pipe]
-    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_pipe.result == 'success' }}
+    needs: [prepare, ci_required]
+    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -148,31 +286,33 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          path: ${{ github.workspace }}/NeMo-Flow
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
 
       - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
         with:
           cache: false
-          toolchain: ${{ env.NEMO_FLOW_CI_RUST_VERSION }}
+          toolchain: ${{ steps.ci-config.outputs.rust_version }}
 
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
         with:
-          version: ${{ env.NEMO_FLOW_CI_UV_VERSION }}
+          version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
-          cache-dependency-glob: ${{ github.workspace }}/NeMo-Flow/uv.lock
+          cache-dependency-glob: ${{ github.workspace }}/uv.lock
 
       - name: Install managed Python
         run: |
           set -e
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ env.NEMO_FLOW_CI_DEFAULT_PYTHON_VER }}
+          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
 
       - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
         with:
-          tool: just@${{ env.NEMO_FLOW_CI_JUST_VERSION }}
+          tool: just@${{ steps.ci-config.outputs.just_version }}
 
       - name: Set project release version
-        working-directory: ${{ github.workspace }}/NeMo-Flow
+        working-directory: ${{ github.workspace }}
         run: just set-version "${{ github.ref_name }}"
 
       - name: Authenticate to crates.io with trusted publishing
@@ -180,7 +320,7 @@ jobs:
         uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe # v1.0.4
 
       - name: Publish to crates.io with trusted publishing
-        working-directory: ${{ github.workspace }}/NeMo-Flow
+        working-directory: ${{ github.workspace }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
         run: |
@@ -191,8 +331,8 @@ jobs:
 
   publish-python:
     name: Publish / PyPI
-    needs: [prepare, ci_pipe]
-    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_pipe.result == 'success' }}
+    needs: [prepare, ci_required]
+    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -212,8 +352,8 @@ jobs:
 
   publish-npm:
     name: Publish / npm
-    needs: [prepare, ci_pipe]
-    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_pipe.result == 'success' }}
+    needs: [prepare, ci_required]
+    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -221,9 +361,16 @@ jobs:
       id-token: write
     environment: npm
     steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
-          node-version: ${{ env.NEMO_FLOW_CI_NODE_VERSION }}
+          node-version: ${{ steps.ci-config.outputs.node_version }}
           registry-url: "https://registry.npmjs.org"
 
       - name: Download consolidated Node package artifact
