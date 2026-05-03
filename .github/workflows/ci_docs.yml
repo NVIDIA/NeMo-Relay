@@ -33,7 +33,7 @@ env:
 jobs:
   docs:
     name: Build
-    runs-on: linux-amd64-cpu4
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read

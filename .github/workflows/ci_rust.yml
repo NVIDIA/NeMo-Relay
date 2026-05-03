@@ -43,11 +43,11 @@ jobs:
       matrix:
         include:
           - platform: linux-amd64
-            runner: linux-amd64-cpu4
+            runner: ubuntu-latest
             run_redis_tests: true
             redis_service_image: redis:7.4.7-alpine
           - platform: linux-arm64
-            runner: linux-arm64-cpu4
+            runner: ubuntu-24.04-arm
             run_redis_tests: false
             redis_service_image: ''
           - platform: macos-arm64

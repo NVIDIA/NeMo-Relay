@@ -42,9 +42,9 @@ jobs:
       matrix:
         include:
           - platform: linux-amd64
-            runner: linux-amd64-cpu4
+            runner: ubuntu-latest
           - platform: linux-arm64
-            runner: linux-arm64-cpu4
+            runner: ubuntu-24.04-arm
           - platform: macos-arm64
             runner: macos-15
           - platform: windows-amd64
@@ -109,9 +109,9 @@ jobs:
       matrix:
         include:
           - platform: linux-amd64
-            runner: linux-amd64-cpu4
+            runner: ubuntu-latest
           - platform: linux-arm64
-            runner: linux-arm64-cpu4
+            runner: ubuntu-24.04-arm
           - platform: macos-arm64
             runner: macos-15
           - platform: windows-amd64
@@ -200,7 +200,7 @@ jobs:
     name: Consolidate
     needs: [package-node]
     if: ${{ !cancelled() && needs.package-node.result == 'success' }}
-    runs-on: linux-amd64-cpu4
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
