@@ -223,6 +223,8 @@ jobs:
           NODE_RESULT: ${{ needs.ci_node.result }}
           PYTHON_RESULT: ${{ needs.ci_python.result }}
           WEBASSEMBLY_RESULT: ${{ needs.ci_wasm.result }}
+          publish_docs: ${{ needs.prepare.outputs.publish_docs }}
+          publish_packages: ${{ needs.prepare.outputs.publish_packages }}
         run: |
           set -euo pipefail
           failed=false
@@ -247,12 +249,26 @@ jobs:
 
           require_success "Changes" "$CHANGES_RESULT"
           require_success "Check" "$CHECK_RESULT"
-          allow_success_or_skipped "Documentation" "$DOCS_RESULT"
-          allow_success_or_skipped "Rust" "$RUST_RESULT"
+
+          if [[ "$publish_docs" == "true" ]]; then
+            require_success "Documentation" "$DOCS_RESULT"
+          else
+            allow_success_or_skipped "Documentation" "$DOCS_RESULT"
+          fi
+
+          if [[ "$publish_packages" == "true" ]]; then
+            require_success "Rust" "$RUST_RESULT"
+            require_success "Node.js" "$NODE_RESULT"
+            require_success "Python" "$PYTHON_RESULT"
+            require_success "WebAssembly" "$WEBASSEMBLY_RESULT"
+          else
+            allow_success_or_skipped "Rust" "$RUST_RESULT"
+            allow_success_or_skipped "Node.js" "$NODE_RESULT"
+            allow_success_or_skipped "Python" "$PYTHON_RESULT"
+            allow_success_or_skipped "WebAssembly" "$WEBASSEMBLY_RESULT"
+          fi
+
           allow_success_or_skipped "Go" "$GO_RESULT"
-          allow_success_or_skipped "Node.js" "$NODE_RESULT"
-          allow_success_or_skipped "Python" "$PYTHON_RESULT"
-          allow_success_or_skipped "WebAssembly" "$WEBASSEMBLY_RESULT"
 
           if [[ "$failed" == "true" ]]; then
             exit 1
