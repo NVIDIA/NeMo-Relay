@@ -167,6 +167,7 @@ These conventions keep source, documentation, and binding behavior consistent ac
 repository.
 
 - Keep SPDX headers on source, docs, scripts, and configuration files. The project is Apache-2.0.
+- `SKILL.md` files are skill entrypoints and do not need SPDX headers, but they must always start with YAML frontmatter containing at least `name` and `description`.
 - Follow binding naming conventions: Rust and Python `snake_case`, C FFI exports prefixed `nemo_flow_`, Go `PascalCase` for public APIs, Node.js `camelCase`.
 - Preserve the shared runtime model across bindings. Do not add behavior to one primary binding without considering Rust, Python, and Node.js parity.
 - Prefer documented public APIs and stable wrapper commands. Do not rely on internal helpers in examples or user-facing docs.
