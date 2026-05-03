@@ -783,12 +783,19 @@ test-go:
     coverage_out=""
     junit_out=""
     lib_dir="$NEMO_FLOW_REPO_ROOT/target/$target"
+    host_os="$(uname -s 2>/dev/null || true)"
+    is_windows=false
+    case "${RUNNER_OS:-}:${OSTYPE:-}:$host_os" in
+        Windows:*|*:msys*:*|*:win32*:*|*:*:MINGW*|*:*:MSYS*|*:*:CYGWIN*)
+            is_windows=true
+            ;;
+    esac
     cd "$NEMO_FLOW_REPO_ROOT"
     cargo build $flag -p nemo-flow-ffi
 
-    if [[ "$OSTYPE" == msys* || "$OSTYPE" == win32* ]]; then
-        export CC="${CC:-clang}"
-        export CXX="${CXX:-clang++}"
+    if [[ "$is_windows" == true ]]; then
+        export CC=clang
+        export CXX=clang++
         # Go's Windows linker checks -extldflags before deciding whether to
         # inject a GNU linker script; CGO_LDFLAGS is too late for that check.
         go_ldflags+=(-extldflags=-fuse-ld=lld)
@@ -808,12 +815,15 @@ test-go:
         coverage_out="$(prepare_artifact go-coverage.xml)"
         junit_out="$(prepare_artifact go-junit.xml)"
         go_test_cmd+=(-coverprofile=coverage.out)
-        if [[ "$OSTYPE" == msys* || "$OSTYPE" == win32* ]]; then
+        if [[ "$is_windows" == true ]]; then
             go_ldflags+=(-w)
         fi
         go install github.com/jstemmer/go-junit-report/v2@latest
         go install github.com/boumenot/gocover-cobertura@latest
         prepend_go_bin_to_path
+    fi
+    if [[ "$is_windows" == true ]]; then
+        echo "Go Windows linker: RUNNER_OS=${RUNNER_OS:-} OSTYPE=${OSTYPE:-} uname=$host_os CC=$CC CXX=$CXX ldflags=${go_ldflags[*]:-}"
     fi
     if [[ ${#go_ldflags[@]} -gt 0 ]]; then
         go_test_cmd+=("-ldflags=${go_ldflags[*]}")
