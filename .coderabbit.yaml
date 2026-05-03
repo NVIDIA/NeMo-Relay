@@ -90,6 +90,10 @@ reviews:
       instructions: |
         Review documentation for technical accuracy against the current API, command correctness, and consistency across language bindings.
         Flag stale examples, missing SPDX headers where required, and instructions that no longer match CI or pre-commit behavior.
+    - path: "**/SKILL.md"
+      instructions: |
+        Do not flag SKILL.md files for missing SPDX headers. Skill entrypoints intentionally start with YAML frontmatter instead.
+        Verify that every SKILL.md keeps valid YAML frontmatter with at least name and description fields before the Markdown body.
     - path: "{.github/**,.gitlab-ci.yml,.pre-commit-config.yaml,justfile,scripts/**}"
       instructions: |
         Review automation changes for reproducibility, pinned versions where appropriate, secret handling, and consistency with the documented validation matrix.

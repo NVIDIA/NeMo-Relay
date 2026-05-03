@@ -4,8 +4,16 @@
 codecov:
   require_ci_to_pass: true
   notify:
-    # CI uploads coverage from 5 test jobs, each on a 3-way platform matrix.
-    after_n_builds: 15
+    # Codecov counts one build per upload step in a full CI run:
+    # | Binding     | Platforms that upload coverage                                      | Uploads |
+    # |-------------|----------------------------------------------------------------------|---------|
+    # | Rust        | linux-amd64, linux-arm64, macos-arm64, windows-amd64                 | 4       |
+    # | Python      | linux-amd64, linux-arm64, macos-arm64, windows-amd64, windows-arm64  | 5       |
+    # | Go          | linux-amd64, linux-arm64, macos-arm64, windows-amd64, windows-arm64  | 5       |
+    # | Node.js     | linux-amd64, linux-arm64, macos-arm64                                | 3       |
+    # | WebAssembly | linux-amd64, linux-arm64, macos-arm64, windows-amd64, windows-arm64  | 5       |
+    # | Total       |                                                                      | 22      |
+    after_n_builds: 22
     wait_for_ci: true
 
 coverage:
@@ -81,7 +89,7 @@ component_management:
     - component_id: wasm_binding
       name: WebAssembly Binding
       paths:
-        - "NeMo-Flow/crates/wasm/pkg/*.js"
+        - "NeMo-Flow/crates/wasm/wrappers/nodejs/*.js"
       statuses:
         - type: project
           target: 84% # cannot be any higher due to internals
@@ -90,7 +98,7 @@ component_management:
           if_ci_failed: error
 
 comment:
-  after_n_builds: 15
+  after_n_builds: 22
   layout: "header, diff, components, files, footer"
   behavior: default
   require_changes: false
@@ -113,5 +121,6 @@ ignore:
   - "**/*.d.ts"
   - "**/*.pyi"
   - "**/python/nemo_flow/lib_native*.dylib.dSYM/**"
-  # impossible to cover due to wasm-bindgen internals
-  - "**/crates/wasm/src/api/mod.rs"
+  # WebAssembly Rust wrappers are covered through wasm-pack execution and
+  # reported through generated package JavaScript coverage.
+  - "**/crates/wasm/src/**/*.rs"
