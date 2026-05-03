@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-name: WASM
+name: WebAssembly
 
 on:
   workflow_call:
@@ -31,7 +31,7 @@ env:
 
 jobs:
   test-wasm:
-    name: Test / WASM / ${{ matrix.platform }}
+    name: Test / ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
@@ -85,11 +85,11 @@ jobs:
         with:
           tool: wasm-pack@${{ steps.ci-config.outputs.wasm_pack_version }}
 
-      - name: Run WASM tests with coverage
+      - name: Run WebAssembly tests with coverage
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-wasm
 
-      - name: Upload WASM coverage to Codecov
+      - name: Upload WebAssembly coverage to Codecov
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -100,7 +100,7 @@ jobs:
           verbose: true
 
   package-wasm:
-    name: Package / WASM / linux-amd64
+    name: Package / linux-amd64
     needs: [test-wasm]
     if: ${{ !cancelled() && needs.test-wasm.result == 'success' }}
     runs-on: linux-amd64-cpu4
@@ -141,7 +141,7 @@ jobs:
           set -e
           mkdir -p "${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wasm"
 
-      - name: Derive WASM package version
+      - name: Derive WebAssembly package version
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: |
           set -e
@@ -158,7 +158,7 @@ jobs:
           fi
           printf 'NEMO_FLOW_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
-      - name: Package WASM bundler
+      - name: Package WebAssembly bundler
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: |
           set -e
@@ -167,7 +167,7 @@ jobs:
             --set ref_name "${NEMO_FLOW_PACKAGE_VERSION}" \
             package-wasm
 
-      - name: Upload WASM package artifact
+      - name: Upload WebAssembly package artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: wasm-bundler

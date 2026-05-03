@@ -22,7 +22,7 @@ env:
 
 jobs:
   test-go:
-    name: Test / Go / ${{ matrix.platform }}
+    name: Test / ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}

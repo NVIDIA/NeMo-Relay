@@ -32,7 +32,7 @@ env:
 
 jobs:
   docs:
-    name: Documentation
+    name: Build
     runs-on: linux-amd64-cpu4
     timeout-minutes: 60
     permissions:

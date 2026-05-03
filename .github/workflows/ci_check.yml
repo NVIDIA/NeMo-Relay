@@ -29,7 +29,7 @@ env:
 
 jobs:
   check:
-    name: Check
+    name: Run
     runs-on: linux-amd64-cpu4
     timeout-minutes: 30
     permissions:

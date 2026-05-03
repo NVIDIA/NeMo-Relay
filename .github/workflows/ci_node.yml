@@ -31,7 +31,7 @@ env:
 
 jobs:
   test-node:
-    name: Test / Node / ${{ matrix.platform }}
+    name: Test / ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
@@ -97,7 +97,7 @@ jobs:
           verbose: true
 
   package-node:
-    name: Package / Node / ${{ matrix.platform }}
+    name: Package / ${{ matrix.platform }}
     needs: [test-node]
     if: ${{ !cancelled() && needs.test-node.result == 'success' }}
     runs-on: ${{ matrix.runner }}
@@ -197,7 +197,7 @@ jobs:
           if-no-files-found: error
 
   consolidate-node:
-    name: Consolidate / Node
+    name: Consolidate
     needs: [package-node]
     if: ${{ !cancelled() && needs.package-node.result == 'success' }}
     runs-on: linux-amd64-cpu4

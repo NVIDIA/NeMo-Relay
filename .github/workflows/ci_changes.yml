@@ -39,12 +39,12 @@ on:
         description: 'Whether Rust jobs should run'
         value: ${{ jobs.changes.outputs.run_rust }}
       run_wasm:
-        description: 'Whether WASM jobs should run'
+        description: 'Whether WebAssembly jobs should run'
         value: ${{ jobs.changes.outputs.run_wasm }}
 
 jobs:
   changes:
-    name: Detect Changes
+    name: Detect
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

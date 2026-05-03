@@ -31,7 +31,7 @@ env:
 
 jobs:
   test-python:
-    name: Test / Python / ${{ matrix.platform }}
+    name: Test / ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
@@ -124,7 +124,7 @@ jobs:
         run: uv cache prune --ci
 
   package-python:
-    name: Package / Python / ${{ matrix.platform }}
+    name: Package / ${{ matrix.platform }}
     needs: [test-python]
     if: ${{ !cancelled() && needs.test-python.result == 'success' }}
     runs-on: ${{ matrix.runner }}
