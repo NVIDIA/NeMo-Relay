@@ -32,18 +32,41 @@ pull request.
 - [ ] Dependent maintainer or consumer skills updated when code changes affected
       their APIs, bindings, commands, paths, packaging guidance, or best
       practices
-- [ ] Commit messages and PR summary explain what changed, why, and how it was tested
+- [ ] Pull request body follows `.github/pull_request_template.md`
 - [ ] Breaking changes or renamed surfaces are called out explicitly
 
-## PR Description Should Cover
+## Opening A Pull Request
 
-- What changed
-- Why the change exists
-- Key implementation notes
-- Tests run
-- Any breaking behavior or migration notes
+Always use `.github/pull_request_template.md` as the source of truth for the PR
+body. Before opening a PR, read the current template and preserve its headings,
+checkboxes, comments' intent, and related-issue guidance.
+
+When using GitHub CLI, prefer:
+
+```bash
+gh pr create --template .github/pull_request_template.md
+```
+
+If a tool cannot consume the template directly, create the PR body from the
+template content and then fill in every visible section before opening the PR.
+Do not replace the template with a freeform summary.
+
+The PR body must include:
+
+- `#### Overview` with a concise summary and both contribution confirmation
+  checklist items preserved
+- `#### Details` with the concrete changes made
+- `#### Where should the reviewer start?` with the most useful file, test, or
+  design decision
+- `#### Related Issues: (use one of the action keywords Closes / Fixes / Resolves / Relates to)`
+  with an issue reference, or a clear `Relates to: none` entry when there is no
+  related issue
+
+Only check the contribution confirmation boxes when they are true. If either
+confirmation cannot be made, stop before opening the PR and surface the blocker.
 
 ## References
 
 - `CONTRIBUTING.md`
+- `.github/pull_request_template.md`
 - `validate-change`
