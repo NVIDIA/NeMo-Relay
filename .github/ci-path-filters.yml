@@ -5,6 +5,7 @@ ci:
   - '.github/actionlint.yaml'
   - '.github/ci-path-filters.yml'
   - '.github/workflows/**'
+  - 'codecov.yml'
 
 shared:
   - 'crates/adaptive/Cargo.toml'
