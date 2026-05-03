@@ -26,7 +26,6 @@ defaults:
 jobs:
   codeowners-approval:
     name: Require CODEOWNERS approvals
-    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
