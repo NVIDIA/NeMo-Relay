@@ -4,16 +4,12 @@
 name: CODEOWNERS approval
 
 on:
-  pull_request:
+  pull_request_target:
     types:
       - opened
       - ready_for_review
       - reopened
       - synchronize
-  pull_request_review:
-    types:
-      - submitted
-      - dismissed
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.number }}'
