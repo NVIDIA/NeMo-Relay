@@ -37,8 +37,32 @@ review handoff details.
 - [ ] Dependent maintainer or consumer skills updated when code changes affected
       their APIs, bindings, commands, paths, packaging guidance, or best
       practices
+- [ ] Pull request title follows Conventional Commit style and uses the correct
+      type
 - [ ] Pull request body follows `.github/pull_request_template.md`
 - [ ] Breaking changes or renamed surfaces are called out explicitly
+
+## Pull Request Title
+
+Use Conventional Commit style for PR titles:
+
+```text
+<type>: <concise imperative summary>
+```
+
+Choose the type from the actual change surface, not from the impact of the
+review comment or CI outcome. Use `fix` only for an actual user-facing or
+runtime/product code bug fix. Never use `fix` for changes that are not related
+to product code behavior, including chores, CI configuration, docs, tests,
+packaging metadata, generated-output handling, or agent/skill guidance.
+
+Common examples:
+
+- `ci: update codecov coverage reporting`
+- `docs: clarify release workflow`
+- `chore: refresh generated attribution data`
+- `test: add Python scope regression coverage`
+- `fix: preserve scope-local middleware cleanup`
 
 ## Opening A Pull Request
 
