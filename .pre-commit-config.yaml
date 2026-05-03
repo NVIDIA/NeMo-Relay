@@ -58,6 +58,8 @@ repos:
         args:
           - --no-progress
           - --include-fragments
+          - --exclude
+          - '^https://www\.npmjs\.com/package/nemo-flow-(node|wasm)$'
           - README.md
           - CONTRIBUTING.md
           - docs/**/*.md
