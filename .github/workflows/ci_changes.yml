@@ -19,6 +19,10 @@ on:
         description: 'The ref name from the triggering workflow'
         required: true
         type: string
+      default_branch:
+        description: 'The repository default branch used as the fallback comparison base'
+        required: true
+        type: string
     outputs:
       base:
         description: 'The comparison base used for filtered checks'
@@ -69,6 +73,7 @@ jobs:
         id: comparison-base
         if: ${{ ! inputs.full_ci }}
         env:
+          DEFAULT_BRANCH: ${{ inputs.default_branch }}
           EVENT_BEFORE: ${{ github.event.before }}
           PR_INFO: ${{ inputs.pr_info }}
           REF_NAME: ${{ inputs.ref_name }}
@@ -76,15 +81,16 @@ jobs:
           set -euo pipefail
           base=""
           if [[ "$REF_NAME" == pull-request/* ]]; then
-            base="$(jq -r '.base.ref // empty' <<< "$PR_INFO")"
+            if [[ -n "$PR_INFO" ]]; then
+              base="$(jq -r '.base.ref // empty' <<< "$PR_INFO")"
+            fi
             if [[ -z "$base" ]]; then
-              echo "Error: failed to resolve PR base branch from pr_info" >&2
-              exit 1
+              base="origin/${DEFAULT_BRANCH}"
             fi
           elif [[ -n "$EVENT_BEFORE" && "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]]; then
             base="$EVENT_BEFORE"
           else
-            base="${GITHUB_REF}"
+            base="origin/${DEFAULT_BRANCH}"
           fi
           printf 'base=%s\n' "$base" >> "$GITHUB_OUTPUT"
 
