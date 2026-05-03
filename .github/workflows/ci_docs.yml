@@ -79,7 +79,7 @@ jobs:
 
       - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
         with:
-          tool: just@${{ steps.ci-config.outputs.just_version }}
+          tool: just@${{ steps.ci-config.outputs.just_version }},sphinx-rustdocgen@1.0.1
 
       - name: Install Documentation Dependencies
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
