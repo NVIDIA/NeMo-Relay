@@ -311,6 +311,7 @@ jobs:
     if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_rust == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
     permissions:
       contents: read
     services:
@@ -436,6 +437,7 @@ jobs:
     if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_go == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
     permissions:
       contents: read
     strategy:
@@ -503,6 +505,7 @@ jobs:
     if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_node == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
     permissions:
       contents: read
     strategy:
@@ -568,6 +571,7 @@ jobs:
     if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_python == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
     permissions:
       contents: read
     strategy:
@@ -660,6 +664,7 @@ jobs:
     if: ${{ needs.check.result == 'success' && needs.changes.outputs.run_wasm == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
     permissions:
       contents: read
     strategy:

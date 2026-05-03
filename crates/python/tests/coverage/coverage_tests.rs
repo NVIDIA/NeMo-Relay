@@ -138,6 +138,7 @@ fn test_python_test_guard_keeps_absent_runtime_env_absent() {
         std::env::remove_var("NEMO_FLOW_BINDING_KIND");
         std::env::remove_var("NEMO_FLOW_RUNTIME_OWNER");
     }
+    let _lock = crate::test_support::lock_python_test();
     assert!(std::env::var_os("NEMO_FLOW_BINDING_KIND").is_none());
     assert!(std::env::var_os("NEMO_FLOW_RUNTIME_OWNER").is_none());
 }
