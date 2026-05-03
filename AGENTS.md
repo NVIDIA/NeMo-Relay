@@ -236,4 +236,6 @@ with repository expectations.
 - Keep stable public wrappers at the `scripts/` root in docs and examples. Reference namespaced helper paths only when documenting internal maintenance work.
 - Use branch prefixes from the contributor docs: `feat/`, `fix/`, `docs/`, `test/`, or `refactor/`.
 - Use signed-off commits for PR work: `git commit -s`.
-- PR descriptions should include what changed, why, how it was tested, and any breaking changes.
+- Before creating, opening, publishing, or editing a pull request, read `.github/pull_request_template.md` and use it as the PR body skeleton. Preserve its visible headings, checklist items, and related-issue guidance; fill the sections instead of replacing them with a generic summary.
+- If repo-local PR guidance such as the `prepare-pr` skill conflicts with generic GitHub connector or plugin guidance, follow the repo-local PR guidance for PR body format and review handoff details.
+- PR descriptions should include what changed, why, how it was tested, and any breaking changes within the repository template format.
