@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: CODEOWNERS approval
+
+on:
+  pull_request:
+    types:
+      - opened
+      - ready_for_review
+      - reopened
+      - synchronize
+  pull_request_review:
+    types:
+      - submitted
+      - dismissed
+
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.number }}'
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  codeowners-approval:
+    name: Require CODEOWNERS approvals
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check token configuration
+        env:
+          NEMO_FLOW_CODEOWNERS_APPROVAL_TOKEN: ${{ secrets.NEMO_FLOW_CODEOWNERS_APPROVAL_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$NEMO_FLOW_CODEOWNERS_APPROVAL_TOKEN" ]]; then
+            echo "Error: NEMO_FLOW_CODEOWNERS_APPROVAL_TOKEN is required with repo and read:org permissions." >&2
+            exit 1
+          fi
+
+      - name: Check CODEOWNERS approval
+        uses: noamelf/codeowner-multi-approval-action@ab1d2dc274612ab9439b96538f30e88be2570f49 # v0.1
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          repo-name: ${{ github.repository }}
+          github-token: ${{ secrets.NEMO_FLOW_CODEOWNERS_APPROVAL_TOKEN }}
