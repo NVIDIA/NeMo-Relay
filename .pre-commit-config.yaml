@@ -8,7 +8,7 @@ repos:
       - id: copyright-header
         name: copyright header
         entry: python3 scripts/lint/check_copyright.py
-        language: python
+        language: system
         files: '\.(rs|go|py|pyi|toml|yaml|yml|md|mjs|js|ts|h|sh)$|\.gitignore$'
         exclude: '(/SKILL\.md|index\.js|index\.d\.ts|nemo_flow\.h|node_modules/|target/|\.venv/|pkg/|^\.github/pull_request_template\.md)$'
 
@@ -53,7 +53,7 @@ repos:
       - id: ty
         name: ty (type check)
         entry: uv run ty check . --exclude docs/** --exclude third_party/** --exclude ./examples/** --exclude .cache/** --exclude .claude/**
-        language: python
+        language: system
         types: [python]
         pass_filenames: false
 
@@ -80,14 +80,14 @@ repos:
       - id: cargo-lockfile-check
         name: Cargo.lock is up to date
         entry: bash -c 'cargo metadata --format-version 1 --no-deps >/dev/null'
-        language: rust
+        language: system
         files: '^(Cargo\.toml|Cargo\.lock|crates/.*/Cargo\.toml)$'
         pass_filenames: false
 
       - id: uv-lockfile-check
         name: uv.lock is up to date
         entry: uv lock
-        language: python
+        language: system
         files: '^(pyproject\.toml|uv\.lock)$'
         pass_filenames: false
 
@@ -104,35 +104,35 @@ repos:
       - id: ffi-header-sync
         name: ffi header sync
         entry: cargo check -p nemo-flow-ffi
-        language: rust
+        language: system
         files: '^crates/ffi/(Cargo\.toml|cbindgen\.toml|nemo_flow\.h|src/.*\.rs)$'
         pass_filenames: false
 
       - id: cargo-fmt
         name: cargo fmt
         entry: cargo fmt --all --
-        language: rust
+        language: system
         types: [rust]
         pass_filenames: false
 
       - id: cargo-clippy
         name: cargo clippy
         entry: cargo clippy --workspace --all-targets -- -D warnings
-        language: rust
+        language: system
         types: [rust]
         pass_filenames: false
 
       - id: cargo-check
         name: cargo check
         entry: cargo check --workspace --all-targets
-        language: rust
+        language: system
         types: [rust]
         pass_filenames: false
 
       - id: cargo-deny
         name: cargo deny
         entry: cargo deny check
-        language: rust
+        language: system
         files: '(Cargo\.toml|Cargo\.lock|deny\.toml)$'
         pass_filenames: false
 
@@ -179,13 +179,13 @@ repos:
       - id: node-prettier-check
         name: node prettier check
         entry: node scripts/lint/prettier-precommit.mjs
-        language: node
+        language: system
         files: '^(crates/node|crates/wasm/(wrappers|tests-js|scripts))/.*\.(?:[cm]?js|[mc]?ts|tsx)$'
         pass_filenames: false
 
       - id: node-docstrings-check
         name: node docstrings check
         entry: node scripts/lint/check_public_docstrings.mjs all
-        language: node
+        language: system
         files: '^(?:(?:crates/node|crates/wasm/wrappers/(?:esm|nodejs))/(?:plugin|adaptive|typed)\.(?:js|d\.ts))$'
         pass_filenames: false

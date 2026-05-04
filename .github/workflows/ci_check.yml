@@ -25,7 +25,6 @@ env:
   GIT_COMMIT: "${{ github.sha }}"
   NEMO_FLOW_CI_WORKSPACE: "${{ github.workspace }}"
   NEMO_FLOW_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
-  PRE_COMMIT_HOME: "${{ github.workspace }}/../.cache/pre-commit"
   UV_PYTHON_DOWNLOADS: never
 
 jobs:
@@ -93,7 +92,7 @@ jobs:
       - name: Cache pre-commit environments
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: ${{ env.PRE_COMMIT_HOME }}
+          path: ${{ runner.temp }}/.cache/pre-commit
           key: >-
             nemo-flow-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc${{ steps.ci-config.outputs.pre_commit_version }}-${{ hashFiles('.pre-commit-config.yaml') }}
           restore-keys: |
@@ -104,6 +103,7 @@ jobs:
         env:
           FULL_CI: ${{ inputs.full_ci }}
           PRE_COMMIT_BASE: ${{ inputs.base }}
+          PRE_COMMIT_HOME: ${{ runner.temp }}/.cache/pre-commit
           # The attribution hook syncs docs deps; do not apply repo warning policy to third-party Rust builds.
           RUSTFLAGS: ""
         run: |
