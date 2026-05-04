@@ -546,7 +546,7 @@ def _installed_license_texts(
     text = "\n".join(line.rstrip() for line in (row.get("LicenseText") or "").splitlines()).strip()
     license_texts: list[tuple[str, str]] = [(path_label, text)] if _is_useful_license_text(text) else []
 
-    if _is_unknown_value(license_file) or not license_texts:
+    if not license_texts:
         _, artifact_license_texts = _artifact_metadata_from_lockfile(lockfile_pkg)
         if artifact_license_texts:
             return artifact_license_texts
@@ -711,7 +711,8 @@ def _node_workspace_package_metas(lock: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(packages, dict):
         return package_metas
     for path, meta in packages.items():
-        if path and str(path).startswith("node_modules/"):
+        normalized_path = str(path).replace("\\", "/")
+        if normalized_path and "node_modules" in normalized_path.split("/"):
             continue
         if isinstance(meta, dict):
             package_metas.append(meta)
