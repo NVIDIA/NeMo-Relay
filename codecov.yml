@@ -46,8 +46,8 @@ component_management:
     - component_id: rust_runtime
       name: Rust Runtime
       paths:
-        - "NeMo-Flow/crates/core/src"
-        - "NeMo-Flow/crates/adaptive/src"
+        - "crates/core/src"
+        - "crates/adaptive/src"
       statuses:
         - type: project
           target: 95%
@@ -57,8 +57,8 @@ component_management:
     - component_id: go_binding
       name: Go Binding
       paths:
-        - "NeMo-Flow/go/nemo_flow"
-        - "NeMo-Flow/crates/ffi/src"
+        - "go/nemo_flow"
+        - "crates/ffi/src"
       statuses:
         - type: project
           target: 95%
@@ -68,8 +68,8 @@ component_management:
     - component_id: python_binding
       name: Python Binding
       paths:
-        - "NeMo-Flow/python/nemo_flow"
-        - "NeMo-Flow/crates/python/src"
+        - "python/nemo_flow"
+        - "crates/python/src"
       statuses:
         - type: project
           target: 95%
@@ -79,7 +79,7 @@ component_management:
     - component_id: node_binding
       name: Node Binding
       paths:
-        - "NeMo-Flow/crates/node/*.js"
+        - "crates/node/*.js"
       statuses:
         - type: project
           target: 95%
@@ -89,7 +89,7 @@ component_management:
     - component_id: wasm_binding
       name: WebAssembly Binding
       paths:
-        - "NeMo-Flow/crates/wasm/wrappers/nodejs/*.js"
+        - "crates/wasm/wrappers/nodejs/*.js"
       statuses:
         - type: project
           target: 84% # cannot be any higher due to internals

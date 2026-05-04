@@ -23,7 +23,14 @@ jobs:
     needs:
       - prepare
       - ci_required
-    if: ${{ needs.prepare.outputs.publish_docs != 'true' }}
+    if: >-
+      ${{
+        always()
+        && !cancelled()
+        && needs.prepare.result == 'success'
+        && needs.ci_required.result == 'success'
+        && needs.prepare.outputs.publish_docs != 'true'
+      }}
     permissions:
       contents: read
     uses: rapidsai/shared-workflows/.github/workflows/pr-builder.yaml@4866bb5437e913caf5bf775f57c91abd144ed391 # main
