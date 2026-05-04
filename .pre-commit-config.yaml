@@ -31,6 +31,14 @@ repos:
         args: ["--maxkb=500"]
         exclude: '^ATTRIBUTIONS-(Rust|Python|Node)\.md$'
 
+  # GitHub Actions — workflow semantics
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+        files: '^(\.github/workflows/.*\.ya?ml|\.github/actions/.*/action\.ya?ml|\.github/actionlint\.ya?ml)$'
+        pass_filenames: false
+
   # Python — ruff lint + format
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.11.0

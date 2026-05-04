@@ -30,8 +30,8 @@ env:
   UV_PYTHON_DOWNLOADS: never
 
 jobs:
-  test-wasm:
-    name: Test / ${{ matrix.platform }}
+  Test:
+    name: Test (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
@@ -99,10 +99,10 @@ jobs:
           name: wasm-${{ matrix.platform }}
           verbose: true
 
-  package-wasm:
-    name: Package / linux-amd64
-    needs: [test-wasm]
-    if: ${{ !cancelled() && needs.test-wasm.result == 'success' }}
+  Package:
+    name: Package (linux-amd64)
+    needs: [Test]
+    if: ${{ !cancelled() && needs.Test.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

@@ -14,7 +14,7 @@ on:
 
 # This allows a subsequently queued workflow run to interrupt previous runs
 concurrency:
-  group: '${{ github.workflow }} @ ${{ github.event_name }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  group: '${{ github.workflow }} @ ${{ github.event_name }} @ ${{ github.head_ref || github.ref }}'
   cancel-in-progress: true
 
 jobs:
@@ -298,7 +298,7 @@ jobs:
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
 
   publish-rust:
-    name: Publish / crates.io
+    name: Publish (crates.io)
     needs: [prepare, ci_required]
     if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
     runs-on: ubuntu-latest
@@ -354,7 +354,7 @@ jobs:
           done
 
   publish-python:
-    name: Publish / PyPI
+    name: Publish (PyPI)
     needs: [prepare, ci_required]
     if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
     runs-on: ubuntu-latest
@@ -375,7 +375,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
 
   publish-npm:
-    name: Publish / npm
+    name: Publish (npm)
     needs: [prepare, ci_required]
     if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
     runs-on: ubuntu-latest

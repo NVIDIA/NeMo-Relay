@@ -30,8 +30,8 @@ env:
   UV_PYTHON_DOWNLOADS: never
 
 jobs:
-  test-python:
-    name: Test / ${{ matrix.platform }}
+  Test:
+    name: Test (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
@@ -123,10 +123,10 @@ jobs:
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: uv cache prune --ci
 
-  package-python:
-    name: Package / ${{ matrix.platform }}
-    needs: [test-python]
-    if: ${{ !cancelled() && needs.test-python.result == 'success' }}
+  Package:
+    name: Package (${{ matrix.platform }})
+    needs: [Test]
+    if: ${{ !cancelled() && needs.Test.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
