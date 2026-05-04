@@ -15,7 +15,9 @@ stages:
 
 variables:
   NEMO_FLOW_CI_DEBIAN_VERSION: "trixie"
+  NEMO_FLOW_CI_JUST_VERSION: "1.40.0"
   NEMO_FLOW_CI_NODE_VERSION: "24"
+  NEMO_FLOW_CI_RUST_VERSION: "1.93.0"
   NEMO_FLOW_CI_UV_VERSION: "0.9.28"
   NEMO_FLOW_CI_GITHUB_REPOSITORY: "NVIDIA/NeMo-Flow"
   NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE: "ci.yaml"
@@ -203,6 +205,72 @@ publish:artifactory:wheels:
         UV_PUBLISH_PASSWORD="${NEMO_FLOW_CI_ARTIFACTORY_KEY}" \
         UV_PUBLISH_URL="${NEMO_FLOW_CI_ARTIFACTORY_PYPI_URL}" \
         uv publish --no-progress collected/wheels/*.whl
+
+publish:artifactory:cargo:
+  stage: publish
+  image:
+    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
+    pull_policy: if-not-present
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'schedule'
+    - when: never
+  needs:
+    - job: collect:github-artifacts
+      artifacts: true
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends ca-certificates curl nodejs python3 && rm -rf /var/lib/apt/lists/*
+    - cargo install just --version "${NEMO_FLOW_CI_JUST_VERSION}" --locked
+    - curl -LsSf https://astral.sh/uv/install.sh -o /tmp/install-uv.sh
+    - UV_VERSION="${NEMO_FLOW_CI_UV_VERSION}" sh /tmp/install-uv.sh
+    - export PATH="${HOME}/.cargo/bin:${HOME}/.local/bin:${PATH}"
+    - rustc --version
+    - just --version
+    - uv --version
+  script:
+    - |
+      set -eu
+
+      if [ -z "${NEMO_FLOW_CI_ARTIFACTORY_USER:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL:-}" ]; then
+        echo "Error: uploading Cargo crates to Artifactory requires NEMO_FLOW_CI_ARTIFACTORY_USER, NEMO_FLOW_CI_ARTIFACTORY_KEY, and NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL." >&2
+        exit 1
+      fi
+      if [ ! -f collected/github-run.json ]; then
+        echo "Error: no collected GitHub run metadata found." >&2
+        exit 1
+      fi
+
+      version="$(
+        python3 - <<'PY'
+      import json
+      from pathlib import Path
+
+      print(json.loads(Path("collected/github-run.json").read_text()).get("tag", ""))
+      PY
+      )"
+      if [ -z "$version" ]; then
+        echo "Error: failed to extract package version from collected GitHub tag metadata." >&2
+        exit 1
+      fi
+
+      just set-version "$version"
+
+      cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
+      mkdir -p "$cargo_home"
+      cargo_auth="Basic $(printf '%s:%s' "${NEMO_FLOW_CI_ARTIFACTORY_USER}" "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" | base64 | tr -d '\n')"
+      cat > "${cargo_home}/config.toml" <<EOF
+      [registries.artifactory]
+      index = "${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL}"
+      credential-provider = "cargo:token"
+      EOF
+      cat > "${cargo_home}/credentials.toml" <<EOF
+      [registries.artifactory]
+      token = "${cargo_auth}"
+      EOF
+      chmod 600 "${cargo_home}/credentials.toml"
+
+      for crate in nemo-flow nemo-flow-adaptive nemo-flow-ffi; do
+        cargo publish --package "$crate" --registry artifactory --allow-dirty
+      done
 
 publish:artifactory:npm:
   stage: publish
