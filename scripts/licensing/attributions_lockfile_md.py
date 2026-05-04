@@ -27,6 +27,8 @@ SPDX-License-Identifier: Apache-2.0
 
 ROOT = Path(__file__).resolve().parents[2]
 NODE = ROOT / "crates" / "node"
+MARKDOWN_CODE_FENCE = "```\n"
+MARKDOWN_CODE_BLOCK_END = "```\n\n"
 
 
 class RenderedPythonPackage(TypedDict):
@@ -163,9 +165,9 @@ def _render_python_package(
     parts.append(f"License: {_md_inline_safe(license_name)}\n\n")
     for path_label, text in license_texts:
         parts.append(f"  - {_md_inline_safe(path_label)}:\n")
-        parts.append("```\n")
+        parts.append(MARKDOWN_CODE_FENCE)
         parts.append(text if text.endswith("\n") else text + "\n")
-        parts.append("```\n\n")
+        parts.append(MARKDOWN_CODE_BLOCK_END)
 
 
 def _cargo_workspace_members() -> set[str]:
@@ -211,6 +213,33 @@ def _cargo_about_json() -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(proc.stdout))
 
 
+def _render_rust_crate_attribution(
+    crate: dict[str, Any], *, license_id: str, license_text: str, workspace_members: set[str]
+) -> str | None:
+    """Render one Rust crate attribution, skipping local workspace crates."""
+    if str(crate.get("id") or "") in workspace_members:
+        return None
+
+    name = str(crate.get("name") or "unknown")
+    version = str(crate.get("version") or "")
+    repo = str(crate.get("repository") or "").strip()
+    if not repo:
+        repo = f"https://crates.io/crates/{name}"
+
+    return "".join(
+        [
+            f"## {name} - {version}\n",
+            f"**Repository URL**: {repo}\n",
+            f"**License Type(s)**: {license_id}\n",
+            f"### License: https://spdx.org/licenses/{license_id}.html\n",
+            MARKDOWN_CODE_FENCE,
+            license_text,
+            "\n",
+            MARKDOWN_CODE_BLOCK_END,
+        ]
+    )
+
+
 def _render_rust_attributions(data: dict[str, Any], workspace_members: set[str]) -> str:
     """Render cargo-about output while omitting local workspace crates."""
     parts: list[str] = [RUST_HEADER]
@@ -218,24 +247,14 @@ def _render_rust_attributions(data: dict[str, Any], workspace_members: set[str])
         license_id = str(license_group.get("id") or "UNKNOWN")
         license_text = str(license_group.get("text") or "")
         for used_by in cast(list[dict[str, Any]], license_group.get("used_by", [])):
-            crate = cast(dict[str, Any], used_by.get("crate") or {})
-            if str(crate.get("id") or "") in workspace_members:
-                continue
-
-            name = str(crate.get("name") or "unknown")
-            version = str(crate.get("version") or "")
-            repo = str(crate.get("repository") or "").strip()
-            if not repo:
-                repo = f"https://crates.io/crates/{name}"
-
-            parts.append(f"## {name} - {version}\n")
-            parts.append(f"**Repository URL**: {repo}\n")
-            parts.append(f"**License Type(s)**: {license_id}\n")
-            parts.append(f"### License: https://spdx.org/licenses/{license_id}.html\n")
-            parts.append("```\n")
-            parts.append(license_text)
-            parts.append("\n")
-            parts.append("```\n\n")
+            rendered = _render_rust_crate_attribution(
+                cast(dict[str, Any], used_by.get("crate") or {}),
+                license_id=license_id,
+                license_text=license_text,
+                workspace_members=workspace_members,
+            )
+            if rendered:
+                parts.append(rendered)
 
     return "".join(parts).rstrip("\n") + "\n"
 
@@ -518,6 +537,58 @@ def _artifact_metadata_from_lockfile(pkg: dict[str, Any]) -> tuple[str, list[tup
     raise ValueError(f"No downloadable artifact found in uv.lock for {package_name}")
 
 
+def _installed_license_texts(
+    row: dict[str, str], lockfile_pkg: dict[str, Any], *, package_name: str
+) -> list[tuple[str, str]]:
+    """Choose license text from pip-licenses first, then fall back to the locked artifact."""
+    license_file = (row.get("LicenseFile") or "").strip()
+    path_label = _pypi_license_path_display(license_file)
+    text = "\n".join(line.rstrip() for line in (row.get("LicenseText") or "").splitlines()).strip()
+    license_texts: list[tuple[str, str]] = [(path_label, text)] if _is_useful_license_text(text) else []
+
+    if _is_unknown_value(license_file) or not license_texts:
+        _, artifact_license_texts = _artifact_metadata_from_lockfile(lockfile_pkg)
+        if artifact_license_texts:
+            return artifact_license_texts
+
+    if license_texts:
+        return license_texts
+    return [
+        ("LICENSE", f"(No license text bundled in site-packages for {package_name}; see package metadata or PyPI.)\n")
+    ]
+
+
+def _infer_installed_license_name(license_name: str, license_texts: list[tuple[str, str]]) -> str:
+    """Infer a package license from bundled license text when pip-licenses reports UNKNOWN."""
+    if not _is_unknown_value(license_name):
+        return license_name
+    for _, license_text in license_texts:
+        inferred_license = _license_name_from_file_heading(license_text)
+        if inferred_license:
+            return inferred_license
+    return license_name
+
+
+def _installed_python_package_from_row(
+    row: dict[str, str], lockfile_pkgs: dict[str, dict[str, Any]], *, own_name: str
+) -> tuple[str, RenderedPythonPackage] | None:
+    """Render one pip-licenses row, returning its normalized lockfile key when included."""
+    name = row.get("Name", "unknown")
+    normalized = _normalize_package_name(name)
+    lockfile_pkg = lockfile_pkgs.get(normalized)
+    if normalized == own_name or lockfile_pkg is None:
+        return None
+
+    license_texts = _installed_license_texts(row, lockfile_pkg, package_name=name)
+    license_name = _infer_installed_license_name((row.get("License") or "UNKNOWN").strip() or "UNKNOWN", license_texts)
+    return normalized, RenderedPythonPackage(
+        name=name,
+        version=row.get("Version", ""),
+        license_name=license_name,
+        license_texts=license_texts,
+    )
+
+
 def _installed_python_packages(
     rows: list[dict[str, str]], lockfile_pkgs: dict[str, dict[str, Any]], *, own_name: str
 ) -> tuple[list[RenderedPythonPackage], set[str]]:
@@ -526,40 +597,12 @@ def _installed_python_packages(
     seen: set[str] = set()
 
     for row in rows:
-        name = row.get("Name", "unknown")
-        normalized = _normalize_package_name(name)
-        if normalized == own_name or normalized not in lockfile_pkgs:
+        rendered = _installed_python_package_from_row(row, lockfile_pkgs, own_name=own_name)
+        if rendered is None:
             continue
+        normalized, package = rendered
         seen.add(normalized)
-        lic = (row.get("License") or "UNKNOWN").strip() or "UNKNOWN"
-        license_file = (row.get("LicenseFile") or "").strip()
-        path_label = _pypi_license_path_display(license_file)
-        text = "\n".join(line.rstrip() for line in (row.get("LicenseText") or "").splitlines()).strip()
-        license_texts: list[tuple[str, str]] = [(path_label, text)] if _is_useful_license_text(text) else []
-
-        if _is_unknown_value(license_file) or not license_texts:
-            _, artifact_license_texts = _artifact_metadata_from_lockfile(lockfile_pkgs[normalized])
-            if artifact_license_texts:
-                license_texts = artifact_license_texts
-
-        if not license_texts:
-            license_texts = [
-                ("LICENSE", f"(No license text bundled in site-packages for {name}; see package metadata or PyPI.)\n")
-            ]
-        if _is_unknown_value(lic):
-            for _, license_text in license_texts:
-                inferred_license = _license_name_from_file_heading(license_text)
-                if inferred_license:
-                    lic = inferred_license
-                    break
-        packages.append(
-            RenderedPythonPackage(
-                name=name,
-                version=row.get("Version", ""),
-                license_name=lic,
-                license_texts=license_texts,
-            )
-        )
+        packages.append(package)
 
     return packages, seen
 
@@ -652,24 +695,36 @@ def cmd_python() -> int:
     return 0
 
 
+def _node_package_key(meta: dict[str, Any]) -> str | None:
+    """Return the npm package key for a package-lock entry that has a name and version."""
+    name = str(meta.get("name") or "").strip()
+    version = str(meta.get("version") or "").strip()
+    if name and version:
+        return f"{name}@{version}"
+    return None
+
+
+def _node_workspace_package_metas(lock: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return local package metadata entries from a package-lock file."""
+    package_metas = [lock]
+    packages = lock.get("packages") or {}
+    if not isinstance(packages, dict):
+        return package_metas
+    for path, meta in packages.items():
+        if path and str(path).startswith("node_modules/"):
+            continue
+        if isinstance(meta, dict):
+            package_metas.append(meta)
+    return package_metas
+
+
 def _node_workspace_package_keys(lock: dict[str, Any]) -> set[str]:
     """Return npm package keys for local packages described by package-lock.json."""
     keys: set[str] = set()
-
-    def add_package(meta: dict[str, Any]) -> None:
-        name = str(meta.get("name") or "").strip()
-        version = str(meta.get("version") or "").strip()
-        if name and version:
-            keys.add(f"{name}@{version}")
-
-    add_package(lock)
-    packages = lock.get("packages") or {}
-    if isinstance(packages, dict):
-        for path, meta in packages.items():
-            if path and str(path).startswith("node_modules/"):
-                continue
-            if isinstance(meta, dict):
-                add_package(meta)
+    for meta in _node_workspace_package_metas(lock):
+        key = _node_package_key(meta)
+        if key:
+            keys.add(key)
 
     return keys
 
@@ -718,9 +773,9 @@ def cmd_node() -> int:
         parts.append(f"**Repository URL**: {repo}\n")
         parts.append(f"**License Type(s)**: {lic}\n")
         parts.append(f"### License: {lic_url}\n")
-        parts.append("```\n")
+        parts.append(MARKDOWN_CODE_FENCE)
         parts.append(text if text else f"(No license file read from node_modules for {name}; see npm metadata.)\n")
-        parts.append("```\n\n")
+        parts.append(MARKDOWN_CODE_BLOCK_END)
 
     out.write_text("".join(parts).rstrip("\n") + "\n", encoding="utf-8")
     print(f"Wrote {out.relative_to(ROOT)}", file=sys.stderr)
