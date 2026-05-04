@@ -20,6 +20,9 @@ outputs:
   uv_version:
     description: uv version
     value: ${{ steps.load.outputs.uv_version }}
+  pre_commit_version:
+    description: pre-commit version
+    value: ${{ steps.load.outputs.pre_commit_version }}
   just_version:
     description: just version
     value: ${{ steps.load.outputs.just_version }}
@@ -55,6 +58,7 @@ runs:
           NEMO_FLOW_CI_RUST_VERSION
           NEMO_FLOW_CI_NODE_VERSION
           NEMO_FLOW_CI_UV_VERSION
+          NEMO_FLOW_CI_PRE_COMMIT_VERSION
           NEMO_FLOW_CI_JUST_VERSION
           NEMO_FLOW_CI_WASM_PACK_VERSION
           NEMO_FLOW_CI_CARGO_LLVM_COV_VERSION
@@ -76,6 +80,7 @@ runs:
           printf 'rust_version=%s\n' "$NEMO_FLOW_CI_RUST_VERSION"
           printf 'node_version=%s\n' "$NEMO_FLOW_CI_NODE_VERSION"
           printf 'uv_version=%s\n' "$NEMO_FLOW_CI_UV_VERSION"
+          printf 'pre_commit_version=%s\n' "$NEMO_FLOW_CI_PRE_COMMIT_VERSION"
           printf 'just_version=%s\n' "$NEMO_FLOW_CI_JUST_VERSION"
           printf 'wasm_pack_version=%s\n' "$NEMO_FLOW_CI_WASM_PACK_VERSION"
           printf 'cargo_llvm_cov_version=%s\n' "$NEMO_FLOW_CI_CARGO_LLVM_COV_VERSION"

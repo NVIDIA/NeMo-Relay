@@ -95,9 +95,9 @@ jobs:
         with:
           path: ${{ env.PRE_COMMIT_HOME }}
           key: >-
-            nemo-flow-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc4.5-${{ hashFiles('.pre-commit-config.yaml') }}
+            nemo-flow-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc${{ steps.ci-config.outputs.pre_commit_version }}-${{ hashFiles('.pre-commit-config.yaml') }}
           restore-keys: |
-            nemo-flow-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc4.5-
+            nemo-flow-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc${{ steps.ci-config.outputs.pre_commit_version }}-
 
       - name: pre-commit
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
@@ -108,7 +108,7 @@ jobs:
           RUSTFLAGS: ""
         run: |
           set -e
-          uv tool install pre-commit==4.5
+          uv tool install pre-commit==${{ steps.ci-config.outputs.pre_commit_version }}
           if [[ "$FULL_CI" == "true" || -z "$PRE_COMMIT_BASE" ]]; then
             pre-commit run --all-files --show-diff-on-failure
           else
