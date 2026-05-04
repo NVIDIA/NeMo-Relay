@@ -25,7 +25,7 @@ env:
   GIT_COMMIT: "${{ github.sha }}"
   NEMO_FLOW_CI_WORKSPACE: "${{ github.workspace }}"
   NEMO_FLOW_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
-  PRE_COMMIT_HOME: "${{ github.workspace }}/.cache/pre-commit"
+  PRE_COMMIT_HOME: "${{ github.workspace }}/../.cache/pre-commit"
   UV_PYTHON_DOWNLOADS: never
 
 jobs:
@@ -91,7 +91,7 @@ jobs:
           tool: cargo-about@${{ steps.ci-config.outputs.cargo_about_version }}
 
       - name: Cache pre-commit environments
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ env.PRE_COMMIT_HOME }}
           key: >-
