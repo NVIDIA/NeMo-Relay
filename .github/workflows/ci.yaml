@@ -87,9 +87,11 @@ jobs:
             publish_packages=true
           fi
 
-          printf 'full_ci=%s\n' "$full_ci" >> "$GITHUB_OUTPUT"
-          printf 'publish_docs=%s\n' "$publish_docs" >> "$GITHUB_OUTPUT"
-          printf 'publish_packages=%s\n' "$publish_packages" >> "$GITHUB_OUTPUT"
+          {
+            printf 'full_ci=%s\n' "$full_ci"
+            printf 'publish_docs=%s\n' "$publish_docs"
+            printf 'publish_packages=%s\n' "$publish_packages"
+          } >> "$GITHUB_OUTPUT"
 
     outputs:
       full_ci: ${{ steps.policy.outputs.full_ci }}
