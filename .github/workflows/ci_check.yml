@@ -25,6 +25,7 @@ env:
   GIT_COMMIT: "${{ github.sha }}"
   NEMO_FLOW_CI_WORKSPACE: "${{ github.workspace }}"
   NEMO_FLOW_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
+  PRE_COMMIT_HOME: "${{ github.workspace }}/.cache/pre-commit"
   UV_PYTHON_DOWNLOADS: never
 
 jobs:
@@ -88,6 +89,15 @@ jobs:
         uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
         with:
           tool: cargo-about@${{ steps.ci-config.outputs.cargo_about_version }}
+
+      - name: Cache pre-commit environments
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.PRE_COMMIT_HOME }}
+          key: >-
+            nemo-flow-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc4.5-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: |
+            nemo-flow-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc4.5-
 
       - name: pre-commit
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
