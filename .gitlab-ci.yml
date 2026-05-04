@@ -256,7 +256,7 @@ publish:artifactory:cargo:
 
       cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
       mkdir -p "$cargo_home"
-      cargo_auth="$(printf '%s:%s' "${NEMO_FLOW_CI_ARTIFACTORY_USER}" "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" | base64 | tr -d '\n')"
+      cargo_auth="Basic $(printf '%s:%s' "${NEMO_FLOW_CI_ARTIFACTORY_USER}" "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" | base64 | tr -d '\n')"
       cat > "${cargo_home}/config.toml" <<EOF
       [registries.artifactory]
       index = "${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL}"
