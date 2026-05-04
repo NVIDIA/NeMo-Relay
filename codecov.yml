@@ -110,17 +110,17 @@ github_checks:
 
 ignore:
   - "**/examples/**"
-  - "**/third_party/**"
+  - "third_party/"
   - "**/tests/**"
   - "**/tests-js/**"
   # The Node binding currently reports JS package coverage separately; exclude the
   # native Rust bridge until we have direct Rust-side coverage for this crate.
-  - "**/crates/node/src/**"
-  - "**/crates/node/coverage/**"
-  - "**/target/**"
+  - "crates/node/src/"
+  - "crates/node/coverage/"
+  - "target/"
   - "**/*.d.ts"
   - "**/*.pyi"
-  - "**/python/nemo_flow/lib_native*.dylib.dSYM/**"
+  - "python/nemo_flow/lib_native*.dylib.dSYM/**"
   # WebAssembly Rust wrappers are covered through wasm-pack execution and
   # reported through generated package JavaScript coverage.
-  - "**/crates/wasm/src/**/*.rs"
+  - "crates/wasm/src/"
