@@ -12,8 +12,8 @@
 [submodule "third_party/langchain"]
 	path = third_party/langchain
 	url = https://github.com/langchain-ai/langchain.git
-	# v1.2.17
-	commit = cdf140e77dde6f1132a40c9c7173a6cc72ee83b3
+	# v1.3.3
+	commit = 5039dfec1f8e78459540a7f1b52fb0d6d82e3f07
 
 [submodule "third_party/opencode"]
 	path = third_party/opencode
