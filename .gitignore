@@ -74,6 +74,7 @@ benchmarks/
 # Local third-party upstream checkouts. These are bootstrapped from
 # third_party/sources.lock and are intentionally excluded from the tracked
 # first-party repository surface.
+third_party/deepagents/
 third_party/langchain/
 third_party/langchain-nvidia/
 third_party/langgraph/

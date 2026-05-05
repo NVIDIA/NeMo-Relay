@@ -39,5 +39,5 @@
 [submodule "third_party/deepagents"]
 	path = third_party/deepagents
 	url = https://github.com/langchain-ai/deepagents.git
-	# v0.4.7
-	commit = 5e463c3744fec4a0d791378b4216cf16f2680260
+	# v0.5.7
+	commit = c6765054fec109ad87ca30f15e3367504149352a
