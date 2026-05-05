@@ -7,7 +7,8 @@
 [submodule "third_party/langchain-nvidia"]
 	path = third_party/langchain-nvidia
 	url = https://github.com/langchain-ai/langchain-nvidia.git
-	commit = 0331d733bf55dbbbc42574f7c1e813abb7a53d71
+	# langchain-nvidia-ai-endpoints v1.2.1
+	commit = 0e912ddea23e050be9595c3bb4c47be3f00a9494
 
 [submodule "third_party/langchain"]
 	path = third_party/langchain
