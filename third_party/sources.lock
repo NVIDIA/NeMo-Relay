@@ -12,6 +12,7 @@
 [submodule "third_party/langchain"]
 	path = third_party/langchain
 	url = https://github.com/langchain-ai/langchain.git
+	# v1.2.17
 	commit = cdf140e77dde6f1132a40c9c7173a6cc72ee83b3
 
 [submodule "third_party/opencode"]
@@ -27,9 +28,16 @@
 [submodule "third_party/langgraph"]
 	path = third_party/langgraph
 	url = https://github.com/langchain-ai/langgraph.git
+	# v1.1.4
 	commit = 5c9c1d598d65411317e0957a42cc3af681d395f8
 
 [submodule "third_party/hermes-agent"]
 	path = third_party/hermes-agent
 	url = https://github.com/NousResearch/hermes-agent.git
 	commit = 2367c6ffd53b16daa0ffa1b338f3f9ee5587d4d5
+
+[submodule "third_party/deepagents"]
+	path = third_party/deepagents
+	url = https://github.com/langchain-ai/deepagents.git
+	# v0.4.7
+	commit = 5e463c3744fec4a0d791378b4216cf16f2680260
