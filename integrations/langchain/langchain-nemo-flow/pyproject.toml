@@ -30,11 +30,16 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
+
 dependencies = [
-    "langchain>=1.2.17,<2.0.0",
-    "langchain-core>=1.3.3,<2.0.0",
+    # Minimum version to support they hooks we are using
+    "langchain>=1.2.9,<2.0.0",
+    # Allow the langchain to dictate the version of langchain-core, not strictly needed
+    # but we do import from langchain_core
+    "langchain-core",
     "nemo-flow>=0.2.0,<0.3.0",
 ]
+
 
 [project.urls]
 Documentation = "https://nvidia.github.io/NeMo-Flow/"
