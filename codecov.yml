@@ -48,6 +48,7 @@ component_management:
       paths:
         - "crates/core/src"
         - "crates/adaptive/src"
+        - "crates/sidecar/src"
       statuses:
         - type: project
           target: 95%
@@ -112,6 +113,7 @@ ignore:
   - "**/examples/**"
   - "third_party/"
   - "**/tests/**"
+  - "crates/sidecar/tests/"
   - "**/tests-js/**"
   # The Node binding currently reports JS package coverage separately; exclude the
   # native Rust bridge until we have direct Rust-side coverage for this crate.

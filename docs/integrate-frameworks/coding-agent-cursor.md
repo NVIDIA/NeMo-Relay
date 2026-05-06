@@ -19,54 +19,67 @@ Cursor CLI support must be verified separately with `cursor-agent`. If CLI hooks
 do not fire, treat Cursor CLI support as hook-limited and gateway-only where
 model routing is configurable.
 
-## Install Hooks
+## Transparent Run
 
-Inspect the generated config first:
+Use the wrapper for no-install local observability:
 
 ```bash
-nemo-flow-sidecar install cursor \
-  --scope project \
-  --target gui \
-  --sidecar-url http://127.0.0.1:4040 \
+nemo-flow-sidecar run --atif-dir .nemo-flow/atif -- cursor-agent
+```
+
+The wrapper infers Cursor from `cursor` or `cursor-agent`, starts a sidecar on a
+dynamic `127.0.0.1` port, temporarily merges NeMo Flow hook entries into the
+project `.cursor/hooks.json`, launches Cursor, and restores the original hook
+file after the agent exits.
+
+Inspect what would be launched without starting Cursor:
+
+```bash
+nemo-flow-sidecar run \
   --atif-dir .nemo-flow/atif \
-  --gateway-mode passthrough \
   --dry-run \
-  --print
+  --print \
+  -- cursor-agent
 ```
 
-Then install it:
+If a launcher hides the command name, pass the agent explicitly:
+
+```bash
+nemo-flow-sidecar run --agent cursor -- my-cursor-wrapper
+```
+
+## Shared Config
+
+Create `.nemo-flow/sidecar.toml` for project defaults or
+`~/.config/nemo-flow/sidecar.toml` for user defaults:
+
+```toml
+[session]
+atif_dir = ".nemo-flow/atif"
+metadata = { team = "agent-observability" }
+
+[agents.cursor]
+command = "cursor-agent"
+patch_restore_hooks = true
+```
+
+Then run `nemo-flow-sidecar run --agent cursor` to use the configured command.
+User config takes priority over project and global config.
+
+## Persistent Install
+
+Use persistent hooks only when you want Cursor configured outside the wrapper:
 
 ```bash
 nemo-flow-sidecar install cursor \
   --scope project \
   --target gui \
   --sidecar-url http://127.0.0.1:4040 \
-  --atif-dir .nemo-flow/atif \
-  --gateway-mode passthrough
+  --atif-dir .nemo-flow/atif
 ```
 
-The installer merges NeMo Flow entries into `.cursor/hooks.json` and backs up an
-existing file before writing.
-
-## Start The Sidecar
-
-```bash
-NEMO_FLOW_ATIF_DIR=.nemo-flow/atif \
-nemo-flow-sidecar --bind 127.0.0.1:4040
-```
-
-Use `--openai-base-url` or `--anthropic-base-url` when the sidecar should
-forward to non-default upstream providers.
-
-## Configure The Gateway
-
-If Cursor exposes provider base URL configuration, point OpenAI-compatible or
-Anthropic-compatible traffic at:
-
-```text
-http://127.0.0.1:4040
-```
-
+Then start the sidecar manually and point Cursor provider traffic at
+`http://127.0.0.1:4040` where Cursor exposes provider base URL configuration.
 Hook-only Cursor mode observes agent and tool lifecycle but cannot provide
 complete LLM lifecycle. Missing LLM spans are expected when Cursor sends model
 traffic directly to the provider or through a remote service.
@@ -77,8 +90,9 @@ Run a small Cursor GUI session that starts an agent and uses one simple tool.
 Then check hook forwarding directly:
 
 ```bash
+curl -f http://127.0.0.1:4040/healthz
 printf '{"session_id":"smoke-cursor","hook_event_name":"sessionStart"}' \
-  | nemo-flow-sidecar hook-forward cursor --sidecar-url http://127.0.0.1:4040
+  | NEMO_FLOW_SIDECAR_URL=http://127.0.0.1:4040 nemo-flow-sidecar hook-forward cursor --fail-closed
 ```
 
 For Cursor CLI, run an equivalent `cursor-agent` session and verify the sidecar

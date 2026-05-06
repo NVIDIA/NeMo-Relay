@@ -5,8 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Flow Coding-Agent Observability Integrations
 
-This directory contains installable hook integrations for coding agents that
-should be observed by `nemo-flow-sidecar`.
+This directory contains hook integration bundles for coding agents that should
+be observed by `nemo-flow-sidecar`.
 
 The sidecar combines two observability paths:
 
@@ -17,7 +17,8 @@ The sidecar combines two observability paths:
 
 Hook integrations preserve each coding agent's canonical hook payload. They do
 not wrap the payload in a shared NeMo Flow envelope. Sidecar-specific settings
-travel through hook command arguments and HTTP headers.
+travel through the transparent wrapper, hook command arguments, HTTP headers,
+environment variables, or shared TOML config.
 
 ## Packages
 
@@ -28,18 +29,43 @@ travel through hook command arguments and HTTP headers.
 - `cursor/` installs a Cursor `.cursor/hooks.json` bundle targeting
   `POST /hooks/cursor`.
 
-## Common Setup
+## Transparent Setup
 
 Build or install the sidecar binary so `nemo-flow-sidecar` is on `PATH`.
 
-Start the sidecar:
+Prefer the wrapper. It starts a sidecar on a dynamic `127.0.0.1` port, injects
+temporary hook and gateway configuration, runs the agent, and shuts the sidecar
+down when the agent exits.
 
 ```bash
-NEMO_FLOW_ATIF_DIR=.nemo-flow/atif \
-nemo-flow-sidecar --bind 127.0.0.1:4040
+nemo-flow-sidecar run --atif-dir .nemo-flow/atif -- claude
+nemo-flow-sidecar run --atif-dir .nemo-flow/atif -- codex
+nemo-flow-sidecar run --atif-dir .nemo-flow/atif -- cursor-agent
 ```
 
-Install an integration:
+Use `--agent claude-code|codex|cursor` when a wrapper hides the agent command
+name. Use `--dry-run --print` to inspect generated config without launching.
+
+Shared TOML config is loaded from `/etc/nemo-flow/sidecar.toml`, then nearest
+project `.nemo-flow/sidecar.toml`, then
+`$XDG_CONFIG_HOME/nemo-flow/sidecar.toml` or
+`~/.config/nemo-flow/sidecar.toml`.
+
+```toml
+[session]
+atif_dir = ".nemo-flow/atif"
+metadata = { team = "agent-observability" }
+
+[export.openinference]
+endpoint = "http://127.0.0.1:4318/v1/traces"
+
+[agents.codex]
+command = "codex"
+```
+
+## Persistent Setup
+
+Use `install` only when you want persistent hook configuration:
 
 ```bash
 nemo-flow-sidecar install claude-code --scope user --target cli --sidecar-url http://127.0.0.1:4040
@@ -55,35 +81,37 @@ nemo-flow-sidecar install codex \
   --target both \
   --sidecar-url http://127.0.0.1:4040 \
   --atif-dir .nemo-flow/atif \
-  --gateway-mode required \
   --dry-run \
   --print
 ```
 
 The installer backs up existing config files, merges only NeMo Flow hook
-entries, and avoids adding duplicate NeMo Flow entries on repeated runs.
+entries, and avoids adding duplicate NeMo Flow entries on repeated runs. In
+persistent mode you start the sidecar yourself and pass `--sidecar-url` or set
+`NEMO_FLOW_SIDECAR_URL` for hook forwarding.
 
 ## Common Options
 
-The installer writes hook commands that call:
+Static bundles rely on `NEMO_FLOW_SIDECAR_URL` from `nemo-flow-sidecar run` and
+call:
 
 ```bash
 nemo-flow-sidecar hook-forward <agent>
 ```
 
+Persistent installer output includes `--sidecar-url` and any selected export or
+session options in the generated command.
+
 `hook-forward` reads the canonical hook JSON from standard input, forwards it to
 the matching sidecar endpoint, and prints the vendor-specific hook response.
 
-Useful install options:
+Useful wrapper and install options:
 
 - `--atif-dir <path>` writes ATIF trajectories on session end.
 - `--openinference-endpoint <url>` exports OpenInference traces.
-- `--profile <name>` records a sidecar profile name in session metadata.
 - `--session-metadata '<json>'` adds structured metadata to the agent begin
   event.
 - `--plugin-config '<json>'` records scope-local plugin configuration metadata.
-- `--gateway-mode hook-only|passthrough|required` records the intended gateway
-  mode for the session.
 - `--fail-closed` can be added to generated hook commands when the agent should
   block on hook delivery failures. The default is fail-open.
 
@@ -102,8 +130,9 @@ The sidecar exposes these passthrough routes:
 - `POST /v1/messages/count_tokens`
 - `GET /v1/models`
 
-Configure each coding agent's provider base URL to use
-`http://127.0.0.1:4040` where that agent supports local provider routing.
+Transparent runs configure provider routing automatically where the launched
+agent supports local routing. Persistent installs require you to point the
+agent's provider base URL at the sidecar manually.
 
 ## Verify Export
 

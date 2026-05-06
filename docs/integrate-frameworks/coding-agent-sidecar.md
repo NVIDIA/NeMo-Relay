@@ -47,22 +47,73 @@ payload schemas. It removes only hop-by-hop transport headers, forwards
 streaming responses as streams, and emits NeMo Flow LLM start and end events
 under the active session scope.
 
-## Session Configuration
+## Transparent Run
 
-Sidecar-specific configuration travels through hook registration settings,
-headers, environment variables, or a referenced sidecar profile. It must not
-replace the coding agent's canonical hook schema.
+Use `nemo-flow-sidecar run` for no-install local observability. The wrapper
+starts a sidecar on a dynamic `127.0.0.1` port, injects the resolved hook and
+gateway configuration into the launched coding agent, and stops the sidecar
+when the agent exits.
 
-Common headers are:
+```bash
+nemo-flow-sidecar run -- codex
+nemo-flow-sidecar run -- claude
+nemo-flow-sidecar run -- cursor-agent
+```
 
-- `x-nemo-flow-session-id`
-- `x-nemo-flow-config-profile`
-- `x-nemo-flow-session-metadata`
-- `x-nemo-flow-plugin-config`
-- `x-nemo-flow-openinference-endpoint`
-- `x-nemo-flow-atif-dir`
+The wrapper infers the agent from the command basename. Use `--agent` when a
+launcher or wrapper hides the real agent name:
 
-Common environment variables are:
+```bash
+nemo-flow-sidecar run --agent codex -- my-codex-wrapper
+```
+
+Use `--dry-run --print` to inspect the generated hook config, gateway
+environment, sidecar URL, and final command without launching the agent.
+
+## Shared Configuration
+
+Shared TOML config is optional. The sidecar loads defaults, then global config,
+then project config, then user config. User config takes priority over global
+and project config. CLI flags and environment variables override file config.
+
+Config file locations are:
+
+- `/etc/nemo-flow/sidecar.toml`
+- `.nemo-flow/sidecar.toml`
+- `$XDG_CONFIG_HOME/nemo-flow/sidecar.toml`
+- `~/.config/nemo-flow/sidecar.toml`
+
+Example:
+
+```toml
+[server]
+openai_base_url = "https://api.openai.com"
+anthropic_base_url = "https://api.anthropic.com"
+
+[session]
+atif_dir = ".nemo-flow/atif"
+metadata = { team = "agent-observability" }
+plugin_config = { components = [] }
+
+[export.openinference]
+endpoint = "http://127.0.0.1:4318/v1/traces"
+
+[agents.claude-code]
+command = "claude"
+
+[agents.codex]
+command = "codex"
+
+[agents.cursor]
+command = "cursor-agent"
+patch_restore_hooks = true
+```
+
+Transparent runs always bind the managed sidecar to `127.0.0.1:0`. The selected
+port is discovered by the wrapper and exposed to hooks through
+`NEMO_FLOW_SIDECAR_URL`.
+
+Common environment variables for direct sidecar server use are:
 
 - `NEMO_FLOW_SIDECAR_BIND`
 - `NEMO_FLOW_OPENAI_BASE_URL`
@@ -94,10 +145,11 @@ Cursor hook-only mode observes agent, subagent, and tool lifecycle. To observe
 Cursor LLM lifecycle completely, configure Cursor model traffic to use the
 sidecar gateway.
 
-## Install Integrations
+## Persistent Install
 
-The repository includes installable integration packages under
-`integrations/coding-agents/` and an installer in the sidecar binary.
+The repository also includes installable integration packages under
+`integrations/coding-agents/`. Use `install` when you want stable hook config
+instead of the transparent wrapper.
 
 ```bash
 nemo-flow-sidecar install claude-code --scope user --target cli --sidecar-url http://127.0.0.1:4040
@@ -115,22 +167,25 @@ headers:
 
 - `--atif-dir` sets `x-nemo-flow-atif-dir`.
 - `--openinference-endpoint` sets `x-nemo-flow-openinference-endpoint`.
-- `--profile` sets `x-nemo-flow-config-profile`.
 - `--session-metadata` sets `x-nemo-flow-session-metadata`.
 - `--plugin-config` sets `x-nemo-flow-plugin-config`.
-- `--gateway-mode hook-only|passthrough|required` sets
-  `x-nemo-flow-gateway-mode`.
 
-The generated hooks run:
+Static integration bundles rely on the wrapper-provided
+`NEMO_FLOW_SIDECAR_URL` and run:
 
 ```bash
 nemo-flow-sidecar hook-forward <agent>
 ```
 
+Persistent installer output embeds `--sidecar-url` and any selected export or
+session options directly in the generated hook command.
+
 `hook-forward` reads the canonical hook payload from standard input, sends it to
-the matching endpoint, and prints the endpoint response. It fails open by
-default so observability outages do not block the coding agent. Add
-`--fail-closed` only when policy requires hook delivery to block the agent.
+the matching endpoint, and prints the endpoint response. In transparent runs it
+discovers the sidecar through `NEMO_FLOW_SIDECAR_URL`; in persistent installs
+you can still pass `--sidecar-url`. It fails open by default so observability
+outages do not block the coding agent. Add `--fail-closed` only when policy
+requires hook delivery to block the agent.
 
 ## Agent Guides
 
@@ -141,6 +196,6 @@ application-mode caveats.
 - [Codex Sidecar Guide](coding-agent-codex.md)
 - [Cursor Sidecar Guide](coding-agent-cursor.md)
 
-Each guide covers plugin or hook installation, sidecar startup, gateway routing,
-hook smoke tests, ATIF export verification on session end, and troubleshooting
-missing LLM lifecycle data.
+Each guide covers transparent run setup, persistent installation, gateway
+routing, hook smoke tests, ATIF export verification on session end, and
+troubleshooting missing LLM lifecycle data.

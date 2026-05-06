@@ -38,9 +38,9 @@ Use these guide links to move from the overview into task-specific instructions.
 - [Basic Guide: Wrap Tool Calls](wrap-tool-calls.md) explains where to place managed tool wrappers and tool lifecycle fallbacks.
 - [Basic Guide: Wrap LLM Calls](wrap-llm-calls.md) explains where to place managed provider wrappers, model names, streaming behavior, and LLM lifecycle fallbacks.
 - [Advanced Guide: Coding-Agent Gateway Sidecar](coding-agent-sidecar.md) describes the Rust sidecar for observing Codex, Claude Code, and Cursor through canonical hooks plus a passthrough LLM gateway.
-- [Claude Code Sidecar Guide](coding-agent-claude-code.md) covers Claude Code hook installation, Anthropic gateway routing, ATIF verification, and the unsupported Claude application modes.
-- [Codex Sidecar Guide](coding-agent-codex.md) covers Codex CLI and local GUI/app setup, `codex_hooks = true`, model provider routing, and remote-task caveats.
-- [Cursor Sidecar Guide](coding-agent-cursor.md) covers the Cursor hook bundle, GUI and CLI smoke tests, gateway routing limits, and hook-only operation.
+- [Claude Code Sidecar Guide](coding-agent-claude-code.md) covers transparent Claude Code runs, Anthropic gateway routing, ATIF verification, and unsupported Claude application modes.
+- [Codex Sidecar Guide](coding-agent-codex.md) covers transparent Codex CLI runs, local GUI/app caveats, model provider routing, and remote-task limits.
+- [Cursor Sidecar Guide](coding-agent-cursor.md) covers transparent Cursor runs, temporary hook patching, GUI and CLI smoke tests, and gateway routing limits.
 - [Advanced Guide: Handle Non-Serializable Data](non-serializable-data.md) shows how to keep clients, streams, callbacks, and SDK objects outside JSON payloads.
 - [Advanced Guide: Using Codecs](using-codecs.md) explains typed value codecs for framework-facing wrappers.
 - [Advanced Guide: Provider Codecs](provider-codecs.md) explains provider request and response codecs for normalized middleware and event annotations.

@@ -18,6 +18,10 @@ pub(crate) enum SidecarError {
     Io(#[from] std::io::Error),
     #[error("installer error: {0}")]
     Install(String),
+    #[error("configuration error: {0}")]
+    Config(String),
+    #[error("launcher error: {0}")]
+    Launch(String),
     #[error("NeMo Flow runtime error: {0}")]
     Flow(#[from] nemo_flow::error::FlowError),
     #[error("openinference error: {0}")]
@@ -32,6 +36,8 @@ impl IntoResponse for SidecarError {
             Self::Http(_)
             | Self::Io(_)
             | Self::Install(_)
+            | Self::Config(_)
+            | Self::Launch(_)
             | Self::Flow(_)
             | Self::OpenInference(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };

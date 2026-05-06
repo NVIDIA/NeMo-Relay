@@ -21,15 +21,21 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
             tool_end: &[
                 "PostToolUse",
                 "postToolUse",
+                "PostToolUseFailure",
+                "postToolUseFailure",
                 "ToolUseFailed",
                 "toolUseFailed",
             ],
         },
     );
     let response = match &event {
-        NormalizedEvent::ToolStarted(_) => {
-            json!({ "continue": true, "permissionDecision": "allow" })
-        }
+        NormalizedEvent::ToolStarted(_) => json!({
+            "continue": true,
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow"
+            }
+        }),
         NormalizedEvent::AgentEnded(_) => json!({ "continue": true, "stopReason": null }),
         _ => json!({ "continue": true }),
     };

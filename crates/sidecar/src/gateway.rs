@@ -10,7 +10,6 @@ use serde_json::{Map, Value, json};
 
 use crate::config::header_string;
 use crate::error::SidecarError;
-use crate::model::AgentKind;
 use crate::server::AppState;
 use crate::session::LlmGatewayStart;
 
@@ -70,7 +69,20 @@ pub(crate) async fn passthrough(
             upstream = upstream.header(name, value);
         }
     }
-    let upstream_response = upstream.send().await?;
+    let upstream_response = match upstream.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            state
+                .sessions
+                .end_llm(
+                    active,
+                    json!({ "error": error.to_string() }),
+                    json!({ "gateway_error": true, "stage": "send" }),
+                )
+                .await?;
+            return Err(SidecarError::Upstream(error));
+        }
+    };
     let status = upstream_response.status();
     let headers = response_headers(upstream_response.headers());
     let content_type = upstream_response
@@ -86,6 +98,7 @@ pub(crate) async fn passthrough(
         let stream = upstream_response.bytes_stream();
         let body = Body::from_stream(async_stream::stream! {
             let mut stream = stream;
+            let mut active = Some(active);
             let mut collected = Vec::new();
             let mut truncated = false;
             while let Some(chunk) = stream.next().await {
@@ -99,24 +112,48 @@ pub(crate) async fn passthrough(
                         yield Ok::<Bytes, reqwest::Error>(bytes);
                     }
                     Err(error) => {
+                        if let Some(active) = active.take() {
+                            let _ = sessions
+                                .end_llm(
+                                    active,
+                                    json!({ "error": error.to_string() }),
+                                    json!({ "http_status": status.as_u16(), "streaming": true, "gateway_error": true, "stage": "stream" }),
+                                )
+                                .await;
+                        }
                         yield Err(error);
                         return;
                     }
                 }
             }
             let response = stream_response_json(&collected, truncated);
-            let _ = sessions
-                .end_llm(
-                    active,
-                    response,
-                    json!({ "http_status": status.as_u16(), "streaming": true, "stream_truncated": truncated }),
-                )
-                .await;
+            if let Some(active) = active.take() {
+                let _ = sessions
+                    .end_llm(
+                        active,
+                        response,
+                        json!({ "http_status": status.as_u16(), "streaming": true, "stream_truncated": truncated }),
+                    )
+                    .await;
+            }
         });
         return build_response(status, headers, body);
     }
 
-    let bytes = upstream_response.bytes().await?;
+    let bytes = match upstream_response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            state
+                .sessions
+                .end_llm(
+                    active,
+                    json!({ "error": error.to_string() }),
+                    json!({ "http_status": status.as_u16(), "streaming": false, "gateway_error": true, "stage": "body" }),
+                )
+                .await?;
+            return Err(SidecarError::Upstream(error));
+        }
+    };
     let response_json = serde_json::from_slice::<Value>(&bytes)
         .unwrap_or_else(|_| json!({ "body_bytes": bytes.len() }));
     state
@@ -208,13 +245,9 @@ impl ProviderRoute {
     }
 }
 
-fn gateway_session_id(headers: &HeaderMap) -> String {
+fn gateway_session_id(headers: &HeaderMap) -> Option<String> {
     header_string(headers, "x-nemo-flow-session-id")
         .or_else(|| header_string(headers, "x-claude-code-session-id"))
-        .or_else(|| {
-            header_string(headers, "anthropic-beta").map(|value| format!("anthropic:{value}"))
-        })
-        .unwrap_or_else(|| format!("{}-gateway", AgentKind::Gateway.as_str()))
 }
 
 fn observable_headers(headers: &HeaderMap) -> Map<String, Value> {
@@ -289,125 +322,5 @@ fn stream_response_json(collected: &[u8], truncated: bool) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::SidecarConfig;
-    use axum::http::{HeaderMap, HeaderValue};
-
-    #[test]
-    fn removes_hop_by_hop_headers() {
-        assert!(!should_forward_request_header(&HeaderName::from_static(
-            "connection"
-        )));
-        assert!(!should_forward_request_header(&HeaderName::from_static(
-            "host"
-        )));
-        assert!(should_forward_request_header(&HeaderName::from_static(
-            "authorization"
-        )));
-        assert!(!should_record_header(&HeaderName::from_static(
-            "authorization"
-        )));
-        assert!(!should_record_header(&HeaderName::from_static("x-api-key")));
-        assert!(!should_record_header(&HeaderName::from_static(
-            "anthropic-api-key"
-        )));
-        assert!(should_record_header(&HeaderName::from_static(
-            "x-request-id"
-        )));
-    }
-
-    #[test]
-    fn selects_provider_routes() {
-        assert_eq!(
-            ProviderRoute::from_path("/v1/responses"),
-            Some(ProviderRoute::OpenAiResponses)
-        );
-        assert_eq!(
-            ProviderRoute::from_path("/v1/messages/count_tokens"),
-            Some(ProviderRoute::AnthropicCountTokens)
-        );
-        assert_eq!(
-            ProviderRoute::from_path("/v1/chat/completions")
-                .unwrap()
-                .name(),
-            "openai.chat_completions"
-        );
-        assert_eq!(ProviderRoute::from_path("/unsupported"), None);
-    }
-
-    #[test]
-    fn provider_routes_preserve_path_query_and_choose_upstream() {
-        let config = SidecarConfig {
-            bind: "127.0.0.1:0".parse().unwrap(),
-            openai_base_url: "http://openai/".into(),
-            anthropic_base_url: "http://anthropic/".into(),
-            atif_dir: None,
-            openinference_endpoint: None,
-        };
-
-        assert_eq!(
-            ProviderRoute::OpenAiResponses.upstream_url(&config, "/v1/responses?x=1"),
-            "http://openai/v1/responses?x=1"
-        );
-        assert_eq!(
-            ProviderRoute::AnthropicMessages.upstream_url(&config, "/v1/messages"),
-            "http://anthropic/v1/messages"
-        );
-    }
-
-    #[test]
-    fn gateway_session_id_prefers_headers_and_has_fallbacks() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "anthropic-beta",
-            HeaderValue::from_static("prompt-caching-2024-07-31"),
-        );
-        assert_eq!(
-            gateway_session_id(&headers),
-            "anthropic:prompt-caching-2024-07-31"
-        );
-
-        headers.insert(
-            "x-claude-code-session-id",
-            HeaderValue::from_static("claude-session"),
-        );
-        assert_eq!(gateway_session_id(&headers), "claude-session");
-
-        headers.insert(
-            "x-nemo-flow-session-id",
-            HeaderValue::from_static("explicit-session"),
-        );
-        assert_eq!(gateway_session_id(&headers), "explicit-session");
-
-        assert_eq!(gateway_session_id(&HeaderMap::new()), "gateway-gateway");
-    }
-
-    #[test]
-    fn observable_headers_omit_secrets_and_transport_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert("authorization", HeaderValue::from_static("Bearer secret"));
-        headers.insert("x-api-key", HeaderValue::from_static("secret"));
-        headers.insert("connection", HeaderValue::from_static("close"));
-        headers.insert("x-request-id", HeaderValue::from_static("req-1"));
-
-        let observed = observable_headers(&headers);
-
-        assert_eq!(observed.get("x-request-id"), Some(&json!("req-1")));
-        assert!(!observed.contains_key("authorization"));
-        assert!(!observed.contains_key("x-api-key"));
-        assert!(!observed.contains_key("connection"));
-    }
-
-    #[test]
-    fn stream_response_records_preview_and_truncation() {
-        assert_eq!(
-            stream_response_json(b"data: done", false),
-            json!({ "stream": "data: done" })
-        );
-        assert_eq!(
-            stream_response_json(b"partial", true),
-            json!({ "stream_preview": "partial", "stream_truncated": true })
-        );
-    }
-}
+#[path = "../tests/coverage/gateway_tests.rs"]
+mod tests;
