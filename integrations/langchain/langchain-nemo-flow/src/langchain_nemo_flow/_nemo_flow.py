@@ -17,6 +17,7 @@ import nemo_flow
 
 # TODO: Move into Nemo flow's python package name it something like integration_utils.py
 
+
 def get_nemo_flow() -> ModuleType | None:
     """Return the ``nemo_flow`` module, or ``None`` if not installed.
 
@@ -59,9 +60,7 @@ def run_sync(coro: Any) -> Any:
             return asyncio.run(coro)
 
         with ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(
-                ctx.run, _run_with_scope_stack
-            ).result()
+            return pool.submit(ctx.run, _run_with_scope_stack).result()
     except Exception:
         pass  # Fall through to vanilla path
 
