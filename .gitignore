@@ -91,3 +91,6 @@ CHANGELOG.md
 
 crates/wasm/coverage/
 .scannerwork/
+
+# VSCode
+/.vscode
