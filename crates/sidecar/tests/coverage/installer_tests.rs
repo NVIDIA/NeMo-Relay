@@ -85,6 +85,8 @@ fn generates_hermes_shell_hook_config() {
     assert!(files[0].path.ends_with(".hermes/config.yaml"));
     let yaml: Value = serde_yaml::from_str(&files[0].contents).unwrap();
     assert!(yaml["hooks"]["on_session_start"].is_array());
+    assert!(yaml["hooks"]["pre_api_request"].is_array());
+    assert!(yaml["hooks"]["post_api_request"].is_array());
     assert!(yaml["hooks"]["subagent_stop"].is_array());
     assert!(yaml["hooks"].get("subagent_start").is_none());
     assert!(

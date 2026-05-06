@@ -225,6 +225,76 @@ fn maps_hermes_real_session_boundary_without_closing_per_turn_end() {
 }
 
 #[test]
+fn maps_hermes_api_hooks_to_llm_lifecycle() {
+    let headers = HeaderMap::new();
+
+    let started = hermes::adapt(
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-session",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 2,
+                "model": "qwen",
+                "provider": "custom",
+                "base_url": "http://localhost:11434/v1",
+                "api_mode": "chat_completions",
+                "message_count": 3,
+                "tool_count": 1,
+                "approx_input_tokens": 12,
+                "request_char_count": 456,
+                "max_tokens": 1024
+            }
+        }),
+        &headers,
+    );
+    match &started.events[0] {
+        NormalizedEvent::LlmStarted(event) => {
+            assert_eq!(event.session_id, "hermes-session");
+            assert_eq!(event.api_call_id, "hermes-session:task-1:2");
+            assert_eq!(event.provider, "custom");
+            assert_eq!(event.model_name.as_deref(), Some("qwen"));
+            assert_eq!(event.request["message_count"], json!(3));
+            assert_eq!(
+                event.request["fidelity"]["provider_payload_exact"],
+                json!(false)
+            );
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+
+    let ended = hermes::adapt(
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "hermes-session",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 2,
+                "model": "qwen",
+                "response_model": "qwen",
+                "provider": "custom",
+                "api_duration": 0.25,
+                "finish_reason": "stop",
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "prompt_tokens_details": { "cached_tokens": 3 }
+                }
+            }
+        }),
+        &headers,
+    );
+    match &ended.events[0] {
+        NormalizedEvent::LlmEnded(event) => {
+            assert_eq!(event.api_call_id, "hermes-session:task-1:2");
+            assert_eq!(event.response["usage"]["prompt_tokens"], json!(10));
+            assert_eq!(event.response["usage"]["completion_tokens"], json!(5));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
 fn normalizes_mark_style_events_and_header_session_ids() {
     let mut headers = HeaderMap::new();
     headers.insert("x-nemo-flow-session-id", "header-session".parse().unwrap());

@@ -25,7 +25,7 @@ use tokio::sync::Mutex;
 
 use crate::config::{SessionConfig, SidecarConfig};
 use crate::error::SidecarError;
-use crate::model::{AgentKind, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent};
+use crate::model::{AgentKind, LlmEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent};
 
 #[derive(Clone)]
 pub(crate) struct SessionManager {
@@ -56,6 +56,7 @@ struct Session {
     agent_scope: Option<ScopeHandle>,
     subagents: HashMap<String, ScopeHandle>,
     subagent_stack: Vec<String>,
+    llms: HashMap<String, LlmHandle>,
     tools: HashMap<String, ToolHandle>,
     config: SessionConfig,
     atif: Option<AtifExporter>,
@@ -86,6 +87,7 @@ impl SessionManager {
             if session.agent_scope.is_none()
                 && session.subagents.is_empty()
                 && session.subagent_stack.is_empty()
+                && session.llms.is_empty()
                 && session.tools.is_empty()
             {
                 sessions.remove(&session_id);
@@ -142,6 +144,7 @@ impl Session {
             agent_scope: None,
             subagents: HashMap::new(),
             subagent_stack: Vec::new(),
+            llms: HashMap::new(),
             tools: HashMap::new(),
             config,
             atif: None,
@@ -158,6 +161,8 @@ impl Session {
                     NormalizedEvent::AgentEnded(event) => self.end_agent(event),
                     NormalizedEvent::SubagentStarted(event) => self.start_subagent(event),
                     NormalizedEvent::SubagentEnded(event) => self.end_subagent(event),
+                    NormalizedEvent::LlmStarted(event) => self.start_hook_llm(event),
+                    NormalizedEvent::LlmEnded(event) => self.end_hook_llm(event),
                     NormalizedEvent::ToolStarted(event) => self.start_tool(event),
                     NormalizedEvent::ToolEnded(event) => self.end_tool(event),
                     NormalizedEvent::PromptSubmitted(event) => self.mark("prompt_submitted", event),
@@ -262,6 +267,16 @@ impl Session {
 
     fn end_agent(&mut self, event: SessionEvent) -> Result<(), SidecarError> {
         self.ensure_agent_started(event.metadata.clone())?;
+        let active_llms: Vec<_> = self.llms.drain().map(|(_, handle)| handle).collect();
+        for handle in active_llms {
+            llm_call_end(
+                LlmCallEndParams::builder()
+                    .handle(&handle)
+                    .response(json!({ "status": "closed_by_agent_end" }))
+                    .metadata(json!({ "status": "closed_by_agent_end" }))
+                    .build(),
+            )?;
+        }
         let active_tools: Vec<_> = self.tools.drain().map(|(_, handle)| handle).collect();
         for handle in active_tools {
             tool_call_end(
@@ -356,6 +371,54 @@ impl Session {
         }
         self.subagent_stack.pop();
         self.subagents.remove(&event.subagent_id);
+        Ok(())
+    }
+
+    fn start_hook_llm(&mut self, event: LlmEvent) -> Result<(), SidecarError> {
+        self.ensure_agent_started(event.metadata.clone())?;
+        if self.llms.contains_key(&event.api_call_id) {
+            return Ok(());
+        }
+        let handle = llm_call(
+            LlmCallParams::builder()
+                .name(event.provider.as_str())
+                .request(&LlmRequest {
+                    headers: Map::new(),
+                    content: event.request,
+                })
+                .attributes(LlmAttributes::empty())
+                .metadata(event.metadata)
+                .model_name_opt(event.model_name)
+                .build(),
+        )?;
+        self.llms.insert(event.api_call_id, handle);
+        Ok(())
+    }
+
+    fn end_hook_llm(&mut self, event: LlmEvent) -> Result<(), SidecarError> {
+        self.ensure_agent_started(event.metadata.clone())?;
+        let handle = match self.llms.remove(&event.api_call_id) {
+            Some(handle) => handle,
+            None => llm_call(
+                LlmCallParams::builder()
+                    .name(event.provider.as_str())
+                    .request(&LlmRequest {
+                        headers: Map::new(),
+                        content: event.request,
+                    })
+                    .attributes(LlmAttributes::empty())
+                    .metadata(event.metadata.clone())
+                    .model_name_opt(event.model_name.clone())
+                    .build(),
+            )?,
+        };
+        llm_call_end(
+            LlmCallEndParams::builder()
+                .handle(&handle)
+                .response(event.response)
+                .metadata(event.metadata)
+                .build(),
+        )?;
         Ok(())
     }
 
@@ -466,6 +529,7 @@ fn event_agent_kind(event: &NormalizedEvent) -> AgentKind {
         NormalizedEvent::SubagentStarted(event) | NormalizedEvent::SubagentEnded(event) => {
             event.agent_kind
         }
+        NormalizedEvent::LlmStarted(event) | NormalizedEvent::LlmEnded(event) => event.agent_kind,
         NormalizedEvent::ToolStarted(event) | NormalizedEvent::ToolEnded(event) => event.agent_kind,
     }
 }

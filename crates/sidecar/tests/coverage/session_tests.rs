@@ -5,7 +5,7 @@ use axum::http::HeaderMap;
 use serde_json::json;
 
 use super::*;
-use crate::model::{SessionEvent, ToolEvent};
+use crate::model::{LlmEvent, SessionEvent, ToolEvent};
 
 #[tokio::test]
 async fn nests_agent_subagent_and_tool_lifecycle() {
@@ -139,6 +139,86 @@ async fn writes_atif_on_session_end_from_header_config() {
     let path = temp.path().join("atif-session.atif.json");
     let atif: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     assert_eq!(atif["agent"]["name"], json!("codex"));
+}
+
+#[tokio::test]
+async fn writes_hermes_api_hook_usage_to_atif_metrics() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = SidecarConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        openai_base_url: "http://127.0.0.1".into(),
+        anthropic_base_url: "http://127.0.0.1".into(),
+        atif_dir: None,
+        openinference_endpoint: None,
+        metadata: None,
+        plugin_config: None,
+    };
+    let manager = SessionManager::new(config);
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-nemo-flow-atif-dir",
+        temp.path().to_string_lossy().parse().unwrap(),
+    );
+
+    manager
+        .apply_events(
+            &headers,
+            vec![
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "hermes-usage".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "on_session_start".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::LlmStarted(LlmEvent {
+                    session_id: "hermes-usage".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "pre_api_request".into(),
+                    api_call_id: "hermes-usage:task-1:1".into(),
+                    provider: "custom".into(),
+                    model_name: Some("qwen".into()),
+                    request: json!({ "model": "qwen" }),
+                    response: Value::Null,
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::LlmEnded(LlmEvent {
+                    session_id: "hermes-usage".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "post_api_request".into(),
+                    api_call_id: "hermes-usage:task-1:1".into(),
+                    provider: "custom".into(),
+                    model_name: Some("qwen".into()),
+                    request: json!({}),
+                    response: json!({
+                        "usage": {
+                            "prompt_tokens": 10,
+                            "completion_tokens": 5,
+                            "prompt_tokens_details": { "cached_tokens": 3 }
+                        }
+                    }),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::AgentEnded(SessionEvent {
+                    session_id: "hermes-usage".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "on_session_finalize".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let path = temp.path().join("hermes-usage.atif.json");
+    let atif: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(atif["steps"][1]["metrics"]["prompt_tokens"], json!(10));
+    assert_eq!(atif["steps"][1]["metrics"]["completion_tokens"], json!(5));
+    assert_eq!(atif["steps"][1]["metrics"]["cached_tokens"], json!(3));
+    assert_eq!(atif["final_metrics"]["total_prompt_tokens"], json!(10));
+    assert_eq!(atif["final_metrics"]["total_completion_tokens"], json!(5));
+    assert_eq!(atif["final_metrics"]["total_cached_tokens"], json!(3));
 }
 
 #[tokio::test]
