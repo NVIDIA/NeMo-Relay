@@ -28,6 +28,9 @@ environment variables, or shared TOML config.
   `codex_hooks = true`.
 - `cursor/` installs a Cursor `.cursor/hooks.json` bundle targeting
   `POST /hooks/cursor`.
+- Hermes does not require a static bundle in this directory. Use
+  `nemo-flow-sidecar install hermes` to merge hook commands into
+  `.hermes/config.yaml`.
 
 ## Transparent Setup
 
@@ -41,10 +44,16 @@ down when the agent exits.
 nemo-flow-sidecar run --atif-dir .nemo-flow/atif -- claude
 nemo-flow-sidecar run --atif-dir .nemo-flow/atif -- codex
 nemo-flow-sidecar run --atif-dir .nemo-flow/atif -- cursor-agent
+nemo-flow-sidecar run --atif-dir .nemo-flow/atif -- hermes
 ```
 
-Use `--agent claude-code|codex|cursor` when a wrapper hides the agent command
-name. Use `--dry-run --print` to inspect generated config without launching.
+Use `--agent claude-code|codex|cursor|hermes` when a wrapper hides the agent
+command name. Use `--dry-run --print` to inspect generated config without
+launching.
+
+Hermes transparent runs export the dynamic `NEMO_FLOW_SIDECAR_URL`, but Hermes
+hooks still need to be installed or approved in Hermes configuration before
+they can call the sidecar.
 
 Shared TOML config is loaded from `/etc/nemo-flow/sidecar.toml`, then nearest
 project `.nemo-flow/sidecar.toml`, then
@@ -61,6 +70,9 @@ endpoint = "http://127.0.0.1:4318/v1/traces"
 
 [agents.codex]
 command = "codex"
+
+[agents.hermes]
+command = "hermes"
 ```
 
 ## Persistent Setup
@@ -71,6 +83,7 @@ Use `install` only when you want persistent hook configuration:
 nemo-flow-sidecar install claude-code --scope user --target cli --sidecar-url http://127.0.0.1:4040
 nemo-flow-sidecar install codex --scope user --target both --sidecar-url http://127.0.0.1:4040
 nemo-flow-sidecar install cursor --scope project --target gui --sidecar-url http://127.0.0.1:4040
+nemo-flow-sidecar install hermes --scope user --target cli --sidecar-url http://127.0.0.1:4040
 ```
 
 Inspect generated changes before writing:
@@ -112,6 +125,9 @@ Useful wrapper and install options:
 - `--session-metadata '<json>'` adds structured metadata to the agent begin
   event.
 - `--plugin-config '<json>'` records scope-local plugin configuration metadata.
+- `--profile <name>` records a configuration profile in session metadata.
+- `--gateway-mode hook-only|passthrough|required` records the expected gateway
+  behavior in session metadata.
 - `--fail-closed` can be added to generated hook commands when the agent should
   block on hook delivery failures. The default is fail-open.
 

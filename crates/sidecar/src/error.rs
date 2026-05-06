@@ -29,6 +29,9 @@ pub(crate) enum SidecarError {
 }
 
 impl IntoResponse for SidecarError {
+    // Maps sidecar errors into a compact JSON HTTP response. Bad hook payloads are client errors,
+    // upstream gateway failures are bad gateway responses, and local install/config/runtime faults
+    // remain internal errors so callers do not mistake them for agent policy decisions.
     fn into_response(self) -> Response {
         let status = match self {
             Self::InvalidPayload(_) => StatusCode::BAD_REQUEST,

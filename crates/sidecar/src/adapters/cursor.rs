@@ -7,6 +7,11 @@ use serde_json::{Value, json};
 use crate::adapters::{AdapterOutcome, ClassificationRules, classify};
 use crate::model::{AgentKind, NormalizedEvent};
 
+/// Normalizes Cursor hook payloads and returns Cursor-compatible continuation decisions.
+///
+/// Cursor has separate shell and MCP hook names, both of which are collapsed into normal tool
+/// start/end events. Tool starts are fail-open with an explicit `allow` permission response so
+/// the sidecar records activity without becoming a policy engine for Cursor executions.
 pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     let event = classify(
         &payload,

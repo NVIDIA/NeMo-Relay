@@ -127,6 +127,17 @@
         ]
       }
     ],
+    "afterAgentThought": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
     "preCompact": [
       {
         "hooks": [

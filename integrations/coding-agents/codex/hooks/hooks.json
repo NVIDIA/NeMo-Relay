@@ -58,6 +58,28 @@
         ]
       }
     ],
+    "AfterAgentResponse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward codex",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "AfterAgentThought": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward codex",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
     "SubagentStart": [
       {
         "hooks": [
@@ -70,6 +92,17 @@
       }
     ],
     "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward codex",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Notification": [
       {
         "hooks": [
           {

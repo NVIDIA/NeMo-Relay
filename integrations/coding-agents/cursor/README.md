@@ -20,6 +20,18 @@ configuration.
 - `.cursor/hooks.json` contains hook entries that run
   `nemo-flow-sidecar hook-forward cursor`.
 
+## Captured Events
+
+The bundle forwards `sessionStart`, `sessionEnd`, `subagentStart`,
+`subagentStop`, `preToolUse`, `postToolUse`, `beforeShellExecution`,
+`afterShellExecution`, `beforeMCPExecution`, `afterMCPExecution`, `preCompact`,
+and `stop` as scope, tool, or mark events. `beforeSubmitPrompt`,
+`afterAgentResponse`, and `afterAgentThought` provide private LLM correlation
+hints for gateway requests.
+
+Tool events preserve shell and MCP payloads in metadata and attach to
+`subagent.id`, `subagent_id`, or `x-nemo-flow-subagent-id` when one is present.
+
 ## Transparent Setup
 
 Build or install the sidecar binary so `nemo-flow-sidecar` is on `PATH`.
@@ -101,3 +113,8 @@ printf '{"session_id":"smoke-cursor","hook_event_name":"sessionStart"}' \
 If Cursor CLI hooks do not fire for the active `cursor-agent` version, treat
 that CLI mode as hook-limited and rely on gateway observability where provider
 routing is available.
+
+If LLM spans are present but attached to the top-level agent instead of a
+subagent, include `x-nemo-flow-subagent-id` on gateway requests or share
+`conversation_id`, `generation_id`, or `request_id` values between hook payloads
+and provider requests.

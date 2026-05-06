@@ -38,6 +38,15 @@ fn generates_claude_install_file() {
     assert!(files[0].path.ends_with(".claude/settings.json"));
     let json: Value = serde_json::from_str(&files[0].contents).unwrap();
     assert!(json["hooks"]["SessionStart"].is_array());
+    assert!(json["hooks"]["UserPromptSubmit"].is_array());
+    assert!(json["hooks"]["AfterAgentResponse"].is_array());
+    assert!(json["hooks"]["AfterAgentThought"].is_array());
+    assert!(json["hooks"]["Notification"].is_array());
+    assert!(
+        json["hooks"]["AfterAgentResponse"][0]
+            .get("matcher")
+            .is_none()
+    );
     assert!(
         json["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
             .as_str()
@@ -54,6 +63,15 @@ fn generates_codex_config_and_hooks() {
     assert!(files[0].contents.contains("codex_hooks = true"));
     let json: Value = serde_json::from_str(&files[1].contents).unwrap();
     assert!(json["hooks"]["Stop"].is_array());
+    assert!(json["hooks"]["UserPromptSubmit"].is_array());
+    assert!(json["hooks"]["AfterAgentResponse"].is_array());
+    assert!(json["hooks"]["AfterAgentThought"].is_array());
+    assert!(json["hooks"]["Notification"].is_array());
+    assert!(
+        json["hooks"]["AfterAgentThought"][0]
+            .get("matcher")
+            .is_none()
+    );
     assert!(
         json["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
             .as_str()
@@ -69,6 +87,14 @@ fn generates_cursor_hooks() {
     assert_eq!(files.len(), 1);
     let json: Value = serde_json::from_str(&files[0].contents).unwrap();
     assert!(json["hooks"]["beforeShellExecution"].is_array());
+    assert!(json["hooks"]["beforeSubmitPrompt"].is_array());
+    assert!(json["hooks"]["afterAgentResponse"].is_array());
+    assert!(json["hooks"]["afterAgentThought"].is_array());
+    assert!(
+        json["hooks"]["afterAgentThought"][0]
+            .get("matcher")
+            .is_none()
+    );
     assert!(
         json["hooks"]["beforeShellExecution"][0]["hooks"][0]["command"]
             .as_str()
@@ -85,8 +111,10 @@ fn generates_hermes_shell_hook_config() {
     assert!(files[0].path.ends_with(".hermes/config.yaml"));
     let yaml: Value = serde_yaml::from_str(&files[0].contents).unwrap();
     assert!(yaml["hooks"]["on_session_start"].is_array());
+    assert!(yaml["hooks"]["pre_llm_call"].is_array());
+    assert!(yaml["hooks"]["post_llm_call"].is_array());
+    assert!(yaml["hooks"]["subagent_start"].is_array());
     assert!(yaml["hooks"]["subagent_stop"].is_array());
-    assert!(yaml["hooks"].get("subagent_start").is_none());
     assert!(
         yaml["hooks"]["pre_tool_call"][0]["command"]
             .as_str()
@@ -120,6 +148,18 @@ hooks:
             .len(),
         1
     );
+}
+
+#[test]
+fn hermes_config_merge_rejects_invalid_yaml() {
+    let error = merge_hermes_config(
+        "hooks: [not valid",
+        hermes_hooks("nemo-flow-sidecar hook-forward hermes"),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("invalid YAML in Hermes config"));
 }
 
 #[test]
@@ -200,6 +240,22 @@ fn install_writes_file_and_backs_up_existing_config() {
         .filter(|name| name.starts_with("settings.json.bak."))
         .collect();
     assert_eq!(backups.len(), 1);
+}
+
+#[test]
+fn install_prints_target_notes_for_non_claude_agents() {
+    for agent in [CodingAgent::Codex, CodingAgent::Cursor, CodingAgent::Hermes] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut command = command(agent, temp.path());
+        command.target = InstallTarget::Both;
+
+        install(command).unwrap();
+    }
+}
+
+#[test]
+fn target_note_noops_for_unmatched_agent_target_pairs() {
+    print_target_note(CodingAgent::Codex, InstallTarget::Cli);
 }
 
 #[test]
@@ -286,6 +342,25 @@ fn helper_formatting_and_headers_cover_optional_paths() {
             Some("bad\nvalue")
         )
         .is_err()
+    );
+
+    let headers = sidecar_headers(None, None, None, None, None, None).unwrap();
+    assert!(headers.is_empty());
+}
+
+#[test]
+fn generated_hook_dispatch_covers_all_agents() {
+    for agent in [
+        CodingAgent::ClaudeCode,
+        CodingAgent::Codex,
+        CodingAgent::Cursor,
+        CodingAgent::Hermes,
+    ] {
+        assert!(generated_hooks(agent, "cmd")["hooks"].is_object());
+    }
+    assert_eq!(
+        hook_forward_command(CodingAgent::Hermes),
+        "nemo-flow-sidecar hook-forward hermes"
     );
 }
 

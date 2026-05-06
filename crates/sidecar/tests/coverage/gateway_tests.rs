@@ -4,7 +4,12 @@
 use super::*;
 use crate::config::SidecarConfig;
 use crate::model::{AgentKind, NormalizedEvent, SessionEvent};
-use axum::http::{HeaderMap, HeaderValue};
+use crate::server::AppState;
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
+use http_body_util::BodyExt;
+use reqwest::Client;
 
 #[test]
 fn removes_hop_by_hop_headers() {
@@ -44,6 +49,15 @@ fn selects_provider_routes() {
             .unwrap()
             .name(),
         "openai.chat_completions"
+    );
+    assert_eq!(ProviderRoute::OpenAiModels.name(), "openai.models");
+    assert_eq!(
+        ProviderRoute::AnthropicMessages.name(),
+        "anthropic.messages"
+    );
+    assert_eq!(
+        ProviderRoute::AnthropicCountTokens.name(),
+        "anthropic.count_tokens"
     );
     assert_eq!(ProviderRoute::from_path("/unsupported"), None);
 }
@@ -101,6 +115,56 @@ fn gateway_session_id_prefers_headers_and_has_fallbacks() {
 }
 
 #[test]
+fn gateway_identifiers_accept_headers_and_scalar_body_values() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-nemo-flow-request-id",
+        HeaderValue::from_static("req-header"),
+    );
+    let body = json!({
+        "conversation": { "id": 42 },
+        "generation": { "id": true },
+        "request": { "id": "req-body" },
+        "object": { "id": { "nested": true } }
+    });
+
+    assert_eq!(
+        gateway_identifier(
+            &headers,
+            &body,
+            "x-nemo-flow-request-id",
+            &[&["request", "id"]]
+        )
+        .as_deref(),
+        Some("req-header")
+    );
+    assert_eq!(
+        gateway_identifier(
+            &HeaderMap::new(),
+            &body,
+            "missing",
+            &[&["conversation", "id"]]
+        )
+        .as_deref(),
+        Some("42")
+    );
+    assert_eq!(
+        gateway_identifier(
+            &HeaderMap::new(),
+            &body,
+            "missing",
+            &[&["generation", "id"]]
+        )
+        .as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        gateway_identifier(&HeaderMap::new(), &body, "missing", &[&["object", "id"]]),
+        None
+    );
+}
+
+#[test]
 fn observable_headers_omit_secrets_and_transport_headers() {
     let mut headers = HeaderMap::new();
     headers.insert("authorization", HeaderValue::from_static("Bearer secret"));
@@ -114,6 +178,69 @@ fn observable_headers_omit_secrets_and_transport_headers() {
     assert!(!observed.contains_key("authorization"));
     assert!(!observed.contains_key("x-api-key"));
     assert!(!observed.contains_key("connection"));
+}
+
+#[tokio::test]
+async fn passthrough_rejects_unsupported_provider_path_directly() {
+    let config = SidecarConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        openai_base_url: "http://openai".into(),
+        anthropic_base_url: "http://anthropic".into(),
+        atif_dir: None,
+        openinference_endpoint: None,
+        metadata: None,
+        plugin_config: None,
+    };
+    let state = AppState {
+        config: config.clone(),
+        http: Client::new(),
+        sessions: SessionManager::new(config),
+    };
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/unsupported")
+        .body(Body::empty())
+        .unwrap();
+
+    let error = passthrough(State(state), request).await.unwrap_err();
+
+    assert!(error.to_string().contains("unsupported gateway path"));
+}
+
+#[tokio::test]
+async fn models_rejects_non_get_requests_directly() {
+    let config = SidecarConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        openai_base_url: "http://openai".into(),
+        anthropic_base_url: "http://anthropic".into(),
+        atif_dir: None,
+        openinference_endpoint: None,
+        metadata: None,
+        plugin_config: None,
+    };
+    let state = AppState {
+        config: config.clone(),
+        http: Client::new(),
+        sessions: SessionManager::new(config),
+    };
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/models")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = models(State(state), request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert!(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -159,6 +286,10 @@ async fn streaming_llm_guard_closes_on_drop() {
                 session_id: Some("drop-session".into()),
                 provider: "openai.responses".into(),
                 model_name: Some("gpt-test".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: None,
                 request: LlmRequest {
                     headers: Map::new(),
                     content: json!({ "model": "gpt-test", "stream": true }),

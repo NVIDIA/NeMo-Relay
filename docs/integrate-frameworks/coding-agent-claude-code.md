@@ -89,6 +89,19 @@ claude
 The sidecar forwards Anthropic `/v1/messages`, `/v1/messages/count_tokens`, and
 model routes without rewriting provider JSON.
 
+## Captured Events
+
+Generated Claude Code hooks include `SessionStart`, `SessionEnd`,
+`SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`,
+`PostToolUseFailure`, `Notification`, and `PreCompact` for scope, tool, and
+mark events. `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and
+`Stop` are retained as private LLM correlation hints and are not emitted as
+standalone NeMo Flow events.
+
+Tool hooks preserve canonical fields such as `tool_use_id`, `tool_name`,
+`tool_input`, `error`, `duration_ms`, and `is_interrupt`. Subagent hooks use
+`agent_id` as the subagent identifier and preserve `agent_type` in metadata.
+
 ## Smoke Test
 
 Run a small Claude Code prompt that starts a session and uses one simple tool.
@@ -124,3 +137,8 @@ the `nemo-flow-sidecar` binary is not on `PATH`.
 Missing LLM spans with present hook spans means Anthropic traffic is not routed
 through the sidecar. Verify `ANTHROPIC_BASE_URL` in the Claude Code process
 environment and confirm that requests hit `/v1/messages`.
+
+If LLM spans exist but attach to the session instead of a subagent, pass
+`x-nemo-flow-subagent-id` on gateway requests or include shared
+`conversation_id`, `generation_id`, or `request_id` values in both hook payloads
+and provider requests.

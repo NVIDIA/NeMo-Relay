@@ -18,6 +18,14 @@ same local hook and gateway controls as Claude Code.
 - `hooks/hooks.json` contains hook entries that run
   `nemo-flow-sidecar hook-forward claude-code`.
 
+## Captured Events
+
+The bundle forwards `SessionStart`, `SessionEnd`, `SubagentStart`,
+`SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
+`Notification`, and `PreCompact` as scope, tool, or mark events.
+`UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and `Stop`
+provide private LLM correlation hints for gateway requests.
+
 ## Transparent Setup
 
 Build or install the sidecar binary so `nemo-flow-sidecar` is on `PATH`.
@@ -110,3 +118,8 @@ printf '{"session_id":"smoke-claude","hook_event_name":"SessionStart"}' \
 If hooks arrive but LLM spans are missing, confirm the Claude Code process was
 started by `nemo-flow-sidecar run` or has `ANTHROPIC_BASE_URL` set to the
 sidecar URL.
+
+If LLM spans are present but attached to the top-level agent instead of a
+subagent, include `x-nemo-flow-subagent-id` on gateway requests or share
+`conversation_id`, `generation_id`, or `request_id` values between hook payloads
+and provider requests.

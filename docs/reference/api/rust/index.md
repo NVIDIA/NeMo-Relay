@@ -27,9 +27,8 @@ These entry points are the primary APIs to use from this binding.
 
 - `nemo-flow`: core runtime APIs for scopes, tools, LLMs, registries, subscribers, codecs, streams, and observability
 - `nemo-flow-adaptive`: adaptive runtime helpers, learner implementations, storage backends, and adaptive configuration
+- `nemo-flow-sidecar`: binary gateway sidecar for coding-agent hooks and passthrough LLM observability
 - `nemo-flow-ffi`: raw C ABI used by downstream native bindings
-- `nemo-flow-sidecar`: binary gateway sidecar for coding-agent hooks and
-  passthrough LLM observability
 
 Within `nemo-flow`, most integrations start in `api`, especially the `scope`,
 `tool`, `llm`, `registry`, and `subscriber` modules. Other important public
@@ -62,6 +61,7 @@ Use the generated crate entry points when you need symbol-level detail:
 
 nemo-flow <_generated/nemo-flow/src>
 nemo-flow-adaptive <_generated/nemo-flow-adaptive/src>
+nemo-flow-adaptive <_generated/nemo-flow-sidecar/src>
 ```
 
 ## Related Guides
@@ -77,3 +77,4 @@ Use these links to continue from the API reference into task-focused guides.
 - [Adaptive Optimization](../../../use-adaptive-optimization/about.md)
 - [Typed Wrappers and Codecs](../../../integrate-frameworks/using-codecs.md)
 - [Framework Integration Surfaces](../../../integrate-frameworks/about.md)
+- [Coding-Agent Gateway Sidecar](../../../integrate-frameworks/coding-agent-sidecar.md)

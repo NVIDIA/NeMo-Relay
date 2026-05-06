@@ -165,6 +165,7 @@ Advanced Guide: Coding-Agent Gateway Sidecar <integrate-frameworks/coding-agent-
 Claude Code Sidecar Guide <integrate-frameworks/coding-agent-claude-code>
 Codex Sidecar Guide <integrate-frameworks/coding-agent-codex>
 Cursor Sidecar Guide <integrate-frameworks/coding-agent-cursor>
+Hermes Sidecar Guide <integrate-frameworks/coding-agent-hermes>
 Advanced Guide: Handle Non-Serializable Data <integrate-frameworks/non-serializable-data>
 Advanced Guide: Using Codecs <integrate-frameworks/using-codecs>
 Advanced Guide: Provider Codecs <integrate-frameworks/provider-codecs>

@@ -7,6 +7,11 @@ use serde_json::{Value, json};
 use crate::adapters::{AdapterOutcome, ClassificationRules, classify};
 use crate::model::AgentKind;
 
+/// Normalizes Hermes shell hook payloads without emitting control directives.
+///
+/// Hermes hooks are installed as shell commands and may run outside `run`, so this adapter keeps
+/// responses minimal and relies on the forwarder fail-open/fail-closed setting to decide whether
+/// hook delivery problems affect the invoking agent.
 pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     let event = classify(
         &payload,

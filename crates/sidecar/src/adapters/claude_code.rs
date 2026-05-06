@@ -7,6 +7,12 @@ use serde_json::{Value, json};
 use crate::adapters::{AdapterOutcome, ClassificationRules, classify, event_name, normalize_name};
 use crate::model::{AgentKind, NormalizedEvent};
 
+/// Normalizes Claude Code hook payloads and returns the hook response Claude expects.
+///
+/// Claude Code uses permission-bearing tool hooks, so pre-tool events are explicitly allowed
+/// instead of returning the generic `{ continue: true }` shape. Stop hooks can arrive as either
+/// terminal events or LLM-style marks; both are acknowledged with a null stop reason so the
+/// sidecar remains observational and never blocks Claude's lifecycle by default.
 pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     let event = classify(
         &payload,
@@ -39,7 +45,9 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
                 "permissionDecision": "allow"
             }
         }),
-        NormalizedEvent::AgentEnded(_) | NormalizedEvent::HookMark(_)
+        NormalizedEvent::AgentEnded(_)
+        | NormalizedEvent::HookMark(_)
+        | NormalizedEvent::LlmHint(_)
             if normalized_event == "stop" =>
         {
             json!({ "continue": true, "stopReason": null })

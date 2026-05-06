@@ -20,6 +20,9 @@ use clap::Parser;
 use crate::config::{Cli, Command};
 
 #[tokio::main]
+// Runs the async CLI entrypoint and converts any surfaced sidecar error into a non-zero process
+// exit. Errors are printed once here so subcommands can return structured errors without also
+// owning process-level reporting.
 async fn main() -> ExitCode {
     match run().await {
         Ok(code) => code,
@@ -30,6 +33,8 @@ async fn main() -> ExitCode {
     }
 }
 
+// Dispatches CLI subcommands while keeping the no-subcommand path as server mode. `run` inherits
+// top-level server flags so transparent launch can share config parsing with daemon startup.
 async fn run() -> Result<ExitCode, error::SidecarError> {
     let cli = Cli::parse();
     match cli.command {

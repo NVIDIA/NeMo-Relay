@@ -55,6 +55,16 @@ component_management:
           threshold: 0.5%
           base: auto
           if_ci_failed: error
+    - component_id: sidecar_runtime
+      name: Sidecar Runtime
+      paths:
+        - "crates/sidecar/src"
+      statuses:
+        - type: project
+          target: 95%
+          threshold: 0.5%
+          base: auto
+          if_ci_failed: error
     - component_id: go_binding
       name: Go Binding
       paths:

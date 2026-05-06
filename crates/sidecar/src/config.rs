@@ -178,6 +178,9 @@ pub(crate) struct SessionConfig {
 }
 
 impl SidecarConfig {
+    // Resolves per-session settings from hook/gateway headers with process config as fallback.
+    // Header JSON fields are parsed opportunistically; invalid JSON is treated as absent here
+    // because install and hook-forward validate generated header values before sending them.
     pub(crate) fn session_config_from_headers(&self, headers: &HeaderMap) -> SessionConfig {
         let atif_dir = header_string(headers, "x-nemo-flow-atif-dir")
             .map(PathBuf::from)
@@ -227,6 +230,9 @@ pub(crate) struct CursorAgentConfig {
 }
 
 impl Default for CursorAgentConfig {
+    // Keeps Cursor run-mode patching enabled unless a config file opts out. Cursor's CLI discovers
+    // hooks from project files, so the launcher needs permission to temporarily patch and restore
+    // `.cursor/hooks.json` by default.
     fn default() -> Self {
         Self {
             command: None,
@@ -287,6 +293,9 @@ struct FileCursorAgentConfig {
 }
 
 impl Default for SidecarConfig {
+    // Supplies conservative local gateway defaults: bind only to loopback, route OpenAI and
+    // Anthropic requests to their public bases, and leave exporters/plugins disabled until config,
+    // environment, or headers explicitly opt in.
     fn default() -> Self {
         Self {
             bind: "127.0.0.1:4040"
@@ -302,12 +311,21 @@ impl Default for SidecarConfig {
     }
 }
 
+/// Resolves server-mode configuration from shared config files plus server CLI/environment overrides.
+///
+/// File discovery and merge behavior live in `load_shared_config`; this function only applies the
+/// server-facing command-line layer so launcher-only settings cannot leak into daemon mode.
 pub(crate) fn resolve_server_config(args: &ServerArgs) -> Result<ResolvedConfig, SidecarError> {
     let mut resolved = load_shared_config(args.config.as_ref())?;
     apply_server_overrides(&mut resolved.sidecar, args);
     Ok(resolved)
 }
 
+/// Resolves transparent `run` configuration and switches the sidecar to an ephemeral bind address.
+///
+/// Explicit run arguments override inherited top-level server flags, which override shared config.
+/// Session metadata and plugin config are parsed as JSON here so malformed CLI values fail before
+/// the child agent is spawned.
 pub(crate) fn resolve_run_config(
     command: &RunCommand,
     inherited: Option<&ServerArgs>,
@@ -320,30 +338,58 @@ pub(crate) fn resolve_run_config(
     if let Some(args) = inherited {
         apply_server_overrides(&mut resolved.sidecar, args);
     }
-    if let Some(value) = &command.openai_base_url {
-        resolved.sidecar.openai_base_url = value.clone();
-    }
-    if let Some(value) = &command.anthropic_base_url {
-        resolved.sidecar.anthropic_base_url = value.clone();
-    }
-    if let Some(value) = &command.atif_dir {
-        resolved.sidecar.atif_dir = Some(value.clone());
-    }
-    if let Some(value) = &command.openinference_endpoint {
-        resolved.sidecar.openinference_endpoint = Some(value.clone());
-    }
-    if let Some(value) = &command.session_metadata {
-        resolved.sidecar.metadata = Some(parse_json_option("session metadata", value)?);
-    }
-    if let Some(value) = &command.plugin_config {
-        resolved.sidecar.plugin_config = Some(parse_json_option("plugin config", value)?);
-    }
+    apply_run_overrides(&mut resolved.sidecar, command)?;
     resolved.sidecar.bind = "127.0.0.1:0"
         .parse()
         .expect("valid transparent bind address");
     Ok(resolved)
 }
 
+// Applies subcommand-specific `run` overrides after inherited top-level flags. JSON-bearing fields
+// are parsed here so invalid metadata or plugin config fails before the sidecar binds a port.
+fn apply_run_overrides(
+    config: &mut SidecarConfig,
+    command: &RunCommand,
+) -> Result<(), SidecarError> {
+    apply_run_url_overrides(config, command);
+    apply_run_json_overrides(config, command)?;
+    Ok(())
+}
+
+// Applies plain string/path run overrides. These fields do not need parsing, so they stay separate
+// from JSON options whose errors should include field context.
+fn apply_run_url_overrides(config: &mut SidecarConfig, command: &RunCommand) {
+    if let Some(value) = &command.openai_base_url {
+        config.openai_base_url = value.clone();
+    }
+    if let Some(value) = &command.anthropic_base_url {
+        config.anthropic_base_url = value.clone();
+    }
+    if let Some(value) = &command.atif_dir {
+        config.atif_dir = Some(value.clone());
+    }
+    if let Some(value) = &command.openinference_endpoint {
+        config.openinference_endpoint = Some(value.clone());
+    }
+}
+
+// Parses JSON-bearing run overrides after simple values. Invalid metadata or plugin config fails
+// before transparent run mode binds its ephemeral sidecar listener.
+fn apply_run_json_overrides(
+    config: &mut SidecarConfig,
+    command: &RunCommand,
+) -> Result<(), SidecarError> {
+    if let Some(value) = &command.session_metadata {
+        config.metadata = Some(parse_json_option("session metadata", value)?);
+    }
+    if let Some(value) = &command.plugin_config {
+        config.plugin_config = Some(parse_json_option("plugin config", value)?);
+    }
+    Ok(())
+}
+
+// Applies direct server flags on top of already-merged configuration. Only present options mutate
+// the config so lower-priority file values survive when a flag was omitted.
 fn apply_server_overrides(config: &mut SidecarConfig, args: &ServerArgs) {
     if let Some(value) = args.bind {
         config.bind = value;
@@ -362,6 +408,9 @@ fn apply_server_overrides(config: &mut SidecarConfig, args: &ServerArgs) {
     }
 }
 
+// Loads config from the ordered shared locations, deep-merges TOML tables, maps the typed file
+// shape onto runtime structs, then lets environment variables override file values. Invalid TOML
+// or typed shapes fail closed because they indicate an operator configuration error.
 fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, SidecarError> {
     let mut merged = toml::Value::Table(toml::map::Map::new());
     for path in config_paths(explicit) {
@@ -385,6 +434,8 @@ fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, Side
     Ok(resolved)
 }
 
+// Returns the config search path. An explicit path disables implicit discovery; otherwise system
+// config is lowest priority, the nearest project config is next, and user config is merged last.
 fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
     if let Some(path) = explicit {
         return vec![path.clone()];
@@ -401,6 +452,8 @@ fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
     paths
 }
 
+// Walks upward from the current directory and returns the nearest project-local sidecar config.
+// The first hit wins so nested projects can override parent workspace defaults.
 fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
     for ancestor in start.ancestors() {
         let path = ancestor.join(".nemo-flow/sidecar.toml");
@@ -411,6 +464,8 @@ fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
     None
 }
 
+// Resolves the user config using XDG first and HOME/USERPROFILE second. Returning `None` keeps
+// config loading portable in minimal environments where no home directory is visible.
 fn user_config_path() -> Option<PathBuf> {
     if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
         return Some(PathBuf::from(base).join("nemo-flow/sidecar.toml"));
@@ -418,6 +473,9 @@ fn user_config_path() -> Option<PathBuf> {
     home_dir().map(|home| home.join(".config/nemo-flow/sidecar.toml"))
 }
 
+// Applies the typed TOML config model to the resolved runtime config. Missing sections and fields
+// are ignored, preserving defaults and prior merge layers; Cursor's patch-restore flag is only
+// changed when explicitly present.
 fn apply_file_config(
     resolved: &mut ResolvedConfig,
     value: toml::Value,
@@ -425,51 +483,83 @@ fn apply_file_config(
     let config: FileConfig = value.try_into().map_err(|error| {
         SidecarError::Config(format!("invalid sidecar configuration shape: {error}"))
     })?;
-    if let Some(server) = config.server {
-        if let Some(value) = server.openai_base_url {
-            resolved.sidecar.openai_base_url = value;
-        }
-        if let Some(value) = server.anthropic_base_url {
-            resolved.sidecar.anthropic_base_url = value;
-        }
-    }
-    if let Some(session) = config.session {
-        if let Some(value) = session.atif_dir {
-            resolved.sidecar.atif_dir = Some(value);
-        }
-        if let Some(value) = session.metadata {
-            resolved.sidecar.metadata = Some(value);
-        }
-        if let Some(value) = session.plugin_config {
-            resolved.sidecar.plugin_config = Some(value);
-        }
-    }
-    if let Some(export) = config.export
-        && let Some(openinference) = export.openinference
-        && let Some(value) = openinference.endpoint
-    {
-        resolved.sidecar.openinference_endpoint = Some(value);
-    }
-    if let Some(agents) = config.agents {
-        if let Some(value) = agents.claude_code {
-            resolved.agents.claude_code.command = value.command;
-        }
-        if let Some(value) = agents.codex {
-            resolved.agents.codex.command = value.command;
-        }
-        if let Some(value) = agents.cursor {
-            resolved.agents.cursor.command = value.command;
-            if let Some(patch_restore_hooks) = value.patch_restore_hooks {
-                resolved.agents.cursor.patch_restore_hooks = patch_restore_hooks;
-            }
-        }
-        if let Some(value) = agents.hermes {
-            resolved.agents.hermes.command = value.command;
-        }
-    }
+    apply_file_server_config(&mut resolved.sidecar, config.server);
+    apply_file_session_config(&mut resolved.sidecar, config.session);
+    apply_file_export_config(&mut resolved.sidecar, config.export);
+    apply_file_agents_config(&mut resolved.agents, config.agents);
     Ok(())
 }
 
+// Applies provider upstream defaults from file config. These values are the upstream targets used
+// by direct sidecar server mode; transparent `run` mode can still override them per invocation.
+fn apply_file_server_config(sidecar: &mut SidecarConfig, server: Option<FileServerConfig>) {
+    let Some(server) = server else {
+        return;
+    };
+    if let Some(value) = server.openai_base_url {
+        sidecar.openai_base_url = value;
+    }
+    if let Some(value) = server.anthropic_base_url {
+        sidecar.anthropic_base_url = value;
+    }
+}
+
+// Applies session-level exporter and metadata defaults. Missing optional fields leave earlier
+// merge layers intact, which preserves global or project defaults when user config is partial.
+fn apply_file_session_config(sidecar: &mut SidecarConfig, session: Option<FileSessionConfig>) {
+    let Some(session) = session else {
+        return;
+    };
+    if let Some(value) = session.atif_dir {
+        sidecar.atif_dir = Some(value);
+    }
+    if let Some(value) = session.metadata {
+        sidecar.metadata = Some(value);
+    }
+    if let Some(value) = session.plugin_config {
+        sidecar.plugin_config = Some(value);
+    }
+}
+
+// Applies optional OpenInference export config. The nested shape mirrors the docs and leaves room
+// for future exporter-specific fields without changing the top-level config parser.
+fn apply_file_export_config(sidecar: &mut SidecarConfig, export: Option<FileExportConfig>) {
+    let Some(export) = export else {
+        return;
+    };
+    if let Some(openinference) = export.openinference
+        && let Some(value) = openinference.endpoint
+    {
+        sidecar.openinference_endpoint = Some(value);
+    }
+}
+
+// Applies configured agent commands and Cursor's temporary-hook behavior. Cursor's
+// `patch_restore_hooks` flag is intentionally tri-state in file config so omitted values preserve
+// the safe default while explicit `false` disables temporary hook mutation.
+fn apply_file_agents_config(agents: &mut AgentConfigs, file_agents: Option<FileAgentsConfig>) {
+    let Some(file_agents) = file_agents else {
+        return;
+    };
+    if let Some(value) = file_agents.claude_code {
+        agents.claude_code.command = value.command;
+    }
+    if let Some(value) = file_agents.codex {
+        agents.codex.command = value.command;
+    }
+    if let Some(value) = file_agents.cursor {
+        agents.cursor.command = value.command;
+        if let Some(patch_restore_hooks) = value.patch_restore_hooks {
+            agents.cursor.patch_restore_hooks = patch_restore_hooks;
+        }
+    }
+    if let Some(value) = file_agents.hermes {
+        agents.hermes.command = value.command;
+    }
+}
+
+// Applies environment variables after file configuration. Invalid bind values are ignored here to
+// preserve existing startup behavior, while string/path values replace earlier layers when present.
 fn apply_env_config(config: &mut SidecarConfig) {
     if let Ok(value) = std::env::var("NEMO_FLOW_SIDECAR_BIND")
         && let Ok(value) = value.parse()
@@ -490,6 +580,8 @@ fn apply_env_config(config: &mut SidecarConfig) {
     }
 }
 
+// Recursively merges TOML tables and replaces scalar/array values from the higher-priority side.
+// This lets user/project configs override individual nested keys without restating whole sections.
 fn merge_toml(left: &mut toml::Value, right: toml::Value) {
     match (left, right) {
         (toml::Value::Table(left), toml::Value::Table(right)) => {
@@ -506,17 +598,25 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
     }
 }
 
+// Parses JSON-valued CLI options into runtime metadata/config values and labels errors with the
+// user-facing option name so callers can report which structured argument was malformed.
 fn parse_json_option(name: &str, value: &str) -> Result<Value, SidecarError> {
     serde_json::from_str::<Value>(value)
         .map_err(|error| SidecarError::Config(format!("invalid {name}: {error}")))
 }
 
+// Resolves a cross-platform home directory from environment only. The sidecar avoids extra OS
+// lookups here so tests can control install/config locations by setting env variables.
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
 }
 
+/// Reads a non-empty UTF-8 header value as an owned string.
+///
+/// Invalid header bytes and empty strings are treated as absent so callers can preserve their
+/// explicit fallback order without surfacing HTTP parsing details as sidecar errors.
 pub(crate) fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
@@ -530,6 +630,8 @@ fn header_json(headers: &HeaderMap, name: &str) -> Option<Value> {
 }
 
 impl CodingAgent {
+    // Returns the sidecar hook endpoint for the agent. These paths are stable integration surface
+    // because installed hook commands persist them in user or project configuration.
     pub(crate) const fn hook_path(self) -> &'static str {
         match self {
             Self::ClaudeCode => "/hooks/claude-code",
@@ -539,6 +641,8 @@ impl CodingAgent {
         }
     }
 
+    // Returns the CLI spelling used in generated commands and diagnostics. The value intentionally
+    // matches clap's kebab-case enum names so install/run output can be copied back into commands.
     pub(crate) const fn as_arg(self) -> &'static str {
         match self {
             Self::ClaudeCode => "claude-code",
@@ -548,6 +652,8 @@ impl CodingAgent {
         }
     }
 
+    // Infers an agent from the executable basename, accepting both canonical project names and
+    // common command aliases. Path components are stripped so configured absolute commands work.
     pub(crate) fn infer(command: &str) -> Option<Self> {
         let name = std::path::Path::new(command)
             .file_name()
@@ -564,6 +670,8 @@ impl CodingAgent {
 }
 
 impl GatewayMode {
+    // Returns the installed hook-forward spelling for gateway mode headers. Keeping this separate
+    // from debug output prevents enum formatting changes from affecting persisted hook commands.
     pub(crate) const fn as_arg(self) -> &'static str {
         match self {
             Self::HookOnly => "hook-only",

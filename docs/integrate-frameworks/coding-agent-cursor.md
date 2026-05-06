@@ -84,6 +84,21 @@ Hook-only Cursor mode observes agent and tool lifecycle but cannot provide
 complete LLM lifecycle. Missing LLM spans are expected when Cursor sends model
 traffic directly to the provider or through a remote service.
 
+## Captured Events
+
+Generated Cursor hooks include `sessionStart`, `sessionEnd`, `subagentStart`,
+`subagentStop`, `preToolUse`, `postToolUse`, `beforeShellExecution`,
+`afterShellExecution`, `beforeMCPExecution`, `afterMCPExecution`, `preCompact`,
+and `stop` for scope, tool, and mark events. `beforeSubmitPrompt`,
+`afterAgentResponse`, and `afterAgentThought` are retained as private LLM
+correlation hints and are not emitted as standalone NeMo Flow events.
+
+Tool events preserve Cursor shell and MCP payloads in metadata and use the
+active `subagent.id`, `subagent_id`, or `x-nemo-flow-subagent-id` when present.
+The transparent wrapper backs up the project hook file, merges NeMo Flow hook
+entries for the run, and restores or removes the temporary file when the agent
+exits.
+
 ## Smoke Test
 
 Run a small Cursor GUI session that starts an agent and uses one simple tool.
@@ -117,3 +132,8 @@ missing, confirm Cursor loaded `.cursor/hooks.json`, the sidecar binary is on
 If Cursor hook events appear but LLM spans are missing, provider traffic is not
 routed through the sidecar. Confirm the active Cursor GUI or CLI mode supports
 provider base URL configuration for the model path being used.
+
+If LLM spans exist but attach to the session instead of a subagent, pass
+`x-nemo-flow-subagent-id` on gateway requests or include shared
+`conversation_id`, `generation_id`, or `request_id` values in both hook payloads
+and provider requests.

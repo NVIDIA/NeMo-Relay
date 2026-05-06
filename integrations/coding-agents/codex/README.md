@@ -19,6 +19,18 @@ local sidecar LLM capture.
 - `hooks/hooks.json` contains hook entries that run
   `nemo-flow-sidecar hook-forward codex`.
 
+## Captured Events
+
+The bundle forwards `SessionStart`, `SessionEnd`, `SubagentStart`,
+`SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
+`Notification`, and `PreCompact` as scope, tool, or mark events.
+`UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and `Stop`
+provide private LLM correlation hints for gateway requests.
+
+Transparent setup injects these hooks with CLI config overrides. Persistent
+setup writes `codex_hooks = true` in `.codex/config.toml` and merges the hook
+entries into `.codex/hooks.json`.
+
 ## Transparent Setup
 
 Build or install the sidecar binary so `nemo-flow-sidecar` is on `PATH`.
@@ -101,3 +113,8 @@ printf '{"session_id":"smoke-codex","hook_event_name":"sessionStart"}' \
 If hooks arrive but LLM spans are missing, confirm Codex was started by
 `nemo-flow-sidecar run` or that the active provider `base_url` points to the
 sidecar URL.
+
+If LLM spans are present but attached to the top-level agent instead of a
+subagent, include `x-nemo-flow-subagent-id` on gateway requests or share
+`conversation_id`, `generation_id`, or `request_id` values between hook payloads
+and provider requests.

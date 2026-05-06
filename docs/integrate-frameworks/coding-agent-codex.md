@@ -78,6 +78,20 @@ same support level only when they read the same local hook/plugin config and
 provider routing. Cloud tasks may still emit some lifecycle hooks, but complete
 LLM lifecycle capture requires model traffic to pass through the sidecar.
 
+## Captured Events
+
+Generated Codex hooks include `SessionStart`, `SessionEnd`, `SubagentStart`,
+`SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
+`Notification`, and `PreCompact` for scope, tool, and mark events.
+`UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and `Stop` are
+retained as private LLM correlation hints and are not emitted as standalone
+NeMo Flow events.
+
+The transparent wrapper passes hook entries as Codex CLI config overrides and
+sets `features.codex_hooks=true` for that launched process. Persistent install
+writes `.codex/config.toml` with `codex_hooks = true` and merges generated hook
+entries into `.codex/hooks.json`.
+
 ## Smoke Test
 
 Run a small Codex prompt that starts a session and uses one simple tool. Then
@@ -110,3 +124,8 @@ If agent/tool events exist but LLM spans are missing, the provider `base_url` is
 not pointing at the sidecar for the active Codex process. If only GUI sessions
 are missing spans, confirm the GUI is using local provider configuration rather
 than a remote execution path.
+
+If LLM spans exist but attach to the session instead of a subagent, pass
+`x-nemo-flow-subagent-id` on gateway requests or include shared
+`conversation_id`, `generation_id`, or `request_id` values in both hook payloads
+and provider requests.

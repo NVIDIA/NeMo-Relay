@@ -12,6 +12,7 @@ use tokio::net::TcpListener;
 use tower::ServiceExt;
 
 use super::*;
+use crate::error::SidecarError;
 
 fn test_config() -> SidecarConfig {
     SidecarConfig {
@@ -69,6 +70,26 @@ async fn healthz_returns_ok() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body, json!({ "status": "ok" }));
+}
+
+#[tokio::test]
+async fn sidecar_errors_render_structured_json_responses() {
+    let response = SidecarError::InvalidPayload("bad input".into()).into_response();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"]["type"], json!("nemo_flow_sidecar_error"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("bad input")
+    );
+
+    let response = SidecarError::Config("bad config".into()).into_response();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[tokio::test]
@@ -220,6 +241,34 @@ async fn gateway_preserves_streaming_body() {
 }
 
 #[tokio::test]
+async fn gateway_surfaces_streaming_upstream_errors() {
+    let upstream = spawn_failing_stream_upstream().await;
+    let mut config = test_config();
+    config.openai_base_url = upstream;
+    let app = router(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-test",
+                        "input": "hello",
+                        "stream": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
 async fn gateway_rejects_unsupported_paths() {
     let app = router(test_config());
     let response = app
@@ -235,6 +284,26 @@ async fn gateway_rejects_unsupported_paths() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn gateway_returns_bad_gateway_when_upstream_is_unreachable() {
+    let mut config = test_config();
+    config.openai_base_url = "http://127.0.0.1:1".into();
+    let app = router(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "model": "gpt-test" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
 }
 
 #[tokio::test]
@@ -292,6 +361,27 @@ async fn spawn_upstream(streaming: bool) -> String {
     } else {
         Router::new().route("/v1/chat/completions", post(chat))
     };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{address}")
+}
+
+async fn spawn_failing_stream_upstream() -> String {
+    async fn stream_response() -> impl IntoResponse {
+        let chunks = stream::iter([
+            Ok::<_, std::io::Error>(Bytes::from_static(b"data: one\n\n")),
+            Err(std::io::Error::other("stream failed")),
+        ]);
+        (
+            [(header::CONTENT_TYPE, "text/event-stream")],
+            Body::from_stream(chunks),
+        )
+    }
+
+    let app = Router::new().route("/v1/responses", post(stream_response));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move {

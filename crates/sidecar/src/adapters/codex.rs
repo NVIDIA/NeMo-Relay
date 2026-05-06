@@ -7,6 +7,11 @@ use serde_json::{Value, json};
 use crate::adapters::{AdapterOutcome, ClassificationRules, classify};
 use crate::model::AgentKind;
 
+/// Normalizes Codex hook payloads while leaving Codex hook control flow untouched.
+///
+/// Codex receives an empty response body from this adapter because the sidecar currently records
+/// hooks instead of making allow/deny decisions. Event spelling is accepted in both camelCase and
+/// snake_case forms so installed hooks and inline `run` hook configuration share one path.
 pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     let event = classify(
         &payload,

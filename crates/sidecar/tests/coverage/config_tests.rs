@@ -248,6 +248,87 @@ openai_base_url = "http://file-openai"
 }
 
 #[test]
+fn server_resolution_applies_all_server_overrides() {
+    let args = ServerArgs {
+        config: None,
+        bind: Some("127.0.0.1:0".parse().unwrap()),
+        openai_base_url: Some("http://cli-openai".into()),
+        anthropic_base_url: Some("http://cli-anthropic".into()),
+        atif_dir: Some(PathBuf::from("cli-atif")),
+        openinference_endpoint: Some("http://cli-otel".into()),
+    };
+
+    let resolved = resolve_server_config(&args).unwrap();
+
+    assert_eq!(resolved.sidecar.bind.to_string(), "127.0.0.1:0");
+    assert_eq!(resolved.sidecar.openai_base_url, "http://cli-openai");
+    assert_eq!(resolved.sidecar.anthropic_base_url, "http://cli-anthropic");
+    assert_eq!(resolved.sidecar.atif_dir, Some(PathBuf::from("cli-atif")));
+    assert_eq!(
+        resolved.sidecar.openinference_endpoint.as_deref(),
+        Some("http://cli-otel")
+    );
+}
+
+#[test]
+fn run_resolution_applies_all_run_overrides() {
+    let command = RunCommand {
+        agent: Some(CodingAgent::Codex),
+        config: None,
+        openai_base_url: Some("http://run-openai".into()),
+        anthropic_base_url: Some("http://run-anthropic".into()),
+        atif_dir: Some(PathBuf::from("run-atif")),
+        openinference_endpoint: Some("http://run-otel".into()),
+        session_metadata: Some(r#"{"team":"run"}"#.into()),
+        plugin_config: Some(r#"{"components":["x"]}"#.into()),
+        dry_run: false,
+        print: false,
+        command: vec!["codex".into()],
+    };
+
+    let resolved = resolve_run_config(&command, None).unwrap();
+
+    assert_eq!(resolved.sidecar.openai_base_url, "http://run-openai");
+    assert_eq!(resolved.sidecar.anthropic_base_url, "http://run-anthropic");
+    assert_eq!(resolved.sidecar.atif_dir, Some(PathBuf::from("run-atif")));
+    assert_eq!(
+        resolved.sidecar.openinference_endpoint.as_deref(),
+        Some("http://run-otel")
+    );
+    assert_eq!(resolved.sidecar.metadata, Some(json!({ "team": "run" })));
+    assert_eq!(
+        resolved.sidecar.plugin_config,
+        Some(json!({ "components": ["x"] }))
+    );
+}
+
+#[test]
+fn malformed_shared_config_reports_context() {
+    let temp = tempfile::tempdir().unwrap();
+    let invalid_toml = temp.path().join("invalid.toml");
+    std::fs::write(&invalid_toml, "server = [").unwrap();
+    let args = ServerArgs {
+        config: Some(invalid_toml),
+        ..ServerArgs::default()
+    };
+
+    let error = resolve_server_config(&args).unwrap_err().to_string();
+
+    assert!(error.contains("invalid TOML"));
+
+    let invalid_shape = temp.path().join("invalid-shape.toml");
+    std::fs::write(&invalid_shape, "server = \"not-a-table\"").unwrap();
+    let args = ServerArgs {
+        config: Some(invalid_shape),
+        ..ServerArgs::default()
+    };
+
+    let error = resolve_server_config(&args).unwrap_err().to_string();
+
+    assert!(error.contains("invalid sidecar configuration shape"));
+}
+
+#[test]
 fn recursive_toml_merge_replaces_scalars_and_preserves_tables() {
     let mut left: toml::Value = r#"
 [server]

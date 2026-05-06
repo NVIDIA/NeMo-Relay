@@ -124,6 +124,54 @@ fn maps_claude_subagent_canonical_agent_id() {
 }
 
 #[test]
+fn maps_claude_subagent_stop() {
+    let outcome = claude_code::adapt(
+        json!({
+            "session_id": "claude-session",
+            "hook_event_name": "SubagentStop",
+            "agent_id": "agent-worker-1"
+        }),
+        &HeaderMap::new(),
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::SubagentEnded(event) => {
+            assert_eq!(event.subagent_id, "agent-worker-1");
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
+fn maps_claude_stop_response_shape() {
+    let outcome = claude_code::adapt(
+        json!({
+            "session_id": "claude-session",
+            "hook_event_name": "Stop"
+        }),
+        &HeaderMap::new(),
+    );
+
+    assert_eq!(
+        outcome.response,
+        json!({ "continue": true, "stopReason": null })
+    );
+}
+
+#[test]
+fn adapter_string_lookup_accepts_scalar_values_only() {
+    let payload = json!({
+        "number": 7,
+        "boolean": false,
+        "object": { "nested": true }
+    });
+
+    assert_eq!(string_at(&payload, &["number"]).as_deref(), Some("7"));
+    assert_eq!(string_at(&payload, &["boolean"]).as_deref(), Some("false"));
+    assert_eq!(string_at(&payload, &["object"]), None);
+}
+
+#[test]
 fn maps_cursor_subagent_and_permission_response() {
     let headers = HeaderMap::new();
     let outcome = cursor::adapt(
@@ -245,21 +293,52 @@ fn normalizes_mark_style_events_and_header_session_ids() {
             }),
             &headers,
         );
-        let session = match &outcome.events[0] {
-            NormalizedEvent::PromptSubmitted(event) if expected == "prompt" => event,
-            NormalizedEvent::AgentResponse(event) if expected == "response" => event,
-            NormalizedEvent::Compaction(event) if expected == "compact" => event,
-            NormalizedEvent::Notification(event) if expected == "notification" => event,
-            NormalizedEvent::HookMark(event) if expected == "hook" => event,
+        let (session_id, metadata) = match &outcome.events[0] {
+            NormalizedEvent::LlmHint(event) if expected == "prompt" => {
+                (event.session_id.as_str(), &event.metadata)
+            }
+            NormalizedEvent::LlmHint(event) if expected == "response" => {
+                (event.session_id.as_str(), &event.metadata)
+            }
+            NormalizedEvent::Compaction(event) if expected == "compact" => {
+                (event.session_id.as_str(), &event.metadata)
+            }
+            NormalizedEvent::Notification(event) if expected == "notification" => {
+                (event.session_id.as_str(), &event.metadata)
+            }
+            NormalizedEvent::HookMark(event) if expected == "hook" => {
+                (event.session_id.as_str(), &event.metadata)
+            }
             event => panic!("unexpected event for {event_name}: {event:?}"),
         };
-        assert_eq!(session.session_id, "header-session");
-        assert_eq!(session.metadata["model"], json!("model-a"));
-        assert_eq!(session.metadata["cwd"], json!("/repo"));
-        assert_eq!(
-            session.metadata["sidecar_config_profile"],
-            json!("coverage")
-        );
+        assert_eq!(session_id, "header-session");
+        assert_eq!(metadata["model"], json!("model-a"));
+        assert_eq!(metadata["cwd"], json!("/repo"));
+        assert_eq!(metadata["sidecar_config_profile"], json!("coverage"));
+    }
+}
+
+#[test]
+fn maps_hermes_llm_hooks_to_private_hints() {
+    let headers = HeaderMap::new();
+    let outcome = hermes::adapt(
+        json!({
+            "hook_event_name": "pre_llm_call",
+            "session_id": "hermes-session",
+            "model": "anthropic/claude-sonnet",
+            "request_id": "req-1"
+        }),
+        &headers,
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::LlmHint(event) => {
+            assert_eq!(event.session_id, "hermes-session");
+            assert_eq!(event.event_name, "pre_llm_call");
+            assert_eq!(event.model.as_deref(), Some("anthropic/claude-sonnet"));
+            assert_eq!(event.request_id.as_deref(), Some("req-1"));
+        }
+        event => panic!("unexpected event: {event:?}"),
     }
 }
 
@@ -322,7 +401,7 @@ fn stop_responses_preserve_vendor_shapes() {
         }),
         &headers,
     );
-    assert!(matches!(claude.events[0], NormalizedEvent::HookMark(_)));
+    assert!(matches!(claude.events[0], NormalizedEvent::LlmHint(_)));
     assert_eq!(claude.response["stopReason"], Value::Null);
 
     let codex = codex::adapt(
@@ -332,7 +411,7 @@ fn stop_responses_preserve_vendor_shapes() {
         }),
         &headers,
     );
-    assert!(matches!(codex.events[0], NormalizedEvent::HookMark(_)));
+    assert!(matches!(codex.events[0], NormalizedEvent::LlmHint(_)));
     assert_eq!(codex.response, json!({}));
 
     let cursor = cursor::adapt(
