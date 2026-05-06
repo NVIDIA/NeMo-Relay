@@ -8,6 +8,7 @@ pub(crate) enum AgentKind {
     Codex,
     ClaudeCode,
     Cursor,
+    Hermes,
     Gateway,
 }
 
@@ -17,6 +18,7 @@ impl AgentKind {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude-code",
             Self::Cursor => "cursor",
+            Self::Hermes => "hermes",
             Self::Gateway => "gateway",
         }
     }

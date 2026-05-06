@@ -90,7 +90,7 @@ fn resolve_agent_and_argv(
         Some(agent) => agent,
         None => CodingAgent::infer(&argv[0]).ok_or_else(|| {
             SidecarError::Launch(format!(
-                "could not infer coding agent from command {:?}; pass --agent claude-code, --agent codex, or --agent cursor",
+                "could not infer coding agent from command {:?}; pass --agent claude-code, --agent codex, --agent cursor, or --agent hermes",
                 argv[0]
             ))
         })?,
@@ -103,6 +103,7 @@ fn configured_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<Vec<S
         CodingAgent::ClaudeCode => agents.claude_code.command.as_ref(),
         CodingAgent::Codex => agents.codex.command.as_ref(),
         CodingAgent::Cursor => agents.cursor.command.as_ref(),
+        CodingAgent::Hermes => agents.hermes.command.as_ref(),
     }?;
     let argv: Vec<_> = command.split_whitespace().map(ToOwned::to_owned).collect();
     (!argv.is_empty()).then_some(argv)
@@ -155,6 +156,7 @@ impl PreparedRun {
                     }
                 }
             }
+            CodingAgent::Hermes => run.prepare_hermes(),
         }
         Ok(run)
     }
@@ -264,6 +266,12 @@ impl PreparedRun {
             path.display()
         ));
         Ok(())
+    }
+
+    fn prepare_hermes(&mut self) {
+        self.notes.push(
+            "Hermes shell hooks must be configured with `nemo-flow-sidecar install hermes`; this run exports the dynamic sidecar URL for approved hooks".into(),
+        );
     }
 
     async fn spawn_and_wait(&self) -> Result<std::process::ExitStatus, SidecarError> {

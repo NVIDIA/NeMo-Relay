@@ -5,7 +5,7 @@ use axum::http::HeaderMap;
 use serde_json::json;
 
 use super::*;
-use crate::adapters::{claude_code, codex, cursor};
+use crate::adapters::{claude_code, codex, cursor, hermes};
 
 #[test]
 fn maps_claude_canonical_tool_payload() {
@@ -166,6 +166,62 @@ fn keeps_codex_response_unwrapped() {
         NormalizedEvent::AgentStarted(_)
     ));
     assert_eq!(outcome.response, json!({}));
+}
+
+#[test]
+fn maps_hermes_shell_hook_tool_payload() {
+    let headers = HeaderMap::new();
+    let outcome = hermes::adapt(
+        json!({
+            "hook_event_name": "pre_tool_call",
+            "tool_name": "terminal",
+            "tool_input": { "command": "pwd" },
+            "session_id": "",
+            "extra": {
+                "task_id": "hermes-session",
+                "tool_call_id": "tool-1"
+            }
+        }),
+        &headers,
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::ToolStarted(event) => {
+            assert_eq!(event.agent_kind, AgentKind::Hermes);
+            assert_eq!(event.session_id, "hermes-session");
+            assert_eq!(event.tool_call_id, "tool-1");
+            assert_eq!(event.tool_name, "terminal");
+            assert_eq!(event.arguments, json!({ "command": "pwd" }));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+    assert_eq!(outcome.response, json!({}));
+}
+
+#[test]
+fn maps_hermes_real_session_boundary_without_closing_per_turn_end() {
+    let headers = HeaderMap::new();
+
+    let per_turn = hermes::adapt(
+        json!({
+            "hook_event_name": "on_session_end",
+            "session_id": "hermes-session"
+        }),
+        &headers,
+    );
+    assert!(matches!(per_turn.events[0], NormalizedEvent::HookMark(_)));
+
+    let finalized = hermes::adapt(
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-session"
+        }),
+        &headers,
+    );
+    assert!(matches!(
+        finalized.events[0],
+        NormalizedEvent::AgentEnded(_)
+    ));
 }
 
 #[test]

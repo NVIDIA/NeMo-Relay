@@ -10,7 +10,7 @@ use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::adapters::{claude_code, codex, cursor};
+use crate::adapters::{claude_code, codex, cursor, hermes};
 use crate::config::SidecarConfig;
 use crate::error::SidecarError;
 use crate::gateway;
@@ -61,6 +61,7 @@ pub(crate) fn router(config: SidecarConfig) -> Router {
         .route("/hooks/codex", post(codex_hook))
         .route("/hooks/claude-code", post(claude_code_hook))
         .route("/hooks/cursor", post(cursor_hook))
+        .route("/hooks/hermes", post(hermes_hook))
         .route("/v1/responses", post(gateway::passthrough))
         .route("/v1/chat/completions", post(gateway::passthrough))
         .route("/v1/messages", post(gateway::passthrough))
@@ -105,6 +106,19 @@ async fn cursor_hook(
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, SidecarError> {
     let outcome = cursor::adapt(payload, &headers);
+    state
+        .sessions
+        .apply_events(&headers, outcome.events)
+        .await?;
+    Ok(Json(outcome.response))
+}
+
+async fn hermes_hook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, SidecarError> {
+    let outcome = hermes::adapt(payload, &headers);
     state
         .sessions
         .apply_events(&headers, outcome.events)

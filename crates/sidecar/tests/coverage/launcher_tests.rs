@@ -67,6 +67,34 @@ fn uses_configured_command_when_no_argv_is_supplied() {
 }
 
 #[test]
+fn uses_configured_hermes_command_when_no_argv_is_supplied() {
+    let agents = AgentConfigs {
+        hermes: AgentCommandConfig {
+            command: Some("hermes --yolo chat".into()),
+        },
+        ..AgentConfigs::default()
+    };
+    let command = RunCommand {
+        agent: Some(CodingAgent::Hermes),
+        config: None,
+        openai_base_url: None,
+        anthropic_base_url: None,
+        atif_dir: None,
+        openinference_endpoint: None,
+        session_metadata: None,
+        plugin_config: None,
+        dry_run: false,
+        print: false,
+        command: vec![],
+    };
+
+    let (agent, argv) = resolve_agent_and_argv(&command, &agents).unwrap();
+
+    assert_eq!(agent, CodingAgent::Hermes);
+    assert_eq!(argv, vec!["hermes", "--yolo", "chat"]);
+}
+
+#[test]
 fn inference_failure_has_actionable_message() {
     let command = RunCommand {
         agent: None,
@@ -117,6 +145,35 @@ fn prepares_codex_config_overrides() {
             .iter()
             .any(|arg| arg.contains("hooks.SessionStart"))
     );
+}
+
+#[test]
+fn prepares_hermes_hook_environment() {
+    let resolved = ResolvedConfig {
+        sidecar: SidecarConfig::default(),
+        agents: AgentConfigs::default(),
+    };
+    let prepared = PreparedRun::new(
+        CodingAgent::Hermes,
+        vec!["hermes".into(), "chat".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(prepared.argv, vec!["hermes", "chat"]);
+    assert!(prepared.env.contains(&(
+        "NEMO_FLOW_SIDECAR_URL".into(),
+        "http://127.0.0.1:1234".into()
+    )));
+    assert!(
+        !prepared
+            .env
+            .iter()
+            .any(|(name, _)| name == "HERMES_ACCEPT_HOOKS")
+    );
+    assert!(prepared.notes[0].contains("approved hooks"));
 }
 
 #[test]

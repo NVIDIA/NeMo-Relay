@@ -45,6 +45,18 @@ const CURSOR_HOOK_EVENTS: &[&str] = &[
 ];
 const HOOK_FORWARD_TIMEOUT: Duration = Duration::from_secs(2);
 
+const HERMES_HOOK_EVENTS: &[&str] = &[
+    "on_session_start",
+    "on_session_end",
+    "on_session_finalize",
+    "on_session_reset",
+    "pre_llm_call",
+    "post_llm_call",
+    "pre_tool_call",
+    "post_tool_call",
+    "subagent_stop",
+];
+
 #[derive(Debug, Clone)]
 struct PlannedFile {
     path: PathBuf,
@@ -91,11 +103,11 @@ pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), Side
         input = "{}".to_string();
     }
 
-    let Some(sidecar_url) = command
-        .sidecar_url
-        .clone()
-        .or_else(|| std::env::var("NEMO_FLOW_SIDECAR_URL").ok())
-    else {
+    let Some(sidecar_url) = resolve_hook_sidecar_url(
+        command.agent,
+        command.sidecar_url.clone(),
+        std::env::var("NEMO_FLOW_SIDECAR_URL").ok(),
+    ) else {
         eprintln!(
             "nemo-flow-sidecar hook forward failed: missing sidecar URL; pass --sidecar-url or set NEMO_FLOW_SIDECAR_URL"
         );
@@ -157,6 +169,19 @@ pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), Side
     }
 }
 
+fn resolve_hook_sidecar_url(
+    agent: CodingAgent,
+    command_url: Option<String>,
+    env_url: Option<String>,
+) -> Option<String> {
+    match agent {
+        // Hermes shell hooks are installed persistently, but `run --agent hermes`
+        // starts an ephemeral sidecar and passes the live URL through env.
+        CodingAgent::Hermes => env_url.or(command_url),
+        _ => command_url.or(env_url),
+    }
+}
+
 fn planned_files(command: &InstallCommand) -> Result<Vec<PlannedFile>, SidecarError> {
     let base = install_base(command)?;
     match command.agent {
@@ -199,6 +224,19 @@ fn planned_files(command: &InstallCommand) -> Result<Vec<PlannedFile>, SidecarEr
                 cursor_hooks(&hook_command(command, CodingAgent::Cursor)),
             )?)
             .map_err(|error| SidecarError::Install(error.to_string()))?;
+            Ok(vec![PlannedFile { path, contents }])
+        }
+        CodingAgent::Hermes => {
+            let path = base.join(".hermes/config.yaml");
+            let existing = match std::fs::read_to_string(&path) {
+                Ok(raw) => raw,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(error) => return Err(SidecarError::Io(error)),
+            };
+            let contents = merge_hermes_config(
+                &existing,
+                hermes_hooks(&hook_command(command, CodingAgent::Hermes)),
+            )?;
             Ok(vec![PlannedFile { path, contents }])
         }
     }
@@ -289,6 +327,7 @@ pub(crate) fn generated_hooks(agent: CodingAgent, command: &str) -> Value {
         CodingAgent::ClaudeCode => claude_hooks(command),
         CodingAgent::Codex => codex_hooks(command),
         CodingAgent::Cursor => cursor_hooks(command),
+        CodingAgent::Hermes => hermes_hooks(command),
     }
 }
 
@@ -306,6 +345,22 @@ fn codex_hooks(command: &str) -> Value {
 
 fn cursor_hooks(command: &str) -> Value {
     hooks_for_events(CURSOR_HOOK_EVENTS, command, true)
+}
+
+fn hermes_hooks(command: &str) -> Value {
+    let hooks: serde_json::Map<String, Value> = HERMES_HOOK_EVENTS
+        .iter()
+        .map(|event| {
+            (
+                (*event).to_string(),
+                json!([{
+                    "command": command,
+                    "timeout": 30
+                }]),
+            )
+        })
+        .collect();
+    json!({ "hooks": Value::Object(hooks) })
 }
 
 fn hooks_for_events(events: &[&str], command: &str, matcher_for_tools: bool) -> Value {
@@ -399,6 +454,18 @@ fn merge_codex_config(existing: &str) -> Result<String, SidecarError> {
     }
     document["features"]["codex_hooks"] = value(true);
     Ok(document.to_string())
+}
+
+fn merge_hermes_config(existing: &str, generated: Value) -> Result<String, SidecarError> {
+    let existing = if existing.trim().is_empty() {
+        Value::Null
+    } else {
+        serde_yaml::from_str(existing).map_err(|error| {
+            SidecarError::Install(format!("invalid YAML in Hermes config: {error}"))
+        })?
+    };
+    let merged = merge_hooks(existing, generated)?;
+    serde_yaml::to_string(&merged).map_err(|error| SidecarError::Install(error.to_string()))
 }
 
 pub(crate) fn read_json_file(path: &Path) -> Result<Value, SidecarError> {
@@ -523,6 +590,11 @@ fn print_target_note(agent: CodingAgent, target: InstallTarget) {
         (CodingAgent::Cursor, InstallTarget::Cli | InstallTarget::Both) => {
             println!(
                 "Note: run the Cursor CLI smoke test to confirm cursor-agent loads hooks in your version."
+            );
+        }
+        (CodingAgent::Hermes, InstallTarget::Cli | InstallTarget::Both) => {
+            println!(
+                "Note: Hermes shell hooks prefer NEMO_FLOW_SIDECAR_URL at runtime when set; otherwise they use the installed sidecar URL. Hook consent is still required unless approved interactively or through Hermes configuration."
             );
         }
         _ => {}

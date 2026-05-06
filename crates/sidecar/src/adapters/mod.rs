@@ -4,6 +4,7 @@
 pub(crate) mod claude_code;
 pub(crate) mod codex;
 pub(crate) mod cursor;
+pub(crate) mod hermes;
 
 use axum::http::HeaderMap;
 use serde_json::{Map, Value, json};
@@ -36,6 +37,10 @@ fn session_id(payload: &Value, headers: &HeaderMap) -> String {
         .or_else(|| string_at(payload, &["session", "id"]))
         .or_else(|| string_at(payload, &["conversation_id"]))
         .or_else(|| string_at(payload, &["conversationId"]))
+        .or_else(|| string_at(payload, &["parent_session_id"]))
+        .or_else(|| string_at(payload, &["task_id"]))
+        .or_else(|| string_at(payload, &["extra", "session_id"]))
+        .or_else(|| string_at(payload, &["extra", "task_id"]))
         .unwrap_or_else(|| format!("hook-{}", Uuid::now_v7()))
 }
 
@@ -105,6 +110,8 @@ fn common_tool_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) -> T
         .or_else(|| string_at(payload, &["toolCallId"]))
         .or_else(|| string_at(payload, &["tool_use_id"]))
         .or_else(|| string_at(payload, &["call_id"]))
+        .or_else(|| string_at(payload, &["extra", "tool_call_id"]))
+        .or_else(|| string_at(payload, &["extra", "call_id"]))
         .or_else(|| string_at(payload, &["tool", "id"]))
         .or_else(|| string_at(payload, &["tool_input", "id"]))
         .or_else(|| string_at(payload, &["id"]))
@@ -124,6 +131,8 @@ fn common_tool_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) -> T
         .or_else(|| value_at(payload, &["tool_response"]))
         .or_else(|| value_at(payload, &["output"]))
         .or_else(|| value_at(payload, &["result"]))
+        .or_else(|| value_at(payload, &["extra", "tool_output"]))
+        .or_else(|| value_at(payload, &["extra", "result"]))
         .or_else(|| event_detail_result(payload, &normalized_event))
         .unwrap_or(Value::Null);
     ToolEvent {
@@ -179,12 +188,14 @@ fn event_detail_result(payload: &Value, normalized_event: &str) -> Option<Value>
 }
 
 fn string_at(payload: &Value, path: &[&str]) -> Option<String> {
-    value_at(payload, path).and_then(|value| match value {
-        Value::String(value) => Some(value),
-        Value::Number(value) => Some(value.to_string()),
-        Value::Bool(value) => Some(value.to_string()),
-        _ => None,
-    })
+    value_at(payload, path)
+        .and_then(|value| match value {
+            Value::String(value) => Some(value),
+            Value::Number(value) => Some(value.to_string()),
+            Value::Bool(value) => Some(value.to_string()),
+            _ => None,
+        })
+        .filter(|value| !value.is_empty())
 }
 
 fn value_at(payload: &Value, path: &[&str]) -> Option<Value> {

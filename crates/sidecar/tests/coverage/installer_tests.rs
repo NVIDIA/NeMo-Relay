@@ -78,6 +78,78 @@ fn generates_cursor_hooks() {
 }
 
 #[test]
+fn generates_hermes_shell_hook_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let files = planned_files(&command(CodingAgent::Hermes, temp.path())).unwrap();
+    assert_eq!(files.len(), 1);
+    assert!(files[0].path.ends_with(".hermes/config.yaml"));
+    let yaml: Value = serde_yaml::from_str(&files[0].contents).unwrap();
+    assert!(yaml["hooks"]["on_session_start"].is_array());
+    assert!(yaml["hooks"]["subagent_stop"].is_array());
+    assert!(yaml["hooks"].get("subagent_start").is_none());
+    assert!(
+        yaml["hooks"]["pre_tool_call"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("hook-forward hermes")
+    );
+}
+
+#[test]
+fn hermes_config_merge_preserves_existing_yaml() {
+    let existing = r#"
+model:
+  provider: auto
+hooks:
+  pre_tool_call:
+    - command: ~/.hermes/agent-hooks/audit.sh
+"#;
+    let merged = merge_hermes_config(
+        existing,
+        hermes_hooks("nemo-flow-sidecar hook-forward hermes"),
+    )
+    .unwrap();
+    let yaml: Value = serde_yaml::from_str(&merged).unwrap();
+
+    assert_eq!(yaml["model"]["provider"], json!("auto"));
+    assert_eq!(yaml["hooks"]["pre_tool_call"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        yaml["hooks"]["on_session_finalize"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn hermes_hook_forward_prefers_dynamic_env_url() {
+    assert_eq!(
+        resolve_hook_sidecar_url(
+            CodingAgent::Hermes,
+            Some("http://installed".into()),
+            Some("http://dynamic".into()),
+        )
+        .as_deref(),
+        Some("http://dynamic")
+    );
+    assert_eq!(
+        resolve_hook_sidecar_url(CodingAgent::Hermes, Some("http://installed".into()), None,)
+            .as_deref(),
+        Some("http://installed")
+    );
+    assert_eq!(
+        resolve_hook_sidecar_url(
+            CodingAgent::Codex,
+            Some("http://installed".into()),
+            Some("http://dynamic".into()),
+        )
+        .as_deref(),
+        Some("http://installed")
+    );
+}
+
+#[test]
 fn merge_hooks_is_idempotent_and_preserves_existing_entries() {
     let existing = json!({
         "hooks": {

@@ -141,6 +141,7 @@ pub(crate) enum CodingAgent {
     ClaudeCode,
     Codex,
     Cursor,
+    Hermes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -211,6 +212,7 @@ pub(crate) struct AgentConfigs {
     pub(crate) claude_code: AgentCommandConfig,
     pub(crate) codex: AgentCommandConfig,
     pub(crate) cursor: CursorAgentConfig,
+    pub(crate) hermes: AgentCommandConfig,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -270,6 +272,7 @@ struct FileAgentsConfig {
     claude_code: Option<FileAgentCommandConfig>,
     codex: Option<FileAgentCommandConfig>,
     cursor: Option<FileCursorAgentConfig>,
+    hermes: Option<FileAgentCommandConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -460,6 +463,9 @@ fn apply_file_config(
                 resolved.agents.cursor.patch_restore_hooks = patch_restore_hooks;
             }
         }
+        if let Some(value) = agents.hermes {
+            resolved.agents.hermes.command = value.command;
+        }
     }
     Ok(())
 }
@@ -529,6 +535,7 @@ impl CodingAgent {
             Self::ClaudeCode => "/hooks/claude-code",
             Self::Codex => "/hooks/codex",
             Self::Cursor => "/hooks/cursor",
+            Self::Hermes => "/hooks/hermes",
         }
     }
 
@@ -537,6 +544,7 @@ impl CodingAgent {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
             Self::Cursor => "cursor",
+            Self::Hermes => "hermes",
         }
     }
 
@@ -549,6 +557,7 @@ impl CodingAgent {
             "claude" | "claude-code" => Some(Self::ClaudeCode),
             "codex" => Some(Self::Codex),
             "cursor" | "cursor-agent" => Some(Self::Cursor),
+            "hermes" | "hermes-agent" => Some(Self::Hermes),
             _ => None,
         }
     }
