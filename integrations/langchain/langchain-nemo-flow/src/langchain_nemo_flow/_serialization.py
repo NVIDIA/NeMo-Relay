@@ -14,7 +14,7 @@ from langchain_core.tools import BaseTool
 LANGCHAIN_MODEL_RESPONSE_KEY = "__langchain_nemo_flow_model_response"
 
 
-def model_name(model: Any) -> str | None:
+def get_model_name(model: Any) -> str | None:
     """Best-effort extraction of a model name from a LangChain chat model."""
     for attr in ("model_name", "model", "model_id", "deployment_name"):
         value = getattr(model, attr, None)
@@ -22,8 +22,8 @@ def model_name(model: Any) -> str | None:
             return value
     return None
 
-
-def model_provider(model: Any) -> str:
+# TODO: Remove is not used
+def get_model_provider(model: Any) -> str:
     """Best-effort provider/name label for a LangChain chat model."""
     name = model.__class__.__name__
     if name.startswith("Chat") and len(name) > 4:
@@ -68,7 +68,7 @@ def default_model_request_payload(request: ModelRequest[Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "messages": messages_to_dict(messages),
     }
-    if name := model_name(request.model):
+    if name := get_model_name(request.model):
         payload["model"] = name
     if request.model_settings:
         payload["model_settings"] = request.model_settings
