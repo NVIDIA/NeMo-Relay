@@ -1,0 +1,45 @@
+{
+  "name": "@nvidia/nemo-flow-openclaw",
+  "version": "0.0.0",
+  "private": true,
+  "description": "NeMo Flow-authored observability plugin for OpenClaw.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json"
+  ],
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test \"dist/src/__tests__/*.test.js\""
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "optionalDependencies": {
+    "nemo-flow-node": "file:../../crates/node"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "typescript": "^5.8.2"
+  },
+  "license": "Apache-2.0"
+}

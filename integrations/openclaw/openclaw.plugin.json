@@ -1,0 +1,157 @@
+{
+  "id": "nemo-flow",
+  "name": "NeMo Flow Observability",
+  "description": "ATIF, OpenInference, and OpenTelemetry telemetry through NeMo Flow.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "backend": {
+        "type": "string",
+        "enum": ["hooks"],
+        "default": "hooks"
+      },
+      "nemoFlow": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "pluginConfig": {
+            "type": "object",
+            "additionalProperties": true,
+            "default": {}
+          }
+        }
+      },
+      "atif": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "outputDir": {
+            "type": "string"
+          },
+          "agentName": {
+            "type": "string",
+            "default": "openclaw"
+          },
+          "agentVersion": {
+            "type": "string"
+          }
+        }
+      },
+      "telemetry": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "openInference": {
+            "$ref": "#/$defs/otlpSubscriber"
+          },
+          "otel": {
+            "$ref": "#/$defs/otlpSubscriber"
+          }
+        }
+      },
+      "capture": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "includePrompts": {
+            "type": "boolean",
+            "default": true
+          },
+          "includeResponses": {
+            "type": "boolean",
+            "default": true
+          },
+          "stripToolArgs": {
+            "type": "boolean",
+            "default": true
+          },
+          "stripToolResults": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "correlation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "llmOutputGraceMs": {
+            "type": "number",
+            "default": 250
+          },
+          "recordTtlMs": {
+            "type": "number",
+            "default": 600000
+          },
+          "maxRecordsPerKey": {
+            "type": "number",
+            "default": 32
+          }
+        }
+      }
+    },
+    "$defs": {
+      "otlpSubscriber": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "transport": {
+            "type": "string",
+            "enum": ["http_binary", "grpc"],
+            "default": "http_binary"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "resourceAttributes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "serviceName": {
+            "type": "string",
+            "default": "openclaw-nemo-flow"
+          },
+          "serviceNamespace": {
+            "type": "string",
+            "default": "nemo-flow"
+          },
+          "serviceVersion": {
+            "type": "string",
+            "default": "unknown"
+          },
+          "instrumentationScope": {
+            "type": "string"
+          },
+          "timeoutMillis": {
+            "type": "number",
+            "default": 3000
+          }
+        }
+      }
+    }
+  }
+}
