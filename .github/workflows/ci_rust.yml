@@ -146,3 +146,76 @@ jobs:
           flags: rust-${{ matrix.platform }}
           name: rust-${{ matrix.platform }}
           verbose: true
+
+  Package:
+    name: Package (${{ matrix.platform }})
+    needs: [Test]
+    if: ${{ !cancelled() && needs.Test.result == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-amd64
+            runner: ubuntu-latest
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: macos-arm64
+            runner: macos-15
+          - platform: windows-amd64
+            runner: windows-2022
+          - platform: windows-arm64
+            runner: windows-11-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        with:
+          cache: false
+          toolchain: ${{ steps.ci-config.outputs.rust_version }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: nemo-flow-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          workspaces: . -> target
+          cache-all-crates: true
+          cache-bin: false
+          save-if: false
+
+      - name: Build sidecar release binary
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: |
+          set -e
+          cargo build --release -p nemo-flow-sidecar
+
+      - name: Stage sidecar binary artifact
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          binary="nemo-flow-sidecar"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            binary="${binary}.exe"
+          fi
+          source="${NEMO_FLOW_CI_WORKSPACE}/target/release/${binary}"
+          if [ ! -f "$source" ]; then
+            echo "Error: expected sidecar binary at ${source}" >&2
+            exit 1
+          fi
+          mkdir -p "${NEMO_FLOW_CI_WORKSPACE_TMP}/sidecar"
+          cp "$source" "${NEMO_FLOW_CI_WORKSPACE_TMP}/sidecar/${binary}"
+
+      - name: Upload sidecar binary artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: sidecar-${{ matrix.platform }}
+          path: ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/sidecar/*
+          if-no-files-found: error
