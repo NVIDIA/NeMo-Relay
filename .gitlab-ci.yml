@@ -232,8 +232,8 @@ publish:artifactory:cargo:
     - |
       set -eu
 
-      if [ -z "${NEMO_FLOW_CI_ARTIFACTORY_USER:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL:-}" ]; then
-        echo "Error: uploading Cargo crates to Artifactory requires NEMO_FLOW_CI_ARTIFACTORY_USER, NEMO_FLOW_CI_ARTIFACTORY_KEY, and NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL." >&2
+      if [ -z "${NEMO_FLOW_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL:-}" ]; then
+        echo "Error: uploading Cargo crates to Artifactory requires NEMO_FLOW_CI_ARTIFACTORY_KEY and NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL." >&2
         exit 1
       fi
       if [ ! -f collected/github-run.json ]; then
@@ -259,48 +259,34 @@ publish:artifactory:cargo:
 
       cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
       mkdir -p "$cargo_home"
-
-      # Cargo fetches this Artifactory registry as an authenticated Git index.
-      git_credential_url="$(
-        uv run --no-project python - <<'PY'
-      import os
-      from urllib.parse import quote, urlsplit, urlunsplit
-
-      url = os.environ["NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL"]
-      user = quote(os.environ["NEMO_FLOW_CI_ARTIFACTORY_USER"], safe="")
-      password = quote(os.environ["NEMO_FLOW_CI_ARTIFACTORY_KEY"], safe="")
-      parts = urlsplit(url)
-      if not parts.scheme or not parts.netloc:
-          raise SystemExit("NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL must be an absolute URL")
-      print(urlunsplit((parts.scheme, f"{user}:{password}@{parts.netloc}", parts.path, parts.query, parts.fragment)))
-      PY
-      )"
-
-      git config --global credential.helper "store --file=${HOME}/.git-credentials"
-      git config --global credential.useHttpPath true
-      printf '%s\n' "$git_credential_url" > "${HOME}/.git-credentials"
-      chmod 600 "${HOME}/.git-credentials"
-
-      cargo_auth="Basic $(printf '%s:%s' "${NEMO_FLOW_CI_ARTIFACTORY_USER}" "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" | base64 | tr -d '\n')"
-
+      cargo_registry_url="${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL#sparse+}"
+      while [ "${cargo_registry_url%/}" != "$cargo_registry_url" ]; do
+        cargo_registry_url="${cargo_registry_url%/}"
+      done
+      if ! printf '%s\n' "$cargo_registry_url" | grep -Eq '^https://[^/]+/artifactory/api/cargo/[^/]+/index$'; then
+        echo "Error: NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL must resolve to https://<host>/artifactory/api/cargo/<repo>/index." >&2
+        exit 1
+      fi
+      cargo_registry_index="sparse+${cargo_registry_url}/"
+      echo "Using Cargo Artifactory registry index ${cargo_registry_index}"
       cat > "${cargo_home}/config.toml" <<EOF
-      [registries.artifactory]
-      index = "${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL}"
-      credential-provider = "cargo:token"
+      [registry]
+      default = "artifactory"
 
-      [net]
-      git-fetch-with-cli = true
+      [registries.artifactory]
+      index = "${cargo_registry_index}"
+      credential-provider = "cargo:token"
       EOF
 
       cat > "${cargo_home}/credentials.toml" <<EOF
       [registries.artifactory]
-      token = "${cargo_auth}"
+      token = "Bearer ${NEMO_FLOW_CI_ARTIFACTORY_KEY}"
       EOF
 
       chmod 600 "${cargo_home}/credentials.toml"
 
       for crate in nemo-flow nemo-flow-adaptive nemo-flow-ffi; do
-        cargo publish --package "$crate" --registry artifactory --allow-dirty
+        cargo publish --package "$crate" --allow-dirty --registry artifactory
       done
 
 publish:artifactory:npm:
