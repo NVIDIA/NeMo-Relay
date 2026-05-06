@@ -29,8 +29,8 @@
 [submodule "third_party/langgraph"]
 	path = third_party/langgraph
 	url = https://github.com/langchain-ai/langgraph.git
-	# langgraph-sdk v0.3.14
-	commit = 0ae01c7366f09bffdb751328e8591e59a2d436c4
+	# langgraph-prebuilt v1.0.13
+	commit = 20558f62e270e79f735d61c53287b725afb2761b
 
 [submodule "third_party/hermes-agent"]
 	path = third_party/hermes-agent
