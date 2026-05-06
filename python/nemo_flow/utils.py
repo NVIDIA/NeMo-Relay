@@ -1,44 +1,19 @@
-"""Lazy import helper for optional NeMo Flow integration.
-
-NeMo Flow is an optional dependency. All functions in this module are safe to
-call regardless of whether NeMo Flow is installed — they return ``None`` or
-``False`` when the package is not available.
-"""
-
-from __future__ import annotations
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 
 import asyncio
 import contextvars
 from concurrent.futures import ThreadPoolExecutor
-from types import ModuleType
 from typing import Any
 
 import nemo_flow
 
-# TODO: Move into Nemo flow's python package name it something like integration_utils.py
-
-
-def get_nemo_flow() -> ModuleType | None:
-    """Return the ``nemo_flow`` module, or ``None`` if not installed.
-
-    The import is performed lazily on first call and cached thereafter.
-    """
-    return nemo_flow  # type: ignore[return-value]
-
-
-def is_available() -> bool:
-    """Return ``True`` if NeMo Flow is installed and importable."""
-    return get_nemo_flow() is not None
-
-
 # ---------------------------------------------------------------------------
 # Sync-to-async bridge
 # ---------------------------------------------------------------------------
-
-
 def run_sync(coro: Any) -> Any:
     """Run *coro* synchronously, handling the case where an event loop is
-    already running (e.g. Jupyter notebooks).
+    already running.
 
     When offloading to a ThreadPoolExecutor worker, this helper propagates
     both Python contextvars and the Rust thread-local scope stack so that

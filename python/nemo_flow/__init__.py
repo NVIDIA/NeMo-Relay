@@ -183,6 +183,7 @@ from nemo_flow import (  # noqa: E402
     subscribers,
     tools,
     typed,
+    utils,
 )
 
 _scope_stack_var: contextvars.ContextVar[ScopeStack] = contextvars.ContextVar("scope_stack")

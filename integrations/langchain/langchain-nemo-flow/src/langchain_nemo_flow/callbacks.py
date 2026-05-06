@@ -11,7 +11,7 @@ from uuid import UUID
 
 from langchain_core.callbacks.base import BaseCallbackHandler
 
-from langchain_nemo_flow._nemo_flow import get_nemo_flow
+import nemo_flow
 
 _logger = logging.getLogger(__name__)
 
@@ -22,7 +22,6 @@ class NemoFlowCallbackHandler(BaseCallbackHandler):
     def __init__(self) -> None:
         super().__init__()
         self._scope_handles: dict[UUID, Any] = {}
-        self._nnex = get_nemo_flow()
 
     def on_chain_start(
         self,
@@ -36,14 +35,12 @@ class NemoFlowCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Push a NeMo Flow Agent scope for a LangChain chain run."""
-        if self._nnex is None:
-            return None
         try:
             name = serialized.get("name") or serialized.get("id", ["Unknown"])[-1]
             parent = self._scope_handles.get(parent_run_id) if parent_run_id else None
-            handle = self._nnex.scope.push(
+            handle = nemo_flow.scope.push(
                 name,
-                self._nnex.ScopeType.Agent,
+                nemo_flow.ScopeType.Agent,
                 handle=parent,
                 input=inputs,
                 metadata={"langchain_run_id": str(run_id), **(metadata or {})},
@@ -78,12 +75,10 @@ class NemoFlowCallbackHandler(BaseCallbackHandler):
         return None
 
     def _pop_scope(self, run_id: UUID, *, output: Any | None = None) -> None:
-        if self._nnex is None:
-            return
         handle = self._scope_handles.pop(run_id, None)
         if handle is None:
             return
         try:
-            self._nnex.scope.pop(handle, output=output)
+            nemo_flow.scope.pop(handle, output=output)
         except Exception:
             _logger.debug("NeMo Flow: scope.pop failed", exc_info=True)
