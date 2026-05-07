@@ -59,3 +59,6 @@ quote-style = "double"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
+
+[tool.uv.sources]
+nemo-flow = { path = "../..", editable = true }
