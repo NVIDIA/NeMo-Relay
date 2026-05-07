@@ -16,12 +16,12 @@ from nemo_flow._native import LLMRequest
 
 from langchain_nemo_flow._serialization import (
     ModelRequestHeaders,
+    get_model_name,
+    model_request_to_payload,
     model_response_from_json,
     model_response_to_json,
-    model_request_to_payload,
     payload_to_model_request,
-    get_model_name,
-    infer_codec_from_model)
+)
 
 if TYPE_CHECKING:
     from nemo_flow.codecs import LlmCodec, LlmResponseCodec
@@ -110,12 +110,11 @@ class NemoFlowMiddleware(AgentMiddleware):
                 request=llm_request,
                 func=_call,
                 # TODO:  Whenever I set these I get an attribute error about the codec missing a type attribute.
-                codec=None, 
+                codec=None,
                 response_codec=None,
             )
         )
         return model_response_from_json(result, object_codec)
-
 
     async def awrap_model_call(
         self,
@@ -141,7 +140,6 @@ class NemoFlowMiddleware(AgentMiddleware):
             response_codec=None,
         )
         return model_response_from_json(result, object_codec)
-
 
     def wrap_tool_call(
         self,

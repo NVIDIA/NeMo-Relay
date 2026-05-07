@@ -15,8 +15,7 @@ from langchain_core.messages import (
     messages_to_dict,
 )
 from langchain_core.tools import BaseTool
-
-from nemo_flow.codecs import LlmCodec, OpenAIChatCodec, OpenAIResponsesCodec, AnthropicMessagesCodec
+from nemo_flow.codecs import AnthropicMessagesCodec, LlmCodec, OpenAIChatCodec
 
 LANGCHAIN_MODEL_RESPONSE_KEY = "__langchain_nemo_flow_model_response"
 
@@ -37,6 +36,7 @@ def get_model_provider(model: Any) -> str:
         return name[4:].lower()
     return name.lower()
 
+
 def infer_codec_from_model(model: Any) -> LlmCodec | None:
     """Infer a NeMo Flow codec name from a LangChain chat model."""
     provider = get_model_provider(model)
@@ -47,6 +47,7 @@ def infer_codec_from_model(model: Any) -> LlmCodec | None:
         return AnthropicMessagesCodec()
 
     return None
+
 
 def split_system_message(messages: list[BaseMessage]) -> tuple[SystemMessage | None, list[BaseMessage]]:
     """Split a leading system message into LangChain agent ``ModelRequest`` shape."""
