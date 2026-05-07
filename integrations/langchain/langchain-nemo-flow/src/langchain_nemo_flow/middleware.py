@@ -156,7 +156,11 @@ class NemoFlowMiddleware(AgentMiddleware):
         def _call(args: Any) -> ToolMessage | Command[Any]:
             return handler(request.override(tool_call={**request.tool_call, "args": args}))
 
-        return nemo_flow.utils.run_sync(nemo_flow.typed.tool_execute(name=tool_name, args=tool_args, func=_call, args_codec=codec, result_codec=codec, handle=parent))
+        return nemo_flow.utils.run_sync(
+            nemo_flow.typed.tool_execute(
+                name=tool_name, args=tool_args, func=_call, args_codec=codec, result_codec=codec, handle=parent
+            )
+        )
 
     async def awrap_tool_call(
         self,
@@ -173,7 +177,9 @@ class NemoFlowMiddleware(AgentMiddleware):
             return await handler(request.override(tool_call={**request.tool_call, "args": args}))
 
         parent = nemo_flow.scope.get_handle()
-        return await nemo_flow.typed.tool_execute(name=tool_name, args=tool_args, func=_call, args_codec=codec, result_codec=codec, handle=parent)
+        return await nemo_flow.typed.tool_execute(
+            name=tool_name, args=tool_args, func=_call, args_codec=codec, result_codec=codec, handle=parent
+        )
 
     def _headers_for(self, request: ModelRequest[Any]) -> dict[str, str]:
         return self._model_request_headers(request) if self._model_request_headers else {}
