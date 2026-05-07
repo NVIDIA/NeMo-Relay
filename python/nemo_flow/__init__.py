@@ -419,6 +419,7 @@ __all__ = [
     "typed",
     "plugin",
     "adaptive",
+    "utils",
     # Scope stack isolation
     "ScopeStack",
     "create_scope_stack",

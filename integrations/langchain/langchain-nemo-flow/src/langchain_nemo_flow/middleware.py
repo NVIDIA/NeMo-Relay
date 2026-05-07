@@ -17,6 +17,7 @@ from nemo_flow._native import LLMRequest
 from langchain_nemo_flow._serialization import (
     ModelRequestHeaders,
     get_model_name,
+    infer_codec_from_model,
     model_request_to_payload,
     model_response_from_json,
     model_response_to_json,
@@ -98,8 +99,8 @@ class NemoFlowMiddleware(AgentMiddleware):
         object_codec = nemo_flow.typed.BestEffortAnyCodec()
         llm_request = nemo_flow.LLMRequest(self._headers_for(request), model_request_to_payload(request))
         model_name = get_model_name(request.model)
-        # model_codec = infer_codec_from_model(request.model)
-
+        model_codec = infer_codec_from_model(request.model)
+        
         async def _call(req: Any) -> Any:
             response = handler(payload_to_model_request(request, req.content))
             return model_response_to_json(response, object_codec)
@@ -111,7 +112,7 @@ class NemoFlowMiddleware(AgentMiddleware):
                 func=_call,
                 # TODO:  Whenever I set these I get an attribute error about the codec missing a type attribute.
                 codec=None,
-                response_codec=None,
+                response_codec=model_codec,
             )
         )
         return model_response_from_json(result, object_codec)
@@ -126,7 +127,7 @@ class NemoFlowMiddleware(AgentMiddleware):
         object_codec = nemo_flow.typed.BestEffortAnyCodec()
         llm_request = nemo_flow.LLMRequest(self._headers_for(request), model_request_to_payload(request))
         model_name = get_model_name(request.model)
-        # model_codec = infer_codec_from_model(request.model)
+        model_codec = infer_codec_from_model(request.model)
 
         async def _call(req: Any) -> Any:
             response = await handler(payload_to_model_request(request, req.content))
@@ -137,7 +138,7 @@ class NemoFlowMiddleware(AgentMiddleware):
             request=llm_request,
             func=_call,
             codec=None,
-            response_codec=None,
+            response_codec=model_codec,
         )
         return model_response_from_json(result, object_codec)
 
