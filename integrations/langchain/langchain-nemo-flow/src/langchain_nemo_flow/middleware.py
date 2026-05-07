@@ -8,9 +8,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from langchain.agents.middleware import AgentMiddleware 
-
 import nemo_flow
+from langchain.agents.middleware import AgentMiddleware
 
 from langchain_nemo_flow._serialization import (
     get_model_name,
@@ -22,10 +21,10 @@ from langchain_nemo_flow._serialization import (
 )
 
 if TYPE_CHECKING:
-    from nemo_flow.codecs import LlmCodec, LlmResponseCodec
     from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
     from langchain_core.messages import ToolMessage
     from langgraph.types import Command
+    from nemo_flow.codecs import LlmCodec, LlmResponseCodec
 
 
 class NemoFlowMiddleware(AgentMiddleware):
@@ -88,10 +87,7 @@ class NemoFlowMiddleware(AgentMiddleware):
             response_codec=response_codec,
         )
 
-    def _prepare_model_call(
-        self,
-        request: ModelRequest[Any]
-    ) -> tuple:
+    def _prepare_model_call(self, request: ModelRequest[Any]) -> tuple:
         """Boilerplate code common to both wrap_model_call and awrap_model_call"""
         object_codec = nemo_flow.typed.BestEffortAnyCodec()
         llm_request = nemo_flow.LLMRequest({}, model_request_to_payload(request))
