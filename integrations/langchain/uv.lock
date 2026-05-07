@@ -225,7 +225,6 @@ wheels = [
 
 [[package]]
 name = "langchain-nemo-flow"
-version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "langchain" },
