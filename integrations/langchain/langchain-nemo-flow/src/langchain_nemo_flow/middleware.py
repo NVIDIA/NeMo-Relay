@@ -15,7 +15,6 @@ from langgraph.types import Command
 from nemo_flow._native import LLMRequest
 
 from langchain_nemo_flow._serialization import (
-    ModelRequestHeaders,
     get_model_name,
     infer_codec_from_model,
     model_request_to_payload,
@@ -39,11 +38,9 @@ class NemoFlowMiddleware(AgentMiddleware):
         self,
         *,
         name: str = "NemoFlowMiddleware",
-        model_request_headers: ModelRequestHeaders | None = None,
     ) -> None:
         super().__init__()
         self._name = name
-        self._model_request_headers = model_request_headers
 
     @property
     def name(self) -> str:
@@ -90,17 +87,25 @@ class NemoFlowMiddleware(AgentMiddleware):
             response_codec=response_codec,
         )
 
+    def _prepare_model_call(
+        self,
+        request: ModelRequest[Any]
+    ) -> tuple:
+        """Boilerplate code common to both wrap_model_call and awrap_model_call"""
+        object_codec = nemo_flow.typed.BestEffortAnyCodec()
+        llm_request = nemo_flow.LLMRequest({}, model_request_to_payload(request))
+        model_name = get_model_name(request.model)
+        model_codec = infer_codec_from_model(request.model)
+        return (object_codec, llm_request, model_name, model_codec)
+
     def wrap_model_call(
         self,
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
     ) -> ModelResponse[Any]:
         """Wrap a sync LangChain agent model call in NeMo Flow LLM execution."""
-        object_codec = nemo_flow.typed.BestEffortAnyCodec()
-        llm_request = nemo_flow.LLMRequest(self._headers_for(request), model_request_to_payload(request))
-        model_name = get_model_name(request.model)
-        model_codec = infer_codec_from_model(request.model)
-        
+        (object_codec, llm_request, model_name, model_codec) = self._prepare_model_call(request)
+
         async def _call(req: Any) -> Any:
             response = handler(payload_to_model_request(request, req.content))
             return model_response_to_json(response, object_codec)
@@ -122,11 +127,7 @@ class NemoFlowMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any]:
         """Wrap an async LangChain agent model call in NeMo Flow LLM execution."""
-
-        object_codec = nemo_flow.typed.BestEffortAnyCodec()
-        llm_request = nemo_flow.LLMRequest(self._headers_for(request), model_request_to_payload(request))
-        model_name = get_model_name(request.model)
-        model_codec = infer_codec_from_model(request.model)
+        (object_codec, llm_request, model_name, model_codec) = self._prepare_model_call(request)
 
         async def _call(req: Any) -> Any:
             response = await handler(payload_to_model_request(request, req.content))
@@ -141,6 +142,14 @@ class NemoFlowMiddleware(AgentMiddleware):
         )
         return model_response_from_json(result, object_codec)
 
+    def _prepare_tool_call(self, request: ToolCallRequest) -> tuple:
+        """Boilerplate code common to both wrap_tool_call and awrap_tool_call"""
+        parent = nemo_flow.scope.get_handle()
+        codec = nemo_flow.typed.BestEffortAnyCodec()
+        tool_name = request.tool_call["name"]
+        tool_args = request.tool_call.get("args") or {}
+        return (parent, codec, tool_name, tool_args)
+
     def wrap_tool_call(
         self,
         request: ToolCallRequest,
@@ -148,10 +157,7 @@ class NemoFlowMiddleware(AgentMiddleware):
     ) -> ToolMessage | Command[Any]:
         """Wrap a sync LangChain agent tool call in NeMo Flow tool execution."""
 
-        parent = nemo_flow.scope.get_handle()
-        codec = nemo_flow.typed.BestEffortAnyCodec()
-        tool_name = request.tool_call["name"]
-        tool_args = request.tool_call.get("args") or {}
+        (parent, codec, tool_name, tool_args) = self._prepare_tool_call(request)
 
         def _call(args: Any) -> ToolMessage | Command[Any]:
             return handler(request.override(tool_call={**request.tool_call, "args": args}))
@@ -169,17 +175,11 @@ class NemoFlowMiddleware(AgentMiddleware):
     ) -> ToolMessage | Command[Any]:
         """Wrap an async LangChain agent tool call in NeMo Flow tool execution."""
 
-        codec = nemo_flow.typed.BestEffortAnyCodec()
-        tool_name = request.tool_call["name"]
-        tool_args = request.tool_call.get("args") or {}
+        (parent, codec, tool_name, tool_args) = self._prepare_tool_call(request)
 
         async def _call(args: Any) -> ToolMessage | Command[Any]:
             return await handler(request.override(tool_call={**request.tool_call, "args": args}))
 
-        parent = nemo_flow.scope.get_handle()
         return await nemo_flow.typed.tool_execute(
             name=tool_name, args=tool_args, func=_call, args_codec=codec, result_codec=codec, handle=parent
         )
-
-    def _headers_for(self, request: ModelRequest[Any]) -> dict[str, str]:
-        return self._model_request_headers(request) if self._model_request_headers else {}

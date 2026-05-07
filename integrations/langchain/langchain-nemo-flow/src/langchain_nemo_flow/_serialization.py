@@ -149,5 +149,3 @@ def model_response_from_json(payload: Any, codec: Any) -> ModelResponse[Any]:
         return decoded
     raise TypeError(f"NeMo Flow model execution returned {type(decoded)!r}, expected ModelResponse")
 
-
-ModelRequestHeaders = Callable[[ModelRequest[Any]], dict[str, str]]
