@@ -9,7 +9,7 @@ import tomllib
 from email.parser import Parser
 from pathlib import Path
 
-from hatchling.metadata.plugin.interface import MetadataHookInterface
+from hatchling.metadata.plugin.interface import MetadataHookInterface  # ty: ignore[unresolved-import]
 
 
 class CargoVersionMetadataHook(MetadataHookInterface):
