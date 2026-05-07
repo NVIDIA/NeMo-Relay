@@ -8,6 +8,8 @@ from typing import Any
 
 import nemo_flow
 
+_RUN_SYNC_EXECUTOR = ThreadPoolExecutor()
+
 
 # ---------------------------------------------------------------------------
 # Sync-to-async bridge
@@ -25,6 +27,7 @@ def run_sync(coro: Any) -> Any:
     except RuntimeError:
         # No loop running -- we can just use asyncio.run.
         return asyncio.run(coro)
+
     # Loop already running -- offload to a worker thread so we don't block.
     # Propagate contextvars and scope stack to the worker thread.
     ctx = contextvars.copy_context()
@@ -35,10 +38,9 @@ def run_sync(coro: Any) -> Any:
             nemo_flow.set_thread_scope_stack(scope_stack)
             return asyncio.run(coro)
 
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(ctx.run, _run_with_scope_stack).result()
+        return _RUN_SYNC_EXECUTOR.submit(ctx.run, _run_with_scope_stack).result()
+
     except Exception:
         pass  # Fall through to vanilla path
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result()
+    return _RUN_SYNC_EXECUTOR.submit(asyncio.run, coro).result()

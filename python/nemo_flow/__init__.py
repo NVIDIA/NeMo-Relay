@@ -183,7 +183,6 @@ from nemo_flow import (  # noqa: E402
     subscribers,
     tools,
     typed,
-    utils,
 )
 
 _scope_stack_var: contextvars.ContextVar[ScopeStack] = contextvars.ContextVar("scope_stack")
@@ -419,7 +418,6 @@ __all__ = [
     "typed",
     "plugin",
     "adaptive",
-    "utils",
     # Scope stack isolation
     "ScopeStack",
     "create_scope_stack",
