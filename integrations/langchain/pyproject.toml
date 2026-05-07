@@ -55,7 +55,7 @@ Repository = "https://github.com/NVIDIA/NeMo-Flow"
 packages = ["src/langchain_nemo_flow"]
 
 [tool.hatch.metadata.hooks.custom]
-path = "hatch_fecth_version.py"
+path = "hatch_fetch_version.py"
 
 [tool.ruff]
 line-length = 120
