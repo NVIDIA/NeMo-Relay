@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { parseConfig } from "../config.js";
+import { errorToJson, toJsonRecord } from "../hook-replay/marks.js";
 import { HookReplayBackend } from "../hooks-backend.js";
 import type { NemoFlowRuntimeModule } from "../modules.js";
 import type { PluginLoggerLike } from "../types.js";
@@ -71,7 +72,7 @@ describe("HookReplayBackend", () => {
     assert.equal(backend.state().sessionAliases.get("kb"), "b");
   });
 
-  it("drains before close, emits unpaired timing mark, and evicts session records", () => {
+  it("drains before close, emits unpaired timing mark, and evicts session records", async () => {
     const nf = createNemoFlowRuntime();
     const backend = createBackend(nf);
 
@@ -111,7 +112,7 @@ describe("HookReplayBackend", () => {
       { runId: "run-1", sessionId: "session-1" },
     );
 
-    backend.onSessionEnd(
+    await backend.onSessionEnd(
       { sessionId: "session-1", messageCount: 3, reason: "idle" },
       { sessionId: "session-1" },
     );
@@ -242,6 +243,37 @@ describe("HookReplayBackend", () => {
       "openclaw.subagent_spawned",
     ]);
   });
+
+  it("uses child session key as a lazy-session fallback without aliasing it away", () => {
+    const nf = createNemoFlowRuntime();
+    const backend = createBackend(nf);
+
+    backend.onSubagentSpawned(
+      {
+        childSessionKey: "child-key",
+        agentId: "child-agent",
+        mode: "run",
+        threadRequested: false,
+        runId: "child-run",
+      },
+      { childSessionKey: "child-key", runId: "child-run" },
+    );
+
+    assert.ok(backend.state().sessions.get("child-key"));
+    assert.equal(backend.state().sessionAliases.get("child-run"), "child-key");
+    assert.equal(backend.state().sessionAliases.get("child-key"), undefined);
+  });
+
+  it("normalizes circular replay payloads before NAPI boundaries", () => {
+    const payload: Record<string, unknown> = { ok: true };
+    payload.self = payload;
+
+    assert.deepEqual(toJsonRecord(payload), {
+      ok: true,
+      self: { ok: true, self: "[Circular]" },
+    });
+    assert.deepEqual(errorToJson(new Error("boom")).message, "boom");
+  });
 });
 
 type TestNemoFlowRuntime = NemoFlowRuntimeModule & {
@@ -265,6 +297,9 @@ function createBackend(nf: TestNemoFlowRuntime, logger = createLogger()): HookRe
     nf,
     config: parseConfig(undefined),
     logger,
+    agentVersion: "test-version",
+    resolvedAtifOutputDir: "/tmp/openclaw-state/plugins/nemo-flow/atif",
+    markOutputDegraded: () => {},
   });
 }
 
@@ -301,5 +336,32 @@ function createNemoFlowRuntime(): TestNemoFlowRuntime {
     },
     popScope: (handle, output) => calls.popScope.push({ handle, output }),
     event: (name, handle, data) => calls.event.push({ name, handle, data }),
+    llmCall: () => ({}),
+    llmCallEnd: () => {},
+    toolCall: () => ({}),
+    toolCallEnd: () => {},
+    AtifExporter: FakeAtifExporter,
+    OpenTelemetrySubscriber: FakeSubscriber,
+    OpenInferenceSubscriber: FakeSubscriber,
   };
+}
+
+class FakeAtifExporter {
+  register(): void {}
+  deregister(): boolean {
+    return true;
+  }
+  exportJson(): string {
+    return "{}";
+  }
+  clear(): void {}
+}
+
+class FakeSubscriber {
+  register(): void {}
+  deregister(): boolean {
+    return true;
+  }
+  forceFlush(): void {}
+  shutdown(): void {}
 }

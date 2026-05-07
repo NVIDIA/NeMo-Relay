@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import * as path from "node:path";
+
 import { parseConfig } from "./config.js";
+import type { NemoFlowHookBackendConfig } from "./config.js";
 import { createHealthSnapshot, type HookReplayBackendStatus } from "./health.js";
 import { HookReplayBackend } from "./hooks-backend.js";
 import {
@@ -9,6 +12,7 @@ import {
   type ConfigDiagnostic,
   type NemoFlowModules,
   type NemoFlowModuleLoader,
+  type NemoFlowSubscriber,
 } from "./modules.js";
 import type {
   PluginHookAfterToolCallEvent,
@@ -46,14 +50,26 @@ const STATUS_METHOD = "nemoFlow.status";
 
 export class NemoFlowRuntimeState {
   private readonly api: OpenClawPluginApiLike;
+  private readonly config: NemoFlowHookBackendConfig;
   private readonly moduleLoader: NemoFlowModuleLoader;
+  private loadPromise: Promise<NemoFlowModules> | undefined;
   private statusValue: HookReplayBackendStatus = { state: "not_initialized" };
   private modulesValue?: NemoFlowModules;
   private backendValue: HookReplayBackend | undefined;
   private initializedPluginHost = false;
+  private started = false;
+  private beforeExitListener?: () => void;
+  private unavailableLogged = false;
+  private telemetrySubscribers: Array<{
+    output: "otel" | "openInference";
+    name: string;
+    subscriber: NemoFlowSubscriber;
+  }> = [];
+  private readonly degradedOutputs = new Set<"atif" | "otel" | "openInference">();
 
   constructor(options: RuntimeStateOptions) {
     this.api = options.api;
+    this.config = options.config;
     this.moduleLoader = options.moduleLoader ?? defaultNemoFlowModuleLoader;
   }
 
@@ -69,78 +85,100 @@ export class NemoFlowRuntimeState {
   }
 
   async start(ctx: StartContext): Promise<void> {
-    if (this.statusValue.state === "ready" || this.statusValue.state === "degraded") {
+    if (this.started || this.statusValue.state === "ready" || this.statusValue.state === "degraded") {
       return;
     }
 
     let modules: NemoFlowModules;
     try {
-      modules = await this.moduleLoader();
+      this.loadPromise ??= this.moduleLoader();
+      modules = await this.loadPromise;
       this.modulesValue = modules;
     } catch (error) {
+      this.loadPromise = undefined;
       this.statusValue = { state: "degraded", reason: `failed to load nemo-flow-node: ${toMessage(error)}` };
-      ctx.logger.warn?.(this.statusValue.reason);
+      if (!this.unavailableLogged) {
+        ctx.logger.warn?.(this.statusValue.reason);
+        this.unavailableLogged = true;
+      }
       return;
     }
 
-    const { hostConfig, degradedReason } = this.resolvePluginHostConfig(modules, ctx.logger);
-    if (degradedReason) {
-      this.statusValue = { state: "degraded", reason: degradedReason };
-    }
+    const { hostConfig, degradedReason: configuredDegradedReason } = this.resolvePluginHostConfig(
+      modules,
+      ctx.logger,
+    );
+    let degradedReason = configuredDegradedReason;
 
     const validationReport = validatePluginHostConfig(modules, hostConfig, ctx.logger);
 
     if (validationReport.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
-      this.statusValue = {
-        state: "degraded",
-        reason: "NeMo Flow plugin host config validation failed",
-      };
-      return;
-    }
+      degradedReason = "NeMo Flow plugin host config validation failed";
+    } else {
+      if (
+        validationReport.diagnostics.some((diagnostic) => diagnostic.level === "warning") &&
+        degradedReason === undefined
+      ) {
+        degradedReason = "NeMo Flow plugin host config validation produced warnings";
+      }
 
-    try {
-      const activationReport = await modules.pluginHost.initialize(hostConfig);
-      logDiagnostics(ctx.logger, activationReport.diagnostics);
-      this.initializedPluginHost = true;
-    } catch (error) {
-      this.statusValue = {
-        state: "degraded",
-        reason: `failed to initialize NeMo Flow plugin host: ${toMessage(error)}`,
-      };
-      ctx.logger.warn?.(this.statusValue.reason);
-      return;
-    }
-
-    if (!degradedReason) {
-      this.statusValue = { state: "ready" };
+      try {
+        const activationReport = await modules.pluginHost.initialize(hostConfig);
+        logDiagnostics(ctx.logger, activationReport.diagnostics);
+        this.initializedPluginHost = true;
+        if (
+          activationReport.diagnostics.some((diagnostic) => diagnostic.level === "error") &&
+          degradedReason === undefined
+        ) {
+          degradedReason = "NeMo Flow plugin host initialization reported errors";
+        }
+      } catch (error) {
+        degradedReason = `failed to initialize NeMo Flow plugin host: ${toMessage(error)}`;
+        ctx.logger.warn?.(degradedReason);
+      }
     }
 
     this.backendValue = new HookReplayBackend({
       nf: modules.nf,
-      config: parseConfig(this.api.pluginConfig),
+      config: this.config,
       logger: ctx.logger,
+      agentVersion: ctx.agentVersion,
+      resolvedAtifOutputDir: resolveAtifOutputDir(this.config, ctx),
+      markOutputDegraded: (output) => this.markOutputDegraded(output),
     });
+    this.started = true;
+    this.statusValue = degradedReason === undefined ? { state: "ready" } : { state: "degraded", reason: degradedReason };
   }
 
   async stop(reason: string, logger?: PluginLoggerLike): Promise<void> {
-    if (this.statusValue.state === "stopped" || this.statusValue.state === "disabled") {
+    if (
+      this.statusValue.state === "stopped" ||
+      this.statusValue.state === "disabled" ||
+      this.statusValue.state === "stopping"
+    ) {
       return;
     }
 
     this.statusValue = { state: "stopping" };
+    const log = logger ?? this.api.logger;
+
+    try {
+      await this.backendValue?.drainForGatewayStop(reason);
+    } catch (error) {
+      log.warn?.(`failed to stop NeMo Flow hook backend: ${toMessage(error)}`);
+    }
+    this.backendValue = undefined;
 
     if (this.initializedPluginHost && this.modulesValue) {
       try {
         this.modulesValue.pluginHost.clear();
       } catch (error) {
-        logger?.warn?.(`failed to clear NeMo Flow plugin host: ${toMessage(error)}`);
+        log.warn?.(`failed to clear NeMo Flow plugin host: ${toMessage(error)}`);
       }
       this.initializedPluginHost = false;
     }
 
-    this.backendValue?.stop(reason);
-    this.backendValue = undefined;
-
+    this.started = false;
     this.statusValue = { state: "stopped", reason };
   }
 
@@ -161,17 +199,30 @@ export class NemoFlowRuntimeState {
         backend.safeReplay(hookName, undefined, () => handler(backend, event, ctx));
       }) as OpenClawHookHandlerLike);
     };
+    const dispatchAsync = (
+      hookName: string,
+      handler: (backend: HookReplayBackend, event: unknown, ctx: unknown) => Promise<void>,
+    ): void => {
+      this.api.on(hookName, (async (event: unknown, ctx: unknown) => {
+        const backend = this.backendValue;
+        if (!backend) {
+          return;
+        }
+        await backend.safeReplayAsync(hookName, undefined, () => handler(backend, event, ctx));
+      }) as OpenClawHookHandlerLike);
+    };
 
     dispatch("gateway_start", (backend, event, ctx) =>
       backend.onGatewayStart(event as PluginHookGatewayStartEvent, ctx as PluginHookGatewayContext),
     );
-    dispatch("gateway_stop", (backend, event, ctx) =>
-      backend.onGatewayStop(event as PluginHookGatewayStopEvent, ctx as PluginHookGatewayContext),
-    );
+    this.api.on("gateway_stop", (async (event: unknown) => {
+      const stopEvent = event as PluginHookGatewayStopEvent;
+      await this.stop(stopEvent.reason ?? "gateway_stop", this.api.logger);
+    }) as OpenClawHookHandlerLike);
     dispatch("session_start", (backend, event, ctx) =>
       backend.onSessionStart(event as PluginHookSessionStartEvent, ctx as PluginHookSessionContext),
     );
-    dispatch("session_end", (backend, event, ctx) =>
+    dispatchAsync("session_end", (backend, event, ctx) =>
       backend.onSessionEnd(event as PluginHookSessionEndEvent, ctx as PluginHookSessionContext),
     );
     dispatch("llm_input", (backend, event, ctx) =>
@@ -213,7 +264,7 @@ export class NemoFlowRuntimeState {
     hostConfig: { version: number; components: unknown[]; [key: string]: unknown };
     degradedReason?: string;
   } {
-    const configured = parseConfig(this.api.pluginConfig).nemoFlow.pluginConfig;
+    const configured = this.config.nemoFlow.pluginConfig;
 
     if (configured.components.length === 0) {
       return { hostConfig: modules.pluginHost.defaultConfig() };
@@ -228,6 +279,10 @@ export class NemoFlowRuntimeState {
       hostConfig: modules.pluginHost.defaultConfig(),
       degradedReason,
     };
+  }
+
+  private markOutputDegraded(output: "atif" | "otel" | "openInference"): void {
+    this.degradedOutputs.add(output);
   }
 }
 
@@ -304,6 +359,14 @@ function logDiagnostics(logger: PluginLoggerLike, diagnostics: ConfigDiagnostic[
       logger.info?.(message);
     }
   }
+}
+
+function resolveAtifOutputDir(config: NemoFlowHookBackendConfig, ctx: StartContext): string {
+  const configured = config.atif.outputDir;
+  if (!configured) {
+    return path.join(ctx.stateDir, "plugins", "nemo-flow", "atif");
+  }
+  return path.isAbsolute(configured) ? configured : ctx.resolvePath(configured);
 }
 
 function toMessage(error: unknown): string {

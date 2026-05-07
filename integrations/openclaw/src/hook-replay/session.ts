@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { NemoFlowHookBackendConfig } from "../config.js";
+import type { AtifExporterLike } from "../modules.js";
 import type { PluginHookModelCallEndedEvent } from "../openclaw-hook-types.js";
 import type { JsonRecord, PluginLoggerLike } from "../types.js";
 import type { NemoFlowRuntimeModule } from "../modules.js";
@@ -28,6 +29,13 @@ export type SessionState = {
   resumedFrom?: string;
   stack: unknown;
   rootHandle?: unknown;
+  atif?: {
+    exporter: AtifExporterLike;
+    registrationName: string;
+    capturing: boolean;
+    disabled?: boolean;
+    leakedRegistration?: boolean;
+  };
 };
 
 export type PendingLlmOutputRecord = {
@@ -68,12 +76,15 @@ export type SessionManager = {
   config: NemoFlowHookBackendConfig;
   logger: PluginLoggerLike;
   state: HookReplayBackendState;
+  agentVersion: string;
+  resolvedAtifOutputDir: string;
   emitCapturedUnderSession: (label: string, session: SessionState, emit: () => void) => void;
   replayPendingLlmOutputsForSession: (
     session: SessionState,
     options: { allowPlaceholderRequest: boolean },
   ) => void;
   emitUnpairedModelCallTimingMarks: (session: SessionState) => void;
+  markOutputDegraded: (output: "atif" | "otel" | "openInference") => void;
   logBoundedWarn: (key: string, message: string) => void;
 };
 
@@ -100,7 +111,7 @@ export function resolveSessionKey(
     }
   }
 
-  return input.sessionId ?? input.sessionKey ?? input.runId;
+  return input.sessionId ?? input.sessionKey ?? input.childSessionKey ?? input.runId;
 }
 
 export function rememberSessionAliases(

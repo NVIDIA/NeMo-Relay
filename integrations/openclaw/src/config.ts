@@ -171,13 +171,13 @@ export function parseConfig(value: unknown): NemoFlowHookBackendConfig {
     },
     correlation: {
       llmOutputGraceMs:
-        optionalNumber(correlation.llmOutputGraceMs, "correlation.llmOutputGraceMs") ??
+        optionalNonNegativeInteger(correlation.llmOutputGraceMs, "correlation.llmOutputGraceMs") ??
         DEFAULT_CONFIG.correlation.llmOutputGraceMs,
       recordTtlMs:
-        optionalNumber(correlation.recordTtlMs, "correlation.recordTtlMs") ??
+        optionalNonNegativeInteger(correlation.recordTtlMs, "correlation.recordTtlMs") ??
         DEFAULT_CONFIG.correlation.recordTtlMs,
       maxRecordsPerKey:
-        optionalNumber(correlation.maxRecordsPerKey, "correlation.maxRecordsPerKey") ??
+        optionalPositiveInteger(correlation.maxRecordsPerKey, "correlation.maxRecordsPerKey") ??
         DEFAULT_CONFIG.correlation.maxRecordsPerKey,
     },
   };
@@ -213,7 +213,7 @@ function parseTelemetrySinkConfig(
     serviceNamespace:
       optionalString(raw.serviceNamespace, `${path}.serviceNamespace`) ?? defaults.serviceNamespace,
     timeoutMillis:
-      optionalNumber(raw.timeoutMillis, `${path}.timeoutMillis`) ?? defaults.timeoutMillis,
+      optionalNonNegativeInteger(raw.timeoutMillis, `${path}.timeoutMillis`) ?? defaults.timeoutMillis,
     ...definedStringProperty(
       "transport",
       optionalString(raw.transport, `${path}.transport`) ?? defaults.transport,
@@ -283,6 +283,28 @@ function optionalNumber(value: unknown, path: string): number | undefined {
     throw new Error(`${path} must be a finite number`);
   }
   return value;
+}
+
+function optionalNonNegativeInteger(value: unknown, path: string): number | undefined {
+  const parsed = optionalNumber(value, path);
+  if (parsed === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${path} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
+function optionalPositiveInteger(value: unknown, path: string): number | undefined {
+  const parsed = optionalNumber(value, path);
+  if (parsed === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${path} must be a positive integer`);
+  }
+  return parsed;
 }
 
 function optionalString(value: unknown, path: string): string | undefined {

@@ -12,7 +12,7 @@ import {
 } from "../config.js";
 import type { NemoFlowModules } from "../modules.js";
 import { registerNemoFlowPlugin } from "../runtime-state.js";
-import type { OpenClawPluginApiLike, PluginLoggerLike } from "../types.js";
+import type { OpenClawHookHandlerLike, OpenClawPluginApiLike, PluginLoggerLike } from "../types.js";
 
 describe("nemo-flow OpenClaw plugin shell", () => {
   it("applies hook-backend config defaults", () => {
@@ -48,6 +48,25 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.throws(
       () => parseConfig({ backend: "managed_execution" }),
       /unsupported nemo-flow backend: managed_execution/,
+    );
+  });
+
+  it("rejects invalid correlation and timeout values", () => {
+    assert.throws(
+      () => parseConfig({ correlation: { llmOutputGraceMs: -1 } }),
+      /correlation\.llmOutputGraceMs must be a non-negative integer/,
+    );
+    assert.throws(
+      () => parseConfig({ correlation: { recordTtlMs: 1.5 } }),
+      /correlation\.recordTtlMs must be a non-negative integer/,
+    );
+    assert.throws(
+      () => parseConfig({ correlation: { maxRecordsPerKey: 0 } }),
+      /correlation\.maxRecordsPerKey must be a positive integer/,
+    );
+    assert.throws(
+      () => parseConfig({ telemetry: { otel: { timeoutMillis: 2.5 } } }),
+      /telemetry\.otel\.timeoutMillis must be a non-negative integer/,
     );
   });
 
@@ -133,6 +152,69 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     );
   });
 
+  it("uses config parsed during registration when service starts", async () => {
+    const api = createApi({ pluginConfig: { correlation: { maxRecordsPerKey: 1 } } });
+
+    registerNemoFlowPlugin(api, async () => createModules());
+    api.pluginConfig = { backend: "managed_execution" };
+
+    const service = api.calls.services[0];
+    assert.ok(service);
+    await assert.doesNotReject(async () => {
+      await service.start({
+        stateDir: "/tmp/openclaw-state",
+        logger: api.logger,
+      });
+    });
+  });
+
+  it("continues hook-backed telemetry when plugin host validation fails", async () => {
+    const modules = createModules({
+      validateDiagnostics: [{ level: "error", code: "bad_config", message: "invalid" }],
+    });
+    const api = createApi();
+
+    registerNemoFlowPlugin(api, async () => modules);
+    const service = api.calls.services[0];
+    assert.ok(service);
+    await service.start({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+
+    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
+    assert.ok(sessionStart);
+    await sessionStart.handler({ sessionId: "session-1" }, { sessionId: "session-1" });
+
+    const status = api.calls.gatewayMethods[0]?.handler();
+    assert.ok(status);
+    assert.deepEqual(modules.nf.calls.event.map((event) => event.name), ["openclaw.session_start"]);
+    assert.equal(status.status.state, "degraded");
+    assert.equal(status.initializedPluginHost, false);
+  });
+
+  it("routes gateway_stop through runtime stop", async () => {
+    const modules = createModules();
+    const api = createApi();
+
+    registerNemoFlowPlugin(api, async () => modules);
+    const service = api.calls.services[0];
+    assert.ok(service);
+    await service.start({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+
+    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
+    const gatewayStop = api.calls.hooks.find((hook) => hook.hookName === "gateway_stop");
+    assert.ok(sessionStart);
+    assert.ok(gatewayStop);
+    await sessionStart.handler({ sessionId: "session-1" }, { sessionId: "session-1" });
+    await gatewayStop.handler({ reason: "test_stop" }, {});
+
+    const status = api.calls.gatewayMethods[0]?.handler();
+    assert.ok(status);
+    assert.equal(status.status.state, "stopped");
+    assert.deepEqual(modules.nf.calls.event.map((event) => event.name), [
+      "openclaw.session_start",
+      "openclaw.session_end",
+    ]);
+  });
+
   it("does not statically import nemo-flow-node or OpenClaw private src paths", () => {
     const files = [
       readFileSync(new URL("../modules.js", import.meta.url), "utf8"),
@@ -149,8 +231,11 @@ type TestApi = OpenClawPluginApiLike & {
   calls: {
     services: Parameters<OpenClawPluginApiLike["registerService"]>[0][];
     lifecycle: Parameters<OpenClawPluginApiLike["registerRuntimeLifecycle"]>[0][];
-    gatewayMethods: Array<{ method: string }>;
-    hooks: Array<{ hookName: string }>;
+    gatewayMethods: Array<{
+      method: string;
+      handler: () => { status: { state: string }; initializedPluginHost: boolean };
+    }>;
+    hooks: Array<{ hookName: string; handler: OpenClawHookHandlerLike }>;
   };
   messages: {
     info: string[];
@@ -182,8 +267,12 @@ function createApi(params: {
     resolvePath: (input) => input,
     registerService: (service) => calls.services.push(service),
     registerRuntimeLifecycle: (lifecycle) => calls.lifecycle.push(lifecycle),
-    on: (hookName) => calls.hooks.push({ hookName }),
-    registerGatewayMethod: (method) => calls.gatewayMethods.push({ method }),
+    on: (hookName, handler) => calls.hooks.push({ hookName, handler }),
+    registerGatewayMethod: (method, handler) =>
+      calls.gatewayMethods.push({
+        method,
+        handler: handler as TestApi["calls"]["gatewayMethods"][number]["handler"],
+      }),
     calls,
     messages,
   };
@@ -195,26 +284,68 @@ function createApi(params: {
   return api;
 }
 
-function createModules(): NemoFlowModules {
+type TestNemoFlowRuntime = NemoFlowModules["nf"] & {
+  calls: {
+    event: Array<{ name: string; handle: unknown; data: unknown }>;
+  };
+};
+
+type TestModules = NemoFlowModules & {
+  nf: TestNemoFlowRuntime;
+};
+
+function createModules(params: { validateDiagnostics?: Array<{ level: "warning" | "error"; code: string; message: string }> } = {}): TestModules {
+  const nf = createNemoFlowRuntime();
   return {
-    nf: createNemoFlowRuntime(),
+    nf,
     pluginHost: {
       defaultConfig: () => ({ version: 1, components: [] }),
-      validate: () => ({ diagnostics: [] }),
+      validate: () => ({ diagnostics: params.validateDiagnostics ?? [] }),
       initialize: async () => ({ diagnostics: [] }),
       clear: () => {},
     },
   };
 }
 
-function createNemoFlowRuntime(): NemoFlowModules["nf"] {
+function createNemoFlowRuntime(): TestNemoFlowRuntime {
+  const calls: TestNemoFlowRuntime["calls"] = {
+    event: [],
+  };
   return {
     ScopeType: { Agent: 0 },
+    calls,
     createScopeStack: () => ({ type: "stack" }),
     currentScopeStack: () => ({ type: "previous-stack" }),
     setThreadScopeStack: () => {},
     pushScope: () => ({ type: "scope" }),
     popScope: () => {},
-    event: () => {},
+    event: (name, handle, data) => calls.event.push({ name, handle, data }),
+    llmCall: () => ({}),
+    llmCallEnd: () => {},
+    toolCall: () => ({}),
+    toolCallEnd: () => {},
+    AtifExporter: FakeAtifExporter,
+    OpenTelemetrySubscriber: FakeSubscriber,
+    OpenInferenceSubscriber: FakeSubscriber,
   };
+}
+
+class FakeAtifExporter {
+  register(): void {}
+  deregister(): boolean {
+    return true;
+  }
+  exportJson(): string {
+    return "{}";
+  }
+  clear(): void {}
+}
+
+class FakeSubscriber {
+  register(): void {}
+  deregister(): boolean {
+    return true;
+  }
+  forceFlush(): void {}
+  shutdown(): void {}
 }

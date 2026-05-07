@@ -88,15 +88,18 @@
         "additionalProperties": false,
         "properties": {
           "llmOutputGraceMs": {
-            "type": "number",
+            "type": "integer",
+            "minimum": 0,
             "default": 250
           },
           "recordTtlMs": {
-            "type": "number",
+            "type": "integer",
+            "minimum": 0,
             "default": 600000
           },
           "maxRecordsPerKey": {
-            "type": "number",
+            "type": "integer",
+            "minimum": 1,
             "default": 32
           }
         }
@@ -147,7 +150,8 @@
             "type": "string"
           },
           "timeoutMillis": {
-            "type": "number",
+            "type": "integer",
+            "minimum": 0,
             "default": 3000
           }
         }

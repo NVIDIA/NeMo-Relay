@@ -32,7 +32,7 @@ export function blockedToolDetails(
     return undefined;
   }
 
-  return stripUndefined({
+  return toJsonRecord({
     toolName: event.toolName,
     toolCallId: event.toolCallId,
     runId: event.runId ?? context?.runId,
@@ -43,7 +43,21 @@ export function blockedToolDetails(
 }
 
 export function toJsonRecord(input: Record<string, unknown>): JsonRecord {
-  return stripUndefined(input);
+  return stripUndefined(input, new WeakSet<object>());
+}
+
+export function errorToJson(error: unknown): JsonRecord {
+  if (error instanceof Error) {
+    return toJsonRecord({
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    });
+  }
+  if (isRecord(error)) {
+    return toJsonRecord(error);
+  }
+  return { message: String(error) };
 }
 
 function resultDetails(result: unknown): Record<string, unknown> | undefined {
@@ -54,25 +68,37 @@ function resultDetails(result: unknown): Record<string, unknown> | undefined {
   return isRecord(details) ? details : undefined;
 }
 
-function stripUndefined(input: Record<string, unknown>): JsonRecord {
+function stripUndefined(input: Record<string, unknown>, seen: WeakSet<object>): JsonRecord {
   const output: JsonRecord = {};
   for (const [key, value] of Object.entries(input)) {
     if (value !== undefined) {
-      output[key] = toJsonValue(value);
+      output[key] = toJsonValue(value, seen);
     }
   }
   return output;
 }
 
-function toJsonValue(value: unknown): JsonValue {
+function toJsonValue(value: unknown, seen: WeakSet<object>): JsonValue {
   if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map(toJsonValue);
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    const out = value.map((item) => toJsonValue(item, seen));
+    seen.delete(value);
+    return out;
   }
   if (isRecord(value)) {
-    return stripUndefined(value);
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    const out = stripUndefined(value, seen);
+    seen.delete(value);
+    return out;
   }
   return String(value);
 }

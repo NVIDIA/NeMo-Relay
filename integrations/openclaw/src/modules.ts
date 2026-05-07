@@ -47,6 +47,62 @@ export type NemoFlowRuntimeModule = {
     metadata?: unknown,
     timestamp?: number | null,
   ) => void;
+  llmCall: (
+    name: string,
+    request: unknown,
+    handle?: unknown | null,
+    attributes?: number | null,
+    data?: unknown,
+    metadata?: unknown,
+    modelName?: string | null,
+    timestamp?: number | null,
+  ) => unknown;
+  llmCallEnd: (
+    handle: unknown,
+    response: unknown,
+    data?: unknown,
+    metadata?: unknown,
+    timestamp?: number | null,
+  ) => void;
+  toolCall: (
+    name: string,
+    args: unknown,
+    handle?: unknown | null,
+    attributes?: number | null,
+    data?: unknown,
+    metadata?: unknown,
+    toolCallId?: string | null,
+    timestamp?: number | null,
+  ) => unknown;
+  toolCallEnd: (
+    handle: unknown,
+    result: unknown,
+    data?: unknown,
+    metadata?: unknown,
+    timestamp?: number | null,
+  ) => void;
+  AtifExporter: new (
+    sessionId: string,
+    agentName: string,
+    agentVersion: string,
+    modelName?: string | null,
+  ) => AtifExporterLike;
+  OpenTelemetrySubscriber: new (config?: Record<string, unknown>) => NemoFlowSubscriber;
+  OpenInferenceSubscriber: new (config?: Record<string, unknown>) => NemoFlowSubscriber;
+};
+
+export type NemoFlowSubscriber = {
+  register: (name: string) => void;
+  deregister: (name: string) => boolean;
+  forceFlush: () => void;
+  shutdown: () => void;
+};
+
+export type AtifExporterLike = {
+  register: (name: string) => void;
+  deregister: (name: string) => boolean;
+  exportJson: () => string;
+  clear: () => void;
 };
 
 export type NemoFlowModules = {

@@ -23,7 +23,6 @@ import type {
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
-  PluginHookGatewayStopEvent,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
   PluginHookModelCallEndedEvent,
@@ -42,12 +41,18 @@ export type HookReplayBackendOptions = {
   nf: NemoFlowRuntimeModule;
   config: NemoFlowHookBackendConfig;
   logger: PluginLoggerLike;
+  agentVersion: string;
+  resolvedAtifOutputDir: string;
+  markOutputDegraded: (output: "atif" | "otel" | "openInference") => void;
 };
 
 export class HookReplayBackend {
   private readonly nf: NemoFlowRuntimeModule;
   private readonly config: NemoFlowHookBackendConfig;
   private readonly logger: PluginLoggerLike;
+  private readonly agentVersion: string;
+  private readonly resolvedAtifOutputDir: string;
+  private readonly markOutputDegradedValue: (output: "atif" | "otel" | "openInference") => void;
   private readonly stateValue = createHookReplayState();
   private readonly warningCounts = new Map<string, number>();
 
@@ -55,6 +60,9 @@ export class HookReplayBackend {
     this.nf = options.nf;
     this.config = options.config;
     this.logger = options.logger;
+    this.agentVersion = options.agentVersion;
+    this.resolvedAtifOutputDir = options.resolvedAtifOutputDir;
+    this.markOutputDegradedValue = options.markOutputDegraded;
   }
 
   state(): HookReplayBackendState {
@@ -64,10 +72,6 @@ export class HookReplayBackend {
   onGatewayStart(_event: PluginHookGatewayStartEvent, _ctx: PluginHookGatewayContext): void {
     // Gateway events have no session root in the hook backend. Keep this hook
     // registered so later telemetry lifecycle can attach without changing the shell.
-  }
-
-  onGatewayStop(event: PluginHookGatewayStopEvent, _ctx: PluginHookGatewayContext): void {
-    this.closeAllSessions({ reason: event.reason ?? "gateway_stop" });
   }
 
   onSessionStart(event: PluginHookSessionStartEvent, ctx: PluginHookSessionContext): void {
@@ -82,7 +86,7 @@ export class HookReplayBackend {
     // ensureSession opens the root scope and emits openclaw.session_start for both explicit and lazy sessions.
   }
 
-  onSessionEnd(event: PluginHookSessionEndEvent, ctx: PluginHookSessionContext): void {
+  async onSessionEnd(event: PluginHookSessionEndEvent, ctx: PluginHookSessionContext): Promise<void> {
     const session = this.ensureSession({
       sessionId: event.sessionId,
       sessionKey: event.sessionKey ?? ctx.sessionKey,
@@ -298,7 +302,11 @@ export class HookReplayBackend {
     );
   }
 
-  stop(reason: string): void {
+  async drainForGatewayStop(reason?: string): Promise<void> {
+    this.closeAllSessions({ reason: reason ?? "gateway_stop" });
+  }
+
+  async stop(reason: string): Promise<void> {
     this.closeAllSessions({ reason });
   }
 
@@ -310,6 +318,22 @@ export class HookReplayBackend {
       this.logBoundedWarn(
         `safe-replay:${label}`,
         `nemo-flow replay failed: label=${label} session=${session?.sessionId ?? "unknown"} error=${toMessage(error)}`,
+      );
+    }
+  }
+
+  async safeReplayAsync(
+    label: string,
+    session: SessionState | undefined,
+    emit: () => Promise<void>,
+  ): Promise<void> {
+    try {
+      await emit();
+    } catch (error) {
+      this.stateValue.counters.replayErrors += 1;
+      this.logBoundedWarn(
+        `safe-replay:${label}`,
+        `nemo-flow async replay failed: label=${label} session=${session?.sessionId ?? "unknown"} error=${toMessage(error)}`,
       );
     }
   }
@@ -400,11 +424,14 @@ export class HookReplayBackend {
       config: this.config,
       logger: this.logger,
       state: this.stateValue,
+      agentVersion: this.agentVersion,
+      resolvedAtifOutputDir: this.resolvedAtifOutputDir,
       emitCapturedUnderSession: (label: string, session: SessionState, emit: () => void) =>
         this.emitCapturedUnderSession(label, session, emit),
       replayPendingLlmOutputsForSession: (session: SessionState, options: { allowPlaceholderRequest: boolean }) =>
         this.replayPendingLlmOutputsForSession(session, options),
       emitUnpairedModelCallTimingMarks: (session: SessionState) => this.emitUnpairedModelCallTimingMarks(session),
+      markOutputDegraded: (output: "atif" | "otel" | "openInference") => this.markOutputDegradedValue(output),
       logBoundedWarn: (key: string, message: string) => this.logBoundedWarn(key, message),
     };
   }
