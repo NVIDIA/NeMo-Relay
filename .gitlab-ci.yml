@@ -230,8 +230,8 @@ publish:artifactory:cargo:
     - |
       set -eu
 
-      if [ -z "${NEMO_FLOW_CI_ARTIFACTORY_USER:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL:-}" ]; then
-        echo "Error: uploading Cargo crates to Artifactory requires NEMO_FLOW_CI_ARTIFACTORY_USER, NEMO_FLOW_CI_ARTIFACTORY_KEY, and NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL." >&2
+      if [ -z "${NEMO_FLOW_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL:-}" ]; then
+        echo "Error: uploading Cargo crates to Artifactory requires NEMO_FLOW_CI_ARTIFACTORY_KEY and NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL." >&2
         exit 1
       fi
       if [ ! -f collected/github-run.json ]; then
@@ -256,20 +256,14 @@ publish:artifactory:cargo:
 
       cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
       mkdir -p "$cargo_home"
-      cargo_auth="Basic $(printf '%s:%s' "${NEMO_FLOW_CI_ARTIFACTORY_USER}" "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" | base64 | tr -d '\n')"
+
       cat > "${cargo_home}/config.toml" <<EOF
-      [registries.artifactory]
-      index = "${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL}"
-      credential-provider = "cargo:token"
+      [registries]
+      artifactory = { index = "sparse+${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL}" }
       EOF
-      cat > "${cargo_home}/credentials.toml" <<EOF
-      [registries.artifactory]
-      token = "${cargo_auth}"
-      EOF
-      chmod 600 "${cargo_home}/credentials.toml"
 
       for crate in nemo-flow nemo-flow-adaptive nemo-flow-ffi; do
-        cargo publish --package "$crate" --registry artifactory --allow-dirty
+        cargo publish --package "$crate" --registry artifactory --token "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" --allow-dirty
       done
 
 publish:artifactory:npm:
