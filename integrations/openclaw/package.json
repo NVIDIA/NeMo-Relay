@@ -13,8 +13,24 @@
     }
   },
   "files": [
-    "dist",
-    "openclaw.plugin.json"
+    "dist/**",
+    "index.ts",
+    "src/atif-capture.ts",
+    "src/config.ts",
+    "src/health.ts",
+    "src/hook-replay/correlation.ts",
+    "src/hook-replay/llm.ts",
+    "src/hook-replay/marks.ts",
+    "src/hook-replay/session.ts",
+    "src/hook-replay/tool.ts",
+    "src/hooks-backend.ts",
+    "src/modules.ts",
+    "src/openclaw-hook-types.ts",
+    "src/runtime-state.ts",
+    "src/telemetry.ts",
+    "src/types.ts",
+    "openclaw.plugin.json",
+    "README.md"
   ],
   "openclaw": {
     "extensions": [
@@ -33,10 +49,13 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/build.mjs",
+    "build:test": "node scripts/build-test.mjs",
+    "pack:check": "node scripts/check-pack-payload.mjs",
+    "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test \"dist/src/__tests__/*.test.js\"",
-    "test:live": "npm run build && NEMO_FLOW_OPENCLAW_LIVE_SMOKE=1 node --test \"dist/src/__tests__/live-smoke.test.js\""
+    "test": "npm run build:test && node --test \".test-dist/src/__tests__/*.test.js\"",
+    "test:live": "npm run build:test && NEMO_FLOW_OPENCLAW_LIVE_SMOKE=1 node --test \".test-dist/src/__tests__/live-smoke.test.js\""
   },
   "peerDependencies": {
     "openclaw": ">=2026.5.6"

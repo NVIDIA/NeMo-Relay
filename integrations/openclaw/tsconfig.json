@@ -4,11 +4,8 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
     "rootDir": ".",
-    "outDir": "dist",
+    "noEmit": true,
     "resolveJsonModule": true,
     "types": [
       "node"
