@@ -76,7 +76,17 @@ function stripUndefined(input: Record<string, unknown>, seen: WeakSet<object>): 
   const output: JsonRecord = {};
   for (const [key, value] of Object.entries(input)) {
     if (value !== undefined) {
-      output[key] = normalizeJsonValue(value, seen);
+      const normalized = normalizeJsonValue(value, seen);
+      if (key === "__proto__") {
+        Object.defineProperty(output, key, {
+          configurable: true,
+          enumerable: true,
+          value: normalized,
+          writable: true,
+        });
+      } else {
+        output[key] = normalized;
+      }
     }
   }
   return output;

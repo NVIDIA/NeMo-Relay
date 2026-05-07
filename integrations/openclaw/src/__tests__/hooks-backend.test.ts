@@ -315,6 +315,20 @@ describe("HookReplayBackend", () => {
     });
     assert.deepEqual(errorToJson(new Error("boom")).message, "boom");
   });
+
+  it("normalizes prototype keys without mutating output prototypes", () => {
+    const payload: Record<string, unknown> = {};
+    Object.defineProperty(payload, "__proto__", {
+      enumerable: true,
+      value: { polluted: true },
+    });
+
+    const normalized = toJsonRecord(payload);
+
+    assert.equal(Object.getPrototypeOf(normalized), Object.prototype);
+    assert.deepEqual(normalized["__proto__"], { polluted: true });
+    assert.equal(({} as Record<string, unknown>).polluted, undefined);
+  });
 });
 
 type TestNemoFlowRuntime = NemoFlowRuntimeModule & {
