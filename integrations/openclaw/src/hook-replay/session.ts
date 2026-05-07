@@ -3,8 +3,13 @@
 
 import type { NemoFlowHookBackendConfig } from "../config.js";
 import { createAtifExporter } from "../atif-capture.js";
+import { evictExpiredRecords, tupleKey as tupleKeyFromCorrelation } from "./correlation.js";
 import type { AtifExporterLike } from "../modules.js";
-import type { PluginHookModelCallEndedEvent } from "../openclaw-hook-types.js";
+import type {
+  PluginHookAgentContext,
+  PluginHookLlmOutputEvent,
+  PluginHookModelCallEndedEvent,
+} from "../openclaw-hook-types.js";
 import type { JsonRecord, PluginLoggerLike } from "../types.js";
 import type { NemoFlowRuntimeModule } from "../modules.js";
 
@@ -42,17 +47,52 @@ export type SessionState = {
 
 export type PendingLlmOutputRecord = {
   sessionKey: string;
+  sessionId: string;
+  runId: string;
+  provider: string;
+  model: string;
+  event: PluginHookLlmOutputEvent;
+  ctx: PluginHookAgentContext;
+  observedAtMs: number;
   timer?: ReturnType<typeof setTimeout> | undefined;
 };
 
 export type LlmInputRecord = {
   sessionKey: string;
+  sessionId: string;
+  runId: string;
+  provider: string;
+  model: string;
+  prompt: string;
+  historyMessages: unknown[];
+  imagesCount: number;
+  observedAtMs: number;
+  systemPrompt?: string | undefined;
+  placeholderRequest?: boolean | undefined;
 };
 
 export type ModelCallRecord = {
   sessionKey: string;
-  event: PluginHookModelCallEndedEvent;
+  runId: string;
+  callId: string;
+  provider: string;
+  model: string;
   consumed: boolean;
+  observedAtMs: number;
+  sessionId?: string | undefined;
+  api?: string | undefined;
+  transport?: string | undefined;
+  startedAtMs?: number | undefined;
+  endedAtMs?: number | undefined;
+  durationMs?: number | undefined;
+  outcome?: PluginHookModelCallEndedEvent["outcome"] | undefined;
+  errorCategory?: string | undefined;
+  failureKind?: PluginHookModelCallEndedEvent["failureKind"] | undefined;
+  requestPayloadBytes?: number | undefined;
+  responseStreamBytes?: number | undefined;
+  timeToFirstByteMs?: number | undefined;
+  upstreamRequestIdHash?: string | undefined;
+  ambiguous?: boolean | undefined;
 };
 
 export type HookReplayCounters = {
@@ -69,7 +109,8 @@ export type HookReplayBackendState = {
   sessionAliases: Map<string, string>;
   llmInputs: Map<string, LlmInputRecord[]>;
   llmOutputsPendingInput: Map<string, PendingLlmOutputRecord[]>;
-  modelCallsByRun: Map<string, ModelCallRecord[]>;
+  modelCallsByCallId: Map<string, ModelCallRecord[]>;
+  modelTimingsByLlmKey: Map<string, ModelCallRecord[]>;
   counters: HookReplayCounters;
 };
 
@@ -132,7 +173,8 @@ export function createHookReplayState(): HookReplayBackendState {
     sessionAliases: new Map(),
     llmInputs: new Map(),
     llmOutputsPendingInput: new Map(),
-    modelCallsByRun: new Map(),
+    modelCallsByCallId: new Map(),
+    modelTimingsByLlmKey: new Map(),
     counters: {
       llmSpansReplayed: 0,
       toolSpansReplayed: 0,
@@ -233,7 +275,14 @@ export function insertBoundedRecord<T>(
 }
 
 export function tupleKey(parts: Array<string | undefined>): string {
-  return JSON.stringify(parts.map((part) => (typeof part === "string" && part.length > 0 ? part : null)));
+  return tupleKeyFromCorrelation(parts);
+}
+
+export function evictExpiredCorrelationRecords(state: HookReplayBackendState, nowMs: number, ttlMs: number): void {
+  evictExpiredRecords(state.llmInputs, nowMs, ttlMs);
+  evictExpiredPendingLlmOutputs(state.llmOutputsPendingInput, nowMs, ttlMs);
+  evictExpiredRecords(state.modelCallsByCallId, nowMs, ttlMs);
+  evictExpiredRecords(state.modelTimingsByLlmKey, nowMs, ttlMs);
 }
 
 function openSessionRoot(manager: SessionManager, session: SessionState, input: EnsureSessionInput): void {
@@ -276,7 +325,8 @@ function cancelPendingLlmOutputTimers(state: HookReplayBackendState, session: Se
 function evictSessionCorrelationRecords(state: HookReplayBackendState, session: SessionState): void {
   evictFromRecordMap(state.llmInputs, session.sessionId);
   evictFromRecordMap(state.llmOutputsPendingInput, session.sessionId);
-  evictFromRecordMap(state.modelCallsByRun, session.sessionId);
+  evictFromRecordMap(state.modelCallsByCallId, session.sessionId);
+  evictFromRecordMap(state.modelTimingsByLlmKey, session.sessionId);
 
   for (const [alias, canonical] of state.sessionAliases) {
     if (canonical === session.sessionId || alias === session.sessionId) {
@@ -288,6 +338,31 @@ function evictSessionCorrelationRecords(state: HookReplayBackendState, session: 
 function evictFromRecordMap<T extends { sessionKey: string }>(map: Map<string, T[]>, sessionKey: string): void {
   for (const [key, records] of map) {
     const retained = records.filter((record) => record.sessionKey !== sessionKey);
+    if (retained.length === 0) {
+      map.delete(key);
+    } else {
+      map.set(key, retained);
+    }
+  }
+}
+
+function evictExpiredPendingLlmOutputs(
+  map: Map<string, PendingLlmOutputRecord[]>,
+  nowMs: number,
+  ttlMs: number,
+): void {
+  for (const [key, records] of map) {
+    const retained: PendingLlmOutputRecord[] = [];
+    for (const record of records) {
+      if (nowMs - record.observedAtMs <= ttlMs) {
+        retained.push(record);
+        continue;
+      }
+      if (record.timer) {
+        clearTimeout(record.timer);
+        record.timer = undefined;
+      }
+    }
     if (retained.length === 0) {
       map.delete(key);
     } else {

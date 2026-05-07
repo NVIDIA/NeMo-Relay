@@ -46,6 +46,10 @@ export function toJsonRecord(input: Record<string, unknown>): JsonRecord {
   return stripUndefined(input, new WeakSet<object>());
 }
 
+export function toJsonValue(input: unknown): JsonValue {
+  return normalizeJsonValue(input, new WeakSet<object>());
+}
+
 export function errorToJson(error: unknown): JsonRecord {
   if (error instanceof Error) {
     return toJsonRecord({
@@ -72,13 +76,13 @@ function stripUndefined(input: Record<string, unknown>, seen: WeakSet<object>): 
   const output: JsonRecord = {};
   for (const [key, value] of Object.entries(input)) {
     if (value !== undefined) {
-      output[key] = toJsonValue(value, seen);
+      output[key] = normalizeJsonValue(value, seen);
     }
   }
   return output;
 }
 
-function toJsonValue(value: unknown, seen: WeakSet<object>): JsonValue {
+function normalizeJsonValue(value: unknown, seen: WeakSet<object>): JsonValue {
   if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return value;
   }
@@ -87,7 +91,7 @@ function toJsonValue(value: unknown, seen: WeakSet<object>): JsonValue {
       return "[Circular]";
     }
     seen.add(value);
-    const out = value.map((item) => toJsonValue(item, seen));
+    const out = value.map((item) => normalizeJsonValue(item, seen));
     seen.delete(value);
     return out;
   }

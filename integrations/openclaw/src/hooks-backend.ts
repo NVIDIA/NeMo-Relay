@@ -3,16 +3,24 @@
 
 import type { NemoFlowHookBackendConfig } from "./config.js";
 import { exportAtifJson, withAtifCapture } from "./atif-capture.js";
-import { emitMark, blockedToolDetails, toJsonRecord } from "./hook-replay/marks.js";
+import { emitMark, toJsonRecord } from "./hook-replay/marks.js";
+import { llmKey } from "./hook-replay/correlation.js";
+import {
+  emitUnpairedModelCallTimingMarks,
+  recordLlmInput,
+  recordLlmOutput,
+  recordModelCallEnded,
+  recordModelCallStarted,
+  replayPendingLlmOutputsForSession,
+} from "./hook-replay/llm.js";
+import { replayAfterToolCall } from "./hook-replay/tool.js";
 import {
   createHookReplayState,
   drainSession,
   closeSessionRoot,
   deleteSession,
   ensureSession,
-  insertBoundedRecord,
   resolveSessionKey,
-  tupleKey,
   type HookReplayBackendState,
   type SessionState,
 } from "./hook-replay/session.js";
@@ -103,85 +111,23 @@ export class HookReplayBackend {
   }
 
   onLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext): void {
-    const session = this.ensureSession({
-      sessionId: event.sessionId,
-      sessionKey: ctx.sessionKey,
-      runId: event.runId,
-      agentId: ctx.agentId,
-      source: "lazy_session",
-    });
-
-    if (!session) {
-      return;
-    }
-
-    insertBoundedRecord(
-      this.stateValue.llmInputs,
-      llmKey(event),
-      { sessionKey: session.sessionId },
-      this.config.correlation.maxRecordsPerKey,
-    );
+    recordLlmInput(this.sessionManager(), event, ctx);
   }
 
   onLlmOutput(event: PluginHookLlmOutputEvent, ctx: PluginHookAgentContext): void {
-    const session = this.ensureSession({
-      sessionId: event.sessionId,
-      sessionKey: ctx.sessionKey,
-      runId: event.runId,
-      agentId: ctx.agentId,
-      source: "lazy_session",
-    });
-
-    if (!session) {
-      return;
-    }
-
-    insertBoundedRecord(
-      this.stateValue.llmOutputsPendingInput,
-      llmKey(event),
-      { sessionKey: session.sessionId },
-      this.config.correlation.maxRecordsPerKey,
-    );
+    recordLlmOutput(this.sessionManager(), event, ctx);
   }
 
-  onModelCallStarted(_event: PluginHookModelCallStartedEvent, _ctx: PluginHookAgentContext): void {
-    // Phase 2 records completed model timing only. Full timing enrichment lands with LLM replay in Phase 4.
+  onModelCallStarted(event: PluginHookModelCallStartedEvent, ctx: PluginHookAgentContext): void {
+    recordModelCallStarted(this.sessionManager(), event, ctx);
   }
 
   onModelCallEnded(event: PluginHookModelCallEndedEvent, ctx: PluginHookAgentContext): void {
-    const session = this.ensureSession({
-      sessionId: event.sessionId ?? ctx.sessionId,
-      sessionKey: event.sessionKey ?? ctx.sessionKey,
-      runId: event.runId,
-      agentId: ctx.agentId,
-      source: "lazy_session",
-    });
-
-    if (!session) {
-      return;
-    }
-
-    insertBoundedRecord(
-      this.stateValue.modelCallsByRun,
-      tupleKey([session.sessionId, event.runId, event.provider, event.model]),
-      { sessionKey: session.sessionId, event, consumed: false },
-      this.config.correlation.maxRecordsPerKey,
-    );
+    recordModelCallEnded(this.sessionManager(), event, ctx);
   }
 
   onAfterToolCall(event: PluginHookAfterToolCallEvent, ctx: PluginHookToolContext): void {
-    const session = this.ensureSession({
-      sessionId: ctx.sessionId,
-      sessionKey: ctx.sessionKey,
-      runId: event.runId ?? ctx.runId,
-      agentId: ctx.agentId,
-      source: "lazy_session",
-    });
-
-    const details = blockedToolDetails(event, { runId: ctx.runId });
-    if (session && details) {
-      this.emitSessionMark("openclaw.tool_blocked", session, details);
-    }
+    replayAfterToolCall(this.sessionManager(), event, ctx);
   }
 
   onAgentEnd(event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext): void {
@@ -351,40 +297,12 @@ export class HookReplayBackend {
     });
   }
 
-  replayPendingLlmOutputsForSession(_session: SessionState, _options: { allowPlaceholderRequest: boolean }): void {
-    // Phase 4 replaces this extension point with real llmCall/llmCallEnd replay.
+  replayPendingLlmOutputsForSession(session: SessionState, options: { allowPlaceholderRequest: boolean }): void {
+    replayPendingLlmOutputsForSession(this.sessionManager(), session, options);
   }
 
   emitUnpairedModelCallTimingMarks(session: SessionState): void {
-    for (const records of this.stateValue.modelCallsByRun.values()) {
-      for (const record of records) {
-        if (record.sessionKey !== session.sessionId || record.consumed) {
-          continue;
-        }
-
-        this.emitSessionMark(
-          "openclaw.model_call_timing_unpaired",
-          session,
-          toJsonRecord({
-            runId: record.event.runId,
-            callId: record.event.callId,
-            provider: record.event.provider,
-            model: record.event.model,
-            api: record.event.api,
-            transport: record.event.transport,
-            durationMs: record.event.durationMs,
-            outcome: record.event.outcome,
-            errorCategory: record.event.errorCategory,
-            failureKind: record.event.failureKind,
-            requestPayloadBytes: record.event.requestPayloadBytes,
-            responseStreamBytes: record.event.responseStreamBytes,
-            timeToFirstByteMs: record.event.timeToFirstByteMs,
-            upstreamRequestIdHash: record.event.upstreamRequestIdHash,
-          }),
-        );
-        record.consumed = true;
-      }
-    }
+    emitUnpairedModelCallTimingMarks(this.sessionManager(), session);
   }
 
   private ensureSession(input: Parameters<typeof ensureSession>[1]): SessionState | undefined {
@@ -447,14 +365,7 @@ export class HookReplayBackend {
   }
 }
 
-export function llmKey(input: {
-  sessionId?: string;
-  runId?: string;
-  provider?: string;
-  model?: string;
-}): string {
-  return tupleKey([input.sessionId, input.runId, input.provider, input.model]);
-}
+export { llmKey };
 
 export function resolveBackendSessionKey(
   state: HookReplayBackendState,

@@ -16,7 +16,7 @@ import type { OpenClawHookHandlerLike, OpenClawPluginApiLike, PluginLoggerLike }
 const liveSmokeEnabled = process.env.NEMO_FLOW_OPENCLAW_LIVE_SMOKE === "1";
 
 it(
-  "runs a live NeMo Flow binding smoke for session ATIF export",
+  "runs a live NeMo Flow binding smoke for session ATIF export and hook replay",
   { skip: !liveSmokeEnabled },
   async () => {
     const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "nemo-flow-openclaw-live-"));
@@ -47,11 +47,57 @@ it(
       serviceStarted = true;
 
       const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
+      const llmInput = api.calls.hooks.find((hook) => hook.hookName === "llm_input");
+      const llmOutput = api.calls.hooks.find((hook) => hook.hookName === "llm_output");
+      const afterToolCall = api.calls.hooks.find((hook) => hook.hookName === "after_tool_call");
       const sessionEnd = api.calls.hooks.find((hook) => hook.hookName === "session_end");
       assert.ok(sessionStart, "expected session_start hook registration");
+      assert.ok(llmInput, "expected llm_input hook registration");
+      assert.ok(llmOutput, "expected llm_output hook registration");
+      assert.ok(afterToolCall, "expected after_tool_call hook registration");
       assert.ok(sessionEnd, "expected session_end hook registration");
 
       await sessionStart.handler({ sessionId: "../live-session:1" }, { sessionId: "../live-session:1" });
+      await llmInput.handler(
+        {
+          runId: "live-run-1",
+          sessionId: "../live-session:1",
+          provider: "openai",
+          model: "gpt-live",
+          systemPrompt: "be concise",
+          prompt: "hello",
+          historyMessages: [],
+          imagesCount: 0,
+        },
+        { runId: "live-run-1", sessionId: "../live-session:1", agentId: "agent-live" },
+      );
+      await llmOutput.handler(
+        {
+          runId: "live-run-1",
+          sessionId: "../live-session:1",
+          provider: "openai",
+          model: "gpt-live",
+          assistantTexts: ["hi"],
+          usage: { input: 1, output: 1 },
+        },
+        { runId: "live-run-1", sessionId: "../live-session:1", agentId: "agent-live" },
+      );
+      await afterToolCall.handler(
+        {
+          toolName: "read_file",
+          params: { path: "README.md" },
+          runId: "live-run-1",
+          toolCallId: "tool-live-1",
+          result: { text: "ok" },
+          durationMs: 2,
+        },
+        {
+          runId: "live-run-1",
+          sessionId: "../live-session:1",
+          toolName: "read_file",
+          toolCallId: "tool-live-1",
+        },
+      );
       await sessionEnd.handler(
         { sessionId: "../live-session:1", messageCount: 1, reason: "idle" },
         { sessionId: "../live-session:1" },
@@ -64,6 +110,8 @@ it(
       const status = api.calls.gatewayMethods[0]?.handler();
       assert.ok(status);
       assert.equal(status.outputs.atif, "enabled");
+      assert.equal(status.counters.llmSpansReplayed, 1);
+      assert.equal(status.counters.toolSpansReplayed, 1);
       assert.equal(status.counters.atifFilesWritten, 1);
 
     } finally {

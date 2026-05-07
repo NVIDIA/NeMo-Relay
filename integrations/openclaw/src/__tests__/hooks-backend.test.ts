@@ -125,7 +125,8 @@ describe("HookReplayBackend", () => {
     assert.equal(backend.state().sessionAliases.size, 0);
     assert.equal(backend.state().llmInputs.size, 0);
     assert.equal(backend.state().llmOutputsPendingInput.size, 0);
-    assert.equal(backend.state().modelCallsByRun.size, 0);
+    assert.equal(backend.state().modelCallsByCallId.size, 0);
+    assert.equal(backend.state().modelTimingsByLlmKey.size, 0);
     assert.deepEqual(
       nf.calls.event.map((event) => event.name),
       [
