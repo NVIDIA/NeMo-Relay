@@ -11,7 +11,9 @@ from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
+    HumanMessage,
     SystemMessage,
+    ToolMessage,
     convert_to_messages,
     convert_to_openai_messages,
     messages_from_dict,
@@ -32,7 +34,6 @@ def get_model_name(model: Any) -> str | None:
     return None
 
 
-# TODO: Remove is not used
 def get_model_provider(model: Any) -> str:
     """Best-effort provider/name label for a LangChain chat model."""
     name = model.__class__.__name__
@@ -288,6 +289,137 @@ def openai_chat_model_response_from_json(payload: Any, codec: Any) -> ModelRespo
         structured_response = codec.from_json(payload["structured_response"])
     return ModelResponse(
         result=convert_to_messages([message_dict]),
+        structured_response=structured_response,
+    )
+
+
+def _anthropic_content(value: Any) -> str | list[dict[str, Any]]:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(isinstance(item, dict) for item in value):
+        return value
+    return str(value)
+
+
+def _message_to_anthropic(message: BaseMessage) -> dict[str, Any]:
+    if isinstance(message, AIMessage):
+        return {"role": "assistant", "content": _anthropic_content(message.content)}
+    if isinstance(message, ToolMessage):
+        return {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": message.tool_call_id,
+                    "content": _anthropic_content(message.content),
+                }
+            ],
+        }
+    return {"role": "user", "content": _anthropic_content(message.content)}
+
+
+def anthropic_messages_model_request_payload(request: ModelRequest[Any]) -> dict[str, Any]:
+    """Serialize public ``ModelRequest`` fields into Anthropic Messages payload shape."""
+    payload: dict[str, Any] = {
+        "messages": [_message_to_anthropic(message) for message in request.messages],
+    }
+    if request.system_message is not None:
+        payload["system"] = _anthropic_content(request.system_message.content)
+    if name := get_model_name(request.model):
+        payload["model"] = name
+    if request.model_settings:
+        payload.update(request.model_settings)
+    if request.tools:
+        payload["tools"] = [tool if isinstance(tool, dict) else tool_to_json(tool) for tool in request.tools]
+    if request.tool_choice is not None:
+        payload["tool_choice"] = request.tool_choice
+    return payload
+
+
+def anthropic_messages_payload_to_model_request(
+    original: ModelRequest[Any],
+    payload: dict[str, Any],
+) -> ModelRequest[Any]:
+    """Apply Anthropic Messages request-intercept edits back to ``ModelRequest``."""
+    messages: list[BaseMessage] = []
+    for raw in payload.get("messages", []):
+        if not isinstance(raw, dict):
+            continue
+        role = raw.get("role")
+        content = raw.get("content", "")
+        if role == "assistant":
+            messages.append(AIMessage(content=content))
+        else:
+            messages.append(HumanMessage(content=content))
+
+    overrides: dict[str, Any] = {}
+    if messages:
+        overrides["messages"] = messages
+    if "system" in payload:
+        overrides["system_message"] = SystemMessage(content=payload["system"])
+    if "tools" in payload and isinstance(payload["tools"], list):
+        overrides["tools"] = payload["tools"]
+    if "tool_choice" in payload:
+        overrides["tool_choice"] = payload["tool_choice"]
+
+    model_settings = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"messages", "system", "tools", "tool_choice", LANGCHAIN_MODEL_RESPONSE_KEY}
+    }
+    if model_settings:
+        overrides["model_settings"] = {**original.model_settings, **model_settings}
+
+    return original.override(**overrides) if overrides else original
+
+
+def anthropic_messages_model_response_to_json(response: ModelResponse[Any], codec: Any) -> dict[str, Any]:
+    """Serialize ``ModelResponse`` into Anthropic Messages response shape."""
+    message = response.result[0] if response.result else AIMessage(content="")
+    content = _anthropic_content(message.content)
+    if isinstance(content, str):
+        anthropic_content: list[dict[str, Any]] = [{"type": "text", "text": content}]
+    else:
+        anthropic_content = content
+
+    payload: dict[str, Any] = {
+        "id": getattr(message, "id", None) or "langchain-nemo-flow",
+        "type": "message",
+        "role": "assistant",
+        "content": anthropic_content,
+        "model": getattr(message, "response_metadata", {}).get("model_name") or "unknown",
+        "stop_reason": getattr(message, "response_metadata", {}).get("stop_reason"),
+        LANGCHAIN_MODEL_RESPONSE_KEY: _model_response_payload(response, codec),
+    }
+    if usage := getattr(message, "usage_metadata", None):
+        payload["usage"] = usage
+    return payload
+
+
+def anthropic_messages_model_response_from_json(payload: Any, codec: Any) -> ModelResponse[Any]:
+    """Deserialize Anthropic Messages response shape into ``ModelResponse``."""
+    if isinstance(payload, dict) and LANGCHAIN_MODEL_RESPONSE_KEY in payload:
+        decoded = _model_response_from_payload(payload[LANGCHAIN_MODEL_RESPONSE_KEY], codec)
+        if decoded is not None:
+            return decoded
+
+    if not isinstance(payload, dict):
+        raise TypeError(f"Expected Anthropic Messages response payload, received {type(payload)!r}")
+
+    parts = payload.get("content", [])
+    text_parts: list[str] = []
+    if isinstance(parts, list):
+        for part in parts:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text_parts.append(str(part.get("text", "")))
+    elif isinstance(parts, str):
+        text_parts.append(parts)
+
+    structured_response = None
+    if "structured_response" in payload:
+        structured_response = codec.from_json(payload["structured_response"])
+    return ModelResponse(
+        result=[AIMessage(content="".join(text_parts), response_metadata={"model_provider": "anthropic"})],
         structured_response=structured_response,
     )
 

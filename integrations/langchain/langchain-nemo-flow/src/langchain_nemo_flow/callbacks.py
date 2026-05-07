@@ -6,12 +6,15 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
-from uuid import UUID
+import typing
+
 
 from langchain_core.callbacks.base import BaseCallbackHandler
 
 import nemo_flow
+
+if typing.TYPE_CHECKING:
+    from uuid import UUID
 
 _logger = logging.getLogger(__name__)
 
@@ -21,19 +24,19 @@ class NemoFlowCallbackHandler(BaseCallbackHandler):
 
     def __init__(self) -> None:
         super().__init__()
-        self._scope_handles: dict[UUID, Any] = {}
+        self._scope_handles: dict[UUID, typing.Any] = {}
 
     def on_chain_start(
         self,
-        serialized: dict[str, Any],
-        inputs: dict[str, Any],
+        serialized: dict[str, typing.Any],
+        inputs: dict[str, typing.Any],
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
         tags: list[str] | None = None,
-        metadata: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> Any:
+        metadata: dict[str, typing.Any] | None = None,
+        **kwargs: typing.Any,
+    ) -> typing.Any:
         """Push a NeMo Flow Agent scope for a LangChain chain run."""
         try:
             name = serialized.get("name") or serialized.get("id", ["Unknown"])[-1]
@@ -52,12 +55,12 @@ class NemoFlowCallbackHandler(BaseCallbackHandler):
 
     def on_chain_end(
         self,
-        outputs: dict[str, Any],
+        outputs: dict[str, typing.Any],
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
-        **kwargs: Any,
-    ) -> Any:
+        **kwargs: typing.Any,
+    ) -> typing.Any:
         """Pop the NeMo Flow scope associated with a LangChain chain run."""
         self._pop_scope(run_id, output=outputs)
         return None
@@ -68,13 +71,13 @@ class NemoFlowCallbackHandler(BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
-        **kwargs: Any,
-    ) -> Any:
+        **kwargs: typing.Any,
+    ) -> typing.Any:
         """Pop the NeMo Flow scope associated with a failed LangChain chain run."""
         self._pop_scope(run_id, output={"error": repr(error)})
         return None
 
-    def _pop_scope(self, run_id: UUID, *, output: Any | None = None) -> None:
+    def _pop_scope(self, run_id: UUID, *, output: typing.Any | None = None) -> None:
         handle = self._scope_handles.pop(run_id, None)
         if handle is None:
             return

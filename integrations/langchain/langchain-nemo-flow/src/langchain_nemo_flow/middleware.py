@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -21,19 +20,21 @@ from langchain_nemo_flow._serialization import (
     ModelResponseFromJson,
     ModelResponseToJson,
     PayloadToModelRequest,
+    anthropic_messages_model_request_payload,
+    anthropic_messages_model_response_from_json,
+    anthropic_messages_model_response_to_json,
+    anthropic_messages_payload_to_model_request,
     best_effort_model_response_from_json,
     best_effort_model_response_to_json,
     default_model_request_payload,
     default_payload_to_model_request,
     get_model_name,
+    get_model_provider,
     openai_chat_model_request_payload,
     openai_chat_model_response_from_json,
     openai_chat_model_response_to_json,
     openai_chat_payload_to_model_request,
 )
-
-_logger = logging.getLogger(__name__)
-ProviderName = str | Callable[[ModelRequest[Any]], str]
 
 if TYPE_CHECKING:
     from nemo_flow.codecs import LlmCodec, LlmResponseCodec
@@ -50,7 +51,7 @@ class NemoFlowMiddleware(AgentMiddleware):
         self,
         *,
         name: str = "NemoFlowMiddleware",
-        codec: LlmCodec,
+        codec: LlmCodec | None = None,
         model_request_to_payload: ModelRequestToPayload = default_model_request_payload,
         model_request_headers: ModelRequestHeaders | None = None,
         payload_to_model_request: PayloadToModelRequest = default_payload_to_model_request,
@@ -58,15 +59,6 @@ class NemoFlowMiddleware(AgentMiddleware):
         model_response_from_json: ModelResponseFromJson = best_effort_model_response_from_json,
     ) -> None:
         super().__init__()
-        if _is_openai_chat_codec(codec) and model_request_to_payload is default_model_request_payload:
-            model_request_to_payload = openai_chat_model_request_payload
-        if _is_openai_chat_codec(codec) and payload_to_model_request is default_payload_to_model_request:
-            payload_to_model_request = openai_chat_payload_to_model_request
-        if _is_openai_chat_codec(codec) and model_response_to_json is best_effort_model_response_to_json:
-            model_response_to_json = openai_chat_model_response_to_json
-        if _is_openai_chat_codec(codec) and model_response_from_json is best_effort_model_response_from_json:
-            model_response_from_json = openai_chat_model_response_from_json
-
         self._name = name
         self._codec = codec
         self._model_request_to_payload = model_request_to_payload
@@ -89,7 +81,6 @@ class NemoFlowMiddleware(AgentMiddleware):
         func: Callable[..., Any],
     ) -> Any:
         """Execute a non-streaming LLM call through the NeMo Flow pipeline."""
-        # TODO: just import this
         return await nemo_flow.llm.execute(
             model_name,
             request,
@@ -127,14 +118,17 @@ class NemoFlowMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
     ) -> ModelResponse[Any]:
         """Wrap a sync LangChain agent model call in NeMo Flow LLM execution."""
-
         object_codec = nemo_flow.typed.BestEffortAnyCodec()
-        llm_request = nemo_flow.LLMRequest(self._headers_for(request), self._model_request_to_payload(request))
+        model_request_to_payload = self._model_request_to_payload_for(self._codec)
+        payload_to_model_request = self._payload_to_model_request_for(self._codec)
+        model_response_to_json = self._model_response_to_json_for(self._codec)
+        model_response_from_json = self._model_response_from_json_for(self._codec)
+        llm_request = nemo_flow.LLMRequest(self._headers_for(request), model_request_to_payload(request))
         model_name = get_model_name(request.model)
 
         async def _call(req: Any) -> Any:
-            response = handler(self._payload_to_model_request(request, req.content))
-            return self._model_response_to_json(response, object_codec)
+            response = handler(payload_to_model_request(request, req.content))
+            return model_response_to_json(response, object_codec)
 
         result = nemo_flow.utils.run_sync(
             self.llm_execute(
@@ -145,7 +139,8 @@ class NemoFlowMiddleware(AgentMiddleware):
                 response_codec=self._codec,
             )
         )
-        return self._model_response_from_json(result, object_codec)
+        return model_response_from_json(result, object_codec)
+
 
     async def awrap_model_call(
         self,
@@ -153,13 +148,18 @@ class NemoFlowMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any]:
         """Wrap an async LangChain agent model call in NeMo Flow LLM execution."""
+
         object_codec = nemo_flow.typed.BestEffortAnyCodec()
-        llm_request = nemo_flow.LLMRequest(self._headers_for(request), self._model_request_to_payload(request))
+        model_request_to_payload = self._model_request_to_payload_for(self._codec)
+        payload_to_model_request = self._payload_to_model_request_for(self._codec)
+        model_response_to_json = self._model_response_to_json_for(self._codec)
+        model_response_from_json = self._model_response_from_json_for(self._codec)
+        llm_request = nemo_flow.LLMRequest(self._headers_for(request), model_request_to_payload(request))
         model_name = get_model_name(request.model)
 
         async def _call(req: Any) -> Any:
-            response = await handler(self._payload_to_model_request(request, req.content))
-            return self._model_response_to_json(response, object_codec)
+            response = await handler(payload_to_model_request(request, req.content))
+            return model_response_to_json(response, object_codec)
 
         result = await self.llm_execute(
             model_name=model_name,
@@ -168,7 +168,8 @@ class NemoFlowMiddleware(AgentMiddleware):
             codec=self._codec,
             response_codec=self._codec,
         )
-        return self._model_response_from_json(result, object_codec)
+        return model_response_from_json(result, object_codec)
+
 
     def wrap_tool_call(
         self,
@@ -206,5 +207,38 @@ class NemoFlowMiddleware(AgentMiddleware):
         return self._model_request_headers(request) if self._model_request_headers else {}
 
 
-def _is_openai_chat_codec(codec: Any) -> bool:
-    return codec.__class__.__name__ == "OpenAIChatCodec"
+    def _model_request_to_payload_for(self, codec: LlmCodec) -> ModelRequestToPayload:
+        if self._model_request_to_payload is not default_model_request_payload:
+            return self._model_request_to_payload
+        if isinstance(codec, nemo_flow.codecs.OpenAIChatCodec):
+            return openai_chat_model_request_payload
+        if isinstance(codec, nemo_flow.codecs.AnthropicMessagesCodec):
+            return anthropic_messages_model_request_payload
+        return self._model_request_to_payload
+
+    def _payload_to_model_request_for(self, codec: LlmCodec) -> PayloadToModelRequest:
+        if self._payload_to_model_request is not default_payload_to_model_request:
+            return self._payload_to_model_request
+        if isinstance(codec, nemo_flow.codecs.OpenAIChatCodec):
+            return openai_chat_payload_to_model_request
+        if isinstance(codec, nemo_flow.codecs.AnthropicMessagesCodec):
+            return anthropic_messages_payload_to_model_request
+        return self._payload_to_model_request
+
+    def _model_response_to_json_for(self, codec: LlmCodec) -> ModelResponseToJson:
+        if self._model_response_to_json is not best_effort_model_response_to_json:
+            return self._model_response_to_json
+        if isinstance(codec, nemo_flow.codecs.OpenAIChatCodec):
+            return openai_chat_model_response_to_json
+        if isinstance(codec, nemo_flow.codecs.AnthropicMessagesCodec):
+            return anthropic_messages_model_response_to_json
+        return self._model_response_to_json
+
+    def _model_response_from_json_for(self, codec: LlmCodec) -> ModelResponseFromJson:
+        if self._model_response_from_json is not best_effort_model_response_from_json:
+            return self._model_response_from_json
+        if isinstance(codec, nemo_flow.codecs.OpenAIChatCodec):
+            return openai_chat_model_response_from_json
+        if isinstance(codec, nemo_flow.codecs.AnthropicMessagesCodec):
+            return anthropic_messages_model_response_from_json
+        return self._model_response_from_json
