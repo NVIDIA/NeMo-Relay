@@ -9,12 +9,6 @@ import {
 import { nemoFlowConfigSchema } from "./src/config.js";
 import { registerNemoFlowPlugin } from "./src/runtime-state.js";
 
-export { NEMO_FLOW_OPENCLAW_JSON_SCHEMA, nemoFlowConfigSchema, parseConfig } from "./src/config.js";
-export type { NemoFlowHookBackendConfig } from "./src/config.js";
-export { createHealthSnapshot } from "./src/health.js";
-export { registerNemoFlowPlugin, NemoFlowRuntimeState } from "./src/runtime-state.js";
-export type { HookReplayBackendStatus, NemoFlowHealthSnapshot } from "./src/health.js";
-
 export default definePluginEntry({
   id: "nemo-flow",
   name: "NeMo Flow Observability",
