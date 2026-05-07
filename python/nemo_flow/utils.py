@@ -36,7 +36,10 @@ def run_sync(coro: Any) -> Any:
 
         def _run_with_scope_stack() -> Any:
             nemo_flow.set_thread_scope_stack(scope_stack)
-            return asyncio.run(coro)
+            try:
+                return asyncio.run(coro)
+            finally:
+                nemo_flow.set_thread_scope_stack(None)
 
         return _RUN_SYNC_EXECUTOR.submit(ctx.run, _run_with_scope_stack).result()
 
