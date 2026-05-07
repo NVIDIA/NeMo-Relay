@@ -27,7 +27,7 @@ class RecordingMiddleware(NemoFlowMiddleware):
         super().__init__()
         self.calls: list[dict[str, Any]] = []
 
-    async def llm_execute(
+    async def _llm_execute(
         self,
         model_name: str,
         request: nemo_flow.LLMRequest,
