@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+// OpenClaw 2026.5.6 does not expose these plugin hook payload types through a public package subpath.
+// Keep these aliases structural and remove them once the hook contracts are exported by OpenClaw.
 export type PluginHookAgentContext = {
   runId?: string;
   agentId?: string;
