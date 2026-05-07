@@ -15,8 +15,6 @@ from langchain_core.messages import (
     messages_to_dict,
 )
 
-from langchain_core.tools import BaseTool
-
 try:
     from langchain_anthropic import ChatAnthropic
 except ImportError:
@@ -62,26 +60,6 @@ def split_system_message(messages: list[BaseMessage]) -> tuple[SystemMessage | N
     return None, messages
 
 
-def tool_to_json(tool: BaseTool | dict[str, Any]) -> dict[str, Any]:
-    """Convert a LangChain tool descriptor into a JSON-compatible summary."""
-    if isinstance(tool, dict):
-        return tool
-
-    schema: dict[str, Any] | None = None
-    try:
-        schema = tool.get_input_schema().model_json_schema()
-    except Exception:
-        schema = None
-
-    payload: dict[str, Any] = {
-        "name": tool.name,
-        "description": tool.description,
-    }
-    if schema is not None:
-        payload["schema"] = schema
-    return payload
-
-
 def model_request_to_payload(request: ModelRequest[Any]) -> dict[str, Any]:
     """Serialize public ``ModelRequest`` fields into a JSON-compatible payload."""
     messages: list[BaseMessage] = []
@@ -96,10 +74,6 @@ def model_request_to_payload(request: ModelRequest[Any]) -> dict[str, Any]:
         payload["model"] = name
     if request.model_settings:
         payload["model_settings"] = request.model_settings
-    if request.tool_choice is not None:
-        payload["tool_choice"] = request.tool_choice
-    if request.tools:
-        payload["tools"] = [tool_to_json(tool) for tool in request.tools]
     if request.response_format is not None:
         payload["response_format"] = repr(request.response_format)
     return payload
