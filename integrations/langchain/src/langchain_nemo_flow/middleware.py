@@ -48,7 +48,7 @@ class NemoFlowMiddleware(AgentMiddleware):
         """Middleware name used by LangChain graph nodes and traces."""
         return self._name
 
-    async def llm_execute(
+    async def _llm_execute(
         self,
         model_name: str,
         request: nemo_flow.LLMRequest,
@@ -66,7 +66,7 @@ class NemoFlowMiddleware(AgentMiddleware):
             response_codec=response_codec,
         )
 
-    async def llm_stream_execute(
+    async def _llm_stream_execute(
         self,
         model_name: str,
         request: nemo_flow.LLMRequest,
@@ -109,7 +109,7 @@ class NemoFlowMiddleware(AgentMiddleware):
             return model_response_to_json(response, object_codec)
 
         result = run_sync(
-            self.llm_execute(
+            self._llm_execute(
                 model_name=model_name,
                 request=llm_request,
                 func=_call,
@@ -131,7 +131,7 @@ class NemoFlowMiddleware(AgentMiddleware):
             response = await handler(payload_to_model_request(request, req.content))
             return model_response_to_json(response, object_codec)
 
-        result = await self.llm_execute(
+        result = await self._llm_execute(
             model_name=model_name,
             request=llm_request,
             func=_call,
