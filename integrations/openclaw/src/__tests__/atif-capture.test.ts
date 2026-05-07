@@ -16,7 +16,7 @@ import {
 import { parseConfig } from "../config.js";
 import { createHookReplayState, type SessionManager, type SessionState } from "../hook-replay/session.js";
 import type { NemoFlowRuntimeModule } from "../modules.js";
-import type { PluginLoggerLike } from "../types.js";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 
 describe("ATIF capture", () => {
   it("registers and deregisters around synchronous emit", () => {
@@ -201,16 +201,17 @@ function createSession(manager: TestManager, sessionId: string): SessionState {
     sessionId,
     source: "session_start",
     stack: manager.nf.createScopeStack(),
-    rootHandle: { id: "root" },
+    rootHandle: { id: "root" } as unknown as ReturnType<NemoFlowRuntimeModule["pushScope"]>,
   };
   manager.state.sessions.set(sessionId, session);
   return session;
 }
 
-function createLogger(): PluginLoggerLike {
+function createLogger(): PluginLogger {
   return {
     info: () => {},
     warn: () => {},
+    error: () => {},
   };
 }
 
@@ -231,16 +232,16 @@ function createNemoFlowRuntime(params: {
       };
 
   return {
-    ScopeType: { Agent: 0 },
-    createScopeStack: () => ({}),
-    currentScopeStack: () => ({}),
+    ScopeType: { Agent: 0 } as NemoFlowRuntimeModule["ScopeType"],
+    createScopeStack: () => ({}) as unknown as ReturnType<NemoFlowRuntimeModule["createScopeStack"]>,
+    currentScopeStack: () => ({}) as unknown as ReturnType<NemoFlowRuntimeModule["currentScopeStack"]>,
     setThreadScopeStack: () => {},
-    pushScope: () => ({}),
+    pushScope: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["pushScope"]>),
     popScope: () => {},
     event: () => {},
-    llmCall: () => ({}),
+    llmCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["llmCall"]>),
     llmCallEnd: () => {},
-    toolCall: () => ({}),
+    toolCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>),
     toolCallEnd: () => {},
     AtifExporter,
     OpenTelemetrySubscriber: FakeSubscriber,

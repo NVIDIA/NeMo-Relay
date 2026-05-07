@@ -31,9 +31,8 @@ export function modelTimingKey(input: ModelTimingKeyInput): string {
   return tupleKey([input.runId, input.callId]);
 }
 
-export function modelTimingLlmKey(input: LlmKeyInput): string {
-  return tupleKey([input.sessionId, input.runId, input.provider, input.model]);
-}
+// Model timing fallback uses the same provider/model tuple as LLM replay.
+export const modelTimingLlmKey = llmKey;
 
 export function evictExpiredRecords<T extends TimestampedRecord>(
   map: Map<string, T[]>,

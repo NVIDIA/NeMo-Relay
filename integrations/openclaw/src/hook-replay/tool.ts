@@ -19,7 +19,7 @@ export function replayAfterToolCall(
     source: "lazy_session",
   });
 
-  const blockedDetails = blockedToolDetails(event, { runId: ctx.runId });
+  const blockedDetails = blockedToolDetails(event, { runId: event.runId ?? ctx.runId });
   if (session && blockedDetails) {
     manager.emitCapturedUnderSession("openclaw.tool_blocked", session, () => {
       emitMark({

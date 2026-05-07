@@ -10,8 +10,8 @@ import { it } from "node:test";
 import { makeSafeSessionId } from "../atif-capture.js";
 import { registerNemoFlowPlugin } from "../runtime-state.js";
 import type { NemoFlowHealthSnapshot } from "../health.js";
-import type { NemoFlowModules } from "../modules.js";
-import type { OpenClawHookHandlerLike, OpenClawPluginApiLike, PluginLoggerLike } from "../types.js";
+import { defaultNemoFlowModuleLoader, type NemoFlowModules } from "../modules.js";
+import type { OpenClawPluginApi, PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 
 const liveSmokeEnabled = process.env.NEMO_FLOW_OPENCLAW_LIVE_SMOKE === "1";
 
@@ -36,12 +36,13 @@ it(
     let serviceStarted = false;
 
     try {
-      registerNemoFlowPlugin(api, async () => modules);
+      registerNemoFlowPlugin(api as unknown as OpenClawPluginApi, async () => modules);
 
       const service = api.calls.services[0];
       assert.ok(service, "expected OpenClaw service registration");
       await service.start({
         stateDir: outputDir,
+        config: {} as never,
         logger: api.logger,
       });
       serviceStarted = true;
@@ -118,6 +119,7 @@ it(
       if (serviceStarted) {
         await api.calls.services[0]?.stop?.({
           stateDir: outputDir,
+          config: {} as never,
           logger: api.logger,
         });
       }
@@ -126,15 +128,32 @@ it(
   },
 );
 
-type TestApi = OpenClawPluginApiLike & {
+type HookHandler = (event: unknown, ctx: unknown) => void | Promise<void>;
+
+type TestApi = {
+  id: string;
+  version?: string;
+  registrationMode: OpenClawPluginApi["registrationMode"];
+  pluginConfig?: Record<string, unknown>;
+  logger: PluginLogger;
+  resolvePath: OpenClawPluginApi["resolvePath"];
+  registerService: (service: Parameters<OpenClawPluginApi["registerService"]>[0]) => void;
+  registerRuntimeLifecycle: (lifecycle: Parameters<OpenClawPluginApi["registerRuntimeLifecycle"]>[0]) => void;
+  registerHook: (hookName: string | string[], handler: HookHandler) => void;
+  on: (hookName: string, handler: HookHandler) => void;
+  registerGatewayMethod: (
+    method: string,
+    handler: (request?: unknown) => unknown,
+    opts?: { scope?: string },
+  ) => void;
   calls: {
-    services: Parameters<OpenClawPluginApiLike["registerService"]>[0][];
-    lifecycle: Parameters<OpenClawPluginApiLike["registerRuntimeLifecycle"]>[0][];
+    services: Parameters<OpenClawPluginApi["registerService"]>[0][];
+    lifecycle: Parameters<OpenClawPluginApi["registerRuntimeLifecycle"]>[0][];
     gatewayMethods: Array<{
       method: string;
-      handler: () => NemoFlowHealthSnapshot;
+      handler: (request?: unknown) => NemoFlowHealthSnapshot;
     }>;
-    hooks: Array<{ hookName: string; handler: OpenClawHookHandlerLike }>;
+    hooks: Array<{ hookName: string; handler: HookHandler }>;
   };
 };
 
@@ -145,9 +164,10 @@ function createApi(params: { pluginConfig: Record<string, unknown> }): TestApi {
     gatewayMethods: [],
     hooks: [],
   };
-  const logger: PluginLoggerLike = {
+  const logger: PluginLogger = {
     info: () => {},
     warn: () => {},
+    error: () => {},
   };
 
   return {
@@ -159,37 +179,29 @@ function createApi(params: { pluginConfig: Record<string, unknown> }): TestApi {
     resolvePath: (input) => input,
     registerService: (service) => calls.services.push(service),
     registerRuntimeLifecycle: (lifecycle) => calls.lifecycle.push(lifecycle),
-    on: (hookName, handler) => calls.hooks.push({ hookName, handler }),
+    registerHook: (hookName: string | string[], handler: HookHandler) =>
+      calls.hooks.push({ hookName: String(hookName), handler }),
+    on: (hookName: string, handler: HookHandler) => calls.hooks.push({ hookName, handler }),
     registerGatewayMethod: (method, handler) =>
       calls.gatewayMethods.push({
         method,
-        handler: handler as TestApi["calls"]["gatewayMethods"][number]["handler"],
+        handler: handler as unknown as TestApi["calls"]["gatewayMethods"][number]["handler"],
       }),
     calls,
   };
 }
 
 async function loadRealNemoFlowModules(): Promise<NemoFlowModules> {
-  let nf: unknown;
-  let pluginHost: unknown;
   try {
-    [nf, pluginHost] = await Promise.all([
-      import("nemo-flow-node"),
-      import("nemo-flow-node/plugin"),
-    ]);
+    return await defaultNemoFlowModuleLoader();
   } catch (error) {
     if (isMissingLocalNemoFlowNode(error)) {
       throw new Error(
-        "Live smoke requires the local nemo-flow-node native package to be built. From the NeMo-Flow repo root, run `npm --prefix crates/node run build`, then rerun `npm --prefix integrations/openclaw run test:live`.",
+        "Live smoke requires the nemo-flow-node native package for this platform. Install integration dependencies, or build local bindings when testing an unpublished version, then rerun `npm --prefix integrations/openclaw run test:live`.",
       );
     }
     throw error;
   }
-
-  return {
-    nf: nf as unknown as NemoFlowModules["nf"],
-    pluginHost: pluginHost as unknown as NemoFlowModules["pluginHost"],
-  };
 }
 
 function isMissingLocalNemoFlowNode(error: unknown): boolean {

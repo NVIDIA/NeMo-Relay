@@ -12,7 +12,7 @@ import { parseConfig } from "../config.js";
 import { errorToJson, toJsonRecord } from "../hook-replay/marks.js";
 import { HookReplayBackend } from "../hooks-backend.js";
 import type { NemoFlowRuntimeModule } from "../modules.js";
-import type { PluginLoggerLike } from "../types.js";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 
 describe("HookReplayBackend", () => {
   it("opens a session root and records aliases on session_start", () => {
@@ -316,7 +316,7 @@ type TestNemoFlowRuntime = NemoFlowRuntimeModule & {
   };
 };
 
-type TestLogger = PluginLoggerLike & {
+type TestLogger = PluginLogger & {
   messages: {
     warn: string[];
   };
@@ -346,6 +346,7 @@ function createLogger(): TestLogger {
     messages,
     info: () => {},
     warn: (message) => messages.warn.push(message),
+    error: () => {},
   };
 }
 
@@ -360,22 +361,22 @@ function createNemoFlowRuntime(): TestNemoFlowRuntime {
   };
 
   return {
-    ScopeType: { Agent: 0 },
+    ScopeType: { Agent: 0 } as NemoFlowRuntimeModule["ScopeType"],
     previousStack,
     calls,
-    createScopeStack: () => ({ id: `stack-${nextScopeId++}` }),
-    currentScopeStack: () => previousStack,
+    createScopeStack: () => ({ id: `stack-${nextScopeId++}` }) as unknown as ReturnType<NemoFlowRuntimeModule["createScopeStack"]>,
+    currentScopeStack: () => previousStack as unknown as ReturnType<NemoFlowRuntimeModule["currentScopeStack"]>,
     setThreadScopeStack: (stack) => calls.setThreadScopeStack.push(stack),
     pushScope: (name, scopeType, _handle, _attributes, data) => {
       const handle = { id: `scope-${nextScopeId++}` };
       calls.pushScope.push({ name, scopeType, data });
-      return handle;
+      return handle as unknown as ReturnType<NemoFlowRuntimeModule["pushScope"]>;
     },
     popScope: (handle, output) => calls.popScope.push({ handle, output }),
     event: (name, handle, data) => calls.event.push({ name, handle, data }),
-    llmCall: () => ({}),
+    llmCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["llmCall"]>),
     llmCallEnd: () => {},
-    toolCall: () => ({}),
+    toolCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>),
     toolCallEnd: () => {},
     AtifExporter: FakeAtifExporter,
     OpenTelemetrySubscriber: FakeSubscriber,

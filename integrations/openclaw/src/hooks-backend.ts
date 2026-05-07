@@ -44,12 +44,13 @@ import type {
   PluginHookSubagentSpawnedEvent,
   PluginHookToolContext,
 } from "./openclaw-hook-types.js";
-import type { JsonRecord, PluginLoggerLike } from "./types.js";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import type { JsonObject as JsonRecord } from "nemo-flow-node/typed";
 
 export type HookReplayBackendOptions = {
   nf: NemoFlowRuntimeModule;
   config: NemoFlowHookBackendConfig;
-  logger: PluginLoggerLike;
+  logger: PluginLogger;
   agentVersion: string;
   resolvedAtifOutputDir: string;
   markOutputDegraded: (output: "atif" | "otel" | "openInference") => void;
@@ -58,7 +59,7 @@ export type HookReplayBackendOptions = {
 export class HookReplayBackend {
   private readonly nf: NemoFlowRuntimeModule;
   private readonly config: NemoFlowHookBackendConfig;
-  private readonly logger: PluginLoggerLike;
+  private readonly logger: PluginLogger;
   private readonly agentVersion: string;
   private readonly resolvedAtifOutputDir: string;
   private readonly markOutputDegradedValue: (output: "atif" | "otel" | "openInference") => void;

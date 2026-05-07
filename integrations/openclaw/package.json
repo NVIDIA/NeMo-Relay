@@ -28,15 +28,10 @@
     "test:live": "npm run build && NEMO_FLOW_OPENCLAW_LIVE_SMOKE=1 node --test \"dist/src/__tests__/live-smoke.test.js\""
   },
   "peerDependencies": {
-    "openclaw": "*"
+    "openclaw": ">=2026.5.6"
   },
-  "peerDependenciesMeta": {
-    "openclaw": {
-      "optional": true
-    }
-  },
-  "optionalDependencies": {
-    "nemo-flow-node": "file:../../crates/node"
+  "dependencies": {
+    "nemo-flow-node": ">=0.1.0 <0.3.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.0",

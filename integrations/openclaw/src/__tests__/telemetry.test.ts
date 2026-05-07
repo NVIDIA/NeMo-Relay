@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 
 import { shutdownTelemetrySubscribers, type TelemetrySubscriberEntry } from "../telemetry.js";
 import type { NemoFlowSubscriber } from "../modules.js";
-import type { PluginLoggerLike } from "../types.js";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 
 describe("telemetry subscriber shutdown", () => {
   it("continues force flush and shutdown when deregister throws", () => {
@@ -62,9 +62,11 @@ function entry(
   return { output, name, subscriber };
 }
 
-function createLogger(): PluginLoggerLike {
+function createLogger(): PluginLogger {
   return {
+    info: () => {},
     warn: () => {},
+    error: () => {},
   };
 }
 

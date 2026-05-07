@@ -1,109 +1,57 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-export type ConfigDiagnostic = {
-  level: "warning" | "error";
-  code: string;
-  component?: string;
-  field?: string;
-  message: string;
+import type * as NemoFlowRuntime from "nemo-flow-node";
+import type * as NemoFlowPluginHost from "nemo-flow-node/plugin";
+
+type NemoFlowRuntimeKeys =
+  | "ScopeType"
+  | "createScopeStack"
+  | "currentScopeStack"
+  | "setThreadScopeStack"
+  | "pushScope"
+  | "popScope"
+  | "event"
+  | "llmCall"
+  | "llmCallEnd"
+  | "toolCall"
+  | "toolCallEnd"
+  | "AtifExporter"
+  | "OpenTelemetrySubscriber"
+  | "OpenInferenceSubscriber";
+
+type NemoFlowPluginHostKeys = "defaultConfig" | "validate" | "initialize" | "clear";
+
+export type ConfigDiagnostic = NemoFlowPluginHost.ConfigDiagnostic;
+export type ConfigReport = NemoFlowPluginHost.ConfigReport;
+
+/**
+ * @internal Package-owned subset of the dynamically imported `nemo-flow-node`
+ * namespace used by this integration.
+ */
+export type NemoFlowRuntimeModule = Omit<Pick<typeof NemoFlowRuntime, NemoFlowRuntimeKeys>, "ScopeType"> & {
+  ScopeType: {
+    Agent?: Parameters<typeof NemoFlowRuntime.pushScope>[1];
+  } | undefined;
 };
 
-export type ConfigReport = {
-  diagnostics: ConfigDiagnostic[];
-};
+/**
+ * @internal Package-owned subset of the dynamically imported
+ * `nemo-flow-node/plugin` namespace used by this integration.
+ */
+export type NemoFlowPluginHostModule = Pick<typeof NemoFlowPluginHost, NemoFlowPluginHostKeys>;
 
-export type NemoFlowPluginHostModule = {
-  defaultConfig: () => { version: number; components: unknown[]; [key: string]: unknown };
-  validate: (config: { version: number; components: unknown[]; [key: string]: unknown }) => ConfigReport;
-  initialize: (
-    config: { version: number; components: unknown[]; [key: string]: unknown },
-  ) => Promise<ConfigReport>;
-  clear: () => void;
-};
+/** @internal Subscriber surface used by runtime shutdown and health tracking. */
+export type NemoFlowSubscriber = Pick<
+  InstanceType<typeof NemoFlowRuntime.OpenTelemetrySubscriber>,
+  "register" | "deregister" | "forceFlush" | "shutdown"
+>;
 
-export type NemoFlowRuntimeModule = {
-  ScopeType?: {
-    Agent?: number;
-  };
-  createScopeStack: () => unknown;
-  currentScopeStack: () => unknown;
-  setThreadScopeStack: (stack: unknown) => void;
-  pushScope: (
-    name: string,
-    scopeType: number,
-    handle?: unknown | null,
-    attributes?: number | null,
-    data?: unknown,
-    metadata?: unknown,
-    input?: unknown,
-    timestamp?: number | null,
-  ) => unknown;
-  popScope: (handle: unknown, output?: unknown, timestamp?: number | null) => void;
-  event: (
-    name: string,
-    handle?: unknown | null,
-    data?: unknown,
-    metadata?: unknown,
-    timestamp?: number | null,
-  ) => void;
-  llmCall: (
-    name: string,
-    request: unknown,
-    handle?: unknown | null,
-    attributes?: number | null,
-    data?: unknown,
-    metadata?: unknown,
-    modelName?: string | null,
-    timestamp?: number | null,
-  ) => unknown;
-  llmCallEnd: (
-    handle: unknown,
-    response: unknown,
-    data?: unknown,
-    metadata?: unknown,
-    timestamp?: number | null,
-  ) => void;
-  toolCall: (
-    name: string,
-    args: unknown,
-    handle?: unknown | null,
-    attributes?: number | null,
-    data?: unknown,
-    metadata?: unknown,
-    toolCallId?: string | null,
-    timestamp?: number | null,
-  ) => unknown;
-  toolCallEnd: (
-    handle: unknown,
-    result: unknown,
-    data?: unknown,
-    metadata?: unknown,
-    timestamp?: number | null,
-  ) => void;
-  AtifExporter: new (
-    sessionId: string,
-    agentName: string,
-    agentVersion: string,
-    modelName?: string | null,
-  ) => AtifExporterLike;
-  OpenTelemetrySubscriber: new (config?: Record<string, unknown>) => NemoFlowSubscriber;
-  OpenInferenceSubscriber: new (config?: Record<string, unknown>) => NemoFlowSubscriber;
-};
-
-export type NemoFlowSubscriber = {
-  register: (name: string) => void;
-  deregister: (name: string) => boolean;
-  forceFlush: () => void;
-  shutdown: () => void;
-};
-
-export type AtifExporterLike = {
-  register: (name: string) => void;
-  deregister: (name: string) => boolean;
-  exportJson: () => string;
-  clear: () => void;
-};
+/** @internal ATIF exporter surface used by per-session capture/export. */
+export type AtifExporterLike = Pick<
+  InstanceType<typeof NemoFlowRuntime.AtifExporter>,
+  "register" | "deregister" | "exportJson" | "clear"
+>;
 
 export type NemoFlowModules = {
   nf: NemoFlowRuntimeModule;
@@ -119,7 +67,7 @@ export const defaultNemoFlowModuleLoader: NemoFlowModuleLoader = async () => {
   ]);
 
   return {
-    nf: nf as unknown as NemoFlowRuntimeModule,
+    nf: nf as NemoFlowRuntimeModule,
     pluginHost: pluginHost as NemoFlowPluginHostModule,
   };
 };

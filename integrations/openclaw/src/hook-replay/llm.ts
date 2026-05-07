@@ -9,7 +9,7 @@ import type {
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
 } from "../openclaw-hook-types.js";
-import type { JsonRecord, JsonValue } from "../types.js";
+import type { JsonObject as JsonRecord, JsonValue } from "nemo-flow-node/typed";
 import { emitMark, toJsonRecord, toJsonValue } from "./marks.js";
 import {
   evictExpiredCorrelationRecords,
@@ -342,6 +342,7 @@ function replayLlmOutput(params: {
   const { manager, event, ctx, input, timing } = params;
   const session = ensureSession(manager, {
     sessionId: event.sessionId,
+    sessionKey: ctx.sessionKey,
     runId: event.runId,
     agentId: ctx.agentId,
     source: "lazy_session",

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
@@ -10,10 +10,10 @@ import {
   nemoFlowConfigSchema,
   parseConfig,
 } from "../config.js";
-import type { NemoFlowModules } from "../modules.js";
+import type { NemoFlowModules, NemoFlowRuntimeModule } from "../modules.js";
 import type { NemoFlowHealthSnapshot } from "../health.js";
 import { registerNemoFlowPlugin } from "../runtime-state.js";
-import type { OpenClawHookHandlerLike, OpenClawPluginApiLike, PluginLoggerLike } from "../types.js";
+import type { OpenClawPluginApi, PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 
 describe("nemo-flow OpenClaw plugin shell", () => {
   it("applies hook-backend config defaults", () => {
@@ -81,7 +81,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
   it("returns without side effects outside full registration mode", () => {
     const api = createApi({ registrationMode: "discovery" });
 
-    registerNemoFlowPlugin(api);
+    registerNemoFlowPlugin(api as unknown as OpenClawPluginApi);
 
     assert.equal(api.calls.services.length, 0);
     assert.equal(api.calls.lifecycle.length, 0);
@@ -92,7 +92,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
   it("returns without side effects when disabled", () => {
     const api = createApi({ pluginConfig: { enabled: false } });
 
-    registerNemoFlowPlugin(api);
+    registerNemoFlowPlugin(api as unknown as OpenClawPluginApi);
 
     assert.equal(api.calls.services.length, 0);
     assert.equal(api.calls.lifecycle.length, 0);
@@ -104,7 +104,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
   it("returns without side effects when config parsing fails during registration", () => {
     const api = createApi({ pluginConfig: { backend: "managed_execution" } });
 
-    registerNemoFlowPlugin(api);
+    registerNemoFlowPlugin(api as unknown as OpenClawPluginApi);
 
     assert.equal(api.calls.services.length, 0);
     assert.equal(api.calls.lifecycle.length, 0);
@@ -119,7 +119,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
   it("registers service, lifecycle, and health surfaces in full mode", () => {
     const api = createApi();
 
-    registerNemoFlowPlugin(api, async () => createModules());
+    registerNemoFlowPlugin(api as unknown as OpenClawPluginApi, async () => createModules());
 
     assert.deepEqual(
       api.calls.services.map((service) => service.id),
@@ -156,7 +156,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
   it("uses config parsed during registration when service starts", async () => {
     const api = createApi({ pluginConfig: { atif: { enabled: false }, correlation: { maxRecordsPerKey: 1 } } });
 
-    registerNemoFlowPlugin(api, async () => createModules());
+    registerNemoFlowPlugin(api as unknown as OpenClawPluginApi, async () => createModules());
     api.pluginConfig = { backend: "managed_execution" };
 
     const service = api.calls.services[0];
@@ -165,11 +165,12 @@ describe("nemo-flow OpenClaw plugin shell", () => {
       await assert.doesNotReject(async () => {
         await service.start({
           stateDir: "/tmp/openclaw-state",
+          config: {} as never,
           logger: api.logger,
         });
       });
     } finally {
-      await service.stop?.({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
     }
   });
 
@@ -179,11 +180,11 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     });
     const api = createApi({ pluginConfig: { atif: { enabled: false } } });
 
-    registerNemoFlowPlugin(api, async () => modules);
+    registerNemoFlowPlugin(api as unknown as OpenClawPluginApi, async () => modules);
     const service = api.calls.services[0];
     assert.ok(service);
     try {
-      await service.start({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+      await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
 
       const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
       assert.ok(sessionStart);
@@ -195,7 +196,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
       assert.equal(status.status.state, "degraded");
       assert.equal(status.initializedPluginHost, false);
     } finally {
-      await service.stop?.({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
     }
   });
 
@@ -203,10 +204,10 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     const modules = createModules();
     const api = createApi({ pluginConfig: { atif: { enabled: false } } });
 
-    registerNemoFlowPlugin(api, async () => modules);
+    registerNemoFlowPlugin(api as unknown as OpenClawPluginApi, async () => modules);
     const service = api.calls.services[0];
     assert.ok(service);
-    await service.start({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+    await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
 
     const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
     const gatewayStop = api.calls.hooks.find((hook) => hook.hookName === "gateway_stop");
@@ -236,10 +237,10 @@ describe("nemo-flow OpenClaw plugin shell", () => {
       },
     });
 
-    registerNemoFlowPlugin(api, async () => modules);
+    registerNemoFlowPlugin(api as unknown as OpenClawPluginApi, async () => modules);
     const service = api.calls.services[0];
     assert.ok(service);
-    await service.start({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+    await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
 
     assert.deepEqual(
       modules.nf.calls.subscribers.map((subscriber) => [subscriber.kind, subscriber.name]),
@@ -251,7 +252,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.equal(modules.nf.calls.subscribers[0]?.config.endpoint, "http://otel.example");
     assert.equal(modules.nf.calls.subscribers[1]?.config.endpoint, "http://phoenix.example");
 
-    await service.stop?.({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+    await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
 
     for (const subscriber of modules.nf.calls.subscribers) {
       assert.deepEqual(subscriber.actions, [
@@ -275,11 +276,11 @@ describe("nemo-flow OpenClaw plugin shell", () => {
       },
     });
 
-    registerNemoFlowPlugin(api, async () => modules);
+    registerNemoFlowPlugin(api as unknown as OpenClawPluginApi, async () => modules);
     const service = api.calls.services[0];
     assert.ok(service);
     try {
-      await service.start({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+      await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
 
       const status = api.calls.gatewayMethods[0]?.handler();
       assert.ok(status);
@@ -294,7 +295,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
         ],
       );
     } finally {
-      await service.stop?.({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
     }
   });
 
@@ -310,14 +311,14 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     });
     let serviceStarted = false;
 
-    registerNemoFlowPlugin(api, async () => modules);
+    registerNemoFlowPlugin(api as unknown as OpenClawPluginApi, async () => modules);
     const service = api.calls.services[0];
     assert.ok(service);
     try {
-      await service.start({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+      await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
       serviceStarted = true;
 
-      await service.stop?.({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
       serviceStarted = false;
 
       const status = api.calls.gatewayMethods[0]?.handler();
@@ -326,7 +327,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
       assert.equal(status.outputs.otel, "degraded");
     } finally {
       if (serviceStarted) {
-        await service.stop?.({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+        await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
       }
     }
   });
@@ -336,21 +337,18 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     const api = createApi();
     const before = process.listenerCount("beforeExit");
 
-    registerNemoFlowPlugin(api, async () => modules);
+    registerNemoFlowPlugin(api as unknown as OpenClawPluginApi, async () => modules);
     const service = api.calls.services[0];
     assert.ok(service);
-    await service.start({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+    await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
     assert.equal(process.listenerCount("beforeExit"), before + 1);
 
-    await service.stop?.({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+    await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
     assert.equal(process.listenerCount("beforeExit"), before);
   });
 
   it("does not statically import nemo-flow-node or OpenClaw private src paths", () => {
-    const files = [
-      readFileSync(new URL("../modules.js", import.meta.url), "utf8"),
-      readFileSync(new URL("../../index.js", import.meta.url), "utf8"),
-    ].join("\n");
+    const files = readBuiltJavaScriptFiles(new URL("../../", import.meta.url));
 
     assert.doesNotMatch(files, /from ["']nemo-flow-node/);
     assert.doesNotMatch(files, /from ["']nemo-flow-node\/plugin/);
@@ -358,15 +356,45 @@ describe("nemo-flow OpenClaw plugin shell", () => {
   });
 });
 
-type TestApi = OpenClawPluginApiLike & {
+function readBuiltJavaScriptFiles(directory: URL): string {
+  const chunks: string[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const child = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, directory);
+    if (entry.isDirectory()) {
+      chunks.push(readBuiltJavaScriptFiles(child));
+    } else if (entry.isFile() && entry.name.endsWith(".js")) {
+      chunks.push(readFileSync(child, "utf8"));
+    }
+  }
+  return chunks.join("\n");
+}
+
+type HookHandler = (event: unknown, ctx: unknown) => void | Promise<void>;
+
+type TestApi = {
+  id: string;
+  version?: string;
+  registrationMode: OpenClawPluginApi["registrationMode"];
+  pluginConfig?: Record<string, unknown>;
+  logger: PluginLogger;
+  resolvePath: OpenClawPluginApi["resolvePath"];
+  registerService: (service: Parameters<OpenClawPluginApi["registerService"]>[0]) => void;
+  registerRuntimeLifecycle: (lifecycle: Parameters<OpenClawPluginApi["registerRuntimeLifecycle"]>[0]) => void;
+  registerHook: (hookName: string | string[], handler: HookHandler) => void;
+  on: (hookName: string, handler: HookHandler) => void;
+  registerGatewayMethod: (
+    method: string,
+    handler: (request?: unknown) => unknown,
+    opts?: { scope?: string },
+  ) => void;
   calls: {
-    services: Parameters<OpenClawPluginApiLike["registerService"]>[0][];
-    lifecycle: Parameters<OpenClawPluginApiLike["registerRuntimeLifecycle"]>[0][];
+    services: Parameters<OpenClawPluginApi["registerService"]>[0][];
+    lifecycle: Parameters<OpenClawPluginApi["registerRuntimeLifecycle"]>[0][];
     gatewayMethods: Array<{
       method: string;
-      handler: () => NemoFlowHealthSnapshot;
+      handler: (request?: unknown) => NemoFlowHealthSnapshot;
     }>;
-    hooks: Array<{ hookName: string; handler: OpenClawHookHandlerLike }>;
+    hooks: Array<{ hookName: string; handler: HookHandler }>;
   };
   messages: {
     info: string[];
@@ -375,7 +403,7 @@ type TestApi = OpenClawPluginApiLike & {
 };
 
 function createApi(params: {
-  registrationMode?: string;
+  registrationMode?: OpenClawPluginApi["registrationMode"];
   pluginConfig?: Record<string, unknown>;
 } = {}): TestApi {
   const messages: TestApi["messages"] = { info: [], warn: [] };
@@ -385,9 +413,10 @@ function createApi(params: {
     gatewayMethods: [],
     hooks: [],
   };
-  const logger: PluginLoggerLike = {
+  const logger: PluginLogger = {
     info: (message) => messages.info.push(message),
     warn: (message) => messages.warn.push(message),
+    error: () => {},
   };
 
   const api: TestApi = {
@@ -398,11 +427,13 @@ function createApi(params: {
     resolvePath: (input) => input,
     registerService: (service) => calls.services.push(service),
     registerRuntimeLifecycle: (lifecycle) => calls.lifecycle.push(lifecycle),
-    on: (hookName, handler) => calls.hooks.push({ hookName, handler }),
+    registerHook: (hookName: string | string[], handler: HookHandler) =>
+      calls.hooks.push({ hookName: String(hookName), handler }),
+    on: (hookName: string, handler: HookHandler) => calls.hooks.push({ hookName, handler }),
     registerGatewayMethod: (method, handler) =>
       calls.gatewayMethods.push({
         method,
-        handler: handler as TestApi["calls"]["gatewayMethods"][number]["handler"],
+        handler: handler as unknown as TestApi["calls"]["gatewayMethods"][number]["handler"],
       }),
     calls,
     messages,
@@ -506,17 +537,17 @@ function createNemoFlowRuntime(params: SubscriberFailures = {}): TestNemoFlowRun
     };
 
   return {
-    ScopeType: { Agent: 0 },
+    ScopeType: { Agent: 0 } as NemoFlowRuntimeModule["ScopeType"],
     calls,
-    createScopeStack: () => ({ type: "stack" }),
-    currentScopeStack: () => ({ type: "previous-stack" }),
+    createScopeStack: () => ({ type: "stack" }) as unknown as ReturnType<NemoFlowRuntimeModule["createScopeStack"]>,
+    currentScopeStack: () => ({ type: "previous-stack" }) as unknown as ReturnType<NemoFlowRuntimeModule["currentScopeStack"]>,
     setThreadScopeStack: () => {},
-    pushScope: () => ({ type: "scope" }),
+    pushScope: () => ({ type: "scope" } as unknown as ReturnType<NemoFlowRuntimeModule["pushScope"]>),
     popScope: () => {},
     event: (name, handle, data) => calls.event.push({ name, handle, data }),
-    llmCall: () => ({}),
+    llmCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["llmCall"]>),
     llmCallEnd: () => {},
-    toolCall: () => ({}),
+    toolCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>),
     toolCallEnd: () => {},
     AtifExporter: FakeAtifExporter,
     OpenTelemetrySubscriber: createSubscriber("otel", {

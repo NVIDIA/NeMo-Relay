@@ -7,7 +7,7 @@ import { describe, it } from "node:test";
 import { parseConfig } from "../config.js";
 import { HookReplayBackend } from "../hooks-backend.js";
 import type { NemoFlowRuntimeModule } from "../modules.js";
-import type { PluginLoggerLike } from "../types.js";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 
 describe("LLM replay", () => {
   it("replays llm output with buffered input under the session root", () => {
@@ -403,10 +403,11 @@ function createBackend(
   });
 }
 
-function createLogger(): PluginLoggerLike {
+function createLogger(): PluginLogger {
   return {
     info: () => {},
     warn: () => {},
+    error: () => {},
   };
 }
 
@@ -425,28 +426,28 @@ function createNemoFlowRuntime(): TestNemoFlowRuntime {
   };
 
   return {
-    ScopeType: { Agent: 0 },
+    ScopeType: { Agent: 0 } as NemoFlowRuntimeModule["ScopeType"],
     calls,
-    createScopeStack: () => ({ id: `stack-${nextScopeId++}` }),
-    currentScopeStack: () => previousStack,
+    createScopeStack: () => ({ id: `stack-${nextScopeId++}` }) as unknown as ReturnType<NemoFlowRuntimeModule["createScopeStack"]>,
+    currentScopeStack: () => previousStack as unknown as ReturnType<NemoFlowRuntimeModule["currentScopeStack"]>,
     setThreadScopeStack: (stack) => calls.setThreadScopeStack.push(stack),
     pushScope: (name, scopeType, _handle, _attributes, data) => {
       const handle = { id: `scope-${nextScopeId++}` };
       calls.pushScope.push({ name, scopeType, data });
-      return handle;
+      return handle as unknown as ReturnType<NemoFlowRuntimeModule["pushScope"]>;
     },
     popScope: (handle, output) => calls.popScope.push({ handle, output }),
     event: (name, handle, data) => calls.event.push({ name, handle, data }),
     llmCall: (name, request, _handle, _attributes, _data, _metadata, modelName) => {
       const handle = { id: `llm-${nextScopeId++}` };
       calls.llmCall.push({ name, request, modelName });
-      return handle;
+      return handle as unknown as ReturnType<NemoFlowRuntimeModule["llmCall"]>;
     },
     llmCallEnd: (handle, response) => calls.llmCallEnd.push({ handle, response }),
     toolCall: (name, args) => {
       const handle = { id: `tool-${nextScopeId++}` };
       calls.toolCall.push({ name, args });
-      return handle;
+      return handle as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>;
     },
     toolCallEnd: (handle, result, data) => calls.toolCallEnd.push({ handle, result, data }),
     AtifExporter: FakeAtifExporter,

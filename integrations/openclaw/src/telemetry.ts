@@ -3,7 +3,7 @@
 
 import type { NemoFlowHookBackendConfig, TelemetrySinkConfig } from "./config.js";
 import type { NemoFlowRuntimeModule, NemoFlowSubscriber } from "./modules.js";
-import type { PluginLoggerLike } from "./types.js";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 
 export type TelemetrySubscriberEntry = {
   output: "otel" | "openInference";
@@ -14,7 +14,7 @@ export type TelemetrySubscriberEntry = {
 export type RegisterTelemetrySubscribersOptions = {
   nf: NemoFlowRuntimeModule;
   config: NemoFlowHookBackendConfig;
-  logger: PluginLoggerLike;
+  logger: PluginLogger;
   markOutputDegraded: (output: "otel" | "openInference") => void;
 };
 
@@ -75,7 +75,7 @@ export function registerTelemetrySubscribers(
 
 export function shutdownTelemetrySubscribers(params: {
   subscribers: TelemetrySubscriberEntry[];
-  logger: PluginLoggerLike;
+  logger: PluginLogger;
   markOutputDegraded: (output: "otel" | "openInference") => void;
 }): void {
   for (const { output, name, subscriber } of params.subscribers) {

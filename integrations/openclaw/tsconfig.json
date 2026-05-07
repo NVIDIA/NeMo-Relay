@@ -10,16 +10,16 @@
     "rootDir": ".",
     "outDir": "dist",
     "resolveJsonModule": true,
-    "baseUrl": ".",
-    "paths": {
-      "openclaw/plugin-sdk/plugin-entry": ["./src/openclaw-plugin-entry.d.ts"],
-      "nemo-flow-node": ["./src/openclaw-plugin-entry.d.ts"],
-      "nemo-flow-node/plugin": ["./src/openclaw-plugin-entry.d.ts"]
-    },
-    "types": ["node"],
-    "skipLibCheck": false,
+    "types": [
+      "node"
+    ],
+    "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true
   },
-  "include": ["index.ts", "src/**/*.ts", "src/**/*.d.ts"]
+  "include": [
+    "index.ts",
+    "src/**/*.ts",
+    "src/**/*.d.ts"
+  ]
 }

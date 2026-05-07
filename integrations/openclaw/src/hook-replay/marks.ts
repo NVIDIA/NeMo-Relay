@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { PluginHookAfterToolCallEvent } from "../openclaw-hook-types.js";
-import type { JsonRecord, JsonValue } from "../types.js";
+import type { JsonObject as JsonRecord, JsonValue } from "nemo-flow-node/typed";
 import type { HookReplayBackendState, SessionState } from "./session.js";
 import type { NemoFlowRuntimeModule } from "../modules.js";
 

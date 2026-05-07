@@ -7,7 +7,7 @@ import { describe, it } from "node:test";
 import { parseConfig } from "../config.js";
 import { HookReplayBackend } from "../hooks-backend.js";
 import type { NemoFlowRuntimeModule } from "../modules.js";
-import type { PluginLoggerLike } from "../types.js";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 
 describe("Replay failure model", () => {
   it("grace timer replay failure is caught and counted", async () => {
@@ -43,7 +43,7 @@ describe("Replay failure model", () => {
   });
 });
 
-type TestLogger = PluginLoggerLike & {
+type TestLogger = PluginLogger & {
   messages: {
     warn: string[];
   };
@@ -55,6 +55,7 @@ function createLogger(): TestLogger {
     messages,
     info: () => {},
     warn: (message) => messages.warn.push(message),
+    error: () => {},
   };
 }
 
@@ -62,18 +63,18 @@ function createThrowingLlmRuntime(): NemoFlowRuntimeModule {
   let nextScopeId = 0;
   const previousStack = { id: "previous" };
   return {
-    ScopeType: { Agent: 0 },
-    createScopeStack: () => ({ id: `stack-${nextScopeId++}` }),
-    currentScopeStack: () => previousStack,
+    ScopeType: { Agent: 0 } as NemoFlowRuntimeModule["ScopeType"],
+    createScopeStack: () => ({ id: `stack-${nextScopeId++}` }) as unknown as ReturnType<NemoFlowRuntimeModule["createScopeStack"]>,
+    currentScopeStack: () => previousStack as unknown as ReturnType<NemoFlowRuntimeModule["currentScopeStack"]>,
     setThreadScopeStack: () => {},
-    pushScope: () => ({ id: `scope-${nextScopeId++}` }),
+    pushScope: () => ({ id: `scope-${nextScopeId++}` } as unknown as ReturnType<NemoFlowRuntimeModule["pushScope"]>),
     popScope: () => {},
     event: () => {},
     llmCall: () => {
       throw new Error("llmCall failed");
     },
     llmCallEnd: () => {},
-    toolCall: () => ({}),
+    toolCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>),
     toolCallEnd: () => {},
     AtifExporter: FakeAtifExporter,
     OpenTelemetrySubscriber: FakeSubscriber,

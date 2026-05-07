@@ -3,6 +3,8 @@
 
 import * as path from "node:path";
 
+import type { OpenClawPluginApi, OpenClawPluginServiceContext, PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+
 import { parseConfig } from "./config.js";
 import type { NemoFlowHookBackendConfig } from "./config.js";
 import { createHealthSnapshot, type HookReplayBackendStatus } from "./health.js";
@@ -39,14 +41,7 @@ import type {
   PluginHookSubagentSpawnedEvent,
   PluginHookToolContext,
 } from "./openclaw-hook-types.js";
-import type {
-  OpenClawPluginApiLike,
-  OpenClawHookHandlerLike,
-  OpenClawPluginServiceContextLike,
-  PluginLoggerLike,
-  RuntimeStateOptions,
-  StartContext,
-} from "./types.js";
+import type { RuntimeStateOptions, StartContext } from "./types.js";
 
 const PLUGIN_ID = "nemo-flow";
 const SERVICE_ID = "nemo-flow-observability";
@@ -54,7 +49,7 @@ const LIFECYCLE_ID = "nemo-flow-observability-cleanup";
 const STATUS_METHOD = "nemoFlow.status";
 
 export class NemoFlowRuntimeState {
-  private readonly api: OpenClawPluginApiLike;
+  private readonly api: OpenClawPluginApi;
   private readonly config: NemoFlowHookBackendConfig;
   private readonly moduleLoader: NemoFlowModuleLoader;
   private loadPromise: Promise<NemoFlowModules> | undefined;
@@ -178,7 +173,7 @@ export class NemoFlowRuntimeState {
     this.statusValue = degradedReason === undefined ? { state: "ready" } : { state: "degraded", reason: degradedReason };
   }
 
-  async stop(reason: string, logger?: PluginLoggerLike): Promise<void> {
+  async stop(reason: string, logger?: PluginLogger): Promise<void> {
     if (
       this.statusValue.state === "stopped" ||
       this.statusValue.state === "disabled" ||
@@ -228,7 +223,7 @@ export class NemoFlowRuntimeState {
 
   registerHooks(): void {
     const dispatch = (
-      hookName: string,
+      hookName: Parameters<OpenClawPluginApi["on"]>[0],
       handler: (backend: HookReplayBackend, event: unknown, ctx: unknown) => void,
     ): void => {
       this.api.on(hookName, ((event: unknown, ctx: unknown) => {
@@ -237,10 +232,10 @@ export class NemoFlowRuntimeState {
           return;
         }
         backend.safeReplay(hookName, undefined, () => handler(backend, event, ctx));
-      }) as OpenClawHookHandlerLike);
+      }) as never);
     };
     const dispatchAsync = (
-      hookName: string,
+      hookName: Parameters<OpenClawPluginApi["on"]>[0],
       handler: (backend: HookReplayBackend, event: unknown, ctx: unknown) => Promise<void>,
     ): void => {
       this.api.on(hookName, (async (event: unknown, ctx: unknown) => {
@@ -249,7 +244,7 @@ export class NemoFlowRuntimeState {
           return;
         }
         await backend.safeReplayAsync(hookName, undefined, () => handler(backend, event, ctx));
-      }) as OpenClawHookHandlerLike);
+      }) as never);
     };
 
     dispatch("gateway_start", (backend, event, ctx) =>
@@ -258,7 +253,7 @@ export class NemoFlowRuntimeState {
     this.api.on("gateway_stop", (async (event: unknown) => {
       const stopEvent = event as PluginHookGatewayStopEvent;
       await this.stop(stopEvent.reason ?? "gateway_stop", this.api.logger);
-    }) as OpenClawHookHandlerLike);
+    }) as never);
     dispatch("session_start", (backend, event, ctx) =>
       backend.onSessionStart(event as PluginHookSessionStartEvent, ctx as PluginHookSessionContext),
     );
@@ -299,9 +294,9 @@ export class NemoFlowRuntimeState {
 
   private resolvePluginHostConfig(
     modules: NemoFlowModules,
-    logger: PluginLoggerLike,
+    logger: PluginLogger,
   ): {
-    hostConfig: { version: number; components: unknown[]; [key: string]: unknown };
+    hostConfig: Parameters<NemoFlowModules["pluginHost"]["validate"]>[0];
     degradedReason?: string;
   } {
     const configured = this.config.nemoFlow.pluginConfig;
@@ -310,7 +305,11 @@ export class NemoFlowRuntimeState {
       return { hostConfig: modules.pluginHost.defaultConfig() };
     }
 
-    const validationReport = validatePluginHostConfig(modules, configured, logger);
+    const validationReport = validatePluginHostConfig(
+      modules,
+      configured as Parameters<NemoFlowModules["pluginHost"]["validate"]>[0],
+      logger,
+    );
     const degradedReason =
       "nemoFlow.pluginConfig.components is not supported by the hook backend; using default NeMo Flow plugin host config";
     logger.warn?.(degradedReason);
@@ -325,7 +324,7 @@ export class NemoFlowRuntimeState {
     this.degradedOutputs.add(output);
   }
 
-  private registerBeforeExit(logger: PluginLoggerLike): void {
+  private registerBeforeExit(logger: PluginLogger): void {
     if (this.beforeExitListener) {
       return;
     }
@@ -348,7 +347,7 @@ export class NemoFlowRuntimeState {
 }
 
 export function registerNemoFlowPlugin(
-  api: OpenClawPluginApiLike,
+  api: OpenClawPluginApi,
   moduleLoader?: NemoFlowModuleLoader,
 ): void {
   if (api.registrationMode !== "full") {
@@ -376,7 +375,7 @@ export function registerNemoFlowPlugin(
 
   api.registerService({
     id: SERVICE_ID,
-    start: (ctx: OpenClawPluginServiceContextLike) =>
+    start: (ctx: OpenClawPluginServiceContext) =>
       runtime.start({
         stateDir: ctx.stateDir,
         logger: ctx.logger,
@@ -384,7 +383,7 @@ export function registerNemoFlowPlugin(
         agentVersion: config.atif.agentVersion ?? api.version ?? "unknown",
         ...(ctx.workspaceDir === undefined ? {} : { workspaceDir: ctx.workspaceDir }),
       }),
-    stop: (ctx: OpenClawPluginServiceContextLike) => runtime.stop("service_stop", ctx.logger),
+    stop: (ctx: OpenClawPluginServiceContext) => runtime.stop("service_stop", ctx.logger),
   });
 
   api.registerRuntimeLifecycle({
@@ -393,24 +392,28 @@ export function registerNemoFlowPlugin(
     cleanup: (ctx) => runtime.cleanup(ctx.reason),
   });
 
-  api.registerGatewayMethod?.(STATUS_METHOD, () => runtime.health(), {
-    scope: "operator.admin",
-  });
+  api.registerGatewayMethod?.(
+    STATUS_METHOD,
+    (() => runtime.health()) as unknown as Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1],
+    {
+      scope: "operator.admin",
+    },
+  );
 
   runtime.registerHooks();
 }
 
 function validatePluginHostConfig(
   modules: NemoFlowModules,
-  config: { version: number; components: unknown[]; [key: string]: unknown },
-  logger: PluginLoggerLike,
+  config: Parameters<NemoFlowModules["pluginHost"]["validate"]>[0],
+  logger: PluginLogger,
 ) {
   const report = modules.pluginHost.validate(config);
   logDiagnostics(logger, report.diagnostics);
   return report;
 }
 
-function logDiagnostics(logger: PluginLoggerLike, diagnostics: ConfigDiagnostic[]): void {
+function logDiagnostics(logger: PluginLogger, diagnostics: ConfigDiagnostic[]): void {
   for (const diagnostic of diagnostics) {
     const prefix = diagnostic.component ? `${diagnostic.component}: ` : "";
     const message = `${prefix}${diagnostic.code}: ${diagnostic.message}`;

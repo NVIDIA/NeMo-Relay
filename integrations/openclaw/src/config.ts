@@ -259,7 +259,7 @@ function asRecord(value: unknown, path: string, optional: boolean): Record<strin
   if (value === undefined && optional) {
     return {};
   }
-  if (value && typeof value === "object" && !Array.isArray(value)) {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
   }
   throw new Error(`${path} must be an object`);

@@ -10,7 +10,8 @@ import type {
   PluginHookLlmOutputEvent,
   PluginHookModelCallEndedEvent,
 } from "../openclaw-hook-types.js";
-import type { JsonRecord, PluginLoggerLike } from "../types.js";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import type { JsonObject as JsonRecord } from "nemo-flow-node/typed";
 import type { NemoFlowRuntimeModule } from "../modules.js";
 
 export type SessionLookupInput = {
@@ -33,8 +34,8 @@ export type SessionState = {
   agentId?: string;
   source: "session_start" | "lazy_session";
   resumedFrom?: string;
-  stack: unknown;
-  rootHandle?: unknown;
+  stack: ReturnType<NemoFlowRuntimeModule["createScopeStack"]>;
+  rootHandle?: ReturnType<NemoFlowRuntimeModule["pushScope"]>;
   atif?: {
     exporter: AtifExporterLike;
     registrationName: string;
@@ -117,7 +118,7 @@ export type HookReplayBackendState = {
 export type SessionManager = {
   nf: NemoFlowRuntimeModule;
   config: NemoFlowHookBackendConfig;
-  logger: PluginLoggerLike;
+  logger: PluginLogger;
   state: HookReplayBackendState;
   agentVersion: string;
   resolvedAtifOutputDir: string;
@@ -252,7 +253,7 @@ export function closeSessionRoot(
     manager.nf.event("openclaw.session_end", session.rootHandle, summary, null, timestamp ?? null);
     manager.state.counters.marksEmitted += 1;
     manager.nf.popScope(session.rootHandle, summary, timestamp ?? null);
-    session.rootHandle = undefined;
+    delete session.rootHandle;
   });
 }
 
@@ -371,6 +372,6 @@ function evictExpiredPendingLlmOutputs(
   }
 }
 
-function agentScopeType(nf: NemoFlowRuntimeModule): number {
-  return nf.ScopeType?.Agent ?? 0;
+function agentScopeType(nf: NemoFlowRuntimeModule): Parameters<NemoFlowRuntimeModule["pushScope"]>[1] {
+  return (nf.ScopeType?.Agent ?? 0) as Parameters<NemoFlowRuntimeModule["pushScope"]>[1];
 }
