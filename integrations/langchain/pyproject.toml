@@ -2,12 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
-requires = ["hatchling>=1.25,<2"]
-build-backend = "hatchling.build"
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=64", "setuptools-scm>=8", "setuptools_dynamic_dependencies>=1.0.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+git_describe_command = "git describe --long --first-parent"
+root = "../.."
 
 [project]
 name = "langchain-nemo-flow"
-dynamic = ["version"]
+dynamic = ["version", "dependencies"]
 description = "NeMo Flow middleware and callback integrations for LangChain."
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -24,20 +31,20 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
 
+[tool.setuptools_dynamic_dependencies]
 dependencies = [
     # Minimum version to support they hooks we are using
     "langchain>=1.2.9,<2.0.0",
     # Allow the langchain to dictate the version of langchain-core, not strictly needed
     # but we do import from langchain_core
     "langchain-core",
-    "nemo-flow>=0.2.0,<0.3.0",
+    "nemo-flow == {version}",
 ]
 
 [dependency-groups]
@@ -50,12 +57,6 @@ Documentation = "https://nvidia.github.io/NeMo-Flow/"
 Homepage = "https://github.com/NVIDIA/NeMo-Flow"
 Issues = "https://github.com/NVIDIA/NeMo-Flow/issues"
 Repository = "https://github.com/NVIDIA/NeMo-Flow"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/langchain_nemo_flow"]
-
-[tool.hatch.metadata.hooks.custom]
-path = "hatch_fetch_version.py"
 
 [tool.ruff]
 line-length = 120
