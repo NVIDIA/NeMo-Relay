@@ -133,6 +133,10 @@ The table below summarizes the support level for each binding surface.
 Some framework integrations are maintained as patch sets against upstream
 projects rather than as packages in this repository.
 
+### Public API-based Integrations
+Some integrations can be implemented using public APIs without patching. These implementations are maintained under `integrations/` with their own README files and test suites.
+
+### Patch-based Integrations
 Use [third_party/README.md](third_party/README.md) for the clone, checkout, and
 patch-application workflow for those integrations.
 
