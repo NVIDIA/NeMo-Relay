@@ -9,9 +9,13 @@ import { it } from "node:test";
 
 import { makeSafeSessionId } from "../atif-capture.js";
 import { registerNemoFlowPlugin } from "../runtime-state.js";
-import type { NemoFlowHealthSnapshot } from "../health.js";
-import { defaultNemoFlowModuleLoader, type NemoFlowModules } from "../modules.js";
+import {
+  defaultNemoFlowModuleLoader,
+  type NemoFlowModuleLoader,
+  type NemoFlowModules,
+} from "../modules.js";
 import type { OpenClawPluginApi, PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import { callGatewayStatus, type TestGatewayMethodHandler } from "./gateway-status.js";
 
 const liveSmokeEnabled = process.env.NEMO_FLOW_OPENCLAW_LIVE_SMOKE === "1";
 
@@ -36,7 +40,7 @@ it(
     let serviceStarted = false;
 
     try {
-      registerNemoFlowPlugin(api as unknown as OpenClawPluginApi, async () => modules);
+      registerPlugin(api, async () => modules);
 
       const service = api.calls.services[0];
       assert.ok(service, "expected OpenClaw service registration");
@@ -108,8 +112,7 @@ it(
       const exported = JSON.parse(await fs.readFile(targetPath, "utf8")) as unknown;
       assert.equal(typeof exported, "object");
 
-      const status = api.calls.gatewayMethods[0]?.handler();
-      assert.ok(status);
+      const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
       assert.equal(status.outputs.atif, "enabled");
       assert.equal(status.counters.llmSpansReplayed, 1);
       assert.equal(status.counters.toolSpansReplayed, 1);
@@ -139,11 +142,10 @@ type TestApi = {
   resolvePath: OpenClawPluginApi["resolvePath"];
   registerService: (service: Parameters<OpenClawPluginApi["registerService"]>[0]) => void;
   registerRuntimeLifecycle: (lifecycle: Parameters<OpenClawPluginApi["registerRuntimeLifecycle"]>[0]) => void;
-  registerHook: (hookName: string | string[], handler: HookHandler) => void;
   on: (hookName: string, handler: HookHandler) => void;
   registerGatewayMethod: (
     method: string,
-    handler: (request?: unknown) => unknown,
+    handler: TestGatewayMethodHandler,
     opts?: { scope?: string },
   ) => void;
   calls: {
@@ -151,7 +153,7 @@ type TestApi = {
     lifecycle: Parameters<OpenClawPluginApi["registerRuntimeLifecycle"]>[0][];
     gatewayMethods: Array<{
       method: string;
-      handler: (request?: unknown) => NemoFlowHealthSnapshot;
+      handler: TestGatewayMethodHandler;
     }>;
     hooks: Array<{ hookName: string; handler: HookHandler }>;
   };
@@ -179,16 +181,14 @@ function createApi(params: { pluginConfig: Record<string, unknown> }): TestApi {
     resolvePath: (input) => input,
     registerService: (service) => calls.services.push(service),
     registerRuntimeLifecycle: (lifecycle) => calls.lifecycle.push(lifecycle),
-    registerHook: (hookName: string | string[], handler: HookHandler) =>
-      calls.hooks.push({ hookName: String(hookName), handler }),
     on: (hookName: string, handler: HookHandler) => calls.hooks.push({ hookName, handler }),
-    registerGatewayMethod: (method, handler) =>
-      calls.gatewayMethods.push({
-        method,
-        handler: handler as unknown as TestApi["calls"]["gatewayMethods"][number]["handler"],
-      }),
+    registerGatewayMethod: (method, handler) => calls.gatewayMethods.push({ method, handler }),
     calls,
   };
+}
+
+function registerPlugin(api: TestApi, moduleLoader: NemoFlowModuleLoader): void {
+  registerNemoFlowPlugin(api as unknown as OpenClawPluginApi, moduleLoader);
 }
 
 async function loadRealNemoFlowModules(): Promise<NemoFlowModules> {

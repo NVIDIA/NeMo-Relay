@@ -21,26 +21,6 @@ import {
   shutdownTelemetrySubscribers,
   type TelemetrySubscriberEntry,
 } from "./telemetry.js";
-import type {
-  PluginHookAfterToolCallEvent,
-  PluginHookAgentContext,
-  PluginHookAgentEndEvent,
-  PluginHookBeforeAgentFinalizeEvent,
-  PluginHookGatewayContext,
-  PluginHookGatewayStartEvent,
-  PluginHookGatewayStopEvent,
-  PluginHookLlmInputEvent,
-  PluginHookLlmOutputEvent,
-  PluginHookModelCallEndedEvent,
-  PluginHookModelCallStartedEvent,
-  PluginHookSessionContext,
-  PluginHookSessionEndEvent,
-  PluginHookSessionStartEvent,
-  PluginHookSubagentContext,
-  PluginHookSubagentEndedEvent,
-  PluginHookSubagentSpawnedEvent,
-  PluginHookToolContext,
-} from "./openclaw-hook-types.js";
 import type { RuntimeStateOptions, StartContext } from "./types.js";
 
 const PLUGIN_ID = "nemo-flow";
@@ -221,75 +201,91 @@ export class NemoFlowRuntimeState {
     return this.stop(reason, this.api.logger);
   }
 
-  registerHooks(): void {
-    const dispatch = (
-      hookName: Parameters<OpenClawPluginApi["on"]>[0],
-      handler: (backend: HookReplayBackend, event: unknown, ctx: unknown) => void,
-    ): void => {
-      this.api.on(hookName, ((event: unknown, ctx: unknown) => {
-        const backend = this.backendValue;
-        if (!backend) {
-          return;
-        }
-        backend.safeReplay(hookName, undefined, () => handler(backend, event, ctx));
-      }) as never);
-    };
-    const dispatchAsync = (
-      hookName: Parameters<OpenClawPluginApi["on"]>[0],
-      handler: (backend: HookReplayBackend, event: unknown, ctx: unknown) => Promise<void>,
-    ): void => {
-      this.api.on(hookName, (async (event: unknown, ctx: unknown) => {
-        const backend = this.backendValue;
-        if (!backend) {
-          return;
-        }
-        await backend.safeReplayAsync(hookName, undefined, () => handler(backend, event, ctx));
-      }) as never);
-    };
+  private replayWithBackend(label: string, emit: (backend: HookReplayBackend) => void): void {
+    const backend = this.backendValue;
+    if (!backend) {
+      return;
+    }
 
-    dispatch("gateway_start", (backend, event, ctx) =>
-      backend.onGatewayStart(event as PluginHookGatewayStartEvent, ctx as PluginHookGatewayContext),
-    );
-    this.api.on("gateway_stop", (async (event: unknown) => {
-      const stopEvent = event as PluginHookGatewayStopEvent;
-      await this.stop(stopEvent.reason ?? "gateway_stop", this.api.logger);
-    }) as never);
-    dispatch("session_start", (backend, event, ctx) =>
-      backend.onSessionStart(event as PluginHookSessionStartEvent, ctx as PluginHookSessionContext),
-    );
-    dispatchAsync("session_end", (backend, event, ctx) =>
-      backend.onSessionEnd(event as PluginHookSessionEndEvent, ctx as PluginHookSessionContext),
-    );
-    dispatch("llm_input", (backend, event, ctx) =>
-      backend.onLlmInput(event as PluginHookLlmInputEvent, ctx as PluginHookAgentContext),
-    );
-    dispatch("llm_output", (backend, event, ctx) =>
-      backend.onLlmOutput(event as PluginHookLlmOutputEvent, ctx as PluginHookAgentContext),
-    );
-    dispatch("model_call_started", (backend, event, ctx) =>
-      backend.onModelCallStarted(event as PluginHookModelCallStartedEvent, ctx as PluginHookAgentContext),
-    );
-    dispatch("model_call_ended", (backend, event, ctx) =>
-      backend.onModelCallEnded(event as PluginHookModelCallEndedEvent, ctx as PluginHookAgentContext),
-    );
-    dispatch("after_tool_call", (backend, event, ctx) =>
-      backend.onAfterToolCall(event as PluginHookAfterToolCallEvent, ctx as PluginHookToolContext),
-    );
-    dispatch("agent_end", (backend, event, ctx) =>
-      backend.onAgentEnd(event as PluginHookAgentEndEvent, ctx as PluginHookAgentContext),
-    );
-    dispatch("before_agent_finalize", (backend, event, ctx) =>
-      backend.onBeforeAgentFinalize(
-        event as PluginHookBeforeAgentFinalizeEvent,
-        ctx as PluginHookAgentContext,
-      ),
-    );
-    dispatch("subagent_spawned", (backend, event, ctx) =>
-      backend.onSubagentSpawned(event as PluginHookSubagentSpawnedEvent, ctx as PluginHookSubagentContext),
-    );
-    dispatch("subagent_ended", (backend, event, ctx) =>
-      backend.onSubagentEnded(event as PluginHookSubagentEndedEvent, ctx as PluginHookSubagentContext),
-    );
+    backend.safeReplay(label, undefined, () => emit(backend));
+  }
+
+  private async replayWithBackendAsync(
+    label: string,
+    emit: (backend: HookReplayBackend) => Promise<void>,
+  ): Promise<void> {
+    const backend = this.backendValue;
+    if (!backend) {
+      return;
+    }
+
+    await backend.safeReplayAsync(label, undefined, () => emit(backend));
+  }
+
+  registerHooks(): void {
+    this.api.on("gateway_start", (event, ctx) => {
+      this.replayWithBackend("gateway_start", (backend) => backend.onGatewayStart(event, ctx));
+    });
+
+    this.api.on("gateway_stop", async (event) => {
+      await this.stop(event.reason ?? "gateway_stop", this.api.logger);
+    });
+
+    this.api.on("session_start", (event, ctx) => {
+      this.replayWithBackend("session_start", (backend) => backend.onSessionStart(event, ctx));
+    });
+
+    this.api.on("session_end", async (event, ctx) => {
+      await this.replayWithBackendAsync("session_end", (backend) => backend.onSessionEnd(event, ctx));
+    });
+
+    this.api.on("llm_input", (event, ctx) => {
+      this.replayWithBackend("llm_input", (backend) => backend.onLlmInput(event, ctx));
+    });
+
+    this.api.on("llm_output", (event, ctx) => {
+      this.replayWithBackend("llm_output", (backend) => backend.onLlmOutput(event, ctx));
+    });
+
+    this.api.on("model_call_started", (event, ctx) => {
+      this.replayWithBackend("model_call_started", (backend) =>
+        backend.onModelCallStarted(event, ctx),
+      );
+    });
+
+    this.api.on("model_call_ended", (event, ctx) => {
+      this.replayWithBackend("model_call_ended", (backend) =>
+        backend.onModelCallEnded(event, ctx),
+      );
+    });
+
+    this.api.on("after_tool_call", (event, ctx) => {
+      this.replayWithBackend("after_tool_call", (backend) =>
+        backend.onAfterToolCall(event, ctx),
+      );
+    });
+
+    this.api.on("agent_end", (event, ctx) => {
+      this.replayWithBackend("agent_end", (backend) => backend.onAgentEnd(event, ctx));
+    });
+
+    this.api.on("before_agent_finalize", (event, ctx) => {
+      this.replayWithBackend("before_agent_finalize", (backend) =>
+        backend.onBeforeAgentFinalize(event, ctx),
+      );
+    });
+
+    this.api.on("subagent_spawned", (event, ctx) => {
+      this.replayWithBackend("subagent_spawned", (backend) =>
+        backend.onSubagentSpawned(event, ctx),
+      );
+    });
+
+    this.api.on("subagent_ended", (event, ctx) => {
+      this.replayWithBackend("subagent_ended", (backend) =>
+        backend.onSubagentEnded(event, ctx),
+      );
+    });
   }
 
   private resolvePluginHostConfig(
@@ -394,7 +390,9 @@ export function registerNemoFlowPlugin(
 
   api.registerGatewayMethod?.(
     STATUS_METHOD,
-    (() => runtime.health()) as unknown as Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1],
+    ({ respond }) => {
+      respond(true, runtime.health());
+    },
     {
       scope: "operator.admin",
     },
