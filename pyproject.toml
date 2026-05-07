@@ -89,7 +89,8 @@ asyncio_mode = "auto"
 [tool.ty.analysis]
 # nemo_flow._native is a compiled Rust extension (built by maturin) that only
 # exists after `uv sync` / `pip install -e .`. Suppress unresolved-import for it.
-allowed-unresolved-imports = ["nemo_flow._native", "pytest"]
+# LangChain and LangGraph are dependencies of integrations/langchain which aren't installed by default
+allowed-unresolved-imports = ["langchain.**", "langchain_*.**", "langgraph.**", "nemo_flow._native", "pytest"]
 
 [tool.ruff]
 line-length = 120
