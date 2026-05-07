@@ -302,6 +302,17 @@ describe("HookReplayBackend", () => {
       ok: true,
       self: { ok: true, self: "[Circular]" },
     });
+    assert.deepEqual(toJsonRecord({
+      finite: 42,
+      nan: Number.NaN,
+      positiveInfinity: Number.POSITIVE_INFINITY,
+      negativeInfinity: Number.NEGATIVE_INFINITY,
+    }), {
+      finite: 42,
+      nan: null,
+      positiveInfinity: null,
+      negativeInfinity: null,
+    });
     assert.deepEqual(errorToJson(new Error("boom")).message, "boom");
   });
 });

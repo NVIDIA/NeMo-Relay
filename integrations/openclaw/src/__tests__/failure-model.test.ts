@@ -35,7 +35,7 @@ describe("Replay failure model", () => {
       { runId: "run-1", sessionId: "session-1" },
     );
 
-    await delay(10);
+    await waitFor(() => backend.state().counters.replayErrors === 1 && logger.messages.warn.length >= 1);
 
     assert.equal(backend.state().counters.replayErrors, 1);
     assert.equal(logger.messages.warn.length, 1);
@@ -82,8 +82,14 @@ function createThrowingLlmRuntime(): NemoFlowRuntimeModule {
   };
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) {
+      throw new Error("timed out waiting for replay failure state");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 class FakeAtifExporter {

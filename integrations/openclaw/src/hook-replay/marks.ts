@@ -83,8 +83,11 @@ function stripUndefined(input: Record<string, unknown>, seen: WeakSet<object>): 
 }
 
 function normalizeJsonValue(value: unknown, seen: WeakSet<object>): JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
     return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {
