@@ -69,25 +69,6 @@ def tool_to_json(tool: BaseTool | dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def openai_chat_tool_to_json(tool: BaseTool | dict[str, Any]) -> dict[str, Any]:
-    """Convert a LangChain tool descriptor into OpenAI Chat tool shape."""
-    if isinstance(tool, dict) and tool.get("type") == "function":
-        return tool
-    return convert_to_openai_tool(tool)
-
-
-def normalize_openai_tool_choice(tool_choice: Any) -> Any:
-    """Convert LangChain tool choice aliases to OpenAI Chat-compatible values."""
-    if isinstance(tool_choice, bool):
-        return "required" if tool_choice else "none"
-    if isinstance(tool_choice, str):
-        if tool_choice == "any":
-            return "required"
-        if tool_choice not in {"auto", "none", "required"}:
-            return {"type": "function", "function": {"name": tool_choice}}
-    return tool_choice
-
-
 def model_request_to_payload(request: ModelRequest[Any]) -> dict[str, Any]:
     """Serialize public ``ModelRequest`` fields into a JSON-compatible payload."""
     messages: list[BaseMessage] = []
@@ -182,29 +163,5 @@ def model_response_from_json(payload: Any, codec: Any) -> ModelResponse[Any]:
         return decoded
     raise TypeError(f"NeMo Flow model execution returned {type(decoded)!r}, expected ModelResponse")
 
-
-def _anthropic_content(value: Any) -> str | list[dict[str, Any]]:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list) and all(isinstance(item, dict) for item in value):
-        return value
-    return str(value)
-
-
-def _message_to_anthropic(message: BaseMessage) -> dict[str, Any]:
-    if isinstance(message, AIMessage):
-        return {"role": "assistant", "content": _anthropic_content(message.content)}
-    if isinstance(message, ToolMessage):
-        return {
-            "role": "user",
-            "content": [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": message.tool_call_id,
-                    "content": _anthropic_content(message.content),
-                }
-            ],
-        }
-    return {"role": "user", "content": _anthropic_content(message.content)}
 
 ModelRequestHeaders = Callable[[ModelRequest[Any]], dict[str, str]]
