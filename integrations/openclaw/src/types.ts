@@ -47,6 +47,8 @@ export type OpenClawPluginServiceLike = {
   stop?: (ctx: OpenClawPluginServiceContextLike) => void | Promise<void>;
 };
 
+export type OpenClawHookHandlerLike = (event: unknown, ctx: unknown) => void | Promise<void>;
+
 export type OpenClawRuntimeCleanupContextLike = {
   reason: string;
   sessionKey?: string;
@@ -67,6 +69,7 @@ export type OpenClawPluginApiLike = {
     description?: string;
     cleanup: (ctx: OpenClawRuntimeCleanupContextLike) => void | Promise<void>;
   }) => void;
+  on: (hookName: string, handler: OpenClawHookHandlerLike, opts?: { priority?: number; timeoutMs?: number }) => void;
   registerGatewayMethod?: (
     method: string,
     handler: () => NemoFlowHealthSnapshot | Promise<NemoFlowHealthSnapshot>,

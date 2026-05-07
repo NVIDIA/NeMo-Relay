@@ -22,7 +22,32 @@ export type NemoFlowPluginHostModule = {
   clear: () => void;
 };
 
-export type NemoFlowRuntimeModule = Record<string, unknown>;
+export type NemoFlowRuntimeModule = {
+  ScopeType?: {
+    Agent?: number;
+  };
+  createScopeStack: () => unknown;
+  currentScopeStack: () => unknown;
+  setThreadScopeStack: (stack: unknown) => void;
+  pushScope: (
+    name: string,
+    scopeType: number,
+    handle?: unknown | null,
+    attributes?: number | null,
+    data?: unknown,
+    metadata?: unknown,
+    input?: unknown,
+    timestamp?: number | null,
+  ) => unknown;
+  popScope: (handle: unknown, output?: unknown, timestamp?: number | null) => void;
+  event: (
+    name: string,
+    handle?: unknown | null,
+    data?: unknown,
+    metadata?: unknown,
+    timestamp?: number | null,
+  ) => void;
+};
 
 export type NemoFlowModules = {
   nf: NemoFlowRuntimeModule;
@@ -38,7 +63,7 @@ export const defaultNemoFlowModuleLoader: NemoFlowModuleLoader = async () => {
   ]);
 
   return {
-    nf,
+    nf: nf as unknown as NemoFlowRuntimeModule,
     pluginHost: pluginHost as NemoFlowPluginHostModule,
   };
 };

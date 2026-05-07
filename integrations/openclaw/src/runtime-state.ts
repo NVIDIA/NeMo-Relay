@@ -3,6 +3,7 @@
 
 import { parseConfig } from "./config.js";
 import { createHealthSnapshot, type HookReplayBackendStatus } from "./health.js";
+import { HookReplayBackend } from "./hooks-backend.js";
 import {
   defaultNemoFlowModuleLoader,
   type ConfigDiagnostic,
@@ -10,7 +11,28 @@ import {
   type NemoFlowModuleLoader,
 } from "./modules.js";
 import type {
+  PluginHookAfterToolCallEvent,
+  PluginHookAgentContext,
+  PluginHookAgentEndEvent,
+  PluginHookBeforeAgentFinalizeEvent,
+  PluginHookGatewayContext,
+  PluginHookGatewayStartEvent,
+  PluginHookGatewayStopEvent,
+  PluginHookLlmInputEvent,
+  PluginHookLlmOutputEvent,
+  PluginHookModelCallEndedEvent,
+  PluginHookModelCallStartedEvent,
+  PluginHookSessionContext,
+  PluginHookSessionEndEvent,
+  PluginHookSessionStartEvent,
+  PluginHookSubagentContext,
+  PluginHookSubagentEndedEvent,
+  PluginHookSubagentSpawnedEvent,
+  PluginHookToolContext,
+} from "./openclaw-hook-types.js";
+import type {
   OpenClawPluginApiLike,
+  OpenClawHookHandlerLike,
   OpenClawPluginServiceContextLike,
   PluginLoggerLike,
   RuntimeStateOptions,
@@ -27,6 +49,7 @@ export class NemoFlowRuntimeState {
   private readonly moduleLoader: NemoFlowModuleLoader;
   private statusValue: HookReplayBackendStatus = { state: "not_initialized" };
   private modulesValue?: NemoFlowModules;
+  private backendValue: HookReplayBackend | undefined;
   private initializedPluginHost = false;
 
   constructor(options: RuntimeStateOptions) {
@@ -91,6 +114,12 @@ export class NemoFlowRuntimeState {
     if (!degradedReason) {
       this.statusValue = { state: "ready" };
     }
+
+    this.backendValue = new HookReplayBackend({
+      nf: modules.nf,
+      config: parseConfig(this.api.pluginConfig),
+      logger: ctx.logger,
+    });
   }
 
   async stop(reason: string, logger?: PluginLoggerLike): Promise<void> {
@@ -109,11 +138,72 @@ export class NemoFlowRuntimeState {
       this.initializedPluginHost = false;
     }
 
+    this.backendValue?.stop(reason);
+    this.backendValue = undefined;
+
     this.statusValue = { state: "stopped", reason };
   }
 
   cleanup(reason: string): Promise<void> {
     return this.stop(reason, this.api.logger);
+  }
+
+  registerHooks(): void {
+    const dispatch = (
+      hookName: string,
+      handler: (backend: HookReplayBackend, event: unknown, ctx: unknown) => void,
+    ): void => {
+      this.api.on(hookName, ((event: unknown, ctx: unknown) => {
+        const backend = this.backendValue;
+        if (!backend) {
+          return;
+        }
+        backend.safeReplay(hookName, undefined, () => handler(backend, event, ctx));
+      }) as OpenClawHookHandlerLike);
+    };
+
+    dispatch("gateway_start", (backend, event, ctx) =>
+      backend.onGatewayStart(event as PluginHookGatewayStartEvent, ctx as PluginHookGatewayContext),
+    );
+    dispatch("gateway_stop", (backend, event, ctx) =>
+      backend.onGatewayStop(event as PluginHookGatewayStopEvent, ctx as PluginHookGatewayContext),
+    );
+    dispatch("session_start", (backend, event, ctx) =>
+      backend.onSessionStart(event as PluginHookSessionStartEvent, ctx as PluginHookSessionContext),
+    );
+    dispatch("session_end", (backend, event, ctx) =>
+      backend.onSessionEnd(event as PluginHookSessionEndEvent, ctx as PluginHookSessionContext),
+    );
+    dispatch("llm_input", (backend, event, ctx) =>
+      backend.onLlmInput(event as PluginHookLlmInputEvent, ctx as PluginHookAgentContext),
+    );
+    dispatch("llm_output", (backend, event, ctx) =>
+      backend.onLlmOutput(event as PluginHookLlmOutputEvent, ctx as PluginHookAgentContext),
+    );
+    dispatch("model_call_started", (backend, event, ctx) =>
+      backend.onModelCallStarted(event as PluginHookModelCallStartedEvent, ctx as PluginHookAgentContext),
+    );
+    dispatch("model_call_ended", (backend, event, ctx) =>
+      backend.onModelCallEnded(event as PluginHookModelCallEndedEvent, ctx as PluginHookAgentContext),
+    );
+    dispatch("after_tool_call", (backend, event, ctx) =>
+      backend.onAfterToolCall(event as PluginHookAfterToolCallEvent, ctx as PluginHookToolContext),
+    );
+    dispatch("agent_end", (backend, event, ctx) =>
+      backend.onAgentEnd(event as PluginHookAgentEndEvent, ctx as PluginHookAgentContext),
+    );
+    dispatch("before_agent_finalize", (backend, event, ctx) =>
+      backend.onBeforeAgentFinalize(
+        event as PluginHookBeforeAgentFinalizeEvent,
+        ctx as PluginHookAgentContext,
+      ),
+    );
+    dispatch("subagent_spawned", (backend, event, ctx) =>
+      backend.onSubagentSpawned(event as PluginHookSubagentSpawnedEvent, ctx as PluginHookSubagentContext),
+    );
+    dispatch("subagent_ended", (backend, event, ctx) =>
+      backend.onSubagentEnded(event as PluginHookSubagentEndedEvent, ctx as PluginHookSubagentContext),
+    );
   }
 
   private resolvePluginHostConfig(
@@ -190,6 +280,8 @@ export function registerNemoFlowPlugin(
   api.registerGatewayMethod?.(STATUS_METHOD, () => runtime.health(), {
     scope: "operator.admin",
   });
+
+  runtime.registerHooks();
 }
 
 function validatePluginHostConfig(

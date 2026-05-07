@@ -66,6 +66,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.equal(api.calls.services.length, 0);
     assert.equal(api.calls.lifecycle.length, 0);
     assert.equal(api.calls.gatewayMethods.length, 0);
+    assert.equal(api.calls.hooks.length, 0);
   });
 
   it("returns without side effects when disabled", () => {
@@ -76,6 +77,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.equal(api.calls.services.length, 0);
     assert.equal(api.calls.lifecycle.length, 0);
     assert.equal(api.calls.gatewayMethods.length, 0);
+    assert.equal(api.calls.hooks.length, 0);
     assert.deepEqual(api.messages.info, ["nemo-flow observability disabled by plugin config"]);
   });
 
@@ -87,6 +89,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.equal(api.calls.services.length, 0);
     assert.equal(api.calls.lifecycle.length, 0);
     assert.equal(api.calls.gatewayMethods.length, 0);
+    assert.equal(api.calls.hooks.length, 0);
     assert.match(
       api.messages.warn[0] ?? "",
       /nemo-flow observability disabled because plugin config is invalid/,
@@ -110,6 +113,24 @@ describe("nemo-flow OpenClaw plugin shell", () => {
       api.calls.gatewayMethods.map((method) => method.method),
       ["nemoFlow.status"],
     );
+    assert.deepEqual(
+      api.calls.hooks.map((hook) => hook.hookName),
+      [
+        "gateway_start",
+        "gateway_stop",
+        "session_start",
+        "session_end",
+        "llm_input",
+        "llm_output",
+        "model_call_started",
+        "model_call_ended",
+        "after_tool_call",
+        "agent_end",
+        "before_agent_finalize",
+        "subagent_spawned",
+        "subagent_ended",
+      ],
+    );
   });
 
   it("does not statically import nemo-flow-node or OpenClaw private src paths", () => {
@@ -129,6 +150,7 @@ type TestApi = OpenClawPluginApiLike & {
     services: Parameters<OpenClawPluginApiLike["registerService"]>[0][];
     lifecycle: Parameters<OpenClawPluginApiLike["registerRuntimeLifecycle"]>[0][];
     gatewayMethods: Array<{ method: string }>;
+    hooks: Array<{ hookName: string }>;
   };
   messages: {
     info: string[];
@@ -145,6 +167,7 @@ function createApi(params: {
     services: [],
     lifecycle: [],
     gatewayMethods: [],
+    hooks: [],
   };
   const logger: PluginLoggerLike = {
     info: (message) => messages.info.push(message),
@@ -159,6 +182,7 @@ function createApi(params: {
     resolvePath: (input) => input,
     registerService: (service) => calls.services.push(service),
     registerRuntimeLifecycle: (lifecycle) => calls.lifecycle.push(lifecycle),
+    on: (hookName) => calls.hooks.push({ hookName }),
     registerGatewayMethod: (method) => calls.gatewayMethods.push({ method }),
     calls,
     messages,
@@ -173,12 +197,24 @@ function createApi(params: {
 
 function createModules(): NemoFlowModules {
   return {
-    nf: {},
+    nf: createNemoFlowRuntime(),
     pluginHost: {
       defaultConfig: () => ({ version: 1, components: [] }),
       validate: () => ({ diagnostics: [] }),
       initialize: async () => ({ diagnostics: [] }),
       clear: () => {},
     },
+  };
+}
+
+function createNemoFlowRuntime(): NemoFlowModules["nf"] {
+  return {
+    ScopeType: { Agent: 0 },
+    createScopeStack: () => ({ type: "stack" }),
+    currentScopeStack: () => ({ type: "previous-stack" }),
+    setThreadScopeStack: () => {},
+    pushScope: () => ({ type: "scope" }),
+    popScope: () => {},
+    event: () => {},
   };
 }
