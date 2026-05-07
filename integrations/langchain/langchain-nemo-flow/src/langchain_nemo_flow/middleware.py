@@ -16,10 +16,10 @@ from nemo_flow._native import LLMRequest
 
 from langchain_nemo_flow._serialization import (
     ModelRequestHeaders,
-    best_effort_model_response_from_json,
-    best_effort_model_response_to_json,
-    default_model_request_payload,
-    default_payload_to_model_request,
+    model_response_from_json,
+    model_response_to_json,
+    model_request_to_payload,
+    payload_to_model_request,
     get_model_name)
 
 if TYPE_CHECKING:
@@ -97,12 +97,12 @@ class NemoFlowMiddleware(AgentMiddleware):
     ) -> ModelResponse[Any]:
         """Wrap a sync LangChain agent model call in NeMo Flow LLM execution."""
         object_codec = nemo_flow.typed.BestEffortAnyCodec()
-        llm_request = nemo_flow.LLMRequest(self._headers_for(request), default_model_request_payload(request))
+        llm_request = nemo_flow.LLMRequest(self._headers_for(request), model_request_to_payload(request))
         model_name = get_model_name(request.model)
 
         async def _call(req: Any) -> Any:
-            response = handler(default_payload_to_model_request(request, req.content))
-            return best_effort_model_response_to_json(response, object_codec)
+            response = handler(payload_to_model_request(request, req.content))
+            return model_response_to_json(response, object_codec)
 
         result = nemo_flow.utils.run_sync(
             self.llm_execute(
@@ -113,7 +113,7 @@ class NemoFlowMiddleware(AgentMiddleware):
                 response_codec=self._codec,
             )
         )
-        return best_effort_model_response_from_json(result, object_codec)
+        return model_response_from_json(result, object_codec)
 
 
     async def awrap_model_call(
@@ -124,12 +124,12 @@ class NemoFlowMiddleware(AgentMiddleware):
         """Wrap an async LangChain agent model call in NeMo Flow LLM execution."""
 
         object_codec = nemo_flow.typed.BestEffortAnyCodec()
-        llm_request = nemo_flow.LLMRequest(self._headers_for(request), default_model_request_payload(request))
+        llm_request = nemo_flow.LLMRequest(self._headers_for(request), model_request_to_payload(request))
         model_name = get_model_name(request.model)
 
         async def _call(req: Any) -> Any:
-            response = await handler(default_payload_to_model_request(request, req.content))
-            return best_effort_model_response_to_json(response, object_codec)
+            response = await handler(payload_to_model_request(request, req.content))
+            return model_response_to_json(response, object_codec)
 
         result = await self.llm_execute(
             model_name=model_name,
@@ -138,7 +138,7 @@ class NemoFlowMiddleware(AgentMiddleware):
             codec=self._codec,
             response_codec=self._codec,
         )
-        return best_effort_model_response_from_json(result, object_codec)
+        return model_response_from_json(result, object_codec)
 
 
     def wrap_tool_call(
