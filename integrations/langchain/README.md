@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Flow LangChain Integration
 
-This directory contains the `langchain_nemo_flow` package which provides observability integration for LangChain. 
+This directory contains the `langchain_nemo_flow` package which provides observability integration for LangChain.
 
 The intent of this project is to enable as much NeMo Flow functionality as possible using public LangChain APIs without requiring changes to LangChain itself.
 

@@ -55,7 +55,7 @@ class RecordingMiddleware(NemoFlowMiddleware):
 
 def _model_request() -> ModelRequest[Any]:
     return ModelRequest(
-        model=FakeModel(),
+        model=FakeModel(),  # ty: ignore[invalid-argument-type]
         messages=[HumanMessage(content="hello")],
         model_settings={"temperature": 1.0},
     )
