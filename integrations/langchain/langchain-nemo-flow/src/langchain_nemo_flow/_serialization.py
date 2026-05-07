@@ -5,15 +5,18 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, TYPE_CHECKING
 
-from langchain.agents.middleware import ModelRequest, ModelResponse
+from langchain.agents.middleware import ModelResponse
 from langchain_core.messages import (
-    BaseMessage,
     SystemMessage,
     messages_from_dict,
     messages_to_dict,
 )
+
+if TYPE_CHECKING:
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.messages import BaseMessage
 
 try:
     from langchain_anthropic import ChatAnthropic
@@ -148,4 +151,3 @@ def model_response_from_json(payload: Any, codec: Any) -> ModelResponse[Any]:
     if isinstance(decoded, ModelResponse):
         return decoded
     raise TypeError(f"NeMo Flow model execution returned {type(decoded)!r}, expected ModelResponse")
-
