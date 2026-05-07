@@ -14,8 +14,21 @@ from langchain_core.messages import (
     messages_from_dict,
     messages_to_dict,
 )
+
 from langchain_core.tools import BaseTool
-from nemo_flow.codecs import AnthropicMessagesCodec, LlmCodec, OpenAIChatCodec
+
+try:
+    from langchain_anthropic import ChatAnthropic
+except ImportError:
+    ChatAnthropic = None
+
+try:
+    from langchain_openai import ChatOpenAI
+except ImportError:
+    ChatOpenAI = None
+
+
+from nemo_flow.codecs import AnthropicMessagesCodec, LlmCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 LANGCHAIN_MODEL_RESPONSE_KEY = "__langchain_nemo_flow_model_response"
 
@@ -29,22 +42,15 @@ def get_model_name(model: Any) -> str | None:
     return None
 
 
-def get_model_provider(model: Any) -> str:
-    """Best-effort provider name label for a LangChain chat model."""
-    name = model.__class__.__name__
-    if name.startswith("Chat") and len(name) > 4:
-        return name[4:].lower()
-    return name.lower()
-
-
 def infer_codec_from_model(model: Any) -> LlmCodec | None:
     """Infer a NeMo Flow codec name from a LangChain chat model."""
-    provider = get_model_provider(model)
-    if provider in ("azureopenai", "openai", "nvidia"):
-        return OpenAIChatCodec()
-
-    if provider == "anthropic":
+    if ChatAnthropic is not None and isinstance(model, ChatAnthropic):
         return AnthropicMessagesCodec()
+
+    if ChatOpenAI is not None and isinstance(model, ChatOpenAI):
+        if getattr(model, "use_responses_api", None) is True:
+            return OpenAIResponsesCodec()
+        return OpenAIChatCodec()
 
     return None
 

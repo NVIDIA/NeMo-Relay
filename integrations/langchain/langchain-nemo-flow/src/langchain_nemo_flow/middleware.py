@@ -110,8 +110,7 @@ class NemoFlowMiddleware(AgentMiddleware):
                 model_name=model_name,
                 request=llm_request,
                 func=_call,
-                # TODO:  Whenever I set these I get an attribute error about the codec missing a type attribute.
-                codec=None,
+                codec=model_codec,
                 response_codec=model_codec,
             )
         )
@@ -137,7 +136,7 @@ class NemoFlowMiddleware(AgentMiddleware):
             model_name=model_name,
             request=llm_request,
             func=_call,
-            codec=None,
+            codec=model_codec,
             response_codec=model_codec,
         )
         return model_response_from_json(result, object_codec)
