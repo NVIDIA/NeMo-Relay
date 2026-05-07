@@ -6,14 +6,19 @@ import * as path from "node:path";
 import { parseConfig } from "./config.js";
 import type { NemoFlowHookBackendConfig } from "./config.js";
 import { createHealthSnapshot, type HookReplayBackendStatus } from "./health.js";
+import type { HookReplayCounters } from "./hook-replay/session.js";
 import { HookReplayBackend } from "./hooks-backend.js";
 import {
   defaultNemoFlowModuleLoader,
   type ConfigDiagnostic,
   type NemoFlowModules,
   type NemoFlowModuleLoader,
-  type NemoFlowSubscriber,
 } from "./modules.js";
+import {
+  registerTelemetrySubscribers,
+  shutdownTelemetrySubscribers,
+  type TelemetrySubscriberEntry,
+} from "./telemetry.js";
 import type {
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
@@ -60,11 +65,8 @@ export class NemoFlowRuntimeState {
   private started = false;
   private beforeExitListener?: () => void;
   private unavailableLogged = false;
-  private telemetrySubscribers: Array<{
-    output: "otel" | "openInference";
-    name: string;
-    subscriber: NemoFlowSubscriber;
-  }> = [];
+  private telemetrySubscribers: TelemetrySubscriberEntry[] = [];
+  private lastCounters?: HookReplayCounters;
   private readonly degradedOutputs = new Set<"atif" | "otel" | "openInference">();
 
   constructor(options: RuntimeStateOptions) {
@@ -78,9 +80,20 @@ export class NemoFlowRuntimeState {
   }
 
   health() {
+    const backendState = this.backendValue?.state();
     return createHealthSnapshot({
       status: this.statusValue,
       initializedPluginHost: this.initializedPluginHost,
+      config: this.config,
+      degradedOutputs: this.degradedOutputs,
+      ...(backendState === undefined
+        ? this.lastCounters === undefined
+          ? {}
+          : { counters: this.lastCounters }
+        : {
+            counters: backendState.counters,
+            sessions: backendState.sessions.values(),
+          }),
     });
   }
 
@@ -88,6 +101,9 @@ export class NemoFlowRuntimeState {
     if (this.started || this.statusValue.state === "ready" || this.statusValue.state === "degraded") {
       return;
     }
+
+    delete this.lastCounters;
+    this.degradedOutputs.clear();
 
     let modules: NemoFlowModules;
     try {
@@ -138,6 +154,17 @@ export class NemoFlowRuntimeState {
       }
     }
 
+    const degradedOutputCount = this.degradedOutputs.size;
+    this.telemetrySubscribers = registerTelemetrySubscribers({
+      nf: modules.nf,
+      config: this.config,
+      logger: ctx.logger,
+      markOutputDegraded: (output) => this.markOutputDegraded(output),
+    });
+    if (this.degradedOutputs.size > degradedOutputCount && degradedReason === undefined) {
+      degradedReason = "one or more NeMo Flow telemetry outputs failed to initialize";
+    }
+
     this.backendValue = new HookReplayBackend({
       nf: modules.nf,
       config: this.config,
@@ -146,6 +173,7 @@ export class NemoFlowRuntimeState {
       resolvedAtifOutputDir: resolveAtifOutputDir(this.config, ctx),
       markOutputDegraded: (output) => this.markOutputDegraded(output),
     });
+    this.registerBeforeExit(ctx.logger);
     this.started = true;
     this.statusValue = degradedReason === undefined ? { state: "ready" } : { state: "degraded", reason: degradedReason };
   }
@@ -161,13 +189,25 @@ export class NemoFlowRuntimeState {
 
     this.statusValue = { state: "stopping" };
     const log = logger ?? this.api.logger;
+    this.removeBeforeExitListener();
 
     try {
       await this.backendValue?.drainForGatewayStop(reason);
     } catch (error) {
       log.warn?.(`failed to stop NeMo Flow hook backend: ${toMessage(error)}`);
     }
+    const backendState = this.backendValue?.state();
+    if (backendState) {
+      this.lastCounters = { ...backendState.counters };
+    }
     this.backendValue = undefined;
+
+    shutdownTelemetrySubscribers({
+      subscribers: this.telemetrySubscribers,
+      logger: log,
+      markOutputDegraded: (output) => this.markOutputDegraded(output),
+    });
+    this.telemetrySubscribers = [];
 
     if (this.initializedPluginHost && this.modulesValue) {
       try {
@@ -283,6 +323,27 @@ export class NemoFlowRuntimeState {
 
   private markOutputDegraded(output: "atif" | "otel" | "openInference"): void {
     this.degradedOutputs.add(output);
+  }
+
+  private registerBeforeExit(logger: PluginLoggerLike): void {
+    if (this.beforeExitListener) {
+      return;
+    }
+    const listener = () => {
+      void this.cleanup("beforeExit").catch((error) => {
+        logger.warn?.(`nemo-flow beforeExit cleanup failed: ${toMessage(error)}`);
+      });
+    };
+    process.on("beforeExit", listener);
+    this.beforeExitListener = listener;
+  }
+
+  private removeBeforeExitListener(): void {
+    if (!this.beforeExitListener) {
+      return;
+    }
+    process.removeListener("beforeExit", this.beforeExitListener);
+    delete this.beforeExitListener;
   }
 }
 

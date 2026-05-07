@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { NemoFlowHookBackendConfig } from "../config.js";
+import { createAtifExporter } from "../atif-capture.js";
 import type { AtifExporterLike } from "../modules.js";
 import type { PluginHookModelCallEndedEvent } from "../openclaw-hook-types.js";
 import type { JsonRecord, PluginLoggerLike } from "../types.js";
@@ -33,6 +34,7 @@ export type SessionState = {
     exporter: AtifExporterLike;
     registrationName: string;
     capturing: boolean;
+    registeredOnce?: boolean;
     disabled?: boolean;
     leakedRegistration?: boolean;
   };
@@ -180,6 +182,7 @@ export function ensureSession(manager: SessionManager, input: EnsureSessionInput
     session.resumedFrom = input.resumedFrom;
   }
 
+  createAtifExporter(manager, session);
   openSessionRoot(manager, session, input);
   manager.state.sessions.set(session.sessionId, session);
   rememberSessionAliases(manager.state, session, input);

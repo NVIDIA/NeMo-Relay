@@ -24,7 +24,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test \"dist/src/__tests__/*.test.js\""
+    "test": "npm run build && node --test \"dist/src/__tests__/*.test.js\"",
+    "test:live": "npm run build && NEMO_FLOW_OPENCLAW_LIVE_SMOKE=1 node --test \"dist/src/__tests__/live-smoke.test.js\""
   },
   "peerDependencies": {
     "openclaw": "*"

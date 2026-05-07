@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { NemoFlowHookBackendConfig } from "./config.js";
+import { exportAtifJson, withAtifCapture } from "./atif-capture.js";
 import { emitMark, blockedToolDetails, toJsonRecord } from "./hook-replay/marks.js";
 import {
   createHookReplayState,
@@ -98,7 +99,7 @@ export class HookReplayBackend {
       return;
     }
 
-    this.closeSession(session, sessionEndSummary(event));
+    await this.closeSession(session, sessionEndSummary(event));
   }
 
   onLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext): void {
@@ -303,11 +304,11 @@ export class HookReplayBackend {
   }
 
   async drainForGatewayStop(reason?: string): Promise<void> {
-    this.closeAllSessions({ reason: reason ?? "gateway_stop" });
+    await this.closeAllSessions({ reason: reason ?? "gateway_stop" });
   }
 
   async stop(reason: string): Promise<void> {
-    this.closeAllSessions({ reason });
+    await this.closeAllSessions({ reason });
   }
 
   safeReplay(label: string, session: SessionState | undefined, emit: () => void): void {
@@ -390,9 +391,10 @@ export class HookReplayBackend {
     return ensureSession(this.sessionManager(), input);
   }
 
-  private closeSession(session: SessionState, summary: JsonRecord): void {
+  private async closeSession(session: SessionState, summary: JsonRecord): Promise<void> {
     drainSession(this.sessionManager(), session);
     closeSessionRoot(this.sessionManager(), session, summary);
+    await exportAtifJson(this.sessionManager(), session);
     deleteSession(this.stateValue, session);
   }
 
@@ -408,14 +410,14 @@ export class HookReplayBackend {
     });
   }
 
-  private closeAllSessions(summary: JsonRecord): void {
+  private async closeAllSessions(summary: JsonRecord): Promise<void> {
     for (const session of [...this.stateValue.sessions.values()]) {
-      this.closeSession(session, summary);
+      await this.closeSession(session, summary);
     }
   }
 
   private withAtifCapture(_session: SessionState, emit: () => void): void {
-    emit();
+    withAtifCapture(this.sessionManager(), _session, emit);
   }
 
   private sessionManager() {

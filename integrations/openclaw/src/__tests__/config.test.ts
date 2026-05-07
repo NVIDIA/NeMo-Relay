@@ -11,6 +11,7 @@ import {
   parseConfig,
 } from "../config.js";
 import type { NemoFlowModules } from "../modules.js";
+import type { NemoFlowHealthSnapshot } from "../health.js";
 import { registerNemoFlowPlugin } from "../runtime-state.js";
 import type { OpenClawHookHandlerLike, OpenClawPluginApiLike, PluginLoggerLike } from "../types.js";
 
@@ -153,46 +154,54 @@ describe("nemo-flow OpenClaw plugin shell", () => {
   });
 
   it("uses config parsed during registration when service starts", async () => {
-    const api = createApi({ pluginConfig: { correlation: { maxRecordsPerKey: 1 } } });
+    const api = createApi({ pluginConfig: { atif: { enabled: false }, correlation: { maxRecordsPerKey: 1 } } });
 
     registerNemoFlowPlugin(api, async () => createModules());
     api.pluginConfig = { backend: "managed_execution" };
 
     const service = api.calls.services[0];
     assert.ok(service);
-    await assert.doesNotReject(async () => {
-      await service.start({
-        stateDir: "/tmp/openclaw-state",
-        logger: api.logger,
+    try {
+      await assert.doesNotReject(async () => {
+        await service.start({
+          stateDir: "/tmp/openclaw-state",
+          logger: api.logger,
+        });
       });
-    });
+    } finally {
+      await service.stop?.({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+    }
   });
 
   it("continues hook-backed telemetry when plugin host validation fails", async () => {
     const modules = createModules({
       validateDiagnostics: [{ level: "error", code: "bad_config", message: "invalid" }],
     });
-    const api = createApi();
+    const api = createApi({ pluginConfig: { atif: { enabled: false } } });
 
     registerNemoFlowPlugin(api, async () => modules);
     const service = api.calls.services[0];
     assert.ok(service);
-    await service.start({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+    try {
+      await service.start({ stateDir: "/tmp/openclaw-state", logger: api.logger });
 
-    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
-    assert.ok(sessionStart);
-    await sessionStart.handler({ sessionId: "session-1" }, { sessionId: "session-1" });
+      const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
+      assert.ok(sessionStart);
+      await sessionStart.handler({ sessionId: "session-1" }, { sessionId: "session-1" });
 
-    const status = api.calls.gatewayMethods[0]?.handler();
-    assert.ok(status);
-    assert.deepEqual(modules.nf.calls.event.map((event) => event.name), ["openclaw.session_start"]);
-    assert.equal(status.status.state, "degraded");
-    assert.equal(status.initializedPluginHost, false);
+      const status = api.calls.gatewayMethods[0]?.handler();
+      assert.ok(status);
+      assert.deepEqual(modules.nf.calls.event.map((event) => event.name), ["openclaw.session_start"]);
+      assert.equal(status.status.state, "degraded");
+      assert.equal(status.initializedPluginHost, false);
+    } finally {
+      await service.stop?.({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+    }
   });
 
   it("routes gateway_stop through runtime stop", async () => {
     const modules = createModules();
-    const api = createApi();
+    const api = createApi({ pluginConfig: { atif: { enabled: false } } });
 
     registerNemoFlowPlugin(api, async () => modules);
     const service = api.calls.services[0];
@@ -209,10 +218,132 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     const status = api.calls.gatewayMethods[0]?.handler();
     assert.ok(status);
     assert.equal(status.status.state, "stopped");
+    assert.equal(status.counters.marksEmitted, 2);
     assert.deepEqual(modules.nf.calls.event.map((event) => event.name), [
       "openclaw.session_start",
       "openclaw.session_end",
     ]);
+  });
+
+  it("registers and shuts down telemetry subscribers in order", async () => {
+    const modules = createModules();
+    const api = createApi({
+      pluginConfig: {
+        telemetry: {
+          otel: { enabled: true, endpoint: "http://otel.example" },
+          openInference: { enabled: true, endpoint: "http://phoenix.example" },
+        },
+      },
+    });
+
+    registerNemoFlowPlugin(api, async () => modules);
+    const service = api.calls.services[0];
+    assert.ok(service);
+    await service.start({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+
+    assert.deepEqual(
+      modules.nf.calls.subscribers.map((subscriber) => [subscriber.kind, subscriber.name]),
+      [
+        ["otel", "openclaw.nemo-flow.otel"],
+        ["openInference", "openclaw.nemo-flow.openinference"],
+      ],
+    );
+    assert.equal(modules.nf.calls.subscribers[0]?.config.endpoint, "http://otel.example");
+    assert.equal(modules.nf.calls.subscribers[1]?.config.endpoint, "http://phoenix.example");
+
+    await service.stop?.({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+
+    for (const subscriber of modules.nf.calls.subscribers) {
+      assert.deepEqual(subscriber.actions, [
+        `register:${subscriber.name}`,
+        `deregister:${subscriber.name}`,
+        "forceFlush",
+        "shutdown",
+      ]);
+    }
+  });
+
+  it("marks subscriber registration failure degraded and keeps other outputs", async () => {
+    const modules = createModules({ subscriberFailures: { otelRegister: true } });
+    const api = createApi({
+      pluginConfig: {
+        atif: { enabled: false },
+        telemetry: {
+          otel: { enabled: true },
+          openInference: { enabled: true },
+        },
+      },
+    });
+
+    registerNemoFlowPlugin(api, async () => modules);
+    const service = api.calls.services[0];
+    assert.ok(service);
+    try {
+      await service.start({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+
+      const status = api.calls.gatewayMethods[0]?.handler();
+      assert.ok(status);
+      assert.equal(status.status.state, "degraded");
+      assert.equal(status.outputs.otel, "degraded");
+      assert.equal(status.outputs.openInference, "enabled");
+      assert.deepEqual(
+        modules.nf.calls.subscribers.map((subscriber) => [subscriber.kind, subscriber.actions]),
+        [
+          ["otel", ["shutdown"]],
+          ["openInference", ["register:openclaw.nemo-flow.openinference"]],
+        ],
+      );
+    } finally {
+      await service.stop?.({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+    }
+  });
+
+  it("marks subscriber shutdown failure degraded in runtime health", async () => {
+    const modules = createModules({ subscriberFailures: { otelForceFlush: true } });
+    const api = createApi({
+      pluginConfig: {
+        atif: { enabled: false },
+        telemetry: {
+          otel: { enabled: true },
+        },
+      },
+    });
+    let serviceStarted = false;
+
+    registerNemoFlowPlugin(api, async () => modules);
+    const service = api.calls.services[0];
+    assert.ok(service);
+    try {
+      await service.start({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+      serviceStarted = true;
+
+      await service.stop?.({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+      serviceStarted = false;
+
+      const status = api.calls.gatewayMethods[0]?.handler();
+      assert.ok(status);
+      assert.equal(status.status.state, "stopped");
+      assert.equal(status.outputs.otel, "degraded");
+    } finally {
+      if (serviceStarted) {
+        await service.stop?.({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+      }
+    }
+  });
+
+  it("removes beforeExit listener during normal stop", async () => {
+    const modules = createModules();
+    const api = createApi();
+    const before = process.listenerCount("beforeExit");
+
+    registerNemoFlowPlugin(api, async () => modules);
+    const service = api.calls.services[0];
+    assert.ok(service);
+    await service.start({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+    assert.equal(process.listenerCount("beforeExit"), before + 1);
+
+    await service.stop?.({ stateDir: "/tmp/openclaw-state", logger: api.logger });
+    assert.equal(process.listenerCount("beforeExit"), before);
   });
 
   it("does not statically import nemo-flow-node or OpenClaw private src paths", () => {
@@ -233,7 +364,7 @@ type TestApi = OpenClawPluginApiLike & {
     lifecycle: Parameters<OpenClawPluginApiLike["registerRuntimeLifecycle"]>[0][];
     gatewayMethods: Array<{
       method: string;
-      handler: () => { status: { state: string }; initializedPluginHost: boolean };
+      handler: () => NemoFlowHealthSnapshot;
     }>;
     hooks: Array<{ hookName: string; handler: OpenClawHookHandlerLike }>;
   };
@@ -287,6 +418,12 @@ function createApi(params: {
 type TestNemoFlowRuntime = NemoFlowModules["nf"] & {
   calls: {
     event: Array<{ name: string; handle: unknown; data: unknown }>;
+    subscribers: Array<{
+      kind: "otel" | "openInference";
+      name?: string;
+      config: Record<string, unknown>;
+      actions: string[];
+    }>;
   };
 };
 
@@ -294,8 +431,11 @@ type TestModules = NemoFlowModules & {
   nf: TestNemoFlowRuntime;
 };
 
-function createModules(params: { validateDiagnostics?: Array<{ level: "warning" | "error"; code: string; message: string }> } = {}): TestModules {
-  const nf = createNemoFlowRuntime();
+function createModules(params: {
+  validateDiagnostics?: Array<{ level: "warning" | "error"; code: string; message: string }>;
+  subscriberFailures?: SubscriberFailures;
+} = {}): TestModules {
+  const nf = createNemoFlowRuntime(params.subscriberFailures);
   return {
     nf,
     pluginHost: {
@@ -307,10 +447,64 @@ function createModules(params: { validateDiagnostics?: Array<{ level: "warning" 
   };
 }
 
-function createNemoFlowRuntime(): TestNemoFlowRuntime {
+type SubscriberFailures = {
+  otelRegister?: boolean;
+  openInferenceRegister?: boolean;
+  otelForceFlush?: boolean;
+  openInferenceForceFlush?: boolean;
+  otelShutdown?: boolean;
+  openInferenceShutdown?: boolean;
+};
+
+function createNemoFlowRuntime(params: SubscriberFailures = {}): TestNemoFlowRuntime {
   const calls: TestNemoFlowRuntime["calls"] = {
     event: [],
+    subscribers: [],
   };
+  const createSubscriber = (
+    kind: "otel" | "openInference",
+    failures: {
+      register: boolean;
+      forceFlush: boolean;
+      shutdown: boolean;
+    },
+  ) =>
+    class {
+      private readonly record: TestNemoFlowRuntime["calls"]["subscribers"][number];
+
+      constructor(config?: Record<string, unknown>) {
+        this.record = { kind, config: config ?? {}, actions: [] };
+        calls.subscribers.push(this.record);
+      }
+
+      register(name: string): void {
+        this.record.name = name;
+        if (failures.register) {
+          throw new Error(`${kind} register failed`);
+        }
+        this.record.actions.push(`register:${name}`);
+      }
+
+      deregister(name: string): boolean {
+        this.record.actions.push(`deregister:${name}`);
+        return true;
+      }
+
+      forceFlush(): void {
+        this.record.actions.push("forceFlush");
+        if (failures.forceFlush) {
+          throw new Error(`${kind} forceFlush failed`);
+        }
+      }
+
+      shutdown(): void {
+        this.record.actions.push("shutdown");
+        if (failures.shutdown) {
+          throw new Error(`${kind} shutdown failed`);
+        }
+      }
+    };
+
   return {
     ScopeType: { Agent: 0 },
     calls,
@@ -325,8 +519,16 @@ function createNemoFlowRuntime(): TestNemoFlowRuntime {
     toolCall: () => ({}),
     toolCallEnd: () => {},
     AtifExporter: FakeAtifExporter,
-    OpenTelemetrySubscriber: FakeSubscriber,
-    OpenInferenceSubscriber: FakeSubscriber,
+    OpenTelemetrySubscriber: createSubscriber("otel", {
+      register: params.otelRegister ?? false,
+      forceFlush: params.otelForceFlush ?? false,
+      shutdown: params.otelShutdown ?? false,
+    }),
+    OpenInferenceSubscriber: createSubscriber("openInference", {
+      register: params.openInferenceRegister ?? false,
+      forceFlush: params.openInferenceForceFlush ?? false,
+      shutdown: params.openInferenceShutdown ?? false,
+    }),
   };
 }
 
@@ -339,13 +541,4 @@ class FakeAtifExporter {
     return "{}";
   }
   clear(): void {}
-}
-
-class FakeSubscriber {
-  register(): void {}
-  deregister(): boolean {
-    return true;
-  }
-  forceFlush(): void {}
-  shutdown(): void {}
 }
