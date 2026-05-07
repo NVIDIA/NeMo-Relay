@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 import nemo_flow
 from langchain.agents.middleware import AgentMiddleware
+from nemo_flow.utils import run_sync
 
 from langchain_nemo_flow._serialization import (
     get_model_name,
@@ -107,7 +108,7 @@ class NemoFlowMiddleware(AgentMiddleware):
             response = handler(payload_to_model_request(request, req.content))
             return model_response_to_json(response, object_codec)
 
-        result = nemo_flow.utils.run_sync(
+        result = run_sync(
             self.llm_execute(
                 model_name=model_name,
                 request=llm_request,
@@ -159,7 +160,7 @@ class NemoFlowMiddleware(AgentMiddleware):
         def _call(args: Any) -> ToolMessage | Command[Any]:
             return handler(request.override(tool_call={**request.tool_call, "args": args}))
 
-        return nemo_flow.utils.run_sync(
+        return run_sync(
             nemo_flow.typed.tool_execute(
                 name=tool_name, args=tool_args, func=_call, args_codec=codec, result_codec=codec, handle=parent
             )
