@@ -20,7 +20,8 @@ from langchain_nemo_flow._serialization import (
     model_response_to_json,
     model_request_to_payload,
     payload_to_model_request,
-    get_model_name)
+    get_model_name,
+    infer_codec_from_model)
 
 if TYPE_CHECKING:
     from nemo_flow.codecs import LlmCodec, LlmResponseCodec
@@ -37,12 +38,10 @@ class NemoFlowMiddleware(AgentMiddleware):
         self,
         *,
         name: str = "NemoFlowMiddleware",
-        codec: LlmCodec | None = None,
         model_request_headers: ModelRequestHeaders | None = None,
     ) -> None:
         super().__init__()
         self._name = name
-        self._codec = codec
         self._model_request_headers = model_request_headers
 
     @property
@@ -54,8 +53,8 @@ class NemoFlowMiddleware(AgentMiddleware):
         self,
         model_name: str,
         request: "LLMRequest",
-        codec: LlmCodec,
-        response_codec: LlmResponseCodec,
+        codec: LlmCodec | None,
+        response_codec: LlmResponseCodec | None,
         func: Callable[..., Any],
     ) -> Any:
         """Execute a non-streaming LLM call through the NeMo Flow pipeline."""
@@ -75,8 +74,8 @@ class NemoFlowMiddleware(AgentMiddleware):
         func: Callable[..., Any],
         collector: Callable[[Any], None],
         finalizer: Callable[[], Any],
-        codec: LlmCodec,
-        response_codec: LlmResponseCodec,
+        codec: LlmCodec | None,
+        response_codec: LlmResponseCodec | None,
     ) -> Any:
         """Execute a streaming LLM call through the NeMo Flow pipeline."""
         return await nemo_flow.llm.stream_execute(
@@ -99,6 +98,7 @@ class NemoFlowMiddleware(AgentMiddleware):
         object_codec = nemo_flow.typed.BestEffortAnyCodec()
         llm_request = nemo_flow.LLMRequest(self._headers_for(request), model_request_to_payload(request))
         model_name = get_model_name(request.model)
+        # model_codec = infer_codec_from_model(request.model)
 
         async def _call(req: Any) -> Any:
             response = handler(payload_to_model_request(request, req.content))
@@ -109,8 +109,9 @@ class NemoFlowMiddleware(AgentMiddleware):
                 model_name=model_name,
                 request=llm_request,
                 func=_call,
-                codec=self._codec,
-                response_codec=self._codec,
+                # TODO: Whenever I set these I get an attribute error about the codec missing a type attribute.
+                codec=None, 
+                response_codec=None,
             )
         )
         return model_response_from_json(result, object_codec)
@@ -126,6 +127,7 @@ class NemoFlowMiddleware(AgentMiddleware):
         object_codec = nemo_flow.typed.BestEffortAnyCodec()
         llm_request = nemo_flow.LLMRequest(self._headers_for(request), model_request_to_payload(request))
         model_name = get_model_name(request.model)
+        # model_codec = infer_codec_from_model(request.model)
 
         async def _call(req: Any) -> Any:
             response = await handler(payload_to_model_request(request, req.content))
@@ -135,8 +137,8 @@ class NemoFlowMiddleware(AgentMiddleware):
             model_name=model_name,
             request=llm_request,
             func=_call,
-            codec=self._codec,
-            response_codec=self._codec,
+            codec=None,
+            response_codec=None,
         )
         return model_response_from_json(result, object_codec)
 

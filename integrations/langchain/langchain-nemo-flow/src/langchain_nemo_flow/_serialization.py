@@ -9,25 +9,21 @@ from typing import Any, Callable
 
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain_core.messages import (
-    AIMessage,
     BaseMessage,
-    HumanMessage,
     SystemMessage,
-    ToolMessage,
-    convert_to_messages,
-    convert_to_openai_messages,
     messages_from_dict,
     messages_to_dict,
 )
 from langchain_core.tools import BaseTool
-from langchain_core.utils.function_calling import convert_to_openai_tool
+
+from nemo_flow.codecs import LlmCodec, OpenAIChatCodec, OpenAIResponsesCodec, AnthropicMessagesCodec
 
 LANGCHAIN_MODEL_RESPONSE_KEY = "__langchain_nemo_flow_model_response"
 
 
 def get_model_name(model: Any) -> str | None:
     """Best-effort extraction of a model name from a LangChain chat model."""
-    for attr in ("model_name", "model", "model_id", "deployment_name"):
+    for attr in ("model", "model_name", "model_id", "deployment_name"):
         value = getattr(model, attr, None)
         if isinstance(value, str) and value:
             return value
@@ -35,12 +31,22 @@ def get_model_name(model: Any) -> str | None:
 
 
 def get_model_provider(model: Any) -> str:
-    """Best-effort provider/name label for a LangChain chat model."""
+    """Best-effort provider name label for a LangChain chat model."""
     name = model.__class__.__name__
     if name.startswith("Chat") and len(name) > 4:
         return name[4:].lower()
     return name.lower()
 
+def infer_codec_from_model(model: Any) -> LlmCodec | None:
+    """Infer a NeMo Flow codec name from a LangChain chat model."""
+    provider = get_model_provider(model)
+    if provider in ("azureopenai", "openai", "nvidia"):
+        return OpenAIChatCodec()
+
+    if provider == "anthropic":
+        return AnthropicMessagesCodec()
+
+    return None
 
 def split_system_message(messages: list[BaseMessage]) -> tuple[SystemMessage | None, list[BaseMessage]]:
     """Split a leading system message into LangChain agent ``ModelRequest`` shape."""
@@ -116,7 +122,6 @@ def payload_to_model_request(
         overrides["tool_choice"] = payload["tool_choice"]
 
     return original.override(**overrides) if overrides else original
-
 
 
 def _model_response_payload(response: ModelResponse[Any], codec: Any) -> dict[str, Any]:
