@@ -17,6 +17,7 @@ variables:
   NEMO_FLOW_CI_DEBIAN_VERSION: "trixie"
   NEMO_FLOW_CI_JUST_VERSION: "1.40.0"
   NEMO_FLOW_CI_NODE_VERSION: "24"
+  NEMO_FLOW_CI_PYTHON_VERSION: "3.11"
   NEMO_FLOW_CI_RUST_VERSION: "1.93.0"
   NEMO_FLOW_CI_UV_VERSION: "0.9.28"
   NEMO_FLOW_CI_GITHUB_REPOSITORY: "NVIDIA/NeMo-Flow"
@@ -218,11 +219,12 @@ publish:artifactory:cargo:
     - job: collect:github-artifacts
       artifacts: true
   before_script:
-    - apt-get update -qq && apt-get install -y --no-install-recommends ca-certificates curl nodejs python3 && rm -rf /var/lib/apt/lists/*
+    - apt-get update -qq && apt-get install -y --no-install-recommends ca-certificates curl git nodejs && rm -rf /var/lib/apt/lists/*
     - cargo install just --version "${NEMO_FLOW_CI_JUST_VERSION}" --locked
     - curl -LsSf https://astral.sh/uv/install.sh -o /tmp/install-uv.sh
     - UV_VERSION="${NEMO_FLOW_CI_UV_VERSION}" sh /tmp/install-uv.sh
     - export PATH="${HOME}/.cargo/bin:${HOME}/.local/bin:${PATH}"
+    - uv python install "${NEMO_FLOW_CI_PYTHON_VERSION}"
     - rustc --version
     - just --version
     - uv --version
@@ -240,13 +242,14 @@ publish:artifactory:cargo:
       fi
 
       version="$(
-        python3 - <<'PY'
+        uv run --no-project python - <<'PY'
       import json
       from pathlib import Path
 
       print(json.loads(Path("collected/github-run.json").read_text()).get("tag", ""))
       PY
       )"
+
       if [ -z "$version" ]; then
         echo "Error: failed to extract package version from collected GitHub tag metadata." >&2
         exit 1
