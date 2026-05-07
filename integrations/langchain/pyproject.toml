@@ -40,6 +40,10 @@ dependencies = [
     "nemo-flow>=0.2.0,<0.3.0",
 ]
 
+[dependency-groups]
+test = [
+    "pytest>=8",
+]
 
 [project.urls]
 Documentation = "https://nvidia.github.io/NeMo-Flow/"
@@ -62,6 +66,9 @@ quote-style = "double"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
+
+[tool.uv]
+default-groups = ["test"]
 
 [tool.uv.sources]
 nemo-flow = { path = "../..", editable = true }

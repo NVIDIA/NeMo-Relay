@@ -81,7 +81,9 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
-          cache-dependency-glob: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/uv.lock
+          cache-dependency-glob: |
+            ${{ env.NEMO_FLOW_CI_WORKSPACE }}/uv.lock
+            ${{ env.NEMO_FLOW_CI_WORKSPACE }}/integrations/langchain/uv.lock
 
       - name: Set up Windows ARM Python
         if: ${{ matrix.platform == 'windows-arm64' }}
@@ -108,6 +110,10 @@ jobs:
       - name: Run Python tests with coverage
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-python
+
+      - name: Run LangChain integration tests
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: just test-python-integration
 
       - name: Upload Python coverage to Codecov
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
@@ -170,7 +176,9 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
-          cache-dependency-glob: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/uv.lock
+          cache-dependency-glob: |
+            ${{ env.NEMO_FLOW_CI_WORKSPACE }}/uv.lock
+            ${{ env.NEMO_FLOW_CI_WORKSPACE }}/integrations/langchain/uv.lock
 
       - name: Set up Windows ARM Python
         if: ${{ matrix.platform == 'windows-arm64' }}
@@ -228,6 +236,13 @@ jobs:
             --set output_dir "${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}" \
             --set ref_name "${NEMO_FLOW_PACKAGE_VERSION}" \
             package-python
+
+      - name: Package LangChain integration wheel
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/integrations/langchain
+        run: |
+          set -e
+          uv build --wheel --out-dir "${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/wheels"
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

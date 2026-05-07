@@ -766,6 +766,13 @@ test-python:
             --output-path "$rust_coverage_out"
     fi
 
+test-python-integration:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_FLOW_REPO_ROOT/integrations/langchain"
+    uv sync --locked
+    uv run pytest -c pyproject.toml tests
+
 # --set [output_dir=<path>] [ci=true|false]
 test-go:
     #!/usr/bin/env bash
@@ -896,7 +903,7 @@ test-wasm:
     fi
 
 # --set [output_dir=<path>] [ci=true|false]
-test-all: test-rust test-python test-go test-node test-wasm
+test-all: test-rust test-python test-python-integration test-go test-node test-wasm
 
 # [version] or --set ref_name=<version>
 set-version version="":
