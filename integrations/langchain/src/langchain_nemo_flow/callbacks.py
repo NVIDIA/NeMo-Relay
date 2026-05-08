@@ -39,12 +39,15 @@ class NemoFlowCallbackHandler(BaseCallbackHandler):
         try:
             name = serialized.get("name") or serialized.get("id", ["Unknown"])[-1]
             parent = self._scope_handles.get(parent_run_id) if parent_run_id else None
+
+            scope_metadata = metadata.copy() if metadata else {}
+            scope_metadata["langchain_run_id"] = str(run_id)
             handle = nemo_flow.scope.push(
                 name,
                 nemo_flow.ScopeType.Agent,
                 handle=parent,
                 input=inputs,
-                metadata={"langchain_run_id": str(run_id), **(metadata or {})},
+                metadata=scope_metadata,
             )
             self._scope_handles[run_id] = handle
         except Exception:
