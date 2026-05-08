@@ -337,7 +337,7 @@ def _require_node_modules() -> None:
     if not node_modules_dir.is_dir():
         raise RuntimeError(
             "Node.js docs dependencies are missing. "
-            "Run `cd crates/node && npm install --ignore-scripts` before building docs."
+            "Run `npm install --ignore-scripts` from the repository root before building docs."
         )
 
 

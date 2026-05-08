@@ -19,9 +19,8 @@ Use this path when you are working from a local checkout and need editable sourc
 behavior.
 
 ```bash
-cd crates/node
 npm install --ignore-scripts
-npm run build
+npm run build --workspace=nemo-flow-node
 ```
 
 This path is for local source development when you need to build the binding from the repository checkout.

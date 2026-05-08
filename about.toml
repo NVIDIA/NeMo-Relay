@@ -15,4 +15,4 @@ accepted = [
     "Unicode-3.0",
 ]
 
-ignore-build-dependencies = true
+ignore-build-dependencies = false

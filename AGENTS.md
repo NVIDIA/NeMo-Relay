@@ -74,7 +74,6 @@ cargo install wasm-pack --version 0.14.0 --locked
 uv sync
 uv run pre-commit install
 
-cd crates/node
 npm install --ignore-scripts
 ```
 

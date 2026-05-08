@@ -24,9 +24,10 @@ pre-release or build-metadata variants used during packaging.
 - Keep `Cargo.toml` `[workspace.dependencies]` self-references aligned when the
   workspace version changes.
 - `crates/node/package.json` carries its own npm package version and must stay
-  aligned with `crates/node/package-lock.json`.
-- `crates/node/package-lock.json` needs both the top-level `version` and the
-  root entry under `packages[""].version` updated together.
+  aligned with the workspace-root `package-lock.json`.
+- `package-lock.json` records the Node package version under
+  `packages["crates/node"].version`. The workspace-root lockfile may not have a
+  top-level `version` field.
 - `crates/wasm/package.json` is a local dev manifest. Do not treat it as the
   publishable package manifest unless it gains an explicit `version` field.
 - The publishable WebAssembly npm package version is derived from
@@ -43,8 +44,7 @@ pre-release or build-metadata variants used during packaging.
    - `workspace.dependencies.nemo-flow-adaptive.version`
    - `workspace.dependencies.nemo-flow-ffi.version`
    - `crates/node/package.json` `version`
-   - `crates/node/package-lock.json` top-level `version`
-   - `crates/node/package-lock.json` `packages[""].version`
+   - `package-lock.json` `packages["crates/node"].version`
 3. If editing helper code, keep `set_project_version`,
    `set_cargo_workspace_version`, and `set_node_package_version` aligned with
    those same fields. `set_npm_package_version` remains the reusable npm JSON
@@ -55,12 +55,12 @@ pre-release or build-metadata variants used during packaging.
    - If Cargo metadata changed and committed attribution files must stay fresh,
      regenerate `ATTRIBUTIONS-Rust.md` with
      `./scripts/generate_attributions.sh rust`.
-   - If `crates/node/package-lock.json` changed, regenerate
+   - If `package-lock.json` changed, regenerate
      `ATTRIBUTIONS-Node.md` with
      `./scripts/generate_attributions.sh node`.
    - If the change needs WebAssembly publish validation, rebuild the generated package
      with `just build-wasm` or
-     `NEMO_FLOW_WASM_RELEASE=1 npm --prefix crates/wasm run build:pkg`. Inspect
+     `NEMO_FLOW_WASM_RELEASE=1 npm run build:pkg --workspace=nemo-flow-wasm`. Inspect
      `crates/wasm/pkg/package.json`, not `crates/wasm/package.json`.
 5. Audit remaining references to the old version with targeted search. Separate
    true version pins from examples, generated attribution files, and unrelated
@@ -69,12 +69,12 @@ pre-release or build-metadata variants used during packaging.
 ## Validation
 
 - `rg -n '^version =|nemo-flow = \\{ version =|nemo-flow-adaptive = \\{ version =' Cargo.toml`
-- `rg -n '\"version\"' crates/node/package.json crates/node/package-lock.json`
+- `rg -n '\"version\"' crates/node/package.json package-lock.json`
 - `cargo check --workspace`
 - If Rust attribution files are expected to stay current:
   `./scripts/generate_attributions.sh rust`
-- If Node packaging changed materially: run `npm install --ignore-scripts` or
-  stronger Node validation in `crates/node`
+- If Node packaging changed materially: run `npm install --ignore-scripts` from
+  the repository root or stronger Node validation through `just test-node`
 - If validating the WebAssembly publish surface: inspect the regenerated
   `crates/wasm/pkg/package.json`
 
@@ -98,8 +98,9 @@ pre-release or build-metadata variants used during packaging.
 
 - `Cargo.toml`
 - `Cargo.lock`
+- `package.json`
+- `package-lock.json`
 - `crates/node/package.json`
-- `crates/node/package-lock.json`
 - `crates/wasm/Cargo.toml`
 - `crates/wasm/package.json`
 - `crates/wasm/scripts/prepare_pkg.mjs`

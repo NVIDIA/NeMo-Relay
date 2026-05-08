@@ -36,12 +36,11 @@ Confirm that Python satisfies the supported version from [Prerequisites](../gett
 
 ## Node.js Native Addon Does Not Load
 
-If Node.js reports a missing or incompatible native addon, reinstall dependencies from the Node binding directory so the pretest build can regenerate the local addon:
+If Node.js reports a missing or incompatible native addon, reinstall dependencies from the repository root so the pretest build can regenerate the local addon:
 
 ```bash
-cd crates/node
 npm install
-npm test
+npm test --workspace=nemo-flow-node
 ```
 
 Use [Node.js Getting Started](../getting-started/nodejs.md) to confirm that the example runs against the generated local build, not a stale package or a globally installed copy.
