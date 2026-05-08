@@ -22,6 +22,7 @@ import {
   ensureSession,
   resolveSessionKey,
   type HookReplayBackendState,
+  type SessionLookupInput,
   type SessionState,
 } from "./hook-replay/session.js";
 import type { NemoFlowRuntimeModule } from "./modules.js";
@@ -252,6 +253,20 @@ export class HookReplayBackend {
 
   async drainForGatewayStop(reason?: string): Promise<void> {
     await this.closeAllSessions({ reason: reason ?? "gateway_stop" });
+  }
+
+  async cleanupSession(input: SessionLookupInput & { reason: string }): Promise<void> {
+    const key = resolveSessionKey(this.stateValue, input);
+    if (!key) {
+      return;
+    }
+
+    const session = this.stateValue.sessions.get(key);
+    if (!session) {
+      return;
+    }
+
+    await this.closeSession(session, { reason: input.reason });
   }
 
   async stop(reason: string): Promise<void> {

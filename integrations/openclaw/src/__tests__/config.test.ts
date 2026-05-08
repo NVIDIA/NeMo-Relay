@@ -224,6 +224,92 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     ]);
   });
 
+  it("keeps the runtime running for scoped lifecycle cleanup", async () => {
+    const modules = createModules();
+    const api = createApi({ pluginConfig: { atif: { enabled: false } } });
+
+    registerPlugin(api, async () => modules);
+    const service = api.calls.services[0];
+    const lifecycle = api.calls.lifecycle[0];
+    assert.ok(service);
+    assert.ok(lifecycle?.cleanup);
+    await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+
+    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
+    assert.ok(sessionStart);
+    await sessionStart.handler({ sessionId: "session-1", sessionKey: "agent:main:session-1" }, {
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+    });
+
+    await lifecycle.cleanup({ reason: "restart", sessionKey: "agent:main:session-1" });
+
+    const statusAfterScopedCleanup = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+    assert.equal(statusAfterScopedCleanup.status.state, "ready");
+    assert.equal(statusAfterScopedCleanup.counters.marksEmitted, 2);
+
+    await sessionStart.handler({ sessionId: "session-2" }, { sessionId: "session-2" });
+
+    const statusAfterNextHook = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+    assert.equal(statusAfterNextHook.status.state, "ready");
+    assert.equal(statusAfterNextHook.counters.marksEmitted, 3);
+    assert.deepEqual(modules.nf.calls.event.map((event) => event.name), [
+      "openclaw.session_start",
+      "openclaw.session_end",
+      "openclaw.session_start",
+    ]);
+
+    await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+  });
+
+  it("restarts hook replay after unscoped runtime restart cleanup", async () => {
+    const modules = createModules();
+    const api = createApi({ pluginConfig: { atif: { enabled: false } } });
+
+    registerPlugin(api, async () => modules);
+    const service = api.calls.services[0];
+    const lifecycle = api.calls.lifecycle[0];
+    assert.ok(service);
+    assert.ok(lifecycle?.cleanup);
+    await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+
+    await lifecycle.cleanup({ reason: "restart" });
+    const statusAfterRestart = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+    assert.equal(statusAfterRestart.status.state, "not_initialized");
+    assert.equal(statusAfterRestart.status.reason, "restart");
+
+    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
+    assert.ok(sessionStart);
+    await sessionStart.handler({ sessionId: "session-1" }, { sessionId: "session-1" });
+
+    const statusAfterNextHook = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+    assert.equal(statusAfterNextHook.status.state, "ready");
+    assert.equal(statusAfterNextHook.counters.marksEmitted, 1);
+    assert.deepEqual(modules.nf.calls.event.map((event) => event.name), ["openclaw.session_start"]);
+
+    await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+  });
+
+  it("starts hook replay from the OpenClaw runtime when service start has not run", async () => {
+    const modules = createModules();
+    const api = createApi({ pluginConfig: { atif: { enabled: false } } });
+
+    registerPlugin(api, async () => modules);
+    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
+    assert.ok(sessionStart);
+
+    await sessionStart.handler({ sessionId: "session-1" }, { sessionId: "session-1" });
+
+    const statusAfterHook = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+    assert.equal(statusAfterHook.status.state, "ready");
+    assert.equal(statusAfterHook.counters.marksEmitted, 1);
+    assert.deepEqual(modules.nf.calls.event.map((event) => event.name), ["openclaw.session_start"]);
+
+    const service = api.calls.services[0];
+    assert.ok(service);
+    await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+  });
+
   it("registers and shuts down telemetry subscribers in order", async () => {
     const modules = createModules();
     const api = createApi({
@@ -373,6 +459,7 @@ type TestApi = {
   registrationMode: OpenClawPluginApi["registrationMode"];
   pluginConfig?: Record<string, unknown>;
   logger: PluginLogger;
+  runtime: OpenClawPluginApi["runtime"];
   resolvePath: OpenClawPluginApi["resolvePath"];
   registerService: (service: Parameters<OpenClawPluginApi["registerService"]>[0]) => void;
   registerRuntimeLifecycle: (lifecycle: Parameters<OpenClawPluginApi["registerRuntimeLifecycle"]>[0]) => void;
@@ -419,6 +506,11 @@ function createApi(params: {
     version: "1.2.3",
     registrationMode: params.registrationMode ?? "full",
     logger,
+    runtime: {
+      state: {
+        resolveStateDir: () => "/tmp/openclaw-state",
+      },
+    } as unknown as OpenClawPluginApi["runtime"],
     resolvePath: (input) => input,
     registerService: (service) => calls.services.push(service),
     registerRuntimeLifecycle: (lifecycle) => calls.lifecycle.push(lifecycle),

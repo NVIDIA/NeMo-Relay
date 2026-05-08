@@ -3,7 +3,12 @@
 
 import * as path from "node:path";
 
-import type { OpenClawPluginApi, OpenClawPluginServiceContext, PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginServiceContext,
+  PluginLogger,
+  PluginRuntimeLifecycleRegistration,
+} from "openclaw/plugin-sdk/plugin-entry";
 
 import { parseConfig } from "./config.js";
 import type { NemoFlowHookBackendConfig } from "./config.js";
@@ -27,12 +32,14 @@ const PLUGIN_ID = "nemo-flow";
 const SERVICE_ID = "nemo-flow-observability";
 const LIFECYCLE_ID = "nemo-flow-observability-cleanup";
 const STATUS_METHOD = "nemoFlow.status";
+type RuntimeCleanupContext = Parameters<NonNullable<PluginRuntimeLifecycleRegistration["cleanup"]>>[0];
 
 export class NemoFlowRuntimeState {
   private readonly api: OpenClawPluginApi;
   private readonly config: NemoFlowHookBackendConfig;
   private readonly moduleLoader: NemoFlowModuleLoader;
   private loadPromise: Promise<NemoFlowModules> | undefined;
+  private startPromise: Promise<void> | undefined;
   private statusValue: HookReplayBackendStatus = { state: "not_initialized" };
   private modulesValue?: NemoFlowModules;
   private backendValue: HookReplayBackend | undefined;
@@ -40,7 +47,9 @@ export class NemoFlowRuntimeState {
   private started = false;
   private beforeExitListener?: () => void;
   private unavailableLogged = false;
+  private missingStartContextLogged = false;
   private telemetrySubscribers: TelemetrySubscriberEntry[] = [];
+  private lastStartContext?: StartContext;
   private lastCounters?: HookReplayCounters;
   private readonly degradedOutputs = new Set<"atif" | "otel" | "openInference">();
 
@@ -73,10 +82,27 @@ export class NemoFlowRuntimeState {
   }
 
   async start(ctx: StartContext): Promise<void> {
+    this.lastStartContext = copyStartContext(ctx);
+    this.missingStartContextLogged = false;
+
     if (this.started || this.statusValue.state === "ready" || this.statusValue.state === "degraded") {
       return;
     }
 
+    if (this.startPromise) {
+      await this.startPromise;
+      return;
+    }
+
+    this.startPromise = this.startInternal(ctx);
+    try {
+      await this.startPromise;
+    } finally {
+      this.startPromise = undefined;
+    }
+  }
+
+  private async startInternal(ctx: StartContext): Promise<void> {
     delete this.lastCounters;
     this.degradedOutputs.clear();
 
@@ -154,12 +180,27 @@ export class NemoFlowRuntimeState {
   }
 
   async stop(reason: string, logger?: PluginLogger): Promise<void> {
+    await this.stopWithStatus(reason, logger, { state: "stopped", reason });
+  }
+
+  private async stopWithStatus(
+    reason: string,
+    logger: PluginLogger | undefined,
+    finalStatus: HookReplayBackendStatus,
+  ): Promise<void> {
     if (
       this.statusValue.state === "stopped" ||
       this.statusValue.state === "disabled" ||
       this.statusValue.state === "stopping"
     ) {
       return;
+    }
+
+    if (this.startPromise) {
+      await this.startPromise.catch((error) => {
+        const log = logger ?? this.api.logger;
+        log.warn?.(`failed to finish NeMo Flow startup before stop: ${toMessage(error)}`);
+      });
     }
 
     this.statusValue = { state: "stopping" };
@@ -194,15 +235,54 @@ export class NemoFlowRuntimeState {
     }
 
     this.started = false;
-    this.statusValue = { state: "stopped", reason };
+    this.statusValue = finalStatus;
   }
 
-  cleanup(reason: string): Promise<void> {
-    return this.stop(reason, this.api.logger);
+  async cleanup(ctx: RuntimeCleanupContext): Promise<void> {
+    if (ctx.sessionKey !== undefined || ctx.runId !== undefined) {
+      await this.backendValue?.cleanupSession({
+        reason: ctx.reason,
+        ...(ctx.sessionKey === undefined ? {} : { sessionKey: ctx.sessionKey }),
+        ...(ctx.runId === undefined ? {} : { runId: ctx.runId }),
+      });
+      return;
+    }
+
+    await this.stopWithStatus(
+      ctx.reason,
+      this.api.logger,
+      ctx.reason === "restart" ? { state: "not_initialized", reason: "restart" } : { state: "stopped", reason: ctx.reason },
+    );
   }
 
-  private replayWithBackend(label: string, emit: (backend: HookReplayBackend) => void): void {
-    const backend = this.backendValue;
+  private async backendForHook(workspaceDir?: string): Promise<HookReplayBackend | undefined> {
+    if (this.backendValue) {
+      return this.backendValue;
+    }
+
+    if (this.statusValue.state === "disabled" || this.statusValue.state === "stopping") {
+      return undefined;
+    }
+
+    const startContext = this.lastStartContext ?? this.startContextFromRuntime(workspaceDir);
+    if (!startContext) {
+      if (!this.missingStartContextLogged) {
+        this.api.logger.warn?.("nemo-flow skipped hook replay because OpenClaw service start context is unavailable");
+        this.missingStartContextLogged = true;
+      }
+      return undefined;
+    }
+
+    await this.start(startContext);
+    return this.backendValue;
+  }
+
+  private async replayWithBackend(
+    label: string,
+    workspaceDir: string | undefined,
+    emit: (backend: HookReplayBackend) => void,
+  ): Promise<void> {
+    const backend = await this.backendForHook(workspaceDir);
     if (!backend) {
       return;
     }
@@ -212,9 +292,10 @@ export class NemoFlowRuntimeState {
 
   private async replayWithBackendAsync(
     label: string,
+    workspaceDir: string | undefined,
     emit: (backend: HookReplayBackend) => Promise<void>,
   ): Promise<void> {
-    const backend = this.backendValue;
+    const backend = await this.backendForHook(workspaceDir);
     if (!backend) {
       return;
     }
@@ -223,66 +304,68 @@ export class NemoFlowRuntimeState {
   }
 
   registerHooks(): void {
-    this.api.on("gateway_start", (event, ctx) => {
-      this.replayWithBackend("gateway_start", (backend) => backend.onGatewayStart(event, ctx));
+    this.api.on("gateway_start", async (event, ctx) => {
+      await this.replayWithBackend("gateway_start", ctx.workspaceDir, (backend) =>
+        backend.onGatewayStart(event, ctx),
+      );
     });
 
     this.api.on("gateway_stop", async (event) => {
       await this.stop(event.reason ?? "gateway_stop", this.api.logger);
     });
 
-    this.api.on("session_start", (event, ctx) => {
-      this.replayWithBackend("session_start", (backend) => backend.onSessionStart(event, ctx));
+    this.api.on("session_start", async (event, ctx) => {
+      await this.replayWithBackend("session_start", undefined, (backend) => backend.onSessionStart(event, ctx));
     });
 
     this.api.on("session_end", async (event, ctx) => {
-      await this.replayWithBackendAsync("session_end", (backend) => backend.onSessionEnd(event, ctx));
+      await this.replayWithBackendAsync("session_end", undefined, (backend) => backend.onSessionEnd(event, ctx));
     });
 
-    this.api.on("llm_input", (event, ctx) => {
-      this.replayWithBackend("llm_input", (backend) => backend.onLlmInput(event, ctx));
+    this.api.on("llm_input", async (event, ctx) => {
+      await this.replayWithBackend("llm_input", ctx.workspaceDir, (backend) => backend.onLlmInput(event, ctx));
     });
 
-    this.api.on("llm_output", (event, ctx) => {
-      this.replayWithBackend("llm_output", (backend) => backend.onLlmOutput(event, ctx));
+    this.api.on("llm_output", async (event, ctx) => {
+      await this.replayWithBackend("llm_output", ctx.workspaceDir, (backend) => backend.onLlmOutput(event, ctx));
     });
 
-    this.api.on("model_call_started", (event, ctx) => {
-      this.replayWithBackend("model_call_started", (backend) =>
+    this.api.on("model_call_started", async (event, ctx) => {
+      await this.replayWithBackend("model_call_started", ctx.workspaceDir, (backend) =>
         backend.onModelCallStarted(event, ctx),
       );
     });
 
-    this.api.on("model_call_ended", (event, ctx) => {
-      this.replayWithBackend("model_call_ended", (backend) =>
+    this.api.on("model_call_ended", async (event, ctx) => {
+      await this.replayWithBackend("model_call_ended", ctx.workspaceDir, (backend) =>
         backend.onModelCallEnded(event, ctx),
       );
     });
 
-    this.api.on("after_tool_call", (event, ctx) => {
-      this.replayWithBackend("after_tool_call", (backend) =>
+    this.api.on("after_tool_call", async (event, ctx) => {
+      await this.replayWithBackend("after_tool_call", undefined, (backend) =>
         backend.onAfterToolCall(event, ctx),
       );
     });
 
-    this.api.on("agent_end", (event, ctx) => {
-      this.replayWithBackend("agent_end", (backend) => backend.onAgentEnd(event, ctx));
+    this.api.on("agent_end", async (event, ctx) => {
+      await this.replayWithBackend("agent_end", ctx.workspaceDir, (backend) => backend.onAgentEnd(event, ctx));
     });
 
-    this.api.on("before_agent_finalize", (event, ctx) => {
-      this.replayWithBackend("before_agent_finalize", (backend) =>
+    this.api.on("before_agent_finalize", async (event, ctx) => {
+      await this.replayWithBackend("before_agent_finalize", ctx.workspaceDir, (backend) =>
         backend.onBeforeAgentFinalize(event, ctx),
       );
     });
 
-    this.api.on("subagent_spawned", (event, ctx) => {
-      this.replayWithBackend("subagent_spawned", (backend) =>
+    this.api.on("subagent_spawned", async (event, ctx) => {
+      await this.replayWithBackend("subagent_spawned", undefined, (backend) =>
         backend.onSubagentSpawned(event, ctx),
       );
     });
 
-    this.api.on("subagent_ended", (event, ctx) => {
-      this.replayWithBackend("subagent_ended", (backend) =>
+    this.api.on("subagent_ended", async (event, ctx) => {
+      await this.replayWithBackend("subagent_ended", undefined, (backend) =>
         backend.onSubagentEnded(event, ctx),
       );
     });
@@ -320,12 +403,28 @@ export class NemoFlowRuntimeState {
     this.degradedOutputs.add(output);
   }
 
+  private startContextFromRuntime(workspaceDir?: string): StartContext | undefined {
+    try {
+      const stateDir = this.api.runtime.state.resolveStateDir();
+      return {
+        stateDir,
+        logger: this.api.logger,
+        resolvePath: this.api.resolvePath,
+        agentVersion: this.config.atif.agentVersion ?? this.api.version ?? "unknown",
+        ...(workspaceDir === undefined ? {} : { workspaceDir }),
+      };
+    } catch (error) {
+      this.api.logger.warn?.(`nemo-flow could not resolve OpenClaw runtime state dir: ${toMessage(error)}`);
+      return undefined;
+    }
+  }
+
   private registerBeforeExit(logger: PluginLogger): void {
     if (this.beforeExitListener) {
       return;
     }
     const listener = () => {
-      void this.cleanup("beforeExit").catch((error) => {
+      void this.stop("beforeExit", logger).catch((error) => {
         logger.warn?.(`nemo-flow beforeExit cleanup failed: ${toMessage(error)}`);
       });
     };
@@ -385,7 +484,7 @@ export function registerNemoFlowPlugin(
   api.registerRuntimeLifecycle({
     id: LIFECYCLE_ID,
     description: "Clean up NeMo Flow OpenClaw observability plugin state",
-    cleanup: (ctx) => runtime.cleanup(ctx.reason),
+    cleanup: (ctx) => runtime.cleanup(ctx),
   });
 
   api.registerGatewayMethod?.(
@@ -429,6 +528,16 @@ function resolveAtifOutputDir(config: NemoFlowHookBackendConfig, ctx: StartConte
     return path.join(ctx.stateDir, "plugins", "nemo-flow", "atif");
   }
   return path.isAbsolute(configured) ? configured : ctx.resolvePath(configured);
+}
+
+function copyStartContext(ctx: StartContext): StartContext {
+  return {
+    stateDir: ctx.stateDir,
+    logger: ctx.logger,
+    resolvePath: ctx.resolvePath,
+    agentVersion: ctx.agentVersion,
+    ...(ctx.workspaceDir === undefined ? {} : { workspaceDir: ctx.workspaceDir }),
+  };
 }
 
 function toMessage(error: unknown): string {
