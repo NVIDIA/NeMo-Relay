@@ -26,6 +26,7 @@ def _mk_mock_model(returned_message: str = _DEFAULT_MOCK_RESPONSE_MSG) -> MagicM
     msg = AIMessage(content=returned_message)
 
     mock_model = MagicMock(spec=BaseChatModel)
+    mock_model.bind.return_value = mock_model
     mock_model.model = "mock-model"
     mock_model.invoke.return_value = msg
     mock_model.ainvoke = AsyncMock(return_value=msg)
@@ -234,8 +235,27 @@ def test_wrap_model_integration_test(use_async: bool) -> None:
         ]
     }
 
-    with nemo_flow.scope.scope("langchain-request", nemo_flow.ScopeType.Agent):
-        if use_async:
-            result = asyncio.run(agent.ainvoke(input_payload))
-        else:
-            result = agent.invoke(input_payload)
+    events = []
+    expected_events = [
+        "scope.start.langchain-request",
+        "scope.start.mock-model",
+        "scope.end.mock-model",
+        "scope.end.langchain-request",
+    ]
+
+    def event_recorder(event) -> None:
+        events.append(f"{event.kind}.{event.scope_category}.{event.name}")
+
+    nemo_flow.subscribers.register("event_recorder", event_recorder)
+
+    try:
+        with nemo_flow.scope.scope("langchain-request", nemo_flow.ScopeType.Agent):
+            if use_async:
+                result = asyncio.run(agent.ainvoke(input_payload))
+            else:
+                result = agent.invoke(input_payload)
+    finally:
+        nemo_flow.subscribers.deregister("event_recorder")
+
+    assert result['messages'][-1].content == _DEFAULT_MOCK_RESPONSE_MSG
+    assert events == expected_events
