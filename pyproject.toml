@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
-build-backend = "maturin"
+requires = ["uv_build>=0.11.11,<0.12"]
+build-backend = "uv_build"
 
 [project]
-name = "nemo-flow"
-dynamic = ["version"]
+name = "nemo-flow-meta"
+version = "0.1.0" # Placeholder version for the meta package which we don't actually publish
 description = "Python bindings for the NeMo Flow agent runtime."
 readme = "python/nemo_flow/README.md"
 requires-python = ">=3.11"
@@ -28,7 +28,6 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -42,13 +41,12 @@ Homepage = "https://github.com/NVIDIA/NeMo-Flow"
 Issues = "https://github.com/NVIDIA/NeMo-Flow/issues"
 Repository = "https://github.com/NVIDIA/NeMo-Flow"
 
-[tool.maturin]
-manifest-path = "crates/python/Cargo.toml"
-python-source = "python"
-module-name = "nemo_flow._native"
-features = ["pyo3/extension-module"]
-
 [dependency-groups]
+libs = [
+    "nemo-flow",
+    "langchain-nemo-flow[nvidia]",
+]
+
 dev = [
     "ipython~=8.20",
     "maturin[zig]>=1.0,<2.0; sys_platform == 'linux'",
@@ -79,11 +77,18 @@ docs = [
 ]
 
 [tool.uv]
-default-groups = ["dev", "test"]
-package = true
+default-groups = ["dev", "libs", "test"]
+package = false
+
+[tool.uv.sources]
+langchain-nemo-flow = { workspace = true }
+nemo-flow = { workspace = true }
+
+[tool.uv.workspace]
+members = ["python", "integrations/*"]
 
 [tool.pytest.ini_options]
-testpaths = ["python/tests", "third_party/langgraph_tests"]
+testpaths = ["python/tests", "integrations/langchain/tests", "third_party/langgraph_tests"]
 asyncio_mode = "auto"
 
 [tool.ty.analysis]
@@ -102,6 +107,3 @@ quote-style = "double"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
 
-[tool.maturin.sbom]
-rust = true
-auditwheel = true

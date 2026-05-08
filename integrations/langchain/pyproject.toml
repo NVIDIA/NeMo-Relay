@@ -52,6 +52,13 @@ test = [
     "pytest>=8",
 ]
 
+[project.optional-dependencies]
+nvidia = [
+    # Allow pip to determine the compatible version based on the installed version of langchain
+    "langchain-nvidia-ai-endpoints"
+]
+
+
 [project.urls]
 Documentation = "https://nvidia.github.io/NeMo-Flow/"
 Homepage = "https://github.com/NVIDIA/NeMo-Flow"
@@ -71,5 +78,3 @@ select = ["E", "F", "W", "I"]
 [tool.uv]
 default-groups = ["test"]
 
-[tool.uv.sources]
-nemo-flow = { path = "../..", editable = true }
