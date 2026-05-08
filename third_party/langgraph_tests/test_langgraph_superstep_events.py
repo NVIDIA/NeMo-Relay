@@ -12,7 +12,6 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-import nemo_flow
 import pytest
 from langgraph._nemo_flow import (  # type: ignore[import-untyped]
     available,
@@ -21,6 +20,8 @@ from langgraph._nemo_flow import (  # type: ignore[import-untyped]
     pop_graph_scope,
     push_graph_scope,
 )
+
+import nemo_flow
 from nemo_flow import create_scope_stack, set_thread_scope_stack
 
 

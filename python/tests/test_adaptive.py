@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+
 from nemo_flow import AnnotatedLLMRequest, JsonObject, LLMRequest, ScopeType, llm, plugin, scope, tools
 from nemo_flow import adaptive as adaptive_module
 from nemo_flow.adaptive import (

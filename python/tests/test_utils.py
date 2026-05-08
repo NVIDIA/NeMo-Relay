@@ -10,6 +10,7 @@ import pytest
 import nemo_flow
 from nemo_flow.utils import run_sync
 
+
 @pytest.mark.parametrize("from_async", [False, True])
 def test_run_sync(from_async: bool):
     """

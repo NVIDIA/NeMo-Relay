@@ -6,6 +6,7 @@
 from typing import NoReturn, cast
 
 import pytest
+
 from nemo_flow import (
     LLMAttributes,
     LLMHandle,

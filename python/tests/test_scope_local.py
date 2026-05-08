@@ -12,6 +12,7 @@ take effect within their owning scope and do not leak to other scopes.
 from typing import cast
 
 import pytest
+
 from nemo_flow import (
     JsonObject,
     LLMRequest,

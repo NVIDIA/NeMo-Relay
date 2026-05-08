@@ -7,6 +7,7 @@ import dataclasses
 from typing import cast
 
 import pytest
+
 from nemo_flow import JsonObject, LLMRequest, intercepts, typed
 from nemo_flow.typed import BestEffortAnyCodec, Codec, DataclassCodec, JsonPassthrough
 
