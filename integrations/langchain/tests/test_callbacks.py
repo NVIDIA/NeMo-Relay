@@ -18,7 +18,7 @@ from langchain_nemo_flow.callbacks import NemoFlowCallbackHandler
 def _make_mock_nemo_flow() -> ModuleType:
     """Build a minimal mock of the ``nemo_flow`` module."""
     mock_nemo_flow = ModuleType("nemo_flow")
-    mock_nemo_flow.ScopeType = SimpleNamespace(Agent="Agent")  # ty: ignore[unresolved-attribute]
+    mock_nemo_flow.ScopeType = SimpleNamespace(Agent="Agent")
 
     scope = SimpleNamespace()
     scope.push = MagicMock(
@@ -30,7 +30,7 @@ def _make_mock_nemo_flow() -> ModuleType:
         )
     )
     scope.pop = MagicMock()
-    mock_nemo_flow.scope = scope  # ty: ignore[unresolved-attribute]
+    mock_nemo_flow.scope = scope
     return mock_nemo_flow
 
 
