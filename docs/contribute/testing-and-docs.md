@@ -65,9 +65,8 @@ Run the Node.js validation loop when a change touches the NAPI binding or
 JavaScript package surface.
 
 ```bash
-cd crates/node
 npm install --ignore-scripts
-npm test
+npm test --workspace=nemo-flow-node
 ```
 
 ## Documentation Checklist

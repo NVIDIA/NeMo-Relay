@@ -1,0 +1,104 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: License Diff
+
+on:
+  workflow_call:
+    inputs:
+      base:
+        description: 'The comparison base used for the license diff'
+        required: false
+        default: ''
+        type: string
+      default_branch:
+        description: 'The repository default branch used as the fallback comparison base'
+        required: true
+        type: string
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  license-diff:
+    name: Run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        with:
+          cache: false
+          toolchain: ${{ steps.ci-config.outputs.rust_version }}
+
+      - name: Install cargo-about
+        uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+        with:
+          tool: cargo-about@${{ steps.ci-config.outputs.cargo_about_version }}
+
+      - name: Compare lockfile licenses
+        continue-on-error: true
+        env:
+          DEFAULT_BRANCH: ${{ inputs.default_branch }}
+          LICENSE_DIFF_BASE: ${{ inputs.base }}
+        run: |
+          set -euo pipefail
+
+          base_ref="${LICENSE_DIFF_BASE:-origin/${DEFAULT_BRANCH}}"
+          if [[ "$base_ref" =~ ^[0-9a-f]{40}$ || "$base_ref" == refs/tags/* ]]; then
+            compare_ref="$base_ref"
+          elif [[ "$base_ref" == refs/heads/* ]]; then
+            base_branch="${base_ref#refs/heads/}"
+            git fetch --no-tags origin "+refs/heads/${base_branch}:refs/remotes/origin/${base_branch}"
+            compare_ref="origin/${base_branch}"
+          else
+            base_branch="${base_ref#origin/}"
+            git fetch --no-tags origin "+refs/heads/${base_branch}:refs/remotes/origin/${base_branch}"
+            compare_ref="origin/${base_branch}"
+          fi
+
+          echo "Comparing lockfile licenses against ${compare_ref}"
+
+          set +e
+          python3 scripts/licensing/license_diff.py --base-ref "$compare_ref" > license-diff.md 2> license-diff.status
+          diff_status=$?
+          set -e
+
+          cat license-diff.status >&2
+          cat license-diff.md
+
+          {
+            echo "## License Diff"
+            echo
+            echo "Compared against \`${compare_ref}\`."
+            echo
+            if [[ -s license-diff.md ]]; then
+              cat license-diff.md
+            else
+              echo "No license diff output was produced."
+            fi
+            echo
+            echo "<details><summary>Status output</summary>"
+            echo
+            echo '```text'
+            cat license-diff.status
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$diff_status"

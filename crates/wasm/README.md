@@ -57,12 +57,11 @@ Install the npm package in a JavaScript project:
 npm install nemo-flow-wasm
 ```
 
-For local source development from this repository:
+For local source development from the repository root:
 
 ```bash
-cd crates/wasm
-npm run build:pkg
-npm run test:pkg
+npm run build:pkg --workspace=nemo-flow-wasm
+npm run test:pkg --workspace=nemo-flow-wasm
 ```
 
 ## Getting Started

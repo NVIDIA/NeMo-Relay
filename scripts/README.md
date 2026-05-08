@@ -21,7 +21,7 @@ Keep `scripts/` focused on helpers that are still script-native:
 ## Internal Layout
 
 - `docs/`: documentation build helpers
-- `licensing/`: attribution generation helpers
+- `licensing/`: attribution generation helpers, including license inventory diff scripts
 - `lint/`: pre-commit and local lint helpers
 - `test-support/`: shared test utilities
 - `third-party/`: third-party checkout and patch management

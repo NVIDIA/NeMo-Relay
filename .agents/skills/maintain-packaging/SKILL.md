@@ -22,6 +22,7 @@ consumed outside the source tree.
 - Rust `Cargo.toml` package names and workspace metadata
 - Python packaging in `pyproject.toml`
 - Go module path in `go/nemo_flow/go.mod`
+- Node workspace metadata in root `package.json` and `package-lock.json`
 - Node package metadata in `crates/node/package.json`
 - WebAssembly package naming and generated package expectations
 - FFI header and library naming
@@ -42,6 +43,8 @@ consumed outside the source tree.
 
 - `pyproject.toml`
 - `go/nemo_flow/go.mod`
+- `package.json`
+- `package-lock.json`
 - `crates/node/package.json`
 - `RELEASING.md`
 - `.github/workflows/ci_pipe.yml`

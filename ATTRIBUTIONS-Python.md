@@ -95,7 +95,7 @@ POSSIBILITY OF SUCH DAMAGE.
 ## annotated-types (0.7.0)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `licenses/LICENSE`:
 ```
@@ -917,7 +917,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## beautifulsoup4 (4.14.3)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `licenses/LICENSE`:
 ```
@@ -957,7 +957,7 @@ Isaac Muse
 ## cattrs (24.1.3)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `licenses/LICENSE`:
 ```
@@ -1780,7 +1780,7 @@ licenses_ directory.
 ## executing (2.2.1)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `LICENSE.txt`:
 ```
@@ -1908,7 +1908,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## imagesize (2.0.0)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `licenses/LICENSE.rst`:
 ```
@@ -2016,7 +2016,7 @@ to indicate the copyright and license terms:
 ## jedi (0.19.2)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `LICENSE.txt`:
 ```
@@ -2086,7 +2086,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## markdown-it-py (3.0.0)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `LICENSE`:
 ```
@@ -2401,7 +2401,7 @@ limitations under the License.
 ## mdit-py-plugins (0.5.0)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `licenses/LICENSE`:
 ```
@@ -2431,7 +2431,7 @@ SOFTWARE.
 ## mdurl (0.1.2)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `LICENSE`:
 ```
@@ -2486,7 +2486,7 @@ IN THE SOFTWARE.
 ## myst-parser (4.0.1)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `LICENSE`:
 ```
@@ -2630,7 +2630,7 @@ under the terms of *both* these licenses.
 ## parsimonious (0.10.0)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `LICENSE`:
 ```
@@ -2658,7 +2658,7 @@ SOFTWARE.
 ## parso (0.8.6)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `licenses/LICENSE.txt`:
 ```
@@ -2841,7 +2841,7 @@ SOFTWARE.
 ## pluggy (1.6.0)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `licenses/LICENSE`:
 ```
@@ -2998,7 +2998,7 @@ OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ## pure_eval (0.2.3)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `LICENSE.txt`:
 ```
@@ -3430,7 +3430,7 @@ THE SOFTWARE.
 ## python-discovery (1.2.1)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `licenses/LICENSE`:
 ```
@@ -3457,7 +3457,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ## PyYAML (6.0.3)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `licenses/LICENSE`:
 ```
@@ -4743,7 +4743,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## sphinx-autoapi (3.8.0)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `licenses/LICENSE.rst`:
 ```
@@ -4777,7 +4777,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 ## sphinx-js (5.0.3)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `licenses/LICENSE`:
 ```
@@ -4841,7 +4841,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## sphinx_design (0.7.0)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `licenses/LICENSE`:
 ```
@@ -5764,7 +5764,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## stack-data (0.6.3)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `LICENSE.txt`:
 ```
@@ -5863,7 +5863,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## ty (0.0.29)
 
 ### Licenses
-License: `MIT License`
+License: `MIT`
 
   - `licenses/LICENSE`:
 ```

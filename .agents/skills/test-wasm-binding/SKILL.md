@@ -20,7 +20,7 @@ or the WebAssembly-facing runtime surface.
 ## Default Path
 
 1. Format changed WebAssembly JS/TS wrapper files with
-   `npm --prefix crates/node run precommit:format -- crates/wasm/wrappers crates/wasm/tests-js crates/wasm/scripts`.
+   `npm run precommit:format --workspace=nemo-flow-node -- crates/wasm/wrappers crates/wasm/tests-js crates/wasm/scripts`.
 2. Run the WebAssembly tests with `just test-wasm`.
 3. If any Rust files changed as part of the WebAssembly work, also run
    `cargo fmt --all`, `just test-rust`, and
@@ -36,7 +36,7 @@ or the WebAssembly-facing runtime surface.
 just test-wasm
 
 # Format WebAssembly JS/TS wrapper files
-npm --prefix crates/node run precommit:format -- crates/wasm/wrappers crates/wasm/tests-js crates/wasm/scripts
+npm run precommit:format --workspace=nemo-flow-node -- crates/wasm/wrappers crates/wasm/tests-js crates/wasm/scripts
 
 # Required when the WebAssembly change also touched Rust code
 cargo fmt --all
