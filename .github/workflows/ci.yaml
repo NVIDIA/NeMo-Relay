@@ -128,6 +128,22 @@ jobs:
       full_ci: ${{ needs.prepare.outputs.full_ci == 'true' }}
       base: ${{ needs.ci_changes.outputs.base }}
 
+  ci_license_diff:
+    name: License Diff
+    needs: [prepare, ci_changes, ci_check]
+    uses: ./.github/workflows/ci_license_diff.yml
+    if: >-
+      ${{
+        needs.prepare.outputs.is_pr == 'true'
+        && needs.ci_check.result == 'success'
+        && needs.ci_changes.outputs.run_dependencies == 'true'
+      }}
+    permissions:
+      contents: read
+    with:
+      base: ${{ needs.ci_changes.outputs.base }}
+      default_branch: ${{ github.event.repository.default_branch }}
+
   ci_docs:
     name: Documentation
     needs: [prepare, ci_changes, ci_check]

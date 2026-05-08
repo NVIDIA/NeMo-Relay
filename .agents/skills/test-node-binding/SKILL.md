@@ -19,7 +19,7 @@ Node surface, or Node-facing examples/docs.
 
 ## Default Path
 
-1. Format changed Node files with `npm --prefix crates/node run format`.
+1. Format changed Node files with `npm run format --workspace=nemo-flow-node`.
 2. Install dependencies and build with `just build-node` when you need
    to validate packaging/build output.
 3. Run `just test-node` for the normal dev/test loop.
@@ -36,7 +36,7 @@ Node surface, or Node-facing examples/docs.
 just build-node
 
 # Format Node files
-npm --prefix crates/node run format
+npm run format --workspace=nemo-flow-node
 
 # Standard test loop
 just test-node
@@ -54,7 +54,7 @@ just ci=true test-node
 
 ```bash
 # Public API docstring checks when surface docs changed
-npm --prefix crates/node run check:docstrings
+npm run check:docstrings --workspace=nemo-flow-node
 ```
 
 ## When To Escalate
@@ -65,6 +65,8 @@ npm --prefix crates/node run check:docstrings
 
 ## References
 
+- `package.json`
+- `package-lock.json`
 - `crates/node/package.json`
 - `docs/getting-started/nodejs.md`
 - `README.md`

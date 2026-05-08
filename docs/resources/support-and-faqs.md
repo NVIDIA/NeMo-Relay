@@ -517,7 +517,7 @@ Choose the smallest validation set that covers the touched surface:
 
 - Rust core or adaptive changes: `cargo test --workspace` or focused crate tests.
 - Python binding changes: `uv run pytest`.
-- Node.js binding changes: `cd crates/node && npm test`.
+- Node.js binding changes: `npm test --workspace=nemo-flow-node`.
 - Go binding changes: build the release FFI library first, then run Go tests under `go/nemo_flow`.
 - WebAssembly changes: run `just test-wasm` and the WebAssembly crate tests
   (`cargo test -p nemo-flow-wasm`) when integration behavior changed. For

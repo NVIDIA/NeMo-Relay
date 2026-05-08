@@ -94,12 +94,12 @@ cd go/nemo_flow && go fmt ./...
 # Node
 just build-node
 just test-node
-npm --prefix crates/node run format
+npm run format --workspace=nemo-flow-node
 
 # WebAssembly
 just build-wasm
 just test-wasm
-npm --prefix crates/node run precommit:format -- crates/wasm/wrappers crates/wasm/tests-js crates/wasm/scripts
+npm run precommit:format --workspace=nemo-flow-node -- crates/wasm/wrappers crates/wasm/tests-js crates/wasm/scripts
 
 # Third-party patches
 ./scripts/bootstrap-third-party.sh
@@ -141,7 +141,7 @@ Examples from this repo:
 - Matching docs markdown files under `README.md`, `CONTRIBUTING.md`, or `docs/`
   trigger the docs link checker.
 - Matching `Cargo.toml`, `Cargo.lock`, or `deny.toml` triggers `cargo deny check`.
-- Matching `Cargo.lock`, `uv.lock`, or `crates/node/package-lock.json` triggers
+- Matching `Cargo.lock`, `uv.lock`, or `package-lock.json` triggers
   the attributions generators.
 - Matching Node/WebAssembly public JS/TS surfaces can also trigger the public docstring
   checks, while matching Node/WebAssembly JS/TS files trigger the prettier wrapper.
