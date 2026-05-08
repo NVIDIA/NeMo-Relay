@@ -95,7 +95,7 @@ repos:
         name: package-lock.json is up to date
         entry: bash -c 'npm install --package-lock-only --ignore-scripts --audit=false --fund=false'
         language: system
-        files: '^(package(?:-lock)?\.json|crates/node/package\.json|integrations/openclaw/package\.json)$'
+        files: 'package(?:-lock)?\.json$'
         pass_filenames: false
 
   # Rust — fmt + clippy + cargo-deny

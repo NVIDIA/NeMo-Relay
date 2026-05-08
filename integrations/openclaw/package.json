@@ -1,5 +1,5 @@
 {
-  "name": "@nvidia/nemo-flow-openclaw",
+  "name": "nemo-flow-openclaw",
   "version": "0.2.0",
   "private": true,
   "description": "NeMo Flow-authored observability plugin for OpenClaw.",

@@ -663,7 +663,7 @@ build-node:
         prepare_llvm_cov_workspace
     fi
     cd "$NEMO_FLOW_REPO_ROOT"
-    npm install --ignore-scripts
+    npm install --workspace=nemo-flow-node --ignore-scripts
     if is_true "{{ ci }}"; then
         npm run build-debug --workspace=nemo-flow-node
     else
@@ -674,11 +674,11 @@ build-node:
 build-wasm:
     #!/usr/bin/env bash
     {{ bash_helpers }}
-    cd "$NEMO_FLOW_REPO_ROOT/crates/wasm"
+    cd "$NEMO_FLOW_REPO_ROOT"
     if is_true "{{ ci }}"; then
-        npm run build:pkg
+        npm run build:pkg --workspace=nemo-flow-wasm
     else
-        NEMO_FLOW_WASM_RELEASE=1 npm run build:pkg
+        NEMO_FLOW_WASM_RELEASE=1 npm run build:pkg --workspace=nemo-flow-wasm
     fi
 
 build-all: build-rust build-python build-go build-node build-wasm
@@ -699,7 +699,6 @@ clean:
         crates/node/junit.xml \
         crates/node/node_modules \
         crates/wasm/node_modules \
-        crates/wasm/package-lock.json \
         crates/wasm/pkg-test/ \
         crates/wasm/pkg/ \
         integrations/openclaw/.test-dist \
@@ -868,8 +867,7 @@ test-node:
         fi
         cargo test -p nemo-flow-node --lib
     fi
-    cd "$NEMO_FLOW_REPO_ROOT"
-    npm install --ignore-scripts
+    npm install --workspace=nemo-flow-node --ignore-scripts
     if is_true "{{ ci }}"; then
         npm run coverage --workspace=nemo-flow-node
         cp crates/node/coverage/cobertura-coverage.xml "$coverage_out"
@@ -896,9 +894,9 @@ test-openclaw:
     else
         npm install --ignore-scripts
     fi
-    npm run typecheck --workspace=@nvidia/nemo-flow-openclaw
-    npm test --workspace=@nvidia/nemo-flow-openclaw
-    npm run pack:check --workspace=@nvidia/nemo-flow-openclaw
+    npm run typecheck --workspace=nemo-flow-openclaw
+    npm test --workspace=nemo-flow-openclaw
+    npm run pack:check --workspace=nemo-flow-openclaw
 
 # --set [output_dir=<path>] [ci=true|false]
 test-wasm:
@@ -909,16 +907,15 @@ test-wasm:
     junit_out=""
     cd "$NEMO_FLOW_REPO_ROOT"
     wasm-pack test --node crates/wasm
-    cd "$NEMO_FLOW_REPO_ROOT/crates/wasm"
-    npm install --ignore-scripts
+    npm install --workspace=nemo-flow-wasm --ignore-scripts
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact wasm-js.xml)"
         junit_out="$(prepare_artifact wasm-junit.xml)"
-        npm run coverage:pkg
-        cp ./coverage/cobertura-coverage.xml "$coverage_out"
-        cp ./junit.xml "$junit_out"
+        npm run coverage:pkg --workspace=nemo-flow-wasm
+        cp crates/wasm/coverage/cobertura-coverage.xml "$coverage_out"
+        cp crates/wasm/junit.xml "$junit_out"
     else
-        npm run test:pkg
+        npm run test:pkg --workspace=nemo-flow-wasm
     fi
 
 # --set [output_dir=<path>] [ci=true|false]
@@ -967,11 +964,9 @@ package-node:
         prepend_ziglang_to_path "$(project_python_executable)"
         build_args+=(-- --zig --zig-abi-suffix "$linux_glibc_version")
     fi
-    npm install --ignore-scripts
+    npm install --workspace=nemo-flow-node --ignore-scripts
     npm run --workspace=nemo-flow-node "${build_args[@]}"
-    pushd crates/node >/dev/null
-    npm pack --pack-destination "$package_dir"
-    popd >/dev/null
+    npm pack --workspace=nemo-flow-node --pack-destination "$package_dir"
     shopt -s nullglob
     packages=("$package_dir"/*.tgz)
     if ((${#packages[@]} == 0)); then

@@ -197,7 +197,7 @@ async function loadRealNemoFlowModules(): Promise<NemoFlowModules> {
   } catch (error) {
     if (isMissingLocalNemoFlowNode(error)) {
       throw new Error(
-        "Live smoke requires the nemo-flow-node native package for this platform. Install workspace dependencies, or build local bindings when testing an unpublished version, then rerun `npm run test:live --workspace=@nvidia/nemo-flow-openclaw`.",
+        "Live smoke requires the nemo-flow-node native package for this platform. Install workspace dependencies, or build local bindings when testing an unpublished version, then rerun `npm run test:live --workspace=nemo-flow-openclaw`.",
       );
     }
     throw error;

@@ -12,7 +12,6 @@ import re
 import subprocess
 import sys
 import tarfile
-import tomllib
 import urllib.request
 import zipfile
 from email.parser import Parser
@@ -26,7 +25,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 ROOT = Path(__file__).resolve().parents[2]
-NODE_LOCK = ROOT / "package-lock.json"
+NODE = ROOT
 MARKDOWN_CODE_FENCE = "```\n"
 MARKDOWN_CODE_BLOCK_END = "```\n\n"
 
@@ -38,6 +37,14 @@ class RenderedPythonPackage(TypedDict):
     version: str
     license_name: str
     license_texts: list[tuple[str, str]]
+
+
+class LicenseInventoryEntry(TypedDict):
+    """Minimal package license data used by machine-readable inventories."""
+
+    package: str
+    version: str
+    license: str
 
 
 RUST_HEADER = (
@@ -117,9 +124,39 @@ def _is_unknown_value(s: str) -> bool:
     return not s.strip() or s.strip().upper() == "UNKNOWN"
 
 
+def _is_weak_license_name(s: str) -> bool:
+    """Return true when package metadata does not provide a useful license label."""
+    normalized = " ".join(s.strip().split()).lower()
+    return _is_unknown_value(s) or normalized == "see package metadata"
+
+
 def _is_useful_license_text(text: str) -> bool:
     """Return true when text is usable license content rather than a placeholder."""
     return not _is_unknown_value(text)
+
+
+def _normalize_license_name(license_name: str) -> str:
+    """Normalize common license labels that are equivalent but noisy across metadata sources."""
+    normalized = " ".join(license_name.strip().split()).lower()
+    label_map = {
+        "mit license": "MIT",
+        "the mit license": "MIT",
+        "the mit license (mit)": "MIT",
+    }
+    return label_map.get(normalized, license_name)
+
+
+def _looks_like_mit_license(text: str) -> bool:
+    """Return true when license text matches the canonical MIT license shape."""
+    normalized = " ".join(text.lower().split())
+    return (
+        "permission is hereby granted, free of charge" in normalized
+        and "without restriction" in normalized
+        and "use, copy, modify, merge, publish, distribute, sublicense" in normalized
+        and "the above copyright notice and this permission notice" in normalized
+        and "the software is provided" in normalized
+        and "without warranty of any kind" in normalized
+    )
 
 
 def _license_name_from_file_heading(text: str) -> str | None:
@@ -130,13 +167,23 @@ def _license_name_from_file_heading(text: str) -> str | None:
         "ISC License": "ISC",
         "MIT License": "MIT",
         "Mozilla Public License Version 2.0": "MPL-2.0",
+        "NVIDIA LICENSE AGREEMENT": "NVIDIA License Agreement",
         "The MIT License": "MIT",
         "The MIT License (MIT)": "MIT",
     }
     for line in text.splitlines():
         heading = line.strip()
         if heading:
-            return heading_map.get(heading)
+            mapped = heading_map.get(heading)
+            if mapped:
+                return mapped
+            break
+
+    normalized = text.lower()
+    if "under the isc license" in normalized:
+        return "ISC"
+    if _looks_like_mit_license(text):
+        return "MIT"
     return None
 
 
@@ -147,6 +194,8 @@ def _normalize_package_name(name: str) -> str:
 
 def _lockfile_registry_packages() -> dict[str, dict[str, Any]]:
     """Return {normalized_name: package_entry} for all third-party registry packages in uv.lock."""
+    import tomllib
+
     with open(ROOT / "uv.lock", "rb") as f:
         lock: dict[str, Any] = tomllib.load(f)
     return {
@@ -215,7 +264,7 @@ def _cargo_about_json() -> dict[str, Any]:
 
 def _render_rust_crate_attribution(
     crate: dict[str, Any], *, license_id: str, license_text: str, workspace_members: set[str]
-) -> str | None:
+) -> tuple[str, str, str] | None:
     """Render one Rust crate attribution, skipping local workspace crates."""
     if str(crate.get("id") or "") in workspace_members:
         return None
@@ -226,7 +275,7 @@ def _render_rust_crate_attribution(
     if not repo:
         repo = f"https://crates.io/crates/{name}"
 
-    return "".join(
+    rendered = "".join(
         [
             f"## {name} - {version}\n",
             f"**Repository URL**: {repo}\n",
@@ -238,11 +287,13 @@ def _render_rust_crate_attribution(
             MARKDOWN_CODE_BLOCK_END,
         ]
     )
+    return name, version, rendered
 
 
 def _render_rust_attributions(data: dict[str, Any], workspace_members: set[str]) -> str:
     """Render cargo-about output while omitting local workspace crates."""
     parts: list[str] = [RUST_HEADER]
+    rendered_crates: list[tuple[str, str, str]] = []
     for license_group in cast(list[dict[str, Any]], data.get("licenses", [])):
         license_id = str(license_group.get("id") or "UNKNOWN")
         license_text = str(license_group.get("text") or "")
@@ -254,9 +305,41 @@ def _render_rust_attributions(data: dict[str, Any], workspace_members: set[str])
                 workspace_members=workspace_members,
             )
             if rendered:
-                parts.append(rendered)
+                rendered_crates.append(rendered)
+
+    for _, _, rendered in sorted(rendered_crates, key=lambda row: (row[0].lower(), row[1])):
+        parts.append(rendered)
 
     return "".join(parts).rstrip("\n") + "\n"
+
+
+def _license_inventory_entry(name: str, version: str, license_name: str) -> LicenseInventoryEntry:
+    """Return one normalized package license inventory row."""
+    return LicenseInventoryEntry(package=name, version=version, license=license_name or "UNKNOWN")
+
+
+def _rendered_python_package_inventory(pkg: RenderedPythonPackage) -> LicenseInventoryEntry:
+    """Return a minimal inventory row from the richer Python attribution record."""
+    return _license_inventory_entry(pkg["name"], pkg["version"], _normalize_license_name(pkg["license_name"]))
+
+
+def _rust_license_inventory(data: dict[str, Any], workspace_members: set[str]) -> list[LicenseInventoryEntry]:
+    """Return minimal Rust dependency license rows while omitting local workspace crates."""
+    rows: dict[tuple[str, str], set[str]] = {}
+    for license_group in cast(list[dict[str, Any]], data.get("licenses", [])):
+        license_id = str(license_group.get("id") or "UNKNOWN")
+        for used_by in cast(list[dict[str, Any]], license_group.get("used_by", [])):
+            crate = cast(dict[str, Any], used_by.get("crate") or {})
+            if str(crate.get("id") or "") in workspace_members:
+                continue
+            name = str(crate.get("name") or "unknown")
+            version = str(crate.get("version") or "")
+            rows.setdefault((name, version), set()).add(license_id)
+
+    return [
+        _license_inventory_entry(name, version, " OR ".join(sorted(licenses)))
+        for (name, version), licenses in sorted(rows.items(), key=lambda item: (item[0][0].lower(), item[0][1]))
+    ]
 
 
 def _hash_matches(data: bytes, expected_hash: str) -> bool:
@@ -307,10 +390,15 @@ def _metadata_license_name(msg) -> str:
     return "UNKNOWN"
 
 
+def _clean_license_text(text: str) -> str:
+    """Normalize bundled license text without changing meaningful line structure."""
+    return "\n".join(line.rstrip() for line in text.splitlines()).strip()
+
+
 def _extract_zip_text(zf: zipfile.ZipFile, path: str) -> str | None:
     """Read a text file from a wheel, returning None when the path is absent."""
     try:
-        return zf.read(path).decode("utf-8", errors="replace").strip()
+        return _clean_license_text(zf.read(path).decode("utf-8", errors="replace"))
     except KeyError:
         return None
 
@@ -324,7 +412,7 @@ def _extract_tar_text(tf: tarfile.TarFile, path: str) -> str | None:
     fileobj = tf.extractfile(member)
     if fileobj is None:
         return None
-    return fileobj.read().decode("utf-8", errors="replace").strip()
+    return _clean_license_text(fileobj.read().decode("utf-8", errors="replace"))
 
 
 def _common_license_candidates(paths: list[str]) -> list[str]:
@@ -520,91 +608,48 @@ def _artifact_metadata_from_lockfile(pkg: dict[str, Any]) -> tuple[str, list[tup
     """Read license metadata from the locked artifacts for one package.
 
     Prefer the sdist when available because it is less platform-specific than a
-    wheel. Fall back to the first locked wheel only when the package has no sdist.
+    wheel. If sdist metadata does not provide a useful license label, inspect
+    locked wheels before falling back to the sdist result.
     """
     package_name = pkg["name"]
     sdist = pkg.get("sdist")
+    sdist_metadata: tuple[str, list[tuple[str, str]]] | None = None
     if isinstance(sdist, dict) and sdist.get("url") and sdist.get("hash"):
         data = _download_locked_artifact(sdist["url"], sdist["hash"])
-        return _sdist_metadata_from_bytes(data, package_name=package_name)
+        sdist_metadata = _sdist_metadata_from_bytes(data, package_name=package_name)
+        if not _is_weak_license_name(sdist_metadata[0]):
+            return sdist_metadata
 
     wheels = cast(list[dict[str, Any]], pkg.get("wheels") or [])
+    first_wheel_metadata: tuple[str, list[tuple[str, str]]] | None = None
     for wheel in wheels:
         if wheel.get("url") and wheel.get("hash"):
             data = _download_locked_artifact(wheel["url"], wheel["hash"])
-            return _wheel_metadata_from_bytes(data, package_name=package_name)
+            wheel_metadata = _wheel_metadata_from_bytes(data, package_name=package_name)
+            if first_wheel_metadata is None:
+                first_wheel_metadata = wheel_metadata
+            if not _is_weak_license_name(wheel_metadata[0]):
+                if sdist_metadata and sdist_metadata[1]:
+                    return wheel_metadata[0], sdist_metadata[1]
+                return wheel_metadata
+
+    if sdist_metadata is not None:
+        return sdist_metadata
+    if first_wheel_metadata is not None:
+        return first_wheel_metadata
 
     raise ValueError(f"No downloadable artifact found in uv.lock for {package_name}")
 
 
-def _installed_license_texts(
-    row: dict[str, str], lockfile_pkg: dict[str, Any], *, package_name: str
-) -> list[tuple[str, str]]:
-    """Choose license text from pip-licenses first, then fall back to the locked artifact."""
-    license_file = (row.get("LicenseFile") or "").strip()
-    path_label = _pypi_license_path_display(license_file)
-    text = "\n".join(line.rstrip() for line in (row.get("LicenseText") or "").splitlines()).strip()
-    license_texts: list[tuple[str, str]] = [(path_label, text)] if _is_useful_license_text(text) else []
-
-    if not license_texts:
-        _, artifact_license_texts = _artifact_metadata_from_lockfile(lockfile_pkg)
-        if artifact_license_texts:
-            return artifact_license_texts
-
-    if license_texts:
-        return license_texts
-    return [
-        ("LICENSE", f"(No license text bundled in site-packages for {package_name}; see package metadata or PyPI.)\n")
-    ]
-
-
-def _infer_installed_license_name(license_name: str, license_texts: list[tuple[str, str]]) -> str:
-    """Infer a package license from bundled license text when pip-licenses reports UNKNOWN."""
-    if not _is_unknown_value(license_name):
+def _infer_license_name(license_name: str, license_texts: list[tuple[str, str]]) -> str:
+    """Infer a package license from bundled license text when metadata reports UNKNOWN."""
+    if not _is_weak_license_name(license_name):
         return license_name
     for _, license_text in license_texts:
         inferred_license = _license_name_from_file_heading(license_text)
         if inferred_license:
             return inferred_license
     return license_name
-
-
-def _installed_python_package_from_row(
-    row: dict[str, str], lockfile_pkgs: dict[str, dict[str, Any]], *, own_name: str
-) -> tuple[str, RenderedPythonPackage] | None:
-    """Render one pip-licenses row, returning its normalized lockfile key when included."""
-    name = row.get("Name", "unknown")
-    normalized = _normalize_package_name(name)
-    lockfile_pkg = lockfile_pkgs.get(normalized)
-    if normalized == own_name or lockfile_pkg is None:
-        return None
-
-    license_texts = _installed_license_texts(row, lockfile_pkg, package_name=name)
-    license_name = _infer_installed_license_name((row.get("License") or "UNKNOWN").strip() or "UNKNOWN", license_texts)
-    return normalized, RenderedPythonPackage(
-        name=name,
-        version=row.get("Version", ""),
-        license_name=license_name,
-        license_texts=license_texts,
-    )
-
-
-def _installed_python_packages(
-    rows: list[dict[str, str]], lockfile_pkgs: dict[str, dict[str, Any]], *, own_name: str
-) -> tuple[list[RenderedPythonPackage], set[str]]:
-    """Render Python packages reported by pip-licenses and track which lockfile entries were seen."""
-    packages: list[RenderedPythonPackage] = []
-    seen: set[str] = set()
-
-    for row in rows:
-        rendered = _installed_python_package_from_row(row, lockfile_pkgs, own_name=own_name)
-        if rendered is None:
-            continue
-        normalized, package = rendered
-        seen.add(normalized)
-        packages.append(package)
-
-    return packages, seen
 
 
 def _lockfile_fallback_license_texts(package_name: str) -> list[tuple[str, str]]:
@@ -615,10 +660,12 @@ def _lockfile_fallback_license_texts(package_name: str) -> list[tuple[str, str]]
 
 
 def _lockfile_only_python_package(pkg: dict[str, Any]) -> RenderedPythonPackage:
-    """Render one package that only appears in uv.lock and not in the current installed environment."""
+    """Render one package from the locked artifact metadata in uv.lock."""
     license_name, license_texts = _artifact_metadata_from_lockfile(pkg)
     if not license_texts:
         license_texts = _lockfile_fallback_license_texts(str(pkg["name"]))
+    license_name = _infer_license_name(license_name, license_texts)
+    license_name = _normalize_license_name(license_name)
     return RenderedPythonPackage(
         name=str(pkg["name"]),
         version=str(pkg["version"]),
@@ -627,16 +674,35 @@ def _lockfile_only_python_package(pkg: dict[str, Any]) -> RenderedPythonPackage:
     )
 
 
-def _missing_lockfile_python_packages(
-    lockfile_pkgs: dict[str, dict[str, Any]], seen: set[str], *, own_name: str
+def _lockfile_python_packages(
+    lockfile_pkgs: dict[str, dict[str, Any]], *, own_name: str, seen: set[str] | None = None
 ) -> list[RenderedPythonPackage]:
-    """Render the remaining uv.lock packages that pip-licenses did not report."""
+    """Render third-party Python packages directly from uv.lock."""
+    seen = seen or set()
     packages: list[RenderedPythonPackage] = []
     for normalized, pkg in lockfile_pkgs.items():
         if normalized == own_name or normalized in seen:
             continue
         packages.append(_lockfile_only_python_package(pkg))
     return packages
+
+
+def _python_attribution_packages() -> list[RenderedPythonPackage]:
+    """Return Python attribution packages directly from uv.lock artifacts."""
+    lockfile_pkgs = _lockfile_registry_packages()
+    own_name = "nemo-flow"
+    packages = _lockfile_python_packages(lockfile_pkgs, own_name=own_name)
+    packages.sort(key=lambda r: (str(r["name"]).lower(), str(r["version"])))
+    return packages
+
+
+def _python_license_inventory() -> list[LicenseInventoryEntry]:
+    """Return minimal Python dependency license rows directly from uv.lock artifacts."""
+    lockfile_pkgs = _lockfile_registry_packages()
+    own_name = "nemo-flow"
+    return [
+        _rendered_python_package_inventory(pkg) for pkg in _lockfile_python_packages(lockfile_pkgs, own_name=own_name)
+    ]
 
 
 def cmd_rust() -> int:
@@ -652,33 +718,7 @@ def cmd_rust() -> int:
 def cmd_python() -> int:
     """Generate ATTRIBUTIONS-Python.md from the current locked install plus archive fallback."""
     out = ROOT / "ATTRIBUTIONS-Python.md"
-    pip_licenses_bin = ROOT / ".venv" / "bin" / "pip-licenses"
-
-    subprocess.run(["uv", "sync", "--all-groups", "--locked"], cwd=ROOT, check=True)  # noqa: S607
-    if not pip_licenses_bin.exists():
-        raise FileNotFoundError(f"pip-licenses not found after sync: {pip_licenses_bin}")
-    lockfile_pkgs = _lockfile_registry_packages()
-    own_name = "nemo-flow"
-
-    proc = subprocess.run(  # noqa: S603 - pip_licenses_bin is validated and comes from the local virtualenv.
-        [str(pip_licenses_bin), "-f", "json", "-u", "-l"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    rows: list[dict[str, str]] = json.loads(proc.stdout)
-
-    # First trust the current locked install: pip-licenses already knows how to
-    # interpret installed dist-info metadata and bundled license files.
-    packages, seen = _installed_python_packages(rows, lockfile_pkgs, own_name=own_name)
-
-    # Then backfill only the lockfile packages that pip-licenses did not report.
-    # This is common for packages skipped on the current platform or omitted by
-    # pip-licenses itself even though they are present in uv.lock.
-    packages.extend(_missing_lockfile_python_packages(lockfile_pkgs, seen, own_name=own_name))
-
-    packages.sort(key=lambda r: (str(r["name"]).lower(), str(r["version"])))
+    packages = _python_attribution_packages()
 
     parts: list[str] = [PYTHON_HEADER]
     for pkg in packages:
@@ -730,31 +770,82 @@ def _node_workspace_package_keys(lock: dict[str, Any]) -> set[str]:
     return keys
 
 
-def cmd_node() -> int:
-    """Generate ATTRIBUTIONS-Node.md from package-lock.json via license-checker."""
-    out = ROOT / "ATTRIBUTIONS-Node.md"
-    lock = cast(dict[str, Any], json.loads(NODE_LOCK.read_text(encoding="utf-8")))
+def _node_lockfile_path() -> Path:
+    """Return the Node.js package lockfile, preferring the workspace-root lockfile."""
+    root_lockfile = NODE / "package-lock.json"
+    if root_lockfile.exists():
+        return root_lockfile
+    return NODE / "crates" / "node" / "package-lock.json"
+
+
+def _node_license_checker_data() -> tuple[dict[str, dict[str, str]], set[str]]:
+    """Return license-checker package data and local package keys to omit."""
+    lockfile = _node_lockfile_path()
+    lock = cast(dict[str, Any], json.loads(lockfile.read_text(encoding="utf-8")))
     workspace_package_keys = _node_workspace_package_keys(lock)
 
-    subprocess.run(["npm", "ci", "--ignore-scripts"], cwd=ROOT, check=True)  # noqa: S607
+    subprocess.run(["npm", "ci", "--ignore-scripts"], cwd=lockfile.parent, check=True)  # noqa: S607
     proc = subprocess.run(
         ["npx", "--yes", "license-checker@25.0.1", "--json"],  # noqa: S607
-        cwd=ROOT,
+        cwd=lockfile.parent,
         capture_output=True,
         text=True,
         check=True,
     )
     data: dict[str, dict[str, str]] = json.loads(proc.stdout)
-    keys = sorted((key for key in data.keys() if key not in workspace_package_keys), key=lambda k: k.lower())
+    return data, workspace_package_keys
+
+
+def _node_package_name_from_lock_path(path: str) -> str:
+    """Infer an npm package name from a package-lock packages path."""
+    parts = path.replace("\\", "/").split("node_modules/")
+    return parts[-1].strip("/")
+
+
+def _split_node_package_key(key: str) -> tuple[str, str]:
+    """Split a license-checker package key into package name and version."""
+    idx = key.rfind("@")
+    if idx <= 0:
+        return key, ""
+    return key[:idx], key[idx + 1 :]
+
+
+def _node_license_inventory() -> list[LicenseInventoryEntry]:
+    """Return minimal Node.js dependency license rows directly from package-lock.json."""
+    lock = cast(dict[str, Any], json.loads(_node_lockfile_path().read_text(encoding="utf-8")))
+    packages = lock.get("packages") or {}
+    if not isinstance(packages, dict):
+        return []
+
+    rows: dict[tuple[str, str, str], LicenseInventoryEntry] = {}
+    for path, meta in packages.items():
+        normalized_path = str(path).replace("\\", "/")
+        if "node_modules" not in normalized_path.split("/"):
+            continue
+        if not isinstance(meta, dict):
+            continue
+        if meta.get("extraneous"):
+            continue
+        version = str(meta.get("version") or "")
+        if not version:
+            continue
+        name = str(meta.get("name") or _node_package_name_from_lock_path(normalized_path))
+        license_name = str(meta.get("license") or "UNKNOWN")
+        rows[(name, version, license_name)] = _license_inventory_entry(name, version, license_name)
+
+    return sorted(rows.values(), key=lambda row: (row["package"].lower(), row["version"], row["license"]))
+
+
+def cmd_node() -> int:
+    """Generate ATTRIBUTIONS-Node.md from package-lock.json via license-checker."""
+    out = ROOT / "ATTRIBUTIONS-Node.md"
+    data, workspace_package_keys = _node_license_checker_data()
+    package_rows = [(*_split_node_package_key(key), key) for key in data.keys() if key not in workspace_package_keys]
+    package_rows.sort(key=lambda row: (row[0].lower(), row[1]))
 
     parts: list[str] = [NODE_HEADER]
-    for key in keys:
+    for name, ver, key in package_rows:
         meta = data[key]
-        idx = key.rfind("@")
-        if idx <= 0:
-            name, ver = key, ""
-        else:
-            name, ver = key[:idx], key[idx + 1 :]
 
         lic = meta.get("licenses") or "UNKNOWN"
         repo = (meta.get("repository") or "").strip()

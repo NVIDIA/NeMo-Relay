@@ -18,13 +18,13 @@ The package declares both OpenClaw entrypoint styles:
 
 ```bash
 npm install --ignore-scripts
-npm run typecheck --workspace=@nvidia/nemo-flow-openclaw
-npm test --workspace=@nvidia/nemo-flow-openclaw
-npm run build --workspace=@nvidia/nemo-flow-openclaw
-npm run pack:check --workspace=@nvidia/nemo-flow-openclaw
+npm run typecheck --workspace=nemo-flow-openclaw
+npm test --workspace=nemo-flow-openclaw
+npm run build --workspace=nemo-flow-openclaw
+npm run pack:check --workspace=nemo-flow-openclaw
 ```
 
-`npm run build --workspace=@nvidia/nemo-flow-openclaw` emits production files
+`npm run build --workspace=nemo-flow-openclaw` emits production files
 under `integrations/openclaw/dist/`. Tests compile to
 `integrations/openclaw/.test-dist/` so test artifacts do not enter the
 installable package.
@@ -32,7 +32,7 @@ installable package.
 The optional live smoke test requires a working installed `nemo-flow-node` binding:
 
 ```bash
-npm run test:live --workspace=@nvidia/nemo-flow-openclaw
+npm run test:live --workspace=nemo-flow-openclaw
 ```
 
 ## Enablement
@@ -167,7 +167,7 @@ Use the output health independently:
 
 ## Packaging
 
-`npm run pack:check --workspace=@nvidia/nemo-flow-openclaw` builds a fresh
+`npm run pack:check --workspace=nemo-flow-openclaw` builds a fresh
 production `dist/`, runs `npm pack --dry-run`, and verifies that:
 
 - declared OpenClaw source and runtime entrypoints are present
