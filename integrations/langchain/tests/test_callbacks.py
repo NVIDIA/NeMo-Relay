@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -15,9 +15,9 @@ from langchain_nemo_flow import callbacks as callbacks_module
 from langchain_nemo_flow.callbacks import NemoFlowCallbackHandler
 
 
-def _make_mock_nemo_flow() -> ModuleType:
+def _make_mock_nemo_flow() -> MagicMock:
     """Build a minimal mock of the ``nemo_flow`` module."""
-    mock_nemo_flow = ModuleType("nemo_flow")
+    mock_nemo_flow = MagicMock(name="nemo_flow")
     mock_nemo_flow.ScopeType = SimpleNamespace(Agent="Agent")
 
     scope = SimpleNamespace()
@@ -35,21 +35,21 @@ def _make_mock_nemo_flow() -> ModuleType:
 
 
 @pytest.fixture()
-def mock_nemo_flow(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+def mock_nemo_flow(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     mock_nemo_flow = _make_mock_nemo_flow()
     monkeypatch.setattr(callbacks_module, "nemo_flow", mock_nemo_flow)
     return mock_nemo_flow
 
 
 @pytest.fixture()
-def handler(mock_nemo_flow: ModuleType) -> NemoFlowCallbackHandler:
+def handler(mock_nemo_flow: MagicMock) -> NemoFlowCallbackHandler:
     return NemoFlowCallbackHandler()
 
 
 class TestScopeLifecycle:
     """Verify that chain start/end/error map to scope push/pop."""
 
-    def test_on_chain_start_pushes_scope(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: ModuleType) -> None:
+    def test_on_chain_start_pushes_scope(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock) -> None:
         run_id = uuid4()
 
         handler.on_chain_start(
@@ -69,7 +69,7 @@ class TestScopeLifecycle:
         }
         assert run_id in handler._scope_handles
 
-    def test_on_chain_end_pops_scope(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: ModuleType) -> None:
+    def test_on_chain_end_pops_scope(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock) -> None:
         run_id = uuid4()
         handler.on_chain_start(
             {"name": "MyChain"},
@@ -86,7 +86,7 @@ class TestScopeLifecycle:
         mock_nemo_flow.scope.pop.assert_called_once_with(handle, output={"output": "result"})
         assert run_id not in handler._scope_handles
 
-    def test_on_chain_error_pops_scope(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: ModuleType) -> None:
+    def test_on_chain_error_pops_scope(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock) -> None:
         run_id = uuid4()
         handler.on_chain_start(
             {"name": "MyChain"},
@@ -103,7 +103,7 @@ class TestScopeLifecycle:
         mock_nemo_flow.scope.pop.assert_called_once_with(handle, output={"error": "RuntimeError('boom')"})
         assert run_id not in handler._scope_handles
 
-    def test_parent_scope_passed_to_push(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: ModuleType) -> None:
+    def test_parent_scope_passed_to_push(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock) -> None:
         parent_id = uuid4()
         child_id = uuid4()
         handler.on_chain_start(
@@ -124,7 +124,7 @@ class TestScopeLifecycle:
         assert child_call.kwargs["handle"] is parent_handle
 
     def test_chain_end_without_start_is_noop(
-        self, handler: NemoFlowCallbackHandler, mock_nemo_flow: ModuleType
+        self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock
     ) -> None:
         handler.on_chain_end(
             {"output": "result"},
@@ -133,7 +133,7 @@ class TestScopeLifecycle:
 
         mock_nemo_flow.scope.pop.assert_not_called()
 
-    def test_name_fallback_to_id(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: ModuleType) -> None:
+    def test_name_fallback_to_id(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock) -> None:
         run_id = uuid4()
 
         handler.on_chain_start(
@@ -170,13 +170,13 @@ class TestGracefulNoOp:
 class TestErrorSwallowing:
     """Ensure NeMo Flow errors never propagate."""
 
-    def test_scope_push_error_swallowed(self, mock_nemo_flow: ModuleType) -> None:
+    def test_scope_push_error_swallowed(self, mock_nemo_flow: MagicMock) -> None:
         mock_nemo_flow.scope.push.side_effect = RuntimeError("nemo flow failure")
         handler = NemoFlowCallbackHandler()
 
         handler.on_chain_start({"name": "x"}, {}, run_id=uuid4())
 
-    def test_scope_pop_error_swallowed(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: ModuleType) -> None:
+    def test_scope_pop_error_swallowed(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock) -> None:
         run_id = uuid4()
         handler.on_chain_start({"name": "x"}, {}, run_id=run_id)
         mock_nemo_flow.scope.pop.side_effect = RuntimeError("nemo flow failure")
