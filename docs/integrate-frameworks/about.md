@@ -41,6 +41,7 @@ Use these guide links to move from the overview into task-specific instructions.
 - [Advanced Guide: Using Codecs](using-codecs.md) explains typed value codecs for framework-facing wrappers.
 - [Advanced Guide: Provider Codecs](provider-codecs.md) explains provider request and response codecs for normalized middleware and event annotations.
 - [Advanced Guide: Provider Response Codecs](provider-response-codecs.md) focuses on response-only annotations for subscribers and exporters.
+- [OpenCode Plugin](opencode.md) explains how to install and configure the standalone OpenCode observability plugin.
 - [Code Examples](code-examples.md) collects fallback APIs, mark events, and repository patch workflow examples.
 
 Start by identifying the framework's stable tool and LLM boundaries. Prefer

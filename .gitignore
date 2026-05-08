@@ -90,3 +90,5 @@ CHANGELOG.md
 
 crates/wasm/coverage/
 .scannerwork/
+
+**/.nemoflow/
