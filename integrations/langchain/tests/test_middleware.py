@@ -15,6 +15,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.tools import tool
 from nemo_flow.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 from langchain_nemo_flow import _serialization
@@ -22,14 +23,19 @@ from langchain_nemo_flow.middleware import NemoFlowMiddleware
 
 _DEFAULT_MOCK_RESPONSE_MSG = "nemo_flow unittest result"
 
-def _mk_mock_model(returned_message: str = _DEFAULT_MOCK_RESPONSE_MSG) -> MagicMock:
-    msg = AIMessage(content=returned_message)
-
+def _mk_mock_model(returned_message: str | list[AIMessage] = _DEFAULT_MOCK_RESPONSE_MSG) -> MagicMock:
     mock_model = MagicMock(spec=BaseChatModel)
     mock_model.bind.return_value = mock_model
+    mock_model.bind_tools.return_value = mock_model
     mock_model.model = "mock-model"
-    mock_model.invoke.return_value = msg
-    mock_model.ainvoke = AsyncMock(return_value=msg)
+
+    if isinstance(returned_message, str):
+        msg = AIMessage(content=returned_message)
+        mock_model.invoke.return_value = msg
+        mock_model.ainvoke = AsyncMock(return_value=msg)
+    else:
+        mock_model.invoke.side_effect = list(returned_message)
+        mock_model.ainvoke = AsyncMock(side_effect=list(returned_message))
 
     return mock_model
 
@@ -217,12 +223,32 @@ def test_infer_codec_from_supported_model_classes(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.parametrize("use_async", [False, True])
-def test_wrap_model_integration_test(use_async: bool) -> None:
+def test_agent_integration(use_async: bool) -> None:
     """An integration test to verify that the middleware correctly wraps a model call end-to-end."""
-    mock_model = _mk_mock_model()
+    model_responses = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "get_weather",
+                    "args": {"location": "San Francisco"},
+                    "id": "call-1",
+                }
+            ]
+        ),
+        AIMessage(content=_DEFAULT_MOCK_RESPONSE_MSG)
+    ]
+
+    mock_model = _mk_mock_model(model_responses)
+
+    @tool
+    def get_weather(location: str) -> str:
+        """Get the current weather for a location."""
+        return f"The weather in {location} is sunny and 72 degrees."
 
     agent = create_agent(
         model=mock_model,
+        tools=[get_weather],
         middleware=[NemoFlowMiddleware()]
     )
 
@@ -238,6 +264,10 @@ def test_wrap_model_integration_test(use_async: bool) -> None:
     events = []
     expected_events = [
         "scope.start.langchain-request",
+        "scope.start.mock-model",
+        "scope.end.mock-model",
+        "scope.start.get_weather",
+        "scope.end.get_weather",
         "scope.start.mock-model",
         "scope.end.mock-model",
         "scope.end.langchain-request",
@@ -257,5 +287,8 @@ def test_wrap_model_integration_test(use_async: bool) -> None:
     finally:
         nemo_flow.subscribers.deregister("event_recorder")
 
-    assert result['messages'][-1].content == _DEFAULT_MOCK_RESPONSE_MSG
+    assert any(
+        message.content == "The weather in San Francisco is sunny and 72 degrees." for message in result["messages"]
+    )
+    assert result["messages"][-1].content == _DEFAULT_MOCK_RESPONSE_MSG
     assert events == expected_events
