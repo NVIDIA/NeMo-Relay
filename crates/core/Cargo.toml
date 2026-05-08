@@ -57,7 +57,7 @@ opentelemetry = { version = "0.31", default-features = false, features = ["trace
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"], optional = true }
 openinference-semantic-conventions = { version = "0.1.1", optional = true }
 async-trait = { version = "0.1", optional = true }
-getrandom = { version = "0.4.2", features = ["wasm_js"], optional = true }
+getrandom = { version = "0.3.4", features = ["wasm_js"], optional = true }
 js-sys = { version = "0.3", optional = true }
 opentelemetry-http = { version = "0.31", default-features = false, optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
