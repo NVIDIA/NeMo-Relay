@@ -3,8 +3,8 @@
 
 """NeMo Flow integrations for LangChain."""
 
-from langchain_nemo_flow.callbacks import NemoFlowCallbackHandler
-from langchain_nemo_flow.middleware import NemoFlowMiddleware
+from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler
+from nemo_flow.integrations.langchain.middleware import NemoFlowMiddleware
 
 __all__ = [
     "NemoFlowCallbackHandler",

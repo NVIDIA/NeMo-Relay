@@ -9,17 +9,17 @@ import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import nemo_flow
 import pytest
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
-from nemo_flow.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
-from langchain_nemo_flow import _serialization
-from langchain_nemo_flow.middleware import NemoFlowMiddleware
+import nemo_flow
+from nemo_flow.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
+from nemo_flow.integrations.langchain import _serialization
+from nemo_flow.integrations.langchain.middleware import NemoFlowMiddleware
 
 _DEFAULT_MOCK_RESPONSE_MSG = "nemo_flow unittest result"
 

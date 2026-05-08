@@ -12,7 +12,7 @@ The patch touches LangChain Core callbacks/tools plus the OpenAI and Anthropic
 partner packages. It adds optional NeMo Flow request, streaming, and callback
 bridges that no-op when `nemo_flow` is unavailable or no scope stack is active.
 
-For an alternate approach refer to [the public API-based integration in `integrations/langchain`](../integrations/langchain/README.md).
+For an alternate approach refer to [the public API-based integration in `python/nemo_flow/integrations/langchain`](../python/nemo_flow/integrations/langchain/README.md).
 
 ## Setup
 

@@ -11,8 +11,8 @@ from uuid import uuid4
 
 import pytest
 
-from langchain_nemo_flow import callbacks as callbacks_module
-from langchain_nemo_flow.callbacks import NemoFlowCallbackHandler
+from nemo_flow.integrations.langchain import callbacks as callbacks_module
+from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler
 
 
 def _make_mock_nemo_flow() -> MagicMock:

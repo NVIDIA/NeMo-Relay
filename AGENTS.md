@@ -233,7 +233,7 @@ Use the stable root-level wrappers:
 Some integrations can be implemented using public APIs without patching. These implementations are maintained under `integrations/` with their own README files and test suites.
 
 Current public API-based integrations include:
-- LangChain: `integrations/langchain`
+- LangChain: `python/nemo_flow/integrations/langchain`
 
 ## Documentation And Contribution Workflow
 

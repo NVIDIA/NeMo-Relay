@@ -635,7 +635,7 @@ build-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_FLOW_REPO_ROOT"
-    uv sync --inexact --no-install-project --no-install-package nemo-flow --no-install-package langchain-nemo-flow
+    uv sync --inexact --no-install-project --no-install-package nemo-flow
     activate_project_venv
     if is_true "{{ ci }}"; then
         prepare_llvm_cov_workspace
@@ -644,7 +644,6 @@ build-python:
     pushd "$NEMO_FLOW_REPO_ROOT/python"
     "$python_executable" -m maturin develop
     popd
-    uv pip install --python "$python_executable" --editable $NEMO_FLOW_REPO_ROOT/integrations/langchain
 
 
 # --set [ci=true|false]
@@ -763,14 +762,13 @@ test-python:
         fi
         cargo test -p nemo-flow-python --lib
     fi
-    uv sync --inexact --no-install-project --no-install-package nemo-flow --no-install-package langchain-nemo-flow
+    uv sync --inexact --no-install-project --no-install-package nemo-flow
     activate_project_venv
     python_executable="$(project_python_executable)"
     use_project_python_source "$python_executable"
     pushd "$NEMO_FLOW_REPO_ROOT/python"
     "$python_executable" -m maturin develop --skip-install
     popd
-    uv pip install --python "$python_executable" --editable $NEMO_FLOW_REPO_ROOT/integrations/langchain
     "$python_executable" -m "${pytest_cmd[@]}"
     if is_true "{{ ci }}" && [[ -n "$rust_coverage_out" ]]; then
         cargo llvm-cov report \

@@ -44,7 +44,9 @@ Repository = "https://github.com/NVIDIA/NeMo-Flow"
 [dependency-groups]
 libs = [
     "nemo-flow",
-    "langchain-nemo-flow[nvidia]",
+    "langchain>=1.2.11,<2.0.0",
+    "langchain-core",
+    "langchain-nvidia-ai-endpoints",
 ]
 
 dev = [
@@ -81,20 +83,19 @@ default-groups = ["dev", "libs", "test"]
 package = false
 
 [tool.uv.sources]
-langchain-nemo-flow = { workspace = true }
 nemo-flow = { workspace = true }
 
 [tool.uv.workspace]
-members = ["python", "integrations/*"]
+members = ["python"]
 
 [tool.pytest.ini_options]
-testpaths = ["python/tests", "integrations/langchain/tests", "third_party/langgraph_tests"]
+testpaths = ["python/tests", "third_party/langgraph_tests"]
 asyncio_mode = "auto"
 
 [tool.ty.analysis]
 # nemo_flow._native is a compiled Rust extension (built by maturin) that only
 # exists after `uv sync` / `pip install -e .`. Suppress unresolved-import for it.
-# LangChain and LangGraph are dependencies of integrations/langchain which aren't installed by default
+# LangChain and LangGraph are optional integration dependencies which aren't installed by default.
 allowed-unresolved-imports = ["langchain.**", "langchain_*.**", "langgraph.**", "nemo_flow._native", "pytest"]
 
 [tool.ruff]

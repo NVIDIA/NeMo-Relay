@@ -8,11 +8,10 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-import nemo_flow
 from langchain.agents.middleware import AgentMiddleware
-from nemo_flow.utils import run_sync
 
-from langchain_nemo_flow._serialization import (
+import nemo_flow
+from nemo_flow.integrations.langchain._serialization import (
     get_model_name,
     infer_codec_from_model,
     model_request_to_payload,
@@ -20,11 +19,13 @@ from langchain_nemo_flow._serialization import (
     model_response_to_json,
     payload_to_model_request,
 )
+from nemo_flow.utils import run_sync
 
 if TYPE_CHECKING:
     from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
     from langchain_core.messages import ToolMessage
     from langgraph.types import Command
+
     from nemo_flow.codecs import LlmCodec, LlmResponseCodec
 
 

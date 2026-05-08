@@ -5,19 +5,17 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Flow LangChain Integration
 
-This directory contains the `langchain_nemo_flow` package which provides observability integration for LangChain.
+This directory contains the `nemo_flow.integrations.langchain` package which provides observability integration for LangChain.
 
 The intent of this project is to enable as much NeMo Flow functionality as possible using public LangChain APIs without requiring changes to LangChain itself.
 
-For an alternate approach refer to [the patch-based integration in `third_party/langchain`](../../third_party/README-langchain.md).
+For an alternate approach refer to [the patch-based integration in `third_party/langchain`](../../../../third_party/README-langchain.md).
 
 ## Setup
 
 ```bash
-uv venv .venv
-. .venv/bin/activate
-uv pip install -e .
-uv pip install -e integrations/langchain
+uv sync --all-groups --all-extras
+just build-python
 ```
 
 Optionally install the langchain-nvidia-ai-endpoints package.
@@ -34,7 +32,7 @@ import asyncio
 import nemo_flow
 from langchain.agents import create_agent
 from langchain_core.tools import tool
-from langchain_nemo_flow import NemoFlowCallbackHandler, NemoFlowMiddleware
+from nemo_flow.integrations.langchain import NemoFlowCallbackHandler, NemoFlowMiddleware
 
 @tool
 def get_weather(location: str) -> str:
@@ -66,9 +64,8 @@ print(f"Final response: {final_message.content}")
 
 ## Validation
 
-Run tests for the `langchain_nemo_flow` package to validate the integration:
+Run tests for the LangChain integration package to validate the integration:
 
 ```bash
-cd integrations/langchain
-uv run --group test pytest -q
+uv run pytest python/tests/integrations/langchain
 ```

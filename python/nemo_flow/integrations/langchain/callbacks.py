@@ -8,8 +8,9 @@ from __future__ import annotations
 import logging
 import typing
 
-import nemo_flow
 from langchain_core.callbacks.base import BaseCallbackHandler
+
+import nemo_flow
 
 if typing.TYPE_CHECKING:
     from uuid import UUID

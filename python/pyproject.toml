@@ -41,6 +41,17 @@ Homepage = "https://github.com/NVIDIA/NeMo-Flow"
 Issues = "https://github.com/NVIDIA/NeMo-Flow/issues"
 Repository = "https://github.com/NVIDIA/NeMo-Flow"
 
+[project.optional-dependencies]
+langchain = [
+    "langchain>=1.2.11,<2.0.0",
+    "langchain-core",
+]
+langchain-nvidia = [
+    "langchain>=1.2.11,<2.0.0",
+    "langchain-core",
+    "langchain-nvidia-ai-endpoints",
+]
+
 [tool.maturin]
 manifest-path = "../crates/python/Cargo.toml"
 python-source = "."

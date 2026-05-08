@@ -36,7 +36,7 @@ except ImportError:
 
 from nemo_flow.codecs import AnthropicMessagesCodec, LlmCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
-LANGCHAIN_MODEL_RESPONSE_KEY = "__langchain_nemo_flow_model_response"
+LANGCHAIN_MODEL_RESPONSE_KEY = "__nemo_flow_integrations_langchain_model_response"
 
 
 def get_model_name(model: Any) -> str | None:
