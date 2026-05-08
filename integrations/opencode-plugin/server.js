@@ -21,9 +21,15 @@ const RELEVANT_EVENTS = new Set([
   "message.part.removed",
 ])
 
+/**
+ * Create the plugin logger.
+ */
 function createLogger(logPath) {
   const seen = new Set()
 
+  /**
+   * Write one diagnostic record to the configured log destination.
+   */
   async function write(level, message, extra) {
     const record = {
       timestamp: new Date().toISOString(),
@@ -56,16 +62,25 @@ function createLogger(logPath) {
   }
 }
 
+/**
+ * Ensure the parent directory for an output file exists.
+ */
 async function ensureParentDir(filePath) {
   await fs.mkdir(path.dirname(filePath), { recursive: true })
 }
 
+/**
+ * Resolve a plugin output path relative to the OpenCode project directory.
+ */
 function resolveOutputPath(baseDir, value) {
   if (typeof value !== "string" || value.trim() === "") return undefined
   if (path.isAbsolute(value)) return value
   return path.resolve(baseDir, value)
 }
 
+/**
+ * Normalize OpenCode plugin options into concrete runtime settings.
+ */
 function normalizeOptions(input, options = {}) {
   const baseDir = input?.directory ?? process.cwd()
   return {
@@ -76,6 +91,9 @@ function normalizeOptions(input, options = {}) {
   }
 }
 
+/**
+ * Convert arbitrary OpenCode hook payloads into JSON-safe data.
+ */
 function toJsonSafe(value) {
   if (value === undefined) return null
   if (value instanceof Error) {
@@ -108,6 +126,9 @@ function toJsonSafe(value) {
   }
 }
 
+/**
+ * Format OpenCode model metadata as a stable provider/model string.
+ */
 function modelName(model) {
   if (!model) return undefined
   const provider = model.providerID ?? model.provider?.id
@@ -117,6 +138,9 @@ function modelName(model) {
   return undefined
 }
 
+/**
+ * Read the OpenCode agent name from hook input or event metadata.
+ */
 function agentName(input, fallback = "opencode") {
   if (typeof input?.agent === "string" && input.agent) return input.agent
   if (typeof input?.message?.agent === "string" && input.message.agent) return input.message.agent
@@ -124,11 +148,17 @@ function agentName(input, fallback = "opencode") {
   return fallback
 }
 
+/**
+ * Read the OpenCode session ID from a bus event payload.
+ */
 function eventSessionID(event) {
   const props = event?.properties
   return props?.sessionID ?? props?.info?.id
 }
 
+/**
+ * Build metadata attached to the NeMo Flow session scope.
+ */
 function inputSessionMetadata(sessionID, state) {
   return {
     source: "opencode",
@@ -138,6 +168,9 @@ function inputSessionMetadata(sessionID, state) {
   }
 }
 
+/**
+ * Build common metadata for OpenCode-derived NeMo Flow marks.
+ */
 function eventMetadata(session, extra = {}) {
   return {
     agent: session?.agent,
@@ -146,6 +179,9 @@ function eventMetadata(session, extra = {}) {
   }
 }
 
+/**
+ * Decide whether an OpenCode event should flush the ATIF trajectory.
+ */
 function shouldFlushEvent(event) {
   if (!event) return false
   if (event.type === "session.deleted" || event.type === "session.idle") return true
@@ -153,6 +189,9 @@ function shouldFlushEvent(event) {
   return event.properties?.status?.type === "idle"
 }
 
+/**
+ * Create the NeMo Flow adapter behind the OpenCode plugin hooks.
+ */
 function createNemoFlowAdapter(lib, options, logger) {
   const sessions = new Map()
   const recentFlushes = new Map()
@@ -161,6 +200,9 @@ function createNemoFlowAdapter(lib, options, logger) {
   let atofDeregisterTimer
   let closed = false
 
+  /**
+   * Register the process-local ATOF JSONL subscriber on first use.
+   */
   function registerAtOfJsonlExporter() {
     if (atofDeregisterTimer) {
       clearTimeout(atofDeregisterTimer)
@@ -175,6 +217,9 @@ function createNemoFlowAdapter(lib, options, logger) {
     void logger.info("registered ATOF JSONL exporter", { path: options.atofPath })
   }
 
+  /**
+   * Deregister the ATOF JSONL subscriber after the last session closes.
+   */
   function deregisterAtOfJsonlExporter() {
     if (atofDeregisterTimer) {
       clearTimeout(atofDeregisterTimer)
@@ -190,6 +235,9 @@ function createNemoFlowAdapter(lib, options, logger) {
     }
   }
 
+  /**
+   * Delay ATOF subscriber cleanup so adjacent events can still flush.
+   */
   function scheduleAtOfJsonlExporterDeregister() {
     if (!atofSubscriberName || atofDeregisterTimer) return
     atofDeregisterTimer = setTimeout(() => {
@@ -197,6 +245,9 @@ function createNemoFlowAdapter(lib, options, logger) {
     }, 250)
   }
 
+  /**
+   * Run a callback with the session scope stack active when supported.
+   */
   function withStack(session, callback) {
     if (!session.stack || typeof lib.setThreadScopeStack !== "function") return callback()
     const previous = typeof lib.currentScopeStack === "function" ? lib.currentScopeStack() : undefined
@@ -208,6 +259,9 @@ function createNemoFlowAdapter(lib, options, logger) {
     }
   }
 
+  /**
+   * Create or update the NeMo Flow session state for an OpenCode session.
+   */
   function ensureSession(sessionID, metadata = {}) {
     if (!sessionID) return undefined
     registerAtOfJsonlExporter()
@@ -252,6 +306,9 @@ function createNemoFlowAdapter(lib, options, logger) {
     return session
   }
 
+  /**
+   * Emit an OpenCode milestone as a NeMo Flow mark event.
+   */
   function emitMark(session, name, data, metadata = {}) {
     if (!session?.scope) return
     lib.event(
@@ -267,6 +324,9 @@ function createNemoFlowAdapter(lib, options, logger) {
     )
   }
 
+  /**
+   * Write all collected ATIF trajectories to the configured file.
+   */
   function writeAtifFile() {
     if (!options.atifPath) return
     const payload = trajectories.length === 1 ? trajectories[0] : { trajectories }
@@ -274,6 +334,9 @@ function createNemoFlowAdapter(lib, options, logger) {
     fsSync.writeFileSync(options.atifPath, JSON.stringify(payload, null, 2))
   }
 
+  /**
+   * Close an OpenCode session scope and export its trajectory.
+   */
   function flushSession(sessionID, reason) {
     const session = sessions.get(sessionID)
     if (!session) return
@@ -318,6 +381,9 @@ function createNemoFlowAdapter(lib, options, logger) {
   }
 
   return {
+    /**
+     * Record OpenCode configuration context for diagnostics.
+     */
     async recordConfig(config) {
       if (closed) return
       await logger.info("observed OpenCode config", {
@@ -326,6 +392,9 @@ function createNemoFlowAdapter(lib, options, logger) {
       })
     },
 
+    /**
+     * Record relevant OpenCode bus events as NeMo Flow marks.
+     */
     async recordEvent(event) {
       if (closed || !RELEVANT_EVENTS.has(event?.type)) return
       const sessionID = eventSessionID(event)
@@ -352,6 +421,9 @@ function createNemoFlowAdapter(lib, options, logger) {
       }
     },
 
+    /**
+     * Record user message metadata for the current OpenCode turn.
+     */
     async recordChatMessage(input, output) {
       if (closed) return
       const session = ensureSession(input.sessionID, {
@@ -371,6 +443,9 @@ function createNemoFlowAdapter(lib, options, logger) {
       )
     },
 
+    /**
+     * Record model and provider metadata near the LLM request boundary.
+     */
     async recordChatParams(input, output) {
       if (closed) return
       const session = ensureSession(input.sessionID, {
@@ -394,6 +469,9 @@ function createNemoFlowAdapter(lib, options, logger) {
       )
     },
 
+    /**
+     * Start a NeMo Flow tool span for an OpenCode tool call.
+     */
     async recordToolBefore(input, output) {
       if (closed) return
       const session = ensureSession(input.sessionID)
@@ -412,6 +490,9 @@ function createNemoFlowAdapter(lib, options, logger) {
       session.pendingTools.set(input.callID, { handle, callID: input.callID, tool: input.tool, args })
     },
 
+    /**
+     * Finish a successful NeMo Flow tool span for an OpenCode tool call.
+     */
     async recordToolAfter(input, output) {
       if (closed) return
       const session = ensureSession(input.sessionID)
@@ -445,6 +526,9 @@ function createNemoFlowAdapter(lib, options, logger) {
       session.pendingTools.delete(input.callID)
     },
 
+    /**
+     * Flush open sessions and unregister exporters during plugin shutdown.
+     */
     async close() {
       closed = true
       for (const sessionID of [...sessions.keys()]) {
@@ -455,6 +539,9 @@ function createNemoFlowAdapter(lib, options, logger) {
   }
 }
 
+/**
+ * Load the default NeMo Flow Node.js runtime.
+ */
 async function loadDefaultRuntime() {
   if (process.env.NEMO_FLOW_OPENCODE_FORCE_INIT_FAILURE === "1") {
     throw new Error("forced initialization failure")
@@ -463,6 +550,9 @@ async function loadDefaultRuntime() {
   return mod.default ?? mod
 }
 
+/**
+ * Create the OpenCode server plugin entrypoint.
+ */
 export function createServerPlugin({ loadRuntime = loadDefaultRuntime } = {}) {
   return async function server(input, options) {
     const normalized = normalizeOptions(input, options)
