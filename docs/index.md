@@ -165,6 +165,7 @@ Advanced Guide: Handle Non-Serializable Data <integrate-frameworks/non-serializa
 Advanced Guide: Using Codecs <integrate-frameworks/using-codecs>
 Advanced Guide: Provider Codecs <integrate-frameworks/provider-codecs>
 Advanced Guide: Provider Response Codecs <integrate-frameworks/provider-response-codecs>
+OpenCode Plugin <integrate-frameworks/opencode>
 Code Examples <integrate-frameworks/code-examples>
 ```
 
