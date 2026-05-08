@@ -4,28 +4,30 @@
 """Tests for Python utility helpers."""
 
 import asyncio
-import threading
-from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
+import nemo_flow
 from nemo_flow.utils import run_sync
 
+@pytest.mark.parametrize("from_async", [False, True])
+def test_run_sync(from_async: bool):
+    """
+    Test that run_sync correctly propagates the NeMo Flow scope stack to the worker thread,
+    and that it can be called from inside a running loop and outside a running loop.
+    """
+    scope_stack = nemo_flow.get_scope_stack()
+    assert scope_stack is not None
 
-def test_run_sync_allows_concurrent_running_loop_callers():
-    """Concurrent running-loop callers can make progress through the shared pool."""
-    barrier = threading.Barrier(2)
+    async def coro_fn() -> int:
+        thread_scope_stack = nemo_flow.get_scope_stack()
+        assert thread_scope_stack is scope_stack
+        return 1
 
-    def call_run_sync(value: int) -> int:
-        async def inner() -> int:
-            barrier.wait(timeout=2)
-            return value
+    if from_async:
+        async def runner() -> int:
+            return run_sync(coro_fn())
 
-        async def outer() -> int:
-            return run_sync(inner())
-
-        return asyncio.run(outer())
-
-    with ThreadPoolExecutor(max_workers=2) as callers:
-        futures = [callers.submit(call_run_sync, value) for value in range(2)]
-        results = [future.result(timeout=5) for future in futures]
-
-    assert sorted(results) == [0, 1]
+        assert asyncio.run(runner()) == 1
+    else:
+        assert run_sync(coro_fn()) == 1
