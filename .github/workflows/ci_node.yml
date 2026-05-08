@@ -92,7 +92,6 @@ jobs:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
       - name: Run Node tests with coverage
-        if: ${{ inputs.run_node }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-node
 
