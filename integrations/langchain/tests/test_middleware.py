@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import nemo_flow
 import pytest
+from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -18,6 +19,18 @@ from nemo_flow.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResp
 
 from langchain_nemo_flow import _serialization
 from langchain_nemo_flow.middleware import NemoFlowMiddleware
+
+_DEFAULT_MOCK_RESPONSE_MSG = "nemo_flow unittest result"
+
+def _mk_mock_model(returned_message: str = _DEFAULT_MOCK_RESPONSE_MSG) -> MagicMock:
+    msg = AIMessage(content=returned_message)
+
+    mock_model = MagicMock(spec=BaseChatModel)
+    mock_model.model = "mock-model"
+    mock_model.invoke.return_value = msg
+    mock_model.ainvoke = AsyncMock(return_value=msg)
+
+    return mock_model
 
 
 class RecordingMiddleware(NemoFlowMiddleware):
@@ -52,11 +65,10 @@ class RecordingMiddleware(NemoFlowMiddleware):
 
 
 def _model_request() -> ModelRequest[Any]:
-    fake_model = MagicMock(spec=BaseChatModel)
-    fake_model.model = "fake-model"
+    mock_model = _mk_mock_model()
 
     return ModelRequest(
-        model=fake_model,
+        model=mock_model,
         messages=[HumanMessage(content="hello")],
         model_settings={"temperature": 1.0},
     )
@@ -85,8 +97,8 @@ def test_wrap_model_call_routes_through_llm_execute() -> None:
     assert response.result[0].content == "done"
     assert seen_request is not None
     assert seen_request.model_settings == {"temperature": 0.25}
-    assert middleware.calls[0]["model_name"] == "fake-model"
-    assert middleware.calls[0]["request"].content["model"] == "fake-model"
+    assert middleware.calls[0]["model_name"] == "mock-model"
+    assert middleware.calls[0]["request"].content["model"] == "mock-model"
     assert middleware.calls[0]["codec"] is None
     assert middleware.calls[0]["response_codec"] is None
 
@@ -105,8 +117,8 @@ def test_awrap_model_call_routes_through_llm_execute() -> None:
     assert response.result[0].content == "done"
     assert seen_request is not None
     assert seen_request.model_settings == {"temperature": 0.25}
-    assert middleware.calls[0]["model_name"] == "fake-model"
-    assert middleware.calls[0]["request"].content["model"] == "fake-model"
+    assert middleware.calls[0]["model_name"] == "mock-model"
+    assert middleware.calls[0]["request"].content["model"] == "mock-model"
     assert middleware.calls[0]["codec"] is None
     assert middleware.calls[0]["response_codec"] is None
 
@@ -201,3 +213,29 @@ def test_infer_codec_from_supported_model_classes(monkeypatch: pytest.MonkeyPatc
         OpenAIResponsesCodec,
     )
     assert _serialization.infer_codec_from_model(object()) is None
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_wrap_model_integration_test(use_async: bool) -> None:
+    """An integration test to verify that the middleware correctly wraps a model call end-to-end."""
+    mock_model = _mk_mock_model()
+
+    agent = create_agent(
+        model=mock_model,
+        middleware=[NemoFlowMiddleware()]
+    )
+
+    input_payload = {
+        "messages": [
+            {
+                "role": "user",
+                "content": "What is the weather in San Francisco?",
+            }
+        ]
+    }
+
+    with nemo_flow.scope.scope("langchain-request", nemo_flow.ScopeType.Agent):
+        if use_async:
+            result = asyncio.run(agent.ainvoke(input_payload))
+        else:
+            result = agent.invoke(input_payload)
