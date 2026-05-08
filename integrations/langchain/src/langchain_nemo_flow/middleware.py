@@ -66,27 +66,6 @@ class NemoFlowMiddleware(AgentMiddleware):
             response_codec=response_codec,
         )
 
-    async def _llm_stream_execute(
-        self,
-        model_name: str,
-        request: nemo_flow.LLMRequest,
-        func: Callable[..., Any],
-        collector: Callable[[Any], None],
-        finalizer: Callable[[], Any],
-        codec: LlmCodec | None,
-        response_codec: LlmResponseCodec | None,
-    ) -> Any:
-        """Execute a streaming LLM call through the NeMo Flow pipeline."""
-        return await nemo_flow.llm.stream_execute(
-            model_name,
-            request,
-            func,
-            collector,
-            finalizer,
-            model_name=model_name,
-            codec=codec,
-            response_codec=response_codec,
-        )
 
     def _prepare_model_call(self, request: ModelRequest[Any]) -> tuple:
         """Boilerplate code common to both wrap_model_call and awrap_model_call"""
