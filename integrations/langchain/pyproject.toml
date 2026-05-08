@@ -40,7 +40,7 @@ classifiers = [
 [tool.setuptools_dynamic_dependencies]
 dependencies = [
     # Minimum version to support they hooks we are using
-    "langchain>=1.2.9,<2.0.0",
+    "langchain>=1.2.11,<2.0.0",
     # Allow the langchain to dictate the version of langchain-core, not strictly needed
     # but we do import from langchain_core
     "langchain-core",
