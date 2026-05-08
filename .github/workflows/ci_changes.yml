@@ -39,6 +39,9 @@ on:
       run_node:
         description: 'Whether Node.js jobs should run'
         value: ${{ jobs.changes.outputs.run_node }}
+      run_openclaw:
+        description: 'Whether OpenClaw integration jobs should run'
+        value: ${{ jobs.changes.outputs.run_openclaw }}
       run_python:
         description: 'Whether Python jobs should run'
         value: ${{ jobs.changes.outputs.run_python }}
@@ -62,6 +65,7 @@ jobs:
       run_docs: ${{ (inputs.full_ci || startsWith(inputs.ref_name, 'pull-request/')) && (inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.docs == 'true') }}
       run_go: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.go == 'true' }}
       run_node: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.node == 'true' }}
+      run_openclaw: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.openclaw == 'true' }}
       run_python: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.python == 'true' }}
       run_rust: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.rust == 'true' }}
       run_wasm: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.wasm == 'true' }}

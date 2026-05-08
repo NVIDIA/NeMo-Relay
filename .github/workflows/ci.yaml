@@ -186,7 +186,7 @@ jobs:
     name: Node.js
     needs: [prepare, ci_changes, ci_check]
     uses: ./.github/workflows/ci_node.yml
-    if: ${{ needs.ci_check.result == 'success' && needs.ci_changes.outputs.run_node == 'true' }}
+    if: ${{ needs.ci_check.result == 'success' && (needs.ci_changes.outputs.run_node == 'true' || needs.ci_changes.outputs.run_openclaw == 'true') }}
     permissions:
       contents: read
     secrets:
@@ -194,6 +194,8 @@ jobs:
     with:
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
+      run_node: ${{ needs.ci_changes.outputs.run_node == 'true' }}
+      run_openclaw: ${{ needs.ci_changes.outputs.run_openclaw == 'true' }}
 
   ci_python:
     name: Python

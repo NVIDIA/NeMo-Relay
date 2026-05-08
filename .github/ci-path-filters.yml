@@ -66,8 +66,10 @@ node:
   - 'crates/node/*.js'
   - 'crates/node/src/**'
   - 'crates/node/tests/**/*.mjs'
-  - 'integrations/openclaw/**'
   - 'scripts/test-support/**'
+
+openclaw:
+  - 'integrations/openclaw/**'
 
 python:
   - 'crates/python/Cargo.toml'

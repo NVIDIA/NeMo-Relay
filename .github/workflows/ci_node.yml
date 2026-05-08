@@ -14,6 +14,16 @@ on:
         description: 'The ref name from the triggering workflow'
         required: true
         type: string
+      run_node:
+        description: 'Whether to run Node.js package tests and packaging'
+        required: false
+        default: true
+        type: boolean
+      run_openclaw:
+        description: 'Whether to run OpenClaw integration checks'
+        required: false
+        default: false
+        type: boolean
     secrets:
       CODECOV_TOKEN:
         required: false
@@ -82,16 +92,18 @@ jobs:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
       - name: Run Node tests with coverage
+        if: ${{ inputs.run_node }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-node
 
       - name: Run OpenClaw integration checks
+        if: ${{ inputs.run_openclaw }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: just --set ci true test-openclaw
 
       - name: Upload Node coverage to Codecov
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
-        if: ${{ !startsWith(matrix.platform, 'windows') }}
+        if: ${{ inputs.run_node && !startsWith(matrix.platform, 'windows') }}
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           disable_search: true
@@ -103,7 +115,7 @@ jobs:
   Package:
     name: Package (${{ matrix.platform }})
     needs: [Test]
-    if: ${{ !cancelled() && needs.Test.result == 'success' }}
+    if: ${{ inputs.run_node && !cancelled() && needs.Test.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
@@ -203,7 +215,7 @@ jobs:
   Consolidate:
     name: Consolidate
     needs: [Package]
-    if: ${{ !cancelled() && needs.Package.result == 'success' }}
+    if: ${{ inputs.run_node && !cancelled() && needs.Package.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
