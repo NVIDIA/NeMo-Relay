@@ -1,0 +1,11 @@
+{
+  "name": "nemo-flow-workspace",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "workspaces": [
+    "crates/node",
+    "crates/wasm"
+  ]
+}

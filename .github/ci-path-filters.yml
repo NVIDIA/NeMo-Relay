@@ -15,6 +15,18 @@ shared:
   - 'justfile'
   - 'rust-toolchain.toml'
 
+dependencies:
+  - 'Cargo.lock'
+  - 'Cargo.toml'
+  - 'about.toml'
+  - 'crates/**/Cargo.toml'
+  - 'crates/**/package.json'
+  - 'package.json'
+  - 'package-lock.json'
+  - 'pyproject.toml'
+  - 'scripts/licensing/**'
+  - 'uv.lock'
+
 docs:
   - 'CONTRIBUTING.md'
   - 'README.md'
@@ -44,10 +56,11 @@ go:
   - 'go/**/!(*.md)'
 
 node:
+  - 'package.json'
+  - 'package-lock.json'
   - 'crates/node/Cargo.toml'
   - 'crates/node/build.rs'
   - 'crates/node/package.json'
-  - 'crates/node/package-lock.json'
   - 'crates/node/*.d.ts'
   - 'crates/node/*.js'
   - 'crates/node/src/**'

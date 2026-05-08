@@ -35,6 +35,5 @@ uv sync
 Install Node.js dependencies when you need Node.js builds or generated Node.js API documentation:
 
 ```bash
-cd crates/node
 npm install --ignore-scripts
 ```

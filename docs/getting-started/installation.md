@@ -83,9 +83,9 @@ Build and install the local Node.js package when your application should consume
 the checkout version.
 
 ```bash
-cd ../NeMo-Flow/crates/node
+cd ../NeMo-Flow
 npm install --ignore-scripts
-npm run build
+npm run build --workspace=nemo-flow-node
 cd -
 npm install ../NeMo-Flow/crates/node
 ```
@@ -140,9 +140,8 @@ This command installs the Python package in editable mode, builds the native ext
 Use this setup when you need the Node.js package dependencies for binding work.
 
 ```bash
-cd crates/node
 npm install --ignore-scripts
-npm run build
+npm run build --workspace=nemo-flow-node
 ```
 
 ### Rust Development Setup
