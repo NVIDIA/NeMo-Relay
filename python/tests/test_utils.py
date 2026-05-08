@@ -26,6 +26,7 @@ def test_run_sync(from_async: bool):
         return 1
 
     if from_async:
+
         async def runner() -> int:
             return run_sync(coro_fn())
 
