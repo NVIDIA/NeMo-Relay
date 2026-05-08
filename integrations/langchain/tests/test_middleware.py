@@ -7,19 +7,17 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from unittest.mock import MagicMock
 
 import nemo_flow
 import pytest
 from langchain.agents.middleware import ModelRequest, ModelResponse
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from nemo_flow.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 from langchain_nemo_flow import _serialization
 from langchain_nemo_flow.middleware import NemoFlowMiddleware
-
-
-class FakeModel:
-    model = "fake-model"
 
 
 class RecordingMiddleware(NemoFlowMiddleware):
@@ -54,8 +52,11 @@ class RecordingMiddleware(NemoFlowMiddleware):
 
 
 def _model_request() -> ModelRequest[Any]:
+    fake_model = MagicMock(spec=BaseChatModel)
+    fake_model.model = "fake-model"
+
     return ModelRequest(
-        model=FakeModel(),
+        model=fake_model,
         messages=[HumanMessage(content="hello")],
         model_settings={"temperature": 1.0},
     )
