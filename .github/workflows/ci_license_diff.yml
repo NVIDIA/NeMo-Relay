@@ -83,10 +83,9 @@ jobs:
           fi
 
           echo "Comparing lockfile licenses against ${compare_ref}"
-          python_exe="$(uv python find ${{ steps.ci-config.outputs.default_python_version }})"
 
           set +e
-          "$python_exe" scripts/licensing/license_diff.py --base-ref "$compare_ref" > license-diff.md 2> license-diff.status
+          uv run --no-project --python ${{ steps.ci-config.outputs.default_python_version }} python scripts/licensing/license_diff.py --base-ref "$compare_ref" > license-diff.md 2> license-diff.status
           diff_status=$?
           set -e
 
