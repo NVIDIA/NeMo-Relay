@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: OpenClaw
+
+on:
+  workflow_call:
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GH_TOKEN: "${{ github.token }}"
+  GIT_COMMIT: "${{ github.sha }}"
+  NEMO_FLOW_CI_WORKSPACE: "${{ github.workspace }}"
+  UV_PYTHON_DOWNLOADS: never
+
+jobs:
+  Test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: ${{ steps.ci-config.outputs.node_version }}
+
+      - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+        with:
+          tool: just@${{ steps.ci-config.outputs.just_version }}
+
+      - name: Run OpenClaw integration checks
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: just --set ci true test-openclaw
