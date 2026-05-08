@@ -27,7 +27,7 @@ index e1f1775248..f3ebc8b9e6 100644
      "AsyncCallbackManagerForChainGroup": "manager",
      "AsyncCallbackManagerForChainRun": "manager",
 diff --git a/libs/core/langchain_core/tools/base.py b/libs/core/langchain_core/tools/base.py
-index f069771f39..793d40b283 100644
+index 7026a2e8fb..80a650f218 100644
 --- a/libs/core/langchain_core/tools/base.py
 +++ b/libs/core/langchain_core/tools/base.py
 @@ -58,6 +58,7 @@ from langchain_core.utils.function_calling import (
@@ -89,7 +89,7 @@ index f069771f39..793d40b283 100644
 @@ -1093,8 +1133,21 @@ class ChildTool(BaseTool):
                  if config_param := _get_runnable_config_param(func_to_check):
                      tool_kwargs[config_param] = config
- 
+
 -                coro = self._arun(*tool_args, **tool_kwargs)
 -                response = await coro_with_context(coro, context)
 +                async def _func(_args: Any) -> Any:
@@ -110,20 +110,33 @@ index f069771f39..793d40b283 100644
              if self.response_format == "content_and_artifact":
                  msg = (
                      "Since response_format='content_and_artifact' "
+diff --git a/libs/core/uv.lock b/libs/core/uv.lock
+index 8dad83ef38..612bb81212 100644
+--- a/libs/core/uv.lock
++++ b/libs/core/uv.lock
+@@ -992,7 +992,7 @@ wheels = [
+
+ [[package]]
+ name = "langchain-core"
+-version = "1.2.16"
++version = "1.2.17"
+ source = { editable = "." }
+ dependencies = [
+     { name = "jsonpatch" },
 diff --git a/libs/partners/anthropic/langchain_anthropic/chat_models.py b/libs/partners/anthropic/langchain_anthropic/chat_models.py
-index bbdcfd9e4d..53278ff33c 100644
+index ee9f480427..8ec8db6541 100644
 --- a/libs/partners/anthropic/langchain_anthropic/chat_models.py
 +++ b/libs/partners/anthropic/langchain_anthropic/chat_models.py
 @@ -57,7 +57,7 @@ from langchain_core.utils.utils import _build_model_kwargs
  from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
- from typing_extensions import NotRequired, TypedDict
- 
+ from typing_extensions import NotRequired, Self, TypedDict
+
 -from langchain_anthropic import __version__
 +from langchain_anthropic import __version__, _nemo_flow
  from langchain_anthropic._client_utils import (
      _get_default_async_httpx_client,
      _get_default_httpx_client,
-@@ -1383,6 +1383,55 @@ class ChatAnthropic(BaseChatModel):
+@@ -1303,6 +1303,55 @@ class ChatAnthropic(BaseChatModel):
              stream_usage = self.stream_usage
          kwargs["stream"] = True
          payload = self._get_request_payload(messages, stop=stop, **kwargs)
@@ -179,7 +192,7 @@ index bbdcfd9e4d..53278ff33c 100644
          try:
              stream = self._create(payload)
              coerce_content_to_string = (
-@@ -1420,6 +1469,51 @@ class ChatAnthropic(BaseChatModel):
+@@ -1340,6 +1389,51 @@ class ChatAnthropic(BaseChatModel):
              stream_usage = self.stream_usage
          kwargs["stream"] = True
          payload = self._get_request_payload(messages, stop=stop, **kwargs)
@@ -231,7 +244,7 @@ index bbdcfd9e4d..53278ff33c 100644
          try:
              stream = await self._acreate(payload)
              coerce_content_to_string = (
-@@ -1697,6 +1791,21 @@ class ChatAnthropic(BaseChatModel):
+@@ -1428,6 +1522,21 @@ class ChatAnthropic(BaseChatModel):
          **kwargs: Any,
      ) -> ChatResult:
          payload = self._get_request_payload(messages, stop=stop, **kwargs)
@@ -253,7 +266,7 @@ index bbdcfd9e4d..53278ff33c 100644
          try:
              data = self._create(payload)
          except anthropic.BadRequestError as e:
-@@ -1711,6 +1820,19 @@ class ChatAnthropic(BaseChatModel):
+@@ -1442,6 +1551,19 @@ class ChatAnthropic(BaseChatModel):
          **kwargs: Any,
      ) -> ChatResult:
          payload = self._get_request_payload(messages, stop=stop, **kwargs)
@@ -274,18 +287,18 @@ index bbdcfd9e4d..53278ff33c 100644
              data = await self._acreate(payload)
          except anthropic.BadRequestError as e:
 diff --git a/libs/partners/openai/langchain_openai/chat_models/base.py b/libs/partners/openai/langchain_openai/chat_models/base.py
-index 722721560e..37951096c6 100644
+index c74c40f3c5..bb834e5c1d 100644
 --- a/libs/partners/openai/langchain_openai/chat_models/base.py
 +++ b/libs/partners/openai/langchain_openai/chat_models/base.py
-@@ -130,6 +130,7 @@ from pydantic import (
+@@ -128,6 +128,7 @@ from pydantic import (
  from pydantic.v1 import BaseModel as BaseModelV1
  from typing_extensions import Self
- 
+
 +from langchain_openai.chat_models import _nemo_flow
  from langchain_openai.chat_models._client_utils import (
-     _astream_with_chunk_timeout,
-     _build_proxied_async_httpx_client,
-@@ -1550,7 +1551,58 @@ class BaseChatOpenAI(BaseChatModel):
+     _get_default_async_httpx_client,
+     _get_default_httpx_client,
+@@ -1368,7 +1369,58 @@ class BaseChatOpenAI(BaseChatModel):
              kwargs["stream_options"] = {"include_usage": stream_usage}
          payload = self._get_request_payload(messages, stop=stop, **kwargs)
          default_chunk_class: type[BaseMessageChunk] = AIMessageChunk
@@ -342,10 +355,10 @@ index 722721560e..37951096c6 100644
 +                is_first_chunk = False
 +                yield generation_chunk
 +            return
- 
+
          try:
              if "response_format" in payload:
-@@ -1618,6 +1670,61 @@ class BaseChatOpenAI(BaseChatModel):
+@@ -1436,6 +1488,61 @@ class BaseChatOpenAI(BaseChatModel):
      ) -> ChatResult:
          self._ensure_sync_client_available()
          payload = self._get_request_payload(messages, stop=stop, **kwargs)
@@ -407,7 +420,7 @@ index 722721560e..37951096c6 100644
          generation_info = None
          raw_response = None
          try:
-@@ -1809,7 +1916,51 @@ class BaseChatOpenAI(BaseChatModel):
+@@ -1621,7 +1728,51 @@ class BaseChatOpenAI(BaseChatModel):
              kwargs["stream_options"] = {"include_usage": stream_usage}
          payload = self._get_request_payload(messages, stop=stop, **kwargs)
          default_chunk_class: type[BaseMessageChunk] = AIMessageChunk
@@ -457,10 +470,10 @@ index 722721560e..37951096c6 100644
 +                is_first_chunk = False
 +                yield generation_chunk
 +            return
- 
+
          try:
              if "response_format" in payload:
-@@ -1882,6 +2033,57 @@ class BaseChatOpenAI(BaseChatModel):
+@@ -1690,6 +1841,57 @@ class BaseChatOpenAI(BaseChatModel):
          **kwargs: Any,
      ) -> ChatResult:
          payload = self._get_request_payload(messages, stop=stop, **kwargs)
