@@ -28,6 +28,11 @@ try:
 except ImportError:
     ChatOpenAI = None
 
+try:
+    from langchain_nvidia_ai_endpoints import ChatNVIDIA
+except ImportError:
+    ChatNVIDIA = None
+
 
 from nemo_flow.codecs import AnthropicMessagesCodec, LlmCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
@@ -48,6 +53,9 @@ def infer_codec_from_model(model: Any) -> LlmCodec | None:
     if ChatAnthropic is not None and isinstance(model, ChatAnthropic):
         return AnthropicMessagesCodec()
 
+    if ChatNVIDIA is not None and isinstance(model, ChatNVIDIA):
+        return OpenAIChatCodec()
+
     if ChatOpenAI is not None and isinstance(model, ChatOpenAI):
         if getattr(model, "use_responses_api", None) is True:
             return OpenAIResponsesCodec()
@@ -63,7 +71,7 @@ def split_system_message(messages: list[BaseMessage]) -> tuple[SystemMessage | N
     return None, messages
 
 
-def model_request_to_payload(request: ModelRequest[Any]) -> dict[str, Any]:
+def model_request_to_payload(model_name: str, request: ModelRequest[Any]) -> dict[str, Any]:
     """Serialize public ``ModelRequest`` fields into a JSON-compatible payload."""
     messages: list[BaseMessage] = []
     if request.system_message is not None:
@@ -73,8 +81,8 @@ def model_request_to_payload(request: ModelRequest[Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "messages": messages_to_dict(messages),
     }
-    if name := get_model_name(request.model):
-        payload["model"] = name
+    if model_name:
+        payload["model"] = model_name
     if request.model_settings:
         payload["model_settings"] = request.model_settings
     if request.response_format is not None:
