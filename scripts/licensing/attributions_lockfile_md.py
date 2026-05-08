@@ -390,10 +390,15 @@ def _metadata_license_name(msg) -> str:
     return "UNKNOWN"
 
 
+def _clean_license_text(text: str) -> str:
+    """Normalize bundled license text without changing meaningful line structure."""
+    return "\n".join(line.rstrip() for line in text.splitlines()).strip()
+
+
 def _extract_zip_text(zf: zipfile.ZipFile, path: str) -> str | None:
     """Read a text file from a wheel, returning None when the path is absent."""
     try:
-        return zf.read(path).decode("utf-8", errors="replace").strip()
+        return _clean_license_text(zf.read(path).decode("utf-8", errors="replace"))
     except KeyError:
         return None
 
@@ -407,7 +412,7 @@ def _extract_tar_text(tf: tarfile.TarFile, path: str) -> str | None:
     fileobj = tf.extractfile(member)
     if fileobj is None:
         return None
-    return fileobj.read().decode("utf-8", errors="replace").strip()
+    return _clean_license_text(fileobj.read().decode("utf-8", errors="replace"))
 
 
 def _common_license_candidates(paths: list[str]) -> list[str]:
