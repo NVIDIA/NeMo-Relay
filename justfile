@@ -891,6 +891,7 @@ test-openclaw:
     cd "$NEMO_FLOW_REPO_ROOT"
     if is_true "{{ ci }}"; then
         npm ci --ignore-scripts
+        npm run build-debug --workspace=nemo-flow-node
     else
         npm install --ignore-scripts
     fi
