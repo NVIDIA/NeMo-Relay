@@ -282,13 +282,15 @@ export function buildReplayLlmResponse(
   timing: ModelCallRecord | undefined,
   config: NemoFlowHookBackendConfig,
 ): JsonValue {
+  const usage = mapUsage(event.usage);
   return toJsonValue({
     role: "assistant",
     content: config.capture.includeResponses ? event.assistantTexts.join("\n") : undefined,
     assistant_texts_count: event.assistantTexts.length,
     resolved_ref: event.resolvedRef,
     harness_id: event.harnessId,
-    token_usage: mapUsage(event.usage),
+    usage,
+    token_usage: usage,
     openclaw: {
       duration_ms: timing?.durationMs,
       outcome: timing?.outcome,
@@ -352,6 +354,8 @@ function replayLlmOutput(params: {
   }
 
   const endMicros = nowMicros();
+  const observedStartMicros = Math.min(input.observedAtMs * 1000, endMicros);
+  const startMicros = startMicrosFromDuration(endMicros, timing?.durationMs) ?? observedStartMicros;
   const request = buildReplayLlmRequest(input, event, manager.config);
   const response = buildReplayLlmResponse(event, timing, manager.config);
   const metadata = toJsonRecord({
@@ -371,7 +375,7 @@ function replayLlmOutput(params: {
       metadata,
       metadata,
       event.model,
-      startMicrosFromDuration(endMicros, timing?.durationMs),
+      startMicros,
     );
     manager.nf.llmCallEnd(handle, response, response, metadata, endMicros);
     manager.state.counters.llmSpansReplayed += 1;
@@ -522,6 +526,7 @@ function mapUsage(usage: PluginHookLlmOutputEvent["usage"]): Record<string, numb
   }
   if (usage.cacheRead !== undefined) {
     mapped.cached_tokens = usage.cacheRead;
+    mapped.cache_read_tokens = usage.cacheRead;
   }
   if (usage.cacheWrite !== undefined) {
     mapped.cache_write_tokens = usage.cacheWrite;
@@ -530,6 +535,9 @@ function mapUsage(usage: PluginHookLlmOutputEvent["usage"]): Record<string, numb
     mapped.total_tokens = usage.total;
   } else if (usage.input !== undefined || usage.output !== undefined) {
     mapped.total_tokens = (usage.input ?? 0) + (usage.output ?? 0);
+  }
+  if (usage.cost?.total !== undefined) {
+    mapped.cost_usd = usage.cost.total;
   }
   return Object.keys(mapped).length > 0 ? mapped : undefined;
 }

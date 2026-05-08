@@ -54,6 +54,9 @@ export type PluginHookLlmOutputEvent = {
     cacheRead?: number;
     cacheWrite?: number;
     total?: number;
+    cost?: {
+      total?: number;
+    };
   };
 };
 

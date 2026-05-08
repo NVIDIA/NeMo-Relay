@@ -1092,6 +1092,62 @@ fn llm_end_with_usage_emits_token_count_attributes() {
 }
 
 #[test]
+fn llm_end_with_manual_usage_payload_emits_token_count_attributes() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "content": "hello",
+            "usage": {
+                "prompt_tokens": 100
+            },
+            "token_usage": {
+                "completion_tokens": 50,
+                "total_tokens": 150,
+                "cached_tokens": 25,
+                "cache_write_tokens": 10
+            }
+        })),
+        Some(CategoryProfile::builder().model_name("gpt-4").build()),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("llm.token_count.prompt"),
+        Some(&"100".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.completion"),
+        Some(&"50".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.total"),
+        Some(&"150".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.prompt_details.cache_read"),
+        Some(&"25".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.prompt_details.cache_write"),
+        Some(&"10".to_string())
+    );
+}
+
+#[test]
 fn llm_end_without_usage_omits_token_count_attributes() {
     let (provider, exporter) = make_provider();
     let mut processor =

@@ -50,11 +50,34 @@ describe("LLM replay", () => {
     assert.equal(request.content.systemPrompt, "be concise");
     const response = nf.calls.llmCallEnd[0]?.response as ReplayResponse;
     assert.equal(response.content, "hi");
+    assert.deepEqual(response.usage, {
+      prompt_tokens: 2,
+      completion_tokens: 3,
+      total_tokens: 5,
+    });
     assert.deepEqual(response.token_usage, {
       prompt_tokens: 2,
       completion_tokens: 3,
       total_tokens: 5,
     });
+  });
+
+  it("uses the observed input time as the fallback llm span start time", () => {
+    const now = Date.now;
+    const nf = createNemoFlowRuntime();
+    const backend = createBackend(nf);
+
+    try {
+      Date.now = () => 1_000;
+      backend.onLlmInput(llmInput(), { runId: "run-1", sessionId: "session-1" });
+      Date.now = () => 1_250;
+      backend.onLlmOutput(llmOutput(), { runId: "run-1", sessionId: "session-1" });
+    } finally {
+      Date.now = now;
+    }
+
+    assert.equal(nf.calls.llmCall[0]?.timestamp, 1_000_000);
+    assert.equal(nf.calls.llmCallEnd[0]?.timestamp, 1_250_000);
   });
 
   it("replays pending output when matching input arrives and cancels pending queue", () => {
@@ -368,6 +391,7 @@ type ReplayResponse = {
   content?: string;
   assistant_texts_count?: number;
   token_usage?: Record<string, number>;
+  usage?: Record<string, number>;
   openclaw: Record<string, unknown>;
 };
 
@@ -377,8 +401,8 @@ type TestNemoFlowRuntime = NemoFlowRuntimeModule & {
     popScope: Array<{ handle: unknown; output: unknown }>;
     event: Array<{ name: string; handle: unknown; data: unknown }>;
     setThreadScopeStack: unknown[];
-    llmCall: Array<{ name: string; request: unknown; modelName: string | null | undefined }>;
-    llmCallEnd: Array<{ handle: unknown; response: unknown }>;
+    llmCall: Array<{ name: string; request: unknown; modelName: string | null | undefined; timestamp: number | null | undefined }>;
+    llmCallEnd: Array<{ handle: unknown; response: unknown; timestamp: number | null | undefined }>;
     toolCall: Array<{ name: string; args: unknown }>;
     toolCallEnd: Array<{ handle: unknown; result: unknown; data: unknown }>;
   };
@@ -438,12 +462,12 @@ function createNemoFlowRuntime(): TestNemoFlowRuntime {
     },
     popScope: (handle, output) => calls.popScope.push({ handle, output }),
     event: (name, handle, data) => calls.event.push({ name, handle, data }),
-    llmCall: (name, request, _handle, _attributes, _data, _metadata, modelName) => {
+    llmCall: (name, request, _handle, _attributes, _data, _metadata, modelName, timestamp) => {
       const handle = { id: `llm-${nextScopeId++}` };
-      calls.llmCall.push({ name, request, modelName });
+      calls.llmCall.push({ name, request, modelName, timestamp });
       return handle as unknown as ReturnType<NemoFlowRuntimeModule["llmCall"]>;
     },
-    llmCallEnd: (handle, response) => calls.llmCallEnd.push({ handle, response }),
+    llmCallEnd: (handle, response, _data, _metadata, timestamp) => calls.llmCallEnd.push({ handle, response, timestamp }),
     toolCall: (name, args) => {
       const handle = { id: `tool-${nextScopeId++}` };
       calls.toolCall.push({ name, args });

@@ -24,7 +24,9 @@ use crate::api::event::{Event, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
+use crate::codec::response::Usage;
 use crate::error::FlowError;
+use crate::json::Json;
 use chrono::{DateTime, Utc};
 use openinference_semantic_conventions::SpanKind as OpenInferenceSpanKind;
 use openinference_semantic_conventions::attributes as oi;
@@ -682,10 +684,22 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         attributes.push(KeyValue::new(oi::output::VALUE, output));
         attributes.push(KeyValue::new(oi::output::MIME_TYPE, "application/json"));
     }
+    let fallback_usage = if event
+        .category()
+        .is_some_and(|category| category.as_str() == "llm")
+    {
+        usage_from_manual_llm_output(event.output())
+    } else {
+        None
+    };
+    let usage = event
+        .annotated_response()
+        .and_then(|response| response.usage.as_ref())
+        .or(fallback_usage.as_ref());
     if event
         .category()
         .is_some_and(|category| category.as_str() == "llm")
-        && let Some(usage) = event.annotated_response().and_then(|r| r.usage.as_ref())
+        && let Some(usage) = usage
     {
         if let Some(v) = usage.prompt_tokens {
             attributes.push(KeyValue::new(oi::llm::token_count::PROMPT, v as i64));
@@ -710,6 +724,93 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         }
     }
     attributes
+}
+
+fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
+    let object = output?.as_object()?;
+    let usage = object.get("usage").and_then(Json::as_object);
+    let token_usage = object.get("token_usage").and_then(Json::as_object);
+    if usage.is_none() && token_usage.is_none() {
+        return None;
+    }
+
+    let prompt_tokens = first_u64_from_manual_usage(
+        usage,
+        token_usage,
+        &["prompt_tokens", "input_tokens", "inputTokens", "input"],
+    );
+    let completion_tokens = first_u64_from_manual_usage(
+        usage,
+        token_usage,
+        &[
+            "completion_tokens",
+            "output_tokens",
+            "completionTokens",
+            "outputTokens",
+            "output",
+        ],
+    );
+    let total_tokens = first_u64_from_manual_usage(
+        usage,
+        token_usage,
+        &["total_tokens", "totalTokens", "total"],
+    );
+    let cache_read_tokens = first_u64_from_manual_usage(
+        usage,
+        token_usage,
+        &[
+            "cache_read_tokens",
+            "cached_tokens",
+            "cache_read_input_tokens",
+            "cacheReadTokens",
+            "cachedTokens",
+            "cacheReadInputTokens",
+            "cacheRead",
+        ],
+    );
+    let cache_write_tokens = first_u64_from_manual_usage(
+        usage,
+        token_usage,
+        &[
+            "cache_write_tokens",
+            "cache_creation_input_tokens",
+            "cacheWriteTokens",
+            "cacheCreationInputTokens",
+            "cacheWrite",
+        ],
+    );
+
+    if prompt_tokens.is_none()
+        && completion_tokens.is_none()
+        && total_tokens.is_none()
+        && cache_read_tokens.is_none()
+        && cache_write_tokens.is_none()
+    {
+        return None;
+    }
+
+    Some(Usage {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+    })
+}
+
+fn first_u64_from_manual_usage(
+    usage: Option<&serde_json::Map<String, Json>>,
+    token_usage: Option<&serde_json::Map<String, Json>>,
+    keys: &[&str],
+) -> Option<u64> {
+    usage
+        .and_then(|value| first_u64(value, keys))
+        .or_else(|| token_usage.and_then(|value| first_u64(value, keys)))
+}
+
+fn first_u64(usage: &serde_json::Map<String, Json>, keys: &[&str]) -> Option<u64> {
+    keys.iter()
+        .find_map(|key| usage.get(*key).and_then(Json::as_u64))
 }
 
 fn mark_attributes(event: &Event) -> Vec<KeyValue> {
