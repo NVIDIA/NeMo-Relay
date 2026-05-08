@@ -5,11 +5,13 @@
 
 import { spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const tsc = path.join(packageRoot, "node_modules", "typescript", "bin", "tsc");
+const require = createRequire(import.meta.url);
+const tsc = require.resolve("typescript/bin/tsc");
 
 rmSync(path.join(packageRoot, ".test-dist"), { recursive: true, force: true });
 

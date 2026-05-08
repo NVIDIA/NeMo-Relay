@@ -17,20 +17,22 @@ The package declares both OpenClaw entrypoint styles:
 ## Build And Validate
 
 ```bash
-npm --prefix integrations/openclaw install
-npm --prefix integrations/openclaw run typecheck
-npm --prefix integrations/openclaw test
-npm --prefix integrations/openclaw run build
-npm --prefix integrations/openclaw run pack:check
+npm install --ignore-scripts
+npm run typecheck --workspace=@nvidia/nemo-flow-openclaw
+npm test --workspace=@nvidia/nemo-flow-openclaw
+npm run build --workspace=@nvidia/nemo-flow-openclaw
+npm run pack:check --workspace=@nvidia/nemo-flow-openclaw
 ```
 
-`npm run build` emits production files under `dist/`. Tests compile to
-`.test-dist/` so test artifacts do not enter the installable package.
+`npm run build --workspace=@nvidia/nemo-flow-openclaw` emits production files
+under `integrations/openclaw/dist/`. Tests compile to
+`integrations/openclaw/.test-dist/` so test artifacts do not enter the
+installable package.
 
 The optional live smoke test requires a working installed `nemo-flow-node` binding:
 
 ```bash
-npm --prefix integrations/openclaw run test:live
+npm run test:live --workspace=@nvidia/nemo-flow-openclaw
 ```
 
 ## Enablement
@@ -134,14 +136,14 @@ large payloads.
 
 | OpenClaw hook | NeMo Flow behavior |
 | --- | --- |
-| `gateway_start` | Emits a gateway lifecycle mark. |
+| `gateway_start` | Ensures the backend is available before session-scoped hook replay begins. |
 | `gateway_stop` | Stops the runtime, drains sessions, shuts down subscribers, and clears the NeMo Flow plugin host. |
 | `session_start` | Opens or aliases a NeMo Flow session scope. |
 | `session_end` | Closes the session, flushes pending replay state, and exports ATIF if enabled. |
 | `llm_input` / `llm_output` | Replays an LLM span through `llmCall` and `llmCallEnd` with bounded FIFO correlation. |
 | `model_call_started` / `model_call_ended` | Enriches matching LLM spans with provider timing when correlation is unambiguous. |
 | `after_tool_call` | Replays successful tool calls through `toolCall` and `toolCallEnd`; blocked tools emit marks. |
-| `agent_end` | Emits an agent lifecycle mark and closes any remaining session state for the run. |
+| `agent_end` | Emits an agent lifecycle mark under the current session. |
 | `before_agent_finalize` | Emits a lifecycle mark and does not mutate the finalization payload. |
 | `subagent_spawned` / `subagent_ended` | Emits subagent lifecycle marks under the best available parent or child session. |
 
@@ -165,8 +167,8 @@ Use the output health independently:
 
 ## Packaging
 
-`npm run pack:check` builds a fresh production `dist/`, runs `npm pack --dry-run`,
-and verifies that:
+`npm run pack:check --workspace=@nvidia/nemo-flow-openclaw` builds a fresh
+production `dist/`, runs `npm pack --dry-run`, and verifies that:
 
 - declared OpenClaw source and runtime entrypoints are present
 - production source files needed by `index.ts` are present

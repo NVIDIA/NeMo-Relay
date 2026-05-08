@@ -968,7 +968,7 @@ package-node:
         build_args+=(-- --zig --zig-abi-suffix "$linux_glibc_version")
     fi
     npm install --ignore-scripts
-    npm run "${build_args[@]}" --workspace=nemo-flow-node
+    npm run --workspace=nemo-flow-node "${build_args[@]}"
     pushd crates/node >/dev/null
     npm pack --pack-destination "$package_dir"
     popd >/dev/null
