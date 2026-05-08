@@ -641,7 +641,9 @@ build-python:
         prepare_llvm_cov_workspace
     fi
     python_executable="$(project_python_executable)"
+    pushd "$NEMO_FLOW_REPO_ROOT/python"
     "$python_executable" -m maturin develop
+    popd
 
 # --set [ci=true|false]
 build-go:
@@ -742,7 +744,7 @@ test-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     output_dir="{{ output_dir }}"
-    pytest_cmd=(pytest python/tests)
+    pytest_cmd=(pytest)
     coverage_out=""
     junit_out=""
     rust_coverage_out=""
@@ -759,11 +761,13 @@ test-python:
         fi
         cargo test -p nemo-flow-python --lib
     fi
-    uv sync --inexact --no-install-project --no-install-package nemo-flow
+    uv sync --inexact --no-install-project --no-install-package nemo-flow --no-install-package langchain-nemo-flow
     activate_project_venv
     python_executable="$(project_python_executable)"
     use_project_python_source "$python_executable"
+    pushd "$NEMO_FLOW_REPO_ROOT/python"
     "$python_executable" -m maturin develop --skip-install
+    popd
     "$python_executable" -m "${pytest_cmd[@]}"
     if is_true "{{ ci }}" && [[ -n "$rust_coverage_out" ]]; then
         cargo llvm-cov report \
@@ -772,13 +776,6 @@ test-python:
             --cobertura \
             --output-path "$rust_coverage_out"
     fi
-
-test-python-integration:
-    #!/usr/bin/env bash
-    {{ bash_helpers }}
-    cd "$NEMO_FLOW_REPO_ROOT/integrations/langchain"
-    uv sync --locked
-    uv run pytest -c pyproject.toml tests
 
 # --set [output_dir=<path>] [ci=true|false]
 test-go:
@@ -908,7 +905,7 @@ test-wasm:
     fi
 
 # --set [output_dir=<path>] [ci=true|false]
-test-all: test-rust test-python test-python-integration test-go test-node test-wasm
+test-all: test-rust test-python test-go test-node test-wasm
 
 # [version] or --set ref_name=<version>
 set-version version="":
