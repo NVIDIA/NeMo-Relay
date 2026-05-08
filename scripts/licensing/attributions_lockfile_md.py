@@ -636,29 +636,8 @@ def _artifact_metadata_from_lockfile(pkg: dict[str, Any]) -> tuple[str, list[tup
     raise ValueError(f"No downloadable artifact found in uv.lock for {package_name}")
 
 
-def _installed_license_texts(
-    row: dict[str, str], lockfile_pkg: dict[str, Any], *, package_name: str
-) -> list[tuple[str, str]]:
-    """Choose license text from pip-licenses first, then fall back to the locked artifact."""
-    license_file = (row.get("LicenseFile") or "").strip()
-    path_label = _pypi_license_path_display(license_file)
-    text = "\n".join(line.rstrip() for line in (row.get("LicenseText") or "").splitlines()).strip()
-    license_texts: list[tuple[str, str]] = [(path_label, text)] if _is_useful_license_text(text) else []
-
-    if not license_texts:
-        _, artifact_license_texts = _artifact_metadata_from_lockfile(lockfile_pkg)
-        if artifact_license_texts:
-            return artifact_license_texts
-
-    if license_texts:
-        return license_texts
-    return [
-        ("LICENSE", f"(No license text bundled in site-packages for {package_name}; see package metadata or PyPI.)\n")
-    ]
-
-
-def _infer_installed_license_name(license_name: str, license_texts: list[tuple[str, str]]) -> str:
-    """Infer a package license from bundled license text when pip-licenses reports UNKNOWN."""
+def _infer_license_name(license_name: str, license_texts: list[tuple[str, str]]) -> str:
+    """Infer a package license from bundled license text when metadata reports UNKNOWN."""
     if not _is_weak_license_name(license_name):
         return license_name
     for _, license_text in license_texts:
@@ -666,45 +645,6 @@ def _infer_installed_license_name(license_name: str, license_texts: list[tuple[s
         if inferred_license:
             return inferred_license
     return license_name
-
-
-def _installed_python_package_from_row(
-    row: dict[str, str], lockfile_pkgs: dict[str, dict[str, Any]], *, own_name: str
-) -> tuple[str, RenderedPythonPackage] | None:
-    """Render one pip-licenses row, returning its normalized lockfile key when included."""
-    name = row.get("Name", "unknown")
-    normalized = _normalize_package_name(name)
-    lockfile_pkg = lockfile_pkgs.get(normalized)
-    if normalized == own_name or lockfile_pkg is None:
-        return None
-
-    license_texts = _installed_license_texts(row, lockfile_pkg, package_name=name)
-    license_name = _infer_installed_license_name((row.get("License") or "UNKNOWN").strip() or "UNKNOWN", license_texts)
-    license_name = _normalize_license_name(license_name)
-    return normalized, RenderedPythonPackage(
-        name=name,
-        version=row.get("Version", ""),
-        license_name=license_name,
-        license_texts=license_texts,
-    )
-
-
-def _installed_python_packages(
-    rows: list[dict[str, str]], lockfile_pkgs: dict[str, dict[str, Any]], *, own_name: str
-) -> tuple[list[RenderedPythonPackage], set[str]]:
-    """Render Python packages reported by pip-licenses and track which lockfile entries were seen."""
-    packages: list[RenderedPythonPackage] = []
-    seen: set[str] = set()
-
-    for row in rows:
-        rendered = _installed_python_package_from_row(row, lockfile_pkgs, own_name=own_name)
-        if rendered is None:
-            continue
-        normalized, package = rendered
-        seen.add(normalized)
-        packages.append(package)
-
-    return packages, seen
 
 
 def _lockfile_fallback_license_texts(package_name: str) -> list[tuple[str, str]]:
@@ -719,7 +659,7 @@ def _lockfile_only_python_package(pkg: dict[str, Any]) -> RenderedPythonPackage:
     license_name, license_texts = _artifact_metadata_from_lockfile(pkg)
     if not license_texts:
         license_texts = _lockfile_fallback_license_texts(str(pkg["name"]))
-    license_name = _infer_installed_license_name(license_name, license_texts)
+    license_name = _infer_license_name(license_name, license_texts)
     license_name = _normalize_license_name(license_name)
     return RenderedPythonPackage(
         name=str(pkg["name"]),
@@ -743,23 +683,10 @@ def _lockfile_python_packages(
 
 
 def _python_attribution_packages() -> list[RenderedPythonPackage]:
-    """Return Python attribution packages from an existing install plus artifact fallback."""
+    """Return Python attribution packages directly from uv.lock artifacts."""
     lockfile_pkgs = _lockfile_registry_packages()
     own_name = "nemo-flow"
-    pip_licenses_bin = ROOT / ".venv" / "bin" / "pip-licenses"
-    if pip_licenses_bin.exists():
-        proc = subprocess.run(  # noqa: S603 - pip_licenses_bin is validated and comes from the local virtualenv.
-            [str(pip_licenses_bin), "-f", "json", "-u", "-l"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        rows: list[dict[str, str]] = json.loads(proc.stdout)
-        packages, seen = _installed_python_packages(rows, lockfile_pkgs, own_name=own_name)
-        packages.extend(_lockfile_python_packages(lockfile_pkgs, own_name=own_name, seen=seen))
-    else:
-        packages = _lockfile_python_packages(lockfile_pkgs, own_name=own_name)
+    packages = _lockfile_python_packages(lockfile_pkgs, own_name=own_name)
     packages.sort(key=lambda r: (str(r["name"]).lower(), str(r["version"])))
     return packages
 
