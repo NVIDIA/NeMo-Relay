@@ -32,6 +32,7 @@ crates/node/junit.xml
 crates/wasm/pkg/
 crates/wasm/pkg-test/
 crates/wasm/package-lock.json
+crates/wasm/junit.xml
 
 # Shared libraries
 *.dylib
