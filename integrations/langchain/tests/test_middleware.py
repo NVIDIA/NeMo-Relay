@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import nemo_flow
 import pytest
-from langchain.agents.middleware import ModelRequest, ModelResponse
+from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from nemo_flow.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 from langchain_nemo_flow import _serialization
@@ -62,6 +62,15 @@ def _model_request() -> ModelRequest[Any]:
     )
 
 
+def _tool_call_request() -> ToolCallRequest:
+    return ToolCallRequest(
+        tool_call={"name": "lookup", "args": {"query": "original"}, "id": "call-1"},
+        tool=None,
+        state={},
+        runtime=MagicMock(),
+    )
+
+
 def test_wrap_model_call_routes_through_llm_execute() -> None:
     middleware = RecordingMiddleware()
     seen_request: ModelRequest[Any] | None = None
@@ -100,6 +109,78 @@ def test_awrap_model_call_routes_through_llm_execute() -> None:
     assert middleware.calls[0]["request"].content["model"] == "fake-model"
     assert middleware.calls[0]["codec"] is None
     assert middleware.calls[0]["response_codec"] is None
+
+
+def test_wrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPatch) -> None:
+    middleware = NemoFlowMiddleware()
+    parent_handle = MagicMock()
+    seen_request: ToolCallRequest | None = None
+
+    async def execute_side_effect(
+        *,
+        func: Any,
+        **kwargs: Any
+    ) -> ToolMessage:
+        return func({"query": "intercepted"})
+
+    mock_tool_execute = AsyncMock(side_effect=execute_side_effect)
+
+    def handler(request: ToolCallRequest) -> ToolMessage:
+        nonlocal seen_request
+        seen_request = request
+        return ToolMessage(content="done", tool_call_id=request.tool_call["id"])
+
+    monkeypatch.setattr(nemo_flow.scope, "get_handle", lambda: parent_handle)
+    monkeypatch.setattr(nemo_flow.typed, "tool_execute", mock_tool_execute)
+
+    response = middleware.wrap_tool_call(_tool_call_request(), handler)
+
+    assert response.content == "done"
+    assert seen_request is not None
+    assert seen_request.tool_call["args"] == {"query": "intercepted"}
+    mock_tool_execute.assert_awaited_once()
+    kwargs = mock_tool_execute.await_args.kwargs
+    assert kwargs["name"] == "lookup"
+    assert kwargs["args"] == {"query": "original"}
+    assert kwargs["handle"] is parent_handle
+    assert isinstance(kwargs["args_codec"], nemo_flow.typed.BestEffortAnyCodec)
+    assert isinstance(kwargs["result_codec"], nemo_flow.typed.BestEffortAnyCodec)
+
+
+def test_awrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPatch) -> None:
+    middleware = NemoFlowMiddleware()
+    parent_handle = MagicMock()
+    seen_request: ToolCallRequest | None = None
+
+    async def execute_side_effect(
+        *,
+        func: Any,
+        **kwargs: Any
+    ) -> ToolMessage:
+        return await func({"query": "intercepted"})
+
+    mock_tool_execute = AsyncMock(side_effect=execute_side_effect)
+
+    async def handler(request: ToolCallRequest) -> ToolMessage:
+        nonlocal seen_request
+        seen_request = request
+        return ToolMessage(content="done", tool_call_id=request.tool_call["id"])
+
+    monkeypatch.setattr(nemo_flow.scope, "get_handle", lambda: parent_handle)
+    monkeypatch.setattr(nemo_flow.typed, "tool_execute", mock_tool_execute)
+
+    response = asyncio.run(middleware.awrap_tool_call(_tool_call_request(), handler))
+
+    assert response.content == "done"
+    assert seen_request is not None
+    assert seen_request.tool_call["args"] == {"query": "intercepted"}
+    mock_tool_execute.assert_awaited_once()
+    kwargs = mock_tool_execute.await_args.kwargs
+    assert kwargs["name"] == "lookup"
+    assert kwargs["args"] == {"query": "original"}
+    assert kwargs["handle"] is parent_handle
+    assert isinstance(kwargs["args_codec"], nemo_flow.typed.BestEffortAnyCodec)
+    assert isinstance(kwargs["result_codec"], nemo_flow.typed.BestEffortAnyCodec)
 
 
 def test_infer_codec_from_supported_model_classes(monkeypatch: pytest.MonkeyPatch) -> None:
