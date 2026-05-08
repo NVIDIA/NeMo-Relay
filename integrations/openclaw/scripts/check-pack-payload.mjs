@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmExecPath = process.env.npm_execpath;
 
 function assert(condition, message) {
   if (!condition) {
@@ -24,10 +25,23 @@ function run(command, args, options = {}) {
     ...options,
   });
   if (result.status !== 0) {
+    if (result.error) {
+      process.stderr.write(`${result.error.message}\n`);
+    }
     process.stderr.write(result.stderr ?? "");
     throw new Error(`${command} ${args.join(" ")} failed`);
   }
   return result;
+}
+
+function runNpm(args, options = {}) {
+  if (npmExecPath) {
+    return run(process.execPath, [npmExecPath, ...args], options);
+  }
+  return run(npm, args, {
+    shell: process.platform === "win32",
+    ...options,
+  });
 }
 
 function normalizePackagePath(value) {
@@ -49,9 +63,9 @@ function walkFiles(root, prefix = "") {
   return output.sort();
 }
 
-run(npm, ["run", "build"], { stdio: "inherit" });
+runNpm(["run", "build"], { stdio: "inherit" });
 
-const pack = run(npm, ["pack", "--dry-run", "--json", "--ignore-scripts"]);
+const pack = runNpm(["pack", "--dry-run", "--json", "--ignore-scripts"]);
 const packInfo = JSON.parse(pack.stdout)[0];
 assert(packInfo, "npm pack did not return package metadata");
 
