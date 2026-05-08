@@ -73,6 +73,10 @@ fn removes_hop_by_hop_headers() {
 #[test]
 fn selects_provider_routes() {
     assert_eq!(
+        ProviderRoute::from_path("/responses"),
+        Some(ProviderRoute::OpenAiResponses)
+    );
+    assert_eq!(
         ProviderRoute::from_path("/v1/responses"),
         Some(ProviderRoute::OpenAiResponses)
     );
@@ -85,6 +89,10 @@ fn selects_provider_routes() {
             .unwrap()
             .name(),
         "openai.chat_completions"
+    );
+    assert_eq!(
+        ProviderRoute::from_path("/models"),
+        Some(ProviderRoute::OpenAiModels)
     );
     assert_eq!(ProviderRoute::OpenAiModels.name(), "openai.models");
     assert_eq!(
@@ -113,6 +121,14 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
     assert_eq!(
         ProviderRoute::OpenAiResponses.upstream_url(&config, "/v1/responses?x=1"),
         "http://openai/v1/responses?x=1"
+    );
+    assert_eq!(
+        ProviderRoute::OpenAiResponses.upstream_url(&config, "/responses?x=1"),
+        "http://openai/v1/responses?x=1"
+    );
+    assert_eq!(
+        ProviderRoute::OpenAiModels.upstream_url(&config, "/models"),
+        "http://openai/v1/models"
     );
     assert_eq!(
         ProviderRoute::AnthropicMessages.upstream_url(&config, "/v1/messages"),

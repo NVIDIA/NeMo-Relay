@@ -226,6 +226,38 @@ async fn gateway_forwards_openai_json_without_rewriting_payload() {
 }
 
 #[tokio::test]
+async fn gateway_accepts_codex_responses_path() {
+    let upstream = spawn_upstream(false).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/responses")
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer test")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-test",
+                        "input": "hello"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["model"], json!("gpt-test"));
+    assert_eq!(body["authorization"], json!("Bearer test"));
+}
+
+#[tokio::test]
 async fn gateway_preserves_streaming_body() {
     let upstream = spawn_upstream(true).await;
     let mut config = test_config();
@@ -377,7 +409,9 @@ async fn spawn_upstream(streaming: bool) -> TestServer {
     let app = if streaming {
         Router::new().route("/v1/responses", post(stream_response))
     } else {
-        Router::new().route("/v1/chat/completions", post(chat))
+        Router::new()
+            .route("/v1/chat/completions", post(chat))
+            .route("/v1/responses", post(chat))
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

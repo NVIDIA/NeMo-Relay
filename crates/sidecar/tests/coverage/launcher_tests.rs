@@ -170,7 +170,22 @@ fn prepares_codex_config_overrides() {
         prepared
             .argv
             .iter()
-            .any(|arg| arg.contains("model_providers.openai.base_url"))
+            .any(|arg| arg == "model_provider=\"nemo-flow-openai\"")
+    );
+    assert!(
+        prepared
+            .argv
+            .iter()
+            .any(|arg| arg.contains("model_providers.nemo-flow-openai")
+                && arg.contains("base_url=\"http://127.0.0.1:1234\"")
+                && arg.contains("requires_openai_auth=true")
+                && arg.contains("supports_websockets=false"))
+    );
+    assert!(
+        !prepared
+            .argv
+            .iter()
+            .any(|arg| arg.contains("model_providers.openai"))
     );
     assert!(
         prepared

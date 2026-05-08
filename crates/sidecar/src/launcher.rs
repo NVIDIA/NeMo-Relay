@@ -310,19 +310,18 @@ impl PreparedRun {
         Ok(())
     }
 
-    // Injects Codex hook and provider-base configuration through repeated `--config` flags. The
-    // generated TOML hook groups are passed inline so transparent run mode does not edit the user's
-    // persistent Codex config.
+    // Injects Codex hook and provider configuration through repeated `--config` flags. Codex
+    // reserves built-in provider IDs, so run mode installs a temporary provider alias instead of
+    // overriding `model_providers.openai`.
     fn prepare_codex(&mut self, sidecar_url: &str) {
         let hook_command = hook_forward_command(CodingAgent::Codex);
         let mut args = vec![
             "--config".to_string(),
             "features.codex_hooks=true".to_string(),
             "--config".to_string(),
-            format!(
-                "model_providers.openai.base_url={}",
-                toml_string(sidecar_url)
-            ),
+            "model_provider=\"nemo-flow-openai\"".to_string(),
+            "--config".to_string(),
+            codex_sidecar_provider_config(sidecar_url),
         ];
         for (event, groups) in generated_hooks(CodingAgent::Codex, &hook_command)["hooks"]
             .as_object()
@@ -470,6 +469,13 @@ async fn wait_for_health(sidecar_url: &str) -> Result<(), SidecarError> {
     Err(SidecarError::Launch(format!(
         "sidecar did not become ready at {url}"
     )))
+}
+
+fn codex_sidecar_provider_config(sidecar_url: &str) -> String {
+    format!(
+        "model_providers.nemo-flow-openai={{name=\"Nemo Flow OpenAI\",base_url={},wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false}}",
+        toml_string(sidecar_url)
+    )
 }
 
 // Inserts generated agent flags immediately after the last argv element that looks like the agent

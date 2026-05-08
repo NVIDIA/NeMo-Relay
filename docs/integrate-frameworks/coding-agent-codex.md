@@ -20,8 +20,9 @@ nemo-flow-sidecar run --atif-dir .nemo-flow/atif -- codex
 
 The wrapper infers Codex from `codex`, starts a sidecar on a dynamic
 `127.0.0.1` port, enables Codex hooks with CLI config overrides, injects hook
-commands that use `NEMO_FLOW_SIDECAR_URL`, and sets the active OpenAI provider
-`base_url` to the sidecar URL.
+commands that use `NEMO_FLOW_SIDECAR_URL`, and points Codex at a temporary
+`nemo-flow-openai` provider alias that uses the sidecar URL while preserving
+Codex's OpenAI auth path.
 
 Inspect what would be launched without starting Codex:
 
@@ -72,11 +73,24 @@ nemo-flow-sidecar install codex \
   --atif-dir .nemo-flow/atif
 ```
 
-Then start the sidecar manually and configure the local Codex provider
-`base_url` to `http://127.0.0.1:4040`. Local Codex GUI or app sessions have the
-same support level only when they read the same local hook/plugin config and
-provider routing. Cloud tasks may still emit some lifecycle hooks, but complete
-LLM lifecycle capture requires model traffic to pass through the sidecar.
+Then start the sidecar manually and configure local Codex to use a sidecar
+provider alias instead of overriding the reserved built-in `openai` provider:
+
+```toml
+model_provider = "nemo-flow-openai"
+
+[model_providers.nemo-flow-openai]
+name = "Nemo Flow OpenAI"
+base_url = "http://127.0.0.1:4040"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+```
+
+Local Codex GUI or app sessions have the same support level only when they read
+the same local hook/plugin config and provider routing. Cloud tasks may still
+emit some lifecycle hooks, but complete LLM lifecycle capture requires model
+traffic to pass through the sidecar.
 
 ## Captured Events
 
@@ -120,10 +134,10 @@ missing, confirm `codex_hooks = true`, hook config loading, and `--atif-dir` or
 
 ## Troubleshoot LLM Lifecycle
 
-If agent/tool events exist but LLM spans are missing, the provider `base_url` is
-not pointing at the sidecar for the active Codex process. If only GUI sessions
-are missing spans, confirm the GUI is using local provider configuration rather
-than a remote execution path.
+If agent/tool events exist but LLM spans are missing, the active Codex provider
+is not pointing at the sidecar for the active Codex process. If only GUI
+sessions are missing spans, confirm the GUI is using local provider
+configuration rather than a remote execution path.
 
 If LLM spans exist but attach to the session instead of a subagent, pass
 `x-nemo-flow-subagent-id` on gateway requests or include shared

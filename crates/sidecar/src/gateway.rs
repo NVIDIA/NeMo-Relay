@@ -393,8 +393,11 @@ impl ProviderRoute {
     // so the caller can fail as a bad hook/gateway payload instead of constructing arbitrary URLs.
     fn from_path(path: &str) -> Option<Self> {
         match path {
+            "/responses" => Some(Self::OpenAiResponses),
             "/v1/responses" => Some(Self::OpenAiResponses),
+            "/chat/completions" => Some(Self::OpenAiChatCompletions),
             "/v1/chat/completions" => Some(Self::OpenAiChatCompletions),
+            "/models" => Some(Self::OpenAiModels),
             "/v1/models" => Some(Self::OpenAiModels),
             "/v1/messages" => Some(Self::AnthropicMessages),
             "/v1/messages/count_tokens" => Some(Self::AnthropicCountTokens),
@@ -425,6 +428,14 @@ impl ProviderRoute {
             Self::AnthropicMessages | Self::AnthropicCountTokens => {
                 config.anthropic_base_url.trim_end_matches('/')
             }
+        };
+        let path_and_query = match self {
+            Self::OpenAiResponses | Self::OpenAiChatCompletions | Self::OpenAiModels
+                if !path_and_query.starts_with("/v1/") =>
+            {
+                format!("/v1{path_and_query}")
+            }
+            _ => path_and_query.to_string(),
         };
         format!("{base}{path_and_query}")
     }

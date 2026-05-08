@@ -43,8 +43,9 @@ nemo-flow-sidecar run --atif-dir .nemo-flow/atif -- codex
 
 The wrapper starts a per-invocation sidecar on a dynamic localhost port,
 enables Codex hooks with CLI config overrides, injects hook commands that use
-`NEMO_FLOW_SIDECAR_URL`, and sets the active OpenAI provider `base_url` to the
-sidecar URL.
+`NEMO_FLOW_SIDECAR_URL`, and points Codex at a temporary `nemo-flow-openai`
+provider alias that uses the sidecar URL while preserving Codex's OpenAI auth
+path.
 
 Inspect the launch without starting Codex:
 
@@ -90,8 +91,19 @@ nemo-flow-sidecar install codex \
   --atif-dir .nemo-flow/atif
 ```
 
-Then start the sidecar manually and configure the local Codex provider
-`base_url` to `http://127.0.0.1:4040`.
+Then start the sidecar manually and configure local Codex to use a sidecar
+provider alias instead of overriding the reserved built-in `openai` provider:
+
+```toml
+model_provider = "nemo-flow-openai"
+
+[model_providers.nemo-flow-openai]
+name = "Nemo Flow OpenAI"
+base_url = "http://127.0.0.1:4040"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+```
 
 ## Verify
 
@@ -111,8 +123,7 @@ printf '{"session_id":"smoke-codex","hook_event_name":"sessionStart"}' \
 ```
 
 If hooks arrive but LLM spans are missing, confirm Codex was started by
-`nemo-flow-sidecar run` or that the active provider `base_url` points to the
-sidecar URL.
+`nemo-flow-sidecar run` or that the active provider points to the sidecar URL.
 
 If LLM spans are present but attached to the top-level agent instead of a
 subagent, include `x-nemo-flow-subagent-id` on gateway requests or share
