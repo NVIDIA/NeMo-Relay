@@ -252,6 +252,10 @@ def _parse_languages(values: list[str]) -> list[str]:
     """Normalize CLI language arguments."""
     if not values or "all" in values:
         return list(LANGUAGES)
+    unsupported = sorted(set(values) - set(LANGUAGES))
+    if unsupported:
+        supported = ", ".join((*LANGUAGES, "all"))
+        raise ValueError(f"Unsupported language(s): {', '.join(unsupported)}. Choose from: {supported}")
     return values
 
 
@@ -265,7 +269,7 @@ def main() -> int:
     parser.add_argument(
         "languages",
         nargs="*",
-        choices=(*LANGUAGES, "all"),
+        metavar="{rust,node,python,all}",
         help="Language inventories to compare. Defaults to all.",
     )
     parser.add_argument(
@@ -283,7 +287,10 @@ def main() -> int:
     parser.add_argument("--output", "-o", type=Path, help="Write output to this path instead of stdout.")
     args = parser.parse_args()
 
-    languages = _parse_languages(args.languages)
+    try:
+        languages = _parse_languages(args.languages)
+    except ValueError as exc:
+        parser.error(str(exc))
     _status(f"selected languages: {', '.join(languages)}")
     if args.current_json:
         _status(f"loading current inventory from {args.current_json}")

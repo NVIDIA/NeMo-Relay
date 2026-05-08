@@ -79,6 +79,10 @@ jobs:
           diff_status=$?
           set -e
 
+          if [[ "$diff_status" -ne 0 ]]; then
+            echo "::warning title=License diff failed::license_diff.py exited with status ${diff_status}; see the step summary for captured output."
+          fi
+
           cat license-diff.status >&2
           cat license-diff.md
 
@@ -87,6 +91,10 @@ jobs:
             echo
             echo "Compared against \`${compare_ref}\`."
             echo
+            if [[ "$diff_status" -ne 0 ]]; then
+              echo "> License diff failed with exit code \`${diff_status}\`; this informational check does not block CI."
+              echo
+            fi
             if [[ -s license-diff.md ]]; then
               cat license-diff.md
             else
@@ -100,5 +108,3 @@ jobs:
             echo '```'
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
-
-          exit "$diff_status"
