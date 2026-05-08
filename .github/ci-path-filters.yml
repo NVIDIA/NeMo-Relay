@@ -24,6 +24,7 @@ dependencies:
   - 'package.json'
   - 'package-lock.json'
   - 'pyproject.toml'
+  - 'scripts/licensing/**'
   - 'uv.lock'
 
 docs:

@@ -784,7 +784,7 @@ def _node_license_checker_data() -> tuple[dict[str, dict[str, str]], set[str]]:
     lock = cast(dict[str, Any], json.loads(lockfile.read_text(encoding="utf-8")))
     workspace_package_keys = _node_workspace_package_keys(lock)
 
-    subprocess.run(["npm", "ci"], cwd=lockfile.parent, check=True)  # noqa: S607
+    subprocess.run(["npm", "ci", "--ignore-scripts"], cwd=lockfile.parent, check=True)  # noqa: S607
     proc = subprocess.run(
         ["npx", "--yes", "license-checker@25.0.1", "--json"],  # noqa: S607
         cwd=lockfile.parent,

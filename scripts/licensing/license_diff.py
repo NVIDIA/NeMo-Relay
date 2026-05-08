@@ -212,11 +212,12 @@ def _load_inventory(path: Path) -> Inventory:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"Inventory must be a JSON object: {path}")
-    return {
-        str(language): [cast(LicenseInventoryEntry, dict(row)) for row in rows]
-        for language, rows in payload.items()
-        if isinstance(rows, list)
-    }
+    inventory: Inventory = {}
+    for language, rows in payload.items():
+        if not isinstance(rows, list):
+            raise ValueError(f"Inventory rows for {language!r} must be a list, got {type(rows).__name__}: {path}")
+        inventory[str(language)] = [cast(LicenseInventoryEntry, dict(row)) for row in rows]
+    return inventory
 
 
 def _filter_inventory(inventory: Inventory, languages: list[str]) -> Inventory:
@@ -231,7 +232,7 @@ def _worktree_inventory(root: Path, ref: str, languages: list[str]) -> Inventory
     try:
         _status(f"checking out base ref {ref} into a temporary worktree")
         subprocess.run(
-            ["git", "-C", str(root), "worktree", "add", "--detach", "--quiet", str(worktree), ref],
+            ["git", "-C", str(root), "worktree", "add", "--detach", "--quiet", str(worktree), "--", ref],
             check=True,
         )
         inventory = generate_inventory(worktree, languages, label="base")
