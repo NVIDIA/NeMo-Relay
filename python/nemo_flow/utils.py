@@ -8,6 +8,7 @@ from typing import Any
 
 import nemo_flow
 
+# Since this is created on import, this module is intentionally not imported in __init__.py
 _RUN_SYNC_EXECUTOR = ThreadPoolExecutor()
 
 

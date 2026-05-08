@@ -171,6 +171,7 @@ LlmStreamExecutionIntercept: TypeAlias = Callable[
     AsyncIterator[Json] | Awaitable[AsyncIterator[Json]],
 ]
 
+# intentionally not importing utils.py to avoid overhead of creating the ThreadPoolExecutor unless it is needed
 from nemo_flow import (  # noqa: E402
     adaptive,
     codecs,
