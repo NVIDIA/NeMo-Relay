@@ -66,7 +66,6 @@ class NemoFlowMiddleware(AgentMiddleware):
             response_codec=response_codec,
         )
 
-
     def _prepare_model_call(self, request: ModelRequest[Any]) -> tuple:
         """Boilerplate code common to both wrap_model_call and awrap_model_call"""
         object_codec = nemo_flow.typed.BestEffortAnyCodec()

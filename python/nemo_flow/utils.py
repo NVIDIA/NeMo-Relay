@@ -40,4 +40,3 @@ def run_sync(coro: Any) -> Any:
         return asyncio.run(coro)
 
     return _RUN_SYNC_EXECUTOR.submit(ctx.run, _run_with_scope_stack).result()
-

@@ -77,4 +77,3 @@ select = ["E", "F", "W", "I"]
 
 [tool.uv]
 default-groups = ["test"]
-
