@@ -37,7 +37,14 @@ class NemoFlowCallbackHandler(BaseCallbackHandler):
     ) -> typing.Any:
         """Push a NeMo Flow Agent scope for a LangChain chain run."""
         try:
-            name = serialized.get("name") or serialized.get("id", ["Unknown"])[-1]
+            name = serialized.get("name")
+            if name is None:
+                id_list = serialized.get("id")
+                if isinstance(id_list, list) and len(id_list) > 0:
+                    name = id_list[-1]
+                else:
+                    name = "Unknown"
+
             parent = self._scope_handles.get(parent_run_id) if parent_run_id else None
 
             scope_metadata = metadata.copy() if metadata else {}
