@@ -28,7 +28,6 @@ import {
 } from "./telemetry.js";
 import type { RuntimeStateOptions, StartContext } from "./types.js";
 
-const PLUGIN_ID = "nemo-flow";
 const SERVICE_ID = "nemo-flow-observability";
 const LIFECYCLE_ID = "nemo-flow-observability-cleanup";
 const STATUS_METHOD = "nemoFlow.status";

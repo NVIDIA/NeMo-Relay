@@ -48,8 +48,9 @@ NeMo Flow versions are anchored on the workspace SemVer in the repository root
 - The root `Cargo.toml` `workspace.dependencies` entries for
   `nemo-flow`, `nemo-flow-adaptive`, and `nemo-flow-ffi` must stay aligned with
   that same version.
-- `crates/node/package.json` and `crates/node/package-lock.json` carry the base
-  npm version for the Node.js package and must be bumped explicitly.
+- `crates/node/package.json` carries the base npm version for the Node.js
+  package. The repository-root `package-lock.json` carries the npm workspace
+  lock entries and must be updated with it.
 - The Python package version is derived at packaging time. `pyproject.toml`
   stays `dynamic = ["version"]` in the repository, and the packaging recipe
   writes a concrete version into `pyproject.toml` and `crates/python/Cargo.toml`
@@ -101,9 +102,9 @@ Update the versioned source files in the release PR or release-prep commit:
 1. Update the root [`Cargo.toml`](Cargo.toml) workspace version.
 2. Update the root [`Cargo.toml`](Cargo.toml) `workspace.dependencies` versions
    for `nemo-flow`, `nemo-flow-adaptive`, and `nemo-flow-ffi`.
-3. Update [`crates/node/package.json`](crates/node/package.json) and
-   [`crates/node/package-lock.json`](crates/node/package-lock.json) to the same
-   release version.
+3. Update [`crates/node/package.json`](crates/node/package.json) and the
+   `crates/node` entry in the root [`package-lock.json`](package-lock.json) to
+   the same release version.
 4. Review docs and snippets that mention explicit versions, including:
    - [`README.md`](README.md)
    - [`CONTRIBUTING.md`](CONTRIBUTING.md)

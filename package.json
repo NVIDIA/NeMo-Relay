@@ -1,0 +1,8 @@
+{
+  "name": "nemo-flow-workspace",
+  "private": true,
+  "workspaces": [
+    "crates/node",
+    "integrations/openclaw"
+  ]
+}

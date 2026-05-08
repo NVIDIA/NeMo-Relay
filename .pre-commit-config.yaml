@@ -93,9 +93,9 @@ repos:
 
       - id: node-lockfile-check
         name: package-lock.json is up to date
-        entry: bash -c 'cd crates/node && npm install --package-lock-only --ignore-scripts --audit=false --fund=false'
+        entry: bash -c 'npm install --package-lock-only --ignore-scripts --audit=false --fund=false'
         language: system
-        files: '^crates/node/package(?:-lock)?\.json$'
+        files: '^(package(?:-lock)?\.json|crates/node/package\.json|integrations/openclaw/package\.json)$'
         pass_filenames: false
 
   # Rust — fmt + clippy + cargo-deny
@@ -151,10 +151,10 @@ repos:
         pass_filenames: false
 
       - id: attributions-node
-        name: ATTRIBUTIONS-Node.md (crates/node/package-lock.json)
+        name: ATTRIBUTIONS-Node.md (package-lock.json)
         entry: bash scripts/generate_attributions.sh node
         language: system
-        files: '^(crates/node/package-lock\.json|ATTRIBUTIONS-Node\.md)$'
+        files: '^(package-lock\.json|ATTRIBUTIONS-Node\.md)$'
         pass_filenames: false
 
   # Go — fmt + vet

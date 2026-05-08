@@ -85,6 +85,10 @@ jobs:
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-node
 
+      - name: Run OpenClaw integration checks
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: just --set ci true test-openclaw
+
       - name: Upload Node coverage to Codecov
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
         if: ${{ !startsWith(matrix.platform, 'windows') }}

@@ -152,10 +152,7 @@ ensure_docs_dependencies() {
 
     cd "$NEMO_FLOW_REPO_ROOT"
     uv sync --inexact --no-default-groups --group docs --no-install-project
-    (
-        cd "$NEMO_FLOW_REPO_ROOT/crates/node"
-        npm install --ignore-scripts
-    )
+    npm install --ignore-scripts
 }
 
 configure_docs_environment() {
@@ -219,10 +216,11 @@ set_npm_package_version() {
     local pkg_path="$1"
     local lock_path="${2:-}"
     local version="$3"
+    local lock_package_path="${4:-}"
 
-    node - "$pkg_path" "$lock_path" "$version" <<'NODE'
+    node - "$pkg_path" "$lock_path" "$version" "$lock_package_path" <<'NODE'
 const fs = require('fs');
-const [pkgPath, lockPath, version] = process.argv.slice(2);
+const [pkgPath, lockPath, version, lockPackagePath] = process.argv.slice(2);
 
 function readJson(path) {
   return JSON.parse(fs.readFileSync(path, 'utf8'));
@@ -248,24 +246,34 @@ try {
   const manifestChanged = manifest.version !== version;
   let lock = null;
   let lockChanged = false;
-  let rootPackageChanged = false;
+  let lockPackageChanged = false;
 
   if (lockPath) {
     lock = readJson(lockPath);
-    requireVersion(lock, lockPath);
-    if (!lock.packages || !lock.packages['']) {
-      throw new Error(`${lockPath} missing packages[""] root package entry`);
+    if (!lock.packages) {
+      throw new Error(`${lockPath} missing packages`);
     }
-    requireVersion(lock.packages[''], `${lockPath} packages[""]`);
 
-    lockChanged = lock.version !== version;
-    rootPackageChanged = lock.packages[''].version !== version;
+    if (typeof lock.version === 'string' && lock.version.length > 0) {
+      lockChanged = lock.version !== version;
+    }
+
+    const packageEntryKey = lockPackagePath || '';
+    const packageEntry = lock.packages[packageEntryKey];
+    if (!packageEntry) {
+      throw new Error(`${lockPath} missing packages["${packageEntryKey}"]`);
+    }
+    requireVersion(packageEntry, `${lockPath} packages["${packageEntryKey}"]`);
+    lockPackageChanged = packageEntry.version !== version;
   }
 
   manifest.version = version;
   if (lock) {
-    lock.version = version;
-    lock.packages[''].version = version;
+    if (typeof lock.version === 'string' && lock.version.length > 0) {
+      lock.version = version;
+    }
+    const packageEntryKey = lockPackagePath || '';
+    lock.packages[packageEntryKey].version = version;
   }
 
   if (manifestChanged) {
@@ -276,7 +284,7 @@ try {
   }
 
   if (lockPath) {
-    if (lockChanged || rootPackageChanged) {
+    if (lockChanged || lockPackageChanged) {
       writeJson(lockPath, lock);
       console.log(`${lockPath} version updated to ${version}`);
     } else {
@@ -416,7 +424,7 @@ PY
 
 set_node_package_version() {
     local version="$1"
-    set_npm_package_version crates/node/package.json crates/node/package-lock.json "$version"
+    set_npm_package_version crates/node/package.json package-lock.json "$version" crates/node
 }
 
 set_project_version() {
@@ -654,12 +662,12 @@ build-node:
     if is_true "{{ ci }}"; then
         prepare_llvm_cov_workspace
     fi
-    cd "$NEMO_FLOW_REPO_ROOT/crates/node"
+    cd "$NEMO_FLOW_REPO_ROOT"
     npm install --ignore-scripts
     if is_true "{{ ci }}"; then
-        npm run build-debug
+        npm run build-debug --workspace=nemo-flow-node
     else
-        npm run build
+        npm run build --workspace=nemo-flow-node
     fi
 
 # --set [ci=true|false]
@@ -694,6 +702,10 @@ clean:
         crates/wasm/package-lock.json \
         crates/wasm/pkg-test/ \
         crates/wasm/pkg/ \
+        integrations/openclaw/.test-dist \
+        integrations/openclaw/dist \
+        integrations/openclaw/node_modules \
+        node_modules \
         docs/_build/ \
         docs/reference/api/**/_generated/ \
         docs/reference/api/**/_source/ \
@@ -856,12 +868,12 @@ test-node:
         fi
         cargo test -p nemo-flow-node --lib
     fi
-    cd "$NEMO_FLOW_REPO_ROOT/crates/node"
+    cd "$NEMO_FLOW_REPO_ROOT"
     npm install --ignore-scripts
     if is_true "{{ ci }}"; then
-        npm run coverage
-        cp ./coverage/cobertura-coverage.xml "$coverage_out"
-        cp ./junit.xml "$junit_out"
+        npm run coverage --workspace=nemo-flow-node
+        cp crates/node/coverage/cobertura-coverage.xml "$coverage_out"
+        cp crates/node/junit.xml "$junit_out"
         cd "$NEMO_FLOW_REPO_ROOT"
         if [[ -n "$rust_coverage_out" ]]; then
             cargo llvm-cov report \
@@ -871,8 +883,22 @@ test-node:
                 --output-path "$rust_coverage_out"
         fi
     else
-        npm test
+        npm test --workspace=nemo-flow-node
     fi
+
+# --set [ci=true|false]
+test-openclaw:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_FLOW_REPO_ROOT"
+    if is_true "{{ ci }}"; then
+        npm ci --ignore-scripts
+    else
+        npm install --ignore-scripts
+    fi
+    npm run typecheck --workspace=@nvidia/nemo-flow-openclaw
+    npm test --workspace=@nvidia/nemo-flow-openclaw
+    npm run pack:check --workspace=@nvidia/nemo-flow-openclaw
 
 # --set [output_dir=<path>] [ci=true|false]
 test-wasm:
@@ -896,7 +922,7 @@ test-wasm:
     fi
 
 # --set [output_dir=<path>] [ci=true|false]
-test-all: test-rust test-python test-go test-node test-wasm
+test-all: test-rust test-python test-go test-node test-openclaw test-wasm
 
 # [version] or --set ref_name=<version>
 set-version version="":
@@ -927,10 +953,10 @@ package-node:
         sha="$(head_git_sha)"
         version="$(read_npm_package_version crates/node/package.json)"
         echo "Non-release build: appending commit hash to version"
-        set_npm_package_version crates/node/package.json crates/node/package-lock.json "${version}-${sha}"
+        set_npm_package_version crates/node/package.json package-lock.json "${version}-${sha}" crates/node
     else
         echo "Using explicit version {{ ref_name }}"
-        set_npm_package_version crates/node/package.json crates/node/package-lock.json "{{ ref_name }}"
+        set_npm_package_version crates/node/package.json package-lock.json "{{ ref_name }}" crates/node
     fi
     build_args=(build)
     if is_true "{{ ci }}" && [[ "$(uname -s)" == "Linux" ]]; then
@@ -941,9 +967,9 @@ package-node:
         prepend_ziglang_to_path "$(project_python_executable)"
         build_args+=(-- --zig --zig-abi-suffix "$linux_glibc_version")
     fi
-    pushd crates/node >/dev/null
     npm install --ignore-scripts
-    npm run "${build_args[@]}"
+    npm run "${build_args[@]}" --workspace=nemo-flow-node
+    pushd crates/node >/dev/null
     npm pack --pack-destination "$package_dir"
     popd >/dev/null
     shopt -s nullglob

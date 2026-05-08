@@ -26,7 +26,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 ROOT = Path(__file__).resolve().parents[2]
-NODE = ROOT / "crates" / "node"
+NODE_LOCK = ROOT / "package-lock.json"
 MARKDOWN_CODE_FENCE = "```\n"
 MARKDOWN_CODE_BLOCK_END = "```\n\n"
 
@@ -733,13 +733,13 @@ def _node_workspace_package_keys(lock: dict[str, Any]) -> set[str]:
 def cmd_node() -> int:
     """Generate ATTRIBUTIONS-Node.md from package-lock.json via license-checker."""
     out = ROOT / "ATTRIBUTIONS-Node.md"
-    lock = cast(dict[str, Any], json.loads((NODE / "package-lock.json").read_text(encoding="utf-8")))
+    lock = cast(dict[str, Any], json.loads(NODE_LOCK.read_text(encoding="utf-8")))
     workspace_package_keys = _node_workspace_package_keys(lock)
 
-    subprocess.run(["npm", "ci"], cwd=NODE, check=True)  # noqa: S607
+    subprocess.run(["npm", "ci", "--ignore-scripts"], cwd=ROOT, check=True)  # noqa: S607
     proc = subprocess.run(
         ["npx", "--yes", "license-checker@25.0.1", "--json"],  # noqa: S607
-        cwd=NODE,
+        cwd=ROOT,
         capture_output=True,
         text=True,
         check=True,

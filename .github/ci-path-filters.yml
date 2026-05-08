@@ -44,14 +44,16 @@ go:
   - 'go/**/!(*.md)'
 
 node:
+  - 'package.json'
+  - 'package-lock.json'
   - 'crates/node/Cargo.toml'
   - 'crates/node/build.rs'
   - 'crates/node/package.json'
-  - 'crates/node/package-lock.json'
   - 'crates/node/*.d.ts'
   - 'crates/node/*.js'
   - 'crates/node/src/**'
   - 'crates/node/tests/**/*.mjs'
+  - 'integrations/openclaw/**'
   - 'scripts/test-support/**'
 
 python:
