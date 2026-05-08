@@ -38,7 +38,8 @@ python/
 go/
   nemo_flow/  # Experimental Go CGo binding and tests
 docs/         # Sphinx documentation site
-integrations/ # Sample integrations using public APIs without patching
+integrations/ # Integrations using public APIs without patching
+integrations/**/tests/  # Integration test suites for public API-based integrations
 scripts/      # Stable wrappers and helper scripts; build/test/docs entry points live in justfile
 third_party/  # Pinned upstream checkouts for sample integration patches
 patches/      # NeMo Flow patch sets applied to third_party checkouts
