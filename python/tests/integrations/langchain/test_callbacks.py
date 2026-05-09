@@ -123,9 +123,7 @@ class TestScopeLifecycle:
         child_call = mock_nemo_flow.scope.push.call_args_list[1]
         assert child_call.kwargs["handle"] is parent_handle
 
-    def test_chain_end_without_start_is_noop(
-        self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock
-    ) -> None:
+    def test_chain_end_without_start_is_noop(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock) -> None:
         handler.on_chain_end(
             {"output": "result"},
             run_id=uuid4(),

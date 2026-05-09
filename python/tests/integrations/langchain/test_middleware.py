@@ -23,6 +23,7 @@ from nemo_flow.integrations.langchain.middleware import NemoFlowMiddleware
 
 _DEFAULT_MOCK_RESPONSE_MSG = "nemo_flow unittest result"
 
+
 def _mk_mock_model(returned_message: str | list[AIMessage] = _DEFAULT_MOCK_RESPONSE_MSG) -> MagicMock:
     mock_model = MagicMock(spec=BaseChatModel)
     mock_model.bind.return_value = mock_model
@@ -135,11 +136,7 @@ def test_wrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPa
     parent_handle = MagicMock()
     seen_request: ToolCallRequest | None = None
 
-    async def execute_side_effect(
-        *,
-        func: Any,
-        **kwargs: Any
-    ) -> ToolMessage:
+    async def execute_side_effect(*, func: Any, **kwargs: Any) -> ToolMessage:
         return func({"query": "intercepted"})
 
     mock_tool_execute = AsyncMock(side_effect=execute_side_effect)
@@ -171,11 +168,7 @@ def test_awrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyP
     parent_handle = MagicMock()
     seen_request: ToolCallRequest | None = None
 
-    async def execute_side_effect(
-        *,
-        func: Any,
-        **kwargs: Any
-    ) -> ToolMessage:
+    async def execute_side_effect(*, func: Any, **kwargs: Any) -> ToolMessage:
         return await func({"query": "intercepted"})
 
     mock_tool_execute = AsyncMock(side_effect=execute_side_effect)
@@ -234,9 +227,9 @@ def test_agent_integration(use_async: bool) -> None:
                     "args": {"location": "San Francisco"},
                     "id": "call-1",
                 }
-            ]
+            ],
         ),
-        AIMessage(content=_DEFAULT_MOCK_RESPONSE_MSG)
+        AIMessage(content=_DEFAULT_MOCK_RESPONSE_MSG),
     ]
 
     mock_model = _mk_mock_model(model_responses)
@@ -246,11 +239,7 @@ def test_agent_integration(use_async: bool) -> None:
         """Get the current weather for a location."""
         return f"The weather in {location} is sunny and 72 degrees."
 
-    agent = create_agent(
-        model=mock_model,
-        tools=[get_weather],
-        middleware=[NemoFlowMiddleware()]
-    )
+    agent = create_agent(model=mock_model, tools=[get_weather], middleware=[NemoFlowMiddleware()])
 
     input_payload = {
         "messages": [

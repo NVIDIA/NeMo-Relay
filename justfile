@@ -642,7 +642,7 @@ build-python:
     fi
     python_executable="$(project_python_executable)"
     "$python_executable" -m maturin develop
-    
+
 
 # --set [ci=true|false]
 build-go:
