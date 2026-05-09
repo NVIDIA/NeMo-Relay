@@ -73,7 +73,7 @@ def infer_codec_from_model(model: Any) -> LlmCodec | None:
             if getattr(model, "use_responses_api", None) is True:
                 return OpenAIResponsesCodec()
 
-        return OpenAIChatCodec()
+            return OpenAIChatCodec()
 
     return None
 
