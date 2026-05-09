@@ -528,7 +528,15 @@ fn build_response(
 // for the forwarded body. Host and content length are intentionally excluded because reqwest sets
 // them for the upstream connection.
 fn should_forward_request_header(name: &HeaderName) -> bool {
-    !is_hop_by_hop(name) && name != http::header::HOST && name != http::header::CONTENT_LENGTH
+    !is_hop_by_hop(name)
+        && name != http::header::HOST
+        && name != http::header::CONTENT_LENGTH
+        // Strip Accept-Encoding so upstreams return identity-encoded bodies; otherwise the
+        // observability capture (`output.value` on LLM spans, ATIF trajectory bodies) records
+        // gzip/br/zstd bytes that downstream consumers can't read. Bandwidth cost is paid only
+        // on the sidecar-upstream hop. The client never asked for the encoding it would have
+        // received from upstream, so its decoders never trigger.
+        && name != http::header::ACCEPT_ENCODING
 }
 
 // Allows headers into observability metadata only after removing credentials and provider API keys.
