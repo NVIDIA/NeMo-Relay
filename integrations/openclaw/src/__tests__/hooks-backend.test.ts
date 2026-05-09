@@ -248,6 +248,32 @@ describe("HookReplayBackend", () => {
     ]);
   });
 
+  it("keeps gateway stop reason out of the root session output when a final answer is known", async () => {
+    const nf = createNemoFlowRuntime();
+    const backend = createBackend(nf);
+
+    backend.onAgentEnd(
+      {
+        runId: "run-1",
+        messages: [
+          { role: "user", content: "hello" },
+          { role: "assistant", provider: "openai", model: "gpt", content: "Final answer." },
+        ],
+        success: true,
+      },
+      { runId: "run-1", sessionId: "session-1" },
+    );
+    await backend.drainForGatewayStop("gateway stopping");
+
+    assert.deepEqual(nf.calls.popScope[0]?.output, {
+      content: "Final answer.",
+      source: "openclaw.agent_end",
+      runId: "run-1",
+      success: true,
+    });
+    assert.deepEqual(nf.calls.event.at(-1)?.data, { reason: "gateway stopping" });
+  });
+
   it("records subagent marks under the requester alias without merging child session identity", () => {
     const nf = createNemoFlowRuntime();
     const backend = createBackend(nf);

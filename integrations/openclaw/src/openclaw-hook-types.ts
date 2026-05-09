@@ -47,6 +47,7 @@ export type PluginHookLlmOutputEvent = {
   resolvedRef?: string;
   harnessId?: string;
   assistantTexts: string[];
+  assistantToolCalls?: unknown[];
   lastAssistant?: unknown;
   usage?: {
     input?: number;
@@ -130,6 +131,17 @@ export type PluginHookBeforeAgentFinalizeEvent = {
   stopHookActive: boolean;
   lastAssistantMessage?: string;
   messages?: unknown[];
+};
+
+export type PluginHookBeforeMessageWriteEvent = {
+  message: unknown;
+  sessionKey?: string;
+  agentId?: string;
+};
+
+export type PluginHookBeforeMessageWriteContext = {
+  agentId?: string;
+  sessionKey?: string;
 };
 
 export type PluginHookSubagentContext = {

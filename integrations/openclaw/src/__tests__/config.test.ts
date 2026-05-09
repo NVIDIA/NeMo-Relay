@@ -145,6 +145,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
         "model_call_started",
         "model_call_ended",
         "after_tool_call",
+        "before_message_write",
         "agent_end",
         "before_agent_finalize",
         "subagent_spawned",

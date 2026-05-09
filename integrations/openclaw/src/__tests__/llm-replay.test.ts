@@ -48,18 +48,16 @@ describe("LLM replay", () => {
     const request = nf.calls.llmCall[0]?.request as ReplayRequest;
     assert.deepEqual(request.content.messages, [{ role: "user", content: "hello" }]);
     assert.equal(request.content.systemPrompt, "be concise");
+    assert.equal(nf.calls.llmCall[0]?.data, null);
     const response = nf.calls.llmCallEnd[0]?.response as ReplayResponse;
     assert.equal(response.content, "hi");
+    assert.equal(nf.calls.llmCallEnd[0]?.data, null);
     assert.deepEqual(response.usage, {
       prompt_tokens: 2,
       completion_tokens: 3,
       total_tokens: 5,
     });
-    assert.deepEqual(response.token_usage, {
-      prompt_tokens: 2,
-      completion_tokens: 3,
-      total_tokens: 5,
-    });
+    assert.equal("token_usage" in response, false);
   });
 
   it("uses the observed input time as the fallback llm span start time", () => {
@@ -78,6 +76,60 @@ describe("LLM replay", () => {
 
     assert.equal(nf.calls.llmCall[0]?.timestamp, 1_000_000);
     assert.equal(nf.calls.llmCallEnd[0]?.timestamp, 1_250_000);
+  });
+
+  it("folds cache read and write tokens into prompt token totals", () => {
+    const nf = createNemoFlowRuntime();
+    const backend = createBackend(nf);
+
+    backend.onLlmInput(llmInput(), { runId: "run-1", sessionId: "session-1" });
+    backend.onLlmOutput(
+      {
+        ...llmOutput(),
+        usage: {
+          input: 1,
+          output: 1_454,
+          cacheRead: 4_869,
+          cacheWrite: 544,
+          total: 6_868,
+        },
+      },
+      { runId: "run-1", sessionId: "session-1" },
+    );
+
+    const response = nf.calls.llmCallEnd[0]?.response as ReplayResponse;
+    assert.deepEqual(response.usage, {
+      prompt_tokens: 5_414,
+      completion_tokens: 1_454,
+      cached_tokens: 4_869,
+      cache_read_tokens: 4_869,
+      cache_write_tokens: 544,
+      total_tokens: 6_868,
+    });
+  });
+
+  it("does not derive impossible prompt tokens from inconsistent usage totals", () => {
+    const nf = createNemoFlowRuntime();
+    const backend = createBackend(nf);
+
+    backend.onLlmInput(llmInput(), { runId: "run-1", sessionId: "session-1" });
+    backend.onLlmOutput(
+      {
+        ...llmOutput(),
+        usage: {
+          input: 3,
+          output: 10,
+          total: 5,
+        },
+      },
+      { runId: "run-1", sessionId: "session-1" },
+    );
+
+    const response = nf.calls.llmCallEnd[0]?.response as ReplayResponse;
+    assert.deepEqual(response.usage, {
+      prompt_tokens: 3,
+      completion_tokens: 10,
+    });
   });
 
   it("replays pending output when matching input arrives and cancels pending queue", () => {
@@ -227,6 +279,337 @@ describe("LLM replay", () => {
     assert.equal("duration_ms" in response.openclaw, false);
   });
 
+  it("replays recorded assistant messages as ordered llm spans with usage and timing", () => {
+    const nf = createNemoFlowRuntime();
+    const backend = createBackend(nf);
+    const firstAssistant = {
+      role: "assistant",
+      provider: "openai",
+      model: "gpt-4",
+      content: [
+        { type: "thinking", thinking: "private reasoning", thinkingSignature: "opaque-signature" },
+        { type: "toolCall", name: "web_search", arguments: { query: "answer" } },
+      ],
+      usage: { input: 10, output: 5, totalTokens: 15 },
+      stopReason: "tool_use",
+    };
+    const finalAssistant = {
+      role: "assistant",
+      provider: "openai",
+      model: "gpt-4",
+      content: [{ type: "text", text: "Final answer." }],
+      usage: { input: 20, output: 7, totalTokens: 27 },
+      stopReason: "stop",
+    };
+
+    const historyMessages: unknown[] = [];
+    backend.onLlmInput(
+      { ...llmInput(), prompt: "Find the answer.", historyMessages },
+      { runId: "run-1", sessionId: "session-1" },
+    );
+    historyMessages.push(firstAssistant);
+    backend.onModelCallEnded(modelEnded("call-1", 42), { runId: "run-1", sessionId: "session-1" });
+    backend.onModelCallEnded(modelEnded("call-2", 55), { runId: "run-1", sessionId: "session-1" });
+    backend.onBeforeMessageWrite({ message: firstAssistant }, { sessionKey: "session-1" });
+    backend.onBeforeMessageWrite({ message: { role: "toolResult", content: "tool result" } }, { sessionKey: "session-1" });
+    backend.onBeforeMessageWrite({ message: finalAssistant }, { sessionKey: "session-1" });
+    backend.onAgentEnd(
+      {
+        runId: "run-1",
+        messages: [
+          { role: "user", content: "Find the answer." },
+          firstAssistant,
+          { role: "tool", content: "tool result" },
+          finalAssistant,
+        ],
+        success: true,
+        durationMs: 100,
+      },
+      { runId: "run-1", sessionId: "session-1" },
+    );
+
+    assert.equal(nf.calls.llmCall.length, 2);
+    assert.equal(nf.calls.llmCallEnd.length, 2);
+    assert.equal(nf.calls.event.some((event) => event.name === "openclaw.model_call_timing_ambiguous"), false);
+    const firstResponse = nf.calls.llmCallEnd[0]?.response as ReplayResponse;
+    const firstRequest = nf.calls.llmCall[0]?.request as ReplayRequest;
+    assert.deepEqual(firstRequest.content.messages, [{ role: "user", content: "Find the answer." }]);
+    assert.equal(firstResponse.content, "tool calls: web_search");
+    assert.equal((firstResponse.openclaw as ResponseOpenClaw).assistant_tool_call_names?.[0], "web_search");
+    assert.equal(firstResponse.openclaw.duration_ms, 42);
+    assert.deepEqual(firstResponse.usage, {
+      prompt_tokens: 10,
+      completion_tokens: 5,
+      total_tokens: 15,
+    });
+    const secondResponse = nf.calls.llmCallEnd[1]?.response as ReplayResponse;
+    const secondRequest = nf.calls.llmCall[1]?.request as ReplayRequest;
+    assert.deepEqual(secondRequest.content.messages?.[1], {
+      role: "assistant",
+      provider: "openai",
+      model: "gpt-4",
+      content: [
+        { type: "thinking", stripped: true },
+        { type: "toolCall", name: "web_search", arguments: { stripped: true } },
+      ],
+      usage: { input: 10, output: 5, totalTokens: 15 },
+      stopReason: "tool_use",
+    });
+    assert.deepEqual(secondRequest.content.messages?.at(-1), { role: "toolResult", content: { stripped: true } });
+    assert.equal(secondResponse.content, "Final answer.");
+    assert.equal(secondResponse.openclaw.duration_ms, 55);
+    assert.deepEqual(secondResponse.usage, {
+      prompt_tokens: 20,
+      completion_tokens: 7,
+      total_tokens: 27,
+    });
+  });
+
+  it("uses model_call timestamps for recorded assistant message spans", () => {
+    const now = Date.now;
+    const nf = createNemoFlowRuntime();
+    const backend = createBackend(nf);
+
+    try {
+      Date.now = () => 1_000;
+      backend.onModelCallStarted(modelStarted("call-1"), { runId: "run-1", sessionId: "session-1" });
+      Date.now = () => 1_250;
+      backend.onModelCallEnded(modelEnded("call-1", 250), { runId: "run-1", sessionId: "session-1" });
+      Date.now = () => 1_260;
+      backend.onBeforeMessageWrite(
+        { message: { role: "assistant", provider: "openai", model: "gpt-4", content: "hi" } },
+        { sessionKey: "session-1" },
+      );
+      Date.now = () => 2_000;
+      backend.onAgentEnd(
+        {
+          runId: "run-1",
+          messages: [
+            { role: "user", content: "hello" },
+            { role: "assistant", provider: "openai", model: "gpt-4", content: "hi" },
+          ],
+          success: true,
+        },
+        { runId: "run-1", sessionId: "session-1" },
+      );
+    } finally {
+      Date.now = now;
+    }
+
+    assert.equal(nf.calls.llmCall[0]?.timestamp, 1_000_000);
+    assert.equal(nf.calls.llmCallEnd[0]?.timestamp, 1_250_000);
+    assert.equal(nf.calls.pushScope[0]?.timestamp, 1_000_000);
+  });
+
+  it("suppresses collapsed llm_output after recorded assistant message replay", () => {
+    const nf = createNemoFlowRuntime();
+    const backend = createBackend(nf);
+
+    backend.onLlmInput(llmInput(), { runId: "run-1", sessionId: "session-1" });
+    backend.onModelCallEnded(modelEnded("call-1", 42), { runId: "run-1", sessionId: "session-1" });
+    backend.onBeforeMessageWrite(
+      { message: { role: "assistant", provider: "openai", model: "gpt-4", content: "hi" } },
+      { sessionKey: "session-1" },
+    );
+    backend.onAgentEnd(
+      {
+        runId: "run-1",
+        messages: [
+          { role: "user", content: "hello" },
+          { role: "assistant", provider: "openai", model: "gpt-4", content: "hi" },
+        ],
+        success: true,
+      },
+      { runId: "run-1", sessionId: "session-1" },
+    );
+    backend.onLlmOutput(llmOutput(), { runId: "run-1", sessionId: "session-1" });
+
+    assert.equal(nf.calls.llmCall.length, 1);
+    assert.equal(nf.calls.llmCallEnd.length, 1);
+    assert.equal(backend.state().llmInputs.size, 0);
+  });
+
+  it("replays multiple llm_output hooks from the same run", () => {
+    const nf = createNemoFlowRuntime();
+    const backend = createBackend(nf);
+
+    backend.onLlmInput({ ...llmInput(), prompt: "first" }, { runId: "run-1", sessionId: "session-1" });
+    backend.onLlmOutput({ ...llmOutput(), assistantTexts: ["first answer"] }, { runId: "run-1", sessionId: "session-1" });
+    backend.onLlmInput({ ...llmInput(), prompt: "second" }, { runId: "run-1", sessionId: "session-1" });
+    backend.onLlmOutput({ ...llmOutput(), assistantTexts: ["second answer"] }, { runId: "run-1", sessionId: "session-1" });
+
+    assert.equal(nf.calls.llmCall.length, 2);
+    assert.equal(nf.calls.llmCallEnd.length, 2);
+    assert.equal((nf.calls.llmCallEnd[0]?.response as ReplayResponse).content, "first answer");
+    assert.equal((nf.calls.llmCallEnd[1]?.response as ReplayResponse).content, "second answer");
+  });
+
+  it("does not reconstruct agent_end transcripts without reliable message-write state", () => {
+    const transcriptOnlyNf = createNemoFlowRuntime();
+    const transcriptOnlyBackend = createBackend(transcriptOnlyNf);
+
+    transcriptOnlyBackend.onAgentEnd(
+      {
+        runId: "run-1",
+        messages: [
+          { role: "user", content: "current question" },
+          { role: "assistant", provider: "openai", model: "gpt-4", content: "current answer" },
+        ],
+        success: true,
+      },
+      { runId: "run-1", sessionId: "session-1" },
+    );
+
+    assert.equal(transcriptOnlyNf.calls.llmCall.length, 0);
+    assert.equal(transcriptOnlyNf.calls.llmCallEnd.length, 0);
+
+    const compactedNf = createNemoFlowRuntime();
+    const compactedBackend = createBackend(compactedNf);
+
+    compactedBackend.onLlmInput(
+      {
+        ...llmInput(),
+        prompt: "current question",
+        historyMessages: [
+          { role: "user", content: "previous question 1" },
+          { role: "assistant", content: "previous answer 1" },
+        ],
+      },
+      { runId: "run-1", sessionId: "session-1" },
+    );
+    compactedBackend.onAgentEnd(
+      {
+        runId: "run-1",
+        messages: [{ role: "assistant", provider: "openai", model: "gpt-4", content: "previous answer" }],
+        success: true,
+      },
+      { runId: "run-1", sessionId: "session-1" },
+    );
+
+    assert.equal(compactedNf.calls.llmCall.length, 0);
+    assert.equal(compactedNf.calls.llmCallEnd.length, 0);
+  });
+
+  it("replays compacted message-write turns from the latest llm input snapshot", () => {
+    const now = Date.now;
+    const nf = createNemoFlowRuntime();
+    const backend = createBackend(nf);
+
+    try {
+      Date.now = () => 1_000;
+      backend.onLlmInput(
+        { ...llmInput(), runId: "old-run", prompt: "old question" },
+        { runId: "old-run", sessionId: "session-1" },
+      );
+      Date.now = () => 2_000;
+      backend.onLlmInput(
+        { ...llmInput(), runId: "run-1", prompt: "current question" },
+        { runId: "run-1", sessionId: "session-1" },
+      );
+    } finally {
+      Date.now = now;
+    }
+
+    backend.onModelCallEnded(modelEnded("call-1", 42), { runId: "run-1", sessionId: "session-1" });
+    backend.onBeforeMessageWrite(
+      { message: { role: "assistant", provider: "openai", model: "gpt-4", content: "current answer" } },
+      { sessionKey: "session-1" },
+    );
+    backend.onAgentEnd(
+      {
+        runId: "run-1",
+        messages: [
+          { role: "assistant", provider: "openai", model: "gpt-4", content: "compacted previous answer" },
+          { role: "user", content: "current question" },
+          { role: "assistant", provider: "openai", model: "gpt-4", content: "current answer" },
+        ],
+        success: true,
+      },
+      { runId: "run-1", sessionId: "session-1" },
+    );
+
+    const request = nf.calls.llmCall[0]?.request as ReplayRequest;
+    assert.deepEqual(request.content.messages, [{ role: "user", content: "current question" }]);
+    assert.equal((nf.calls.llmCallEnd[0]?.response as ReplayResponse).content, "current answer");
+  });
+
+  it("does not duplicate trajectory replay across llm_output, message-write, and late hooks", () => {
+    const nf = createNemoFlowRuntime();
+    const backend = createBackend(nf);
+
+    backend.onLlmInput(llmInput(), { runId: "run-1", sessionId: "session-1" });
+    backend.onLlmOutput(llmOutput(), { runId: "run-1", sessionId: "session-1" });
+    backend.onModelCallEnded(modelEnded("call-1", 42), { runId: "run-1", sessionId: "session-1" });
+    backend.onBeforeMessageWrite(
+      { message: { role: "assistant", provider: "openai", model: "gpt-4", content: "Final answer." } },
+      { sessionKey: "session-1" },
+    );
+    backend.onAgentEnd(
+      {
+        runId: "run-1",
+        messages: [
+          { role: "user", content: "hello" },
+          { role: "assistant", provider: "openai", model: "gpt-4", content: "hi" },
+          { role: "tool", content: "tool result" },
+          { role: "assistant", provider: "openai", model: "gpt-4", content: "Final answer." },
+        ],
+        success: true,
+      },
+      { runId: "run-1", sessionId: "session-1" },
+    );
+    backend.onLlmInput({ ...llmInput(), prompt: "late duplicate" }, { runId: "run-1", sessionId: "session-1" });
+    backend.onLlmOutput({ ...llmOutput(), assistantTexts: ["late duplicate"] }, { runId: "run-1", sessionId: "session-1" });
+
+    assert.equal(nf.calls.llmCall.length, 1);
+    assert.equal(nf.calls.llmCallEnd.length, 1);
+    assert.equal((nf.calls.llmCallEnd[0]?.response as ReplayResponse).content, "hi");
+  });
+
+  it("bounds replayed run markers for long-lived sessions", () => {
+    const nf = createNemoFlowRuntime();
+    const backend = createBackend(nf, { maxRecordsPerKey: 2 });
+
+    for (const runId of ["run-1", "run-2", "run-3"]) {
+      backend.onLlmInput({ ...llmInput(), runId }, { runId, sessionId: "session-1" });
+      backend.onLlmOutput({ ...llmOutput(), runId }, { runId, sessionId: "session-1" });
+      backend.onAgentEnd(
+        {
+          runId,
+          messages: [
+            { role: "user", content: "hello" },
+            { role: "assistant", provider: "openai", model: "gpt-4", content: "hi" },
+          ],
+          success: true,
+        },
+        { runId, sessionId: "session-1" },
+      );
+    }
+
+    const session = backend.state().sessions.get("session-1");
+    assert.deepEqual([...(session?.trajectoryReplayedRuns ?? [])], ["run-2", "run-3"]);
+  });
+
+  it("bounds run bookkeeping for long-lived sessions without agent_end", () => {
+    const nf = createNemoFlowRuntime();
+    const backend = createBackend(nf, { maxRecordsPerKey: 2 });
+
+    for (const runId of ["run-1", "run-2", "run-3"]) {
+      backend.onLlmInput(
+        {
+          ...llmInput(),
+          runId,
+          prompt: `prompt for ${runId}`,
+        },
+        { runId, sessionId: "session-1" },
+      );
+      backend.onLlmOutput({ ...llmOutput(), runId }, { runId, sessionId: "session-1" });
+    }
+
+    const session = backend.state().sessions.get("session-1");
+    assert.deepEqual([...(session?.agentRunInputSnapshots?.keys() ?? [])], ["run-2", "run-3"]);
+    assert.deepEqual([...(session?.hookLlmOutputReplayCounts?.keys() ?? [])], ["run-2", "run-3"]);
+  });
+
   it("emits unpaired mark for model_call_started without matching end on session drain", async () => {
     const nf = createNemoFlowRuntime();
     const backend = createBackend(nf);
@@ -315,7 +698,7 @@ describe("LLM replay", () => {
         provider: "openai",
         model: "gpt-4",
         prompt: "hello",
-        historyMessages: [{ role: "user", content: "hello" }],
+        historyMessages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
         imagesCount: 0,
       },
       { runId: "run-1", sessionId: "session-1" },
@@ -323,7 +706,7 @@ describe("LLM replay", () => {
     backend.onLlmOutput(llmOutput(), { runId: "run-1", sessionId: "session-1" });
 
     const request = nf.calls.llmCall[0]?.request as ReplayRequest;
-    assert.deepEqual(request.content.messages, [{ role: "user", content: "hello" }]);
+    assert.deepEqual(request.content.messages, [{ role: "user", content: [{ type: "text", text: "hello" }] }]);
   });
 
   it("evicts stale expanded correlation records by TTL", () => {
@@ -390,19 +773,30 @@ type ReplayRequest = {
 type ReplayResponse = {
   content?: string;
   assistant_texts_count?: number;
-  token_usage?: Record<string, number>;
   usage?: Record<string, number>;
   openclaw: Record<string, unknown>;
 };
 
+type ResponseOpenClaw = {
+  assistant_tool_call_names?: string[];
+  duration_ms?: number;
+  [key: string]: unknown;
+};
+
 type TestNemoFlowRuntime = NemoFlowRuntimeModule & {
   calls: {
-    pushScope: Array<{ name: string; scopeType: number; data: unknown }>;
+    pushScope: Array<{ name: string; scopeType: number; data: unknown; timestamp: number | null | undefined }>;
     popScope: Array<{ handle: unknown; output: unknown }>;
     event: Array<{ name: string; handle: unknown; data: unknown }>;
     setThreadScopeStack: unknown[];
-    llmCall: Array<{ name: string; request: unknown; modelName: string | null | undefined; timestamp: number | null | undefined }>;
-    llmCallEnd: Array<{ handle: unknown; response: unknown; timestamp: number | null | undefined }>;
+    llmCall: Array<{
+      name: string;
+      request: unknown;
+      data: unknown;
+      modelName: string | null | undefined;
+      timestamp: number | null | undefined;
+    }>;
+    llmCallEnd: Array<{ handle: unknown; response: unknown; data: unknown; timestamp: number | null | undefined }>;
     toolCall: Array<{ name: string; args: unknown }>;
     toolCallEnd: Array<{ handle: unknown; result: unknown; data: unknown }>;
   };
@@ -455,19 +849,20 @@ function createNemoFlowRuntime(): TestNemoFlowRuntime {
     createScopeStack: () => ({ id: `stack-${nextScopeId++}` }) as unknown as ReturnType<NemoFlowRuntimeModule["createScopeStack"]>,
     currentScopeStack: () => previousStack as unknown as ReturnType<NemoFlowRuntimeModule["currentScopeStack"]>,
     setThreadScopeStack: (stack) => calls.setThreadScopeStack.push(stack),
-    pushScope: (name, scopeType, _handle, _attributes, data) => {
+    pushScope: (name, scopeType, _handle, _attributes, data, _links, _metadata, timestamp) => {
       const handle = { id: `scope-${nextScopeId++}` };
-      calls.pushScope.push({ name, scopeType, data });
+      calls.pushScope.push({ name, scopeType, data, timestamp });
       return handle as unknown as ReturnType<NemoFlowRuntimeModule["pushScope"]>;
     },
     popScope: (handle, output) => calls.popScope.push({ handle, output }),
     event: (name, handle, data) => calls.event.push({ name, handle, data }),
-    llmCall: (name, request, _handle, _attributes, _data, _metadata, modelName, timestamp) => {
+    llmCall: (name, request, _handle, _attributes, data, _metadata, modelName, timestamp) => {
       const handle = { id: `llm-${nextScopeId++}` };
-      calls.llmCall.push({ name, request, modelName, timestamp });
+      calls.llmCall.push({ name, request, data, modelName, timestamp });
       return handle as unknown as ReturnType<NemoFlowRuntimeModule["llmCall"]>;
     },
-    llmCallEnd: (handle, response, _data, _metadata, timestamp) => calls.llmCallEnd.push({ handle, response, timestamp }),
+    llmCallEnd: (handle, response, data, _metadata, timestamp) =>
+      calls.llmCallEnd.push({ handle, response, data, timestamp }),
     toolCall: (name, args) => {
       const handle = { id: `tool-${nextScopeId++}` };
       calls.toolCall.push({ name, args });

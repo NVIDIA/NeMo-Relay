@@ -7,10 +7,12 @@ import { emitMark, toJsonRecord } from "./hook-replay/marks.js";
 import { llmKey } from "./hook-replay/correlation.js";
 import {
   emitUnpairedModelCallTimingMarks,
+  recordBeforeMessageWrite,
   recordLlmInput,
   recordLlmOutput,
   recordModelCallEnded,
   recordModelCallStarted,
+  replayAgentEndMessages,
   replayPendingLlmOutputsForSession,
 } from "./hook-replay/llm.js";
 import { replayAfterToolCall } from "./hook-replay/tool.js";
@@ -31,6 +33,8 @@ import type {
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentFinalizeEvent,
+  PluginHookBeforeMessageWriteContext,
+  PluginHookBeforeMessageWriteEvent,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookLlmInputEvent,
@@ -132,6 +136,10 @@ export class HookReplayBackend {
     replayAfterToolCall(this.sessionManager(), event, ctx);
   }
 
+  onBeforeMessageWrite(event: PluginHookBeforeMessageWriteEvent, ctx: PluginHookBeforeMessageWriteContext): void {
+    recordBeforeMessageWrite(this.sessionManager(), event, ctx);
+  }
+
   onAgentEnd(event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext): void {
     const session = this.ensureSession({
       sessionId: ctx.sessionId,
@@ -143,6 +151,11 @@ export class HookReplayBackend {
 
     if (!session) {
       return;
+    }
+
+    const finalOutput = replayAgentEndMessages(this.sessionManager(), event, ctx, session);
+    if (finalOutput && (!session.finalOutput || "content" in finalOutput)) {
+      session.finalOutput = finalOutput;
     }
 
     this.emitSessionMark(
@@ -169,6 +182,14 @@ export class HookReplayBackend {
 
     if (!session) {
       return;
+    }
+
+    if (typeof event.lastAssistantMessage === "string" && event.lastAssistantMessage.length > 0) {
+      session.finalOutput = toJsonRecord({
+        content: event.lastAssistantMessage,
+        source: "openclaw.before_agent_finalize",
+        runId: event.runId ?? ctx.runId,
+      });
     }
 
     this.emitSessionMark(
@@ -327,7 +348,7 @@ export class HookReplayBackend {
 
   private async closeSession(session: SessionState, summary: JsonRecord): Promise<void> {
     drainSession(this.sessionManager(), session);
-    closeSessionRoot(this.sessionManager(), session, summary);
+    closeSessionRoot(this.sessionManager(), session, summary, session.finalOutput ?? summary);
     await exportAtifJson(this.sessionManager(), session);
     deleteSession(this.stateValue, session);
   }

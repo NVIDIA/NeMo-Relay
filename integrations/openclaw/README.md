@@ -143,9 +143,18 @@ large payloads.
 | `llm_input` / `llm_output` | Replays an LLM span through `llmCall` and `llmCallEnd` with bounded FIFO correlation. |
 | `model_call_started` / `model_call_ended` | Enriches matching LLM spans with provider timing when correlation is unambiguous. |
 | `after_tool_call` | Replays successful tool calls through `toolCall` and `toolCallEnd`; blocked tools emit marks. |
-| `agent_end` | Emits an agent lifecycle mark under the current session. |
+| `before_message_write` | Records assistant turns at the message-write boundary so multi-step sessions can be replayed as ordered LLM spans when provider timing is available. |
+| `agent_end` | Emits an agent lifecycle mark, flushes recorded assistant-turn LLM spans, and preserves the final assistant answer as the session output. |
 | `before_agent_finalize` | Emits a lifecycle mark and does not mutate the finalization payload. |
 | `subagent_spawned` / `subagent_ended` | Emits subagent lifecycle marks under the best available parent or child session. |
+
+OpenClaw's current public hooks do not attach the model `callId` to assistant
+message write events. When replaying recorded assistant turns, the plugin pairs
+them with `model_call_ended` timing records FIFO within the same session,
+provider, model, and run. The replay metadata marks this as
+`fifo_model_call_timing`. If a safe timing pair is not available, the plugin
+falls back to run-level `llm_output` replay or emits timing diagnostic marks
+instead of inventing latency.
 
 ## Health
 

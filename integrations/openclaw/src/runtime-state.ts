@@ -347,6 +347,14 @@ export class NemoFlowRuntimeState {
       );
     });
 
+    this.api.on("before_message_write", (event, ctx) => {
+      const backend = this.backendValue;
+      if (!backend) {
+        return;
+      }
+      backend.safeReplay("before_message_write", undefined, () => backend.onBeforeMessageWrite(event, ctx));
+    });
+
     this.api.on("agent_end", async (event, ctx) => {
       await this.replayWithBackend("agent_end", ctx.workspaceDir, (backend) => backend.onAgentEnd(event, ctx));
     });

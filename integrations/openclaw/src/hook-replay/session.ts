@@ -26,6 +26,7 @@ export type EnsureSessionInput = SessionLookupInput & {
   agentId?: string | undefined;
   source: "session_start" | "lazy_session";
   resumedFrom?: string | undefined;
+  timestamp?: number | undefined;
 };
 
 export type SessionState = {
@@ -34,6 +35,15 @@ export type SessionState = {
   agentId?: string;
   source: "session_start" | "lazy_session";
   resumedFrom?: string;
+  finalOutput?: JsonRecord;
+  trajectoryReplayedRuns?: Set<string>;
+  hookLlmOutputReplayCounts?: Map<string, number>;
+  agentRunInputSnapshots?: Map<
+    string,
+    { historyMessageCount: number; historyMessages: unknown[]; observedAtMs: number; prompt: string }
+  >;
+  messageWrites?: unknown[];
+  assistantMessageWrites?: AssistantMessageRecord[];
   stack: ReturnType<NemoFlowRuntimeModule["createScopeStack"]>;
   rootHandle?: ReturnType<NemoFlowRuntimeModule["pushScope"]>;
   atif?: {
@@ -70,6 +80,19 @@ export type LlmInputRecord = {
   observedAtMs: number;
   systemPrompt?: string | undefined;
   placeholderRequest?: boolean | undefined;
+};
+
+export type AssistantMessageRecord = {
+  sessionKey: string;
+  provider: string;
+  model: string;
+  assistantTexts: string[];
+  assistantToolCalls: unknown[];
+  historyMessages: unknown[];
+  prompt: string;
+  observedAtMs: number;
+  replayed: boolean;
+  usage?: unknown;
 };
 
 export type ModelCallRecord = {
@@ -243,6 +266,7 @@ export function closeSessionRoot(
   manager: SessionManager,
   session: SessionState,
   summary: JsonRecord,
+  rootOutput: JsonRecord = summary,
   timestamp?: number,
 ): void {
   manager.emitCapturedUnderSession("session_end", session, () => {
@@ -252,7 +276,7 @@ export function closeSessionRoot(
 
     manager.nf.event("openclaw.session_end", session.rootHandle, summary, null, timestamp ?? null);
     manager.state.counters.marksEmitted += 1;
-    manager.nf.popScope(session.rootHandle, summary, timestamp ?? null);
+    manager.nf.popScope(session.rootHandle, rootOutput, timestamp ?? null);
     delete session.rootHandle;
   });
 }
@@ -305,9 +329,9 @@ function openSessionRoot(manager: SessionManager, session: SessionState, input: 
       data,
       null,
       null,
-      null,
+      input.timestamp ?? null,
     );
-    manager.nf.event("openclaw.session_start", session.rootHandle, data, null, null);
+    manager.nf.event("openclaw.session_start", session.rootHandle, data, null, input.timestamp ?? null);
     manager.state.counters.marksEmitted += 1;
   });
 }

@@ -59,10 +59,10 @@ export function replayAfterToolCall(
   );
   const endPayload = toJsonValue(
     manager.config.capture.stripToolResults
-      ? { stripped: true, hasError: Boolean(event.error) }
+      ? toolDisplayPayload(event, true)
       : event.error
-        ? { error: errorToJson(event.error), result: event.result ?? null }
-        : { result: event.result ?? null },
+        ? { ...toolDisplayPayload(event, false), error: errorToJson(event.error), result: event.result ?? null }
+        : { ...toolDisplayPayload(event, false), result: event.result ?? null },
   );
 
   manager.emitCapturedUnderSession("after_tool_call", session, () => {
@@ -71,12 +71,31 @@ export function replayAfterToolCall(
       argsPayload,
       session.rootHandle,
       null,
-      metadata,
+      null,
       metadata,
       event.toolCallId ?? ctx.toolCallId ?? null,
       startMicrosFromDuration(endMicros, event.durationMs),
     );
-    manager.nf.toolCallEnd(handle, endPayload, endPayload, metadata, endMicros);
+    manager.nf.toolCallEnd(handle, endPayload, null, metadata, endMicros);
     manager.state.counters.toolSpansReplayed += 1;
   });
+}
+
+function toolDisplayPayload(event: PluginHookAfterToolCallEvent, stripped: boolean): Record<string, unknown> {
+  const hasError = Boolean(event.error);
+  return {
+    content: `Tool ${event.toolName} ${hasError ? "failed" : "completed"}.`,
+    openclaw: {
+      toolName: event.toolName,
+      toolCallId: event.toolCallId,
+      durationMs: event.durationMs,
+      hasError,
+      stripped,
+      resultKeys: resultKeys(event.result),
+    },
+  };
+}
+
+function resultKeys(result: unknown): string[] | undefined {
+  return result && typeof result === "object" && !Array.isArray(result) ? Object.keys(result) : undefined;
 }

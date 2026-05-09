@@ -33,10 +33,19 @@ describe("Tool replay", () => {
       stripped: true,
       argKeys: ["path", "token"],
     });
+    assert.equal(nf.calls.toolCall[0]?.data, null);
     assert.deepEqual(nf.calls.toolCallEnd[0]?.result, {
-      stripped: true,
-      hasError: false,
+      content: "Tool read_file completed.",
+      openclaw: {
+        toolName: "read_file",
+        toolCallId: "tool-call-1",
+        durationMs: 7,
+        hasError: false,
+        stripped: true,
+        resultKeys: ["text"],
+      },
     });
+    assert.equal(nf.calls.toolCallEnd[0]?.data, null);
   });
 
   it("captures full tool payloads only when trusted config opts in", () => {
@@ -61,7 +70,19 @@ describe("Tool replay", () => {
     );
 
     assert.deepEqual(nf.calls.toolCall[0]?.args, { path: "/workspace/file.txt" });
-    assert.deepEqual(nf.calls.toolCallEnd[0]?.result, { result: { text: "ok" } });
+    assert.deepEqual(nf.calls.toolCallEnd[0]?.result, {
+      content: "Tool read_file completed.",
+      openclaw: {
+        toolName: "read_file",
+        toolCallId: "tool-call-1",
+        durationMs: 7,
+        hasError: false,
+        stripped: false,
+        resultKeys: ["text"],
+      },
+      result: { text: "ok" },
+    });
+    assert.equal(nf.calls.toolCallEnd[0]?.data, null);
   });
 
   it("passes non-null tool end payload when result and error are missing", () => {
@@ -82,8 +103,17 @@ describe("Tool replay", () => {
       { runId: "run-1", sessionId: "session-1", toolCallId: "tool-call-1" },
     );
 
-    assert.deepEqual(nf.calls.toolCallEnd[0]?.result, { result: null });
-    assert.deepEqual(nf.calls.toolCallEnd[0]?.data, { result: null });
+    assert.deepEqual(nf.calls.toolCallEnd[0]?.result, {
+      content: "Tool noop completed.",
+      openclaw: {
+        toolName: "noop",
+        toolCallId: "tool-call-1",
+        hasError: false,
+        stripped: false,
+      },
+      result: null,
+    });
+    assert.equal(nf.calls.toolCallEnd[0]?.data, null);
   });
 
   it("emits blocked tool mark instead of successful tool span", () => {
@@ -115,7 +145,7 @@ type TestNemoFlowRuntime = NemoFlowRuntimeModule & {
     setThreadScopeStack: unknown[];
     llmCall: Array<{ name: string; request: unknown }>;
     llmCallEnd: Array<{ handle: unknown; response: unknown }>;
-    toolCall: Array<{ name: string; args: unknown }>;
+    toolCall: Array<{ name: string; args: unknown; data: unknown }>;
     toolCallEnd: Array<{ handle: unknown; result: unknown; data: unknown }>;
   };
 };
@@ -180,9 +210,9 @@ function createNemoFlowRuntime(): TestNemoFlowRuntime {
       return handle as unknown as ReturnType<NemoFlowRuntimeModule["llmCall"]>;
     },
     llmCallEnd: (handle, response) => calls.llmCallEnd.push({ handle, response }),
-    toolCall: (name, args) => {
+    toolCall: (name, args, _handle, _attributes, data) => {
       const handle = { id: `tool-${nextScopeId++}` };
-      calls.toolCall.push({ name, args });
+      calls.toolCall.push({ name, args, data });
       return handle as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>;
     },
     toolCallEnd: (handle, result, data) => calls.toolCallEnd.push({ handle, result, data }),
