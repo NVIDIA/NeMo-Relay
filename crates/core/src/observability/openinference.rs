@@ -633,18 +633,19 @@ fn scope_type_name(scope_type: Option<ScopeType>) -> &'static str {
 fn start_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = common_attributes(event);
     let handle_attributes = event.attributes();
-    push_serialized(
-        &mut attributes,
-        "nemo_flow.handle_attributes_json",
-        handle_attributes,
-    );
-    push_serialized(&mut attributes, "nemo_flow.start.data_json", event.data());
-    push_serialized(
-        &mut attributes,
-        "nemo_flow.start.metadata_json",
-        event.metadata(),
-    );
-    push_serialized(&mut attributes, "nemo_flow.start.input_json", event.input());
+    if handle_attributes.is_some_and(|attributes| !attributes.is_empty()) {
+        push_serialized(
+            &mut attributes,
+            "nemo_flow.handle_attributes_json",
+            handle_attributes,
+        );
+    }
+    if event
+        .category()
+        .is_none_or(|category| category.as_str() != "llm")
+    {
+        push_serialized(&mut attributes, "nemo_flow.start.input_json", event.input());
+    }
     if event
         .category()
         .is_some_and(|category| category.as_str() == "tool")
@@ -656,9 +657,9 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
         ));
     }
 
-    if let Some(input) = openinference_input_value(event) {
+    if let Some((input, mime_type)) = openinference_input_value(event) {
         attributes.push(KeyValue::new(oi::input::VALUE, input.clone()));
-        attributes.push(KeyValue::new(oi::input::MIME_TYPE, "application/json"));
+        attributes.push(KeyValue::new(oi::input::MIME_TYPE, mime_type));
 
         if event
             .category()
@@ -673,16 +674,10 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
 
 fn end_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = Vec::new();
-    push_serialized(&mut attributes, "nemo_flow.end.data_json", event.data());
-    push_serialized(
-        &mut attributes,
-        "nemo_flow.end.metadata_json",
-        event.metadata(),
-    );
     push_serialized(&mut attributes, "nemo_flow.end.output_json", event.output());
-    if let Some(output) = event.output().and_then(to_json_string) {
+    if let Some((output, mime_type)) = openinference_output_value(event) {
         attributes.push(KeyValue::new(oi::output::VALUE, output));
-        attributes.push(KeyValue::new(oi::output::MIME_TYPE, "application/json"));
+        attributes.push(KeyValue::new(oi::output::MIME_TYPE, mime_type));
     }
     let fallback_usage = if event
         .category()
@@ -750,7 +745,7 @@ fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
             "output",
         ],
     );
-    let total_tokens = first_u64_from_manual_usage(
+    let reported_total_tokens = first_u64_from_manual_usage(
         usage,
         token_usage,
         &["total_tokens", "totalTokens", "total"],
@@ -782,12 +777,14 @@ fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
 
     if prompt_tokens.is_none()
         && completion_tokens.is_none()
-        && total_tokens.is_none()
+        && reported_total_tokens.is_none()
         && cache_read_tokens.is_none()
         && cache_write_tokens.is_none()
     {
         return None;
     }
+    let total_tokens =
+        normalize_total_tokens(reported_total_tokens, prompt_tokens, completion_tokens);
 
     Some(Usage {
         prompt_tokens,
@@ -796,6 +793,22 @@ fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
         cache_read_tokens,
         cache_write_tokens,
     })
+}
+
+fn normalize_total_tokens(
+    total_tokens: Option<u64>,
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+) -> Option<u64> {
+    let total_tokens = total_tokens?;
+    let minimum_total = prompt_tokens
+        .unwrap_or(0)
+        .saturating_add(completion_tokens.unwrap_or(0));
+    if minimum_total == 0 || total_tokens >= minimum_total {
+        Some(total_tokens)
+    } else {
+        None
+    }
 }
 
 fn first_u64_from_manual_usage(
@@ -860,17 +873,9 @@ fn common_attributes(event: &Event) -> Vec<KeyValue> {
     ];
 
     if let Some(model_name) = event.model_name() {
-        attributes.push(KeyValue::new(
-            "nemo_flow.model_name",
-            model_name.to_string(),
-        ));
         attributes.push(KeyValue::new(oi::llm::MODEL_NAME, model_name.to_string()));
     }
     if let Some(tool_call_id) = event.tool_call_id() {
-        attributes.push(KeyValue::new(
-            "nemo_flow.tool_call_id",
-            tool_call_id.to_string(),
-        ));
         attributes.push(KeyValue::new(oi::tool_call::ID, tool_call_id.to_string()));
     }
     if let Some(metadata) = event.metadata().and_then(to_json_string) {
@@ -908,28 +913,194 @@ fn push_serialized<T: Serialize + ?Sized>(
     }
 }
 
-fn openinference_input_value(event: &Event) -> Option<String> {
+fn openinference_input_value(event: &Event) -> Option<(String, &'static str)> {
     let input = event.input()?;
 
     if event
         .category()
         .is_some_and(|category| category.as_str() == "llm")
     {
-        return match input {
-            serde_json::Value::Object(object) => {
-                if let Some(content) = object.get("content") {
-                    return to_json_string(content);
-                }
-
-                let mut sanitized = object.clone();
-                sanitized.remove("headers");
-                to_json_string(&serde_json::Value::Object(sanitized))
-            }
-            _ => to_json_string(input),
-        };
+        return llm_input_display_value(input)
+            .map(|display| (display, "text/plain"))
+            .or_else(|| sanitized_llm_input_json(input).map(|json| (json, "application/json")));
     }
 
-    to_json_string(input)
+    to_json_string(input).map(|json| (json, "application/json"))
+}
+
+fn openinference_output_value(event: &Event) -> Option<(String, &'static str)> {
+    let output = event.output()?;
+    display_text_from_json(output)
+        .map(|display| (display, "text/plain"))
+        .or_else(|| to_json_string(output).map(|json| (json, "application/json")))
+}
+
+fn llm_input_display_value(input: &Json) -> Option<String> {
+    let content = match input {
+        Json::Object(object) => object.get("content").unwrap_or(input),
+        _ => input,
+    };
+
+    content
+        .get("messages")
+        .and_then(display_text_from_messages)
+        .or_else(|| display_text_from_json(content))
+}
+
+fn sanitized_llm_input_json(input: &Json) -> Option<String> {
+    match input {
+        Json::Object(object) => {
+            let mut sanitized = object.clone();
+            sanitized.remove("headers");
+            to_json_string(&Json::Object(sanitized))
+        }
+        _ => to_json_string(input),
+    }
+}
+
+fn display_text_from_json(value: &Json) -> Option<String> {
+    match value {
+        Json::String(text) => display_text_from_string(text),
+        Json::Object(object) => {
+            for key in ["content", "summary", "message", "text", "prompt"] {
+                if let Some(display) = object.get(key).and_then(display_text_from_json) {
+                    return Some(display);
+                }
+            }
+            object
+                .get("choices")
+                .and_then(display_text_from_chat_choices)
+                .or_else(|| {
+                    object
+                        .get("tool_calls")
+                        .and_then(display_text_from_tool_calls)
+                })
+        }
+        Json::Array(items) => display_text_from_content_blocks(items),
+        _ => None,
+    }
+}
+
+fn display_text_from_messages(value: &Json) -> Option<String> {
+    let messages = value.as_array()?;
+    let text = messages
+        .iter()
+        .filter_map(display_text_from_message)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+        .trim()
+        .to_string();
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn display_text_from_message(value: &Json) -> Option<String> {
+    let role = value
+        .get("role")
+        .and_then(Json::as_str)
+        .unwrap_or("message");
+    if role == "tool" {
+        return Some("tool: Tool result omitted".to_string());
+    }
+    let display = value
+        .get("content")
+        .and_then(display_text_from_json)
+        .or_else(|| {
+            value
+                .get("tool_calls")
+                .and_then(display_text_from_tool_calls)
+        })?;
+    Some(format!("{role}: {display}"))
+}
+
+fn display_text_from_string(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(parsed) = serde_json::from_str::<Json>(trimmed)
+        && let Some(display) = display_text_from_json(&parsed)
+    {
+        return Some(display);
+    }
+    Some(trimmed.to_string())
+}
+
+fn display_text_from_chat_choices(value: &Json) -> Option<String> {
+    let choices = value.as_array()?;
+    for choice in choices {
+        let Some(message) = choice.get("message") else {
+            continue;
+        };
+        let content = message.get("content").and_then(display_text_from_json);
+        let tool_calls = message
+            .get("tool_calls")
+            .and_then(display_text_from_tool_calls);
+        match (content, tool_calls) {
+            (Some(content), Some(tool_calls)) => return Some(format!("{content}\n{tool_calls}")),
+            (Some(content), None) => return Some(content),
+            (None, Some(tool_calls)) => return Some(tool_calls),
+            (None, None) => {}
+        }
+    }
+    None
+}
+
+fn display_text_from_content_blocks(items: &[Json]) -> Option<String> {
+    let mut entries = items
+        .iter()
+        .filter_map(content_block_display_text)
+        .collect::<Vec<_>>();
+    let tool_calls = items.iter().filter_map(tool_call_name).collect::<Vec<_>>();
+    if !tool_calls.is_empty() {
+        entries.push(format!("Requested tools: {}", tool_calls.join(", ")));
+    }
+    let text = entries
+        .into_iter()
+        .filter(|item| !item.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn content_block_display_text(item: &Json) -> Option<String> {
+    if let Some(text) = item.as_str() {
+        return Some(text.to_string());
+    }
+    if item.get("stripped").and_then(Json::as_bool) == Some(true) {
+        return None;
+    }
+    if let Some("thinking" | "reasoning" | "toolResult" | "tool_result") =
+        item.get("type").and_then(Json::as_str)
+    {
+        return None;
+    }
+    item.get("text").and_then(Json::as_str).map(str::to_string)
+}
+
+fn display_text_from_tool_calls(value: &Json) -> Option<String> {
+    let calls = value.as_array()?;
+    let names = calls.iter().filter_map(tool_call_name).collect::<Vec<_>>();
+    if names.is_empty() {
+        None
+    } else {
+        Some(format!("Requested tools: {}", names.join(", ")))
+    }
+}
+
+fn tool_call_name(value: &Json) -> Option<String> {
+    value
+        .get("name")
+        .and_then(Json::as_str)
+        .or_else(|| value.get("toolName").and_then(Json::as_str))
+        .or_else(|| {
+            value
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Json::as_str)
+        })
+        .map(str::to_string)
 }
 
 fn to_json_string<T: Serialize>(value: &T) -> Option<String> {

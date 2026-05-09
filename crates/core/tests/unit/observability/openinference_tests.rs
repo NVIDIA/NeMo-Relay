@@ -379,14 +379,8 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
         attributes.get("openinference.span.kind"),
         Some(&"AGENT".to_string())
     );
-    assert_eq!(
-        attributes.get("nemo_flow.start.data_json"),
-        Some(&"{\"task\":\"scope-start\"}".to_string())
-    );
-    assert_eq!(
-        attributes.get("nemo_flow.start.metadata_json"),
-        Some(&"{\"phase\":\"start\"}".to_string())
-    );
+    assert!(!attributes.contains_key("nemo_flow.start.data_json"));
+    assert!(!attributes.contains_key("nemo_flow.start.metadata_json"));
     assert_eq!(
         attributes.get("nemo_flow.start.input_json"),
         Some(&"{\"task\":\"scope-start\"}".to_string())
@@ -552,15 +546,168 @@ fn llm_input_value_omits_request_headers() {
     let spans = exporter.get_finished_spans().unwrap();
     assert_eq!(spans.len(), 1);
     let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(attributes.get("input.value"), Some(&"user: hi".to_string()));
+    assert_eq!(
+        attributes.get("input.mime_type"),
+        Some(&"text/plain".to_string())
+    );
+    assert!(!attributes.contains_key("nemo_flow.start.input_json"));
+    assert!(!attributes["input.value"].contains("authorization"));
+    assert!(!attributes["input.value"].contains("secret-token"));
+}
+
+#[test]
+fn llm_input_value_summarizes_tool_call_messages() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let root_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        root_uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "content": {
+                "messages": [
+                    {"role": "user", "content": "Inspect the files."},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "thinking", "stripped": true},
+                            {"type": "text", "text": "I will inspect the files."},
+                            {"type": "toolCall", "name": "read", "arguments": {"stripped": true}}
+                        ]
+                    },
+                    {"role": "tool", "content": {"stripped": true, "reason": "tool result"}}
+                ]
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        root_uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"message": "done"})),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
     assert_eq!(
         attributes.get("input.value"),
         Some(
-            &"{\"messages\":[{\"content\":\"hi\",\"role\":\"user\"}],\"model\":\"demo-model\"}"
+            &"user: Inspect the files.\n\nassistant: I will inspect the files.\nRequested tools: read\n\ntool: Tool result omitted"
                 .to_string()
         )
     );
-    assert!(!attributes["input.value"].contains("authorization"));
-    assert!(!attributes["input.value"].contains("secret-token"));
+    assert!(!attributes["input.value"].contains("thinking"));
+    assert!(!attributes["input.value"].contains("arguments"));
+    assert!(!attributes["input.value"].contains("tool result"));
+}
+
+#[test]
+fn output_value_prefers_display_content() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let root_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        root_uuid,
+        None,
+        "edit",
+        ScopeType::Tool,
+        Some(json!({"path": "api.py"})),
+    ));
+    processor.process(&make_end_event(
+        root_uuid,
+        None,
+        "edit",
+        ScopeType::Tool,
+        Some(json!({
+            "content": "Tool edit completed.",
+            "details": {"diff": "-old\n+new"}
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("output.value"),
+        Some(&"Tool edit completed.".to_string())
+    );
+    assert_eq!(
+        attributes.get("output.mime_type"),
+        Some(&"text/plain".to_string())
+    );
+    assert_eq!(
+        attributes.get("nemo_flow.end.output_json"),
+        Some(
+            &"{\"content\":\"Tool edit completed.\",\"details\":{\"diff\":\"-old\\n+new\"}}"
+                .to_string()
+        )
+    );
+    assert!(!attributes.contains_key("nemo_flow.end.data_json"));
+}
+
+#[test]
+fn output_value_extracts_chat_completion_display_text() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let root_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        root_uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"content": {"messages": [{"role": "user", "content": "hi"}]}})),
+    ));
+    processor.process(&make_end_event(
+        root_uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "I will inspect the files.",
+                    "tool_calls": [
+                        {"id": "call-1", "function": {"name": "read", "arguments": "{\"path\":\"api.py\"}"}}
+                    ]
+                }
+            }],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("output.value"),
+        Some(&"I will inspect the files.\nRequested tools: read".to_string())
+    );
+    assert_eq!(
+        attributes.get("output.mime_type"),
+        Some(&"text/plain".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.prompt"),
+        Some(&"3".to_string())
+    );
 }
 
 #[test]
@@ -700,11 +847,8 @@ fn semantic_scope_type_and_input_value_follow_event_variants() {
     assert_eq!(semantic_scope_type(&llm_with_content), Some(ScopeType::Llm));
     assert_eq!(span_kind(&llm_with_content), SpanKind::Client);
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(
-            &openinference_input_value(&llm_with_content).unwrap(),
-        )
-        .unwrap(),
-        json!({"messages": [{"role": "user", "content": "hello"}]})
+        openinference_input_value(&llm_with_content),
+        Some(("user: hello".to_string(), "text/plain"))
     );
 
     let llm_without_content = make_start_event(
@@ -718,11 +862,8 @@ fn semantic_scope_type_and_input_value_follow_event_variants() {
         })),
     );
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(
-            &openinference_input_value(&llm_without_content).unwrap(),
-        )
-        .unwrap(),
-        json!({"prompt": "hello"})
+        openinference_input_value(&llm_without_content),
+        Some(("hello".to_string(), "text/plain"))
     );
 
     let remote_tool = make_scope_event_with_attributes(
@@ -736,11 +877,11 @@ fn semantic_scope_type_and_input_value_follow_event_variants() {
     );
     assert_eq!(semantic_scope_type(&remote_tool), Some(ScopeType::Tool));
     assert_eq!(span_kind(&remote_tool), SpanKind::Client);
+    let (remote_tool_input, remote_tool_mime_type) =
+        openinference_input_value(&remote_tool).unwrap();
+    assert_eq!(remote_tool_mime_type, "application/json");
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(
-            &openinference_input_value(&remote_tool).unwrap()
-        )
-        .unwrap(),
+        serde_json::from_str::<serde_json::Value>(&remote_tool_input).unwrap(),
         json!({"query": "hello"})
     );
 }
@@ -853,10 +994,7 @@ fn helper_functions_cover_additional_openinference_branches() {
         Some(CategoryProfile::builder().model_name("demo-model").build()),
     ));
     let llm_attributes = attr_map(&common_attributes(&llm_end));
-    assert_eq!(
-        llm_attributes.get("nemo_flow.model_name"),
-        Some(&"demo-model".to_string())
-    );
+    assert!(!llm_attributes.contains_key("nemo_flow.model_name"));
     assert_eq!(
         llm_attributes.get(oi::llm::MODEL_NAME.as_str()),
         Some(&"demo-model".to_string())
@@ -949,7 +1087,7 @@ fn helper_functions_cover_additional_openinference_branches() {
     );
     assert_eq!(
         openinference_input_value(&llm_with_scalar_input),
-        Some("\"hello\"".to_string())
+        Some(("hello".to_string(), "text/plain"))
     );
 
     let mut processor = OpenInferenceEventProcessor::new(make_provider().0, "test".into());
@@ -1145,6 +1283,47 @@ fn llm_end_with_manual_usage_payload_emits_token_count_attributes() {
         attributes.get("llm.token_count.prompt_details.cache_write"),
         Some(&"10".to_string())
     );
+}
+
+#[test]
+fn llm_end_with_inconsistent_manual_usage_omits_invalid_total_tokens() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "content": "hello",
+            "usage": {
+                "prompt_tokens": 3,
+                "completion_tokens": 10,
+                "total_tokens": 5
+            }
+        })),
+        Some(CategoryProfile::builder().model_name("gpt-4").build()),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("llm.token_count.prompt"),
+        Some(&"3".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.completion"),
+        Some(&"10".to_string())
+    );
+    assert!(!attributes.contains_key("llm.token_count.total"));
 }
 
 #[test]
