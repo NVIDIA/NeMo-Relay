@@ -14,27 +14,37 @@ from langchain_core.messages import (
     messages_to_dict,
 )
 
+from nemo_flow.codecs import AnthropicMessagesCodec, LlmCodec, OpenAIChatCodec, OpenAIResponsesCodec
+
 if TYPE_CHECKING:
     from langchain.agents.middleware import ModelRequest
     from langchain_core.messages import BaseMessage
 
+# In order to infer codec support from LangChain chat model types, we need to import them here.
+# However these may not be installed in the user's environment.
+_HAS_ANTHROPIC = False
+_HAS_OPENAI = False
+_HAS_NVIDIA = False
 try:
     from langchain_anthropic import ChatAnthropic
+
+    _HAS_ANTHROPIC = True
 except ImportError:
-    ChatAnthropic = None
+    pass
 
 try:
     from langchain_openai import ChatOpenAI
+
+    _HAS_OPENAI = True
 except ImportError:
-    ChatOpenAI = None
+    pass
 
 try:
     from langchain_nvidia_ai_endpoints import ChatNVIDIA
+
+    _HAS_NVIDIA = True
 except ImportError:
-    ChatNVIDIA = None
-
-
-from nemo_flow.codecs import AnthropicMessagesCodec, LlmCodec, OpenAIChatCodec, OpenAIResponsesCodec
+    pass
 
 LANGCHAIN_MODEL_RESPONSE_KEY = "__nemo_flow_integrations_langchain_model_response"
 
@@ -50,15 +60,19 @@ def get_model_name(model: Any) -> str | None:
 
 def infer_codec_from_model(model: Any) -> LlmCodec | None:
     """Infer a NeMo Flow codec name from a LangChain chat model."""
-    if ChatAnthropic is not None and isinstance(model, ChatAnthropic):
-        return AnthropicMessagesCodec()
+    if _HAS_ANTHROPIC:
+        if isinstance(model, ChatAnthropic):
+            return AnthropicMessagesCodec()
 
-    if ChatNVIDIA is not None and isinstance(model, ChatNVIDIA):
-        return OpenAIChatCodec()
+    if _HAS_NVIDIA:
+        if isinstance(model, ChatNVIDIA):
+            return OpenAIChatCodec()
 
-    if ChatOpenAI is not None and isinstance(model, ChatOpenAI):
-        if getattr(model, "use_responses_api", None) is True:
-            return OpenAIResponsesCodec()
+    if _HAS_OPENAI:
+        if isinstance(model, ChatOpenAI):
+            if getattr(model, "use_responses_api", None) is True:
+                return OpenAIResponsesCodec()
+
         return OpenAIChatCodec()
 
     return None
@@ -71,7 +85,7 @@ def split_system_message(messages: list[BaseMessage]) -> tuple[SystemMessage | N
     return None, messages
 
 
-def model_request_to_payload(model_name: str, request: ModelRequest[Any]) -> dict[str, Any]:
+def model_request_to_payload(model_name: str | None, request: ModelRequest[Any]) -> dict[str, Any]:
     """Serialize public ``ModelRequest`` fields into a JSON-compatible payload."""
     messages: list[BaseMessage] = []
     if request.system_message is not None:
