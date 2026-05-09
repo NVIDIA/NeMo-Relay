@@ -562,3 +562,195 @@ fn test_helper_and_error_paths_cover_remaining_responses_branches() {
         other => panic!("unexpected encode result: {other:?}"),
     }
 }
+
+// ===================================================================
+// Streaming codec tests
+// ===================================================================
+
+use super::super::streaming::StreamingCodec;
+
+#[test]
+fn openai_responses_streaming_codec_uses_terminal_snapshot() {
+    // Common case: response.completed carries the full final state. Streaming codec emits that
+    // verbatim; per-item accumulator is unused.
+    let codec = OpenAIResponsesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "response.created",
+        "response": {"id": "resp_1", "model": "gpt-5.5", "status": "in_progress",
+                     "output": [], "usage": null}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_1",
+            "model": "gpt-5.5",
+            "status": "completed",
+            "output": [
+                {"type": "message", "content": [
+                    {"type": "output_text", "text": "Hello, world."}
+                ]}
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14}
+        }
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    let annotated = OpenAIResponsesCodec
+        .decode_response(&assembled)
+        .expect("assembled response should decode through the existing codec");
+    assert_eq!(annotated.id.as_deref(), Some("resp_1"));
+    assert_eq!(annotated.model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
+    assert_eq!(
+        annotated.message,
+        Some(MessageContent::Text("Hello, world.".to_string()))
+    );
+    let usage = annotated.usage.as_ref().unwrap();
+    assert_eq!(usage.prompt_tokens, Some(10));
+    assert_eq!(usage.completion_tokens, Some(4));
+}
+
+#[test]
+fn openai_responses_streaming_codec_assembles_from_output_item_done_when_terminal_lacks_output() {
+    // Schema variant: terminal `response.completed` event omits `output` (or sends empty array).
+    // Codec falls back to per-item accumulator populated by output_item.done.
+    let codec = OpenAIResponsesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "response.created",
+        "response": {"id": "resp_x", "model": "gpt-5.5", "status": "in_progress", "output": []}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {"type": "message", "content": [
+            {"type": "output_text", "text": "Hi from item 0."}
+        ]}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "response.output_item.done",
+        "output_index": 1,
+        "item": {
+            "type": "function_call",
+            "call_id": "call_42",
+            "name": "lookup",
+            "arguments": "{\"q\": \"weather\"}"
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_x",
+            "model": "gpt-5.5",
+            "status": "completed",
+            "usage": {"input_tokens": 5, "output_tokens": 3}
+        }
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    let annotated = OpenAIResponsesCodec
+        .decode_response(&assembled)
+        .expect("assembled response should decode");
+    assert_eq!(
+        annotated.message,
+        Some(MessageContent::Text("Hi from item 0.".to_string()))
+    );
+    let tool_calls = annotated.tool_calls.expect("function call extracted");
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].id, "call_42");
+    assert_eq!(tool_calls[0].name, "lookup");
+    assert_eq!(tool_calls[0].arguments, json!({"q": "weather"}));
+}
+
+#[test]
+fn openai_responses_streaming_codec_preserves_incomplete_terminal_state() {
+    // response.incomplete with `reason: max_output_tokens` should map to FinishReason::Length
+    // through the existing decoder. The streaming codec must surface incomplete_details intact.
+    let codec = OpenAIResponsesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "response.incomplete",
+        "response": {
+            "id": "resp_inc",
+            "model": "gpt-5.5",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [
+                {"type": "message", "content": [
+                    {"type": "output_text", "text": "partial..."}
+                ]}
+            ]
+        }
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    let annotated = OpenAIResponsesCodec
+        .decode_response(&assembled)
+        .expect("assembled response should decode");
+    assert_eq!(annotated.finish_reason, Some(FinishReason::Length));
+    assert_eq!(
+        annotated.message,
+        Some(MessageContent::Text("partial...".to_string()))
+    );
+}
+
+#[test]
+fn openai_responses_streaming_codec_ignores_per_token_deltas() {
+    // output_text.delta events are intentionally not accumulated — their content is redelivered
+    // in output_item.done. Codec must not double-count or insert delta-only state.
+    let codec = OpenAIResponsesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "response.created",
+        "response": {"id": "resp_d", "model": "gpt-5.5", "status": "in_progress", "output": []}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "response.output_text.delta",
+        "output_index": 0, "content_index": 0, "delta": "Hel"
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "response.output_text.delta",
+        "output_index": 0, "content_index": 0, "delta": "lo"
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {"type": "message", "content": [
+            {"type": "output_text", "text": "Hello"}
+        ]}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "response.completed",
+        "response": {"id": "resp_d", "model": "gpt-5.5", "status": "completed", "output": []}
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    let annotated = OpenAIResponsesCodec
+        .decode_response(&assembled)
+        .expect("assembled response should decode");
+    assert_eq!(
+        annotated.message,
+        Some(MessageContent::Text("Hello".to_string()))
+    );
+}
