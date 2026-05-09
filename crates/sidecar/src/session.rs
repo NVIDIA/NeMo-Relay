@@ -54,12 +54,35 @@ pub(crate) struct LlmGatewayStart {
     pub(crate) metadata: Value,
 }
 
+/// Legacy active-LLM record kept for tests that exercise the manual `llm_call` /
+/// `llm_call_end` correlation path. Production gateway traffic now uses managed execution via
+/// [`SessionManager::prepare_gateway_call`].
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub(crate) struct ActiveLlm {
     stack: ScopeStackHandle,
     handle: LlmHandle,
     session_id: String,
     owner_subagent_id: Option<String>,
+}
+
+/// Inputs prepared by [`SessionManager::prepare_gateway_call`] for invoking the
+/// runtime's managed LLM execution pipeline outside the session lock.
+///
+/// The session lock is released after the prep is built, so the gateway can run
+/// the upstream HTTP work without blocking unrelated session activity. The
+/// preserved `scope_stack` is what restores the agent/subagent scope context
+/// the call was opened against when the runtime emits start/end events.
+pub(crate) struct GatewayCallPrep {
+    pub(crate) scope_stack: ScopeStackHandle,
+    pub(crate) session_id: String,
+    pub(crate) provider_name: String,
+    pub(crate) request: LlmRequest,
+    pub(crate) parent: Option<ScopeHandle>,
+    pub(crate) attributes: LlmAttributes,
+    pub(crate) metadata: Value,
+    pub(crate) model_name: Option<String>,
+    pub(crate) owner_subagent_id: Option<String>,
 }
 
 struct Session {
@@ -181,7 +204,9 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Starts a gateway-observed LLM call and correlates it with the best available session.
+    /// Legacy manual-lifecycle entry point retained for tests that drive correlation behavior
+    /// directly. Production gateway traffic uses [`Self::prepare_gateway_call`] +
+    /// `llm_call_execute` / `llm_stream_call_execute` so the runtime owns start/end events.
     ///
     /// Explicit session IDs win, a single active hook session is reused as a convenience fallback,
     /// and otherwise a synthetic gateway session is created so pure proxy use still emits runtime
@@ -192,6 +217,7 @@ impl SessionManager {
     /// session, even after a SessionStart hook arrives, because observer identities are baked at
     /// scope-open time. With it, an Anthropic Messages call before SessionStart still labels the
     /// trace as `claude-code`, an OpenAI Responses call as `codex`, etc.
+    #[cfg(test)]
     pub(crate) async fn start_llm(
         &self,
         headers: &HeaderMap,
@@ -211,10 +237,44 @@ impl SessionManager {
         session.start_llm(start).await
     }
 
-    /// Ends an active gateway-observed LLM call on the scope stack that created it.
+    /// Prepares a managed LLM execution against the right session and scope context.
+    ///
+    /// Resolves the session, opens the agent scope if needed, computes the parent scope and
+    /// correlation metadata, and returns a [`GatewayCallPrep`]. The returned prep carries the
+    /// `ScopeStackHandle` that callers must restore around `llm_call_execute` /
+    /// `llm_stream_call_execute` so the runtime emits start/end events under the same agent or
+    /// subagent scope the prep was opened under.
+    ///
+    /// The session manager lock is held only long enough to build the prep; the actual upstream
+    /// HTTP and managed pipeline run outside the lock.
+    pub(crate) async fn prepare_gateway_call(
+        &self,
+        headers: &HeaderMap,
+        start: LlmGatewayStart,
+    ) -> Result<GatewayCallPrep, SidecarError> {
+        let mut sessions = self.inner.lock().await;
+        let config = self.default_config.session_config_from_headers(headers);
+        let session_id = start
+            .session_id
+            .clone()
+            .or_else(|| single_active_session_id(&sessions))
+            .unwrap_or_else(|| format!("{}-gateway", AgentKind::Gateway.as_str()));
+        // Match `start_llm`: when this path creates a brand-new session (real agent's gateway
+        // request beats its SessionStart hook), label the session by the provider so ATIF and
+        // Phoenix scopes carry the agent identity instead of freezing on "gateway".
+        let inferred_agent_kind = agent_kind_for_gateway_provider(&start.provider);
+        let session = sessions
+            .entry(session_id.clone())
+            .or_insert_with(|| Session::new(session_id, inferred_agent_kind, config));
+        session.prepare_gateway_call(start).await
+    }
+
+    /// Legacy manual-lifecycle close paired with [`Self::start_llm`]. Production gateway traffic
+    /// no longer needs this helper because managed execution emits the end event automatically.
     ///
     /// The captured stack is restored around `llm_call_end` so asynchronous gateway body handling
     /// closes the correct scoped event even after the original request task has moved on.
+    #[cfg(test)]
     pub(crate) async fn end_llm(
         &self,
         active: ActiveLlm,
@@ -253,14 +313,22 @@ impl SessionManager {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(crate) async fn session_llms_empty(&self, session_id: &str) -> bool {
-        self.inner
-            .lock()
-            .await
-            .get(session_id)
-            .map(|session| session.llms.is_empty())
-            .unwrap_or(true)
+    /// Records tool-call hints from a completed gateway response onto the owning session.
+    ///
+    /// The runtime owns the LLM lifecycle when the gateway uses managed execution, so the
+    /// per-response tool-hint extraction that `end_llm` would normally do has to be triggered
+    /// explicitly after the managed pipeline returns. Missing or already-removed sessions are
+    /// silently skipped because hints are advisory.
+    pub(crate) async fn record_gateway_response_hints(
+        &self,
+        session_id: &str,
+        owner_subagent_id: Option<String>,
+        response: Value,
+    ) {
+        let mut sessions = self.inner.lock().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.add_tool_hints_from_llm_response(response, owner_subagent_id);
+        }
     }
 
     #[cfg(test)]
@@ -334,9 +402,9 @@ impl Session {
         Ok(())
     }
 
-    // Opens an LLM call for gateway traffic, creating the agent scope if needed and resolving the
-    // parent scope from headers, pending hints, sticky ownership, active subagents, or agent fallback
-    // in that order.
+    // Legacy manual-lifecycle gateway start used by tests. Production code uses
+    // `prepare_gateway_call` + managed execution.
+    #[cfg(test)]
     async fn start_llm(&mut self, start: LlmGatewayStart) -> Result<ActiveLlm, SidecarError> {
         let stack = self.scope_stack.clone();
         TASK_SCOPE_STACK
@@ -373,6 +441,45 @@ impl Session {
                 self.llms
                     .insert(active.handle.uuid.to_string(), active.handle.clone());
                 Ok(active)
+            })
+            .await
+    }
+
+    // Builds a managed-execution prep without creating an LlmHandle. The agent scope is opened if
+    // needed and ownership/correlation metadata is computed exactly as the manual `start_llm` path
+    // does. The handle and start/end events are emitted later by `llm_call_execute` /
+    // `llm_stream_call_execute`, which the gateway runs outside the session lock.
+    async fn prepare_gateway_call(
+        &mut self,
+        start: LlmGatewayStart,
+    ) -> Result<GatewayCallPrep, SidecarError> {
+        let stack = self.scope_stack.clone();
+        TASK_SCOPE_STACK
+            .scope(stack.clone(), async move {
+                self.ensure_agent_started(Value::Null)?;
+                let mut attributes = LlmAttributes::empty();
+                if start.streaming {
+                    attributes |= LlmAttributes::STREAMING;
+                }
+                let owner = self.resolve_llm_owner(&start);
+                let metadata = llm_correlation_metadata(
+                    start.metadata,
+                    owner.status,
+                    owner.source.as_deref(),
+                    owner.subagent_id.as_deref(),
+                    owner.hint.as_ref(),
+                );
+                Ok(GatewayCallPrep {
+                    scope_stack: stack,
+                    session_id: self.session_id.clone(),
+                    provider_name: start.provider,
+                    request: start.request,
+                    parent: owner.parent,
+                    attributes,
+                    metadata,
+                    model_name: start.model_name,
+                    owner_subagent_id: owner.subagent_id,
+                })
             })
             .await
     }

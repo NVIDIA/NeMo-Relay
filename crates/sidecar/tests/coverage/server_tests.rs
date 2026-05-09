@@ -287,7 +287,24 @@ async fn gateway_preserves_streaming_body() {
         "text/event-stream"
     );
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(bytes, Bytes::from_static(b"data: one\n\ndata: two\n\n"));
+    let body_str = std::str::from_utf8(&bytes).unwrap();
+    // Managed execution re-encodes each parsed event with the OpenAI Responses event name on
+    // its own `event:` line, so the wire shape is closer to the spec but not byte-identical to
+    // the upstream feed. Both event payloads should appear in order.
+    assert!(
+        body_str.contains("event: response.created"),
+        "missing response.created event: {body_str}",
+    );
+    assert!(
+        body_str.contains("event: response.completed"),
+        "missing response.completed event: {body_str}",
+    );
+    let created_idx = body_str.find("response.created").unwrap();
+    let completed_idx = body_str.find("response.completed").unwrap();
+    assert!(
+        created_idx < completed_idx,
+        "events out of order: {body_str}"
+    );
 }
 
 #[tokio::test]
@@ -396,9 +413,16 @@ async fn spawn_upstream(streaming: bool) -> TestServer {
     }
 
     async fn stream_response() -> impl IntoResponse {
+        // OpenAI Responses managed pipeline parses each `data:` payload as JSON; emit minimally
+        // valid response.created / response.completed events so the runtime collector + finalizer
+        // assemble a well-formed end-event payload.
         let chunks = stream::iter([
-            Ok::<_, std::convert::Infallible>(Bytes::from_static(b"data: one\n\n")),
-            Ok(Bytes::from_static(b"data: two\n\n")),
+            Ok::<_, std::convert::Infallible>(Bytes::from_static(
+                b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\"}}\n\n",
+            )),
+            Ok(Bytes::from_static(
+                b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n",
+            )),
         ]);
         (
             [(header::CONTENT_TYPE, "text/event-stream")],
@@ -426,8 +450,12 @@ async fn spawn_upstream(streaming: bool) -> TestServer {
 
 async fn spawn_failing_stream_upstream() -> TestServer {
     async fn stream_response() -> impl IntoResponse {
+        // First chunk is a valid JSON SSE event so the managed pipeline opens cleanly; the
+        // following IO error simulates the upstream socket dropping mid-stream.
         let chunks = stream::iter([
-            Ok::<_, std::io::Error>(Bytes::from_static(b"data: one\n\n")),
+            Ok::<_, std::io::Error>(Bytes::from_static(
+                b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\"}}\n\n",
+            )),
             Err(std::io::Error::other("stream failed")),
         ]);
         (
