@@ -1,46 +1,58 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::{Arc, Mutex};
+
+use async_stream::stream;
 use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderName, Method, Request, Response, StatusCode};
 use futures_util::StreamExt;
-use nemo_flow::api::llm::LlmRequest;
+use nemo_flow::api::llm::{
+    LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
+    llm_stream_call_execute,
+};
+use nemo_flow::api::runtime::{
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, TASK_SCOPE_STACK,
+};
+use nemo_flow::codec::anthropic::{AnthropicMessagesCodec, AnthropicMessagesStreamingCodec};
+use nemo_flow::codec::openai_chat::{OpenAIChatCodec, OpenAIChatStreamingCodec};
+use nemo_flow::codec::openai_responses::{OpenAIResponsesCodec, OpenAIResponsesStreamingCodec};
+use nemo_flow::codec::streaming::StreamingCodec;
+use nemo_flow::codec::traits::LlmResponseCodec;
+use nemo_flow::error::FlowError;
 use serde_json::{Map, Value, json};
 
 use crate::config::header_string;
 use crate::error::SidecarError;
 use crate::server::AppState;
-use crate::session::{ActiveLlm, LlmGatewayStart, SessionManager};
+use crate::session::{GatewayCallPrep, LlmGatewayStart};
 
 const MAX_BODY_BYTES: usize = 100 * 1024 * 1024;
 
-/// Proxies supported LLM API requests while recording a NeMo Flow LLM call around the upstream work.
+/// Proxies supported LLM API requests through NeMo Flow's managed execution pipeline.
 ///
-/// The gateway reads the full request body once so it can both forward exact bytes and derive
-/// observable metadata. Upstream send/body failures close the active LLM with gateway-error
-/// metadata before surfacing an HTTP error. Streaming responses are forwarded chunk-by-chunk while
-/// collecting at most 1 MiB for the end event, so client-visible streaming is not delayed by
-/// observability capture.
+/// The gateway buffers the inbound body once, opens a managed LLM call against the resolved
+/// session, and lets the runtime own the start/end events. Provider routes that have a built-in
+/// codec round-trip the response through the codec so observability records the same annotated
+/// response shape as direct in-process calls; routes without a codec still emit raw JSON to the
+/// runtime so the LLM scope is preserved.
+///
+/// Streaming responses are decoded into per-event JSON values, fed through the runtime collector,
+/// and re-encoded as SSE frames for the client. This Option B approach (re-encode) keeps the
+/// runtime in the streaming hot path so chunk-level observability matches non-streaming output;
+/// the trade-off is one extra JSON parse + serialize per chunk versus the alternative byte-tee
+/// design that splits a raw byte stream between client and runtime.
 pub(crate) async fn passthrough(
     State(state): State<AppState>,
     request: Request<Body>,
 ) -> Result<Response<Body>, SidecarError> {
     let prepared = prepare_gateway_request(&state.config, request).await?;
-    let active = start_gateway_llm(&state.sessions, &prepared).await?;
-    let upstream_response = send_upstream_or_end(&state, &prepared, active.clone()).await?;
-    let status = upstream_response.status();
-    let headers = response_headers(upstream_response.headers());
-    if is_stream_response(prepared.streaming, upstream_response.headers()) {
-        return streaming_gateway_response(
-            state.sessions,
-            active,
-            status,
-            headers,
-            upstream_response,
-        );
-    }
-    buffered_gateway_response(state.sessions, active, status, headers, upstream_response).await
+    let prep = state
+        .sessions
+        .prepare_gateway_call(&prepared.headers, build_llm_gateway_start(&prepared))
+        .await?;
+    run_managed_gateway(state, prepared, prep).await
 }
 
 struct PreparedGatewayRequest {
@@ -93,251 +105,490 @@ async fn prepare_gateway_request(
     })
 }
 
-// Starts the NeMo Flow LLM lifecycle for a prepared gateway request. Session and subagent
-// correlation identifiers are read from headers first and then from provider body fields.
-async fn start_gateway_llm(
-    sessions: &SessionManager,
-    request: &PreparedGatewayRequest,
-) -> Result<ActiveLlm, SidecarError> {
-    let llm_request = LlmRequest {
-        headers: observable_headers(&request.headers),
-        content: request.request_json.clone(),
-    };
-    sessions
-        .start_llm(
+// Builds the [`LlmGatewayStart`] payload from a prepared request. Identifier resolution is shared
+// across streaming and non-streaming paths so correlation behavior is consistent for every route.
+fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGatewayStart {
+    LlmGatewayStart {
+        session_id: gateway_session_id(&request.headers),
+        provider: request.provider.name().to_string(),
+        model_name: request
+            .request_json
+            .get("model")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        subagent_id: gateway_subagent_id(&request.headers),
+        conversation_id: gateway_identifier(
             &request.headers,
-            LlmGatewayStart {
-                session_id: gateway_session_id(&request.headers),
-                provider: request.provider.name().to_string(),
-                model_name: request
-                    .request_json
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
-                subagent_id: gateway_subagent_id(&request.headers),
-                conversation_id: gateway_identifier(
-                    &request.headers,
-                    &request.request_json,
-                    "x-nemo-flow-conversation-id",
-                    &[
-                        &["conversation_id"],
-                        &["conversationId"],
-                        &["conversation", "id"],
-                    ],
-                ),
-                generation_id: gateway_identifier(
-                    &request.headers,
-                    &request.request_json,
-                    "x-nemo-flow-generation-id",
-                    &[&["generation_id"], &["generationId"], &["generation", "id"]],
-                ),
-                request_id: gateway_identifier(
-                    &request.headers,
-                    &request.request_json,
-                    "x-nemo-flow-request-id",
-                    &[
-                        &["request_id"],
-                        &["requestId"],
-                        &["request", "id"],
-                        &["metadata", "request_id"],
-                    ],
-                )
-                .or_else(|| header_string(&request.headers, "x-request-id")),
-                request: llm_request,
-                streaming: request.streaming,
-                metadata: json!({ "gateway_path": request.path }),
-            },
+            &request.request_json,
+            "x-nemo-flow-conversation-id",
+            &[
+                &["conversation_id"],
+                &["conversationId"],
+                &["conversation", "id"],
+            ],
+        ),
+        generation_id: gateway_identifier(
+            &request.headers,
+            &request.request_json,
+            "x-nemo-flow-generation-id",
+            &[&["generation_id"], &["generationId"], &["generation", "id"]],
+        ),
+        request_id: gateway_identifier(
+            &request.headers,
+            &request.request_json,
+            "x-nemo-flow-request-id",
+            &[
+                &["request_id"],
+                &["requestId"],
+                &["request", "id"],
+                &["metadata", "request_id"],
+            ],
         )
-        .await
+        .or_else(|| header_string(&request.headers, "x-request-id")),
+        request: LlmRequest {
+            headers: observable_headers(&request.headers),
+            content: request.request_json.clone(),
+        },
+        streaming: request.streaming,
+        metadata: json!({ "gateway_path": request.path }),
+    }
 }
 
-// Builds and sends the upstream request, copying only safe request headers. Send failures close the
-// active LLM immediately because no response path will later own that lifecycle.
-async fn send_upstream_or_end(
-    state: &AppState,
-    request: &PreparedGatewayRequest,
-    active: ActiveLlm,
-) -> Result<reqwest::Response, SidecarError> {
-    let mut upstream = state
-        .http
-        .request(request.method.clone(), request.upstream_url.clone())
-        .body(request.body_bytes.clone());
-    for (name, value) in &request.headers {
-        if should_forward_request_header(name) {
-            upstream = upstream.header(name, value);
-        }
+// Captures upstream HTTP status and response headers from inside the managed `func`. The runtime's
+// LLM execution callback returns only a Json (or Json stream), so the outer gateway needs a side
+// channel to recover the bytes the client expects.
+type UpstreamResponseInfo = Arc<Mutex<Option<(StatusCode, HeaderMap)>>>;
+
+// Captures the original `reqwest::Error` from an upstream send failure so the gateway can return
+// a 502 Bad Gateway on connection-level failures. The runtime collapses every callback failure to
+// `FlowError::Internal`, which would otherwise map to a generic 400.
+type UpstreamErrorSlot = Arc<Mutex<Option<reqwest::Error>>>;
+
+// Runs the managed pipeline for a prepared gateway request. Streaming and non-streaming branches
+// share the same prep + codec dispatch but diverge in how the runtime drives the upstream call.
+async fn run_managed_gateway(
+    state: AppState,
+    prepared: PreparedGatewayRequest,
+    prep: GatewayCallPrep,
+) -> Result<Response<Body>, SidecarError> {
+    let codecs = codecs_for_route(prepared.provider);
+    if prepared.streaming {
+        run_managed_streaming(state, prepared, prep, codecs).await
+    } else {
+        run_managed_buffered(state, prepared, prep, codecs).await
     }
-    match upstream.send().await {
-        Ok(response) => Ok(response),
-        Err(error) => {
+}
+
+// Codecs registered for each managed provider route. Routes that emit LLM events but lack a typed
+// codec (count_tokens) return `None` so the runtime still wraps the call but skips annotation.
+struct RouteCodecs {
+    streaming: Option<Box<dyn StreamingCodec>>,
+    response: Option<Arc<dyn LlmResponseCodec>>,
+}
+
+fn codecs_for_route(route: ProviderRoute) -> RouteCodecs {
+    match route {
+        ProviderRoute::AnthropicMessages => RouteCodecs {
+            streaming: Some(Box::new(AnthropicMessagesStreamingCodec::new())),
+            response: Some(Arc::new(AnthropicMessagesCodec) as Arc<dyn LlmResponseCodec>),
+        },
+        ProviderRoute::OpenAiResponses => RouteCodecs {
+            streaming: Some(Box::new(OpenAIResponsesStreamingCodec::new())),
+            response: Some(Arc::new(OpenAIResponsesCodec) as Arc<dyn LlmResponseCodec>),
+        },
+        ProviderRoute::OpenAiChatCompletions => RouteCodecs {
+            streaming: Some(Box::new(OpenAIChatStreamingCodec::new())),
+            response: Some(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>),
+        },
+        ProviderRoute::AnthropicCountTokens | ProviderRoute::OpenAiModels => RouteCodecs {
+            streaming: None,
+            response: None,
+        },
+    }
+}
+
+// Runs a non-streaming gateway request through `llm_call_execute`. The runtime handles start/end
+// events and codec annotation; the gateway only sends the upstream request, parses bytes, and
+// forwards the captured status/headers back to the client.
+async fn run_managed_buffered(
+    state: AppState,
+    prepared: PreparedGatewayRequest,
+    prep: GatewayCallPrep,
+    codecs: RouteCodecs,
+) -> Result<Response<Body>, SidecarError> {
+    let upstream_info: UpstreamResponseInfo = Arc::new(Mutex::new(None));
+    let upstream_error: UpstreamErrorSlot = Arc::new(Mutex::new(None));
+    let response_bytes: Arc<Mutex<Option<Bytes>>> = Arc::new(Mutex::new(None));
+    let func = build_buffered_func(
+        state.clone(),
+        &prepared,
+        upstream_info.clone(),
+        upstream_error.clone(),
+        response_bytes.clone(),
+    );
+    let GatewayCallPrep {
+        scope_stack,
+        session_id,
+        provider_name,
+        request,
+        parent,
+        attributes,
+        metadata,
+        model_name,
+        owner_subagent_id,
+    } = prep;
+    let provider_for_event = provider_name.clone();
+    let params = LlmCallExecuteParams::builder()
+        .name(provider_for_event)
+        .request(request)
+        .func(func)
+        .parent_opt(parent)
+        .attributes(attributes)
+        .metadata(metadata)
+        .model_name_opt(model_name)
+        .response_codec_opt(codecs.response)
+        .build();
+    let result = TASK_SCOPE_STACK
+        .scope(scope_stack, async move { llm_call_execute(params).await })
+        .await;
+    match result {
+        Ok(response_json) => {
             state
                 .sessions
-                .end_llm(
-                    active,
-                    json!({ "error": error.to_string() }),
-                    json!({ "gateway_error": true, "stage": "send" }),
-                )
-                .await?;
-            Err(SidecarError::Upstream(error))
+                .record_gateway_response_hints(&session_id, owner_subagent_id, response_json)
+                .await;
+            let (status, headers) = upstream_info
+                .lock()
+                .expect("upstream info lock poisoned")
+                .take()
+                .unwrap_or((StatusCode::OK, HeaderMap::new()));
+            let bytes = response_bytes
+                .lock()
+                .expect("response bytes lock poisoned")
+                .take()
+                .unwrap_or_default();
+            build_response(status, headers, Body::from(bytes))
         }
+        Err(error) => Err(translate_runtime_error(error, &upstream_error)),
     }
 }
 
-// Determines whether the response should be proxied as a stream. The explicit request `stream`
-// flag wins, but upstream SSE content type is also respected for providers that infer streaming.
-fn is_stream_response(request_streaming: bool, headers: &HeaderMap) -> bool {
-    let content_type = headers
-        .get(http::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    request_streaming || content_type.contains("text/event-stream")
+// Builds the managed-execution callback for a non-streaming route. The closure forwards the
+// buffered request bytes upstream, captures the status and headers into `upstream_info` so the
+// outer code can rebuild the client response, and returns the upstream JSON payload to the runtime.
+fn build_buffered_func(
+    state: AppState,
+    prepared: &PreparedGatewayRequest,
+    upstream_info: UpstreamResponseInfo,
+    upstream_error: UpstreamErrorSlot,
+    response_bytes: Arc<Mutex<Option<Bytes>>>,
+) -> LlmExecutionNextFn {
+    let http = state.http.clone();
+    let method = prepared.method.clone();
+    let url = prepared.upstream_url.clone();
+    let body_bytes = prepared.body_bytes.clone();
+    let headers = prepared.headers.clone();
+    Arc::new(move |_request| {
+        let http = http.clone();
+        let method = method.clone();
+        let url = url.clone();
+        let body_bytes = body_bytes.clone();
+        let headers = headers.clone();
+        let upstream_info = upstream_info.clone();
+        let upstream_error = upstream_error.clone();
+        let response_bytes = response_bytes.clone();
+        Box::pin(async move {
+            let response =
+                match forward_upstream_request(&http, &method, &url, &body_bytes, &headers).await {
+                    Ok(response) => response,
+                    Err(error) => {
+                        let message = error.to_string();
+                        *upstream_error.lock().expect("upstream error lock poisoned") = Some(error);
+                        return Err(FlowError::Internal(message));
+                    }
+                };
+            let status = response.status();
+            let response_headers = response_headers(response.headers());
+            let bytes = match response.bytes().await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let message = error.to_string();
+                    *upstream_error.lock().expect("upstream error lock poisoned") = Some(error);
+                    return Err(FlowError::Internal(message));
+                }
+            };
+            let json = serde_json::from_slice::<Value>(&bytes)
+                .unwrap_or_else(|_| json!({ "body_bytes": bytes.len() }));
+            *upstream_info.lock().expect("upstream info lock poisoned") =
+                Some((status, response_headers));
+            *response_bytes.lock().expect("response bytes lock poisoned") = Some(bytes);
+            Ok(json)
+        })
+    })
 }
 
-// Builds a streaming response body that forwards chunks as they arrive while retaining a bounded
-// preview for the LLM end event. Stream errors end the LLM with gateway-error metadata before the
-// client sees the propagated stream error.
-fn streaming_gateway_response(
-    sessions: SessionManager,
-    active: ActiveLlm,
-    status: StatusCode,
-    headers: HeaderMap,
-    upstream_response: reqwest::Response,
+// Runs a streaming gateway request through `llm_stream_call_execute`. The runtime wraps the
+// upstream byte stream as `LlmJsonStream`; the gateway then re-encodes the parsed events back into
+// SSE frames for the client (Option B trade-off: simpler chunk-level observability, one extra
+// JSON parse/serialize per chunk).
+async fn run_managed_streaming(
+    state: AppState,
+    prepared: PreparedGatewayRequest,
+    prep: GatewayCallPrep,
+    codecs: RouteCodecs,
 ) -> Result<Response<Body>, SidecarError> {
-    let stream = upstream_response.bytes_stream();
-    let body = Body::from_stream(async_stream::stream! {
-        let mut stream = stream;
-        let mut llm = StreamingLlmGuard::new(sessions, active, status);
-        let mut collected = Vec::new();
-        let mut truncated = false;
-        while let Some(chunk) = stream.next().await {
-            match chunk {
-                Ok(bytes) => {
-                    if collected.len() + bytes.len() <= 1_048_576 {
-                        collected.extend_from_slice(&bytes);
-                    } else {
-                        truncated = true;
+    let upstream_info: UpstreamResponseInfo = Arc::new(Mutex::new(None));
+    let upstream_error: UpstreamErrorSlot = Arc::new(Mutex::new(None));
+    let func = build_streaming_func(
+        state.clone(),
+        &prepared,
+        upstream_info.clone(),
+        upstream_error.clone(),
+    );
+    let provider_route = prepared.provider;
+
+    // Streaming routes that lack a codec fall back to byte passthrough. The runtime requires a
+    // collector and finalizer for managed streaming, so without a codec we cannot use the managed
+    // pipeline. This keeps non-LLM streaming paths working while typed codecs remain optional.
+    let Some(streaming_codec) = codecs.streaming else {
+        return passthrough_streaming(state, prepared).await;
+    };
+    let collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+
+    let GatewayCallPrep {
+        scope_stack,
+        session_id,
+        provider_name,
+        request,
+        parent,
+        attributes,
+        metadata,
+        model_name,
+        owner_subagent_id,
+    } = prep;
+    let params = LlmStreamCallExecuteParams::builder()
+        .name(provider_name)
+        .request(request)
+        .func(func)
+        .collector(collector)
+        .finalizer(finalizer)
+        .parent_opt(parent)
+        .attributes(attributes)
+        .metadata(metadata)
+        .model_name_opt(model_name)
+        .response_codec_opt(codecs.response)
+        .build();
+    let json_stream_result = TASK_SCOPE_STACK
+        .scope(
+            scope_stack,
+            async move { llm_stream_call_execute(params).await },
+        )
+        .await;
+    let json_stream =
+        json_stream_result.map_err(|error| translate_runtime_error(error, &upstream_error))?;
+    let (status, headers) = upstream_info
+        .lock()
+        .expect("upstream info lock poisoned")
+        .take()
+        .unwrap_or((StatusCode::OK, HeaderMap::new()));
+    let body = client_sse_body(json_stream, provider_route);
+
+    // Tool hint extraction from streamed responses is intentionally deferred: the runtime
+    // synthesizes the aggregate response inside `LlmStreamWrapper::emit_end_event` and does not
+    // surface it back to the caller. Non-streamed responses continue to feed
+    // `record_gateway_response_hints` from `run_managed_buffered`. Wiring streamed hints back would
+    // require either a runtime hook or a finalizer-tap channel; neither is in scope for the
+    // initial managed-execution refactor.
+    let _ = (session_id, owner_subagent_id);
+
+    build_response(status, headers, body)
+}
+
+// Builds the streaming managed-execution callback. The runtime drives the returned future, which
+// fires the upstream request, captures the status + headers into `upstream_info`, and yields a
+// stream of parsed SSE event JSON values for the runtime collector.
+fn build_streaming_func(
+    state: AppState,
+    prepared: &PreparedGatewayRequest,
+    upstream_info: UpstreamResponseInfo,
+    upstream_error: UpstreamErrorSlot,
+) -> LlmStreamExecutionNextFn {
+    let http = state.http.clone();
+    let method = prepared.method.clone();
+    let url = prepared.upstream_url.clone();
+    let body_bytes = prepared.body_bytes.clone();
+    let headers = prepared.headers.clone();
+    Arc::new(move |_request| {
+        let http = http.clone();
+        let method = method.clone();
+        let url = url.clone();
+        let body_bytes = body_bytes.clone();
+        let headers = headers.clone();
+        let upstream_info = upstream_info.clone();
+        let upstream_error = upstream_error.clone();
+        Box::pin(async move {
+            let response =
+                match forward_upstream_request(&http, &method, &url, &body_bytes, &headers).await {
+                    Ok(response) => response,
+                    Err(error) => {
+                        let message = error.to_string();
+                        *upstream_error.lock().expect("upstream error lock poisoned") = Some(error);
+                        return Err(FlowError::Internal(message));
                     }
-                    yield Ok::<Bytes, reqwest::Error>(bytes);
+                };
+            let status = response.status();
+            let response_headers = response_headers(response.headers());
+            *upstream_info.lock().expect("upstream info lock poisoned") =
+                Some((status, response_headers));
+            let json_stream = sse_json_stream(response);
+            Ok(json_stream)
+        })
+    })
+}
+
+// Decodes an upstream SSE byte stream into a stream of parsed `data:` JSON payloads. Frames with no
+// `data:` line (heartbeats), comments, and the `data: [DONE]` sentinel are filtered out by the
+// shared `SseEventDecoder`. Trailing partial frames are surfaced to the runtime so the collector
+// observes whatever the upstream sent before disconnect.
+fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
+    use nemo_flow::codec::streaming::SseEventDecoder;
+    let mut decoder = SseEventDecoder::new();
+    let mut bytes = response.bytes_stream();
+    let stream = stream! {
+        while let Some(chunk) = bytes.next().await {
+            match chunk {
+                Ok(buffer) => {
+                    match decoder.push_bytes(&buffer) {
+                        Ok(events) => {
+                            for event in events {
+                                yield Ok(event.data);
+                            }
+                        }
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    }
                 }
                 Err(error) => {
-                    llm.end_error("stream", error.to_string()).await;
-                    yield Err(error);
+                    yield Err(FlowError::Internal(error.to_string()));
                     return;
                 }
             }
         }
-        let response = stream_response_json(&collected, truncated);
-        llm.end_success(response, truncated).await;
+        match decoder.finish() {
+            Ok(Some(event)) => yield Ok(event.data),
+            Ok(None) => {}
+            Err(error) => yield Err(error),
+        }
+    };
+    Box::pin(stream)
+}
+
+// Re-encodes a runtime JSON stream as `text/event-stream` frames for the downstream client. Event
+// names are reconstructed from the JSON `type` field where providers populate it (Anthropic
+// Messages, OpenAI Responses); OpenAI Chat omits the `event:` line and appends the original
+// `data: [DONE]` terminator after the runtime stream completes.
+fn client_sse_body(json_stream: LlmJsonStream, route: ProviderRoute) -> Body {
+    let mut json_stream = json_stream;
+    let stream = stream! {
+        while let Some(item) = json_stream.next().await {
+            match item {
+                Ok(event_json) => {
+                    let frame = encode_sse_frame(&event_json, route);
+                    yield Ok::<Bytes, SidecarError>(Bytes::from(frame));
+                }
+                Err(error) => {
+                    yield Err(SidecarError::InvalidPayload(error.to_string()));
+                    return;
+                }
+            }
+        }
+        if matches!(route, ProviderRoute::OpenAiChatCompletions) {
+            yield Ok::<Bytes, SidecarError>(Bytes::from_static(b"data: [DONE]\n\n"));
+        }
+    };
+    Body::from_stream(stream)
+}
+
+// Formats one SSE frame from a parsed event payload. Anthropic and OpenAI Responses events carry
+// the event name in the `type` field, so it is mirrored back onto the `event:` line; OpenAI Chat
+// chunks have no event name and emit only `data:`.
+fn encode_sse_frame(event_json: &Value, route: ProviderRoute) -> String {
+    let serialized = serde_json::to_string(event_json).unwrap_or_else(|_| "null".to_string());
+    let event_name = match route {
+        ProviderRoute::AnthropicMessages | ProviderRoute::OpenAiResponses => event_json
+            .get("type")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        _ => None,
+    };
+    match event_name {
+        Some(name) => format!("event: {name}\ndata: {serialized}\n\n"),
+        None => format!("data: {serialized}\n\n"),
+    }
+}
+
+// Forwards the buffered request to the upstream provider with only the safe request headers. This
+// is shared by the buffered and streaming managed funcs so header filtering stays consistent.
+async fn forward_upstream_request(
+    http: &reqwest::Client,
+    method: &Method,
+    url: &str,
+    body_bytes: &Bytes,
+    headers: &HeaderMap,
+) -> Result<reqwest::Response, reqwest::Error> {
+    let mut upstream = http.request(method.clone(), url).body(body_bytes.clone());
+    for (name, value) in headers {
+        if should_forward_request_header(name) {
+            upstream = upstream.header(name, value);
+        }
+    }
+    upstream.send().await
+}
+
+// Plain byte passthrough used for streaming routes that lack a typed codec. The managed pipeline
+// requires a collector + finalizer, so without a codec we keep the simpler proxy behavior and skip
+// the LLM lifecycle event for that single request.
+async fn passthrough_streaming(
+    state: AppState,
+    prepared: PreparedGatewayRequest,
+) -> Result<Response<Body>, SidecarError> {
+    let response = forward_upstream_request(
+        &state.http,
+        &prepared.method,
+        &prepared.upstream_url,
+        &prepared.body_bytes,
+        &prepared.headers,
+    )
+    .await?;
+    let status = response.status();
+    let headers = response_headers(response.headers());
+    let mut bytes = response.bytes_stream();
+    let body = Body::from_stream(stream! {
+        while let Some(chunk) = bytes.next().await {
+            yield chunk;
+        }
     });
     build_response(status, headers, body)
 }
 
-// Buffers a non-streaming upstream response, records its JSON body or byte count, and then returns
-// the original bytes to the client. Body read errors close the LLM before surfacing upstream error.
-async fn buffered_gateway_response(
-    sessions: SessionManager,
-    active: ActiveLlm,
-    status: StatusCode,
-    headers: HeaderMap,
-    upstream_response: reqwest::Response,
-) -> Result<Response<Body>, SidecarError> {
-    let bytes = match upstream_response.bytes().await {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            sessions
-                .end_llm(
-                    active,
-                    json!({ "error": error.to_string() }),
-                    json!({ "http_status": status.as_u16(), "streaming": false, "gateway_error": true, "stage": "body" }),
-                )
-                .await?;
-            return Err(SidecarError::Upstream(error));
-        }
-    };
-    let response_json = serde_json::from_slice::<Value>(&bytes)
-        .unwrap_or_else(|_| json!({ "body_bytes": bytes.len() }));
-    sessions
-        .end_llm(
-            active,
-            response_json,
-            json!({ "http_status": status.as_u16(), "streaming": false }),
-        )
-        .await?;
-    build_response(status, headers, Body::from(bytes))
-}
-
-struct StreamingLlmGuard {
-    sessions: SessionManager,
-    active: Option<ActiveLlm>,
-    status: StatusCode,
-}
-
-impl StreamingLlmGuard {
-    // Creates a guard that owns the active LLM until a stream reaches exactly one terminal path.
-    // The option prevents double-ending when success, stream error, or drop cleanup races with
-    // normal control flow.
-    fn new(sessions: SessionManager, active: ActiveLlm, status: StatusCode) -> Self {
-        Self {
-            sessions,
-            active: Some(active),
-            status,
-        }
+// Translates a runtime [`FlowError`] from managed execution into a sidecar HTTP error. When the
+// failure originated from upstream send/body work, the captured `reqwest::Error` is preferred so
+// the response status reflects 502 Bad Gateway rather than the generic 400 from a guardrail or
+// internal sidecar error.
+fn translate_runtime_error(error: FlowError, upstream_error: &UpstreamErrorSlot) -> SidecarError {
+    if let Some(upstream) = upstream_error
+        .lock()
+        .expect("upstream error lock poisoned")
+        .take()
+    {
+        return SidecarError::Upstream(upstream);
     }
-
-    // Ends a completed streaming LLM with the collected stream preview and truncation marker.
-    // Errors from the observability layer are swallowed because the response body has already been
-    // delivered to the client and the sidecar must not retroactively fail the stream.
-    async fn end_success(&mut self, response: Value, truncated: bool) {
-        if let Some(active) = self.active.take() {
-            let _ = self
-                .sessions
-                .end_llm(
-                    active,
-                    response,
-                    json!({ "http_status": self.status.as_u16(), "streaming": true, "stream_truncated": truncated }),
-                )
-                .await;
-        }
-    }
-
-    // Ends a streaming LLM after an upstream stream error. The stage is preserved in metadata so
-    // observers can distinguish mid-body failures from client drops or initial send failures.
-    async fn end_error(&mut self, stage: &'static str, error: String) {
-        if let Some(active) = self.active.take() {
-            let _ = self
-                .sessions
-                .end_llm(
-                    active,
-                    json!({ "error": error }),
-                    json!({ "http_status": self.status.as_u16(), "streaming": true, "gateway_error": true, "stage": stage }),
-                )
-                .await;
-        }
-    }
-}
-
-impl Drop for StreamingLlmGuard {
-    // Best-effort cleanup for streams abandoned before success or error handling runs. Drop cannot
-    // block, so it spawns onto the current Tokio runtime when one is available and otherwise leaves
-    // cleanup to process shutdown.
-    fn drop(&mut self) {
-        let Some(active) = self.active.take() else {
-            return;
-        };
-        let sessions = self.sessions.clone();
-        let status = self.status;
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                let _ = sessions
-                    .end_llm(
-                        active,
-                        json!({ "error": "stream body dropped before completion" }),
-                        json!({ "http_status": status.as_u16(), "streaming": true, "gateway_error": true, "stage": "client_drop" }),
-                    )
-                    .await;
-            });
-        }
+    match error {
+        FlowError::GuardrailRejected(reason) => SidecarError::InvalidPayload(reason),
+        other => SidecarError::InvalidPayload(other.to_string()),
     }
 }
 
@@ -500,10 +751,12 @@ fn observable_headers(headers: &HeaderMap) -> Map<String, Value> {
 
 // Copies upstream response headers except hop-by-hop transport headers that Axum/hyper must manage
 // for the downstream connection. Multiple values are appended to preserve provider behavior.
+// Content-Length is also dropped because the gateway re-encodes streaming responses and the
+// upstream-reported length will not match the bytes the client sees.
 fn response_headers(headers: &HeaderMap) -> HeaderMap {
     let mut output = HeaderMap::new();
     for (name, value) in headers {
-        if !is_hop_by_hop(name) {
+        if !is_hop_by_hop(name) && name != http::header::CONTENT_LENGTH {
             output.append(name.clone(), value.clone());
         }
     }
@@ -563,18 +816,6 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
             | "transfer-encoding"
             | "upgrade"
     )
-}
-
-// Builds the streaming end-event payload from the collected prefix. Truncated streams are marked
-// explicitly so downstream analysis does not mistake the preview for a complete provider response.
-fn stream_response_json(collected: &[u8], truncated: bool) -> Value {
-    if truncated {
-        return json!({
-            "stream_preview": String::from_utf8_lossy(collected),
-            "stream_truncated": true
-        });
-    }
-    json!({ "stream": String::from_utf8_lossy(collected) })
 }
 
 #[cfg(test)]

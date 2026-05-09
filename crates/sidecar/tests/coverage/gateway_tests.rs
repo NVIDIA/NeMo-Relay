@@ -3,49 +3,13 @@
 
 use super::*;
 use crate::config::SidecarConfig;
-use crate::model::{AgentKind, NormalizedEvent, SessionEvent};
 use crate::server::AppState;
+use crate::session::SessionManager;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
 use http_body_util::BodyExt;
 use reqwest::Client;
-
-async fn wait_for_file_contains(
-    path: &std::path::Path,
-    needle: &str,
-    timeout: std::time::Duration,
-) -> bool {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        if let Ok(contents) = std::fs::read_to_string(path)
-            && contents.contains(needle)
-        {
-            return true;
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-}
-
-async fn wait_for_session_llms_empty(
-    sessions: &SessionManager,
-    session_id: &str,
-    timeout: std::time::Duration,
-) -> bool {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        if sessions.session_llms_empty(session_id).await {
-            return true;
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-}
 
 #[test]
 fn removes_hop_by_hop_headers() {
@@ -306,84 +270,7 @@ fn response_headers_preserve_duplicates() {
     assert_eq!(copied.get_all("set-cookie").iter().count(), 2);
 }
 
-#[test]
-fn stream_response_records_preview_and_truncation() {
-    assert_eq!(
-        stream_response_json(b"data: done", false),
-        json!({ "stream": "data: done" })
-    );
-    assert_eq!(
-        stream_response_json(b"partial", true),
-        json!({ "stream_preview": "partial", "stream_truncated": true })
-    );
-}
-
-#[tokio::test]
-async fn streaming_llm_guard_closes_on_drop() {
-    let temp = tempfile::tempdir().unwrap();
-    let config = SidecarConfig {
-        bind: "127.0.0.1:0".parse().unwrap(),
-        openai_base_url: "http://openai".into(),
-        anthropic_base_url: "http://anthropic".into(),
-        atif_dir: Some(temp.path().to_path_buf()),
-        openinference_endpoint: None,
-        metadata: None,
-        plugin_config: None,
-    };
-    let sessions = SessionManager::new(config);
-    let active = sessions
-        .start_llm(
-            &HeaderMap::new(),
-            LlmGatewayStart {
-                session_id: Some("drop-session".into()),
-                provider: "openai.responses".into(),
-                model_name: Some("gpt-test".into()),
-                subagent_id: None,
-                conversation_id: None,
-                generation_id: None,
-                request_id: None,
-                request: LlmRequest {
-                    headers: Map::new(),
-                    content: json!({ "model": "gpt-test", "stream": true }),
-                },
-                streaming: true,
-                metadata: json!({ "gateway_path": "/v1/responses" }),
-            },
-        )
-        .await
-        .unwrap();
-
-    drop(StreamingLlmGuard::new(
-        sessions.clone(),
-        active,
-        StatusCode::OK,
-    ));
-    // Drop cleanup runs in a spawned task, so poll the session state instead of sleeping.
-    assert!(
-        wait_for_session_llms_empty(&sessions, "drop-session", std::time::Duration::from_secs(5))
-            .await
-    );
-    sessions
-        .apply_events(
-            &HeaderMap::new(),
-            vec![NormalizedEvent::AgentEnded(SessionEvent {
-                session_id: "drop-session".into(),
-                agent_kind: AgentKind::Gateway,
-                event_name: "SessionEnd".into(),
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-        )
-        .await
-        .unwrap();
-
-    let atif_path = temp.path().join("drop-session.atif.json");
-    assert!(
-        wait_for_file_contains(
-            &atif_path,
-            "stream body dropped before completion",
-            std::time::Duration::from_secs(5),
-        )
-        .await
-    );
-}
+// `stream_response_records_preview_and_truncation` and `streaming_llm_guard_closes_on_drop` were
+// removed when the gateway moved to `llm_stream_call_execute`. The runtime now owns stream-end
+// lifecycle (start/end events emitted by `LlmStreamWrapper`); core tests cover that contract,
+// and the gateway no longer carries a stream preview/truncation helper or a separate guard struct.

@@ -428,6 +428,150 @@ impl LlmCodec for OpenAIResponsesCodec {
 }
 
 // ---------------------------------------------------------------------------
+// Streaming codec
+// ---------------------------------------------------------------------------
+
+/// Streaming counterpart to [`OpenAIResponsesCodec`].
+///
+/// Replays the OpenAI Responses SSE event sequence into the same JSON shape the API returns for a
+/// non-streaming request (`{id, model, status, output, usage, incomplete_details, ...}`). Once
+/// finalized, the assembled JSON can be fed back through [`OpenAIResponsesCodec::decode_response`]
+/// to produce the canonical [`AnnotatedLlmResponse`].
+///
+/// # Strategy
+///
+/// The Responses API is a relatively forgiving streaming target because every event carries
+/// either the full `response` snapshot (`response.created`, `response.in_progress`,
+/// `response.completed`, `response.failed`, `response.incomplete`) or the final-state output item
+/// (`response.output_item.done`). We:
+///
+/// 1. Track the latest `response` snapshot — terminal events (`completed`/`failed`/`incomplete`)
+///    typically carry the complete state including `output`, so we prefer those when present.
+/// 2. Track output items by `output_index` — `output_item.done` events deliver the final per-item
+///    state, used as a fallback when the terminal `response.output` is missing or empty.
+/// 3. Per-token `output_text.delta` and `function_call_arguments.delta` events are ignored
+///    because their content is redelivered in the matching `output_item.done` event. Skipping
+///    deltas keeps the codec resilient to schema additions and avoids double-accumulation.
+///
+/// Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer
+/// closures share access. Each instance is single-use because [`LlmFinalizerFn`] consumes the
+/// finalize step.
+///
+/// [`AnnotatedLlmResponse`]: crate::codec::response::AnnotatedLlmResponse
+/// [`LlmFinalizerFn`]: crate::api::runtime::LlmFinalizerFn
+pub struct OpenAIResponsesStreamingCodec {
+    state: std::sync::Arc<std::sync::Mutex<OpenAIResponsesStreamingState>>,
+}
+
+impl OpenAIResponsesStreamingCodec {
+    /// Creates a fresh streaming codec with empty accumulator state.
+    pub fn new() -> Self {
+        Self {
+            state: std::sync::Arc::new(std::sync::Mutex::new(
+                OpenAIResponsesStreamingState::default(),
+            )),
+        }
+    }
+}
+
+impl Default for OpenAIResponsesStreamingCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl super::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
+    fn collector(&self) -> crate::api::runtime::LlmCollectorFn {
+        let state = std::sync::Arc::clone(&self.state);
+        Box::new(move |event: Json| -> Result<()> {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.observe(&event);
+            Ok(())
+        })
+    }
+
+    fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
+        let state = std::sync::Arc::clone(&self.state);
+        Box::new(move || -> Json {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            std::mem::take(&mut *guard).finalize()
+        })
+    }
+}
+
+#[derive(Debug, Default)]
+struct OpenAIResponsesStreamingState {
+    /// Latest `response` snapshot from any event that carries one. Last write wins, so terminal
+    /// events with the complete state will end up here when they fire.
+    response: Option<serde_json::Map<String, Json>>,
+    /// Items keyed by `output_index`. Captured from `response.output_item.added` (initial) and
+    /// replaced on `response.output_item.done` (final). Used as a fallback for `output` when the
+    /// terminal `response` snapshot lacks it.
+    items: std::collections::BTreeMap<usize, Json>,
+}
+
+impl OpenAIResponsesStreamingState {
+    fn observe(&mut self, event: &Json) {
+        let event_type = event.get("type").and_then(Json::as_str).unwrap_or("");
+        match event_type {
+            "response.created"
+            | "response.in_progress"
+            | "response.completed"
+            | "response.failed"
+            | "response.incomplete" => self.observe_response_snapshot(event),
+            "response.output_item.added" | "response.output_item.done" => {
+                self.observe_output_item(event);
+            }
+            // response.output_text.delta, response.function_call_arguments.delta,
+            // response.content_part.added/done — content is redelivered in output_item.done, so we
+            // don't accumulate deltas. Unknown events are ignored.
+            _ => {}
+        }
+    }
+
+    fn observe_response_snapshot(&mut self, event: &Json) {
+        let Some(response) = event.get("response") else {
+            return;
+        };
+        if let Json::Object(map) = response {
+            self.response = Some(map.clone());
+        }
+    }
+
+    fn observe_output_item(&mut self, event: &Json) {
+        let Some(index) = event.get("output_index").and_then(Json::as_u64) else {
+            return;
+        };
+        let Some(item) = event.get("item") else {
+            return;
+        };
+        self.items.insert(index as usize, item.clone());
+    }
+
+    fn finalize(self) -> Json {
+        let mut output = self.response.unwrap_or_default();
+        // If the latest snapshot lacked `output` (or has an empty array because it came from an
+        // early `response.created` event), backfill from per-item accumulator. Terminal events
+        // typically carry the complete output, so this branch is a safety net for truncated
+        // streams or schemas that drop output from terminal events.
+        let snapshot_output_empty = output
+            .get("output")
+            .and_then(Json::as_array)
+            .map(|arr| arr.is_empty())
+            .unwrap_or(true);
+        if snapshot_output_empty && !self.items.is_empty() {
+            let items: Vec<Json> = self.items.into_values().collect();
+            output.insert("output".to_string(), Json::Array(items));
+        }
+        Json::Object(output)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
