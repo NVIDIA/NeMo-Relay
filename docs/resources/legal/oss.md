@@ -13,8 +13,4 @@ Dependency attribution files live at the repository root:
 - [`ATTRIBUTIONS-Python.md`](../../../ATTRIBUTIONS-Python.md)
 - [`ATTRIBUTIONS-Node.md`](../../../ATTRIBUTIONS-Node.md)
 
-Source release artifacts for third-party dependencies that require source
-availability review live under
-[`third_party/source-release/`](../../../third_party/source-release/README.md).
-
 Use the repository root `LICENSE` file for the NeMo Flow project license.
