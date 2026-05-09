@@ -1090,6 +1090,40 @@ fn helper_functions_cover_additional_openinference_branches() {
         Some(("hello".to_string(), "text/plain"))
     );
 
+    let opaque_input = openinference_input_value(&make_start_event(
+        Uuid::now_v7(),
+        None,
+        "opaque-llm",
+        ScopeType::Llm,
+        Some(json!({"headers": {"authorization": "Bearer token"}, "opaque": true})),
+    ))
+    .unwrap();
+    assert_eq!(
+        opaque_input,
+        ("{\"opaque\":true}".to_string(), "application/json")
+    );
+
+    assert_eq!(
+        display_text_from_string(r#"{"content":"json text"}"#),
+        Some("json text".to_string())
+    );
+    assert_eq!(
+        display_text_from_chat_choices(
+            &json!([{"message": {"tool_calls": [{"toolName": "read"}]}}])
+        ),
+        Some("Requested tools: read".to_string())
+    );
+    assert_eq!(normalize_total_tokens(Some(5), None, None), Some(5));
+
+    let alias_usage = usage_from_manual_llm_output(Some(&json!({
+        "usage": {"inputTokens": 11, "outputTokens": 7, "totalTokens": 18, "cacheReadInputTokens": 5}
+    })))
+    .unwrap();
+    assert_eq!(alias_usage.prompt_tokens, Some(11));
+    assert_eq!(alias_usage.completion_tokens, Some(7));
+    assert_eq!(alias_usage.total_tokens, Some(18));
+    assert_eq!(alias_usage.cache_read_tokens, Some(5));
+
     let mut processor = OpenInferenceEventProcessor::new(make_provider().0, "test".into());
     processor.process(&make_end_event(
         Uuid::now_v7(),
