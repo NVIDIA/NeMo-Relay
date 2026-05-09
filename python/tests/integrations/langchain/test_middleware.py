@@ -203,8 +203,15 @@ def test_infer_codec_from_supported_model_classes(monkeypatch: pytest.MonkeyPatc
         def __init__(self, *, use_responses_api: bool = False) -> None:
             self.use_responses_api = use_responses_api
 
-    monkeypatch.setattr(_serialization, "ChatAnthropic", FakeChatAnthropic)
-    monkeypatch.setattr(_serialization, "ChatOpenAI", FakeChatOpenAI)
+    class FakeChatNVIDIA:
+        pass
+
+    monkeypatch.setattr(_serialization, "ChatAnthropic", FakeChatAnthropic, raising=False)
+    monkeypatch.setattr(_serialization, "ChatOpenAI", FakeChatOpenAI, raising=False)
+    monkeypatch.setattr(_serialization, "ChatNVIDIA", FakeChatNVIDIA, raising=False)
+    monkeypatch.setattr(_serialization, "_HAS_ANTHROPIC", True)
+    monkeypatch.setattr(_serialization, "_HAS_OPENAI", True)
+    monkeypatch.setattr(_serialization, "_HAS_NVIDIA", True)
 
     assert isinstance(_serialization.infer_codec_from_model(FakeChatAnthropic()), AnthropicMessagesCodec)
     assert isinstance(_serialization.infer_codec_from_model(FakeChatOpenAI()), OpenAIChatCodec)
@@ -212,6 +219,7 @@ def test_infer_codec_from_supported_model_classes(monkeypatch: pytest.MonkeyPatc
         _serialization.infer_codec_from_model(FakeChatOpenAI(use_responses_api=True)),
         OpenAIResponsesCodec,
     )
+    assert isinstance(_serialization.infer_codec_from_model(FakeChatNVIDIA()), OpenAIChatCodec)
     assert _serialization.infer_codec_from_model(object()) is None
 
 
