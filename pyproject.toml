@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
-requires = ["uv_build>=0.11.11,<0.12"]
-build-backend = "uv_build"
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
 
 [project]
-name = "nemo-flow-meta"
-version = "0.1.0" # Placeholder version for the meta package which we don't actually publish
+name = "nemo-flow"
+dynamic = ["version"]
 description = "Python bindings for the NeMo Flow agent runtime."
 readme = "python/nemo_flow/README.md"
 requires-python = ">=3.11"
@@ -42,13 +42,6 @@ Issues = "https://github.com/NVIDIA/NeMo-Flow/issues"
 Repository = "https://github.com/NVIDIA/NeMo-Flow"
 
 [dependency-groups]
-libs = [
-    "nemo-flow",
-    "langchain>=1.2.11,<2.0.0",
-    "langchain-core",
-    "langchain-nvidia-ai-endpoints",
-]
-
 dev = [
     "ipython~=8.20",
     "maturin[zig]>=1.0,<2.0; sys_platform == 'linux'",
@@ -59,12 +52,14 @@ dev = [
     "ty>=0.0.1a7",
     "uv~=0.10.0",
 ]
+
 test = [
     "pydantic>=2",
     "pytest>=8",
     "pytest-asyncio>=0.26",
     "pytest-cov~=7.0",
 ]
+
 docs = [
     "myst-parser~=4.0",
     "nvidia-sphinx-theme~=0.0.9",
@@ -78,15 +73,31 @@ docs = [
     "sphinxcontrib-mermaid~=1.0",
 ]
 
+[project.optional-dependencies]
+langchain = [
+    "langchain>=1.2.11,<2.0.0",
+    "langchain-core",
+]
+
+langchain-nvidia = [
+    "langchain>=1.2.11,<2.0.0",
+    "langchain-core",
+    "langchain-nvidia-ai-endpoints",
+]
+
+[tool.maturin]
+manifest-path = "crates/python/Cargo.toml"
+python-source = "python"
+module-name = "nemo_flow._native"
+features = ["pyo3/extension-module"]
+
+[tool.maturin.sbom]
+rust = true
+auditwheel = true
+
 [tool.uv]
-default-groups = ["dev", "libs", "test"]
-package = false
-
-[tool.uv.sources]
-nemo-flow = { workspace = true }
-
-[tool.uv.workspace]
-members = ["python"]
+default-groups = ["dev", "test"]
+package = true
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests", "third_party/langgraph_tests"]

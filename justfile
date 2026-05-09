@@ -641,10 +641,8 @@ build-python:
         prepare_llvm_cov_workspace
     fi
     python_executable="$(project_python_executable)"
-    pushd "$NEMO_FLOW_REPO_ROOT/python"
     "$python_executable" -m maturin develop
-    popd
-
+    
 
 # --set [ci=true|false]
 build-go:
@@ -766,9 +764,7 @@ test-python:
     activate_project_venv
     python_executable="$(project_python_executable)"
     use_project_python_source "$python_executable"
-    pushd "$NEMO_FLOW_REPO_ROOT/python"
     "$python_executable" -m maturin develop --skip-install
-    popd
     "$python_executable" -m "${pytest_cmd[@]}"
     if is_true "{{ ci }}" && [[ -n "$rust_coverage_out" ]]; then
         cargo llvm-cov report \

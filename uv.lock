@@ -6,12 +6,6 @@ resolution-markers = [
     "sys_platform != 'linux'",
 ]
 
-[manifest]
-members = [
-    "nemo-flow",
-    "nemo-flow-meta",
-]
-
 [[package]]
 name = "accessible-pygments"
 version = "0.0.5"
@@ -1176,7 +1170,7 @@ wheels = [
 
 [[package]]
 name = "nemo-flow"
-source = { editable = "python" }
+source = { editable = "." }
 
 [package.optional-dependencies]
 langchain = [
@@ -1188,21 +1182,6 @@ langchain-nvidia = [
     { name = "langchain-core" },
     { name = "langchain-nvidia-ai-endpoints" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.2.11,<2.0.0" },
-    { name = "langchain", marker = "extra == 'langchain-nvidia'", specifier = ">=1.2.11,<2.0.0" },
-    { name = "langchain-core", marker = "extra == 'langchain'" },
-    { name = "langchain-core", marker = "extra == 'langchain-nvidia'" },
-    { name = "langchain-nvidia-ai-endpoints", marker = "extra == 'langchain-nvidia'" },
-]
-provides-extras = ["langchain", "langchain-nvidia"]
-
-[[package]]
-name = "nemo-flow-meta"
-version = "0.1.0"
-source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
@@ -1227,12 +1206,6 @@ docs = [
     { name = "sphinxcontrib-mermaid" },
     { name = "sphinxcontrib-rust" },
 ]
-libs = [
-    { name = "langchain" },
-    { name = "langchain-core" },
-    { name = "langchain-nvidia-ai-endpoints" },
-    { name = "nemo-flow" },
-]
 test = [
     { name = "pydantic" },
     { name = "pytest" },
@@ -1241,6 +1214,14 @@ test = [
 ]
 
 [package.metadata]
+requires-dist = [
+    { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.2.11,<2.0.0" },
+    { name = "langchain", marker = "extra == 'langchain-nvidia'", specifier = ">=1.2.11,<2.0.0" },
+    { name = "langchain-core", marker = "extra == 'langchain'" },
+    { name = "langchain-core", marker = "extra == 'langchain-nvidia'" },
+    { name = "langchain-nvidia-ai-endpoints", marker = "extra == 'langchain-nvidia'" },
+]
+provides-extras = ["langchain", "langchain-nvidia"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1264,12 +1245,6 @@ docs = [
     { name = "sphinx-multiversion", specifier = "~=0.2" },
     { name = "sphinxcontrib-mermaid", specifier = "~=1.0" },
     { name = "sphinxcontrib-rust", specifier = ">=1.0,<1.1" },
-]
-libs = [
-    { name = "langchain", specifier = ">=1.2.11,<2.0.0" },
-    { name = "langchain-core" },
-    { name = "langchain-nvidia-ai-endpoints" },
-    { name = "nemo-flow", editable = "python" },
 ]
 test = [
     { name = "pydantic", specifier = ">=2" },
