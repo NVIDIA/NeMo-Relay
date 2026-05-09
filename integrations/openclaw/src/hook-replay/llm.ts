@@ -1,6 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * LLM span reconstruction for OpenClaw hook replay.
+ *
+ * OpenClaw currently exposes public hooks for request snapshots, assistant
+ * outputs, message writes, and model-call timing as separate event streams. This
+ * module correlates those signals into NeMo Flow LLM spans while staying on the
+ * public plugin API. The reconstruction is intentionally best-effort until
+ * OpenClaw exposes a first-class provider-call lifecycle hook with a stable
+ * call id, request, response, usage, and timing in one contract.
+ */
 import type { NemoFlowHookBackendConfig } from "../config.js";
 import type {
   PluginHookAgentContext,
@@ -33,6 +43,10 @@ import {
   startMicrosFromDuration,
 } from "./correlation.js";
 
+/**
+ * Store one OpenClaw llm_input snapshot and replay it immediately if the matching
+ * llm_output arrived first.
+ */
 export function recordLlmInput(
   manager: SessionManager,
   event: PluginHookLlmInputEvent,
@@ -81,6 +95,12 @@ export function recordLlmInput(
   });
 }
 
+/**
+ * Replay one llm_output event or hold it briefly for a late llm_input snapshot.
+ *
+ * The grace window keeps traces accurate for out-of-order hooks without blocking
+ * the OpenClaw process or keeping Node alive.
+ */
 export function recordLlmOutput(
   manager: SessionManager,
   event: PluginHookLlmOutputEvent,
@@ -134,6 +154,12 @@ export function recordLlmOutput(
   insertPendingOutput(manager, key, pending);
 }
 
+/**
+ * Capture assistant message writes as a higher-fidelity fallback for LLM outputs.
+ *
+ * Some OpenClaw paths expose the clearest assistant text, tool calls, and usage
+ * during message persistence rather than through llm_output.
+ */
 export function recordBeforeMessageWrite(
   manager: SessionManager,
   event: PluginHookBeforeMessageWriteEvent,
@@ -191,6 +217,7 @@ export function recordBeforeMessageWrite(
   }
 }
 
+/** Record the start of a provider call when OpenClaw supplies a model call id. */
 export function recordModelCallStarted(
   manager: SessionManager,
   event: PluginHookModelCallStartedEvent,
@@ -230,6 +257,7 @@ export function recordModelCallStarted(
   );
 }
 
+/** Record provider-call timing and byte counters for later LLM span correlation. */
 export function recordModelCallEnded(
   manager: SessionManager,
   event: PluginHookModelCallEndedEvent,
@@ -282,6 +310,7 @@ export function recordModelCallEnded(
   );
 }
 
+/** Flush pending llm_output records for a session before the root span closes. */
 export function replayPendingLlmOutputsForSession(
   manager: SessionManager,
   session: SessionState,
@@ -317,6 +346,10 @@ export function replayPendingLlmOutputsForSession(
   }
 }
 
+/**
+ * Reconstruct final-run LLM spans from agent_end/message-write data when direct
+ * llm_output replay did not already produce the trajectory.
+ */
 export function replayAgentEndMessages(
   manager: SessionManager,
   event: PluginHookAgentEndEvent,
@@ -349,6 +382,7 @@ export function replayAgentEndMessages(
   return finalOutput;
 }
 
+/** Emit diagnostic marks for provider-call timing records that could not pair to an LLM span. */
 export function emitUnpairedModelCallTimingMarks(manager: SessionManager, session: SessionState): void {
   for (const records of manager.state.modelCallsByCallId.values()) {
     for (const record of records) {
@@ -380,6 +414,7 @@ export function emitUnpairedModelCallTimingMarks(manager: SessionManager, sessio
   }
 }
 
+/** Build the request payload passed to NeMo Flow for a replayed LLM span. */
 export function buildReplayLlmRequest(
   input: LlmInputRecord,
   output: PluginHookLlmOutputEvent,
@@ -406,6 +441,7 @@ export function buildReplayLlmRequest(
   });
 }
 
+/** Build the response payload passed to NeMo Flow for a replayed LLM span. */
 export function buildReplayLlmResponse(
   event: PluginHookLlmOutputEvent,
   timing: ModelCallRecord | undefined,
@@ -436,6 +472,7 @@ export function buildReplayLlmResponse(
   });
 }
 
+/** Replay an output whose matching input never arrived before the grace timeout. */
 function replayExpiredPendingOutput(
   manager: SessionManager,
   key: string,
@@ -469,6 +506,7 @@ function replayExpiredPendingOutput(
   }
 }
 
+/** Emit the actual NeMo Flow LLM span from correlated request, output, and timing data. */
 function replayLlmOutput(params: {
   manager: SessionManager;
   event: PluginHookLlmOutputEvent;
@@ -528,6 +566,7 @@ function replayLlmOutput(params: {
   }
 }
 
+/** Replay assistant message-write records as ordered LLM spans using FIFO timing candidates. */
 function replayAssistantMessageWrites(
   manager: SessionManager,
   session: SessionState,
@@ -585,6 +624,7 @@ function replayAssistantMessageWrites(
   return replayed;
 }
 
+/** Consume the next unpaired timing record for message-write trajectory replay. */
 function consumeNextTimingCandidate(
   manager: SessionManager,
   session: SessionState,
@@ -605,6 +645,7 @@ function consumeNextTimingCandidate(
   return candidate;
 }
 
+/** Consume a timing candidate only when the public hook data makes it unambiguous. */
 function consumeTimingCandidate(
   manager: SessionManager,
   session: SessionState,
@@ -639,6 +680,7 @@ function consumeTimingCandidate(
   return undefined;
 }
 
+/** Mark a timing match as ambiguous instead of attaching possibly wrong latency. */
 function emitModelTimingAmbiguousMark(
   manager: SessionManager,
   session: SessionState,
@@ -662,6 +704,7 @@ function emitModelTimingAmbiguousMark(
   });
 }
 
+/** Emit one unpaired timing diagnostic mark. */
 function emitModelTimingMark(
   manager: SessionManager,
   session: SessionState,
@@ -695,6 +738,7 @@ function emitModelTimingMark(
   });
 }
 
+/** Emit a compact summary when multiple timing records cannot be paired safely. */
 function emitModelTimingSummaryMark(
   manager: SessionManager,
   session: SessionState,
@@ -714,6 +758,7 @@ function emitModelTimingSummaryMark(
   });
 }
 
+/** Convert an OpenClaw llm_input event into the buffered request record. */
 function createInputRecord(session: SessionState, event: PluginHookLlmInputEvent): LlmInputRecord {
   return {
     sessionKey: session.sessionId,
@@ -729,6 +774,7 @@ function createInputRecord(session: SessionState, event: PluginHookLlmInputEvent
   };
 }
 
+/** Resolve an existing session for before_message_write without creating a fake one. */
 function existingSessionForMessageWrite(
   manager: SessionManager,
   event: PluginHookBeforeMessageWriteEvent,
@@ -740,6 +786,7 @@ function existingSessionForMessageWrite(
   return key === undefined ? undefined : manager.state.sessions.get(key);
 }
 
+/** Build a minimal request placeholder when only an llm_output hook is available. */
 function placeholderInputRecord(record: PendingLlmOutputRecord): LlmInputRecord {
   return {
     sessionKey: record.sessionKey,
@@ -755,6 +802,7 @@ function placeholderInputRecord(record: PendingLlmOutputRecord): LlmInputRecord 
   };
 }
 
+/** Append the current user prompt unless the history snapshot already ends with it. */
 function appendPromptIfMissing(historyMessages: unknown[], prompt: string): unknown[] {
   if (!prompt) {
     return historyMessages;
@@ -766,6 +814,7 @@ function appendPromptIfMissing(historyMessages: unknown[], prompt: string): unkn
   return [...historyMessages, { role: "user", content: prompt }];
 }
 
+/** Apply prompt-capture privacy settings to one historical message. */
 function sanitizePromptMessage(message: unknown, config: NemoFlowHookBackendConfig): unknown {
   if (!isRecord(message)) {
     return message;
@@ -783,6 +832,7 @@ function sanitizePromptMessage(message: unknown, config: NemoFlowHookBackendConf
   return sanitized;
 }
 
+/** Strip tool call arguments from assistant messages while preserving call names. */
 function stripAssistantToolArgs(message: Record<string, unknown>): Record<string, unknown> {
   const stripped: Record<string, unknown> = { ...message };
   if (Array.isArray(stripped.toolCalls)) {
@@ -799,6 +849,7 @@ function stripAssistantToolArgs(message: Record<string, unknown>): Record<string
   return stripped;
 }
 
+/** Replace large or sensitive tool argument fields with a stripped marker. */
 function stripToolCallArgs(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
@@ -812,6 +863,7 @@ function stripToolCallArgs(value: unknown): unknown {
   return stripped;
 }
 
+/** Strip provider thinking/signature payloads that are noisy in trace UIs. */
 function stripLargeAssistantContentFields(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
@@ -829,6 +881,7 @@ function stripLargeAssistantContentFields(value: unknown): unknown {
   return stripped;
 }
 
+/** Choose the user-visible LLM output text, falling back to tool-call names. */
 function responseContent(assistantTexts: string[], assistantToolCallNames: string[]): string | undefined {
   const text = assistantTexts.join("\n").trim();
   if (text.length > 0) {
@@ -840,6 +893,7 @@ function responseContent(assistantTexts: string[], assistantToolCallNames: strin
   return undefined;
 }
 
+/** Return the last assistant text in a message trajectory. */
 function lastAssistantText(messages: unknown[]): string | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -854,6 +908,7 @@ function lastAssistantText(messages: unknown[]): string | undefined {
   return undefined;
 }
 
+/** Build the final root-span output from agent_end messages without using shutdown reasons. */
 function finalOutputFromAgentEnd(
   messages: unknown[],
   event: PluginHookAgentEndEvent,
@@ -879,6 +934,7 @@ function finalOutputFromAgentEnd(
   return undefined;
 }
 
+/** Extract textual content blocks from OpenClaw/OpenAI/Anthropic-like messages. */
 function extractTextBlocks(message: Record<string, unknown>): string[] {
   const content = message.content;
   if (typeof content === "string" && content.length > 0) {
@@ -898,6 +954,7 @@ function extractTextBlocks(message: Record<string, unknown>): string[] {
   return texts;
 }
 
+/** Extract assistant tool calls from common OpenClaw/OpenAI/Anthropic message shapes. */
 function extractToolCalls(message: Record<string, unknown>): unknown[] {
   if (Array.isArray(message.toolCalls)) {
     return message.toolCalls;
@@ -914,6 +971,7 @@ function extractToolCalls(message: Record<string, unknown>): unknown[] {
   );
 }
 
+/** Identify likely tool-call content blocks across provider-specific shapes. */
 function isToolCallLike(value: unknown): boolean {
   return (
     isRecord(value) &&
@@ -925,6 +983,7 @@ function isToolCallLike(value: unknown): boolean {
   );
 }
 
+/** Return display names for assistant tool calls without exposing arguments. */
 function toolCallNames(toolCalls: unknown[] | undefined): string[] {
   if (!Array.isArray(toolCalls)) {
     return [];
@@ -945,6 +1004,7 @@ function toolCallNames(toolCalls: unknown[] | undefined): string[] {
   return names;
 }
 
+/** Convert stored message-write usage back into the llm_output usage contract. */
 function mapHookUsage(usage: unknown): PluginHookLlmOutputEvent["usage"] | undefined {
   const mapped = mapUsage(usage);
   if (!mapped) {
@@ -972,10 +1032,12 @@ function mapHookUsage(usage: unknown): PluginHookLlmOutputEvent["usage"] | undef
   return Object.keys(hookUsage).length > 0 ? hookUsage : undefined;
 }
 
+/** Report whether this run already has a replayed LLM trajectory. */
 function hasTrajectoryReplay(session: SessionState, runId?: string): boolean {
   return session.trajectoryReplayedRuns?.has(trajectoryRunKey(session, runId)) === true;
 }
 
+/** Remember the latest llm_input snapshot so message-write replay can include context. */
 function rememberAgentRunInputSnapshot(
   session: SessionState,
   runId: string | undefined,
@@ -1002,11 +1064,13 @@ function rememberAgentRunInputSnapshot(
   }
 }
 
+/** Snapshot messages into JSON-compatible values before storing them for later replay. */
 function snapshotMessages(messages: unknown[]): unknown[] {
   const snapshot = toJsonValue(messages);
   return Array.isArray(snapshot) ? snapshot : [];
 }
 
+/** Return the most recent input history snapshot, including the current prompt if needed. */
 function initialHistoryFromLlmInputSnapshot(session: SessionState): unknown[] {
   let snapshot: { historyMessages: unknown[]; observedAtMs: number; prompt: string } | undefined;
   for (const current of session.agentRunInputSnapshots?.values() ?? []) {
@@ -1020,6 +1084,7 @@ function initialHistoryFromLlmInputSnapshot(session: SessionState): unknown[] {
   return appendPromptIfMissing([...snapshot.historyMessages], snapshot.prompt);
 }
 
+/** Trim agent_end messages to only the current run's trajectory when a snapshot exists. */
 function currentRunAgentMessages(session: SessionState, runId: string | undefined, messages: unknown[]): unknown[] {
   const inputSnapshot = session.agentRunInputSnapshots?.get(trajectoryRunKey(session, runId));
   if (!inputSnapshot || inputSnapshot.historyMessageCount <= 0) {
@@ -1032,6 +1097,7 @@ function currentRunAgentMessages(session: SessionState, runId: string | undefine
   return promptIndex === undefined ? [] : messages.slice(promptIndex);
 }
 
+/** Find the current prompt in a full message transcript. */
 function findCurrentPromptIndex(messages: unknown[], prompt: string): number | undefined {
   if (!prompt) {
     return undefined;
@@ -1048,11 +1114,13 @@ function findCurrentPromptIndex(messages: unknown[], prompt: string): number | u
   return undefined;
 }
 
+/** Drop per-run replay bookkeeping once that run no longer needs correlation. */
 function cleanupAgentRunReplayBookkeeping(session: SessionState, runKey: string): void {
   session.agentRunInputSnapshots?.delete(runKey);
   session.hookLlmOutputReplayCounts?.delete(runKey);
 }
 
+/** Mark a run as trajectory-replayed while bounding long-lived session memory. */
 function markTrajectoryReplay(session: SessionState, runKey: string, maxRuns: number): void {
   session.trajectoryReplayedRuns ??= new Set();
   session.trajectoryReplayedRuns.delete(runKey);
@@ -1066,10 +1134,12 @@ function markTrajectoryReplay(session: SessionState, runKey: string, maxRuns: nu
   }
 }
 
+/** Return how many llm_output hooks have already replayed for this run. */
 function hookLlmOutputReplayCount(session: SessionState, runId?: string): number {
   return session.hookLlmOutputReplayCounts?.get(trajectoryRunKey(session, runId)) ?? 0;
 }
 
+/** Increment direct llm_output replay count and keep the count map bounded. */
 function incrementHookLlmOutputReplayCount(session: SessionState, runId: string | undefined, maxRuns: number): void {
   const runKey = trajectoryRunKey(session, runId);
   session.hookLlmOutputReplayCounts ??= new Map();
@@ -1085,10 +1155,12 @@ function incrementHookLlmOutputReplayCount(session: SessionState, runId: string 
   }
 }
 
+/** Build the per-session run key used for trajectory de-duplication. */
 function trajectoryRunKey(session: SessionState, runId?: string): string {
   return runId ?? session.sessionId;
 }
 
+/** Normalize provider usage into OpenInference-friendly token/cost fields. */
 function mapUsage(usage: unknown): Record<string, number> | undefined {
   if (!isRecord(usage)) {
     return undefined;
@@ -1128,16 +1200,19 @@ function mapUsage(usage: unknown): Record<string, number> | undefined {
   return Object.keys(mapped).length > 0 ? mapped : undefined;
 }
 
+/** Read a non-empty string field from a generic hook record. */
 function stringField(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/** Read a finite numeric field from a generic hook record. */
 function numberField(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+/** Copy model_call_ended details into a retained timing record. */
 function applyModelCallEnd(record: ModelCallRecord, event: PluginHookModelCallEndedEvent, nowMs: number): void {
   record.observedAtMs = nowMs;
   record.endedAtMs = nowMs;
@@ -1153,6 +1228,7 @@ function applyModelCallEnd(record: ModelCallRecord, event: PluginHookModelCallEn
   record.upstreamRequestIdHash = event.upstreamRequestIdHash;
 }
 
+/** Find the newest started-but-not-ended timing record for a session. */
 function latestUnendedRecord(records: ModelCallRecord[] | undefined, session: SessionState): ModelCallRecord | undefined {
   if (!records) {
     return undefined;
@@ -1166,6 +1242,7 @@ function latestUnendedRecord(records: ModelCallRecord[] | undefined, session: Se
   return undefined;
 }
 
+/** Insert a pending output and clear timers for any evicted records. */
 function insertPendingOutput(manager: SessionManager, key: string, record: PendingLlmOutputRecord): void {
   const records = manager.state.llmOutputsPendingInput.get(key) ?? [];
   records.push(record);
@@ -1178,6 +1255,7 @@ function insertPendingOutput(manager: SessionManager, key: string, record: Pendi
   manager.state.llmOutputsPendingInput.set(key, records);
 }
 
+/** Remove and return the first record matching a predicate from a keyed map. */
 function shiftOldest<T>(map: Map<string, T[]>, key: string, predicate: (record: T) => boolean): T | undefined {
   const records = map.get(key);
   if (!records) {
@@ -1194,6 +1272,7 @@ function shiftOldest<T>(map: Map<string, T[]>, key: string, predicate: (record: 
   return record;
 }
 
+/** Remove a specific record object from a keyed map. */
 function removeRecord<T>(map: Map<string, T[]>, key: string, record: T): boolean {
   const records = map.get(key);
   if (!records) {
@@ -1210,6 +1289,7 @@ function removeRecord<T>(map: Map<string, T[]>, key: string, record: T): boolean
   return true;
 }
 
+/** Clear the grace timer owned by a pending llm_output record. */
 function clearPendingTimer(record: PendingLlmOutputRecord): void {
   if (record.timer) {
     clearTimeout(record.timer);
@@ -1217,10 +1297,12 @@ function clearPendingTimer(record: PendingLlmOutputRecord): void {
   }
 }
 
+/** Evict stale replay state before accepting another hook event. */
 function evictExpiredReplayRecords(manager: SessionManager): void {
   evictExpiredCorrelationRecords(manager.state, Date.now(), manager.config.correlation.recordTtlMs);
 }
 
+/** Narrow unknown values to plain records for payload traversal. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

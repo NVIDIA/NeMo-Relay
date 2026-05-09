@@ -3,6 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/*
+ * Production build helper for the OpenClaw integration package.
+ *
+ * The script removes stale output and invokes the workspace TypeScript compiler
+ * directly so npm lifecycle behavior stays predictable in CI and local builds.
+ */
 import { spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { createRequire } from "node:module";

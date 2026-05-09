@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * Test helper for querying the OpenClaw gateway status endpoint in live smoke runs.
+ */
 import assert from "node:assert/strict";
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";

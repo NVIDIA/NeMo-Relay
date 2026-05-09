@@ -1,6 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * Session identity and root-span management for hook replay.
+ *
+ * OpenClaw can reference the same conversation by session id, session key, run id,
+ * requester key, or child key depending on the hook. This module canonicalizes
+ * those identifiers and owns the root `openclaw.session` scope lifecycle.
+ */
 import type { NemoFlowHookBackendConfig } from "../config.js";
 import { createAtifExporter } from "../atif-capture.js";
 import { evictExpiredRecords, tupleKey as tupleKeyFromCorrelation } from "./correlation.js";
@@ -155,18 +162,21 @@ export type SessionManager = {
   logBoundedWarn: (key: string, message: string) => void;
 };
 
+/** Return all keys that may identify an existing OpenClaw session. */
 export function lookupSessionKeys(input: SessionLookupInput): string[] {
   return [input.sessionId, input.sessionKey, input.requesterSessionKey, input.childSessionKey, input.runId].filter(
     (value): value is string => typeof value === "string" && value.length > 0,
   );
 }
 
+/** Return keys that should alias to a canonical session once it is known. */
 export function aliasSessionKeys(input: SessionLookupInput): string[] {
   return [input.sessionId, input.sessionKey, input.requesterSessionKey, input.runId].filter(
     (value): value is string => typeof value === "string" && value.length > 0,
   );
 }
 
+/** Resolve a hook's session identity to the canonical session id used in replay state. */
 export function resolveSessionKey(
   state: HookReplayBackendState,
   input: SessionLookupInput,
@@ -181,6 +191,7 @@ export function resolveSessionKey(
   return input.sessionId ?? input.sessionKey ?? input.childSessionKey ?? input.runId;
 }
 
+/** Remember equivalent hook identifiers so later events attach to the same root span. */
 export function rememberSessionAliases(
   state: HookReplayBackendState,
   session: SessionState,
@@ -191,6 +202,7 @@ export function rememberSessionAliases(
   }
 }
 
+/** Create the mutable in-memory state used by the hook replay backend. */
 export function createHookReplayState(): HookReplayBackendState {
   return {
     sessions: new Map(),
@@ -210,6 +222,7 @@ export function createHookReplayState(): HookReplayBackendState {
   };
 }
 
+/** Return an existing session or lazily create a root session scope for replay. */
 export function ensureSession(manager: SessionManager, input: EnsureSessionInput): SessionState | undefined {
   const key = resolveSessionKey(manager.state, input);
   if (!key) {
@@ -255,6 +268,7 @@ export function ensureSession(manager: SessionManager, input: EnsureSessionInput
   return session;
 }
 
+/** Flush pending LLM output/timing state before the root session closes. */
 export function drainSession(manager: SessionManager, session: SessionState): void {
   cancelPendingLlmOutputTimers(manager.state, session);
   manager.replayPendingLlmOutputsForSession(session, { allowPlaceholderRequest: true });
@@ -262,6 +276,7 @@ export function drainSession(manager: SessionManager, session: SessionState): vo
   evictSessionCorrelationRecords(manager.state, session);
 }
 
+/** Close the root session scope with separate lifecycle summary and user-visible output. */
 export function closeSessionRoot(
   manager: SessionManager,
   session: SessionState,
@@ -281,10 +296,12 @@ export function closeSessionRoot(
   });
 }
 
+/** Remove a closed session from active replay state. */
 export function deleteSession(state: HookReplayBackendState, session: SessionState): void {
   state.sessions.delete(session.sessionId);
 }
 
+/** Insert a correlation record while bounding retained entries per key. */
 export function insertBoundedRecord<T>(
   map: Map<string, T[]>,
   key: string,
@@ -299,10 +316,12 @@ export function insertBoundedRecord<T>(
   map.set(key, records);
 }
 
+/** Build a stable tuple key for session alias maps. */
 export function tupleKey(parts: Array<string | undefined>): string {
   return tupleKeyFromCorrelation(parts);
 }
 
+/** Evict stale cross-hook correlation records across all replay maps. */
 export function evictExpiredCorrelationRecords(state: HookReplayBackendState, nowMs: number, ttlMs: number): void {
   evictExpiredRecords(state.llmInputs, nowMs, ttlMs);
   evictExpiredPendingLlmOutputs(state.llmOutputsPendingInput, nowMs, ttlMs);
@@ -310,6 +329,7 @@ export function evictExpiredCorrelationRecords(state: HookReplayBackendState, no
   evictExpiredRecords(state.modelTimingsByLlmKey, nowMs, ttlMs);
 }
 
+/** Open the root NeMo Flow scope for one OpenClaw session and emit session_start. */
 function openSessionRoot(manager: SessionManager, session: SessionState, input: EnsureSessionInput): void {
   const data: JsonRecord = {
     sessionId: session.sessionId,
@@ -336,6 +356,7 @@ function openSessionRoot(manager: SessionManager, session: SessionState, input: 
   });
 }
 
+/** Cancel timers that would otherwise replay late LLM outputs after session close. */
 function cancelPendingLlmOutputTimers(state: HookReplayBackendState, session: SessionState): void {
   for (const records of state.llmOutputsPendingInput.values()) {
     for (const record of records) {
@@ -347,6 +368,7 @@ function cancelPendingLlmOutputTimers(state: HookReplayBackendState, session: Se
   }
 }
 
+/** Remove all correlation records and aliases owned by a closed session. */
 function evictSessionCorrelationRecords(state: HookReplayBackendState, session: SessionState): void {
   evictFromRecordMap(state.llmInputs, session.sessionId);
   evictFromRecordMap(state.llmOutputsPendingInput, session.sessionId);
@@ -360,6 +382,7 @@ function evictSessionCorrelationRecords(state: HookReplayBackendState, session: 
   }
 }
 
+/** Drop records for one session from a single keyed correlation map. */
 function evictFromRecordMap<T extends { sessionKey: string }>(map: Map<string, T[]>, sessionKey: string): void {
   for (const [key, records] of map) {
     const retained = records.filter((record) => record.sessionKey !== sessionKey);
@@ -371,6 +394,7 @@ function evictFromRecordMap<T extends { sessionKey: string }>(map: Map<string, T
   }
 }
 
+/** Evict pending LLM outputs and clear their grace timers when their TTL expires. */
 function evictExpiredPendingLlmOutputs(
   map: Map<string, PendingLlmOutputRecord[]>,
   nowMs: number,
@@ -396,6 +420,7 @@ function evictExpiredPendingLlmOutputs(
   }
 }
 
+/** Resolve the runtime's Agent scope enum while tolerating older Node bindings. */
 function agentScopeType(nf: NemoFlowRuntimeModule): Parameters<NemoFlowRuntimeModule["pushScope"]>[1] {
   return (nf.ScopeType?.Agent ?? 0) as Parameters<NemoFlowRuntimeModule["pushScope"]>[1];
 }

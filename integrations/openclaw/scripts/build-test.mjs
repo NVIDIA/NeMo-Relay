@@ -3,6 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/*
+ * Test build helper for the OpenClaw integration package.
+ *
+ * Tests compile to .test-dist so generated test artifacts stay out of the
+ * installable package and production dist directory.
+ */
 import { spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { createRequire } from "node:module";

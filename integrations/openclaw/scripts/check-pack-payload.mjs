@@ -3,6 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/*
+ * Package payload validation for the OpenClaw integration.
+ *
+ * This script guards the npm package boundary: production source files,
+ * generated dist files, and OpenClaw manifest entries must be packed, while
+ * tests, maps, and test build output must stay out of the package.
+ */
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
@@ -12,12 +19,14 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const npmExecPath = process.env.npm_execpath;
 
+/** Fail the pack check with a precise validation message. */
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
 }
 
+/** Run a child command from the package root and surface stderr on failure. */
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: packageRoot,
@@ -34,6 +43,7 @@ function run(command, args, options = {}) {
   return result;
 }
 
+/** Run npm through the active npm CLI when available, preserving workspace behavior. */
 function runNpm(args, options = {}) {
   if (npmExecPath) {
     return run(process.execPath, [npmExecPath, ...args], options);
@@ -44,10 +54,12 @@ function runNpm(args, options = {}) {
   });
 }
 
+/** Normalize npm pack paths to POSIX style without a leading ./ prefix. */
 function normalizePackagePath(value) {
   return value.replace(/^\.\//, "").replaceAll("\\", "/");
 }
 
+/** Recursively list files below a package-local directory. */
 function walkFiles(root, prefix = "") {
   const absoluteRoot = path.join(packageRoot, root, prefix);
   const output = [];

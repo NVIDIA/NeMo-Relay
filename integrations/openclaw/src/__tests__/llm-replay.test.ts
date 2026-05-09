@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * LLM replay tests for hook correlation, token accounting, capture policy, and diagnostics.
+ */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 

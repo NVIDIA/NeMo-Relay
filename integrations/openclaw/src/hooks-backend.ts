@@ -1,6 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * Main OpenClaw hook replay dispatcher.
+ *
+ * OpenClaw hook callbacks arrive here as lifecycle, LLM, model-timing, tool, and
+ * subagent events. This class routes each event to focused replay modules and
+ * owns fail-open behavior so observability never breaks the agent runtime.
+ */
 import type { NemoFlowHookBackendConfig } from "./config.js";
 import { exportAtifJson, withAtifCapture } from "./atif-capture.js";
 import { emitMark, toJsonRecord } from "./hook-replay/marks.js";
@@ -61,6 +68,7 @@ export type HookReplayBackendOptions = {
   markOutputDegraded: (output: "atif" | "otel" | "openInference") => void;
 };
 
+/** Replays OpenClaw public hook events into NeMo Flow scopes, spans, and marks. */
 export class HookReplayBackend {
   private readonly nf: NemoFlowRuntimeModule;
   private readonly config: NemoFlowHookBackendConfig;
@@ -80,15 +88,18 @@ export class HookReplayBackend {
     this.markOutputDegradedValue = options.markOutputDegraded;
   }
 
+  /** Return mutable replay state for tests and health snapshots. */
   state(): HookReplayBackendState {
     return this.stateValue;
   }
 
+  /** Keep gateway_start registered even though session roots are created lazily. */
   onGatewayStart(_event: PluginHookGatewayStartEvent, _ctx: PluginHookGatewayContext): void {
     // Gateway events have no session root in the hook backend. Keep this hook
     // registered so later telemetry lifecycle can attach without changing the shell.
   }
 
+  /** Open or alias an explicit OpenClaw session root. */
   onSessionStart(event: PluginHookSessionStartEvent, ctx: PluginHookSessionContext): void {
     this.ensureSession({
       sessionId: event.sessionId,
@@ -101,6 +112,7 @@ export class HookReplayBackend {
     // ensureSession opens the root scope and emits openclaw.session_start for both explicit and lazy sessions.
   }
 
+  /** Close one explicit OpenClaw session and export its ATIF artifact. */
   async onSessionEnd(event: PluginHookSessionEndEvent, ctx: PluginHookSessionContext): Promise<void> {
     const session = this.ensureSession({
       sessionId: event.sessionId,
@@ -116,30 +128,37 @@ export class HookReplayBackend {
     await this.closeSession(session, sessionEndSummary(event));
   }
 
+  /** Buffer an LLM request snapshot until a matching response or trajectory replay arrives. */
   onLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext): void {
     recordLlmInput(this.sessionManager(), event, ctx);
   }
 
+  /** Replay an LLM output immediately or keep it briefly for a late input snapshot. */
   onLlmOutput(event: PluginHookLlmOutputEvent, ctx: PluginHookAgentContext): void {
     recordLlmOutput(this.sessionManager(), event, ctx);
   }
 
+  /** Record provider-call start timing when OpenClaw exposes a call id. */
   onModelCallStarted(event: PluginHookModelCallStartedEvent, ctx: PluginHookAgentContext): void {
     recordModelCallStarted(this.sessionManager(), event, ctx);
   }
 
+  /** Record provider-call completion timing for later LLM-span correlation. */
   onModelCallEnded(event: PluginHookModelCallEndedEvent, ctx: PluginHookAgentContext): void {
     recordModelCallEnded(this.sessionManager(), event, ctx);
   }
 
+  /** Replay a finished OpenClaw tool call as a NeMo Flow tool span or blocked mark. */
   onAfterToolCall(event: PluginHookAfterToolCallEvent, ctx: PluginHookToolContext): void {
     replayAfterToolCall(this.sessionManager(), event, ctx);
   }
 
+  /** Capture assistant message writes that may contain the clearest provider output. */
   onBeforeMessageWrite(event: PluginHookBeforeMessageWriteEvent, ctx: PluginHookBeforeMessageWriteContext): void {
     recordBeforeMessageWrite(this.sessionManager(), event, ctx);
   }
 
+  /** Finalize one agent run, replaying message-write trajectory when needed. */
   onAgentEnd(event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext): void {
     const session = this.ensureSession({
       sessionId: ctx.sessionId,
@@ -171,6 +190,7 @@ export class HookReplayBackend {
     );
   }
 
+  /** Remember the last assistant text before OpenClaw finalizes the response. */
   onBeforeAgentFinalize(event: PluginHookBeforeAgentFinalizeEvent, ctx: PluginHookAgentContext): void {
     const session = this.ensureSession({
       sessionId: event.sessionId,
@@ -208,6 +228,7 @@ export class HookReplayBackend {
     );
   }
 
+  /** Attach subagent spawn metadata to the requester session when possible. */
   onSubagentSpawned(event: PluginHookSubagentSpawnedEvent, ctx: PluginHookSubagentContext): void {
     const session =
       this.ensureSession({
@@ -239,6 +260,7 @@ export class HookReplayBackend {
     );
   }
 
+  /** Attach subagent completion metadata to the requester or child session. */
   onSubagentEnded(event: PluginHookSubagentEndedEvent, ctx: PluginHookSubagentContext): void {
     const session =
       this.ensureSession({
@@ -272,10 +294,12 @@ export class HookReplayBackend {
     );
   }
 
+  /** Drain all active sessions when the OpenClaw gateway is stopping. */
   async drainForGatewayStop(reason?: string): Promise<void> {
     await this.closeAllSessions({ reason: reason ?? "gateway_stop" });
   }
 
+  /** Close one session selected by a runtime lifecycle cleanup hook. */
   async cleanupSession(input: SessionLookupInput & { reason: string }): Promise<void> {
     const key = resolveSessionKey(this.stateValue, input);
     if (!key) {
@@ -290,10 +314,12 @@ export class HookReplayBackend {
     await this.closeSession(session, { reason: input.reason });
   }
 
+  /** Stop the backend and close every active session. */
   async stop(reason: string): Promise<void> {
     await this.closeAllSessions({ reason });
   }
 
+  /** Run replay code with bounded warning logs and no exception escape. */
   safeReplay(label: string, session: SessionState | undefined, emit: () => void): void {
     try {
       emit();
@@ -306,6 +332,7 @@ export class HookReplayBackend {
     }
   }
 
+  /** Async variant of safeReplay for hooks that need export or cleanup awaits. */
   async safeReplayAsync(
     label: string,
     session: SessionState | undefined,
@@ -322,6 +349,7 @@ export class HookReplayBackend {
     }
   }
 
+  /** Emit spans/marks under the stored session scope stack and ATIF capture window. */
   emitCapturedUnderSession(label: string, session: SessionState, emit: () => void): void {
     this.safeReplay(label, session, () => {
       const previousStack = this.nf.currentScopeStack();
@@ -334,18 +362,22 @@ export class HookReplayBackend {
     });
   }
 
+  /** Force any pending LLM outputs for a session to replay before closure. */
   replayPendingLlmOutputsForSession(session: SessionState, options: { allowPlaceholderRequest: boolean }): void {
     replayPendingLlmOutputsForSession(this.sessionManager(), session, options);
   }
 
+  /** Emit model-call timing diagnostics that could not be paired with an LLM span. */
   emitUnpairedModelCallTimingMarks(session: SessionState): void {
     emitUnpairedModelCallTimingMarks(this.sessionManager(), session);
   }
 
+  /** Create or resolve a session through the shared session manager facade. */
   private ensureSession(input: Parameters<typeof ensureSession>[1]): SessionState | undefined {
     return ensureSession(this.sessionManager(), input);
   }
 
+  /** Drain, close, export, and delete one session. */
   private async closeSession(session: SessionState, summary: JsonRecord): Promise<void> {
     drainSession(this.sessionManager(), session);
     closeSessionRoot(this.sessionManager(), session, summary, session.finalOutput ?? summary);
@@ -353,6 +385,7 @@ export class HookReplayBackend {
     deleteSession(this.stateValue, session);
   }
 
+  /** Emit a session-level OpenClaw lifecycle mark. */
   private emitSessionMark(name: string, session: SessionState, data: JsonRecord): void {
     this.emitCapturedUnderSession(name, session, () => {
       emitMark({
@@ -365,16 +398,19 @@ export class HookReplayBackend {
     });
   }
 
+  /** Close every active session with the same lifecycle summary. */
   private async closeAllSessions(summary: JsonRecord): Promise<void> {
     for (const session of [...this.stateValue.sessions.values()]) {
       await this.closeSession(session, summary);
     }
   }
 
+  /** Run replay inside the session's ATIF capture window. */
   private withAtifCapture(_session: SessionState, emit: () => void): void {
     withAtifCapture(this.sessionManager(), _session, emit);
   }
 
+  /** Build the narrow manager interface consumed by focused replay modules. */
   private sessionManager() {
     return {
       nf: this.nf,
@@ -393,6 +429,7 @@ export class HookReplayBackend {
     };
   }
 
+  /** Log one warning per key to avoid noisy repeated hook failures. */
   private logBoundedWarn(key: string, message: string): void {
     const count = this.warningCounts.get(key) ?? 0;
     this.warningCounts.set(key, count + 1);
@@ -404,6 +441,7 @@ export class HookReplayBackend {
 
 export { llmKey };
 
+/** Expose session-key resolution for tests without exporting the full session module. */
 export function resolveBackendSessionKey(
   state: HookReplayBackendState,
   input: Parameters<typeof resolveSessionKey>[1],
@@ -411,6 +449,7 @@ export function resolveBackendSessionKey(
   return resolveSessionKey(state, input);
 }
 
+/** Build the lifecycle summary stored as the session_end mark payload. */
 function sessionEndSummary(event: PluginHookSessionEndEvent): JsonRecord {
   return toJsonRecord({
     sessionId: event.sessionId,
@@ -425,6 +464,7 @@ function sessionEndSummary(event: PluginHookSessionEndEvent): JsonRecord {
   });
 }
 
+/** Convert thrown values into stable log strings. */
 function toMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

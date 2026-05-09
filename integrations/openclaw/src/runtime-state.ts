@@ -1,6 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * Runtime lifecycle coordinator for the OpenClaw plugin.
+ *
+ * This module validates config, lazy-loads NeMo Flow Node bindings, registers
+ * OpenClaw service/lifecycle/gateway surfaces, and forwards hooks to the replay
+ * backend once runtime state is ready.
+ */
 import * as path from "node:path";
 
 import type {
@@ -33,6 +40,7 @@ const LIFECYCLE_ID = "nemo-flow-observability-cleanup";
 const STATUS_METHOD = "nemoFlow.status";
 type RuntimeCleanupContext = Parameters<NonNullable<PluginRuntimeLifecycleRegistration["cleanup"]>>[0];
 
+/** Owns one plugin runtime instance across OpenClaw service start/stop cycles. */
 export class NemoFlowRuntimeState {
   private readonly api: OpenClawPluginApi;
   private readonly config: NemoFlowHookBackendConfig;
@@ -58,10 +66,12 @@ export class NemoFlowRuntimeState {
     this.moduleLoader = options.moduleLoader ?? defaultNemoFlowModuleLoader;
   }
 
+  /** Return the current coarse backend status. */
   status(): HookReplayBackendStatus {
     return this.statusValue;
   }
 
+  /** Build the operator-facing health payload served through the gateway method. */
   health() {
     const backendState = this.backendValue?.state();
     return createHealthSnapshot({
@@ -80,6 +90,7 @@ export class NemoFlowRuntimeState {
     });
   }
 
+  /** Start NeMo Flow modules, telemetry outputs, and the hook replay backend. */
   async start(ctx: StartContext): Promise<void> {
     this.lastStartContext = copyStartContext(ctx);
     this.missingStartContextLogged = false;
@@ -101,6 +112,7 @@ export class NemoFlowRuntimeState {
     }
   }
 
+  /** Do the startup work behind a single-flight guard. */
   private async startInternal(ctx: StartContext): Promise<void> {
     delete this.lastCounters;
     this.degradedOutputs.clear();
@@ -178,10 +190,12 @@ export class NemoFlowRuntimeState {
     this.statusValue = degradedReason === undefined ? { state: "ready" } : { state: "degraded", reason: degradedReason };
   }
 
+  /** Stop the runtime because OpenClaw service or gateway shutdown is happening. */
   async stop(reason: string, logger?: PluginLogger): Promise<void> {
     await this.stopWithStatus(reason, logger, { state: "stopped", reason });
   }
 
+  /** Shared stop implementation that controls the final health status. */
   private async stopWithStatus(
     reason: string,
     logger: PluginLogger | undefined,
@@ -237,6 +251,7 @@ export class NemoFlowRuntimeState {
     this.statusValue = finalStatus;
   }
 
+  /** Handle OpenClaw runtime lifecycle cleanup for either a session or the backend. */
   async cleanup(ctx: RuntimeCleanupContext): Promise<void> {
     if (ctx.sessionKey !== undefined || ctx.runId !== undefined) {
       await this.backendValue?.cleanupSession({
@@ -254,6 +269,7 @@ export class NemoFlowRuntimeState {
     );
   }
 
+  /** Return a backend for a hook, lazily starting from runtime context if needed. */
   private async backendForHook(workspaceDir?: string): Promise<HookReplayBackend | undefined> {
     if (this.backendValue) {
       return this.backendValue;
@@ -276,6 +292,7 @@ export class NemoFlowRuntimeState {
     return this.backendValue;
   }
 
+  /** Run a synchronous hook against the backend with fail-open replay handling. */
   private async replayWithBackend(
     label: string,
     workspaceDir: string | undefined,
@@ -289,6 +306,7 @@ export class NemoFlowRuntimeState {
     backend.safeReplay(label, undefined, () => emit(backend));
   }
 
+  /** Run an asynchronous hook against the backend with fail-open replay handling. */
   private async replayWithBackendAsync(
     label: string,
     workspaceDir: string | undefined,
@@ -302,6 +320,7 @@ export class NemoFlowRuntimeState {
     await backend.safeReplayAsync(label, undefined, () => emit(backend));
   }
 
+  /** Register every OpenClaw hook used by the observability backend. */
   registerHooks(): void {
     this.api.on("gateway_start", async (event, ctx) => {
       await this.replayWithBackend("gateway_start", ctx.workspaceDir, (backend) =>
@@ -378,6 +397,7 @@ export class NemoFlowRuntimeState {
     });
   }
 
+  /** Resolve the NeMo Flow plugin-host config, degrading unsupported custom components. */
   private resolvePluginHostConfig(
     modules: NemoFlowModules,
     logger: PluginLogger,
@@ -406,10 +426,12 @@ export class NemoFlowRuntimeState {
     };
   }
 
+  /** Mark one telemetry output degraded for health reporting. */
   private markOutputDegraded(output: "atif" | "otel" | "openInference"): void {
     this.degradedOutputs.add(output);
   }
 
+  /** Reconstruct enough service-start context for hooks that arrive before service start. */
   private startContextFromRuntime(workspaceDir?: string): StartContext | undefined {
     try {
       const stateDir = this.api.runtime.state.resolveStateDir();
@@ -426,6 +448,7 @@ export class NemoFlowRuntimeState {
     }
   }
 
+  /** Register a process beforeExit cleanup guard for local OpenClaw shutdown paths. */
   private registerBeforeExit(logger: PluginLogger): void {
     if (this.beforeExitListener) {
       return;
@@ -439,6 +462,7 @@ export class NemoFlowRuntimeState {
     this.beforeExitListener = listener;
   }
 
+  /** Remove the beforeExit listener once normal shutdown begins. */
   private removeBeforeExitListener(): void {
     if (!this.beforeExitListener) {
       return;
@@ -448,6 +472,7 @@ export class NemoFlowRuntimeState {
   }
 }
 
+/** Register the NeMo Flow observability plugin with the OpenClaw plugin API. */
 export function registerNemoFlowPlugin(
   api: OpenClawPluginApi,
   moduleLoader?: NemoFlowModuleLoader,
@@ -507,6 +532,7 @@ export function registerNemoFlowPlugin(
   runtime.registerHooks();
 }
 
+/** Validate the NeMo Flow plugin-host config and log diagnostics. */
 function validatePluginHostConfig(
   modules: NemoFlowModules,
   config: Parameters<NemoFlowModules["pluginHost"]["validate"]>[0],
@@ -517,6 +543,7 @@ function validatePluginHostConfig(
   return report;
 }
 
+/** Log plugin-host diagnostics at warning or info level based on severity. */
 function logDiagnostics(logger: PluginLogger, diagnostics: ConfigDiagnostic[]): void {
   for (const diagnostic of diagnostics) {
     const prefix = diagnostic.component ? `${diagnostic.component}: ` : "";
@@ -529,6 +556,7 @@ function logDiagnostics(logger: PluginLogger, diagnostics: ConfigDiagnostic[]): 
   }
 }
 
+/** Resolve ATIF output relative to OpenClaw config when the path is not absolute. */
 function resolveAtifOutputDir(config: NemoFlowHookBackendConfig, ctx: StartContext): string {
   const configured = config.atif.outputDir;
   if (!configured) {
@@ -537,6 +565,7 @@ function resolveAtifOutputDir(config: NemoFlowHookBackendConfig, ctx: StartConte
   return path.isAbsolute(configured) ? configured : ctx.resolvePath(configured);
 }
 
+/** Copy service-start context so later lazy hook startup cannot mutate it. */
 function copyStartContext(ctx: StartContext): StartContext {
   return {
     stateDir: ctx.stateDir,
@@ -547,6 +576,7 @@ function copyStartContext(ctx: StartContext): StartContext {
   };
 }
 
+/** Convert thrown values into stable log strings. */
 function toMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

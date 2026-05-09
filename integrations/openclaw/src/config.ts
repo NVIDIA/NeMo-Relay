@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * User-facing configuration parsing for the OpenClaw plugin.
+ *
+ * Keep defaults and validation here so runtime code can consume one normalized
+ * config shape and avoid repeating defensive checks around optional plugin JSON.
+ */
 import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 
 import manifest from "../openclaw.plugin.json" with { type: "json" };
@@ -116,6 +122,7 @@ export const nemoFlowConfigSchema = {
   jsonSchema: NEMO_FLOW_OPENCLAW_JSON_SCHEMA,
 } satisfies OpenClawPluginConfigSchema;
 
+/** Parse OpenClaw plugin JSON into the normalized hook backend config. */
 export function parseConfig(value: unknown): NemoFlowHookBackendConfig {
   const raw = asRecord(value, "config", true);
   const backend = optionalString(raw.backend, "backend") ?? DEFAULT_CONFIG.backend;
@@ -183,6 +190,7 @@ export function parseConfig(value: unknown): NemoFlowHookBackendConfig {
   };
 }
 
+/** Normalize the optional NeMo Flow plugin-host config embedded in OpenClaw config. */
 function parsePluginHostConfig(value: unknown): NemoFlowPluginHostConfig {
   if (value === undefined) {
     return clonePluginHostConfig(DEFAULT_PLUGIN_HOST_CONFIG);
@@ -202,6 +210,7 @@ function parsePluginHostConfig(value: unknown): NemoFlowPluginHostConfig {
   };
 }
 
+/** Merge one telemetry sink block with defaults and validate its primitive fields. */
 function parseTelemetrySinkConfig(
   raw: Record<string, unknown>,
   defaults: TelemetrySinkConfig,
@@ -236,6 +245,7 @@ function parseTelemetrySinkConfig(
   };
 }
 
+/** Build the disabled-by-default telemetry sink config used by both exporters. */
 function defaultTelemetrySinkConfig(instrumentationScope: string): TelemetrySinkConfig {
   return {
     enabled: false,
@@ -248,6 +258,7 @@ function defaultTelemetrySinkConfig(instrumentationScope: string): TelemetrySink
   };
 }
 
+/** Clone the mutable plugin-host component list before putting it in runtime state. */
 function clonePluginHostConfig(config: NemoFlowPluginHostConfig): NemoFlowPluginHostConfig {
   return {
     ...config,
@@ -255,6 +266,7 @@ function clonePluginHostConfig(config: NemoFlowPluginHostConfig): NemoFlowPlugin
   };
 }
 
+/** Require an object config section, optionally treating undefined as an empty object. */
 function asRecord(value: unknown, path: string, optional: boolean): Record<string, unknown> {
   if (value === undefined && optional) {
     return {};
@@ -265,6 +277,7 @@ function asRecord(value: unknown, path: string, optional: boolean): Record<strin
   throw new Error(`${path} must be an object`);
 }
 
+/** Parse an optional boolean while producing config-path-specific error messages. */
 function optionalBoolean(value: unknown, path: string): boolean | undefined {
   if (value === undefined) {
     return undefined;
@@ -275,6 +288,7 @@ function optionalBoolean(value: unknown, path: string): boolean | undefined {
   return value;
 }
 
+/** Parse an optional finite number while preserving undefined for default fallback. */
 function optionalNumber(value: unknown, path: string): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -285,6 +299,7 @@ function optionalNumber(value: unknown, path: string): number | undefined {
   return value;
 }
 
+/** Parse an optional integer where zero is valid, such as timeouts. */
 function optionalNonNegativeInteger(value: unknown, path: string): number | undefined {
   const parsed = optionalNumber(value, path);
   if (parsed === undefined) {
@@ -296,6 +311,7 @@ function optionalNonNegativeInteger(value: unknown, path: string): number | unde
   return parsed;
 }
 
+/** Parse an optional integer where zero would disable required bounded storage. */
 function optionalPositiveInteger(value: unknown, path: string): number | undefined {
   const parsed = optionalNumber(value, path);
   if (parsed === undefined) {
@@ -307,6 +323,7 @@ function optionalPositiveInteger(value: unknown, path: string): number | undefin
   return parsed;
 }
 
+/** Parse an optional string while rejecting accidental non-string config values. */
 function optionalString(value: unknown, path: string): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -317,6 +334,7 @@ function optionalString(value: unknown, path: string): string | undefined {
   return value;
 }
 
+/** Parse optional string-only maps such as headers and resource attributes. */
 function optionalStringRecord(
   value: unknown,
   path: string,
@@ -337,6 +355,7 @@ function optionalStringRecord(
   return out;
 }
 
+/** Return a property object only when a string value is present. */
 function definedStringProperty<K extends string>(
   key: K,
   value: string | undefined,
@@ -344,6 +363,7 @@ function definedStringProperty<K extends string>(
   return value === undefined ? {} : { [key]: value } as Record<K, string>;
 }
 
+/** Return a property object only when a record value is present. */
 function definedRecordProperty<K extends string>(
   key: K,
   value: Record<string, string> | undefined,

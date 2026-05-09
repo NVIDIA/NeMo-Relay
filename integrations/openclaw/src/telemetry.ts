@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * OpenInference and OpenTelemetry subscriber lifecycle management.
+ *
+ * This module owns exporter registration and shutdown ordering so hook replay can
+ * focus on span construction and runtime-state can report degraded outputs.
+ */
 import type { NemoFlowHookBackendConfig, TelemetrySinkConfig } from "./config.js";
 import type { NemoFlowRuntimeModule, NemoFlowSubscriber } from "./modules.js";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
@@ -18,6 +24,7 @@ export type RegisterTelemetrySubscribersOptions = {
   markOutputDegraded: (output: "otel" | "openInference") => void;
 };
 
+/** Register all enabled telemetry subscribers, failing open per output. */
 export function registerTelemetrySubscribers(
   options: RegisterTelemetrySubscribersOptions,
 ): TelemetrySubscriberEntry[] {
@@ -73,6 +80,7 @@ export function registerTelemetrySubscribers(
   return entries;
 }
 
+/** Deregister, flush, and shut down subscribers while continuing after failures. */
 export function shutdownTelemetrySubscribers(params: {
   subscribers: TelemetrySubscriberEntry[];
   logger: PluginLogger;
@@ -106,6 +114,7 @@ export function shutdownTelemetrySubscribers(params: {
   }
 }
 
+/** Convert plugin telemetry config into the shape expected by NeMo Flow subscribers. */
 function toSubscriberConfig(config: TelemetrySinkConfig): Record<string, unknown> {
   const raw = {
     transport: config.transport,
@@ -121,6 +130,7 @@ function toSubscriberConfig(config: TelemetrySinkConfig): Record<string, unknown
   return Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== undefined));
 }
 
+/** Convert thrown values into stable log strings. */
 function toMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

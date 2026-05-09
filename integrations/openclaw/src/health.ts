@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * Health snapshot construction for the plugin gateway status method.
+ *
+ * Runtime state owns status transitions; this file turns that state into a
+ * stable, JSON-friendly status payload for operators and tests.
+ */
 import type { NemoFlowHookBackendConfig } from "./config.js";
 import type { HookReplayBackendState, SessionState } from "./hook-replay/session.js";
 
@@ -29,6 +35,7 @@ export type NemoFlowHealthSnapshot = {
   lastError?: string;
 };
 
+/** Build a complete health payload from runtime status, outputs, and counters. */
 export function createHealthSnapshot(params: {
   status: HookReplayBackendStatus;
   initializedPluginHost: boolean;
@@ -57,6 +64,7 @@ export function createHealthSnapshot(params: {
   };
 }
 
+/** Report ATIF degradation from config, global output state, or active sessions. */
 function atifOutputHealth(
   config: NemoFlowHookBackendConfig,
   degradedOutputs: ReadonlySet<"atif" | "otel" | "openInference">,
@@ -76,6 +84,7 @@ function atifOutputHealth(
   return "enabled";
 }
 
+/** Report telemetry sink health using the sink's enabled and degraded states. */
 function telemetryOutputHealth(enabled: boolean, degraded: boolean): OutputHealthState {
   if (!enabled) {
     return "disabled";
@@ -83,6 +92,7 @@ function telemetryOutputHealth(enabled: boolean, degraded: boolean): OutputHealt
   return degraded ? "degraded" : "enabled";
 }
 
+/** Provide zero counters before hook replay has initialized. */
 function emptyCounters(): HookReplayBackendState["counters"] {
   return {
     llmSpansReplayed: 0,

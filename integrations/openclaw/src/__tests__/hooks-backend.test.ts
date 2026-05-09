@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * HookReplayBackend tests covering session lifecycle, aliases, marks, and cleanup.
+ */
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";

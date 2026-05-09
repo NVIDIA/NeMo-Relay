@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * OpenClaw plugin entry point.
+ *
+ * This file should stay small: it declares the public plugin metadata and hands
+ * registration to the runtime-state module, where lifecycle and hook wiring live.
+ */
 import {
   definePluginEntry,
   type OpenClawPluginApi,

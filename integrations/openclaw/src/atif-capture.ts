@@ -1,11 +1,19 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * Per-session ATIF capture and export helpers.
+ *
+ * Hook replay emits spans through the shared NeMo Flow runtime. These helpers
+ * scope that emission to a session-local ATIF exporter, then write the final JSON
+ * artifact during session cleanup without letting exporter failures break replay.
+ */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import type { SessionManager, SessionState } from "./hook-replay/session.js";
 
+/** Construct the session-local ATIF exporter if ATIF output is enabled. */
 export function createAtifExporter(manager: SessionManager, session: SessionState): void {
   if (!manager.config.atif.enabled || session.atif) {
     return;
@@ -32,6 +40,7 @@ export function createAtifExporter(manager: SessionManager, session: SessionStat
   }
 }
 
+/** Run one replay emission while the session's ATIF exporter is registered. */
 export function withAtifCapture(
   manager: SessionManager,
   session: SessionState,
@@ -96,6 +105,7 @@ export function withAtifCapture(
   }
 }
 
+/** Write the captured ATIF JSON for a session and clear exporter state. */
 export async function exportAtifJson(manager: SessionManager, session: SessionState): Promise<void> {
   if (!session.atif) {
     return;
@@ -125,15 +135,18 @@ export async function exportAtifJson(manager: SessionManager, session: SessionSt
   }
 }
 
+/** Convert arbitrary OpenClaw session ids into safe, deterministic filenames. */
 export function makeSafeSessionId(sessionId: string): string {
   const encoded = Buffer.from(sessionId, "utf8").toString("base64url");
   return encoded.length > 0 ? encoded : "empty-session-id";
 }
 
+/** Convert thrown values into stable log strings. */
 function toMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Clear exporter buffers while marking ATIF degraded if cleanup fails. */
 function clearAtifExporter(
   manager: SessionManager,
   session: SessionState,
