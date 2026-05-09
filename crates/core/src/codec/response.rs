@@ -181,6 +181,27 @@ pub enum ApiSpecificResponse {
         /// Details about why the response is incomplete.
         #[serde(skip_serializing_if = "Option::is_none")]
         incomplete_details: Option<Json>,
+        /// Echoed previous response ID for conversation continuation.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        previous_response_id: Option<String>,
+        /// Whether this response is marked for server-side storage.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        store: Option<bool>,
+        /// Service tier used for the response.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        service_tier: Option<String>,
+        /// Truncation behavior metadata.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        truncation: Option<Json>,
+        /// Reasoning configuration/result metadata.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning: Option<Json>,
+        /// Raw input token details payload.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input_tokens_details: Option<Json>,
+        /// Raw output token details payload.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output_tokens_details: Option<Json>,
     },
 
     /// Anthropic Messages API-specific fields.

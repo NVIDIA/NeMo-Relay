@@ -192,6 +192,13 @@ fn test_api_specific_openai_responses_round_trip() {
         output_items: Some(vec![json!({"type": "message", "content": []})]),
         status: Some("completed".into()),
         incomplete_details: None,
+        previous_response_id: None,
+        store: None,
+        service_tier: None,
+        truncation: None,
+        reasoning: None,
+        input_tokens_details: None,
+        output_tokens_details: None,
     };
     let json_val = serde_json::to_value(&api).unwrap();
     assert_eq!(json_val["api"], json!("openai_responses"));

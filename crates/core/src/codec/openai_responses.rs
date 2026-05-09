@@ -48,6 +48,11 @@ struct RawResponsesResponse {
     output: Option<Vec<Json>>,
     usage: Option<RawResponsesUsage>,
     incomplete_details: Option<Json>,
+    previous_response_id: Option<String>,
+    store: Option<bool>,
+    service_tier: Option<String>,
+    truncation: Option<Json>,
+    reasoning: Option<Json>,
     #[serde(flatten)]
     extra: serde_json::Map<String, Json>,
 }
@@ -57,12 +62,8 @@ struct RawResponsesUsage {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     total_tokens: Option<u64>,
-    input_tokens_details: Option<RawInputTokensDetails>,
-}
-
-#[derive(Deserialize)]
-struct RawInputTokensDetails {
-    cached_tokens: Option<u64>,
+    input_tokens_details: Option<Json>,
+    output_tokens_details: Option<Json>,
 }
 
 // ---------------------------------------------------------------------------
@@ -96,6 +97,12 @@ fn map_responses_finish_reason(
 /// Falls back to [`Json::String`] if parsing fails (malformed model output).
 fn parse_arguments(arguments: &str) -> Json {
     serde_json::from_str(arguments).unwrap_or_else(|_| Json::String(arguments.to_string()))
+}
+
+fn cached_tokens_from_details(details: Option<&Json>) -> Option<u64> {
+    details
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(|v| v.as_u64())
 }
 
 /// Keys that are modeled in [`AnnotatedLlmRequest`] and should NOT go into `extra`.
@@ -278,12 +285,21 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
         let finish_reason =
             map_responses_finish_reason(raw.status.as_deref(), raw.incomplete_details.as_ref());
 
+        let input_tokens_details = raw
+            .usage
+            .as_ref()
+            .and_then(|u| u.input_tokens_details.clone());
+        let output_tokens_details = raw
+            .usage
+            .as_ref()
+            .and_then(|u| u.output_tokens_details.clone());
+
         // Map usage.
         let usage = raw.usage.map(|u| Usage {
             prompt_tokens: u.input_tokens,
             completion_tokens: u.output_tokens,
             total_tokens: u.total_tokens,
-            cache_read_tokens: u.input_tokens_details.and_then(|d| d.cached_tokens),
+            cache_read_tokens: cached_tokens_from_details(u.input_tokens_details.as_ref()),
             cache_write_tokens: None,
         });
 
@@ -292,6 +308,13 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
             output_items: all_output_items,
             status: raw.status,
             incomplete_details: raw.incomplete_details,
+            previous_response_id: raw.previous_response_id,
+            store: raw.store,
+            service_tier: raw.service_tier,
+            truncation: raw.truncation,
+            reasoning: raw.reasoning,
+            input_tokens_details,
+            output_tokens_details,
         });
 
         Ok(AnnotatedLlmResponse {

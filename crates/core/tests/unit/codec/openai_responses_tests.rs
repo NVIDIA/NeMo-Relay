@@ -107,11 +107,61 @@ fn test_decode_full_response() {
             output_items,
             status,
             incomplete_details,
+            previous_response_id,
+            store,
+            service_tier,
+            truncation,
+            reasoning,
+            input_tokens_details,
+            output_tokens_details,
         } => {
             assert_eq!(status, Some("completed".into()));
             assert!(output_items.is_some());
             assert_eq!(output_items.unwrap().len(), 3);
             assert!(incomplete_details.is_none());
+            assert_eq!(previous_response_id, None);
+            assert_eq!(store, None);
+            assert_eq!(service_tier, None);
+            assert_eq!(truncation, None);
+            assert_eq!(reasoning, None);
+            assert_eq!(input_tokens_details, Some(json!({"cached_tokens": 10})));
+            assert_eq!(
+                output_tokens_details,
+                Some(json!({"reasoning_tokens": 1024}))
+            );
+        }
+        other => panic!("Expected OpenAIResponses, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_decode_response_openai_responses_api_specific_top_level_fields() {
+    let codec = OpenAIResponsesCodec;
+    let response = json!({
+        "id": "resp_abc123",
+        "status": "completed",
+        "output": [],
+        "previous_response_id": "resp_prev_1",
+        "store": true,
+        "service_tier": "default",
+        "truncation": "auto",
+        "reasoning": {"effort": "high"}
+    });
+    let resp = codec.decode_response(&response).unwrap();
+    match resp.api_specific.unwrap() {
+        ApiSpecificResponse::OpenAIResponses {
+            previous_response_id,
+            store,
+            service_tier,
+            truncation,
+            reasoning,
+            ..
+        } => {
+            assert_eq!(previous_response_id.as_deref(), Some("resp_prev_1"));
+            assert_eq!(store, Some(true));
+            assert_eq!(service_tier.as_deref(), Some("default"));
+            assert_eq!(truncation, Some(json!("auto")));
+            assert_eq!(reasoning, Some(json!({"effort":"high"})));
         }
         other => panic!("Expected OpenAIResponses, got {other:?}"),
     }
