@@ -219,13 +219,10 @@ impl AnnotatedLlmResponse {
     pub fn response_text(&self) -> Option<&str> {
         match self.message.as_ref()? {
             MessageContent::Text(s) => Some(s.as_str()),
-            MessageContent::Parts(parts) => parts
-                .iter()
-                .map(|p| {
-                    let super::request::ContentPart::Text { text } = p;
-                    text.as_str()
-                })
-                .next(),
+            MessageContent::Parts(parts) => parts.iter().find_map(|p| match p {
+                super::request::ContentPart::Text { text } => Some(text.as_str()),
+                super::request::ContentPart::ImageUrl { .. } => None,
+            }),
         }
     }
 

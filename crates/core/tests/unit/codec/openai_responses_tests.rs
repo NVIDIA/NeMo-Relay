@@ -406,11 +406,47 @@ fn test_decode_request_extra_fields() {
         "tool_choice": "auto"
     }));
     let annotated = codec.decode(&request).unwrap();
-    assert_eq!(annotated.extra.get("store"), Some(&json!(true)));
+    assert_eq!(annotated.store, Some(true));
+    assert_eq!(annotated.metadata, Some(json!({"key": "value"})));
+}
+
+#[test]
+fn test_decode_request_openai_controls_typed() {
+    let codec = OpenAIResponsesCodec;
+    let request = make_request(json!({
+        "model": "gpt-4o",
+        "input": "Hi",
+        "store": true,
+        "previous_response_id": "resp_prev",
+        "truncation": "disabled",
+        "reasoning": { "effort": "high" },
+        "include": ["reasoning.encrypted_content"],
+        "user": "u123",
+        "metadata": { "k": "v" },
+        "service_tier": "default",
+        "parallel_tool_calls": true,
+        "max_output_tokens": 777,
+        "max_tool_calls": 3,
+        "top_logprobs": 2,
+        "stream": true
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    assert_eq!(annotated.store, Some(true));
+    assert_eq!(annotated.previous_response_id.as_deref(), Some("resp_prev"));
+    assert_eq!(annotated.truncation, Some(json!("disabled")));
+    assert_eq!(annotated.reasoning, Some(json!({"effort":"high"})));
     assert_eq!(
-        annotated.extra.get("metadata"),
-        Some(&json!({"key": "value"}))
+        annotated.include,
+        Some(json!(["reasoning.encrypted_content"]))
     );
+    assert_eq!(annotated.user.as_deref(), Some("u123"));
+    assert_eq!(annotated.metadata, Some(json!({"k":"v"})));
+    assert_eq!(annotated.service_tier.as_deref(), Some("default"));
+    assert_eq!(annotated.parallel_tool_calls, Some(true));
+    assert_eq!(annotated.max_output_tokens, Some(777));
+    assert_eq!(annotated.max_tool_calls, Some(3));
+    assert_eq!(annotated.top_logprobs, Some(2));
+    assert_eq!(annotated.stream, Some(true));
 }
 
 // ===================================================================
@@ -477,6 +513,69 @@ fn test_encode_writes_max_output_tokens() {
 }
 
 #[test]
+fn test_encode_request_openai_controls_typed() {
+    let codec = OpenAIResponsesCodec;
+    let mut annotated = codec
+        .decode(&make_request(json!({"model":"gpt-4o","input":"hello"})))
+        .unwrap();
+    annotated.store = Some(false);
+    annotated.previous_response_id = Some("resp_1".into());
+    annotated.truncation = Some(json!("auto"));
+    annotated.reasoning = Some(json!({"effort":"low"}));
+    annotated.include = Some(json!(["reasoning.encrypted_content"]));
+    annotated.user = Some("abc".into());
+    annotated.metadata = Some(json!({"x":1}));
+    annotated.service_tier = Some("default".into());
+    annotated.parallel_tool_calls = Some(false);
+    annotated.max_output_tokens = Some(222);
+    annotated.max_tool_calls = Some(5);
+    annotated.top_logprobs = Some(1);
+    annotated.stream = Some(true);
+
+    let encoded = codec
+        .encode(
+            &annotated,
+            &make_request(json!({"model":"gpt-4o","input":"hello"})),
+        )
+        .unwrap();
+    let obj = encoded.content.as_object().unwrap();
+    assert_eq!(obj.get("store"), Some(&json!(false)));
+    assert_eq!(obj.get("previous_response_id"), Some(&json!("resp_1")));
+    assert_eq!(obj.get("truncation"), Some(&json!("auto")));
+    assert_eq!(obj.get("reasoning"), Some(&json!({"effort":"low"})));
+    assert_eq!(
+        obj.get("include"),
+        Some(&json!(["reasoning.encrypted_content"]))
+    );
+    assert_eq!(obj.get("user"), Some(&json!("abc")));
+    assert_eq!(obj.get("metadata"), Some(&json!({"x":1})));
+    assert_eq!(obj.get("service_tier"), Some(&json!("default")));
+    assert_eq!(obj.get("parallel_tool_calls"), Some(&json!(false)));
+    assert_eq!(obj.get("max_output_tokens"), Some(&json!(222)));
+    assert_eq!(obj.get("max_tool_calls"), Some(&json!(5)));
+    assert_eq!(obj.get("top_logprobs"), Some(&json!(1)));
+    assert_eq!(obj.get("stream"), Some(&json!(true)));
+}
+
+#[test]
+fn test_encode_extra_overrides_typed_controls() {
+    let codec = OpenAIResponsesCodec;
+    let mut annotated = codec
+        .decode(&make_request(json!({"model":"gpt-4o","input":"hello"})))
+        .unwrap();
+    annotated.store = Some(false);
+    annotated.extra.insert("store".into(), json!(true));
+    let encoded = codec
+        .encode(
+            &annotated,
+            &make_request(json!({"model":"gpt-4o","input":"hello"})),
+        )
+        .unwrap();
+    let obj = encoded.content.as_object().unwrap();
+    assert_eq!(obj.get("store"), Some(&json!(true)));
+}
+
+#[test]
 fn test_helper_and_error_paths_cover_remaining_responses_branches() {
     assert_eq!(
         parse_arguments("{not-json"),
@@ -534,6 +633,19 @@ fn test_helper_and_error_paths_cover_remaining_responses_branches() {
             },
         }]),
         tool_choice: Some(ToolChoice::Auto),
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
         extra: serde_json::Map::new(),
     };
 

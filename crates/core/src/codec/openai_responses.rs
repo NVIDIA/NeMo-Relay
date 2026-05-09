@@ -108,6 +108,18 @@ const MODELED_REQUEST_KEYS: &[&str] = &[
     "top_p",
     "tools",
     "tool_choice",
+    "store",
+    "previous_response_id",
+    "truncation",
+    "reasoning",
+    "include",
+    "user",
+    "metadata",
+    "service_tier",
+    "parallel_tool_calls",
+    "max_tool_calls",
+    "top_logprobs",
+    "stream",
 ];
 
 /// Helper to construct a [`Json`] number from an `f64`.
@@ -381,6 +393,25 @@ impl LlmCodec for OpenAIResponsesCodec {
             params,
             tools,
             tool_choice,
+            store: obj.get("store").and_then(|v| v.as_bool()),
+            previous_response_id: obj
+                .get("previous_response_id")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            truncation: obj.get("truncation").cloned(),
+            reasoning: obj.get("reasoning").cloned(),
+            include: obj.get("include").cloned(),
+            user: obj.get("user").and_then(|v| v.as_str()).map(String::from),
+            metadata: obj.get("metadata").cloned(),
+            service_tier: obj
+                .get("service_tier")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            parallel_tool_calls: obj.get("parallel_tool_calls").and_then(|v| v.as_bool()),
+            max_output_tokens: obj.get("max_output_tokens").and_then(|v| v.as_u64()),
+            max_tool_calls: obj.get("max_tool_calls").and_then(|v| v.as_u64()),
+            top_logprobs: obj.get("top_logprobs").and_then(|v| v.as_u64()),
+            stream: obj.get("stream").and_then(|v| v.as_bool()),
             extra,
         })
     }
@@ -413,6 +444,52 @@ impl LlmCodec for OpenAIResponsesCodec {
         // Overlay tool_choice if present.
         if let Some(ref tool_choice) = annotated.tool_choice {
             insert_serialized(obj, "tool_choice", tool_choice, "tool_choice")?;
+        }
+
+        if let Some(store) = annotated.store {
+            obj.insert("store".into(), Json::Bool(store));
+        }
+        if let Some(ref previous_response_id) = annotated.previous_response_id {
+            obj.insert(
+                "previous_response_id".into(),
+                Json::String(previous_response_id.clone()),
+            );
+        }
+        if let Some(ref truncation) = annotated.truncation {
+            obj.insert("truncation".into(), truncation.clone());
+        }
+        if let Some(ref reasoning) = annotated.reasoning {
+            obj.insert("reasoning".into(), reasoning.clone());
+        }
+        if let Some(ref include) = annotated.include {
+            obj.insert("include".into(), include.clone());
+        }
+        if let Some(ref user) = annotated.user {
+            obj.insert("user".into(), Json::String(user.clone()));
+        }
+        if let Some(ref metadata) = annotated.metadata {
+            obj.insert("metadata".into(), metadata.clone());
+        }
+        if let Some(ref service_tier) = annotated.service_tier {
+            obj.insert("service_tier".into(), Json::String(service_tier.clone()));
+        }
+        if let Some(parallel_tool_calls) = annotated.parallel_tool_calls {
+            obj.insert(
+                "parallel_tool_calls".into(),
+                Json::Bool(parallel_tool_calls),
+            );
+        }
+        if let Some(max_output_tokens) = annotated.max_output_tokens {
+            obj.insert("max_output_tokens".into(), Json::from(max_output_tokens));
+        }
+        if let Some(max_tool_calls) = annotated.max_tool_calls {
+            obj.insert("max_tool_calls".into(), Json::from(max_tool_calls));
+        }
+        if let Some(top_logprobs) = annotated.top_logprobs {
+            obj.insert("top_logprobs".into(), Json::from(top_logprobs));
+        }
+        if let Some(stream) = annotated.stream {
+            obj.insert("stream".into(), Json::Bool(stream));
         }
 
         // Merge extra fields back.

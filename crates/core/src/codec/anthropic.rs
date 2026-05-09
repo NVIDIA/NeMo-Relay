@@ -179,9 +179,9 @@ fn extract_system_text(msg: &Message) -> Option<String> {
         } => {
             let texts: Vec<&str> = parts
                 .iter()
-                .map(|p| {
-                    let super::request::ContentPart::Text { text } = p;
-                    text.as_str()
+                .filter_map(|p| match p {
+                    super::request::ContentPart::Text { text } => Some(text.as_str()),
+                    super::request::ContentPart::ImageUrl { .. } => None,
                 })
                 .collect();
             if texts.is_empty() {
@@ -449,6 +449,19 @@ impl LlmCodec for AnthropicMessagesCodec {
             params,
             tools,
             tool_choice,
+            store: None,
+            previous_response_id: None,
+            truncation: None,
+            reasoning: None,
+            include: None,
+            user: None,
+            metadata: None,
+            service_tier: None,
+            parallel_tool_calls: None,
+            max_output_tokens: None,
+            max_tool_calls: None,
+            top_logprobs: None,
+            stream: None,
             extra,
         })
     }

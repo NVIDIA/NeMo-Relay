@@ -37,6 +37,45 @@ pub struct AnnotatedLlmRequest {
     /// Tool choice control.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<ToolChoice>,
+    /// OpenAI Responses: whether to persist response state server-side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store: Option<bool>,
+    /// OpenAI Responses: prior response to continue from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_response_id: Option<String>,
+    /// OpenAI Responses: context truncation behavior.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncation: Option<Json>,
+    /// OpenAI Responses: reasoning configuration object.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<Json>,
+    /// OpenAI Responses: include filter for additional output/state items.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include: Option<Json>,
+    /// OpenAI user identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// OpenAI metadata map/object.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Json>,
+    /// OpenAI service tier preference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    /// OpenAI tool parallelism toggle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
+    /// OpenAI Responses max output token limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
+    /// OpenAI Responses max tool calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tool_calls: Option<u64>,
+    /// OpenAI logprob fanout count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_logprobs: Option<u64>,
+    /// OpenAI streaming toggle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<bool>,
     /// Extensible key-value pairs for unmodeled provider-specific fields.
     /// Merged back into the request body during encode via `serde(flatten)`.
     #[serde(flatten)]
@@ -105,6 +144,21 @@ pub enum ContentPart {
         /// The text content.
         text: String,
     },
+    /// An image URL content part.
+    ImageUrl {
+        /// Image URL payload.
+        image_url: OpenAiImageUrl,
+    },
+}
+
+/// OpenAI image URL payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenAiImageUrl {
+    /// URL for the image.
+    pub url: String,
+    /// Optional provider-specific detail hint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// A tool call requested by the assistant.
@@ -214,13 +268,10 @@ impl AnnotatedLlmRequest {
         self.messages.iter().find_map(|m| match m {
             Message::System { content, .. } => match content {
                 MessageContent::Text(s) => Some(s.as_str()),
-                MessageContent::Parts(parts) => parts
-                    .iter()
-                    .map(|p| {
-                        let ContentPart::Text { text } = p;
-                        text.as_str()
-                    })
-                    .next(),
+                MessageContent::Parts(parts) => parts.iter().find_map(|p| match p {
+                    ContentPart::Text { text } => Some(text.as_str()),
+                    ContentPart::ImageUrl { .. } => None,
+                }),
             },
             _ => None,
         })
@@ -235,13 +286,10 @@ impl AnnotatedLlmRequest {
         self.messages.iter().rev().find_map(|m| match m {
             Message::User { content, .. } => match content {
                 MessageContent::Text(s) => Some(s.as_str()),
-                MessageContent::Parts(parts) => parts
-                    .iter()
-                    .map(|p| {
-                        let ContentPart::Text { text } = p;
-                        text.as_str()
-                    })
-                    .next(),
+                MessageContent::Parts(parts) => parts.iter().find_map(|p| match p {
+                    ContentPart::Text { text } => Some(text.as_str()),
+                    ContentPart::ImageUrl { .. } => None,
+                }),
             },
             _ => None,
         })
