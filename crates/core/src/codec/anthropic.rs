@@ -94,6 +94,8 @@ const MODELED_REQUEST_KEYS: &[&str] = &[
     "stop_sequences",
     "tools",
     "tool_choice",
+    "metadata",
+    "service_tier",
 ];
 
 /// Decode the Anthropic `tool_choice` JSON value into a normalized [`ToolChoice`].
@@ -119,6 +121,15 @@ fn decode_anthropic_tool_choice(val: &Json) -> Option<ToolChoice> {
     }
 }
 
+/// Extract Anthropic `disable_parallel_tool_use` from tool_choice and map
+/// to normalized `parallel_tool_calls` semantics.
+fn decode_parallel_tool_calls(val: &Json) -> Option<bool> {
+    let obj = val.as_object()?;
+    obj.get("disable_parallel_tool_use")
+        .and_then(|v| v.as_bool())
+        .map(|disabled| !disabled)
+}
+
 /// Encode a normalized [`ToolChoice`] back into Anthropic JSON format.
 fn encode_anthropic_tool_choice(tc: &ToolChoice) -> Json {
     match tc {
@@ -129,6 +140,17 @@ fn encode_anthropic_tool_choice(tc: &ToolChoice) -> Json {
             serde_json::json!({"type": "tool", "name": func.function.name})
         }
     }
+}
+
+fn encode_tool_choice_with_parallel_hint(
+    tc: &ToolChoice,
+    parallel_tool_calls: Option<bool>,
+) -> Json {
+    let mut value = encode_anthropic_tool_choice(tc);
+    if let (Some(parallel), Some(obj)) = (parallel_tool_calls, value.as_object_mut()) {
+        obj.insert("disable_parallel_tool_use".into(), Json::Bool(!parallel));
+    }
+    value
 }
 
 /// Extract the system prompt from an Anthropic top-level `system` field.
@@ -435,6 +457,7 @@ impl LlmCodec for AnthropicMessagesCodec {
         let tool_choice = obj
             .get("tool_choice")
             .and_then(decode_anthropic_tool_choice);
+        let parallel_tool_calls = obj.get("tool_choice").and_then(decode_parallel_tool_calls);
 
         // Collect extra fields (keys not in MODELED_REQUEST_KEYS).
         let extra: serde_json::Map<String, Json> = obj
@@ -455,9 +478,12 @@ impl LlmCodec for AnthropicMessagesCodec {
             reasoning: None,
             include: None,
             user: None,
-            metadata: None,
-            service_tier: None,
-            parallel_tool_calls: None,
+            metadata: obj.get("metadata").cloned(),
+            service_tier: obj
+                .get("service_tier")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            parallel_tool_calls,
             max_output_tokens: None,
             max_tool_calls: None,
             top_logprobs: None,
@@ -506,8 +532,15 @@ impl LlmCodec for AnthropicMessagesCodec {
         if let Some(ref tool_choice) = annotated.tool_choice {
             obj.insert(
                 "tool_choice".into(),
-                encode_anthropic_tool_choice(tool_choice),
+                encode_tool_choice_with_parallel_hint(tool_choice, annotated.parallel_tool_calls),
             );
+        }
+
+        if let Some(ref metadata) = annotated.metadata {
+            obj.insert("metadata".into(), metadata.clone());
+        }
+        if let Some(ref service_tier) = annotated.service_tier {
+            obj.insert("service_tier".into(), Json::String(service_tier.clone()));
         }
 
         // Merge extra fields back.

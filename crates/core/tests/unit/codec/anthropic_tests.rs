@@ -495,11 +495,23 @@ fn test_decode_request_extra_fields() {
         "stream": true
     }));
     let annotated = codec.decode(&request).unwrap();
-    assert_eq!(
-        annotated.extra.get("metadata"),
-        Some(&json!({"user_id": "abc"}))
-    );
+    assert_eq!(annotated.metadata, Some(json!({"user_id": "abc"})));
     assert_eq!(annotated.extra.get("stream"), Some(&json!(true)));
+}
+
+#[test]
+fn test_decode_request_service_tier_and_parallel_tool_calls() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(json!({
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 100,
+        "service_tier": "default",
+        "tool_choice": { "type": "auto", "disable_parallel_tool_use": true }
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    assert_eq!(annotated.service_tier.as_deref(), Some("default"));
+    assert_eq!(annotated.parallel_tool_calls, Some(false));
 }
 
 // ===================================================================
@@ -523,6 +535,41 @@ fn test_encode_round_trip_preserves_unmodeled_fields() {
     // Unmodeled fields preserved
     assert_eq!(obj.get("metadata"), Some(&json!({"user_id": "abc"})));
     assert_eq!(obj.get("stream"), Some(&json!(true)));
+}
+
+#[test]
+fn test_encode_writes_anthropic_modeled_controls() {
+    let codec = AnthropicMessagesCodec;
+    let mut annotated = codec
+        .decode(&make_request(json!({
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 100,
+            "tool_choice": { "type": "auto" }
+        })))
+        .unwrap();
+    annotated.metadata = Some(json!({"user_id":"abc"}));
+    annotated.service_tier = Some("default".into());
+    annotated.parallel_tool_calls = Some(false);
+    let encoded = codec
+        .encode(
+            &annotated,
+            &make_request(json!({
+                "messages": [{ "role": "user", "content": "Hi" }],
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 100,
+                "tool_choice": { "type": "auto" }
+            })),
+        )
+        .unwrap();
+    let obj = encoded.content.as_object().unwrap();
+    assert_eq!(obj.get("metadata"), Some(&json!({"user_id":"abc"})));
+    assert_eq!(obj.get("service_tier"), Some(&json!("default")));
+    assert_eq!(
+        obj.get("tool_choice")
+            .and_then(|v| v.get("disable_parallel_tool_use")),
+        Some(&json!(true))
+    );
 }
 
 #[test]
