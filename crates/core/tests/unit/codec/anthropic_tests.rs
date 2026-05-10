@@ -224,8 +224,13 @@ fn test_decode_response_thinking_blocks_in_api_specific() {
     let resp = codec.decode_response(&full_anthropic_response()).unwrap();
     match resp.api_specific.unwrap() {
         ApiSpecificResponse::AnthropicMessages {
+            object_type,
+            role,
+            stop_reason,
             content_blocks,
             stop_sequence,
+            service_tier,
+            container,
         } => {
             let blocks = content_blocks.unwrap();
             // Should contain ALL content blocks
@@ -239,7 +244,12 @@ fn test_decode_response_thinking_blocks_in_api_specific() {
             assert!(types.contains(&"redacted_thinking"));
             assert!(types.contains(&"text"));
             assert!(types.contains(&"tool_use"));
+            assert_eq!(object_type.as_deref(), Some("message"));
+            assert_eq!(role.as_deref(), Some("assistant"));
+            assert_eq!(stop_reason.as_deref(), Some("end_turn"));
             assert_eq!(stop_sequence, None);
+            assert_eq!(service_tier, None);
+            assert_eq!(container, None);
         }
         other => panic!("Expected AnthropicMessages, got {other:?}"),
     }
@@ -261,6 +271,11 @@ fn test_decode_response_stop_sequence_value() {
         ApiSpecificResponse::AnthropicMessages {
             stop_sequence,
             content_blocks: _,
+            object_type: _,
+            role: _,
+            stop_reason: _,
+            service_tier: _,
+            container: _,
         } => {
             assert_eq!(stop_sequence, Some("\n\nHuman:".into()));
         }
@@ -282,13 +297,23 @@ fn test_decode_response_extra_fields_preserved() {
         "container": { "id": "container_abc123" }
     });
     let resp = codec.decode_response(&response).unwrap();
-    // type, role, container should be in extra
-    assert_eq!(resp.extra.get("type"), Some(&json!("message")));
-    assert_eq!(resp.extra.get("role"), Some(&json!("assistant")));
-    assert_eq!(
-        resp.extra.get("container"),
-        Some(&json!({"id": "container_abc123"}))
-    );
+    // type/role/container are now modeled in api_specific.
+    assert!(resp.extra.get("type").is_none());
+    assert!(resp.extra.get("role").is_none());
+    assert!(resp.extra.get("container").is_none());
+    match resp.api_specific.unwrap() {
+        ApiSpecificResponse::AnthropicMessages {
+            object_type,
+            role,
+            container,
+            ..
+        } => {
+            assert_eq!(object_type.as_deref(), Some("message"));
+            assert_eq!(role.as_deref(), Some("assistant"));
+            assert_eq!(container, Some(json!({"id":"container_abc123"})));
+        }
+        other => panic!("Expected AnthropicMessages, got {other:?}"),
+    }
 }
 
 #[test]

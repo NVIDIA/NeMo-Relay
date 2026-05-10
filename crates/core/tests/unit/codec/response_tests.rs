@@ -209,7 +209,12 @@ fn test_api_specific_openai_responses_round_trip() {
 #[test]
 fn test_api_specific_anthropic_messages_round_trip() {
     let api = ApiSpecificResponse::AnthropicMessages {
+        object_type: Some("message".into()),
+        role: Some("assistant".into()),
+        stop_reason: Some("end_turn".into()),
         stop_sequence: Some("\n\nHuman:".into()),
+        service_tier: Some("default".into()),
+        container: Some(json!({"id":"container_123"})),
         content_blocks: Some(vec![json!({"type": "text", "text": "Hello"})]),
     };
     let json_val = serde_json::to_value(&api).unwrap();

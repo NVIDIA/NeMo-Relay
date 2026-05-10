@@ -207,9 +207,24 @@ pub enum ApiSpecificResponse {
     /// Anthropic Messages API-specific fields.
     #[serde(rename = "anthropic_messages")]
     AnthropicMessages {
+        /// Anthropic object type (typically `"message"`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        object_type: Option<String>,
+        /// Anthropic response role (typically `"assistant"`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
+        /// Raw Anthropic stop_reason.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stop_reason: Option<String>,
         /// Which stop sequence was matched (if any).
         #[serde(skip_serializing_if = "Option::is_none")]
         stop_sequence: Option<String>,
+        /// Anthropic response service tier when present.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        service_tier: Option<String>,
+        /// Anthropic container payload when present.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        container: Option<Json>,
         /// Full content blocks array for direct access.
         #[serde(skip_serializing_if = "Option::is_none")]
         content_blocks: Option<Vec<Json>>,

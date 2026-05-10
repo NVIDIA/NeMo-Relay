@@ -45,10 +45,15 @@ pub struct AnthropicMessagesCodec;
 #[derive(Deserialize)]
 struct RawAnthropicResponse {
     id: Option<String>,
+    #[serde(rename = "type")]
+    object_type: Option<String>,
+    role: Option<String>,
     model: Option<String>,
     content: Option<Vec<Json>>,
     stop_reason: Option<String>,
     stop_sequence: Option<String>,
+    service_tier: Option<String>,
+    container: Option<Json>,
     usage: Option<RawAnthropicUsage>,
     #[serde(flatten)]
     extra: serde_json::Map<String, Json>,
@@ -361,7 +366,12 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
         // Build API-specific fields: all content blocks + stop_sequence.
         let api_specific_content_blocks = raw.content.clone();
         let api_specific = Some(ApiSpecificResponse::AnthropicMessages {
+            object_type: raw.object_type,
+            role: raw.role,
+            stop_reason: raw.stop_reason.clone(),
             stop_sequence: raw.stop_sequence,
+            service_tier: raw.service_tier,
+            container: raw.container,
             content_blocks: api_specific_content_blocks,
         });
 
