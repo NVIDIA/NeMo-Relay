@@ -108,6 +108,7 @@ const MODELED_REQUEST_KEYS: &[&str] = &[
 /// Anthropic format:
 /// - `{"type": "auto"}` -> `ToolChoice::Auto`
 /// - `{"type": "any"}` -> `ToolChoice::Required`
+/// - `{"type": "none"}` -> `ToolChoice::None`
 /// - `{"type": "tool", "name": "X"}` -> `ToolChoice::Specific`
 fn decode_anthropic_tool_choice(val: &Json) -> Option<ToolChoice> {
     let obj = val.as_object()?;
@@ -115,6 +116,7 @@ fn decode_anthropic_tool_choice(val: &Json) -> Option<ToolChoice> {
     match tc_type {
         "auto" => Some(ToolChoice::Auto),
         "any" => Some(ToolChoice::Required),
+        "none" => Some(ToolChoice::None),
         "tool" => {
             let name = obj.get("name")?.as_str()?.to_string();
             Some(ToolChoice::Specific(ToolChoiceFunction {
@@ -140,7 +142,7 @@ fn encode_anthropic_tool_choice(tc: &ToolChoice) -> Json {
     match tc {
         ToolChoice::Auto => serde_json::json!({"type": "auto"}),
         ToolChoice::Required => serde_json::json!({"type": "any"}),
-        ToolChoice::None => serde_json::json!({"type": "auto"}), // Anthropic has no "none"; fall back to auto
+        ToolChoice::None => serde_json::json!({"type": "none"}),
         ToolChoice::Specific(func) => {
             serde_json::json!({"type": "tool", "name": func.function.name})
         }

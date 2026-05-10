@@ -20,6 +20,10 @@ fn make_request(content: Json) -> LlmRequest {
     }
 }
 
+fn fixture_json(path: &str) -> Json {
+    serde_json::from_str(path).expect("valid fixture json")
+}
+
 /// Full Anthropic Messages response with text, tool_use, thinking, usage, etc.
 fn full_anthropic_response() -> Json {
     json!({
@@ -539,6 +543,38 @@ fn test_decode_request_service_tier_and_parallel_tool_calls() {
     assert_eq!(annotated.parallel_tool_calls, Some(false));
 }
 
+#[test]
+fn test_decode_request_vllm_tool_choice_none_and_extensions_preserved() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(fixture_json(include_str!(
+        "../../fixtures/codec/anthropic/vllm_tool_choice_none_with_extensions.json"
+    )));
+    let annotated = codec.decode(&request).unwrap();
+    assert_eq!(annotated.tool_choice, Some(ToolChoice::None));
+    assert_eq!(annotated.parallel_tool_calls, Some(false));
+    assert_eq!(
+        annotated.extra.get("kv_transfer_params"),
+        Some(&json!({"mode":"decode"}))
+    );
+    assert_eq!(
+        annotated.extra.get("chat_template_kwargs"),
+        Some(&json!({"include_system":true}))
+    );
+}
+
+#[test]
+fn test_decode_request_vllm_system_array_ignores_non_text_blocks() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(fixture_json(include_str!(
+        "../../fixtures/codec/anthropic/vllm_system_block_with_non_text.json"
+    )));
+    let annotated = codec.decode(&request).unwrap();
+    assert_eq!(
+        annotated.system_prompt(),
+        Some("Only answer in one sentence.")
+    );
+}
+
 // ===================================================================
 // Request encode tests
 // ===================================================================
@@ -672,7 +708,7 @@ fn test_encode_tool_choice_anthropic_format() {
     let annotated = codec.decode(&original).unwrap();
     let encoded = codec.encode(&annotated, &original).unwrap();
     let obj = encoded.content.as_object().unwrap();
-    assert_eq!(obj.get("tool_choice"), Some(&json!({"type": "auto"})));
+    assert_eq!(obj.get("tool_choice"), Some(&json!({"type": "none"})));
 }
 
 #[test]
@@ -793,7 +829,7 @@ fn test_helper_and_error_paths_cover_remaining_anthropic_branches() {
     assert_eq!(obj.get("temperature"), Some(&json!(0.3)));
     assert_eq!(obj.get("top_p"), Some(&json!(0.8)));
     assert_eq!(obj.get("stop_sequences"), Some(&json!(["END"])));
-    assert_eq!(obj.get("tool_choice"), Some(&json!({"type": "auto"})));
+    assert_eq!(obj.get("tool_choice"), Some(&json!({"type": "none"})));
     assert_eq!(obj.get("system"), Some(&json!("First\nSecond")));
 
     let tools = obj.get("tools").unwrap().as_array().unwrap();

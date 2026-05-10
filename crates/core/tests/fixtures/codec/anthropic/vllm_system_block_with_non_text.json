@@ -1,0 +1,11 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "messages": [
+    { "role": "user", "content": "Describe this" }
+  ],
+  "max_tokens": 100,
+  "system": [
+    { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "abcd" } },
+    { "type": "text", "text": "Only answer in one sentence." }
+  ]
+}
