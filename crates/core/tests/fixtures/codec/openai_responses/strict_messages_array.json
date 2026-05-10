@@ -1,0 +1,9 @@
+{
+  "model": "gpt-4o",
+  "instructions": "Be helpful.",
+  "input": [
+    { "role": "user", "content": "What is 2+2?" },
+    { "role": "assistant", "content": "4" },
+    { "role": "user", "content": "And 3+3?" }
+  ]
+}

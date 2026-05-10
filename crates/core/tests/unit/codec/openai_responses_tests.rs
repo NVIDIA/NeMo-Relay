@@ -20,6 +20,10 @@ fn make_request(content: Json) -> LlmRequest {
     }
 }
 
+fn fixture_json(path: &str) -> Json {
+    serde_json::from_str(path).expect("valid fixture json")
+}
+
 /// Full Responses API response with message, function_call, reasoning, and usage.
 fn full_responses_response() -> Json {
     json!({
@@ -386,29 +390,24 @@ fn test_decode_invalid_json() {
 #[test]
 fn test_decode_request_with_input_array() {
     let codec = OpenAIResponsesCodec;
-    let request = make_request(json!({
-        "model": "gpt-4o",
-        "instructions": "Be helpful and concise.",
-        "input": [
-            { "role": "user", "content": "What is 2+2?" },
-            { "role": "assistant", "content": "4" },
-            { "role": "user", "content": "And 3+3?" }
-        ],
-        "tools": [{
-            "type": "function",
-            "function": {
-                "name": "calculate",
-                "description": "Calculate math",
-                "parameters": {"type": "object"}
-            }
-        }]
-    }));
+    let mut request_json = fixture_json(include_str!(
+        "../../fixtures/codec/openai_responses/strict_messages_array.json"
+    ));
+    request_json["tools"] = json!([{
+        "type": "function",
+        "function": {
+            "name": "calculate",
+            "description": "Calculate math",
+            "parameters": {"type": "object"}
+        }
+    }]);
+    let request = make_request(request_json);
     let annotated = codec.decode(&request).unwrap();
     assert_eq!(annotated.model, Some("gpt-4o".into()));
 
     // instructions becomes system message (first)
     assert!(annotated.messages.len() >= 2);
-    assert_eq!(annotated.system_prompt(), Some("Be helpful and concise."));
+    assert_eq!(annotated.system_prompt(), Some("Be helpful."));
 
     // input items become messages (after system)
     // System + 3 input items = 4 total messages
@@ -497,6 +496,35 @@ fn test_decode_request_openai_controls_typed() {
     assert_eq!(annotated.max_tool_calls, Some(3));
     assert_eq!(annotated.top_logprobs, Some(2));
     assert_eq!(annotated.stream, Some(true));
+}
+
+#[test]
+fn test_decode_request_input_array_preserves_unparsed_items_in_extra() {
+    let codec = OpenAIResponsesCodec;
+    let request = make_request(fixture_json(include_str!(
+        "../../fixtures/codec/openai_responses/mixed_input_with_function_call_output.json"
+    )));
+    let annotated = codec.decode(&request).unwrap();
+    // strict-first behavior: no partial message extraction on mixed arrays
+    assert!(annotated.messages.is_empty());
+    assert_eq!(
+        annotated.extra.get("_openai_responses_unparsed_input_items"),
+        Some(&json!([
+            { "role": "user", "content": "hello" },
+            { "type": "function_call_output", "call_id": "call_1", "output": "ok" }
+        ]))
+    );
+}
+
+#[test]
+fn test_decode_request_accepts_anthropic_hint_tool_choice() {
+    let codec = OpenAIResponsesCodec;
+    let request = make_request(fixture_json(include_str!(
+        "../../fixtures/codec/openai_responses/anthropic_tool_choice_hint.json"
+    )));
+    let annotated = codec.decode(&request).unwrap();
+    assert_eq!(annotated.tool_choice, Some(ToolChoice::Auto));
+    assert_eq!(annotated.parallel_tool_calls, Some(false));
 }
 
 // ===================================================================

@@ -22,7 +22,8 @@ use crate::error::{FlowError, Result};
 use crate::json::Json;
 
 use super::request::{
-    AnnotatedLlmRequest, GenerationParams, Message, MessageContent, ToolChoice, ToolDefinition,
+    AnnotatedLlmRequest, GenerationParams, Message, MessageContent, ToolChoice,
+    ToolChoiceFunction, ToolChoiceFunctionName, ToolDefinition,
 };
 use super::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, ResponseToolCall, Usage,
@@ -128,6 +129,7 @@ const MODELED_REQUEST_KEYS: &[&str] = &[
     "top_logprobs",
     "stream",
 ];
+const UNPARSED_INPUT_ITEMS_KEY: &str = "_openai_responses_unparsed_input_items";
 
 /// Helper to construct a [`Json`] number from an `f64`.
 fn json_f64(v: f64) -> Json {
@@ -267,6 +269,40 @@ fn overlay_generation_params(obj: &mut serde_json::Map<String, Json>, params: &G
     }
 }
 
+fn decode_openai_or_anthropic_tool_choice(value: &Json) -> Option<ToolChoice> {
+    if let Ok(parsed) = serde_json::from_value::<ToolChoice>(value.clone()) {
+        return Some(parsed);
+    }
+
+    let obj = value.as_object()?;
+    match obj.get("type").and_then(|v| v.as_str()) {
+        Some("auto") => Some(ToolChoice::Auto),
+        Some("any") => Some(ToolChoice::Required),
+        Some("tool") => {
+            let name = obj.get("name").and_then(|v| v.as_str())?.to_string();
+            Some(ToolChoice::Specific(ToolChoiceFunction {
+                choice_type: "function".to_string(),
+                function: ToolChoiceFunctionName { name },
+            }))
+        }
+        _ => None,
+    }
+}
+
+fn decode_openai_or_anthropic_parallel_tool_calls(
+    obj: &serde_json::Map<String, Json>,
+) -> Option<bool> {
+    if let Some(value) = obj.get("parallel_tool_calls").and_then(|v| v.as_bool()) {
+        return Some(value);
+    }
+    let tool_choice = obj.get("tool_choice")?.as_object()?;
+    tool_choice
+        .get("disable_parallel_tool_use")
+        .and_then(|v| v.as_bool())
+        .map(|disabled| !disabled)
+}
+
+
 // ---------------------------------------------------------------------------
 // LlmResponseCodec implementation
 // ---------------------------------------------------------------------------
@@ -342,6 +378,7 @@ impl LlmCodec for OpenAIResponsesCodec {
             .ok_or_else(|| FlowError::Internal("request content is not an object".into()))?;
 
         let mut messages: Vec<Message> = Vec::new();
+        let mut preserved_unparsed_input: Option<Json> = None;
 
         // Extract instructions -> system message (first).
         if let Some(instructions) = obj.get("instructions").and_then(|v| v.as_str()) {
@@ -360,10 +397,14 @@ impl LlmCodec for OpenAIResponsesCodec {
                     name: None,
                 });
             } else if input.is_array() {
-                // Input is an array of message items.
-                let input_messages: Vec<Message> =
-                    serde_json::from_value(input.clone()).unwrap_or_default();
-                messages.extend(input_messages);
+                // Strict-first parse to avoid partial normalized state.
+                match serde_json::from_value::<Vec<Message>>(input.clone()) {
+                    Ok(input_messages) => messages.extend(input_messages),
+                    Err(_) => {
+                        // Preserve full original array for lossless handling.
+                        preserved_unparsed_input = Some(input.clone());
+                    }
+                }
             }
         }
 
@@ -397,18 +438,17 @@ impl LlmCodec for OpenAIResponsesCodec {
         // Extract tool_choice.
         let tool_choice: Option<ToolChoice> = obj
             .get("tool_choice")
-            .map(|v| serde_json::from_value(v.clone()))
-            .transpose()
-            .map_err(|e| {
-                FlowError::Internal(format!("OpenAI Responses tool_choice decode: {e}"))
-            })?;
+            .and_then(decode_openai_or_anthropic_tool_choice);
 
         // Collect extra fields (keys not in MODELED_REQUEST_KEYS).
-        let extra: serde_json::Map<String, Json> = obj
+        let mut extra: serde_json::Map<String, Json> = obj
             .iter()
             .filter(|(k, _)| !MODELED_REQUEST_KEYS.contains(&k.as_str()))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        if let Some(input_items) = preserved_unparsed_input {
+            extra.insert(UNPARSED_INPUT_ITEMS_KEY.into(), input_items);
+        }
 
         Ok(AnnotatedLlmRequest {
             messages,
@@ -430,7 +470,7 @@ impl LlmCodec for OpenAIResponsesCodec {
                 .get("service_tier")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            parallel_tool_calls: obj.get("parallel_tool_calls").and_then(|v| v.as_bool()),
+            parallel_tool_calls: decode_openai_or_anthropic_parallel_tool_calls(obj),
             max_output_tokens: obj.get("max_output_tokens").and_then(|v| v.as_u64()),
             max_tool_calls: obj.get("max_tool_calls").and_then(|v| v.as_u64()),
             top_logprobs: obj.get("top_logprobs").and_then(|v| v.as_u64()),
