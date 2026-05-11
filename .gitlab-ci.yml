@@ -264,9 +264,10 @@ publish:artifactory:cargo:
       [registries]
       artifactory = { index = "sparse+${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL}" }
       EOF
+      export CARGO_REGISTRIES_ARTIFACTORY_TOKEN="${NEMO_FLOW_CI_ARTIFACTORY_KEY}"
 
       for crate in nemo-flow nemo-flow-adaptive nemo-flow-ffi nemo-flow-sidecar; do
-        cargo publish --package "$crate" --registry artifactory --token "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" --allow-dirty
+        cargo publish --package "$crate" --registry artifactory --allow-dirty
       done
 
 publish:artifactory:npm:
