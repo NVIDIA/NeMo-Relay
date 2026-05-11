@@ -794,11 +794,17 @@ fn should_forward_request_header(name: &HeaderName) -> bool {
 
 // Allows headers into observability metadata only after removing credentials and provider API keys.
 // The forwarding filter runs first so hop-by-hop transport headers are also excluded from recorded
-// LLM request attributes.
+// LLM request attributes. The credential blocklist covers the four canonical cases we see in
+// practice: `Authorization` (most providers), `Cookie` (session credentials), `x-api-key` (OpenAI
+// SDK and similar), `anthropic-api-key` (Anthropic), and the generic `api-key` alias used by some
+// providers/proxies (e.g., Azure OpenAI). `HeaderName::as_str()` already returns the canonical
+// lowercase form so string comparisons are case-insensitive by construction.
 fn should_record_header(name: &HeaderName) -> bool {
     should_forward_request_header(name)
         && name != http::header::AUTHORIZATION
+        && name != http::header::COOKIE
         && name.as_str() != "x-api-key"
+        && name.as_str() != "api-key"
         && name.as_str() != "anthropic-api-key"
 }
 

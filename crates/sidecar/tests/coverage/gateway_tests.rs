@@ -29,6 +29,12 @@ fn removes_hop_by_hop_headers() {
     assert!(!should_record_header(&HeaderName::from_static(
         "anthropic-api-key"
     )));
+    // Additional credential aliases must not appear in observability metadata:
+    // `cookie` carries session credentials; `api-key` is the generic alias used by some providers
+    // (e.g., Azure OpenAI). Without these, secrets would leak into `LlmRequest.headers` and any
+    // downstream exporter that mirrors them (ATIF, OpenInference span attributes).
+    assert!(!should_record_header(&HeaderName::from_static("cookie")));
+    assert!(!should_record_header(&HeaderName::from_static("api-key")));
     assert!(should_record_header(&HeaderName::from_static(
         "x-request-id"
     )));
