@@ -5,10 +5,10 @@ use axum::http::HeaderMap;
 use serde_json::{Map, Value, json};
 
 use crate::adapters::{
-    AdapterOutcome, ClassificationRules, classify, event_name, metadata, normalize_name,
-    session_id, value_at,
+    AdapterOutcome, ClassificationRules, classify, common_session_event, event_name, metadata,
+    normalize_name, session_id, value_at,
 };
-use crate::model::{AgentKind, LlmEvent};
+use crate::model::{AgentKind, LlmEvent, NormalizedEvent};
 
 /// Normalizes Hermes shell hook payloads without emitting control directives.
 ///
@@ -39,7 +39,7 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
         };
     }
 
-    let events = classify(
+    let mut events = classify(
         &payload,
         headers,
         &ClassificationRules {
@@ -52,6 +52,18 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
             tool_end: &["post_tool_call", "postToolCall"],
         },
     );
+    // hermes-agent fires `on_session_end` at every user-turn boundary (it is intentionally distinct
+    // from `on_session_finalize`, which marks the real session close). Emit a `TurnEnded` alongside
+    // the HookMark so the session manager snapshots ATIF per turn — without this, sessions that
+    // never reach `on_session_finalize` (e.g., terminated via Ctrl+D before hermes-agent finalizes)
+    // leave their ATIF un-flushed.
+    if normalized == "onsessionend" {
+        events.push(NormalizedEvent::TurnEnded(common_session_event(
+            &payload,
+            headers,
+            AgentKind::Hermes,
+        )));
+    }
     AdapterOutcome {
         events,
         response: json!({}),

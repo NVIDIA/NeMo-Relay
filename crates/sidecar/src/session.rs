@@ -576,6 +576,13 @@ impl Session {
     // top down, correlation state, then the root agent scope. Observer flush/export happens after
     // the root scope ends so terminal events are included.
     fn end_agent(&mut self, event: SessionEvent) -> Result<(), SidecarError> {
+        // Duplicate agent-end hooks (e.g., hermes-agent emitting `on_session_end` more than once
+        // per session) must not reopen the agent scope. Without this guard, `ensure_agent_started`
+        // would create an empty scope and `flush_observers` would overwrite the already-written
+        // ATIF trajectory with an empty session.
+        if self.agent_scope.is_none() {
+            return Ok(());
+        }
         self.ensure_agent_started(event.metadata.clone())?;
         self.close_active_llms_for_agent_end()?;
         self.close_active_tools_for_agent_end()?;

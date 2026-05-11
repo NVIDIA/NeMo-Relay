@@ -142,6 +142,86 @@ async fn writes_atif_on_session_end_from_header_config() {
 }
 
 #[tokio::test]
+async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
+    // Regression test: hermes-agent and other integrations can emit terminal hooks more than once
+    // per session. Without idempotency in `end_agent`, the second AgentEnded would re-open an
+    // empty agent scope via `ensure_agent_started`, close it, and `flush_observers` would write
+    // an empty ATIF on top of the just-written real trajectory.
+    let temp = tempfile::tempdir().unwrap();
+    let config = SidecarConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        openai_base_url: "http://127.0.0.1".into(),
+        anthropic_base_url: "http://127.0.0.1".into(),
+        atif_dir: Some(temp.path().to_path_buf()),
+        openinference_endpoint: None,
+        metadata: None,
+        plugin_config: None,
+    };
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    manager
+        .apply_events(
+            &headers,
+            vec![
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "dup-end".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SessionStart".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::PromptSubmitted(SessionEvent {
+                    session_id: "dup-end".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "UserPromptSubmit".into(),
+                    payload: json!({ "prompt": "hello" }),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::AgentEnded(SessionEvent {
+                    session_id: "dup-end".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SessionEnd".into(),
+                    payload: json!({ "done": true }),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let path = temp.path().join("dup-end.atif.json");
+    let first: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let first_steps = first["steps"].as_array().unwrap().len();
+    assert!(
+        first_steps > 0,
+        "first AgentEnded should produce a non-empty ATIF"
+    );
+
+    // Second AgentEnded for the same session — must be a no-op, not overwrite with empty.
+    manager
+        .apply_events(
+            &headers,
+            vec![NormalizedEvent::AgentEnded(SessionEvent {
+                session_id: "dup-end".into(),
+                agent_kind: AgentKind::ClaudeCode,
+                event_name: "SessionEnd".into(),
+                payload: json!({ "done_again": true }),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    let second: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let second_steps = second["steps"].as_array().unwrap().len();
+    assert_eq!(
+        first_steps, second_steps,
+        "duplicate AgentEnded must not change the ATIF step count"
+    );
+}
+
+#[tokio::test]
 async fn writes_hermes_api_hook_usage_to_atif_metrics() {
     let temp = tempfile::tempdir().unwrap();
     let config = SidecarConfig {

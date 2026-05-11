@@ -100,7 +100,11 @@ fn metadata(payload: &Value, headers: &HeaderMap, kind: AgentKind, event_name: &
 
 // Creates a root session event using the common session-id and metadata extraction rules so
 // lifecycle, marks, notifications, and compaction events all carry identical correlation fields.
-fn common_session_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) -> SessionEvent {
+pub(crate) fn common_session_event(
+    payload: &Value,
+    headers: &HeaderMap,
+    kind: AgentKind,
+) -> SessionEvent {
     let event_name = event_name(payload);
     SessionEvent {
         session_id: session_id(payload, headers),
