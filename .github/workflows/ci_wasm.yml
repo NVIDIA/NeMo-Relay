@@ -81,14 +81,16 @@ jobs:
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
-      - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
-        with:
-          tool: wasm-pack@${{ steps.ci-config.outputs.wasm_pack_version }}
-          fallback: cargo-install
+      # - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+      #   with:
+      #     tool: wasm-pack@${{ steps.ci-config.outputs.wasm_pack_version }}
 
       - name: Run WebAssembly tests with coverage
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
-        run: just --set ci true --set output_dir "${{ github.workspace }}" test-wasm
+        run: |
+          set -e
+          cargo install wasm-pack --version 0.14.0 --locked
+          just --set ci true --set output_dir "${{ github.workspace }}" test-wasm
 
       - name: Upload WebAssembly coverage to Codecov
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
