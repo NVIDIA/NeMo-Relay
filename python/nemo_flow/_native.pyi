@@ -1284,6 +1284,8 @@ def llm_call_end(
     *,
     data: _Json | None = None,
     metadata: _Json | None = None,
+    annotated_response: AnnotatedLLMResponse | Mapping[str, _JsonValue] | None = None,
+    response_codec: object | None = None,
     timestamp: datetime | None = None,
 ) -> None:
     """End a manual LLM lifecycle span.
@@ -1294,6 +1296,12 @@ def llm_call_end(
             sanitize-response guardrails unless it sanitizes to JSON null.
         data: Optional JSON payload used when the sanitized response is JSON null.
         metadata: Optional JSON metadata recorded on the end event.
+        annotated_response: Optional normalized response annotation attached to
+            the end event. Accepts an ``AnnotatedLLMResponse`` instance or a
+            JSON-compatible mapping matching that schema.
+        response_codec: Optional object implementing ``decode_response`` used
+            to derive ``annotated_response`` from ``response`` for observability
+            when ``annotated_response`` is omitted.
         timestamp: Optional timezone-aware datetime recorded on the end event.
             When omitted, the runtime default end timestamp is used.
 

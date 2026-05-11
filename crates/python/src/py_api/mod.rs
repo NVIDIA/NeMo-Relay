@@ -25,6 +25,7 @@ use nemo_flow::api::scope::ScopeAttributes;
 use nemo_flow::api::subscriber as core_subscriber_api;
 use nemo_flow::api::tool as core_tool_api;
 use nemo_flow::api::tool::ToolAttributes;
+use nemo_flow::codec::response::AnnotatedLlmResponse;
 use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_flow::error::{FlowError, Result as FlowResult};
 use pyo3::prelude::*;
@@ -34,9 +35,9 @@ use uuid::Uuid;
 use crate::convert::{json_to_py, opt_py_to_json, opt_py_to_timestamp, py_to_json};
 use crate::py_callable;
 use crate::py_types::{
-    PyAnthropicMessagesCodec, PyLLMAttributes, PyLLMHandle, PyLLMRequest, PyLlmStream,
-    PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyScopeAttributes, PyScopeHandle, PyScopeStack,
-    PyScopeType, PyToolAttributes, PyToolHandle,
+    PyAnnotatedLLMResponse, PyAnthropicMessagesCodec, PyLLMAttributes, PyLLMHandle, PyLLMRequest,
+    PyLlmStream, PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyScopeAttributes, PyScopeHandle,
+    PyScopeStack, PyScopeType, PyToolAttributes, PyToolHandle,
 };
 
 pub(crate) type RustJsonStream =
@@ -45,6 +46,55 @@ pub(crate) type RustJsonStream =
 /// Convert an [`FlowError`] into a Python `RuntimeError`.
 fn to_py_err(e: FlowError) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+}
+
+fn py_llm_response_codec(
+    response_codec: Option<&Bound<'_, PyAny>>,
+) -> Option<Arc<dyn LlmResponseCodec>> {
+    response_codec.and_then(|c| -> Option<Arc<dyn LlmResponseCodec>> {
+        if c.is_none() {
+            return None;
+        }
+        // Try to extract as a built-in codec first (avoids Python method dispatch overhead)
+        if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIChatCodec>>() {
+            return Some(builtin.inner_response_codec.clone());
+        }
+        if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIResponsesCodec>>() {
+            return Some(builtin.inner_response_codec.clone());
+        }
+        if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
+            return Some(builtin.inner_response_codec.clone());
+        }
+        // Fall back to wrapping the Python object as a custom response codec
+        Some(Arc::new(py_callable::PyLlmResponseCodecWrapper {
+            py_codec: c.clone().unbind(),
+        }))
+    })
+}
+
+fn py_annotated_llm_response(
+    annotated_response: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<Arc<AnnotatedLlmResponse>>> {
+    let Some(annotated_response) = annotated_response else {
+        return Ok(None);
+    };
+    if annotated_response.is_none() {
+        return Ok(None);
+    }
+
+    if let Ok(response) = annotated_response.cast::<PyAnnotatedLLMResponse>() {
+        let response = response.borrow();
+        return Ok(Some(Arc::new(response.inner.clone())));
+    }
+
+    let value = py_to_json(annotated_response)?;
+    serde_json::from_value::<AnnotatedLlmResponse>(value)
+        .map(|response| Some(Arc::new(response)))
+        .map_err(|error| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "invalid annotated_response: {error}"
+            ))
+        })
 }
 
 pub(crate) async fn forward_stream_to_channel(
@@ -558,6 +608,10 @@ fn llm_call(
 ///         sanitize-response guardrails unless it sanitizes to JSON null.
 ///     data: Optional JSON-serializable payload used when the sanitized response is JSON null.
 ///     metadata: Optional JSON-serializable metadata recorded on the end event.
+///     annotated_response: Optional normalized response annotation, either as an
+///         ``AnnotatedLLMResponse`` instance or a JSON object matching that schema.
+///     response_codec: Optional response codec used to decode ``response`` into
+///         an annotated response for observability when ``annotated_response`` is omitted.
 ///     timestamp: Optional timezone-aware ``datetime.datetime`` for the emitted end event.
 ///         When omitted, the runtime default end timestamp is used.
 ///
@@ -571,18 +625,24 @@ fn llm_call(
 	    *,
 	    data: "object | None"=None,
 	    metadata: "object | None"=None,
+	    annotated_response: "AnnotatedLLMResponse | object | None"=None,
+	    response_codec: "object | None"=None,
 	    timestamp: "datetime.datetime | None"=None
-) -> "None", text_signature = "(handle: LlmHandle, response: object, *, data: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
+) -> "None", text_signature = "(handle: LlmHandle, response: object, *, data: object | None = None, metadata: object | None = None, annotated_response: AnnotatedLLMResponse | object | None = None, response_codec: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
 fn llm_call_end(
     handle: &PyLLMHandle,
     response: &Bound<'_, PyAny>,
     data: Option<&Bound<'_, PyAny>>,
     metadata: Option<&Bound<'_, PyAny>>,
+    annotated_response: Option<&Bound<'_, PyAny>>,
+    response_codec: Option<&Bound<'_, PyAny>>,
     timestamp: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<()> {
     let response_json = py_to_json(response)?;
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
+    let response_codec = py_llm_response_codec(response_codec);
+    let annotated_response = py_annotated_llm_response(annotated_response)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
     core_llm_api::llm_call_end(
         core_llm_api::LlmCallEndParams::builder()
@@ -590,6 +650,8 @@ fn llm_call_end(
             .response(response_json)
             .data_opt(data)
             .metadata_opt(metadata)
+            .annotated_response_opt(annotated_response)
+            .response_codec_opt(response_codec)
             .timestamp_opt(timestamp)
             .build(),
     )
@@ -663,23 +725,7 @@ fn llm_call_execute<'py>(
             py_codec: c.clone().unbind(),
         }) as Arc<dyn LlmCodec>
     });
-    let response_codec_arc: Option<Arc<dyn LlmResponseCodec>> =
-        response_codec.map(|c| -> Arc<dyn LlmResponseCodec> {
-            // Try to extract as a built-in codec first (avoids Python method dispatch overhead)
-            if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIChatCodec>>() {
-                return builtin.inner_response_codec.clone();
-            }
-            if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIResponsesCodec>>() {
-                return builtin.inner_response_codec.clone();
-            }
-            if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
-                return builtin.inner_response_codec.clone();
-            }
-            // Fall back to wrapping the Python object as a custom response codec
-            Arc::new(py_callable::PyLlmResponseCodecWrapper {
-                py_codec: c.clone().unbind(),
-            })
-        });
+    let response_codec_arc = py_llm_response_codec(response_codec);
 
     let scope_stack = current_scope_stack_handle();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -780,21 +826,7 @@ fn llm_stream_call_execute<'py>(
             py_codec: c.clone().unbind(),
         }) as Arc<dyn LlmCodec>
     });
-    let response_codec_arc: Option<Arc<dyn LlmResponseCodec>> =
-        response_codec.map(|c| -> Arc<dyn LlmResponseCodec> {
-            if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIChatCodec>>() {
-                return builtin.inner_response_codec.clone();
-            }
-            if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOpenAIResponsesCodec>>() {
-                return builtin.inner_response_codec.clone();
-            }
-            if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
-                return builtin.inner_response_codec.clone();
-            }
-            Arc::new(py_callable::PyLlmResponseCodecWrapper {
-                py_codec: c.clone().unbind(),
-            })
-        });
+    let response_codec_arc = py_llm_response_codec(response_codec);
 
     let scope_stack = current_scope_stack_handle();
     pyo3_async_runtimes::tokio::future_into_py(py, async move {

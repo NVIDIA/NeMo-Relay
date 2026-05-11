@@ -756,3 +756,258 @@ fn test_encode_tool_choice_specific_to_anthropic() {
         Some(&json!({"type": "tool", "name": "my_func"}))
     );
 }
+
+// ===================================================================
+// Streaming codec tests
+// ===================================================================
+
+use super::super::streaming::StreamingCodec;
+
+#[test]
+fn anthropic_streaming_codec_assembles_text_response() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_01ABC",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5-20251001",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {"input_tokens": 100, "output_tokens": 0}
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "text", "text": ""}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hello, "}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "world."}
+    }))
+    .unwrap();
+    collector(json!({"type": "content_block_stop", "index": 0})).unwrap();
+    collector(json!({
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+        "usage": {"input_tokens": 100, "output_tokens": 5}
+    }))
+    .unwrap();
+    collector(json!({"type": "message_stop"})).unwrap();
+
+    let assembled = finalizer();
+    // Wire-compatible with RawAnthropicResponse — feed it back through the existing decoder.
+    let annotated = AnthropicMessagesCodec
+        .decode_response(&assembled)
+        .expect("assembled response should decode");
+    assert_eq!(annotated.id.as_deref(), Some("msg_01ABC"));
+    assert_eq!(
+        annotated.model.as_deref(),
+        Some("claude-haiku-4-5-20251001")
+    );
+    assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
+    assert_eq!(
+        annotated.message,
+        Some(MessageContent::Text("Hello, world.".to_string()))
+    );
+    let usage = annotated.usage.as_ref().unwrap();
+    assert_eq!(usage.prompt_tokens, Some(100));
+    assert_eq!(usage.completion_tokens, Some(5));
+}
+
+#[test]
+fn anthropic_streaming_codec_assembles_tool_use_input_from_partial_json() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_tool",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5-20251001",
+            "content": [],
+            "usage": {"input_tokens": 50, "output_tokens": 0}
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+            "type": "tool_use",
+            "id": "toolu_01",
+            "name": "lookup",
+            "input": {}
+        }
+    }))
+    .unwrap();
+    for fragment in &["{\"q", "uery\":", " \"weath", "er\"}"] {
+        collector(json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": fragment}
+        }))
+        .unwrap();
+    }
+    collector(json!({"type": "content_block_stop", "index": 0})).unwrap();
+    collector(json!({
+        "type": "message_delta",
+        "delta": {"stop_reason": "tool_use"},
+        "usage": {"input_tokens": 50, "output_tokens": 12}
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    let annotated = AnthropicMessagesCodec
+        .decode_response(&assembled)
+        .expect("assembled response should decode");
+    assert_eq!(annotated.finish_reason, Some(FinishReason::ToolUse));
+    let tool_calls = annotated.tool_calls.expect("tool_calls present");
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].id, "toolu_01");
+    assert_eq!(tool_calls[0].name, "lookup");
+    assert_eq!(tool_calls[0].arguments, json!({"query": "weather"}));
+}
+
+#[test]
+fn anthropic_streaming_codec_preserves_unknown_block_types() {
+    // Server-side tool blocks (web_search_tool_result) ship full content at content_block_start
+    // and have no deltas; the codec must preserve them in the assembled content array.
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_ws",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5-20251001",
+            "usage": {"input_tokens": 1, "output_tokens": 0}
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_42",
+            "content": [
+                {"type": "web_search_result", "title": "First", "url": "https://a"},
+                {"type": "web_search_result", "title": "Second", "url": "https://b"}
+            ]
+        }
+    }))
+    .unwrap();
+    collector(json!({"type": "content_block_stop", "index": 0})).unwrap();
+
+    let assembled = finalizer();
+    let block = &assembled["content"][0];
+    assert_eq!(block["type"], json!("web_search_tool_result"));
+    assert_eq!(block["tool_use_id"], json!("srvtoolu_42"));
+    assert_eq!(block["content"][0]["title"], json!("First"));
+    assert_eq!(block["content"][1]["url"], json!("https://b"));
+}
+
+#[test]
+fn anthropic_streaming_codec_attaches_citations_to_text_blocks() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_c", "type": "message", "role": "assistant",
+            "model": "claude-haiku-4-5-20251001", "usage": {}
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "text", "text": ""}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "citations_delta", "citation": {
+            "type": "web_search_result_location",
+            "cited_text": "Hello",
+            "url": "https://example.com",
+            "title": "Source"
+        }}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hello"}
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    let block = &assembled["content"][0];
+    assert_eq!(block["text"], json!("Hello"));
+    let citations = block["citations"].as_array().expect("citations array");
+    assert_eq!(citations.len(), 1);
+    assert_eq!(citations[0]["url"], json!("https://example.com"));
+}
+
+#[test]
+fn anthropic_streaming_codec_keeps_partial_json_when_unparseable() {
+    // Truncated stream: input_json_delta fragments don't form valid JSON. Codec must not drop
+    // the tool_use block; surface the raw concatenation as a string fallback so observability
+    // captures partial intent.
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_p", "type": "message", "role": "assistant",
+            "model": "claude-haiku-4-5-20251001", "usage": {}
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "tool_use", "id": "toolu_p", "name": "go", "input": {}}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "input_json_delta", "partial_json": "{\"q\": \"trun"}
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    let block = &assembled["content"][0];
+    assert_eq!(block["type"], json!("tool_use"));
+    assert_eq!(block["id"], json!("toolu_p"));
+    assert_eq!(block["input"], json!("{\"q\": \"trun"));
+}

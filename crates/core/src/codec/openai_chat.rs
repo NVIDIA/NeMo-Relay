@@ -368,6 +368,277 @@ fn overlay_generation_params(
 }
 
 // ---------------------------------------------------------------------------
+// Streaming codec
+// ---------------------------------------------------------------------------
+
+/// Streaming counterpart to [`OpenAIChatCodec`].
+///
+/// Replays the OpenAI Chat Completions SSE chunk sequence into the same JSON shape returned for a
+/// non-streaming request (`{id, object, created, model, choices: [{message, finish_reason}],
+/// usage}`). Once finalized, the assembled JSON can be fed back through
+/// [`OpenAIChatCodec::decode_response`] to produce the canonical
+/// [`AnnotatedLlmResponse`](crate::codec::response::AnnotatedLlmResponse).
+///
+/// # Strategy
+///
+/// Chat Completions streams untyped SSE chunks of `{choices: [{index, delta: {...},
+/// finish_reason: ...}]}`. Each delta may carry a `role` (typically only on the first chunk),
+/// incremental `content` text, or partial `tool_calls` whose `function.arguments` stream as a
+/// JSON-encoded string fragment-by-fragment. Top-level fields (`id`, `model`, `created`) are
+/// repeated on every chunk; we capture them once. Final-chunk `usage` is preserved when emitted
+/// (only sent when `stream_options.include_usage` is set on the request).
+///
+/// The OpenAI `[DONE]` end-of-stream sentinel is dropped by the SSE event decoder before
+/// reaching the collector, so this codec never sees it.
+///
+/// Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer
+/// closures share access. Each instance is single-use because [`LlmFinalizerFn`] consumes the
+/// finalize step.
+///
+/// [`LlmFinalizerFn`]: crate::api::runtime::LlmFinalizerFn
+pub struct OpenAIChatStreamingCodec {
+    state: std::sync::Arc<std::sync::Mutex<OpenAIChatStreamingState>>,
+}
+
+impl OpenAIChatStreamingCodec {
+    /// Creates a fresh streaming codec with empty accumulator state.
+    pub fn new() -> Self {
+        Self {
+            state: std::sync::Arc::new(std::sync::Mutex::new(OpenAIChatStreamingState::default())),
+        }
+    }
+}
+
+impl Default for OpenAIChatStreamingCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl super::streaming::StreamingCodec for OpenAIChatStreamingCodec {
+    fn collector(&self) -> crate::api::runtime::LlmCollectorFn {
+        let state = std::sync::Arc::clone(&self.state);
+        Box::new(move |event: Json| -> Result<()> {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.observe(&event);
+            Ok(())
+        })
+    }
+
+    fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
+        let state = std::sync::Arc::clone(&self.state);
+        Box::new(move || -> Json {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            std::mem::take(&mut *guard).finalize()
+        })
+    }
+}
+
+#[derive(Debug, Default)]
+struct OpenAIChatStreamingState {
+    id: Option<String>,
+    object: Option<String>,
+    created: Option<u64>,
+    model: Option<String>,
+    /// Per-choice accumulator keyed by `choice.index`. BTreeMap so finalize emits choices in
+    /// stable order.
+    choices: std::collections::BTreeMap<u64, ChoiceState>,
+    /// Top-level usage from the final chunk (when `stream_options.include_usage` is set).
+    usage: Option<Json>,
+}
+
+#[derive(Debug, Default)]
+struct ChoiceState {
+    role: Option<String>,
+    content: String,
+    has_content: bool,
+    /// Tool calls keyed by their `index` within the choice. Each tool call's `arguments` is
+    /// streamed as a JSON-encoded string accumulated fragment-by-fragment.
+    tool_calls: std::collections::BTreeMap<u64, ToolCallState>,
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct ToolCallState {
+    id: Option<String>,
+    type_: Option<String>,
+    name: Option<String>,
+    arguments: String,
+}
+
+impl OpenAIChatStreamingState {
+    fn observe(&mut self, chunk: &Json) {
+        // Top-level fields (id, object, created, model) are repeated on every chunk; capture once
+        // each so unrelated later chunks can't overwrite the canonical values.
+        if self.id.is_none()
+            && let Some(id) = chunk.get("id").and_then(Json::as_str)
+        {
+            self.id = Some(id.to_string());
+        }
+        if self.object.is_none()
+            && let Some(obj) = chunk.get("object").and_then(Json::as_str)
+        {
+            self.object = Some(obj.to_string());
+        }
+        if self.created.is_none()
+            && let Some(c) = chunk.get("created").and_then(Json::as_u64)
+        {
+            self.created = Some(c);
+        }
+        if self.model.is_none()
+            && let Some(m) = chunk.get("model").and_then(Json::as_str)
+        {
+            self.model = Some(m.to_string());
+        }
+        if let Some(usage) = chunk.get("usage") {
+            // Some streams emit `usage: null` on every chunk and the real usage only on the
+            // final chunk; only capture non-null usage objects.
+            if !usage.is_null() {
+                self.usage = Some(usage.clone());
+            }
+        }
+        let Some(choices) = chunk.get("choices").and_then(Json::as_array) else {
+            return;
+        };
+        for choice in choices {
+            self.observe_choice(choice);
+        }
+    }
+
+    fn observe_choice(&mut self, choice: &Json) {
+        let index = choice.get("index").and_then(Json::as_u64).unwrap_or(0);
+        let entry = self.choices.entry(index).or_default();
+        if let Some(reason) = choice.get("finish_reason").and_then(Json::as_str) {
+            entry.finish_reason = Some(reason.to_string());
+        }
+        let Some(delta) = choice.get("delta") else {
+            return;
+        };
+        if let Some(role) = delta.get("role").and_then(Json::as_str) {
+            entry.role = Some(role.to_string());
+        }
+        if let Some(content) = delta.get("content").and_then(Json::as_str) {
+            entry.content.push_str(content);
+            entry.has_content = true;
+        }
+        if let Some(tool_calls) = delta.get("tool_calls").and_then(Json::as_array) {
+            for tc in tool_calls {
+                let tc_index = tc.get("index").and_then(Json::as_u64).unwrap_or(0);
+                let tc_state = entry.tool_calls.entry(tc_index).or_default();
+                if let Some(id) = tc.get("id").and_then(Json::as_str) {
+                    tc_state.id = Some(id.to_string());
+                }
+                if let Some(t) = tc.get("type").and_then(Json::as_str) {
+                    tc_state.type_ = Some(t.to_string());
+                }
+                if let Some(function) = tc.get("function") {
+                    if let Some(name) = function.get("name").and_then(Json::as_str) {
+                        tc_state.name = Some(name.to_string());
+                    }
+                    if let Some(args) = function.get("arguments").and_then(Json::as_str) {
+                        tc_state.arguments.push_str(args);
+                    }
+                }
+            }
+        }
+    }
+
+    fn finalize(self) -> Json {
+        let mut output = serde_json::Map::new();
+        if let Some(id) = self.id {
+            output.insert("id".to_string(), Json::String(id));
+        }
+        // After streaming, the final shape is `chat.completion`, not `chat.completion.chunk`.
+        // Strip the `.chunk` suffix so the assembled JSON round-trips through
+        // OpenAIChatCodec::decode_response with the same `object` field a non-streaming response
+        // would carry.
+        if let Some(object) = self.object {
+            let normalized = object
+                .strip_suffix(".chunk")
+                .map(str::to_string)
+                .unwrap_or(object);
+            output.insert("object".to_string(), Json::String(normalized));
+        }
+        if let Some(created) = self.created {
+            output.insert("created".to_string(), Json::Number(created.into()));
+        }
+        if let Some(model) = self.model {
+            output.insert("model".to_string(), Json::String(model));
+        }
+        let choices: Vec<Json> = self
+            .choices
+            .into_iter()
+            .map(|(index, choice)| choice.finalize(index))
+            .collect();
+        output.insert("choices".to_string(), Json::Array(choices));
+        if let Some(usage) = self.usage {
+            output.insert("usage".to_string(), usage);
+        }
+        Json::Object(output)
+    }
+}
+
+impl ChoiceState {
+    fn finalize(self, index: u64) -> Json {
+        let mut message = serde_json::Map::new();
+        message.insert(
+            "role".to_string(),
+            Json::String(self.role.unwrap_or_else(|| "assistant".to_string())),
+        );
+        // OpenAI's wire format uses `content: null` when the model only emitted tool calls.
+        // Preserve that distinction: empty-string content when the model said something, null
+        // when it didn't.
+        if self.has_content {
+            message.insert("content".to_string(), Json::String(self.content));
+        } else {
+            message.insert("content".to_string(), Json::Null);
+        }
+        if !self.tool_calls.is_empty() {
+            let tool_calls: Vec<Json> = self
+                .tool_calls
+                .into_values()
+                .map(ToolCallState::finalize)
+                .collect();
+            message.insert("tool_calls".to_string(), Json::Array(tool_calls));
+        }
+        let mut choice = serde_json::Map::new();
+        choice.insert("index".to_string(), Json::Number(index.into()));
+        choice.insert("message".to_string(), Json::Object(message));
+        if let Some(reason) = self.finish_reason {
+            choice.insert("finish_reason".to_string(), Json::String(reason));
+        } else {
+            choice.insert("finish_reason".to_string(), Json::Null);
+        }
+        Json::Object(choice)
+    }
+}
+
+impl ToolCallState {
+    fn finalize(self) -> Json {
+        let mut function = serde_json::Map::new();
+        function.insert(
+            "name".to_string(),
+            Json::String(self.name.unwrap_or_default()),
+        );
+        function.insert("arguments".to_string(), Json::String(self.arguments));
+        let mut call = serde_json::Map::new();
+        if let Some(id) = self.id {
+            call.insert("id".to_string(), Json::String(id));
+        }
+        call.insert(
+            "type".to_string(),
+            Json::String(self.type_.unwrap_or_else(|| "function".to_string())),
+        );
+        call.insert("function".to_string(), Json::Object(function));
+        Json::Object(call)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

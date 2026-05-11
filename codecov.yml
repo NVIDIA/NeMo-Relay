@@ -54,6 +54,16 @@ component_management:
           threshold: 0.5%
           base: auto
           if_ci_failed: error
+    - component_id: sidecar_runtime
+      name: Sidecar Runtime
+      paths:
+        - "crates/sidecar/src"
+      statuses:
+        - type: project
+          target: 95%
+          threshold: 0.5%
+          base: auto
+          if_ci_failed: error
     - component_id: go_binding
       name: Go Binding
       paths:
@@ -112,6 +122,7 @@ ignore:
   - "**/examples/**"
   - "third_party/"
   - "**/tests/**"
+  - "crates/sidecar/tests/"
   - "**/tests-js/**"
   # The Node binding currently reports JS package coverage separately; exclude the
   # native Rust bridge until we have direct Rust-side coverage for this crate.

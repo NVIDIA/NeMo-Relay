@@ -129,6 +129,8 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
             Some(&py_dict(py, json!({"tokens": 10}))),
             Some(&py_dict(py, json!({"finish_reason": "stop"}))),
             None,
+            None,
+            None,
         )
         .unwrap();
 

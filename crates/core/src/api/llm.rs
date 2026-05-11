@@ -250,6 +250,9 @@ pub struct LlmCallEndParams<'a> {
     /// Optional normalized response annotation produced by a response codec.
     #[builder(default)]
     pub annotated_response: Option<Arc<AnnotatedLlmResponse>>,
+    /// Optional response codec used to produce an annotation from sanitized event data.
+    #[builder(default)]
+    pub response_codec: Option<Arc<dyn LlmResponseCodec>>,
     /// Optional timestamp recorded on the emitted end event. When omitted, the
     /// runtime records the current UTC time, or one microsecond after the
     /// handle start time if the current time is not later.
@@ -364,7 +367,10 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
 ///   JSON null, in which case this payload is used.
 /// - `metadata`: Optional JSON metadata recorded on the end event.
 /// - `annotated_response`: Optional normalized response annotation produced by
-///   a response codec.
+///   a response codec. When omitted and `response_codec` is supplied, the
+///   annotation is decoded from the sanitized end-event payload.
+/// - `response_codec`: Optional response codec used to produce a normalized
+///   response annotation from the sanitized end-event payload.
 /// - `timestamp`: Optional timestamp recorded on the emitted end event. When
 ///   `None`, the runtime uses the current UTC time, or one microsecond after
 ///   the handle start time if the current time is not later.
@@ -373,14 +379,24 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
 /// A [`Result`] that is `Ok(())` when the end event has been emitted.
 ///
 /// # Errors
-/// Returns an error when the runtime owner check fails or when internal state
-/// cannot be read safely.
+/// Returns an error when the runtime owner check fails, internal state cannot be
+/// read safely, or response codec decoding fails.
 ///
 /// # Notes
 /// Sanitize-response guardrails affect only the emitted end-event payload, not
 /// the caller-owned `response` value.
 pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
+    let LlmCallEndParams {
+        handle,
+        response,
+        data,
+        metadata,
+        annotated_response,
+        response_codec,
+        timestamp,
+    } = params;
     ensure_runtime_owner()?;
+    let mut decode_error = None;
     let (event, subscribers) = {
         let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
@@ -394,25 +410,42 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
 
-        let sanitized_response = state.llm_sanitize_response_chain(params.response, &scope_locals);
+        let sanitized_response = state.llm_sanitize_response_chain(response, &scope_locals);
         let data = if sanitized_response.is_null() {
-            params.data
+            data
         } else {
             Some(sanitized_response)
         };
+        let annotated_response = match annotated_response {
+            Some(annotated_response) => Some(annotated_response),
+            None => match (response_codec.as_ref(), data.as_ref()) {
+                (Some(codec), Some(response)) => match codec.decode_response(response) {
+                    Ok(decoded) => Some(Arc::new(decoded)),
+                    Err(error) => {
+                        decode_error = Some(error);
+                        None
+                    }
+                },
+                _ => None,
+            },
+        };
         let event = state.build_llm_end_event(
             EndLlmHandleParams::builder()
-                .handle(params.handle)
+                .handle(handle)
                 .data_opt(data)
-                .metadata_opt(params.metadata)
-                .annotated_response_opt(params.annotated_response)
-                .timestamp_opt(params.timestamp)
+                .metadata_opt(metadata)
+                .annotated_response_opt(annotated_response)
+                .timestamp_opt(timestamp)
                 .build(),
         );
         (event, subscribers)
     };
     NemoFlowContextState::emit_event(&event, &subscribers);
-    Ok(())
+    if let Some(error) = decode_error {
+        Err(error)
+    } else {
+        Ok(())
+    }
 }
 
 fn emit_llm_end_without_output(handle: &LlmHandle, metadata: Option<Json>) -> Result<()> {
