@@ -112,7 +112,7 @@ def payload_to_model_request(
     overrides: dict[str, Any] = {}
 
     raw_messages = payload.get("messages")
-    if isinstance(raw_messages, list):
+    if isinstance(raw_messages, list) and len(raw_messages) > 0:
         try:
             system_message, messages = split_system_message(messages_from_dict(raw_messages))
             overrides["system_message"] = system_message
