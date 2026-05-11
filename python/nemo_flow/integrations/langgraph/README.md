@@ -9,6 +9,8 @@ This directory contains the `nemo_flow.integrations.langgraph` package, which pr
 
 The integration builds on `nemo_flow.integrations.langchain`: `NemoFlowCallbackHandler` inherits the LangChain callback handler, and `NemoFlowMiddleware` is re-exported for LangChain agents used inside LangGraph workflows.
 
+For an alternate approach refer to [the patch-based integration in `third_party/langchain`](../../../../third_party/README-langgraph.md).
+
 ## Setup
 
 ```bash
@@ -69,12 +71,6 @@ agent = create_agent(
 def agent_node(state: dict, config: RunnableConfig) -> dict:
     return agent.invoke({"messages": state["messages"]}, config=config)
 ```
-
-## Public API Coverage
-
-The public callback path records LangGraph graph and node runnable scopes through LangChain callbacks. LangGraph resume and interrupt lifecycle callbacks are emitted as NeMo Flow marks when LangGraph exposes those events through its public callback API.
-
-The patch-based integration in `patches/langgraph/0001-add-nemo-flow-integration.patch` can observe lower-level scheduler details such as internal supersteps, edge writes, and per-branch scope-stack isolation. Those details are not exposed by LangGraph's public callback API, so this package intentionally does not rely on them.
 
 ## Validation
 
