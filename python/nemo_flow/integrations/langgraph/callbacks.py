@@ -41,7 +41,8 @@ def _interrupt_to_payload(interrupt: Any) -> dict[str, nemo_flow.Json]:
 
 
 class NemoFlowCallbackHandler(LangChainNemoFlowCallbackHandler, GraphCallbackHandler):
-    """Bridge LangGraph runs to NeMo Flow using public callback APIs.
+    """
+    Bridge LangChain and LangGraph runs to NeMo Flow using public callback APIs.
 
     This handler inherits the existing LangChain callback integration, so normal
     runnable scopes from LangGraph and LangChain are recorded by the same code
