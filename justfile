@@ -635,7 +635,7 @@ build-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_FLOW_REPO_ROOT"
-    uv sync --inexact --no-install-project --no-install-package nemo-flow
+    uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain
     activate_project_venv
     if is_true "{{ ci }}"; then
         prepare_llvm_cov_workspace
