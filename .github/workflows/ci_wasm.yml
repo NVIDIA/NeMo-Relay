@@ -81,6 +81,9 @@ jobs:
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
+      # Work-around issue where the GitHub Repo for wasm-pack was moved breaking taiki-e/install-action from
+      # Installing wasm-pack. Once a new version of the action is released with the fix, re-enable this and remove the
+      # cargo install command for wasm-pack.
       # - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
       #   with:
       #     tool: wasm-pack@${{ steps.ci-config.outputs.wasm_pack_version }}
@@ -135,9 +138,14 @@ jobs:
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
-      - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
-        with:
-          tool: just@${{ steps.ci-config.outputs.just_version }},wasm-pack@${{ steps.ci-config.outputs.wasm_pack_version }}
+      # - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+      #   with:
+      #     tool: just@${{ steps.ci-config.outputs.just_version }}
+
+      - name: Install wasm-pack
+        run: |
+          set -e
+          cargo install wasm-pack --version "${{ steps.ci-config.outputs.wasm_pack_version }}" --locked
 
       - name: Create packaging output directory
         run: |
