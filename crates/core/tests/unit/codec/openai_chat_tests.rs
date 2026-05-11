@@ -809,3 +809,226 @@ fn test_encode_does_not_inject_stream_options_on_non_streaming() {
         "stream_options must not be injected when stream: false",
     );
 }
+
+// ===================================================================
+// Streaming codec tests
+// ===================================================================
+
+use super::super::streaming::StreamingCodec;
+
+#[test]
+fn openai_chat_streaming_codec_assembles_text_response() {
+    let codec = OpenAIChatStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    // First chunk: top-level fields + role-only delta.
+    collector(json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1_700_000_000,
+        "model": "gpt-4o",
+        "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": null}]
+    }))
+    .unwrap();
+    // Content deltas.
+    for part in &["Hello, ", "world", "."] {
+        collector(json!({
+            "id": "chatcmpl-1", "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {"content": part}, "finish_reason": null}]
+        }))
+        .unwrap();
+    }
+    // Final chunk with finish_reason and usage (when stream_options.include_usage was set).
+    collector(json!({
+        "id": "chatcmpl-1", "object": "chat.completion.chunk",
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    // Verify the assembled object is wire-compatible with non-streaming Chat Completions and
+    // round-trips through the existing decoder.
+    assert_eq!(assembled["object"], json!("chat.completion"));
+    let annotated = OpenAIChatCodec
+        .decode_response(&assembled)
+        .expect("assembled response should decode");
+    assert_eq!(annotated.id.as_deref(), Some("chatcmpl-1"));
+    assert_eq!(annotated.model.as_deref(), Some("gpt-4o"));
+    assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
+    assert_eq!(
+        annotated.message,
+        Some(MessageContent::Text("Hello, world.".to_string()))
+    );
+    let usage = annotated.usage.as_ref().unwrap();
+    assert_eq!(usage.prompt_tokens, Some(10));
+    assert_eq!(usage.completion_tokens, Some(4));
+    assert_eq!(usage.total_tokens, Some(14));
+}
+
+#[test]
+fn openai_chat_streaming_codec_assembles_tool_call_arguments_from_fragments() {
+    let codec = OpenAIChatStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    // Initial chunk: role + tool_call header (id, type, function.name).
+    collector(json!({
+        "id": "chatcmpl-tc", "object": "chat.completion.chunk", "model": "gpt-4o",
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "index": 0,
+                    "id": "call_a",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": ""}
+                }]
+            },
+            "finish_reason": null
+        }]
+    }))
+    .unwrap();
+    // Argument fragments arrive over multiple chunks.
+    for fragment in &["{\"q", "uery\":", " \"weath", "er\"}"] {
+        collector(json!({
+            "id": "chatcmpl-tc", "object": "chat.completion.chunk",
+            "choices": [{
+                "index": 0,
+                "delta": {"tool_calls": [{
+                    "index": 0,
+                    "function": {"arguments": fragment}
+                }]},
+                "finish_reason": null
+            }]
+        }))
+        .unwrap();
+    }
+    collector(json!({
+        "id": "chatcmpl-tc", "object": "chat.completion.chunk",
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    let annotated = OpenAIChatCodec
+        .decode_response(&assembled)
+        .expect("assembled response should decode");
+    assert_eq!(annotated.finish_reason, Some(FinishReason::ToolUse));
+    let tool_calls = annotated.tool_calls.expect("tool_calls present");
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].id, "call_a");
+    assert_eq!(tool_calls[0].name, "lookup");
+    assert_eq!(tool_calls[0].arguments, json!({"query": "weather"}));
+}
+
+#[test]
+fn openai_chat_streaming_codec_emits_null_content_when_only_tool_calls_streamed() {
+    // OpenAI's non-streaming wire format uses `content: null` when the assistant only emitted
+    // tool calls. The streaming codec must preserve that distinction so downstream consumers
+    // (or anyone manually inspecting the assembled JSON) match what a non-streaming response
+    // would have shown.
+    let codec = OpenAIChatStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "id": "chatcmpl-nc", "object": "chat.completion.chunk", "model": "gpt-4o",
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "index": 0, "id": "call_x", "type": "function",
+                    "function": {"name": "go", "arguments": "{}"}
+                }]
+            },
+            "finish_reason": null
+        }]
+    }))
+    .unwrap();
+    collector(json!({
+        "id": "chatcmpl-nc", "object": "chat.completion.chunk",
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    let message = &assembled["choices"][0]["message"];
+    assert_eq!(message["content"], json!(null));
+    assert!(message["tool_calls"].is_array());
+}
+
+#[test]
+fn openai_chat_streaming_codec_handles_multiple_choices() {
+    // OpenAI Chat Completions supports `n > 1` requesting multiple completions; each gets its
+    // own choice index. Streaming codec must keep them separate.
+    let codec = OpenAIChatStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "id": "chatcmpl-multi", "object": "chat.completion.chunk", "model": "gpt-4o",
+        "choices": [
+            {"index": 0, "delta": {"role": "assistant"}, "finish_reason": null},
+            {"index": 1, "delta": {"role": "assistant"}, "finish_reason": null}
+        ]
+    }))
+    .unwrap();
+    collector(json!({
+        "id": "chatcmpl-multi", "object": "chat.completion.chunk",
+        "choices": [
+            {"index": 0, "delta": {"content": "First"}, "finish_reason": null},
+            {"index": 1, "delta": {"content": "Second"}, "finish_reason": null}
+        ]
+    }))
+    .unwrap();
+    collector(json!({
+        "id": "chatcmpl-multi", "object": "chat.completion.chunk",
+        "choices": [
+            {"index": 0, "delta": {}, "finish_reason": "stop"},
+            {"index": 1, "delta": {}, "finish_reason": "stop"}
+        ]
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    let choices = assembled["choices"].as_array().expect("choices array");
+    assert_eq!(choices.len(), 2);
+    assert_eq!(choices[0]["index"], json!(0));
+    assert_eq!(choices[0]["message"]["content"], json!("First"));
+    assert_eq!(choices[1]["index"], json!(1));
+    assert_eq!(choices[1]["message"]["content"], json!("Second"));
+}
+
+#[test]
+fn openai_chat_streaming_codec_skips_null_usage_chunks() {
+    // Some streams emit `usage: null` on every chunk and the real usage only on the final chunk.
+    // Codec must not let intermediate nulls overwrite a captured usage object.
+    let codec = OpenAIChatStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "id": "chatcmpl-u", "object": "chat.completion.chunk", "model": "gpt-4o", "usage": null,
+        "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": null}]
+    }))
+    .unwrap();
+    collector(json!({
+        "id": "chatcmpl-u", "object": "chat.completion.chunk", "usage": null,
+        "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": null}]
+    }))
+    .unwrap();
+    collector(json!({
+        "id": "chatcmpl-u", "object": "chat.completion.chunk",
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    assert_eq!(assembled["usage"]["prompt_tokens"], json!(1));
+    assert_eq!(assembled["usage"]["total_tokens"], json!(2));
+}

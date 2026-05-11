@@ -10,6 +10,7 @@ from typing import TypedDict, cast
 from uuid import uuid4
 
 import pytest
+
 from nemo_flow import (
     AtifExporter,
     JsonObject,

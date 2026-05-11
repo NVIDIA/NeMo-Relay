@@ -17,7 +17,6 @@ import contextvars
 import threading
 from typing import Any
 
-import nemo_flow
 import pytest
 from langgraph._nemo_flow import (  # type: ignore[import-untyped]
     _graph_scope_info,
@@ -31,6 +30,8 @@ from langgraph._nemo_flow import (  # type: ignore[import-untyped]
     push_node_scope,
     push_subgraph_scope,
 )
+
+import nemo_flow
 from nemo_flow import ScopeEvent, create_scope_stack, set_thread_scope_stack
 
 

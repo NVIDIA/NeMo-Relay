@@ -1,0 +1,31 @@
+{
+  "name": "nemo-flow-codex-observability",
+  "version": "0.1.0",
+  "description": "Codex hooks that forward canonical lifecycle payloads to nemo-flow-sidecar.",
+  "author": {
+    "name": "NVIDIA Corporation and Affiliates",
+    "url": "https://github.com/NVIDIA/NeMo-Flow"
+  },
+  "homepage": "https://github.com/NVIDIA/NeMo-Flow",
+  "repository": "https://github.com/NVIDIA/NeMo-Flow",
+  "license": "Apache-2.0",
+  "keywords": [
+    "nemo-flow",
+    "codex",
+    "hooks",
+    "observability"
+  ],
+  "hooks": "../hooks/hooks.json",
+  "interface": {
+    "displayName": "NeMo Flow Codex Observability",
+    "shortDescription": "Forward Codex lifecycle hooks to a local NeMo Flow sidecar.",
+    "longDescription": "Installs command hooks that preserve Codex hook payloads and forward them to nemo-flow-sidecar for agent, subagent, tool, and lifecycle observability. Full LLM capture also requires sidecar provider routing.",
+    "developerName": "NVIDIA",
+    "category": "Coding",
+    "capabilities": [
+      "Read"
+    ],
+    "websiteURL": "https://github.com/NVIDIA/NeMo-Flow",
+    "brandColor": "#76B900"
+  }
+}

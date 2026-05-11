@@ -37,6 +37,7 @@ docs:
   - 'crates/node/*.js'
   - 'crates/**/*.md'
   - 'docs/**'
+  - 'integrations/coding-agents/**'
   - 'python/nemo_flow/**'
   - 'scripts/build-docs.sh'
   - 'scripts/docs/**'
@@ -47,6 +48,7 @@ rust:
   - 'crates/**/Cargo.toml'
   - 'crates/**/*.rs'
   - 'crates/ffi/cbindgen.toml'
+  - 'integrations/coding-agents/**'
 
 go:
   - 'crates/ffi/Cargo.toml'

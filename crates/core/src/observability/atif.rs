@@ -233,6 +233,9 @@ pub struct AtifStepExtra {
     /// Step-level invocation timing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invocation: Option<AtifInvocationInfo>,
+    /// Full unwrapped LLM request payload for request-level fidelity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub llm_request: Option<Json>,
     /// Per-tool callable lineage, aligned with `tool_calls`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_ancestry: Vec<AtifAncestry>,
@@ -427,13 +430,21 @@ const TOKEN_USAGE_KNOWN_KEYS: &[&str] = &[
 
 /// Try to extract `AtifMetrics` from a `token_usage` object in the LLM response.
 ///
-/// Populates `extra` with any unknown token_usage keys (e.g. reasoning_tokens).
-/// Returns `None` if the response has no `token_usage` or it is not an object.
+/// Supports NeMo Flow `token_usage` and provider-native `usage` payloads.
+/// Populates `extra` with any unknown usage keys (e.g. reasoning_tokens or total_tokens).
+/// Returns `None` if the response has no recognized token counts.
 fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
-    let usage = output.as_object()?.get("token_usage")?.as_object()?;
-    let prompt = usage.get("prompt_tokens").and_then(Json::as_u64);
-    let completion = usage.get("completion_tokens").and_then(Json::as_u64);
-    let cached = usage.get("cached_tokens").and_then(Json::as_u64);
+    let usage = token_usage_object(output)?;
+    let prompt = usage_u64(usage, &["prompt_tokens", "input_tokens"]);
+    let completion = usage_u64(usage, &["completion_tokens", "output_tokens"]);
+    let cached = usage_u64(usage, &["cached_tokens"])
+        .or_else(|| prompt_tokens_detail_u64(usage, "cached_tokens"))
+        .or_else(|| {
+            sum_usage_u64(
+                usage,
+                &["cache_read_input_tokens", "cache_creation_input_tokens"],
+            )
+        });
     let cost = usage.get("cost_usd").and_then(Json::as_f64);
     let prompt_ids = usage
         .get("prompt_token_ids")
@@ -471,6 +482,39 @@ fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
         logprobs,
         extra,
     })
+}
+
+fn token_usage_object(output: &Json) -> Option<&serde_json::Map<String, Json>> {
+    let output = output.as_object()?;
+    output
+        .get("token_usage")
+        .or_else(|| output.get("usage"))
+        .and_then(Json::as_object)
+}
+
+fn usage_u64(usage: &serde_json::Map<String, Json>, keys: &[&str]) -> Option<u64> {
+    keys.iter()
+        .find_map(|key| usage.get(*key).and_then(Json::as_u64))
+}
+
+fn sum_usage_u64(usage: &serde_json::Map<String, Json>, keys: &[&str]) -> Option<u64> {
+    let mut total = 0;
+    let mut found = false;
+    for key in keys {
+        if let Some(value) = usage.get(*key).and_then(Json::as_u64) {
+            total += value;
+            found = true;
+        }
+    }
+    found.then_some(total)
+}
+
+fn prompt_tokens_detail_u64(usage: &serde_json::Map<String, Json>, key: &str) -> Option<u64> {
+    usage
+        .get("prompt_tokens_details")
+        .and_then(Json::as_object)
+        .and_then(|details| details.get(key))
+        .and_then(Json::as_u64)
 }
 
 /// Extract `reasoning_effort` from an LLM request (string or number).
@@ -696,6 +740,7 @@ impl PendingAgentStep {
         let extra = AtifStepExtra {
             ancestry,
             invocation: self.invocation.take(),
+            llm_request: None,
             tool_ancestry: std::mem::take(&mut self.tool_ancestry),
             tool_invocations: if self.tool_invocations.is_empty() {
                 None
@@ -803,6 +848,7 @@ impl StepConversionState {
         let extra = AtifStepExtra {
             ancestry: build_ancestry(event, &lookups.name_map),
             invocation: None,
+            llm_request: Some(content.clone()),
             tool_ancestry: Vec::new(),
             tool_invocations: None,
         };

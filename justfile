@@ -335,7 +335,7 @@ section = ""
 output = []
 changed = []
 found_workspace_version = False
-local_dependencies = ("nemo-flow", "nemo-flow-adaptive", "nemo-flow-ffi")
+local_dependencies = ("nemo-flow", "nemo-flow-adaptive", "nemo-flow-ffi", "nemo-flow-cli")
 found_dependencies = set()
 
 for line in text.splitlines(keepends=True):
@@ -635,13 +635,14 @@ build-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_FLOW_REPO_ROOT"
-    uv sync --inexact --no-install-project --no-install-package nemo-flow
+    uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain
     activate_project_venv
     if is_true "{{ ci }}"; then
         prepare_llvm_cov_workspace
     fi
     python_executable="$(project_python_executable)"
     "$python_executable" -m maturin develop
+
 
 # --set [ci=true|false]
 build-go:
@@ -746,7 +747,7 @@ test-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     output_dir="{{ output_dir }}"
-    pytest_cmd=(pytest python/tests)
+    pytest_cmd=(pytest)
     coverage_out=""
     junit_out=""
     rust_coverage_out=""
@@ -763,7 +764,7 @@ test-python:
         fi
         cargo test -p nemo-flow-python --lib
     fi
-    uv sync --inexact --no-install-project --no-install-package nemo-flow
+    uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain
     activate_project_venv
     python_executable="$(project_python_executable)"
     use_project_python_source "$python_executable"
@@ -905,13 +906,31 @@ test-wasm:
     output_dir="{{ output_dir }}"
     coverage_out=""
     junit_out=""
+    rust_host="$(rustc -vV | sed -n 's/^host: //p')"
+    is_windows_arm64=false
+    case "${RUNNER_OS:-}:${RUNNER_ARCH:-}:$rust_host" in
+        Windows:ARM64:*|*:*:aarch64-pc-windows-msvc)
+            is_windows_arm64=true
+            ;;
+    esac
     cd "$NEMO_FLOW_REPO_ROOT"
     wasm-pack test --node crates/wasm
     npm install --workspace=nemo-flow-wasm --ignore-scripts
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact wasm-js.xml)"
         junit_out="$(prepare_artifact wasm-junit.xml)"
-        npm run coverage:pkg --workspace=nemo-flow-wasm
+        if [[ "$is_windows_arm64" == true ]]; then
+            echo "Skipping wasm-opt for the Windows Arm64 wasm-pack package build"
+            rm -rf crates/wasm/pkg
+            (
+                cd crates/wasm
+                wasm-pack build --no-opt --target nodejs --out-dir pkg
+            )
+            node crates/wasm/scripts/prepare_pkg.mjs
+            npm --workspace=nemo-flow-wasm --ignore-scripts run coverage:pkg
+        else
+            npm run coverage:pkg --workspace=nemo-flow-wasm
+        fi
         cp crates/wasm/coverage/cobertura-coverage.xml "$coverage_out"
         cp crates/wasm/junit.xml "$junit_out"
     else

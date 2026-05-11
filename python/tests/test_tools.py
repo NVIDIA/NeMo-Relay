@@ -6,6 +6,7 @@
 from typing import cast
 
 import pytest
+
 from nemo_flow import (
     ScopeEvent,
     ScopeType,

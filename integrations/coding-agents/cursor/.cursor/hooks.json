@@ -1,0 +1,176 @@
+{
+  "SPDX-License-Identifier": "Apache-2.0",
+  "hooks": {
+    "sessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "preToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "postToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "subagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "subagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "afterAgentThought": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "preCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "sessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-flow-sidecar hook-forward cursor",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
