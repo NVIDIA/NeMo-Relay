@@ -746,7 +746,7 @@ fn test_encode_tool_choice_anthropic_format() {
     let annotated = codec.decode(&original).unwrap();
     let encoded = codec.encode(&annotated, &original).unwrap();
     let obj = encoded.content.as_object().unwrap();
-    assert_eq!(obj.get("tool_choice"), Some(&json!({"type": "none"})));
+    assert_eq!(obj.get("tool_choice"), Some(&json!({"type": "auto"})));
 }
 
 #[test]
