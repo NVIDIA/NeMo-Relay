@@ -175,11 +175,12 @@ def model_response_from_json(payload: Any, codec: Any) -> ModelResponse[Any]:
         return decoded
     raise TypeError(f"NeMo Flow model execution returned {type(decoded)!r}, expected ModelResponse")
 
+
 def _prepare_outputs(outputs: dict[str, Any] | list[Any] | ToolMessage | BaseMessage) -> dict[str, Any] | list[Any]:
     """Prepare a NeMo Flow scope output dict for returning to LangChain."""
     if isinstance(outputs, dict):
         prepared_outputs = {}
-        for (key, value) in outputs.items():
+        for key, value in outputs.items():
             prepared_outputs[key] = _prepare_outputs(value)
     elif isinstance(outputs, list):
         prepared_outputs = []
@@ -202,6 +203,5 @@ def _prepare_outputs(outputs: dict[str, Any] | list[Any] | ToolMessage | BaseMes
         }
     else:
         prepared_outputs = outputs
-
 
     return prepared_outputs
