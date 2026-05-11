@@ -760,7 +760,7 @@ test-python:
         fi
         cargo test -p nemo-flow-python --lib
     fi
-    uv sync --inexact --no-install-project --no-install-package nemo-flow
+    uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain
     activate_project_venv
     python_executable="$(project_python_executable)"
     use_project_python_source "$python_executable"
