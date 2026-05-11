@@ -38,8 +38,6 @@ python/
 go/
   nemo_flow/  # Experimental Go CGo binding and tests
 docs/         # Sphinx documentation site
-integrations/ # Integrations using public APIs without patching
-integrations/**/tests/  # Integration test suites for public API-based integrations
 scripts/      # Stable wrappers and helper scripts; build/test/docs entry points live in justfile
 third_party/  # Pinned upstream checkouts for sample integration patches
 patches/      # NeMo Flow patch sets applied to third_party checkouts
@@ -230,7 +228,7 @@ Use the stable root-level wrappers:
 `apply-patches.sh` expects clean third-party checkouts. After editing an integration checkout, run `./scripts/generate-patches.sh` to regenerate patch files and verify they apply to a clean detached checkout.
 
 ### Public API-based Integrations
-Some integrations can be implemented using public APIs without patching. These implementations are maintained under `integrations/` with their own README files and test suites.
+Some integrations can be implemented using public APIs without patching. Currently the Python based integrations are located under `python/nemo_flow/integrations/` with their own README files and test suites.
 
 Current public API-based integrations include:
 - LangChain: `python/nemo_flow/integrations/langchain`
