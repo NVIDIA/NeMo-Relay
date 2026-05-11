@@ -18,12 +18,6 @@ uv sync --all-groups --all-extras
 just build-python
 ```
 
-Optionally install the langchain-nvidia-ai-endpoints package.
-
-```bash
-uv pip install langchain-nvidia-ai-endpoints
-```
-
 ## Usage Example
 
 ```python
