@@ -9,7 +9,6 @@ import asyncio
 from typing import Any
 from uuid import uuid4
 
-from langchain_core.callbacks import CallbackManager
 from langgraph.callbacks import GraphCallbackHandler, GraphInterruptEvent, GraphResumeEvent
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Interrupt
@@ -17,11 +16,7 @@ from typing_extensions import TypedDict
 
 import nemo_flow
 from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler as LangChainCallbackHandler
-from nemo_flow.integrations.langgraph import (
-    NemoFlowCallbackHandler,
-    instrument_graph,
-    with_nemo_flow_callbacks,
-)
+from nemo_flow.integrations.langgraph import NemoFlowCallbackHandler
 
 
 class State(TypedDict):
@@ -66,34 +61,13 @@ def test_langgraph_handler_builds_on_langchain_handler() -> None:
     assert handler.run_inline is True
 
 
-def test_with_nemo_flow_callbacks_preserves_existing_callbacks() -> None:
-    class ExistingHandler(GraphCallbackHandler):
-        pass
-
-    existing = ExistingHandler()
-    config = with_nemo_flow_callbacks({"callbacks": [existing]})
-
-    callbacks = config["callbacks"]
-    assert callbacks[0] is existing
-    assert isinstance(callbacks[1], NemoFlowCallbackHandler)
-
-
-def test_with_nemo_flow_callbacks_handles_callback_managers() -> None:
-    manager = CallbackManager([])
-    config = with_nemo_flow_callbacks({"callbacks": manager})
-
-    callbacks = config["callbacks"]
-    assert callbacks is not manager
-    assert any(isinstance(handler, NemoFlowCallbackHandler) for handler in callbacks.handlers)
-
-
-def test_instrumented_graph_invoke_emits_named_graph_and_node_scopes() -> None:
-    graph = instrument_graph(_build_graph())
+def test_graph_invoke_with_callback_config_emits_named_graph_and_node_scopes() -> None:
+    graph = _build_graph()
     events, subscriber_name = _record_events()
 
     try:
         with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-            result = graph.invoke({"value": 1})
+            result = graph.invoke({"value": 1}, config={"callbacks": [NemoFlowCallbackHandler()]})
     finally:
         nemo_flow.subscribers.deregister(subscriber_name)
 
@@ -102,12 +76,12 @@ def test_instrumented_graph_invoke_emits_named_graph_and_node_scopes() -> None:
     assert scope_names == ["request", "LangGraph", "increment"]
 
 
-def test_instrumented_graph_ainvoke_completes_with_inline_callbacks() -> None:
-    graph = instrument_graph(_build_async_graph())
+def test_graph_ainvoke_with_callback_config_completes() -> None:
+    graph = _build_async_graph()
 
     async def run_graph() -> dict[str, int]:
         with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-            return await graph.ainvoke({"value": 1})
+            return await graph.ainvoke({"value": 1}, config={"callbacks": [NemoFlowCallbackHandler()]})
 
     assert asyncio.run(run_graph()) == {"value": 2}
 
@@ -144,18 +118,3 @@ def test_graph_lifecycle_callbacks_emit_marks() -> None:
     assert marks[0].data["checkpoint_ns"] == ["parent", "child"]
     assert marks[1].data["interrupts"] == [{"id": "interrupt-1", "value": "needs approval"}]
     assert marks[1].metadata == {"integration": "langgraph"}
-
-
-def test_instrumented_graph_stream_emits_public_task_marks() -> None:
-    graph = instrument_graph(_build_graph())
-    events, subscriber_name = _record_events()
-
-    try:
-        with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-            chunks = list(graph.stream({"value": 1}, stream_mode="tasks"))
-    finally:
-        nemo_flow.subscribers.deregister(subscriber_name)
-
-    assert len(chunks) == 2
-    marks = [event.name for event in events if event.kind == "mark"]
-    assert marks == ["Graph Task Start", "Graph Task End"]
