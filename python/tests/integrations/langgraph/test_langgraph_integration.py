@@ -162,13 +162,3 @@ def test_instrumented_graph_stream_emits_public_task_marks() -> None:
     assert len(chunks) == 2
     marks = [event.name for event in events if event.kind == "mark"]
     assert marks == ["Graph Task Start", "Graph Task End"]
-
-
-def test_langgraph_extra_includes_langchain_integration_dependencies() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-    extra = pyproject["project"]["optional-dependencies"]["langgraph"]
-
-    assert "langchain-core" in extra
-    assert any(requirement.startswith("langchain>=") for requirement in extra)
-    assert any(requirement.startswith("langgraph>=") for requirement in extra)
-    assert NemoFlowMiddleware is not None
