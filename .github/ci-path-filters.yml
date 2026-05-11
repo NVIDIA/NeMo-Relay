@@ -70,7 +70,6 @@ node:
 python:
   - 'crates/python/Cargo.toml'
   - 'crates/python/src/**'
-  - 'integrations/langchain/**'
   - 'pyproject.toml'
   - 'python/**/!(*.md)'
   - 'uv.lock'
