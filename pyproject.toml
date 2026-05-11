@@ -79,9 +79,13 @@ langchain = [
     "langchain-core",
 ]
 
+langgraph = [
+    "nemo-flow[langchain]",
+    "langgraph>=1.1.10,<2.0.0",
+]
+
 langchain-nvidia = [
-    "langchain>=1.2.11,<2.0.0",
-    "langchain-core",
+    "nemo-flow[langchain]",
     "langchain-nvidia-ai-endpoints~=1.0",
 ]
 
