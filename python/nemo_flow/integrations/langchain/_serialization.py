@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware import ModelResponse
 from langchain_core.messages import (
+    BaseMessage,
     SystemMessage,
+    ToolMessage,
     messages_from_dict,
     messages_to_dict,
 )
@@ -18,7 +20,6 @@ from nemo_flow.codecs import AnthropicMessagesCodec, LlmCodec, OpenAIChatCodec, 
 
 if TYPE_CHECKING:
     from langchain.agents.middleware import ModelRequest
-    from langchain_core.messages import BaseMessage
 
 # In order to infer codec support from LangChain chat model types, we need to import them here.
 # However these may not be installed in the user's environment.
@@ -173,3 +174,34 @@ def model_response_from_json(payload: Any, codec: Any) -> ModelResponse[Any]:
     if isinstance(decoded, ModelResponse):
         return decoded
     raise TypeError(f"NeMo Flow model execution returned {type(decoded)!r}, expected ModelResponse")
+
+def _prepare_outputs(outputs: dict[str, Any] | list[Any] | ToolMessage | BaseMessage) -> dict[str, Any] | list[Any]:
+    """Prepare a NeMo Flow scope output dict for returning to LangChain."""
+    if isinstance(outputs, dict):
+        prepared_outputs = {}
+        for (key, value) in outputs.items():
+            prepared_outputs[key] = _prepare_outputs(value)
+    elif isinstance(outputs, list):
+        prepared_outputs = []
+        for value in outputs:
+            prepared_outputs.append(_prepare_outputs(value))
+    elif isinstance(outputs, ToolMessage):
+        prepared_outputs = {
+            "type": "tool_message",
+            "tool_call": {
+                "name": outputs.name,
+                "id": outputs.id,
+                "tool_call_id": outputs.tool_call_id,
+                "content": outputs.content,
+            },
+        }
+    elif isinstance(outputs, BaseMessage):
+        prepared_outputs = {
+            "type": "message",
+            "message": messages_to_dict([outputs]),
+        }
+    else:
+        prepared_outputs = outputs
+
+
+    return prepared_outputs

@@ -11,6 +11,7 @@ import typing
 from langchain_core.callbacks.base import BaseCallbackHandler
 
 import nemo_flow
+from nemo_flow.integrations.langchain._serialization import _prepare_outputs
 
 if typing.TYPE_CHECKING:
     from uuid import UUID
@@ -38,13 +39,16 @@ class NemoFlowCallbackHandler(BaseCallbackHandler):
     ) -> typing.Any:
         """Push a NeMo Flow Agent scope for a LangChain chain run."""
         try:
-            name = serialized.get("name")
+            name: str | None = None
+            if serialized is not None:
+                name = serialized.get("name")
+                if name is None:
+                    id_list = serialized.get("id")
+                    if isinstance(id_list, list) and len(id_list) > 0:
+                        name = id_list[-1]
+
             if name is None:
-                id_list = serialized.get("id")
-                if isinstance(id_list, list) and len(id_list) > 0:
-                    name = id_list[-1]
-                else:
-                    name = "Unknown"
+                name = "Unknown"
 
             parent = self._scope_handles.get(parent_run_id) if parent_run_id else None
 
@@ -86,11 +90,12 @@ class NemoFlowCallbackHandler(BaseCallbackHandler):
         self._pop_scope(run_id, output={"error": repr(error)})
         return None
 
-    def _pop_scope(self, run_id: UUID, *, output: typing.Any | None = None) -> None:
+    def _pop_scope(self, run_id: UUID, *, output: dict[str, typing.Any] | None = None) -> None:
         handle = self._scope_handles.pop(run_id, None)
         if handle is None:
             return
         try:
-            nemo_flow.scope.pop(handle, output=output)
+            prepared_outputs = _prepare_outputs(output) if output is not None else None
+            nemo_flow.scope.pop(handle, output=prepared_outputs)
         except Exception:
             _logger.debug("NeMo Flow: scope.pop failed", exc_info=True)
