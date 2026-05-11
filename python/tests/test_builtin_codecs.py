@@ -12,8 +12,9 @@ Covers:
 
 from typing import cast
 
-import nemo_flow
 import pytest
+
+import nemo_flow
 from nemo_flow import (
     AnnotatedLLMRequest,
     AnnotatedLLMResponse,
