@@ -49,6 +49,9 @@ def handler(mock_nemo_flow: MagicMock) -> NemoFlowCallbackHandler:
 class TestScopeLifecycle:
     """Verify that chain start/end/error map to scope push/pop."""
 
+    def test_handler_runs_inline_for_async_callback_managers(self, handler: NemoFlowCallbackHandler) -> None:
+        assert handler.run_inline is True
+
     def test_on_chain_start_pushes_scope(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock) -> None:
         run_id = uuid4()
 
@@ -68,6 +71,20 @@ class TestScopeLifecycle:
             "source": "unit-test",
         }
         assert run_id in handler._scope_handles
+
+    def test_on_chain_start_uses_callback_name(
+        self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock
+    ) -> None:
+        run_id = uuid4()
+
+        handler.on_chain_start(
+            None,
+            {"input": "test"},
+            run_id=run_id,
+            name="LangGraph",
+        )
+
+        assert mock_nemo_flow.scope.push.call_args.args[0] == "LangGraph"
 
     def test_on_chain_end_pops_scope(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock) -> None:
         run_id = uuid4()
