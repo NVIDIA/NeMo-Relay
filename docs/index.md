@@ -161,11 +161,11 @@ About <integrate-frameworks/about>
 Basic Guide: Adding Scopes <integrate-frameworks/adding-scopes>
 Basic Guide: Wrap Tool Calls <integrate-frameworks/wrap-tool-calls>
 Basic Guide: Wrap LLM Calls <integrate-frameworks/wrap-llm-calls>
-Advanced Guide: Coding-Agent Gateway Sidecar <integrate-frameworks/coding-agent-sidecar>
-Claude Code Sidecar Guide <integrate-frameworks/coding-agent-claude-code>
-Codex Sidecar Guide <integrate-frameworks/coding-agent-codex>
-Cursor Sidecar Guide <integrate-frameworks/coding-agent-cursor>
-Hermes Sidecar Guide <integrate-frameworks/coding-agent-hermes>
+Advanced Guide: Coding-Agent Gateway <integrate-frameworks/coding-agent-gateway>
+Claude Code Gateway Guide <integrate-frameworks/coding-agent-claude-code>
+Codex Gateway Guide <integrate-frameworks/coding-agent-codex>
+Cursor Gateway Guide <integrate-frameworks/coding-agent-cursor>
+Hermes Gateway Guide <integrate-frameworks/coding-agent-hermes>
 Advanced Guide: Handle Non-Serializable Data <integrate-frameworks/non-serializable-data>
 Advanced Guide: Using Codecs <integrate-frameworks/using-codecs>
 Advanced Guide: Provider Codecs <integrate-frameworks/provider-codecs>

@@ -31,7 +31,7 @@ pub(super) struct ClassificationRules<'a> {
     tool_end: &'a [&'a str],
 }
 
-// Derives a stable session identifier from sidecar headers first, then common agent payload
+// Derives a stable session identifier from gateway headers first, then common agent payload
 // fields, and finally a v7 UUID. Header precedence lets gateway and hook-forward callers
 // correlate events even when agent payload schemas omit or rename their native session field.
 fn session_id(payload: &Value, headers: &HeaderMap) -> String {
@@ -73,14 +73,14 @@ fn event_name(payload: &Value) -> String {
 }
 
 // Builds shared metadata for every normalized hook event. Only stable, low-cardinality fields and
-// sidecar configuration hints are lifted out; the full payload remains on the event for consumers
+// gateway configuration hints are lifted out; the full payload remains on the event for consumers
 // that need agent-specific detail.
 fn metadata(payload: &Value, headers: &HeaderMap, kind: AgentKind, event_name: &str) -> Value {
     let mut object = Map::new();
     object.insert("agent_kind".into(), json!(kind.as_str()));
     object.insert("hook_event_name".into(), json!(event_name));
     if let Some(profile) = header_string(headers, "x-nemo-flow-config-profile") {
-        object.insert("sidecar_config_profile".into(), json!(profile));
+        object.insert("gateway_config_profile".into(), json!(profile));
     }
     for (key, value) in [
         ("cwd", string_at(payload, &["cwd"])),
@@ -115,7 +115,7 @@ pub(crate) fn common_session_event(
     }
 }
 
-// Creates a subagent event and tolerates sparse agent payloads by using the sidecar subagent
+// Creates a subagent event and tolerates sparse agent payloads by using the gateway subagent
 // header and then a synthetic `subagent` id. The fallback keeps unmatched start/end events visible
 // rather than dropping them when an integration lacks explicit nested-agent IDs.
 fn common_subagent_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) -> SubagentEvent {
@@ -213,7 +213,7 @@ fn first_string_at(payload: &Value, paths: &[&[&str]]) -> Option<String> {
     paths.iter().find_map(|path| string_at(payload, path))
 }
 
-// Resolves a subagent id from payload shape first and the sidecar header second. The payload wins
+// Resolves a subagent id from payload shape first and the gateway header second. The payload wins
 // because it is the agent's native ownership signal; the header exists for gateway correlation and
 // sparse hook systems.
 fn hook_subagent_id(payload: &Value, headers: &HeaderMap) -> Option<String> {
@@ -267,7 +267,7 @@ fn tool_arguments(payload: &Value) -> Value {
 }
 
 // Extracts tool output from success payloads first and then failure diagnostics. Failure detail
-// synthesis is last so an explicit result always wins over sidecar-built diagnostic metadata.
+// synthesis is last so an explicit result always wins over gateway-built diagnostic metadata.
 fn tool_result(payload: &Value, normalized_event: &str) -> Value {
     value_at(payload, &["tool_output"])
         .or_else(|| value_at(payload, &["tool_response"]))
@@ -297,7 +297,7 @@ fn tool_status(payload: &Value, normalized_event: &str) -> Option<String> {
     })
 }
 
-// Finds the most specific nested-agent identifier the sidecar knows how to interpret. Agent IDs
+// Finds the most specific nested-agent identifier the gateway knows how to interpret. Agent IDs
 // are accepted as subagent IDs because several hook systems use `agent` terminology for spawned
 // workers rather than for the top-level coding agent.
 fn subagent_id(payload: &Value) -> Option<String> {
@@ -310,7 +310,7 @@ fn subagent_id(payload: &Value) -> Option<String> {
 
 // Extracts detail fields as a synthetic tool result only for failure-like hooks. Successful tool
 // events without explicit output remain `null` so observers can distinguish "no output supplied"
-// from "the sidecar assembled diagnostic details".
+// from "the gateway assembled diagnostic details".
 fn event_detail_result(payload: &Value, normalized_event: &str) -> Option<Value> {
     let include_details = normalized_event.contains("failure")
         || normalized_event.contains("failed")
@@ -380,7 +380,7 @@ fn classify(
     vec![primary]
 }
 
-// Classifies a raw hook event using adapter-specific lifecycle names first and generic sidecar
+// Classifies a raw hook event using adapter-specific lifecycle names first and generic gateway
 // names second. Unknown events are intentionally converted to hook marks, not errors, so new agent
 // hook types remain observable until first-class normalization rules are added.
 fn classify_primary(
@@ -446,7 +446,7 @@ fn classify_primary(
     }
 }
 
-// Removes separators and case differences before comparing hook names. The sidecar uses this for
+// Removes separators and case differences before comparing hook names. The gateway uses this for
 // agent-specific aliases so `PostToolUse`, `post_tool_use`, and `postToolUse` converge.
 fn normalize_name(name: &str) -> String {
     name.chars()

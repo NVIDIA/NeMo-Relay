@@ -24,8 +24,8 @@ use nemo_flow::observability::openinference::{OpenInferenceConfig, OpenInference
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
 
-use crate::config::{SessionConfig, SidecarConfig};
-use crate::error::SidecarError;
+use crate::config::{GatewayConfig, SessionConfig};
+use crate::error::CliError;
 use crate::model::{
     AgentKind, LlmEvent, LlmHintEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent,
 };
@@ -37,7 +37,7 @@ const LAST_OWNER_TTL: Duration = Duration::from_secs(300);
 #[derive(Clone)]
 pub(crate) struct SessionManager {
     inner: Arc<Mutex<HashMap<String, Session>>>,
-    default_config: SidecarConfig,
+    default_config: GatewayConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -146,11 +146,11 @@ struct ToolOwnerResolution {
 }
 
 impl SessionManager {
-    /// Creates an empty manager that uses the supplied sidecar config as the header fallback layer.
+    /// Creates an empty manager that uses the supplied gateway config as the header fallback layer.
     ///
     /// Sessions are stored behind a shared async mutex because hook requests and gateway requests
     /// may arrive concurrently and need to resolve LLM ownership against the same in-memory state.
-    pub(crate) fn new(default_config: SidecarConfig) -> Self {
+    pub(crate) fn new(default_config: GatewayConfig) -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
             default_config,
@@ -173,7 +173,7 @@ impl SessionManager {
         &self,
         headers: &HeaderMap,
         events: Vec<NormalizedEvent>,
-    ) -> Result<(), SidecarError> {
+    ) -> Result<(), CliError> {
         let mut sessions = self.inner.lock().await;
         for event in events {
             let session_id = event.session_id().to_string();
@@ -222,7 +222,7 @@ impl SessionManager {
         &self,
         headers: &HeaderMap,
         start: LlmGatewayStart,
-    ) -> Result<ActiveLlm, SidecarError> {
+    ) -> Result<ActiveLlm, CliError> {
         let mut sessions = self.inner.lock().await;
         let config = self.default_config.session_config_from_headers(headers);
         let session_id = start
@@ -251,7 +251,7 @@ impl SessionManager {
         &self,
         headers: &HeaderMap,
         start: LlmGatewayStart,
-    ) -> Result<GatewayCallPrep, SidecarError> {
+    ) -> Result<GatewayCallPrep, CliError> {
         let mut sessions = self.inner.lock().await;
         let config = self.default_config.session_config_from_headers(headers);
         let session_id = start
@@ -280,7 +280,7 @@ impl SessionManager {
         active: ActiveLlm,
         response: Value,
         metadata: Value,
-    ) -> Result<(), SidecarError> {
+    ) -> Result<(), CliError> {
         let response_for_hints = response.clone();
         let session_id = active.session_id.clone();
         let llm_id = active.handle.uuid.to_string();
@@ -303,7 +303,7 @@ impl SessionManager {
                         .metadata(metadata)
                         .build(),
                 )
-                .map_err(SidecarError::from)
+                .map_err(CliError::from)
             })
             .await?;
         let mut sessions = self.inner.lock().await;
@@ -362,7 +362,7 @@ impl Session {
 
     // Runs one normalized hook event inside this session's scope stack. Dispatch stays synchronous
     // inside the scoped closure so lifecycle ordering from each hook request is preserved exactly.
-    async fn apply(&mut self, event: NormalizedEvent) -> Result<(), SidecarError> {
+    async fn apply(&mut self, event: NormalizedEvent) -> Result<(), CliError> {
         let stack = self.scope_stack.clone();
         TASK_SCOPE_STACK
             .scope(stack, async move {
@@ -392,7 +392,7 @@ impl Session {
     /// add events on top and last-write-wins semantics yield a complete trajectory by the final
     /// turn. No-op when `agent_scope` was never opened or when the session has no ATIF observer
     /// installed (e.g., `atif_dir` not configured).
-    fn snapshot_atif(&mut self) -> Result<(), SidecarError> {
+    fn snapshot_atif(&mut self) -> Result<(), CliError> {
         if self.agent_scope.is_none() {
             return Ok(());
         }
@@ -405,7 +405,7 @@ impl Session {
     // Legacy manual-lifecycle gateway start used by tests. Production code uses
     // `prepare_gateway_call` + managed execution.
     #[cfg(test)]
-    async fn start_llm(&mut self, start: LlmGatewayStart) -> Result<ActiveLlm, SidecarError> {
+    async fn start_llm(&mut self, start: LlmGatewayStart) -> Result<ActiveLlm, CliError> {
         let stack = self.scope_stack.clone();
         TASK_SCOPE_STACK
             .scope(stack.clone(), async move {
@@ -452,7 +452,7 @@ impl Session {
     async fn prepare_gateway_call(
         &mut self,
         start: LlmGatewayStart,
-    ) -> Result<GatewayCallPrep, SidecarError> {
+    ) -> Result<GatewayCallPrep, CliError> {
         let stack = self.scope_stack.clone();
         TASK_SCOPE_STACK
             .scope(stack.clone(), async move {
@@ -486,15 +486,15 @@ impl Session {
 
     // Records an explicit top-level agent start. Repeated start hooks are idempotent because
     // `ensure_agent_started` leaves an existing agent scope open and only updates agent kind first.
-    fn start_agent(&mut self, event: SessionEvent) -> Result<(), SidecarError> {
+    fn start_agent(&mut self, event: SessionEvent) -> Result<(), CliError> {
         self.agent_kind = event.agent_kind;
         self.ensure_agent_started(event.metadata)
     }
 
     // Lazily opens the root agent scope, installs observers on the root handle, and merges metadata
-    // from config, event payload, and sidecar headers. Later calls are no-ops to keep duplicate
+    // from config, event payload, and gateway headers. Later calls are no-ops to keep duplicate
     // hooks from nesting agent scopes.
-    fn ensure_agent_started(&mut self, event_metadata: Value) -> Result<(), SidecarError> {
+    fn ensure_agent_started(&mut self, event_metadata: Value) -> Result<(), CliError> {
         if self.agent_scope.is_some() {
             return Ok(());
         }
@@ -507,7 +507,7 @@ impl Session {
             ),
             json!({
                 "session_id": self.session_id,
-                "sidecar_config_profile": self.config.profile,
+                "gateway_config_profile": self.config.profile,
                 "plugin_config": self.config.plugin_config,
                 "gateway_mode": self.config.gateway_mode,
             }),
@@ -526,7 +526,7 @@ impl Session {
     // Installs configured exporters exactly once per session root. ATIF and OpenInference are
     // scope-local subscribers so they disappear with the session and do not affect unrelated
     // concurrent agent runs.
-    fn install_observers(&mut self, root: &ScopeHandle) -> Result<(), SidecarError> {
+    fn install_observers(&mut self, root: &ScopeHandle) -> Result<(), CliError> {
         self.install_atif_observer(root)?;
         self.install_openinference_observer(root)?;
         Ok(())
@@ -534,7 +534,7 @@ impl Session {
 
     // Registers the ATIF exporter once when a session has ATIF output configured. The exporter keeps
     // the session agent metadata so downstream trajectory files can be attributed to this run.
-    fn install_atif_observer(&mut self, root: &ScopeHandle) -> Result<(), SidecarError> {
+    fn install_atif_observer(&mut self, root: &ScopeHandle) -> Result<(), CliError> {
         if self.atif.is_some() || self.config.atif_dir.is_none() {
             return Ok(());
         }
@@ -548,14 +548,14 @@ impl Session {
                 extra: self.config.metadata.clone(),
             },
         );
-        scope_register_subscriber(&root.uuid, "sidecar-atif", exporter.subscriber())?;
+        scope_register_subscriber(&root.uuid, "gateway-atif", exporter.subscriber())?;
         self.atif = Some(exporter);
         Ok(())
     }
 
     // Registers the OpenInference subscriber once when an endpoint is configured. Endpoint ownership
     // remains on the session config so repeated start events cannot duplicate subscribers.
-    fn install_openinference_observer(&mut self, root: &ScopeHandle) -> Result<(), SidecarError> {
+    fn install_openinference_observer(&mut self, root: &ScopeHandle) -> Result<(), CliError> {
         if self.openinference.is_some() {
             return Ok(());
         }
@@ -565,9 +565,9 @@ impl Session {
         let subscriber = OpenInferenceSubscriber::new(
             OpenInferenceConfig::new()
                 .with_endpoint(endpoint.clone())
-                .with_service_name("nemo-flow-sidecar"),
+                .with_service_name("nemo-flow-cli"),
         )?;
-        scope_register_subscriber(&root.uuid, "sidecar-openinference", subscriber.subscriber())?;
+        scope_register_subscriber(&root.uuid, "gateway-openinference", subscriber.subscriber())?;
         self.openinference = Some(subscriber);
         Ok(())
     }
@@ -575,7 +575,7 @@ impl Session {
     // Closes the session in a fail-safe order: active LLMs/tools first, nested subagents from the
     // top down, correlation state, then the root agent scope. Observer flush/export happens after
     // the root scope ends so terminal events are included.
-    fn end_agent(&mut self, event: SessionEvent) -> Result<(), SidecarError> {
+    fn end_agent(&mut self, event: SessionEvent) -> Result<(), CliError> {
         // Duplicate agent-end hooks (e.g., hermes-agent emitting `on_session_end` more than once
         // per session) must not reopen the agent scope. Without this guard, `ensure_agent_started`
         // would create an empty scope and `flush_observers` would overwrite the already-written
@@ -594,7 +594,7 @@ impl Session {
     }
 
     // Ends all active hook-observed LLM calls before closing their containing scopes.
-    fn close_active_llms_for_agent_end(&mut self) -> Result<(), SidecarError> {
+    fn close_active_llms_for_agent_end(&mut self) -> Result<(), CliError> {
         let active_llms: Vec<_> = self.llms.drain().map(|(_, handle)| handle).collect();
         for handle in active_llms {
             llm_call_end(
@@ -610,7 +610,7 @@ impl Session {
 
     // Ends all active tool calls with a synthetic close result before ending their containing scopes.
     // Draining first avoids holding mutable map state while the runtime emits lifecycle events.
-    fn close_active_tools_for_agent_end(&mut self) -> Result<(), SidecarError> {
+    fn close_active_tools_for_agent_end(&mut self) -> Result<(), CliError> {
         let active_tools: Vec<_> = self.tools.drain().map(|(_, handle)| handle).collect();
         for handle in active_tools {
             tool_call_end(
@@ -626,7 +626,7 @@ impl Session {
 
     // Pops active subagent scopes in stack order so nested subagents close from child to parent. The
     // map is cleared afterward to discard any out-of-order stale handles not present in the stack.
-    fn close_active_subagents_for_agent_end(&mut self) -> Result<(), SidecarError> {
+    fn close_active_subagents_for_agent_end(&mut self) -> Result<(), CliError> {
         while let Some(subagent_id) = self.subagent_stack.pop() {
             if let Some(handle) = self.subagents.remove(&subagent_id) {
                 pop_scope(
@@ -650,7 +650,7 @@ impl Session {
 
     // Ends the root agent scope when present. Duplicate agent-end hooks can reach this path after the
     // scope is already gone, so absence is treated as a no-op.
-    fn close_agent_scope(&mut self, payload: Value) -> Result<(), SidecarError> {
+    fn close_agent_scope(&mut self, payload: Value) -> Result<(), CliError> {
         let Some(scope) = self.agent_scope.take() else {
             return Ok(());
         };
@@ -665,7 +665,7 @@ impl Session {
 
     // Starts a subagent scope under the current session. Duplicate subagent starts are ignored so
     // integrations that retry or emit both "start" and "created" style hooks do not double-nest.
-    fn start_subagent(&mut self, event: SubagentEvent) -> Result<(), SidecarError> {
+    fn start_subagent(&mut self, event: SubagentEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event.metadata.clone())?;
         if self.subagents.contains_key(&event.subagent_id) {
             return Ok(());
@@ -686,7 +686,7 @@ impl Session {
     // Ends a subagent only when it is the current top of the subagent stack. Unknown or out-of-order
     // endings become mark events instead of corrupting the scope stack, preserving evidence of the
     // mismatch for observability consumers.
-    fn end_subagent(&mut self, event: SubagentEvent) -> Result<(), SidecarError> {
+    fn end_subagent(&mut self, event: SubagentEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event.metadata.clone())?;
         let Some(scope) = self.subagents.get(&event.subagent_id).cloned() else {
             return self.mark(
@@ -708,7 +708,7 @@ impl Session {
                     .metadata(event.metadata)
                     .build(),
             )
-            .map_err(SidecarError::from);
+            .map_err(CliError::from);
         }
         if pop_scope(
             PopScopeParams::builder()
@@ -725,7 +725,7 @@ impl Session {
                     .metadata(event.metadata)
                     .build(),
             )
-            .map_err(SidecarError::from);
+            .map_err(CliError::from);
         }
         self.subagent_stack.pop();
         self.subagents.remove(&event.subagent_id);
@@ -743,7 +743,7 @@ impl Session {
 
     // Stores an LLM correlation hint from hook activity after pruning expired hints. Hints do not
     // emit runtime events themselves; they are consumed by the next matching gateway LLM call.
-    fn add_llm_hint(&mut self, event: LlmHintEvent) -> Result<(), SidecarError> {
+    fn add_llm_hint(&mut self, event: LlmHintEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event.metadata.clone())?;
         self.cleanup_correlation_state();
         let owner_subagent_id = event.subagent_id.clone().or_else(|| event.agent_id.clone());
@@ -757,7 +757,7 @@ impl Session {
 
     // Starts an LLM call from hook activity such as Hermes API request hooks. Duplicate call IDs are
     // ignored so repeated pre hooks do not create parallel handles for one provider call.
-    fn start_hook_llm(&mut self, event: LlmEvent) -> Result<(), SidecarError> {
+    fn start_hook_llm(&mut self, event: LlmEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event.metadata.clone())?;
         if self.llms.contains_key(&event.api_call_id) {
             return Ok(());
@@ -778,7 +778,7 @@ impl Session {
         Ok(())
     }
 
-    fn end_hook_llm(&mut self, event: LlmEvent) -> Result<(), SidecarError> {
+    fn end_hook_llm(&mut self, event: LlmEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event.metadata.clone())?;
         let handle = match self.llms.remove(&event.api_call_id) {
             Some(handle) => handle,
@@ -808,7 +808,7 @@ impl Session {
     // Starts a tool call under an explicit subagent when available, otherwise under the agent
     // scope. Duplicate tool IDs are ignored so repeated pre-tool hooks do not create parallel
     // handles for one agent tool invocation.
-    fn start_tool(&mut self, event: ToolEvent) -> Result<(), SidecarError> {
+    fn start_tool(&mut self, event: ToolEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event.metadata.clone())?;
         if self.tools.contains_key(&event.tool_call_id) {
             return Ok(());
@@ -845,7 +845,7 @@ impl Session {
 
     // Ends a tool call, synthesizing a start if no matching handle exists. This keeps post-only
     // hooks observable and preserves the final result/status instead of dropping orphaned endings.
-    fn end_tool(&mut self, event: ToolEvent) -> Result<(), SidecarError> {
+    fn end_tool(&mut self, event: ToolEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event.metadata.clone())?;
         let handle = match self.tools.remove(&event.tool_call_id) {
             Some(handle) => handle,
@@ -893,7 +893,7 @@ impl Session {
 
     // Emits a mark event after ensuring the agent scope exists. Generic and unknown hooks use this
     // path so unsupported agent events remain visible without changing scope structure.
-    fn mark(&mut self, name: &str, event_payload: SessionEvent) -> Result<(), SidecarError> {
+    fn mark(&mut self, name: &str, event_payload: SessionEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event_payload.metadata.clone())?;
         emit_mark_event(
             EmitMarkEventParams::builder()
@@ -907,7 +907,7 @@ impl Session {
 
     // Flushes and shuts down configured observers, then writes ATIF output if requested. This runs
     // only on agent end, so long-lived sessions keep subscribers active across intermediate hooks.
-    fn flush_observers(&mut self) -> Result<(), SidecarError> {
+    fn flush_observers(&mut self) -> Result<(), CliError> {
         if let Some(subscriber) = &self.openinference {
             subscriber.force_flush()?;
             subscriber.shutdown()?;
@@ -1234,18 +1234,18 @@ fn write_atif(
     directory: &PathBuf,
     session_id: &str,
     exporter: &AtifExporter,
-) -> Result<(), SidecarError> {
+) -> Result<(), CliError> {
     std::fs::create_dir_all(directory)?;
     validate_atif_session_id(session_id)?;
     let path = directory.join(format!("{session_id}.atif.json"));
     let trajectory = exporter.export();
     let serialized = serde_json::to_vec_pretty(&trajectory)
-        .map_err(|error| SidecarError::InvalidPayload(error.to_string()))?;
+        .map_err(|error| CliError::InvalidPayload(error.to_string()))?;
     std::fs::write(path, serialized)?;
     Ok(())
 }
 
-fn validate_atif_session_id(session_id: &str) -> Result<(), SidecarError> {
+fn validate_atif_session_id(session_id: &str) -> Result<(), CliError> {
     if session_id.is_empty()
         || session_id == "."
         || session_id == ".."
@@ -1253,7 +1253,7 @@ fn validate_atif_session_id(session_id: &str) -> Result<(), SidecarError> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
-        return Err(SidecarError::InvalidPayload(
+        return Err(CliError::InvalidPayload(
             "session id is not safe for ATIF export filename".into(),
         ));
     }

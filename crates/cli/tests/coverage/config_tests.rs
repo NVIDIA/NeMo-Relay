@@ -5,8 +5,8 @@ use super::*;
 use axum::http::HeaderValue;
 use serde_json::json;
 
-fn config() -> SidecarConfig {
-    SidecarConfig {
+fn config() -> GatewayConfig {
+    GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         anthropic_base_url: "http://anthropic".into(),
@@ -107,7 +107,7 @@ fn agent_inference_uses_executable_basename() {
 #[test]
 fn explicit_toml_config_maps_supported_sections() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("sidecar.toml");
+    let path = temp.path().join("gateway.toml");
     std::fs::write(
         &path,
         r#"
@@ -154,15 +154,15 @@ command = "hermes --yolo chat"
 
     let resolved = resolve_run_config(&command, None).unwrap();
 
-    assert_eq!(resolved.sidecar.bind.to_string(), "127.0.0.1:0");
-    assert_eq!(resolved.sidecar.openai_base_url, "http://openai");
-    assert_eq!(resolved.sidecar.anthropic_base_url, "http://anthropic");
-    assert_eq!(resolved.sidecar.atif_dir, Some(PathBuf::from("atif")));
+    assert_eq!(resolved.gateway.bind.to_string(), "127.0.0.1:0");
+    assert_eq!(resolved.gateway.openai_base_url, "http://openai");
+    assert_eq!(resolved.gateway.anthropic_base_url, "http://anthropic");
+    assert_eq!(resolved.gateway.atif_dir, Some(PathBuf::from("atif")));
     assert_eq!(
-        resolved.sidecar.openinference_endpoint.as_deref(),
+        resolved.gateway.openinference_endpoint.as_deref(),
         Some("http://otel")
     );
-    assert_eq!(resolved.sidecar.metadata, Some(json!({ "team": "obs" })));
+    assert_eq!(resolved.gateway.metadata, Some(json!({ "team": "obs" })));
     assert_eq!(
         resolved.agents.codex.command.as_deref(),
         Some("codex --approval-mode never")
@@ -177,7 +177,7 @@ command = "hermes --yolo chat"
 #[test]
 fn cli_run_overrides_config_values() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("sidecar.toml");
+    let path = temp.path().join("gateway.toml");
     std::fs::write(
         &path,
         r#"
@@ -206,15 +206,15 @@ metadata = { team = "file" }
 
     let resolved = resolve_run_config(&command, None).unwrap();
 
-    assert_eq!(resolved.sidecar.openai_base_url, "http://cli-openai");
-    assert_eq!(resolved.sidecar.atif_dir, Some(PathBuf::from("cli-atif")));
-    assert_eq!(resolved.sidecar.metadata, Some(json!({ "team": "cli" })));
+    assert_eq!(resolved.gateway.openai_base_url, "http://cli-openai");
+    assert_eq!(resolved.gateway.atif_dir, Some(PathBuf::from("cli-atif")));
+    assert_eq!(resolved.gateway.metadata, Some(json!({ "team": "cli" })));
 }
 
 #[test]
 fn run_inherits_top_level_server_flags_when_subcommand_flags_are_absent() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("sidecar.toml");
+    let path = temp.path().join("gateway.toml");
     std::fs::write(
         &path,
         r#"
@@ -244,7 +244,7 @@ openai_base_url = "http://file-openai"
 
     let resolved = resolve_run_config(&command, Some(&server)).unwrap();
 
-    assert_eq!(resolved.sidecar.openai_base_url, "http://top-level-openai");
+    assert_eq!(resolved.gateway.openai_base_url, "http://top-level-openai");
 }
 
 #[test]
@@ -260,12 +260,12 @@ fn server_resolution_applies_all_server_overrides() {
 
     let resolved = resolve_server_config(&args).unwrap();
 
-    assert_eq!(resolved.sidecar.bind.to_string(), "127.0.0.1:0");
-    assert_eq!(resolved.sidecar.openai_base_url, "http://cli-openai");
-    assert_eq!(resolved.sidecar.anthropic_base_url, "http://cli-anthropic");
-    assert_eq!(resolved.sidecar.atif_dir, Some(PathBuf::from("cli-atif")));
+    assert_eq!(resolved.gateway.bind.to_string(), "127.0.0.1:0");
+    assert_eq!(resolved.gateway.openai_base_url, "http://cli-openai");
+    assert_eq!(resolved.gateway.anthropic_base_url, "http://cli-anthropic");
+    assert_eq!(resolved.gateway.atif_dir, Some(PathBuf::from("cli-atif")));
     assert_eq!(
-        resolved.sidecar.openinference_endpoint.as_deref(),
+        resolved.gateway.openinference_endpoint.as_deref(),
         Some("http://cli-otel")
     );
 }
@@ -288,16 +288,16 @@ fn run_resolution_applies_all_run_overrides() {
 
     let resolved = resolve_run_config(&command, None).unwrap();
 
-    assert_eq!(resolved.sidecar.openai_base_url, "http://run-openai");
-    assert_eq!(resolved.sidecar.anthropic_base_url, "http://run-anthropic");
-    assert_eq!(resolved.sidecar.atif_dir, Some(PathBuf::from("run-atif")));
+    assert_eq!(resolved.gateway.openai_base_url, "http://run-openai");
+    assert_eq!(resolved.gateway.anthropic_base_url, "http://run-anthropic");
+    assert_eq!(resolved.gateway.atif_dir, Some(PathBuf::from("run-atif")));
     assert_eq!(
-        resolved.sidecar.openinference_endpoint.as_deref(),
+        resolved.gateway.openinference_endpoint.as_deref(),
         Some("http://run-otel")
     );
-    assert_eq!(resolved.sidecar.metadata, Some(json!({ "team": "run" })));
+    assert_eq!(resolved.gateway.metadata, Some(json!({ "team": "run" })));
     assert_eq!(
-        resolved.sidecar.plugin_config,
+        resolved.gateway.plugin_config,
         Some(json!({ "components": ["x"] }))
     );
 }
@@ -325,7 +325,7 @@ fn malformed_shared_config_reports_context() {
 
     let error = resolve_server_config(&args).unwrap_err().to_string();
 
-    assert!(error.contains("invalid sidecar configuration shape"));
+    assert!(error.contains("invalid gateway configuration shape"));
 }
 
 #[test]

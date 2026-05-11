@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::config::{AgentCommandConfig, CursorAgentConfig, SidecarConfig};
+use crate::config::{AgentCommandConfig, CursorAgentConfig, GatewayConfig};
 use std::sync::{Mutex, OnceLock};
 
 fn current_dir_lock() -> &'static Mutex<()> {
@@ -153,7 +153,7 @@ fn missing_configured_command_has_actionable_messages() {
 #[test]
 fn prepares_codex_config_overrides() {
     let resolved = ResolvedConfig {
-        sidecar: SidecarConfig::default(),
+        gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
     };
     let prepared = PreparedRun::new(
@@ -198,7 +198,7 @@ fn prepares_codex_config_overrides() {
 #[test]
 fn prepares_claude_dry_run_without_writing_plugin() {
     let resolved = ResolvedConfig {
-        sidecar: SidecarConfig::default(),
+        gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
     };
     let prepared = PreparedRun::new(
@@ -227,7 +227,7 @@ fn cursor_patching_can_be_disabled() {
     let previous = std::env::current_dir().unwrap();
     std::env::set_current_dir(temp.path()).unwrap();
     let resolved = ResolvedConfig {
-        sidecar: SidecarConfig::default(),
+        gateway: GatewayConfig::default(),
         agents: AgentConfigs {
             cursor: CursorAgentConfig {
                 command: None,
@@ -254,7 +254,7 @@ fn cursor_patching_can_be_disabled() {
 #[test]
 fn prepares_hermes_hook_environment() {
     let resolved = ResolvedConfig {
-        sidecar: SidecarConfig::default(),
+        gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
     };
     let prepared = PreparedRun::new(
@@ -268,7 +268,7 @@ fn prepares_hermes_hook_environment() {
 
     assert_eq!(prepared.argv, vec!["hermes", "chat"]);
     assert!(prepared.env.contains(&(
-        "NEMO_FLOW_SIDECAR_URL".into(),
+        "NEMO_FLOW_GATEWAY_URL".into(),
         "http://127.0.0.1:1234".into()
     )));
     assert!(
@@ -283,7 +283,7 @@ fn prepares_hermes_hook_environment() {
 #[test]
 fn prepares_claude_temp_plugin() {
     let resolved = ResolvedConfig {
-        sidecar: SidecarConfig::default(),
+        gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
     };
     let prepared = PreparedRun::new(
@@ -319,7 +319,7 @@ fn cursor_patch_restore_restores_original_file() {
     std::fs::create_dir_all(".cursor").unwrap();
     std::fs::write(".cursor/hooks.json", r#"{"hooks":{"sessionStart":[]}}"#).unwrap();
     let resolved = ResolvedConfig {
-        sidecar: SidecarConfig::default(),
+        gateway: GatewayConfig::default(),
         agents: AgentConfigs {
             cursor: CursorAgentConfig {
                 command: None,
@@ -364,7 +364,7 @@ fn cursor_patch_restore_uses_nearest_project_cursor_dir() {
     .unwrap();
     std::env::set_current_dir(temp.path().join("nested")).unwrap();
     let resolved = ResolvedConfig {
-        sidecar: SidecarConfig::default(),
+        gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
     };
 
@@ -394,7 +394,7 @@ fn cursor_patch_restore_removes_temporary_file() {
     let previous = std::env::current_dir().unwrap();
     std::env::set_current_dir(temp.path()).unwrap();
     let resolved = ResolvedConfig {
-        sidecar: SidecarConfig::default(),
+        gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
     };
 
@@ -478,7 +478,7 @@ fn cursor_dry_run_does_not_write_hooks() {
     let previous = std::env::current_dir().unwrap();
     std::env::set_current_dir(temp.path()).unwrap();
     let resolved = ResolvedConfig {
-        sidecar: SidecarConfig::default(),
+        gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
     };
 
@@ -497,7 +497,7 @@ fn cursor_dry_run_does_not_write_hooks() {
 }
 
 #[tokio::test]
-async fn run_starts_sidecar_injects_env_and_returns_agent_exit_code() {
+async fn run_starts_gateway_injects_env_and_returns_agent_exit_code() {
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("env.txt");
     let command_argv = fake_agent_command(temp.path(), &output);
@@ -529,7 +529,7 @@ fn fake_agent_command(temp: &Path, output: &Path) -> Vec<String> {
     std::fs::write(
         &script,
         format!(
-            "#!/bin/sh\nprintf '%s' \"$NEMO_FLOW_SIDECAR_URL\" > \"{}\"\nexit 7\n",
+            "#!/bin/sh\nprintf '%s' \"$NEMO_FLOW_GATEWAY_URL\" > \"{}\"\nexit 7\n",
             output.display()
         ),
     )
@@ -544,7 +544,7 @@ fn fake_agent_command(temp: &Path, output: &Path) -> Vec<String> {
     std::fs::write(
         &script,
         format!(
-            "@echo off\r\n<nul set /p dummy=%NEMO_FLOW_SIDECAR_URL% > \"{}\"\r\nexit /b 7\r\n",
+            "@echo off\r\n<nul set /p dummy=%NEMO_FLOW_GATEWAY_URL% > \"{}\"\r\nexit /b 7\r\n",
             output.display()
         ),
     )
@@ -574,13 +574,13 @@ async fn dry_run_does_not_spawn_agent() {
 }
 
 #[tokio::test]
-async fn wait_for_health_reports_unready_sidecar() {
+async fn wait_for_health_reports_unready_gateway() {
     let error = wait_for_health("http://127.0.0.1:1")
         .await
         .unwrap_err()
         .to_string();
 
-    assert!(error.contains("sidecar did not become ready"));
+    assert!(error.contains("gateway did not become ready"));
 }
 
 #[cfg(unix)]

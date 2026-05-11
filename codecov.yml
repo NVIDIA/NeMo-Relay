@@ -54,10 +54,10 @@ component_management:
           threshold: 0.5%
           base: auto
           if_ci_failed: error
-    - component_id: sidecar_runtime
-      name: Sidecar Runtime
+    - component_id: gateway_runtime
+      name: Gateway Runtime
       paths:
-        - "crates/sidecar/src"
+        - "crates/cli/src"
       statuses:
         - type: project
           target: 95%
@@ -122,7 +122,7 @@ ignore:
   - "**/examples/**"
   - "third_party/"
   - "**/tests/**"
-  - "crates/sidecar/tests/"
+  - "crates/cli/tests/"
   - "**/tests-js/**"
   # The Node binding currently reports JS package coverage separately; exclude the
   # native Rust bridge until we have direct Rust-side coverage for this crate.

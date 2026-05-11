@@ -11,7 +11,7 @@ use crate::model::{AgentKind, NormalizedEvent};
 ///
 /// Cursor has separate shell and MCP hook names, both of which are collapsed into normal tool
 /// start/end events. Tool starts are fail-open with an explicit `allow` permission response so
-/// the sidecar records activity without becoming a policy engine for Cursor executions.
+/// the gateway records activity without becoming a policy engine for Cursor executions.
 pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     let events = classify(
         &payload,

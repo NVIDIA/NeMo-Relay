@@ -12,7 +12,7 @@ use toml_edit::{DocumentMut, table, value};
 use crate::config::{
     CodingAgent, GatewayMode, HookForwardCommand, InstallCommand, InstallScope, InstallTarget,
 };
-use crate::error::SidecarError;
+use crate::error::CliError;
 
 // Claude Code's hook loader strictly whitelists event names — any unknown event causes the
 // entire hooks file to be rejected (no hooks register). Only events present in Claude Code's
@@ -80,7 +80,7 @@ struct PlannedFile {
 /// Structured JSON options are validated before any filesystem writes, `--print` shows the exact
 /// planned contents, and `--dry-run` stops before mutation. Existing files are merged rather than
 /// replaced, with per-file backups created by `write_planned_file`.
-pub(crate) fn install(command: InstallCommand) -> Result<(), SidecarError> {
+pub(crate) fn install(command: InstallCommand) -> Result<(), CliError> {
     validate_optional_json("session metadata", command.session_metadata.as_deref())?;
     validate_optional_json("plugin config", command.plugin_config.as_deref())?;
     let files = planned_files(&command)?;
@@ -121,7 +121,7 @@ fn print_dry_run_summary(command: &InstallCommand) {
 
 // Writes every planned file with backup behavior handled by `write_planned_file`. This helper
 // centralizes the success output so per-file write semantics stay consistent across agents.
-fn write_planned_files(files: &[PlannedFile]) -> Result<(), SidecarError> {
+fn write_planned_files(files: &[PlannedFile]) -> Result<(), CliError> {
     for file in files {
         write_planned_file(file)?;
         println!("Installed {}", file.path.display());
@@ -129,12 +129,12 @@ fn write_planned_files(files: &[PlannedFile]) -> Result<(), SidecarError> {
     Ok(())
 }
 
-/// Forwards a hook payload from an installed shell command to a running sidecar.
+/// Forwards a hook payload from an installed shell command to a running gateway.
 ///
 /// Empty stdin is normalized to `{}` so hooks that provide no payload still generate observable
 /// marks. Delivery failures are fail-open by default to avoid blocking coding agents, but
 /// `--fail-closed` converts missing URLs, HTTP failures, and upstream errors into process errors.
-pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), SidecarError> {
+pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), CliError> {
     validate_optional_json("session metadata", command.session_metadata.as_deref())?;
     validate_optional_json("plugin config", command.plugin_config.as_deref())?;
 
@@ -148,7 +148,7 @@ pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), Side
 
 // Reads the native hook payload from stdin and normalizes empty payloads to JSON object syntax.
 // This keeps hook commands observable even for agents or events that invoke hooks without input.
-fn read_hook_payload() -> Result<String, SidecarError> {
+fn read_hook_payload() -> Result<String, CliError> {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
     if input.trim().is_empty() {
@@ -158,43 +158,43 @@ fn read_hook_payload() -> Result<String, SidecarError> {
     }
 }
 
-// Builds the target sidecar hook URL and applies fail-open/fail-closed behavior for missing
-// sidecar discovery. Returning `Ok(None)` is the fail-open path used by default hook commands.
-fn hook_forward_url(command: &HookForwardCommand) -> Result<Option<String>, SidecarError> {
-    let Some(sidecar_url) = resolve_hook_sidecar_url(
+// Builds the target gateway hook URL and applies fail-open/fail-closed behavior for missing
+// gateway discovery. Returning `Ok(None)` is the fail-open path used by default hook commands.
+fn hook_forward_url(command: &HookForwardCommand) -> Result<Option<String>, CliError> {
+    let Some(gateway_url) = resolve_hook_gateway_url(
         command.agent,
-        command.sidecar_url.clone(),
-        std::env::var("NEMO_FLOW_SIDECAR_URL").ok(),
+        command.gateway_url.clone(),
+        std::env::var("NEMO_FLOW_GATEWAY_URL").ok(),
     ) else {
         eprintln!(
-            "nemo-flow-sidecar hook forward failed: missing sidecar URL; pass --sidecar-url or set NEMO_FLOW_SIDECAR_URL"
+            "nemo-flow hook forward failed: missing gateway URL; pass --gateway-url or set NEMO_FLOW_GATEWAY_URL"
         );
         if command.fail_closed {
-            return Err(SidecarError::Install(
-                "missing sidecar URL; pass --sidecar-url or set NEMO_FLOW_SIDECAR_URL".into(),
+            return Err(CliError::Install(
+                "missing gateway URL; pass --gateway-url or set NEMO_FLOW_GATEWAY_URL".into(),
             ));
         }
         return Ok(None);
     };
     Ok(Some(format!(
         "{}{}",
-        sidecar_url.trim_end_matches('/'),
+        gateway_url.trim_end_matches('/'),
         command.agent.hook_path()
     )))
 }
 
-// Sends the hook payload with sidecar-specific headers translated from CLI flags. The reqwest
+// Sends the hook payload with gateway-specific headers translated from CLI flags. The reqwest
 // transport result is returned separately so response handling can preserve fail-open semantics.
 async fn send_hook_forward_request(
     command: &HookForwardCommand,
     url: String,
     input: String,
-) -> Result<Result<reqwest::Response, reqwest::Error>, SidecarError> {
+) -> Result<Result<reqwest::Response, reqwest::Error>, CliError> {
     Ok(reqwest::Client::builder()
         .timeout(HOOK_FORWARD_TIMEOUT)
         .build()?
         .post(url)
-        .headers(sidecar_headers(
+        .headers(gateway_headers(
             command.atif_dir.as_deref(),
             command.openinference_endpoint.as_deref(),
             command.profile.as_deref(),
@@ -213,15 +213,15 @@ async fn send_hook_forward_request(
 async fn handle_hook_forward_response(
     response: Result<reqwest::Response, reqwest::Error>,
     fail_closed: bool,
-) -> Result<(), SidecarError> {
+) -> Result<(), CliError> {
     match response {
         Ok(response) => {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             if !status.is_success() {
-                eprintln!("nemo-flow-sidecar hook forward failed with HTTP {status}");
+                eprintln!("nemo-flow hook forward failed with HTTP {status}");
                 if fail_closed {
-                    return Err(SidecarError::Install(format!(
+                    return Err(CliError::Install(format!(
                         "hook forward failed with HTTP {status}"
                     )));
                 }
@@ -233,9 +233,9 @@ async fn handle_hook_forward_response(
             Ok(())
         }
         Err(error) => {
-            eprintln!("nemo-flow-sidecar hook forward failed: {error}");
+            eprintln!("nemo-flow hook forward failed: {error}");
             if fail_closed {
-                Err(SidecarError::Upstream(error))
+                Err(CliError::Upstream(error))
             } else {
                 Ok(())
             }
@@ -243,17 +243,17 @@ async fn handle_hook_forward_response(
     }
 }
 
-// Chooses the sidecar URL for hook-forward. Hermes prefers the runtime environment URL because
+// Chooses the gateway URL for hook-forward. Hermes prefers the runtime environment URL because
 // its hooks are commonly installed persistently but reused by `run --agent hermes` with an
-// ephemeral sidecar; other agents prefer the installed command URL for stable configuration.
-fn resolve_hook_sidecar_url(
+// ephemeral gateway; other agents prefer the installed command URL for stable configuration.
+fn resolve_hook_gateway_url(
     agent: CodingAgent,
     command_url: Option<String>,
     env_url: Option<String>,
 ) -> Option<String> {
     match agent {
         // Hermes shell hooks are installed persistently, but `run --agent hermes`
-        // starts an ephemeral sidecar and passes the live URL through env.
+        // starts an ephemeral gateway and passes the live URL through env.
         CodingAgent::Hermes => env_url.or(command_url),
         _ => command_url.or(env_url),
     }
@@ -262,7 +262,7 @@ fn resolve_hook_sidecar_url(
 // Builds the exact files that would be written for an install command. Each agent keeps its native
 // config format: Claude/Cursor/Codex hook JSON, Codex feature TOML, and Hermes YAML translated
 // through the shared JSON hook merge logic.
-fn planned_files(command: &InstallCommand) -> Result<Vec<PlannedFile>, SidecarError> {
+fn planned_files(command: &InstallCommand) -> Result<Vec<PlannedFile>, CliError> {
     let base = install_base(command)?;
     match command.agent {
         CodingAgent::ClaudeCode => planned_claude_file(command, &base),
@@ -277,7 +277,7 @@ fn planned_files(command: &InstallCommand) -> Result<Vec<PlannedFile>, SidecarEr
 fn planned_claude_file(
     command: &InstallCommand,
     base: &Path,
-) -> Result<Vec<PlannedFile>, SidecarError> {
+) -> Result<Vec<PlannedFile>, CliError> {
     let path = base.join(".claude/settings.json");
     Ok(vec![planned_json_hooks_file(
         path,
@@ -290,7 +290,7 @@ fn planned_claude_file(
 fn planned_codex_files(
     command: &InstallCommand,
     base: &Path,
-) -> Result<Vec<PlannedFile>, SidecarError> {
+) -> Result<Vec<PlannedFile>, CliError> {
     let config_path = base.join(".codex/config.toml");
     let hooks_path = base.join(".codex/hooks.json");
     let existing_config = read_optional_text_file(&config_path)?;
@@ -311,7 +311,7 @@ fn planned_codex_files(
 fn planned_cursor_file(
     command: &InstallCommand,
     base: &Path,
-) -> Result<Vec<PlannedFile>, SidecarError> {
+) -> Result<Vec<PlannedFile>, CliError> {
     let path = base.join(".cursor/hooks.json");
     Ok(vec![planned_json_hooks_file(
         path,
@@ -324,7 +324,7 @@ fn planned_cursor_file(
 fn planned_hermes_file(
     command: &InstallCommand,
     base: &Path,
-) -> Result<Vec<PlannedFile>, SidecarError> {
+) -> Result<Vec<PlannedFile>, CliError> {
     let path = base.join(".hermes/config.yaml");
     let existing = read_optional_text_file(&path)?;
     let contents = merge_hermes_config(
@@ -336,51 +336,51 @@ fn planned_hermes_file(
 
 // Reads an optional text file for config formats where missing files are valid install targets.
 // Non-not-found I/O errors still propagate to avoid losing existing user configuration.
-fn read_optional_text_file(path: &Path) -> Result<String, SidecarError> {
+fn read_optional_text_file(path: &Path) -> Result<String, CliError> {
     match std::fs::read_to_string(path) {
         Ok(raw) => Ok(raw),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(error) => Err(SidecarError::Io(error)),
+        Err(error) => Err(CliError::Io(error)),
     }
 }
 
 // Produces a planned JSON hook file by reading existing JSON, merging generated hooks, and
 // formatting the result consistently with the package hook bundles.
-fn planned_json_hooks_file(path: PathBuf, generated: Value) -> Result<PlannedFile, SidecarError> {
+fn planned_json_hooks_file(path: PathBuf, generated: Value) -> Result<PlannedFile, CliError> {
     let existing = read_json_file(&path)?;
     let contents = serde_json::to_string_pretty(&merge_hooks(existing, generated)?)
-        .map_err(|error| SidecarError::Install(error.to_string()))?;
+        .map_err(|error| CliError::Install(error.to_string()))?;
     Ok(PlannedFile { path, contents })
 }
 
 // Resolves the installation root according to user or project scope. Hidden test-only overrides
 // take precedence so coverage can avoid touching real home/project directories.
-fn install_base(command: &InstallCommand) -> Result<PathBuf, SidecarError> {
+fn install_base(command: &InstallCommand) -> Result<PathBuf, CliError> {
     match command.scope {
         InstallScope::User => command
             .home_dir
             .clone()
             .or_else(home_dir)
-            .ok_or_else(|| SidecarError::Install("could not resolve home directory".into())),
+            .ok_or_else(|| CliError::Install("could not resolve home directory".into())),
         InstallScope::Project => command
             .project_dir
             .clone()
             .map(Ok)
             .unwrap_or_else(std::env::current_dir)
-            .map_err(SidecarError::from),
+            .map_err(CliError::from),
     }
 }
 
-// Builds the shell command persisted into hook configuration. Optional sidecar settings are turned
+// Builds the shell command persisted into hook configuration. Optional gateway settings are turned
 // into hook-forward flags and every argument is shell-quoted because most target hook systems store
 // the command as a single shell string.
 fn hook_command(command: &InstallCommand, agent: CodingAgent) -> String {
     let mut args = vec![
-        "nemo-flow-sidecar".to_string(),
+        "nemo-flow".to_string(),
         "hook-forward".to_string(),
         agent.as_arg().to_string(),
-        "--sidecar-url".to_string(),
-        command.sidecar_url.clone(),
+        "--gateway-url".to_string(),
+        command.gateway_url.clone(),
     ];
     push_optional_path(&mut args, "--atif-dir", command.atif_dir.as_deref());
     push_optional(
@@ -425,7 +425,7 @@ fn push_optional_path(args: &mut Vec<String>, flag: &str, value: Option<&Path>) 
 }
 
 // Serializes the gateway-mode enum into the generated hook-forward command only when explicitly
-// configured, leaving default runtime behavior under the sidecar's normal config resolution.
+// configured, leaving default runtime behavior under the gateway's normal config resolution.
 fn push_optional_gateway_mode(args: &mut Vec<String>, gateway_mode: Option<GatewayMode>) {
     if let Some(gateway_mode) = gateway_mode {
         args.push("--gateway-mode".to_string());
@@ -459,12 +459,12 @@ pub(crate) fn generated_hooks(agent: CodingAgent, command: &str) -> Value {
     }
 }
 
-// Returns the shell command a hook should run to forward an event to the sidecar. Callers must
+// Returns the shell command a hook should run to forward an event to the gateway. Callers must
 // pass the executable they want hooks to invoke. Transparent-run callers should pass the absolute
-// path of the currently running sidecar binary so spawned hook subprocesses do not depend on the
+// path of the currently running gateway binary so spawned hook subprocesses do not depend on the
 // user's `PATH` (which Codex/Claude/Cursor inherit but which typically does not include
 // `target/debug` or other dev locations); persistent-install callers can pass the bare name
-// `"nemo-flow-sidecar"` because the user is expected to have the binary on `PATH` after install.
+// `"nemo-flow"` because the user is expected to have the binary on `PATH` after install.
 pub(crate) fn hook_forward_command(executable: &str, agent: CodingAgent) -> String {
     format!("{executable} hook-forward {}", agent.as_arg())
 }
@@ -550,7 +550,7 @@ fn event_matches_tools(event: &str) -> bool {
 /// Missing files are represented by `Null` and become empty objects. Existing non-object roots,
 /// non-object `hooks`, non-array event hooks, or malformed generated hooks fail closed because
 /// writing through those shapes would corrupt user configuration.
-pub(crate) fn merge_hooks(existing: Value, generated: Value) -> Result<Value, SidecarError> {
+pub(crate) fn merge_hooks(existing: Value, generated: Value) -> Result<Value, CliError> {
     let mut root = hook_config_root(existing)?;
     let hooks = hooks_object_mut(&mut root)?;
     let generated_hooks = generated_hooks_object(&generated)?;
@@ -562,11 +562,11 @@ pub(crate) fn merge_hooks(existing: Value, generated: Value) -> Result<Value, Si
 
 // Normalizes an existing hook config root. Missing files arrive as `Null`, valid JSON/YAML config
 // roots remain objects, and other shapes are rejected before any install write can occur.
-fn hook_config_root(existing: Value) -> Result<Value, SidecarError> {
+fn hook_config_root(existing: Value) -> Result<Value, CliError> {
     match existing {
         Value::Null => Ok(json!({})),
         Value::Object(object) => Ok(Value::Object(object)),
-        _ => Err(SidecarError::Install(
+        _ => Err(CliError::Install(
             "hook config must be a JSON object".into(),
         )),
     }
@@ -574,24 +574,22 @@ fn hook_config_root(existing: Value) -> Result<Value, SidecarError> {
 
 // Returns the mutable `hooks` object from a config root, creating it when absent. A non-object
 // `hooks` field is considered user config corruption and is not overwritten.
-fn hooks_object_mut(root: &mut Value) -> Result<&mut serde_json::Map<String, Value>, SidecarError> {
+fn hooks_object_mut(root: &mut Value) -> Result<&mut serde_json::Map<String, Value>, CliError> {
     root.as_object_mut()
         .expect("root checked as object")
         .entry("hooks")
         .or_insert_with(|| json!({}))
         .as_object_mut()
-        .ok_or_else(|| SidecarError::Install("hooks must be a JSON object".into()))
+        .ok_or_else(|| CliError::Install("hooks must be a JSON object".into()))
 }
 
 // Validates generated hook shape before merging. Generated hooks are internal data, but checking
 // here keeps test failures localized if an agent bundle generator regresses.
-fn generated_hooks_object(
-    generated: &Value,
-) -> Result<&serde_json::Map<String, Value>, SidecarError> {
+fn generated_hooks_object(generated: &Value) -> Result<&serde_json::Map<String, Value>, CliError> {
     generated
         .get("hooks")
         .and_then(Value::as_object)
-        .ok_or_else(|| SidecarError::Install("generated hooks were malformed".into()))
+        .ok_or_else(|| CliError::Install("generated hooks were malformed".into()))
 }
 
 // Appends missing generated groups for one hook event. Equality comparison is exact so repeated
@@ -600,14 +598,14 @@ fn merge_event_hook_groups(
     hooks: &mut serde_json::Map<String, Value>,
     event: &str,
     groups: &Value,
-) -> Result<(), SidecarError> {
+) -> Result<(), CliError> {
     let groups = groups
         .as_array()
-        .ok_or_else(|| SidecarError::Install("generated hook groups were malformed".into()))?;
+        .ok_or_else(|| CliError::Install("generated hook groups were malformed".into()))?;
     let event_groups = hooks.entry(event.to_string()).or_insert_with(|| json!([]));
     let event_groups = event_groups
         .as_array_mut()
-        .ok_or_else(|| SidecarError::Install(format!("{event} hooks must be an array")))?;
+        .ok_or_else(|| CliError::Install(format!("{event} hooks must be an array")))?;
     for group in groups {
         if !event_groups.iter().any(|existing| existing == group) {
             event_groups.push(group.clone());
@@ -618,13 +616,13 @@ fn merge_event_hook_groups(
 
 // Enables Codex hook support in TOML without rewriting unrelated config. Empty config creates a
 // new document; malformed TOML fails before any install writes occur.
-fn merge_codex_config(existing: &str) -> Result<String, SidecarError> {
+fn merge_codex_config(existing: &str) -> Result<String, CliError> {
     let mut document = if existing.trim().is_empty() {
         DocumentMut::new()
     } else {
         existing
             .parse::<DocumentMut>()
-            .map_err(|error| SidecarError::Install(format!("invalid TOML: {error}")))?
+            .map_err(|error| CliError::Install(format!("invalid TOML: {error}")))?
     };
     if !document.as_table().contains_key("features") {
         document["features"] = table();
@@ -635,35 +633,34 @@ fn merge_codex_config(existing: &str) -> Result<String, SidecarError> {
 
 // Parses Hermes YAML, merges generated hooks through the shared JSON hook merger, and serializes
 // back to YAML. Empty files are treated as no existing configuration.
-fn merge_hermes_config(existing: &str, generated: Value) -> Result<String, SidecarError> {
+fn merge_hermes_config(existing: &str, generated: Value) -> Result<String, CliError> {
     let existing = if existing.trim().is_empty() {
         Value::Null
     } else {
-        serde_yaml::from_str(existing).map_err(|error| {
-            SidecarError::Install(format!("invalid YAML in Hermes config: {error}"))
-        })?
+        serde_yaml::from_str(existing)
+            .map_err(|error| CliError::Install(format!("invalid YAML in Hermes config: {error}")))?
     };
     let merged = merge_hooks(existing, generated)?;
-    serde_yaml::to_string(&merged).map_err(|error| SidecarError::Install(error.to_string()))
+    serde_yaml::to_string(&merged).map_err(|error| CliError::Install(error.to_string()))
 }
 
 /// Reads a JSON config file, returning `Null` for missing files.
 ///
 /// Missing hook files are normal during first install and are merged as empty configs; malformed
 /// JSON fails closed with the path in the error so the installer does not overwrite bad input.
-pub(crate) fn read_json_file(path: &Path) -> Result<Value, SidecarError> {
+pub(crate) fn read_json_file(path: &Path) -> Result<Value, CliError> {
     match std::fs::read_to_string(path) {
         Ok(raw) => serde_json::from_str(&raw).map_err(|error| {
-            SidecarError::Install(format!("invalid JSON in {}: {error}", path.display()))
+            CliError::Install(format!("invalid JSON in {}: {error}", path.display()))
         }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
-        Err(error) => Err(SidecarError::Io(error)),
+        Err(error) => Err(CliError::Io(error)),
     }
 }
 
 // Writes one planned file, creating parents and backing up any existing file first. Backup naming
 // is delegated to `backup_path` so the original extension is preserved in the backup filename.
-fn write_planned_file(file: &PlannedFile) -> Result<(), SidecarError> {
+fn write_planned_file(file: &PlannedFile) -> Result<(), CliError> {
     if let Some(parent) = file.path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -676,10 +673,10 @@ fn write_planned_file(file: &PlannedFile) -> Result<(), SidecarError> {
 
 // Builds a timestamped backup path beside the original file. If a file has no extension, `config`
 // is used so backup names remain recognizable.
-fn backup_path(path: &Path) -> Result<PathBuf, SidecarError> {
+fn backup_path(path: &Path) -> Result<PathBuf, CliError> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| SidecarError::Install(error.to_string()))?
+        .map_err(|error| CliError::Install(error.to_string()))?
         .as_secs();
     Ok(path.with_extension(format!(
         "{}.bak.{timestamp}",
@@ -699,24 +696,24 @@ fn home_dir() -> Option<PathBuf> {
 
 // Validates optional JSON strings before they are embedded into generated hook-forward commands or
 // headers. This catches quoting/config mistakes during install rather than during a later hook run.
-fn validate_optional_json(name: &str, value: Option<&str>) -> Result<(), SidecarError> {
+fn validate_optional_json(name: &str, value: Option<&str>) -> Result<(), CliError> {
     if let Some(value) = value {
         serde_json::from_str::<Value>(value)
-            .map_err(|error| SidecarError::Install(format!("invalid {name}: {error}")))?;
+            .map_err(|error| CliError::Install(format!("invalid {name}: {error}")))?;
     }
     Ok(())
 }
 
-// Converts optional session/export/gateway settings into sidecar headers for hook-forward. Each
+// Converts optional session/export/gateway settings into gateway headers for hook-forward. Each
 // absent value is omitted so the server can fall back to file, environment, or default config.
-fn sidecar_headers(
+fn gateway_headers(
     atif_dir: Option<&Path>,
     openinference_endpoint: Option<&str>,
     profile: Option<&str>,
     session_metadata: Option<&str>,
     plugin_config: Option<&str>,
     gateway_mode: Option<GatewayMode>,
-) -> Result<HeaderMap, SidecarError> {
+) -> Result<HeaderMap, CliError> {
     let mut headers = HeaderMap::new();
     insert_header_path(&mut headers, "x-nemo-flow-atif-dir", atif_dir)?;
     insert_header(
@@ -745,13 +742,12 @@ fn insert_header(
     headers: &mut HeaderMap,
     name: &'static str,
     value: Option<&str>,
-) -> Result<(), SidecarError> {
+) -> Result<(), CliError> {
     if let Some(value) = value {
         headers.insert(
             HeaderName::from_static(name),
-            HeaderValue::from_str(value).map_err(|error| {
-                SidecarError::Install(format!("invalid header {name}: {error}"))
-            })?,
+            HeaderValue::from_str(value)
+                .map_err(|error| CliError::Install(format!("invalid header {name}: {error}")))?,
         );
     }
     Ok(())
@@ -763,7 +759,7 @@ fn insert_header_path(
     headers: &mut HeaderMap,
     name: &'static str,
     value: Option<&Path>,
-) -> Result<(), SidecarError> {
+) -> Result<(), CliError> {
     if let Some(value) = value {
         let value = value.to_string_lossy();
         insert_header(headers, name, Some(value.as_ref()))
@@ -793,7 +789,7 @@ fn print_target_note(agent: CodingAgent, target: InstallTarget) {
         }
         (CodingAgent::Hermes, InstallTarget::Cli | InstallTarget::Both) => {
             println!(
-                "Note: Hermes shell hooks prefer NEMO_FLOW_SIDECAR_URL at runtime when set; otherwise they use the installed sidecar URL. Hook consent is still required unless approved interactively or through Hermes configuration."
+                "Note: Hermes shell hooks prefer NEMO_FLOW_GATEWAY_URL at runtime when set; otherwise they use the installed gateway URL. Hook consent is still required unless approved interactively or through Hermes configuration."
             );
         }
         _ => {}

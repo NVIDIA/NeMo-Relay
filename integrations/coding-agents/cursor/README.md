@@ -7,18 +7,18 @@ SPDX-License-Identifier: Apache-2.0
 
 This package is a Cursor hook bundle, not an official Cursor plugin package. It
 contains `.cursor/hooks.json` entries that forward canonical Cursor hook JSON to
-`nemo-flow-sidecar` at `/hooks/cursor`.
+`nemo-flow` at `/hooks/cursor`.
 
 Cursor GUI or IDE sessions can provide agent, subagent, tool, shell, MCP, file,
 and response lifecycle events through `.cursor/hooks.json`. Complete LLM
 lifecycle observability additionally requires Cursor model traffic to route
-through the sidecar gateway if the active Cursor build exposes provider base URL
+through the gateway if the active Cursor build exposes provider base URL
 configuration.
 
 ## Files
 
 - `.cursor/hooks.json` contains hook entries that run
-  `nemo-flow-sidecar hook-forward cursor`.
+  `nemo-flow hook-forward cursor`.
 
 ## Captured Events
 
@@ -34,22 +34,22 @@ Tool events preserve shell and MCP payloads in metadata and attach to
 
 ## Transparent Setup
 
-Build or install the sidecar binary so `nemo-flow-sidecar` is on `PATH`.
+Build or install the gateway binary so `nemo-flow` is on `PATH`.
 
 Run Cursor through the wrapper:
 
 ```bash
-nemo-flow-sidecar run --atif-dir .nemo-flow/atif -- cursor-agent
+nemo-flow run --atif-dir .nemo-flow/atif -- cursor-agent
 ```
 
-The wrapper starts a per-invocation sidecar on a dynamic localhost port,
+The wrapper starts a per-invocation gateway on a dynamic localhost port,
 temporarily merges NeMo Flow hooks into project `.cursor/hooks.json`, launches
 Cursor, and restores or removes the temporary hook file when Cursor exits.
 
 Inspect the launch without starting Cursor:
 
 ```bash
-nemo-flow-sidecar run \
+nemo-flow run \
   --atif-dir .nemo-flow/atif \
   --dry-run \
   --print \
@@ -58,8 +58,8 @@ nemo-flow-sidecar run \
 
 ## Shared Config
 
-Use `.nemo-flow/sidecar.toml` for project defaults or
-`~/.config/nemo-flow/sidecar.toml` for user defaults:
+Use `.nemo-flow/gateway.toml` for project defaults or
+`~/.config/nemo-flow/gateway.toml` for user defaults:
 
 ```toml
 [session]
@@ -74,7 +74,7 @@ patch_restore_hooks = true
 Then run:
 
 ```bash
-nemo-flow-sidecar run --agent cursor
+nemo-flow run --agent cursor
 ```
 
 ## Persistent Setup
@@ -83,14 +83,14 @@ Use persistent hooks only when you do not want to launch Cursor through the
 wrapper:
 
 ```bash
-nemo-flow-sidecar install cursor \
+nemo-flow install cursor \
   --scope project \
   --target gui \
-  --sidecar-url http://127.0.0.1:4040 \
+  --gateway-url http://127.0.0.1:4040 \
   --atif-dir .nemo-flow/atif
 ```
 
-Then start the sidecar manually and point Cursor provider traffic at
+Then start the gateway manually and point Cursor provider traffic at
 `http://127.0.0.1:4040` where Cursor exposes provider base URL configuration.
 
 ## Verify
@@ -102,12 +102,12 @@ ATIF was written:
 ls .nemo-flow/atif
 ```
 
-For a direct endpoint smoke test against a manually started sidecar:
+For a direct endpoint smoke test against a manually started gateway:
 
 ```bash
 curl -f http://127.0.0.1:4040/healthz
 printf '{"session_id":"smoke-cursor","hook_event_name":"sessionStart"}' \
-  | NEMO_FLOW_SIDECAR_URL=http://127.0.0.1:4040 nemo-flow-sidecar hook-forward cursor --fail-closed
+  | NEMO_FLOW_GATEWAY_URL=http://127.0.0.1:4040 nemo-flow hook-forward cursor --fail-closed
 ```
 
 If Cursor CLI hooks do not fire for the active `cursor-agent` version, treat

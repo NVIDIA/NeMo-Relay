@@ -30,7 +30,7 @@ impl AgentKind {
 pub(crate) enum NormalizedEvent {
     AgentStarted(SessionEvent),
     AgentEnded(SessionEvent),
-    /// Conversation-turn boundary that the sidecar uses to snapshot ATIF without closing the
+    /// Conversation-turn boundary that the gateway uses to snapshot ATIF without closing the
     /// agent scope. Emitted alongside `LlmHint` for `Stop` hooks (Claude/Codex/Cursor).
     /// Required for codex 0.129 transparent runs because codex has no `SessionEnd`-equivalent
     /// event — the last `Stop` of the session leaves an up-to-date ATIF on disk. Multi-turn

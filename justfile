@@ -335,7 +335,7 @@ section = ""
 output = []
 changed = []
 found_workspace_version = False
-local_dependencies = ("nemo-flow", "nemo-flow-adaptive", "nemo-flow-ffi", "nemo-flow-sidecar")
+local_dependencies = ("nemo-flow", "nemo-flow-adaptive", "nemo-flow-ffi", "nemo-flow-cli")
 found_dependencies = set()
 
 for line in text.splitlines(keepends=True):

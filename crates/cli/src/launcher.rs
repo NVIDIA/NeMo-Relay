@@ -13,23 +13,23 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::config::{
-    AgentConfigs, CodingAgent, ResolvedConfig, RunCommand, ServerArgs, SidecarConfig,
+    AgentConfigs, CodingAgent, GatewayConfig, ResolvedConfig, RunCommand, ServerArgs,
     resolve_run_config,
 };
-use crate::error::SidecarError;
+use crate::error::CliError;
 use crate::installer::{generated_hooks, hook_forward_command, merge_hooks, read_json_file};
 use crate::server;
 
-/// Runs a child coding-agent command behind an ephemeral local sidecar.
+/// Runs a child coding-agent command behind an ephemeral local gateway.
 ///
-/// The sidecar binds to an OS-assigned loopback port, prepares agent-specific hook/gateway wiring,
+/// The gateway binds to an OS-assigned loopback port, prepares agent-specific hook/gateway wiring,
 /// waits for health before spawning the child, and restores temporary files after the child and
 /// server shut down. The child's exit status is preserved when it fits in `ExitCode`; otherwise the
 /// launcher reports generic failure.
 pub(crate) async fn run(
     command: RunCommand,
     inherited: Option<&ServerArgs>,
-) -> Result<ExitCode, SidecarError> {
+) -> Result<ExitCode, CliError> {
     let run = TransparentRun::new(command, inherited).await?;
     run.print_if_requested();
     run.execute().await
@@ -40,34 +40,31 @@ struct TransparentRun {
     prepared: PreparedRun,
     resolved: ResolvedConfig,
     listener: TcpListener,
-    sidecar_url: String,
+    gateway_url: String,
     dry_run: bool,
     print: bool,
 }
 
 impl TransparentRun {
     // Resolves configuration, binds the ephemeral listener, and builds agent-specific launch wiring
-    // without starting the sidecar or spawning the child command.
-    async fn new(
-        command: RunCommand,
-        inherited: Option<&ServerArgs>,
-    ) -> Result<Self, SidecarError> {
+    // without starting the gateway or spawning the child command.
+    async fn new(command: RunCommand, inherited: Option<&ServerArgs>) -> Result<Self, CliError> {
         let dry_run = command.dry_run;
         let print = command.print;
         let mut resolved = resolve_run_config(&command, inherited)?;
         let (agent, argv) = resolve_agent_and_argv(&command, &resolved.agents)?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
-        let sidecar_url = format!("http://{address}");
-        resolved.sidecar.bind = address;
+        let gateway_url = format!("http://{address}");
+        resolved.gateway.bind = address;
 
-        let prepared = PreparedRun::new(agent, argv, &sidecar_url, &resolved, dry_run)?;
+        let prepared = PreparedRun::new(agent, argv, &gateway_url, &resolved, dry_run)?;
         Ok(Self {
             agent,
             prepared,
             resolved,
             listener,
-            sidecar_url,
+            gateway_url,
             dry_run,
             print,
         })
@@ -78,35 +75,35 @@ impl TransparentRun {
     fn print_if_requested(&self) {
         if self.print || self.dry_run {
             self.prepared
-                .print(self.agent, &self.sidecar_url, &self.resolved);
+                .print(self.agent, &self.gateway_url, &self.resolved);
         }
     }
 
     // Runs the prepared child command unless this is an inspection-only dry run.
-    async fn execute(self) -> Result<ExitCode, SidecarError> {
+    async fn execute(self) -> Result<ExitCode, CliError> {
         if self.dry_run {
             return Ok(ExitCode::SUCCESS);
         }
         execute_live_run(
             self.listener,
-            self.resolved.sidecar,
-            &self.sidecar_url,
+            self.resolved.gateway,
+            &self.gateway_url,
             self.prepared,
         )
         .await
     }
 }
 
-// Starts the sidecar, waits for readiness, runs the child command, restores temporary state, and then
+// Starts the gateway, waits for readiness, runs the child command, restores temporary state, and then
 // maps the child process status to the launcher's exit code.
 async fn execute_live_run(
     listener: TcpListener,
-    sidecar_config: SidecarConfig,
-    sidecar_url: &str,
+    gateway_config: GatewayConfig,
+    gateway_url: &str,
     prepared: PreparedRun,
-) -> Result<ExitCode, SidecarError> {
-    let running_server = RunningSidecar::start(listener, sidecar_config);
-    if let Err(error) = wait_for_health(sidecar_url).await {
+) -> Result<ExitCode, CliError> {
+    let running_server = RunningGateway::start(listener, gateway_config);
+    if let Err(error) = wait_for_health(gateway_url).await {
         let _ = running_server.stop().await;
         return Err(error);
     }
@@ -125,7 +122,7 @@ async fn execute_live_run(
 fn resolve_agent_and_argv(
     command: &RunCommand,
     agents: &AgentConfigs,
-) -> Result<(CodingAgent, Vec<String>), SidecarError> {
+) -> Result<(CodingAgent, Vec<String>), CliError> {
     let argv = resolved_argv(command, agents)?;
     let agent = resolved_agent(command, &argv)?;
     Ok((agent, argv))
@@ -134,17 +131,17 @@ fn resolve_agent_and_argv(
 // Returns the command argv supplied on the CLI, or the configured command for an explicitly selected
 // agent. Empty CLI argv without `--agent` is rejected before inference because there is no executable
 // name to inspect.
-fn resolved_argv(command: &RunCommand, agents: &AgentConfigs) -> Result<Vec<String>, SidecarError> {
+fn resolved_argv(command: &RunCommand, agents: &AgentConfigs) -> Result<Vec<String>, CliError> {
     if !command.command.is_empty() {
         return Ok(command.command.clone());
     }
     let agent = command.agent.ok_or_else(|| {
-        SidecarError::Launch(
+        CliError::Launch(
             "missing command; pass -- <agent-command> or --agent with a configured command".into(),
         )
     })?;
     configured_command(agent, agents).ok_or_else(|| {
-        SidecarError::Launch(format!(
+        CliError::Launch(format!(
             "no configured command for {}; pass -- <agent-command>",
             agent.as_arg()
         ))
@@ -153,12 +150,12 @@ fn resolved_argv(command: &RunCommand, agents: &AgentConfigs) -> Result<Vec<Stri
 
 // Uses an explicit `--agent` when present and otherwise infers the agent from argv[0]. Inference is
 // intentionally late so configured commands and direct CLI commands share the same validation path.
-fn resolved_agent(command: &RunCommand, argv: &[String]) -> Result<CodingAgent, SidecarError> {
+fn resolved_agent(command: &RunCommand, argv: &[String]) -> Result<CodingAgent, CliError> {
     if let Some(agent) = command.agent {
         return Ok(agent);
     }
     CodingAgent::infer(&argv[0]).ok_or_else(|| {
-        SidecarError::Launch(format!(
+        CliError::Launch(format!(
             "could not infer coding agent from command {:?}; pass --agent claude-code, --agent codex, --agent cursor, or --agent hermes",
             argv[0]
         ))
@@ -193,15 +190,15 @@ struct CursorRestore {
     had_original: bool,
 }
 
-struct RunningSidecar {
+struct RunningGateway {
     shutdown_tx: oneshot::Sender<()>,
-    task: JoinHandle<Result<(), SidecarError>>,
+    task: JoinHandle<Result<(), CliError>>,
 }
 
-impl RunningSidecar {
-    // Starts the sidecar listener on a background task and keeps the shutdown sender paired with the
+impl RunningGateway {
+    // Starts the gateway listener on a background task and keeps the shutdown sender paired with the
     // task handle so health failures and normal exits use identical cleanup semantics.
-    fn start(listener: TcpListener, config: crate::config::SidecarConfig) -> Self {
+    fn start(listener: TcpListener, config: crate::config::GatewayConfig) -> Self {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
             server::serve_listener(listener, config, Some(shutdown_rx)).await
@@ -211,11 +208,11 @@ impl RunningSidecar {
 
     // Requests shutdown and joins the server task. The send can fail only if the task already exited;
     // the join result still captures whether serving ended cleanly.
-    async fn stop(self) -> Result<(), SidecarError> {
+    async fn stop(self) -> Result<(), CliError> {
         let _ = self.shutdown_tx.send(());
         self.task
             .await
-            .map_err(|error| SidecarError::Launch(format!("sidecar task failed: {error}")))?
+            .map_err(|error| CliError::Launch(format!("gateway task failed: {error}")))?
     }
 }
 
@@ -226,13 +223,13 @@ impl PreparedRun {
     fn new(
         agent: CodingAgent,
         argv: Vec<String>,
-        sidecar_url: &str,
+        gateway_url: &str,
         resolved: &ResolvedConfig,
         dry_run: bool,
-    ) -> Result<Self, SidecarError> {
+    ) -> Result<Self, CliError> {
         let mut run = Self {
             argv,
-            env: vec![("NEMO_FLOW_SIDECAR_URL".into(), sidecar_url.into())],
+            env: vec![("NEMO_FLOW_GATEWAY_URL".into(), gateway_url.into())],
             temp_dirs: Vec::new(),
             cursor_restore: None,
             notes: Vec::new(),
@@ -240,12 +237,12 @@ impl PreparedRun {
         match agent {
             CodingAgent::ClaudeCode => {
                 if dry_run {
-                    run.prepare_claude_dry(sidecar_url);
+                    run.prepare_claude_dry(gateway_url);
                 } else {
-                    run.prepare_claude(sidecar_url)?;
+                    run.prepare_claude(gateway_url)?;
                 }
             }
-            CodingAgent::Codex => run.prepare_codex(sidecar_url),
+            CodingAgent::Codex => run.prepare_codex(gateway_url),
             CodingAgent::Cursor => {
                 if resolved.agents.cursor.patch_restore_hooks {
                     if dry_run {
@@ -262,7 +259,7 @@ impl PreparedRun {
 
     // Records the Claude Code argv/env changes that would be made during a real run. The temporary
     // plugin path is symbolic so printed dry-run output is deterministic and non-mutating.
-    fn prepare_claude_dry(&mut self, sidecar_url: &str) {
+    fn prepare_claude_dry(&mut self, gateway_url: &str) {
         insert_after_agent(
             &mut self.argv,
             CodingAgent::ClaudeCode,
@@ -272,25 +269,25 @@ impl PreparedRun {
             ],
         );
         self.env
-            .push(("ANTHROPIC_BASE_URL".into(), sidecar_url.to_string()));
+            .push(("ANTHROPIC_BASE_URL".into(), gateway_url.to_string()));
         self.notes
             .push("would generate a temporary Claude Code plugin directory".into());
     }
 
-    // Creates a temporary Claude Code plugin containing sidecar hooks and points Claude at both
-    // that plugin directory and the sidecar Anthropic-compatible gateway URL.
-    fn prepare_claude(&mut self, sidecar_url: &str) -> Result<(), SidecarError> {
+    // Creates a temporary Claude Code plugin containing gateway hooks and points Claude at both
+    // that plugin directory and the gateway Anthropic-compatible gateway URL.
+    fn prepare_claude(&mut self, gateway_url: &str) -> Result<(), CliError> {
         let root = temp_dir("nemo-flow-claude-plugin")?;
         std::fs::create_dir_all(root.join(".claude-plugin"))?;
         std::fs::create_dir_all(root.join("hooks"))?;
         std::fs::write(
             root.join(".claude-plugin/plugin.json"),
             serde_json::to_vec_pretty(&json!({
-                "name": "nemo-flow-sidecar",
+                "name": "nemo-flow-cli",
                 "version": env!("CARGO_PKG_VERSION"),
-                "description": "Temporary NeMo Flow sidecar hooks"
+                "description": "Temporary NeMo Flow gateway hooks"
             }))
-            .map_err(|error| SidecarError::Launch(error.to_string()))?,
+            .map_err(|error| CliError::Launch(error.to_string()))?,
         )?;
         write_hooks(
             &root.join("hooks/hooks.json"),
@@ -305,7 +302,7 @@ impl PreparedRun {
             ["--plugin-dir".into(), root.display().to_string()],
         );
         self.env
-            .push(("ANTHROPIC_BASE_URL".into(), sidecar_url.to_string()));
+            .push(("ANTHROPIC_BASE_URL".into(), gateway_url.to_string()));
         self.temp_dirs.push(root);
         Ok(())
     }
@@ -314,7 +311,7 @@ impl PreparedRun {
     // reserves built-in provider IDs, so run mode installs a temporary provider alias instead of
     // overriding `model_providers.openai`. Uses `features.hooks=true` introduced in codex-cli
     // 0.129; the older `features.codex_hooks` is deprecated. Requires codex-cli >= 0.129.0.
-    fn prepare_codex(&mut self, sidecar_url: &str) {
+    fn prepare_codex(&mut self, gateway_url: &str) {
         let hook_command = hook_forward_command(&transparent_hook_executable(), CodingAgent::Codex);
         let mut args = vec![
             "--config".to_string(),
@@ -322,7 +319,7 @@ impl PreparedRun {
             "--config".to_string(),
             "model_provider=\"nemo-flow-openai\"".to_string(),
             "--config".to_string(),
-            codex_sidecar_provider_config(sidecar_url),
+            codex_gateway_provider_config(gateway_url),
         ];
         for (event, groups) in generated_hooks(CodingAgent::Codex, &hook_command)["hooks"]
             .as_object()
@@ -338,7 +335,7 @@ impl PreparedRun {
     // Temporarily merges Cursor hooks into the nearest project `.cursor/hooks.json`, backing up the
     // original if it exists. Cursor discovers hooks from files, so run mode patches and later
     // restores project state rather than passing hook config on the command line.
-    fn prepare_cursor(&mut self) -> Result<(), SidecarError> {
+    fn prepare_cursor(&mut self) -> Result<(), CliError> {
         let path = cursor_hooks_path()?;
         let (had_original, backup_path) = backup_existing_cursor_hooks(&path)?;
         write_merged_cursor_hooks(&path)?;
@@ -352,7 +349,7 @@ impl PreparedRun {
 
     // Records the Cursor hook file that would be patched during a real run without touching the
     // filesystem, preserving dry-run as an inspection-only operation.
-    fn prepare_cursor_dry(&mut self) -> Result<(), SidecarError> {
+    fn prepare_cursor_dry(&mut self) -> Result<(), CliError> {
         let path = cursor_hooks_path()?;
         self.notes.push(format!(
             "would temporarily merge NeMo Flow hooks into {}",
@@ -362,28 +359,28 @@ impl PreparedRun {
     }
 
     // Notes Hermes' persistent-hook requirement. Hermes hook approval is outside this launcher, so
-    // run mode only exports the live sidecar URL for hooks that are already installed and approved.
+    // run mode only exports the live gateway URL for hooks that are already installed and approved.
     fn prepare_hermes(&mut self) {
         self.notes.push(
-            "Hermes shell hooks must be configured with `nemo-flow-sidecar install hermes`; this run exports the dynamic sidecar URL for approved hooks".into(),
+            "Hermes shell hooks must be configured with `nemo-flow install hermes`; this run exports the dynamic gateway URL for approved hooks".into(),
         );
     }
 
     // Spawns the prepared child process with injected environment and waits for its exit status.
     // Stdio is inherited by default so agent interaction remains unchanged in transparent mode.
-    async fn spawn_and_wait(&self) -> Result<std::process::ExitStatus, SidecarError> {
+    async fn spawn_and_wait(&self) -> Result<std::process::ExitStatus, CliError> {
         let mut command = Command::new(&self.argv[0]);
         command.args(&self.argv[1..]);
         for (name, value) in &self.env {
             command.env(name, value);
         }
         let mut child = command.spawn()?;
-        child.wait().await.map_err(SidecarError::from)
+        child.wait().await.map_err(CliError::from)
     }
 
     // Removes temporary directories and restores Cursor hook files after the child exits. Restore
     // errors are surfaced after the child status is collected so cleanup problems are not hidden.
-    fn restore(&self) -> Result<(), SidecarError> {
+    fn restore(&self) -> Result<(), CliError> {
         for dir in &self.temp_dirs {
             let _ = std::fs::remove_dir_all(dir);
         }
@@ -393,7 +390,7 @@ impl PreparedRun {
         match (&cursor.backup_path, cursor.had_original) {
             (Some(backup), true) => {
                 std::fs::copy(backup, &cursor.path).map_err(|error| {
-                    SidecarError::Launch(format!(
+                    CliError::Launch(format!(
                         "failed to restore Cursor hooks from {}: {error}",
                         backup.display()
                     ))
@@ -403,7 +400,7 @@ impl PreparedRun {
             (_, false) => {
                 if cursor.path.exists() {
                     std::fs::remove_file(&cursor.path).map_err(|error| {
-                        SidecarError::Launch(format!(
+                        CliError::Launch(format!(
                             "failed to remove temporary Cursor hooks {}: {error}",
                             cursor.path.display()
                         ))
@@ -415,20 +412,20 @@ impl PreparedRun {
         Ok(())
     }
 
-    // Prints the resolved transparent-run plan, including dynamic sidecar URL, upstream base URLs,
+    // Prints the resolved transparent-run plan, including dynamic gateway URL, upstream base URLs,
     // argv/env injection, and any agent-specific notes or temporary files.
-    fn print(&self, agent: CodingAgent, sidecar_url: &str, resolved: &ResolvedConfig) {
+    fn print(&self, agent: CodingAgent, gateway_url: &str, resolved: &ResolvedConfig) {
         println!("agent = {}", agent.as_arg());
-        println!("sidecar_url = {sidecar_url}");
-        println!("openai_base_url = {}", resolved.sidecar.openai_base_url);
+        println!("gateway_url = {gateway_url}");
+        println!("openai_base_url = {}", resolved.gateway.openai_base_url);
         println!(
             "anthropic_base_url = {}",
-            resolved.sidecar.anthropic_base_url
+            resolved.gateway.anthropic_base_url
         );
-        if let Some(path) = &resolved.sidecar.atif_dir {
+        if let Some(path) = &resolved.gateway.atif_dir {
             println!("atif_dir = {}", path.display());
         }
-        if let Some(endpoint) = &resolved.sidecar.openinference_endpoint {
+        if let Some(endpoint) = &resolved.gateway.openinference_endpoint {
             println!("openinference_endpoint = {endpoint}");
         }
         println!("argv = {}", self.argv.join(" "));
@@ -454,11 +451,11 @@ fn exit_code(status: std::process::ExitStatus) -> ExitCode {
         .unwrap_or(ExitCode::FAILURE)
 }
 
-// Polls the ephemeral sidecar health endpoint for roughly one second before launching the agent.
+// Polls the ephemeral gateway health endpoint for roughly one second before launching the agent.
 // Startup failures return a launcher error so the child command is never run against a dead proxy.
-async fn wait_for_health(sidecar_url: &str) -> Result<(), SidecarError> {
+async fn wait_for_health(gateway_url: &str) -> Result<(), CliError> {
     let client = Client::new();
-    let url = format!("{}/healthz", sidecar_url.trim_end_matches('/'));
+    let url = format!("{}/healthz", gateway_url.trim_end_matches('/'));
     for _ in 0..50 {
         if let Ok(response) = client.get(&url).send().await
             && response.status().is_success()
@@ -467,21 +464,21 @@ async fn wait_for_health(sidecar_url: &str) -> Result<(), SidecarError> {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    Err(SidecarError::Launch(format!(
-        "sidecar did not become ready at {url}"
+    Err(CliError::Launch(format!(
+        "gateway did not become ready at {url}"
     )))
 }
 
-fn codex_sidecar_provider_config(sidecar_url: &str) -> String {
+fn codex_gateway_provider_config(gateway_url: &str) -> String {
     format!(
         "model_providers.nemo-flow-openai={{name=\"NeMo Flow OpenAI\",base_url={},wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false}}",
-        toml_string(sidecar_url)
+        toml_string(gateway_url)
     )
 }
 
-// Returns the absolute path of the running sidecar binary so injected hooks can find it
+// Returns the absolute path of the running gateway binary so injected hooks can find it
 // without relying on the user's `PATH`. Spawned hook subprocesses inherit the agent's
-// environment; in transparent run, the dev/install location of the sidecar is rarely on
+// environment; in transparent run, the dev/install location of the gateway is rarely on
 // `PATH`, which would cause hooks to exit with status 127 (command not found). Falls back
 // to the bare name when `current_exe` is unavailable so behavior degrades to the previous
 // install-style assumption rather than failing to launch.
@@ -489,7 +486,7 @@ fn transparent_hook_executable() -> String {
     std::env::current_exe()
         .ok()
         .and_then(|path| path.to_str().map(str::to_owned))
-        .unwrap_or_else(|| "nemo-flow-sidecar".to_string())
+        .unwrap_or_else(|| "nemo-flow".to_string())
 }
 
 // Inserts generated agent flags immediately after the last argv element that looks like the agent
@@ -511,18 +508,17 @@ fn insert_after_agent(
 
 // Writes pretty JSON hook config to a path whose parent has already been created by the caller.
 // Serialization errors are converted to launch errors to keep temporary setup failures contextual.
-fn write_hooks(path: &Path, hooks: Value) -> Result<(), SidecarError> {
+fn write_hooks(path: &Path, hooks: Value) -> Result<(), CliError> {
     std::fs::write(
         path,
-        serde_json::to_vec_pretty(&hooks)
-            .map_err(|error| SidecarError::Launch(error.to_string()))?,
+        serde_json::to_vec_pretty(&hooks).map_err(|error| CliError::Launch(error.to_string()))?,
     )?;
     Ok(())
 }
 
 // Backs up an existing Cursor hook file before run-mode patching. The return value records both the
 // original-file state and backup path so restore can either copy back or remove the generated file.
-fn backup_existing_cursor_hooks(path: &Path) -> Result<(bool, Option<PathBuf>), SidecarError> {
+fn backup_existing_cursor_hooks(path: &Path) -> Result<(bool, Option<PathBuf>), CliError> {
     let had_original = path.exists();
     if !had_original {
         return Ok((false, None));
@@ -532,9 +528,9 @@ fn backup_existing_cursor_hooks(path: &Path) -> Result<(bool, Option<PathBuf>), 
     Ok((true, Some(backup)))
 }
 
-// Creates the Cursor hooks parent directory when needed, merges generated sidecar hooks with any
+// Creates the Cursor hooks parent directory when needed, merges generated gateway hooks with any
 // existing hook file, and writes the patched JSON used for this transparent run.
-fn write_merged_cursor_hooks(path: &Path) -> Result<(), SidecarError> {
+fn write_merged_cursor_hooks(path: &Path) -> Result<(), CliError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -545,7 +541,7 @@ fn write_merged_cursor_hooks(path: &Path) -> Result<(), SidecarError> {
             &hook_forward_command(&transparent_hook_executable(), CodingAgent::Cursor),
         ),
     )?)
-    .map_err(|error| SidecarError::Launch(error.to_string()))?;
+    .map_err(|error| CliError::Launch(error.to_string()))?;
     std::fs::write(path, contents)?;
     Ok(())
 }
@@ -577,7 +573,7 @@ fn toml_string(value: &str) -> String {
 
 // Creates a timestamped directory under the OS temp directory. The timestamp suffix avoids
 // collisions between concurrent transparent runs without keeping persistent state.
-fn temp_dir(prefix: &str) -> Result<PathBuf, SidecarError> {
+fn temp_dir(prefix: &str) -> Result<PathBuf, CliError> {
     let path = std::env::temp_dir().join(format!("{prefix}-{}", timestamp()?));
     std::fs::create_dir_all(&path)?;
     Ok(path)
@@ -585,7 +581,7 @@ fn temp_dir(prefix: &str) -> Result<PathBuf, SidecarError> {
 
 // Locates Cursor's project hook file by walking up to the nearest ancestor that already contains a
 // `.cursor` directory, falling back to the current directory for first-time project setup.
-fn cursor_hooks_path() -> Result<PathBuf, SidecarError> {
+fn cursor_hooks_path() -> Result<PathBuf, CliError> {
     let cwd = std::env::current_dir()?;
     let project = cwd
         .ancestors()
@@ -596,10 +592,10 @@ fn cursor_hooks_path() -> Result<PathBuf, SidecarError> {
 
 // Returns a monotonic-enough wall-clock nanosecond stamp for temp and backup names. System time
 // errors become launcher errors because paths cannot be safely generated without a timestamp.
-fn timestamp() -> Result<u128, SidecarError> {
+fn timestamp() -> Result<u128, CliError> {
     Ok(SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| SidecarError::Launch(error.to_string()))?
+        .map_err(|error| CliError::Launch(error.to_string()))?
         .as_nanos())
 }
 

@@ -13,7 +13,7 @@ use tokio::task::JoinHandle;
 use tower::ServiceExt;
 
 use super::*;
-use crate::error::SidecarError;
+use crate::error::CliError;
 
 struct TestServer {
     url: String,
@@ -32,8 +32,8 @@ impl Drop for TestServer {
     }
 }
 
-fn test_config() -> SidecarConfig {
-    SidecarConfig {
+fn test_config() -> GatewayConfig {
+    GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -91,13 +91,13 @@ async fn healthz_returns_ok() {
 }
 
 #[tokio::test]
-async fn sidecar_errors_render_structured_json_responses() {
-    let response = SidecarError::InvalidPayload("bad input".into()).into_response();
+async fn gateway_errors_render_structured_json_responses() {
+    let response = CliError::InvalidPayload("bad input".into()).into_response();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(body["error"]["type"], json!("nemo_flow_sidecar_error"));
+    assert_eq!(body["error"]["type"], json!("nemo_flow_gateway_error"));
     assert!(
         body["error"]["message"]
             .as_str()
@@ -105,7 +105,7 @@ async fn sidecar_errors_render_structured_json_responses() {
             .contains("bad input")
     );
 
-    let response = SidecarError::Config("bad config".into()).into_response();
+    let response = CliError::Config("bad config".into()).into_response();
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }

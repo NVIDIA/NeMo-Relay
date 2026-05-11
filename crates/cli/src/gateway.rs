@@ -24,7 +24,7 @@ use nemo_flow::error::FlowError;
 use serde_json::{Map, Value, json};
 
 use crate::config::header_string;
-use crate::error::SidecarError;
+use crate::error::CliError;
 use crate::server::AppState;
 use crate::session::{GatewayCallPrep, LlmGatewayStart};
 
@@ -46,7 +46,7 @@ const MAX_BODY_BYTES: usize = 100 * 1024 * 1024;
 pub(crate) async fn passthrough(
     State(state): State<AppState>,
     request: Request<Body>,
-) -> Result<Response<Body>, SidecarError> {
+) -> Result<Response<Body>, CliError> {
     let prepared = prepare_gateway_request(&state.config, request).await?;
     let prep = state
         .sessions
@@ -70,16 +70,16 @@ struct PreparedGatewayRequest {
 // for both upstream forwarding and NeMo Flow LLM start events. Provider JSON parse failures are not
 // request failures because the gateway still forwards raw bytes unchanged.
 async fn prepare_gateway_request(
-    config: &crate::config::SidecarConfig,
+    config: &crate::config::GatewayConfig,
     request: Request<Body>,
-) -> Result<PreparedGatewayRequest, SidecarError> {
+) -> Result<PreparedGatewayRequest, CliError> {
     let (parts, body) = request.into_parts();
     let provider = ProviderRoute::from_path(parts.uri.path()).ok_or_else(|| {
-        SidecarError::InvalidPayload(format!("unsupported gateway path {}", parts.uri.path()))
+        CliError::InvalidPayload(format!("unsupported gateway path {}", parts.uri.path()))
     })?;
     let body_bytes = axum::body::to_bytes(body, MAX_BODY_BYTES)
         .await
-        .map_err(|error| SidecarError::InvalidPayload(error.to_string()))?;
+        .map_err(|error| CliError::InvalidPayload(error.to_string()))?;
     let request_json = serde_json::from_slice::<Value>(&body_bytes).unwrap_or(Value::Null);
     let upstream_url = provider.upstream_url(
         config,
@@ -170,7 +170,7 @@ async fn run_managed_gateway(
     state: AppState,
     prepared: PreparedGatewayRequest,
     prep: GatewayCallPrep,
-) -> Result<Response<Body>, SidecarError> {
+) -> Result<Response<Body>, CliError> {
     let codecs = codecs_for_route(prepared.provider);
     if prepared.streaming {
         run_managed_streaming(state, prepared, prep, codecs).await
@@ -215,7 +215,7 @@ async fn run_managed_buffered(
     prepared: PreparedGatewayRequest,
     prep: GatewayCallPrep,
     codecs: RouteCodecs,
-) -> Result<Response<Body>, SidecarError> {
+) -> Result<Response<Body>, CliError> {
     let upstream_info: UpstreamResponseInfo = Arc::new(Mutex::new(None));
     let upstream_error: UpstreamErrorSlot = Arc::new(Mutex::new(None));
     let response_bytes: Arc<Mutex<Option<Bytes>>> = Arc::new(Mutex::new(None));
@@ -336,7 +336,7 @@ async fn run_managed_streaming(
     prepared: PreparedGatewayRequest,
     prep: GatewayCallPrep,
     codecs: RouteCodecs,
-) -> Result<Response<Body>, SidecarError> {
+) -> Result<Response<Body>, CliError> {
     let upstream_info: UpstreamResponseInfo = Arc::new(Mutex::new(None));
     let upstream_error: UpstreamErrorSlot = Arc::new(Mutex::new(None));
     let func = build_streaming_func(
@@ -497,16 +497,16 @@ fn client_sse_body(json_stream: LlmJsonStream, route: ProviderRoute) -> Body {
             match item {
                 Ok(event_json) => {
                     let frame = encode_sse_frame(&event_json, route);
-                    yield Ok::<Bytes, SidecarError>(Bytes::from(frame));
+                    yield Ok::<Bytes, CliError>(Bytes::from(frame));
                 }
                 Err(error) => {
-                    yield Err(SidecarError::InvalidPayload(error.to_string()));
+                    yield Err(CliError::InvalidPayload(error.to_string()));
                     return;
                 }
             }
         }
         if matches!(route, ProviderRoute::OpenAiChatCompletions) {
-            yield Ok::<Bytes, SidecarError>(Bytes::from_static(b"data: [DONE]\n\n"));
+            yield Ok::<Bytes, CliError>(Bytes::from_static(b"data: [DONE]\n\n"));
         }
     };
     Body::from_stream(stream)
@@ -554,7 +554,7 @@ async fn forward_upstream_request(
 async fn passthrough_streaming(
     state: AppState,
     prepared: PreparedGatewayRequest,
-) -> Result<Response<Body>, SidecarError> {
+) -> Result<Response<Body>, CliError> {
     let response = forward_upstream_request(
         &state.http,
         &prepared.method,
@@ -574,21 +574,21 @@ async fn passthrough_streaming(
     build_response(status, headers, body)
 }
 
-// Translates a runtime [`FlowError`] from managed execution into a sidecar HTTP error. When the
+// Translates a runtime [`FlowError`] from managed execution into a gateway HTTP error. When the
 // failure originated from upstream send/body work, the captured `reqwest::Error` is preferred so
 // the response status reflects 502 Bad Gateway rather than the generic 400 from a guardrail or
-// internal sidecar error.
-fn translate_runtime_error(error: FlowError, upstream_error: &UpstreamErrorSlot) -> SidecarError {
+// internal gateway error.
+fn translate_runtime_error(error: FlowError, upstream_error: &UpstreamErrorSlot) -> CliError {
     if let Some(upstream) = upstream_error
         .lock()
         .expect("upstream error lock poisoned")
         .take()
     {
-        return SidecarError::Upstream(upstream);
+        return CliError::Upstream(upstream);
     }
     match error {
-        FlowError::GuardrailRejected(reason) => SidecarError::InvalidPayload(reason),
-        other => SidecarError::InvalidPayload(other.to_string()),
+        FlowError::GuardrailRejected(reason) => CliError::InvalidPayload(reason),
+        other => CliError::InvalidPayload(other.to_string()),
     }
 }
 
@@ -599,7 +599,7 @@ fn translate_runtime_error(error: FlowError, upstream_error: &UpstreamErrorSlot)
 pub(crate) async fn models(
     State(state): State<AppState>,
     request: Request<Body>,
-) -> Result<Response<Body>, SidecarError> {
+) -> Result<Response<Body>, CliError> {
     let (parts, _body) = request.into_parts();
     if parts.method != Method::GET {
         return build_response(
@@ -640,7 +640,7 @@ enum ProviderRoute {
 }
 
 impl ProviderRoute {
-    // Maps public sidecar paths to known upstream provider routes. Unsupported paths return `None`
+    // Maps public gateway paths to known upstream provider routes. Unsupported paths return `None`
     // so the caller can fail as a bad hook/gateway payload instead of constructing arbitrary URLs.
     fn from_path(path: &str) -> Option<Self> {
         match path {
@@ -671,7 +671,7 @@ impl ProviderRoute {
     // Builds the upstream URL by combining the configured provider base with the original path and
     // query string. Trailing slashes are stripped from the base to avoid double-slash variants in
     // configured enterprise or local proxy endpoints.
-    fn upstream_url(self, config: &crate::config::SidecarConfig, path_and_query: &str) -> String {
+    fn upstream_url(self, config: &crate::config::GatewayConfig, path_and_query: &str) -> String {
         let base = match self {
             Self::OpenAiResponses | Self::OpenAiChatCompletions | Self::OpenAiModels => {
                 config.openai_base_url.trim_end_matches('/')
@@ -692,7 +692,7 @@ impl ProviderRoute {
     }
 }
 
-// Reads the gateway session id from explicit sidecar headers first, with Claude's session header
+// Reads the gateway session id from explicit gateway headers first, with Claude's session header
 // accepted for compatibility with Claude Code environments that already propagate it.
 fn gateway_session_id(headers: &HeaderMap) -> Option<String> {
     header_string(headers, "x-nemo-flow-session-id")
@@ -764,12 +764,12 @@ fn response_headers(headers: &HeaderMap) -> HeaderMap {
 }
 
 // Reconstructs an Axum response from upstream status, filtered headers, and the selected body. All
-// builder errors are converted into sidecar HTTP errors rather than panics.
+// builder errors are converted into gateway HTTP errors rather than panics.
 fn build_response(
     status: StatusCode,
     headers: HeaderMap,
     body: Body,
-) -> Result<Response<Body>, SidecarError> {
+) -> Result<Response<Body>, CliError> {
     let mut builder = Response::builder().status(status);
     for (name, value) in &headers {
         builder = builder.header(name, value);
@@ -787,7 +787,7 @@ fn should_forward_request_header(name: &HeaderName) -> bool {
         // Strip Accept-Encoding so upstreams return identity-encoded bodies; otherwise the
         // observability capture (`output.value` on LLM spans, ATIF trajectory bodies) records
         // gzip/br/zstd bytes that downstream consumers can't read. Bandwidth cost is paid only
-        // on the sidecar-upstream hop. The client never asked for the encoding it would have
+        // on the gateway-upstream hop. The client never asked for the encoding it would have
         // received from upstream, so its decoders never trigger.
         && name != http::header::ACCEPT_ENCODING
 }
@@ -809,7 +809,7 @@ fn should_record_header(name: &HeaderName) -> bool {
 }
 
 // Identifies headers that describe a single transport hop and therefore must not be proxied across
-// the client-sidecar-upstream boundary.
+// the client-gateway-upstream boundary.
 fn is_hop_by_hop(name: &HeaderName) -> bool {
     matches!(
         name.as_str(),
