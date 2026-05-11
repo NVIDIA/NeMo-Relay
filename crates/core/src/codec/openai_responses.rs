@@ -22,8 +22,8 @@ use crate::error::{FlowError, Result};
 use crate::json::Json;
 
 use super::request::{
-    AnnotatedLlmRequest, GenerationParams, Message, MessageContent, ToolChoice,
-    ToolChoiceFunction, ToolChoiceFunctionName, ToolDefinition,
+    AnnotatedLlmRequest, GenerationParams, Message, MessageContent, ToolChoice, ToolChoiceFunction,
+    ToolChoiceFunctionName, ToolDefinition,
 };
 use super::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, ResponseToolCall, Usage,
@@ -301,7 +301,6 @@ fn decode_openai_or_anthropic_parallel_tool_calls(
         .and_then(|v| v.as_bool())
         .map(|disabled| !disabled)
 }
-
 
 // ---------------------------------------------------------------------------
 // LlmResponseCodec implementation

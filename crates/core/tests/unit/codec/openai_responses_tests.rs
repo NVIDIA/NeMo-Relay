@@ -508,7 +508,9 @@ fn test_decode_request_input_array_preserves_unparsed_items_in_extra() {
     // strict-first behavior: no partial message extraction on mixed arrays
     assert!(annotated.messages.is_empty());
     assert_eq!(
-        annotated.extra.get("_openai_responses_unparsed_input_items"),
+        annotated
+            .extra
+            .get("_openai_responses_unparsed_input_items"),
         Some(&json!([
             { "role": "user", "content": "hello" },
             { "type": "function_call_output", "call_id": "call_1", "output": "ok" }
@@ -536,10 +538,12 @@ fn test_decode_request_litellm_reasoning_input_item_preserved_and_controls_extra
     let annotated = codec.decode(&request).unwrap();
     // strict-first parse: mixed input array preserved whole in extra
     assert!(annotated.messages.is_empty());
-    assert!(annotated
-        .extra
-        .get("_openai_responses_unparsed_input_items")
-        .is_some());
+    assert!(
+        annotated
+            .extra
+            .get("_openai_responses_unparsed_input_items")
+            .is_some()
+    );
     // stable controls still extracted
     assert_eq!(annotated.store, Some(true));
     assert_eq!(annotated.parallel_tool_calls, Some(true));
@@ -561,13 +565,19 @@ fn test_decode_request_sglang_extensions_preserved_in_extra() {
     assert_eq!(annotated.reasoning, Some(json!({"effort":"low"})));
     assert_eq!(annotated.tool_choice, Some(ToolChoice::None));
     // sglang-specific extensions retained losslessly
-    assert_eq!(annotated.extra.get("request_id"), Some(&json!("resp_custom_1")));
+    assert_eq!(
+        annotated.extra.get("request_id"),
+        Some(&json!("resp_custom_1"))
+    );
     assert_eq!(annotated.extra.get("priority"), Some(&json!(3)));
     assert_eq!(annotated.extra.get("extra_key"), Some(&json!("tenant-a")));
     assert_eq!(annotated.extra.get("cache_salt"), Some(&json!("salt-123")));
     assert_eq!(annotated.extra.get("top_k"), Some(&json!(40)));
     assert_eq!(annotated.extra.get("min_p"), Some(&json!(0.05)));
-    assert_eq!(annotated.extra.get("repetition_penalty"), Some(&json!(1.02)));
+    assert_eq!(
+        annotated.extra.get("repetition_penalty"),
+        Some(&json!(1.02))
+    );
 }
 
 // ===================================================================
