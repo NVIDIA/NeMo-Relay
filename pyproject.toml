@@ -82,7 +82,7 @@ langchain = [
 langchain-nvidia = [
     "langchain>=1.2.11,<2.0.0",
     "langchain-core",
-    "langchain-nvidia-ai-endpoints",
+    "langchain-nvidia-ai-endpoints~=1.0",
 ]
 
 [tool.maturin]

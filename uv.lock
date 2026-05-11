@@ -1219,7 +1219,7 @@ requires-dist = [
     { name = "langchain", marker = "extra == 'langchain-nvidia'", specifier = ">=1.2.11,<2.0.0" },
     { name = "langchain-core", marker = "extra == 'langchain'" },
     { name = "langchain-core", marker = "extra == 'langchain-nvidia'" },
-    { name = "langchain-nvidia-ai-endpoints", marker = "extra == 'langchain-nvidia'" },
+    { name = "langchain-nvidia-ai-endpoints", marker = "extra == 'langchain-nvidia'", specifier = "~=1.0" },
 ]
 provides-extras = ["langchain", "langchain-nvidia"]
 
