@@ -162,6 +162,7 @@ Basic Guide: Adding Scopes <integrate-frameworks/adding-scopes>
 Basic Guide: Wrap Tool Calls <integrate-frameworks/wrap-tool-calls>
 Basic Guide: Wrap LLM Calls <integrate-frameworks/wrap-llm-calls>
 Advanced Guide: Coding-Agent Gateway <integrate-frameworks/coding-agent-gateway>
+OpenClaw Plugin Guide <integrate-frameworks/openclaw-plugin>
 Claude Code Gateway Guide <integrate-frameworks/coding-agent-claude-code>
 Codex Gateway Guide <integrate-frameworks/coding-agent-codex>
 Cursor Gateway Guide <integrate-frameworks/coding-agent-cursor>

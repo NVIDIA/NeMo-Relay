@@ -9,6 +9,9 @@ This package provides the `nemo-flow` OpenClaw plugin. It converts supported
 OpenClaw hook events into NeMo Flow sessions, LLM spans, tool spans, lifecycle
 marks, ATIF JSON, OpenTelemetry spans, and OpenInference/Phoenix spans.
 
+For user-facing setup, configuration, and troubleshooting, see the
+[OpenClaw Plugin Guide](../../docs/integrate-frameworks/openclaw-plugin.md).
+
 The package declares both OpenClaw entrypoint styles:
 
 - `openclaw.extensions`: `./index.ts` for source-based plugin workflows.
@@ -171,7 +174,8 @@ types through a stable public subpath.
 
 ## Health
 
-The plugin registers the admin-scoped gateway method `nemoFlow.status`.
+The plugin registers the `operator.admin` scoped gateway method
+`nemoFlow.status`.
 
 The response reports:
 
