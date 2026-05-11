@@ -527,6 +527,26 @@ fn test_decode_request_accepts_anthropic_hint_tool_choice() {
     assert_eq!(annotated.parallel_tool_calls, Some(false));
 }
 
+#[test]
+fn test_decode_request_litellm_reasoning_input_item_preserved_and_controls_extracted() {
+    let codec = OpenAIResponsesCodec;
+    let request = make_request(fixture_json(include_str!(
+        "../../fixtures/codec/openai_responses/litellm_reasoning_input_item.json"
+    )));
+    let annotated = codec.decode(&request).unwrap();
+    // strict-first parse: mixed input array preserved whole in extra
+    assert!(annotated.messages.is_empty());
+    assert!(annotated
+        .extra
+        .get("_openai_responses_unparsed_input_items")
+        .is_some());
+    // stable controls still extracted
+    assert_eq!(annotated.store, Some(true));
+    assert_eq!(annotated.parallel_tool_calls, Some(true));
+    assert_eq!(annotated.truncation, Some(json!("disabled")));
+    assert_eq!(annotated.reasoning, Some(json!({"effort":"minimal"})));
+}
+
 // ===================================================================
 // Request encode tests
 // ===================================================================

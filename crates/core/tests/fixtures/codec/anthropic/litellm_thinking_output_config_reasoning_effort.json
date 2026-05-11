@@ -1,0 +1,11 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "messages": [
+    { "role": "user", "content": "Hi" }
+  ],
+  "max_tokens": 128,
+  "thinking": { "type": "enabled", "budget_tokens": 2048 },
+  "output_config": { "effort": "low" },
+  "reasoning_effort": "minimal",
+  "tool_choice": { "type": "any", "disable_parallel_tool_use": false }
+}

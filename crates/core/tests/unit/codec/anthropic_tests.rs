@@ -575,6 +575,44 @@ fn test_decode_request_vllm_system_array_ignores_non_text_blocks() {
     );
 }
 
+#[test]
+fn test_decode_request_litellm_bridge_thinking_output_config_preserved_in_extra() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(fixture_json(include_str!(
+        "../../fixtures/codec/anthropic/litellm_thinking_output_config_reasoning_effort.json"
+    )));
+    let annotated = codec.decode(&request).unwrap();
+    // stable extraction
+    assert_eq!(annotated.tool_choice, Some(ToolChoice::Required));
+    assert_eq!(annotated.parallel_tool_calls, Some(true));
+    // bridge-specific controls preserved losslessly
+    assert_eq!(
+        annotated.extra.get("thinking"),
+        Some(&json!({"type":"enabled","budget_tokens":2048}))
+    );
+    assert_eq!(
+        annotated.extra.get("output_config"),
+        Some(&json!({"effort":"low"}))
+    );
+    assert_eq!(
+        annotated.extra.get("reasoning_effort"),
+        Some(&json!("minimal"))
+    );
+}
+
+#[test]
+fn test_decode_request_litellm_cache_control_blocks_preserved() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(fixture_json(include_str!(
+        "../../fixtures/codec/anthropic/litellm_cache_control_blocks.json"
+    )));
+    let annotated = codec.decode(&request).unwrap();
+    // System text should still extract.
+    assert_eq!(annotated.system_prompt(), Some("Be terse"));
+    // `system` is a modeled key in Anthropic decode and should not live in extra.
+    assert!(annotated.extra.get("system").is_none());
+}
+
 // ===================================================================
 // Request encode tests
 // ===================================================================

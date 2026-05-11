@@ -1,0 +1,15 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "max_tokens": 128,
+  "system": [
+    { "type": "text", "text": "Be terse", "cache_control": { "type": "ephemeral" } }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        { "type": "text", "text": "Hello", "cache_control": { "type": "ephemeral", "scope": "global" } }
+      ]
+    }
+  ]
+}
