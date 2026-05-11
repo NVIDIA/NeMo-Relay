@@ -30,7 +30,7 @@ The release pipeline publishes these package surfaces from a tag push:
 
 | Ecosystem | Published Surface |
 |---|---|
-| crates.io | `nemo-flow`, `nemo-flow-adaptive`, `nemo-flow-ffi`, `nemo-flow-sidecar` |
+| crates.io | `nemo-flow`, `nemo-flow-adaptive`, `nemo-flow-ffi`, `nemo-flow-cli` |
 | PyPI | `nemo-flow` |
 | npm | `nemo-flow-node`, `nemo-flow-wasm` |
 | GitHub Pages | The documentation site, including the versioned docs build |
@@ -46,7 +46,7 @@ NeMo Flow versions are anchored on the workspace SemVer in the repository root
 - The root `Cargo.toml` `workspace.package.version` is the canonical release
   version for the Rust workspace.
 - The root `Cargo.toml` `workspace.dependencies` entries for `nemo-flow`,
-  `nemo-flow-adaptive`, `nemo-flow-ffi`, and `nemo-flow-sidecar` must stay
+  `nemo-flow-adaptive`, `nemo-flow-ffi`, and `nemo-flow-cli` must stay
   aligned with that same version.
 - `crates/node/package.json` and `crates/node/package-lock.json` carry the base
   npm version for the Node.js package and must be bumped explicitly.
@@ -87,7 +87,7 @@ Before you create a release tag, confirm the following:
 4. Registry credentials and repository settings are in place:
    - GitHub Actions `id-token: write` access for the top-level crates.io publish job
    - crates.io trusted publishers for `nemo-flow`, `nemo-flow-adaptive`,
-     `nemo-flow-ffi`, and `nemo-flow-sidecar` are configured for the top-level
+     `nemo-flow-ffi`, and `nemo-flow-cli` are configured for the top-level
      [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
    - GitHub Actions `id-token: write` access is available for the top-level npm publish job
    - GitHub Actions `id-token: write` access for the top-level PyPI publish job
@@ -101,7 +101,7 @@ Update the versioned source files in the release PR or release-prep commit:
 1. Update the root [`Cargo.toml`](Cargo.toml) workspace version.
 2. Update the root [`Cargo.toml`](Cargo.toml) `workspace.dependencies` versions
    for `nemo-flow`, `nemo-flow-adaptive`, `nemo-flow-ffi`, and
-   `nemo-flow-sidecar`.
+   `nemo-flow-cli`.
 3. Update [`crates/node/package.json`](crates/node/package.json) and
    [`crates/node/package-lock.json`](crates/node/package-lock.json) to the same
    release version.
@@ -183,7 +183,7 @@ The release pipeline then:
    jobs complete:
    - `publish-rust` stamps Cargo workspace versions from the release tag, then
      runs `cargo publish --package` for `nemo-flow`, `nemo-flow-adaptive`,
-     `nemo-flow-ffi`, and `nemo-flow-sidecar` through trusted publishing from
+     `nemo-flow-ffi`, and `nemo-flow-cli` through trusted publishing from
      the top-level workflow
    - `publish-python` uploads the wheel artifacts to PyPI with trusted
      publishing from the top-level workflow

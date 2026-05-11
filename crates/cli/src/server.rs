@@ -13,8 +13,8 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::adapters::{claude_code, codex, cursor, hermes};
-use crate::config::SidecarConfig;
-use crate::error::SidecarError;
+use crate::config::GatewayConfig;
+use crate::error::CliError;
 use crate::gateway;
 use crate::session::SessionManager;
 
@@ -24,7 +24,7 @@ const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone)]
 pub(crate) struct AppState {
-    pub(crate) config: SidecarConfig,
+    pub(crate) config: GatewayConfig,
     pub(crate) http: Client,
     pub(crate) sessions: SessionManager,
 }
@@ -33,20 +33,20 @@ pub(crate) struct AppState {
 ///
 /// Tests and transparent run mode use `serve_listener` directly so they can supply an already
 /// bound ephemeral listener and optional shutdown channel.
-pub(crate) async fn serve(config: SidecarConfig) -> Result<(), SidecarError> {
+pub(crate) async fn serve(config: GatewayConfig) -> Result<(), CliError> {
     let listener = TcpListener::bind(config.bind).await?;
     serve_listener(listener, config, None).await
 }
 
-/// Serves the sidecar router on a caller-owned listener with optional graceful shutdown.
+/// Serves the gateway router on a caller-owned listener with optional graceful shutdown.
 ///
 /// A provided shutdown receiver is best-effort: the send side may be dropped after the child agent
 /// exits, and either receiving or channel closure is enough to let Axum drain the listener.
 pub(crate) async fn serve_listener(
     listener: TcpListener,
-    config: SidecarConfig,
+    config: GatewayConfig,
     shutdown: Option<oneshot::Receiver<()>>,
-) -> Result<(), SidecarError> {
+) -> Result<(), CliError> {
     let app = router(config);
     match shutdown {
         Some(receiver) => {
@@ -63,18 +63,18 @@ pub(crate) async fn serve_listener(
     Ok(())
 }
 
-/// Builds the sidecar HTTP router and shared state.
+/// Builds the gateway HTTP router and shared state.
 ///
 /// Hook endpoints normalize agent-specific payloads into session events, while gateway endpoints
 /// proxy model traffic and emit LLM runtime events against the same `SessionManager`.
-pub(crate) fn router(config: SidecarConfig) -> Router {
+pub(crate) fn router(config: GatewayConfig) -> Router {
     let sessions = SessionManager::new(config.clone());
     let http = Client::builder()
         .connect_timeout(HTTP_CONNECT_TIMEOUT)
         .timeout(HTTP_REQUEST_TIMEOUT)
         .read_timeout(HTTP_READ_TIMEOUT)
         .build()
-        .expect("sidecar HTTP client configuration is valid");
+        .expect("gateway HTTP client configuration is valid");
     let state = AppState {
         config,
         http,
@@ -107,7 +107,7 @@ async fn codex_hook(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<Value>,
-) -> Result<Json<Value>, SidecarError> {
+) -> Result<Json<Value>, CliError> {
     let outcome = codex::adapt(payload, &headers);
     state
         .sessions
@@ -122,7 +122,7 @@ async fn claude_code_hook(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<Value>,
-) -> Result<Json<Value>, SidecarError> {
+) -> Result<Json<Value>, CliError> {
     let outcome = claude_code::adapt(payload, &headers);
     state
         .sessions
@@ -137,7 +137,7 @@ async fn cursor_hook(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<Value>,
-) -> Result<Json<Value>, SidecarError> {
+) -> Result<Json<Value>, CliError> {
     let outcome = cursor::adapt(payload, &headers);
     state
         .sessions
@@ -152,7 +152,7 @@ async fn hermes_hook(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<Value>,
-) -> Result<Json<Value>, SidecarError> {
+) -> Result<Json<Value>, CliError> {
     let outcome = hermes::adapt(payload, &headers);
     state
         .sessions

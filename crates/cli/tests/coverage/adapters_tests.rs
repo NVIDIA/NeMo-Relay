@@ -450,7 +450,7 @@ fn normalizes_mark_style_events_and_header_session_ids() {
         assert_eq!(session_id, "header-session");
         assert_eq!(metadata["model"], json!("model-a"));
         assert_eq!(metadata["cwd"], json!("/repo"));
-        assert_eq!(metadata["sidecar_config_profile"], json!("coverage"));
+        assert_eq!(metadata["gateway_config_profile"], json!("coverage"));
     }
 }
 

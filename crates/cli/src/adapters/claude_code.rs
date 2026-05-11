@@ -11,7 +11,7 @@ use crate::model::{AgentKind, NormalizedEvent};
 ///
 /// Claude Code uses permission-bearing tool hooks, so pre-tool events are explicitly allowed
 /// instead of returning the generic `{ continue: true }` shape. All other hooks acknowledge with
-/// `{ continue: true }` so the sidecar remains observational and never blocks Claude's lifecycle
+/// `{ continue: true }` so the gateway remains observational and never blocks Claude's lifecycle
 /// by default. Note: Claude's hook output schema rejects `null` for optional string fields like
 /// `stopReason`; omit them entirely instead.
 pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {

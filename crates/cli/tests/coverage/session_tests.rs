@@ -9,7 +9,7 @@ use crate::model::{LlmEvent, LlmHintEvent, SessionEvent, ToolEvent};
 
 #[tokio::test]
 async fn nests_agent_subagent_and_tool_lifecycle() {
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -85,7 +85,7 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
 #[tokio::test]
 async fn writes_atif_on_session_end_from_header_config() {
     let temp = tempfile::tempdir().unwrap();
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -148,7 +148,7 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
     // empty agent scope via `ensure_agent_started`, close it, and `flush_observers` would write
     // an empty ATIF on top of the just-written real trajectory.
     let temp = tempfile::tempdir().unwrap();
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -224,7 +224,7 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
 #[tokio::test]
 async fn writes_hermes_api_hook_usage_to_atif_metrics() {
     let temp = tempfile::tempdir().unwrap();
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -303,7 +303,7 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
 
 #[tokio::test]
 async fn handles_out_of_order_subagent_and_tool_end_events() {
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -382,7 +382,7 @@ async fn terminal_retry_for_unknown_session_is_ignored() {
 
 #[tokio::test]
 async fn out_of_order_started_subagent_end_does_not_leak_scope() {
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -454,7 +454,7 @@ async fn out_of_order_started_subagent_end_does_not_leak_scope() {
 
 #[tokio::test]
 async fn agent_end_closes_nested_active_subagents_lifo() {
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -510,7 +510,7 @@ async fn agent_end_closes_nested_active_subagents_lifo() {
 
 #[tokio::test]
 async fn llm_lifecycle_starts_implicit_gateway_session() {
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -603,7 +603,7 @@ async fn agent_end_closes_in_flight_gateway_llm() {
 
 #[tokio::test]
 async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() {
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -660,7 +660,7 @@ async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() 
 
 #[tokio::test]
 async fn single_pending_llm_hint_claims_next_gateway_llm() {
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -757,7 +757,7 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
 
 #[tokio::test]
 async fn multiple_llm_hints_resolve_by_generation_id() {
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -872,7 +872,7 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
 
 #[tokio::test]
 async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -971,7 +971,7 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
 
 #[tokio::test]
 async fn no_active_hint_reuses_last_llm_owner() {
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -1416,7 +1416,7 @@ fn write_atif_rejects_unsafe_session_id_filename() {
 
     let error = write_atif(&temp.path().to_path_buf(), "../escape", &exporter).unwrap_err();
 
-    assert!(matches!(error, SidecarError::InvalidPayload(_)));
+    assert!(matches!(error, CliError::InvalidPayload(_)));
     assert!(!temp.path().join("../escape.atif.json").exists());
 }
 
@@ -1630,8 +1630,8 @@ fn merge_metadata_handles_objects_nulls_and_scalars() {
     );
 }
 
-fn session_test_config() -> SidecarConfig {
-    SidecarConfig {
+fn session_test_config() -> GatewayConfig {
+    GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -1649,7 +1649,7 @@ fn session_test_config() -> SidecarConfig {
 #[tokio::test]
 async fn gateway_first_anthropic_call_labels_session_as_claude_code() {
     let temp = tempfile::tempdir().unwrap();
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -1697,7 +1697,7 @@ async fn gateway_first_anthropic_call_labels_session_as_claude_code() {
 #[tokio::test]
 async fn gateway_first_openai_responses_call_labels_session_as_codex() {
     let temp = tempfile::tempdir().unwrap();
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -1741,7 +1741,7 @@ async fn gateway_first_openai_responses_call_labels_session_as_codex() {
 #[tokio::test]
 async fn synthetic_gateway_session_keeps_gateway_label() {
     let temp = tempfile::tempdir().unwrap();
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -1787,7 +1787,7 @@ async fn synthetic_gateway_session_keeps_gateway_label() {
 #[tokio::test]
 async fn turn_ended_snapshots_atif_without_closing_scope() {
     let temp = tempfile::tempdir().unwrap();
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
@@ -1869,7 +1869,7 @@ async fn turn_ended_snapshots_atif_without_closing_scope() {
 #[tokio::test]
 async fn turn_ended_is_noop_for_session_with_no_agent_scope() {
     let temp = tempfile::tempdir().unwrap();
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),

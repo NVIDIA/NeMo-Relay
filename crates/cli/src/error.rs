@@ -7,7 +7,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum SidecarError {
+pub(crate) enum CliError {
     #[error("invalid hook payload: {0}")]
     InvalidPayload(String),
     #[error("gateway upstream error: {0}")]
@@ -28,8 +28,8 @@ pub(crate) enum SidecarError {
     OpenInference(#[from] nemo_flow::observability::openinference::OpenInferenceError),
 }
 
-impl IntoResponse for SidecarError {
-    // Maps sidecar errors into a compact JSON HTTP response. Bad hook payloads are client errors,
+impl IntoResponse for CliError {
+    // Maps gateway errors into a compact JSON HTTP response. Bad hook payloads are client errors,
     // upstream gateway failures are bad gateway responses, and local install/config/runtime faults
     // remain internal errors so callers do not mistake them for agent policy decisions.
     fn into_response(self) -> Response {
@@ -48,7 +48,7 @@ impl IntoResponse for SidecarError {
         let body = Json(json!({
             "error": {
                 "message": message,
-                "type": "nemo_flow_sidecar_error"
+                "type": "nemo_flow_gateway_error"
             }
         }));
         (status, body).into_response()

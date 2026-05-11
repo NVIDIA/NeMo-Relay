@@ -1193,6 +1193,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "nemo-flow-cli"
+version = "0.2.0"
+dependencies = [
+ "async-stream",
+ "axum",
+ "bytes",
+ "clap",
+ "futures-util",
+ "http",
+ "http-body-util",
+ "nemo-flow",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "toml_edit",
+ "tower",
+ "uuid",
+]
+
+[[package]]
 name = "nemo-flow-ffi"
 version = "0.2.0"
 dependencies = [
@@ -1238,31 +1263,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-stream",
- "uuid",
-]
-
-[[package]]
-name = "nemo-flow-sidecar"
-version = "0.2.0"
-dependencies = [
- "async-stream",
- "axum",
- "bytes",
- "clap",
- "futures-util",
- "http",
- "http-body-util",
- "nemo-flow",
- "reqwest",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror",
- "tokio",
- "toml",
- "toml_edit",
- "tower",
  "uuid",
 ]
 

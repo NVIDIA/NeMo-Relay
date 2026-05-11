@@ -367,7 +367,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
         run: |
           set -euo pipefail
-          for package in nemo-flow nemo-flow-adaptive nemo-flow-ffi nemo-flow-sidecar; do
+          for package in nemo-flow nemo-flow-adaptive nemo-flow-ffi nemo-flow-cli; do
             cargo publish --package "$package" --no-verify --allow-dirty
           done
 

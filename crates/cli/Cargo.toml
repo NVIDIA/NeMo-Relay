@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "nemo-flow-sidecar"
+name = "nemo-flow-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Gateway sidecar for coding-agent NeMo Flow observability."
+description = "Coding-agent gateway CLI for NeMo Flow observability."
+
+[[bin]]
+name = "nemo-flow"
+path = "src/main.rs"
 
 [lints]
 workspace = true

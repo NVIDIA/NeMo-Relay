@@ -47,9 +47,9 @@ nemo-flow-adaptive = "0.1.*"
 
 - `nemo-flow` provides the core runtime APIs for scopes, middleware, subscribers, plugins, tool calls, and LLM calls.
 - `nemo-flow-adaptive` provides adaptive runtime primitives and Redis-backed learning components when you want adaptive optimization behavior in Rust.
-- `nemo-flow-sidecar` is a published binary crate for coding-agent hook and LLM
-  gateway observability. Install it with `cargo install nemo-flow-sidecar` when
-  you need the sidecar executable.
+- `nemo-flow-cli` is a published binary crate for coding-agent hook and LLM
+  gateway observability. Install it with `cargo install nemo-flow-cli` when
+  you need the `nemo-flow` executable.
 
 ## Install from Source
 
@@ -103,11 +103,11 @@ nemo-flow = { path = "../NeMo-Flow/crates/core" }
 nemo-flow-adaptive = { path = "../NeMo-Flow/crates/adaptive" }
 ```
 
-Install the local sidecar binary from a source checkout when you need to run the
+Install the local gateway binary from a source checkout when you need to run the
 gateway during development:
 
 ```bash
-cargo install --path ../NeMo-Flow/crates/sidecar
+cargo install --path ../NeMo-Flow/crates/cli
 ```
 
 ## Install from the Repository

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::config::SidecarConfig;
+use crate::config::GatewayConfig;
 use crate::server::AppState;
 use crate::session::SessionManager;
 use axum::body::Body;
@@ -78,7 +78,7 @@ fn selects_provider_routes() {
 
 #[test]
 fn provider_routes_preserve_path_query_and_choose_upstream() {
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai/".into(),
         anthropic_base_url: "http://anthropic/".into(),
@@ -204,7 +204,7 @@ fn observable_headers_omit_secrets_and_transport_headers() {
 
 #[tokio::test]
 async fn passthrough_rejects_unsupported_provider_path_directly() {
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         anthropic_base_url: "http://anthropic".into(),
@@ -231,7 +231,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
 
 #[tokio::test]
 async fn models_rejects_non_get_requests_directly() {
-    let config = SidecarConfig {
+    let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         anthropic_base_url: "http://anthropic".into(),

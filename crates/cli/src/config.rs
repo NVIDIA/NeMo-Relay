@@ -9,11 +9,11 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::error::SidecarError;
+use crate::error::CliError;
 
 #[derive(Debug, Clone, Parser)]
-#[command(name = "nemo-flow-sidecar")]
-#[command(about = "Gateway sidecar for coding-agent NeMo Flow observability")]
+#[command(name = "nemo-flow")]
+#[command(about = "Coding-agent gateway for NeMo Flow observability")]
 pub(crate) struct Cli {
     #[command(flatten)]
     pub(crate) server: ServerArgs,
@@ -32,7 +32,7 @@ pub(crate) enum Command {
 pub(crate) struct ServerArgs {
     #[arg(long)]
     pub(crate) config: Option<PathBuf>,
-    #[arg(long, env = "NEMO_FLOW_SIDECAR_BIND")]
+    #[arg(long, env = "NEMO_FLOW_GATEWAY_BIND")]
     pub(crate) bind: Option<SocketAddr>,
     #[arg(long, env = "NEMO_FLOW_OPENAI_BASE_URL")]
     pub(crate) openai_base_url: Option<String>,
@@ -45,7 +45,7 @@ pub(crate) struct ServerArgs {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SidecarConfig {
+pub(crate) struct GatewayConfig {
     pub(crate) bind: SocketAddr,
     pub(crate) openai_base_url: String,
     pub(crate) anthropic_base_url: String,
@@ -64,7 +64,7 @@ pub(crate) struct InstallCommand {
     #[arg(long, value_enum, default_value = "both")]
     pub(crate) target: InstallTarget,
     #[arg(long, default_value = "http://127.0.0.1:4040")]
-    pub(crate) sidecar_url: String,
+    pub(crate) gateway_url: String,
     #[arg(long)]
     pub(crate) atif_dir: Option<PathBuf>,
     #[arg(long)]
@@ -92,7 +92,7 @@ pub(crate) struct HookForwardCommand {
     #[arg(value_enum)]
     pub(crate) agent: CodingAgent,
     #[arg(long)]
-    pub(crate) sidecar_url: Option<String>,
+    pub(crate) gateway_url: Option<String>,
     #[arg(long)]
     pub(crate) atif_dir: Option<PathBuf>,
     #[arg(long)]
@@ -177,7 +177,7 @@ pub(crate) struct SessionConfig {
     pub(crate) gateway_mode: Option<String>,
 }
 
-impl SidecarConfig {
+impl GatewayConfig {
     // Resolves per-session settings from hook/gateway headers with process config as fallback.
     // Header JSON fields are parsed opportunistically; invalid JSON is treated as absent here
     // because install and hook-forward validate generated header values before sending them.
@@ -206,7 +206,7 @@ impl SidecarConfig {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResolvedConfig {
-    pub(crate) sidecar: SidecarConfig,
+    pub(crate) gateway: GatewayConfig,
     pub(crate) agents: AgentConfigs,
 }
 
@@ -292,7 +292,7 @@ struct FileCursorAgentConfig {
     patch_restore_hooks: Option<bool>,
 }
 
-impl Default for SidecarConfig {
+impl Default for GatewayConfig {
     // Supplies conservative local gateway defaults: bind only to loopback, route OpenAI and
     // Anthropic requests to their public bases, and leave exporters/plugins disabled until config,
     // environment, or headers explicitly opt in.
@@ -315,13 +315,13 @@ impl Default for SidecarConfig {
 ///
 /// File discovery and merge behavior live in `load_shared_config`; this function only applies the
 /// server-facing command-line layer so launcher-only settings cannot leak into daemon mode.
-pub(crate) fn resolve_server_config(args: &ServerArgs) -> Result<ResolvedConfig, SidecarError> {
+pub(crate) fn resolve_server_config(args: &ServerArgs) -> Result<ResolvedConfig, CliError> {
     let mut resolved = load_shared_config(args.config.as_ref())?;
-    apply_server_overrides(&mut resolved.sidecar, args);
+    apply_server_overrides(&mut resolved.gateway, args);
     Ok(resolved)
 }
 
-/// Resolves transparent `run` configuration and switches the sidecar to an ephemeral bind address.
+/// Resolves transparent `run` configuration and switches the gateway to an ephemeral bind address.
 ///
 /// Explicit run arguments override inherited top-level server flags, which override shared config.
 /// Session metadata and plugin config are parsed as JSON here so malformed CLI values fail before
@@ -329,28 +329,25 @@ pub(crate) fn resolve_server_config(args: &ServerArgs) -> Result<ResolvedConfig,
 pub(crate) fn resolve_run_config(
     command: &RunCommand,
     inherited: Option<&ServerArgs>,
-) -> Result<ResolvedConfig, SidecarError> {
+) -> Result<ResolvedConfig, CliError> {
     let config = command
         .config
         .as_ref()
         .or_else(|| inherited.and_then(|args| args.config.as_ref()));
     let mut resolved = load_shared_config(config)?;
     if let Some(args) = inherited {
-        apply_server_overrides(&mut resolved.sidecar, args);
+        apply_server_overrides(&mut resolved.gateway, args);
     }
-    apply_run_overrides(&mut resolved.sidecar, command)?;
-    resolved.sidecar.bind = "127.0.0.1:0"
+    apply_run_overrides(&mut resolved.gateway, command)?;
+    resolved.gateway.bind = "127.0.0.1:0"
         .parse()
         .expect("valid transparent bind address");
     Ok(resolved)
 }
 
 // Applies subcommand-specific `run` overrides after inherited top-level flags. JSON-bearing fields
-// are parsed here so invalid metadata or plugin config fails before the sidecar binds a port.
-fn apply_run_overrides(
-    config: &mut SidecarConfig,
-    command: &RunCommand,
-) -> Result<(), SidecarError> {
+// are parsed here so invalid metadata or plugin config fails before the gateway binds a port.
+fn apply_run_overrides(config: &mut GatewayConfig, command: &RunCommand) -> Result<(), CliError> {
     apply_run_url_overrides(config, command);
     apply_run_json_overrides(config, command)?;
     Ok(())
@@ -358,7 +355,7 @@ fn apply_run_overrides(
 
 // Applies plain string/path run overrides. These fields do not need parsing, so they stay separate
 // from JSON options whose errors should include field context.
-fn apply_run_url_overrides(config: &mut SidecarConfig, command: &RunCommand) {
+fn apply_run_url_overrides(config: &mut GatewayConfig, command: &RunCommand) {
     if let Some(value) = &command.openai_base_url {
         config.openai_base_url = value.clone();
     }
@@ -374,11 +371,11 @@ fn apply_run_url_overrides(config: &mut SidecarConfig, command: &RunCommand) {
 }
 
 // Parses JSON-bearing run overrides after simple values. Invalid metadata or plugin config fails
-// before transparent run mode binds its ephemeral sidecar listener.
+// before transparent run mode binds its ephemeral gateway listener.
 fn apply_run_json_overrides(
-    config: &mut SidecarConfig,
+    config: &mut GatewayConfig,
     command: &RunCommand,
-) -> Result<(), SidecarError> {
+) -> Result<(), CliError> {
     if let Some(value) = &command.session_metadata {
         config.metadata = Some(parse_json_option("session metadata", value)?);
     }
@@ -390,7 +387,7 @@ fn apply_run_json_overrides(
 
 // Applies direct server flags on top of already-merged configuration. Only present options mutate
 // the config so lower-priority file values survive when a flag was omitted.
-fn apply_server_overrides(config: &mut SidecarConfig, args: &ServerArgs) {
+fn apply_server_overrides(config: &mut GatewayConfig, args: &ServerArgs) {
     if let Some(value) = args.bind {
         config.bind = value;
     }
@@ -411,7 +408,7 @@ fn apply_server_overrides(config: &mut SidecarConfig, args: &ServerArgs) {
 // Loads config from the ordered shared locations, deep-merges TOML tables, maps the typed file
 // shape onto runtime structs, then lets environment variables override file values. Invalid TOML
 // or typed shapes fail closed because they indicate an operator configuration error.
-fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, SidecarError> {
+fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, CliError> {
     let mut merged = toml::Value::Table(toml::map::Map::new());
     for path in config_paths(explicit) {
         if path.exists() {
@@ -420,17 +417,17 @@ fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, Side
                 .parse::<toml::Table>()
                 .map(toml::Value::Table)
                 .map_err(|error| {
-                    SidecarError::Config(format!("invalid TOML in {}: {error}", path.display()))
+                    CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
                 })?;
             merge_toml(&mut merged, parsed);
         }
     }
     let mut resolved = ResolvedConfig {
-        sidecar: SidecarConfig::default(),
+        gateway: GatewayConfig::default(),
         ..ResolvedConfig::default()
     };
     apply_file_config(&mut resolved, merged)?;
-    apply_env_config(&mut resolved.sidecar);
+    apply_env_config(&mut resolved.gateway);
     Ok(resolved)
 }
 
@@ -440,7 +437,7 @@ fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
     if let Some(path) = explicit {
         return vec![path.clone()];
     }
-    let mut paths = vec![PathBuf::from("/etc/nemo-flow/sidecar.toml")];
+    let mut paths = vec![PathBuf::from("/etc/nemo-flow/gateway.toml")];
     if let Ok(cwd) = std::env::current_dir()
         && let Some(project) = find_project_config(&cwd)
     {
@@ -452,11 +449,11 @@ fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
     paths
 }
 
-// Walks upward from the current directory and returns the nearest project-local sidecar config.
+// Walks upward from the current directory and returns the nearest project-local gateway config.
 // The first hit wins so nested projects can override parent workspace defaults.
 fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
     for ancestor in start.ancestors() {
-        let path = ancestor.join(".nemo-flow/sidecar.toml");
+        let path = ancestor.join(".nemo-flow/gateway.toml");
         if path.exists() {
             return Some(path);
         }
@@ -468,69 +465,66 @@ fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
 // config loading portable in minimal environments where no home directory is visible.
 fn user_config_path() -> Option<PathBuf> {
     if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(base).join("nemo-flow/sidecar.toml"));
+        return Some(PathBuf::from(base).join("nemo-flow/gateway.toml"));
     }
-    home_dir().map(|home| home.join(".config/nemo-flow/sidecar.toml"))
+    home_dir().map(|home| home.join(".config/nemo-flow/gateway.toml"))
 }
 
 // Applies the typed TOML config model to the resolved runtime config. Missing sections and fields
 // are ignored, preserving defaults and prior merge layers; Cursor's patch-restore flag is only
 // changed when explicitly present.
-fn apply_file_config(
-    resolved: &mut ResolvedConfig,
-    value: toml::Value,
-) -> Result<(), SidecarError> {
+fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Result<(), CliError> {
     let config: FileConfig = value.try_into().map_err(|error| {
-        SidecarError::Config(format!("invalid sidecar configuration shape: {error}"))
+        CliError::Config(format!("invalid gateway configuration shape: {error}"))
     })?;
-    apply_file_server_config(&mut resolved.sidecar, config.server);
-    apply_file_session_config(&mut resolved.sidecar, config.session);
-    apply_file_export_config(&mut resolved.sidecar, config.export);
+    apply_file_server_config(&mut resolved.gateway, config.server);
+    apply_file_session_config(&mut resolved.gateway, config.session);
+    apply_file_export_config(&mut resolved.gateway, config.export);
     apply_file_agents_config(&mut resolved.agents, config.agents);
     Ok(())
 }
 
 // Applies provider upstream defaults from file config. These values are the upstream targets used
-// by direct sidecar server mode; transparent `run` mode can still override them per invocation.
-fn apply_file_server_config(sidecar: &mut SidecarConfig, server: Option<FileServerConfig>) {
+// by direct gateway server mode; transparent `run` mode can still override them per invocation.
+fn apply_file_server_config(gateway: &mut GatewayConfig, server: Option<FileServerConfig>) {
     let Some(server) = server else {
         return;
     };
     if let Some(value) = server.openai_base_url {
-        sidecar.openai_base_url = value;
+        gateway.openai_base_url = value;
     }
     if let Some(value) = server.anthropic_base_url {
-        sidecar.anthropic_base_url = value;
+        gateway.anthropic_base_url = value;
     }
 }
 
 // Applies session-level exporter and metadata defaults. Missing optional fields leave earlier
 // merge layers intact, which preserves global or project defaults when user config is partial.
-fn apply_file_session_config(sidecar: &mut SidecarConfig, session: Option<FileSessionConfig>) {
+fn apply_file_session_config(gateway: &mut GatewayConfig, session: Option<FileSessionConfig>) {
     let Some(session) = session else {
         return;
     };
     if let Some(value) = session.atif_dir {
-        sidecar.atif_dir = Some(value);
+        gateway.atif_dir = Some(value);
     }
     if let Some(value) = session.metadata {
-        sidecar.metadata = Some(value);
+        gateway.metadata = Some(value);
     }
     if let Some(value) = session.plugin_config {
-        sidecar.plugin_config = Some(value);
+        gateway.plugin_config = Some(value);
     }
 }
 
 // Applies optional OpenInference export config. The nested shape mirrors the docs and leaves room
 // for future exporter-specific fields without changing the top-level config parser.
-fn apply_file_export_config(sidecar: &mut SidecarConfig, export: Option<FileExportConfig>) {
+fn apply_file_export_config(gateway: &mut GatewayConfig, export: Option<FileExportConfig>) {
     let Some(export) = export else {
         return;
     };
     if let Some(openinference) = export.openinference
         && let Some(value) = openinference.endpoint
     {
-        sidecar.openinference_endpoint = Some(value);
+        gateway.openinference_endpoint = Some(value);
     }
 }
 
@@ -560,8 +554,8 @@ fn apply_file_agents_config(agents: &mut AgentConfigs, file_agents: Option<FileA
 
 // Applies environment variables after file configuration. Invalid bind values are ignored here to
 // preserve existing startup behavior, while string/path values replace earlier layers when present.
-fn apply_env_config(config: &mut SidecarConfig) {
-    if let Ok(value) = std::env::var("NEMO_FLOW_SIDECAR_BIND")
+fn apply_env_config(config: &mut GatewayConfig) {
+    if let Ok(value) = std::env::var("NEMO_FLOW_GATEWAY_BIND")
         && let Ok(value) = value.parse()
     {
         config.bind = value;
@@ -600,12 +594,12 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
 
 // Parses JSON-valued CLI options into runtime metadata/config values and labels errors with the
 // user-facing option name so callers can report which structured argument was malformed.
-fn parse_json_option(name: &str, value: &str) -> Result<Value, SidecarError> {
+fn parse_json_option(name: &str, value: &str) -> Result<Value, CliError> {
     serde_json::from_str::<Value>(value)
-        .map_err(|error| SidecarError::Config(format!("invalid {name}: {error}")))
+        .map_err(|error| CliError::Config(format!("invalid {name}: {error}")))
 }
 
-// Resolves a cross-platform home directory from environment only. The sidecar avoids extra OS
+// Resolves a cross-platform home directory from environment only. The gateway avoids extra OS
 // lookups here so tests can control install/config locations by setting env variables.
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
@@ -616,7 +610,7 @@ fn home_dir() -> Option<PathBuf> {
 /// Reads a non-empty UTF-8 header value as an owned string.
 ///
 /// Invalid header bytes and empty strings are treated as absent so callers can preserve their
-/// explicit fallback order without surfacing HTTP parsing details as sidecar errors.
+/// explicit fallback order without surfacing HTTP parsing details as gateway errors.
 pub(crate) fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
@@ -630,7 +624,7 @@ fn header_json(headers: &HeaderMap, name: &str) -> Option<Value> {
 }
 
 impl CodingAgent {
-    // Returns the sidecar hook endpoint for the agent. These paths are stable integration surface
+    // Returns the gateway hook endpoint for the agent. These paths are stable integration surface
     // because installed hook commands persist them in user or project configuration.
     pub(crate) const fn hook_path(self) -> &'static str {
         match self {

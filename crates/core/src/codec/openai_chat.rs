@@ -512,39 +512,8 @@ impl OpenAIChatStreamingState {
     fn observe_choice(&mut self, choice: &Json) {
         let index = choice.get("index").and_then(Json::as_u64).unwrap_or(0);
         let entry = self.choices.entry(index).or_default();
-        if let Some(reason) = choice.get("finish_reason").and_then(Json::as_str) {
-            entry.finish_reason = Some(reason.to_string());
-        }
-        let Some(delta) = choice.get("delta") else {
-            return;
-        };
-        if let Some(role) = delta.get("role").and_then(Json::as_str) {
-            entry.role = Some(role.to_string());
-        }
-        if let Some(content) = delta.get("content").and_then(Json::as_str) {
-            entry.content.push_str(content);
-            entry.has_content = true;
-        }
-        if let Some(tool_calls) = delta.get("tool_calls").and_then(Json::as_array) {
-            for tc in tool_calls {
-                let tc_index = tc.get("index").and_then(Json::as_u64).unwrap_or(0);
-                let tc_state = entry.tool_calls.entry(tc_index).or_default();
-                if let Some(id) = tc.get("id").and_then(Json::as_str) {
-                    tc_state.id = Some(id.to_string());
-                }
-                if let Some(t) = tc.get("type").and_then(Json::as_str) {
-                    tc_state.type_ = Some(t.to_string());
-                }
-                if let Some(function) = tc.get("function") {
-                    if let Some(name) = function.get("name").and_then(Json::as_str) {
-                        tc_state.name = Some(name.to_string());
-                    }
-                    if let Some(args) = function.get("arguments").and_then(Json::as_str) {
-                        tc_state.arguments.push_str(args);
-                    }
-                }
-            }
-        }
+        entry.observe_finish_reason(choice);
+        entry.observe_delta(choice.get("delta"));
     }
 
     fn finalize(self) -> Json {
@@ -583,6 +552,48 @@ impl OpenAIChatStreamingState {
 }
 
 impl ChoiceState {
+    fn observe_finish_reason(&mut self, choice: &Json) {
+        if let Some(reason) = choice.get("finish_reason").and_then(Json::as_str) {
+            self.finish_reason = Some(reason.to_string());
+        }
+    }
+
+    fn observe_delta(&mut self, delta: Option<&Json>) {
+        let Some(delta) = delta else {
+            return;
+        };
+        if let Some(role) = delta.get("role").and_then(Json::as_str) {
+            self.role = Some(role.to_string());
+        }
+        if let Some(content) = delta.get("content").and_then(Json::as_str) {
+            self.content.push_str(content);
+            self.has_content = true;
+        }
+        self.observe_tool_calls(delta);
+    }
+
+    fn observe_tool_calls(&mut self, delta: &Json) {
+        if let Some(tool_calls) = delta.get("tool_calls").and_then(Json::as_array) {
+            for tool_call in tool_calls {
+                self.observe_tool_call(tool_call);
+            }
+        }
+    }
+
+    fn observe_tool_call(&mut self, tool_call: &Json) {
+        let index = tool_call.get("index").and_then(Json::as_u64).unwrap_or(0);
+        let state = self.tool_calls.entry(index).or_default();
+        if let Some(id) = tool_call.get("id").and_then(Json::as_str) {
+            state.id = Some(id.to_string());
+        }
+        if let Some(type_) = tool_call.get("type").and_then(Json::as_str) {
+            state.type_ = Some(type_.to_string());
+        }
+        if let Some(function) = tool_call.get("function") {
+            state.observe_function(function);
+        }
+    }
+
     fn finalize(self, index: u64) -> Json {
         let mut message = serde_json::Map::new();
         message.insert(
@@ -618,6 +629,15 @@ impl ChoiceState {
 }
 
 impl ToolCallState {
+    fn observe_function(&mut self, function: &Json) {
+        if let Some(name) = function.get("name").and_then(Json::as_str) {
+            self.name = Some(name.to_string());
+        }
+        if let Some(args) = function.get("arguments").and_then(Json::as_str) {
+            self.arguments.push_str(args);
+        }
+    }
+
     fn finalize(self) -> Json {
         let mut function = serde_json::Map::new();
         function.insert(

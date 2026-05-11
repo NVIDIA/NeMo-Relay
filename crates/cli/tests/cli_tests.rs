@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! CLI-level sidecar coverage tests.
+//! CLI-level gateway coverage tests.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -9,22 +9,22 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-fn sidecar_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_nemo-flow-sidecar")
+fn gateway_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_nemo-flow")
 }
 
 #[test]
 fn cli_help_exits_successfully() {
-    let output = Command::new(sidecar_bin()).arg("--help").output().unwrap();
+    let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
 
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Gateway sidecar"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Coding-agent gateway"));
 }
 
 #[test]
 fn cli_install_dry_run_plans_without_writing() {
     let temp = tempfile::tempdir().unwrap();
-    let output = Command::new(sidecar_bin())
+    let output = Command::new(gateway_bin())
         .env("HOME", temp.path())
         .args([
             "install",
@@ -33,7 +33,7 @@ fn cli_install_dry_run_plans_without_writing() {
             "--print",
             "--target",
             "both",
-            "--sidecar-url",
+            "--gateway-url",
             "http://127.0.0.1:4040",
             "--session-metadata",
             r#"{"team":"cli"}"#,
@@ -55,7 +55,7 @@ fn cli_install_dry_run_plans_without_writing() {
 #[test]
 fn cli_run_dry_run_resolves_config_and_command() {
     let temp = tempfile::tempdir().unwrap();
-    let config = temp.path().join("sidecar.toml");
+    let config = temp.path().join("gateway.toml");
     std::fs::write(
         &config,
         r#"
@@ -75,7 +75,7 @@ command = "hermes --yolo chat"
     )
     .unwrap();
 
-    let output = Command::new(sidecar_bin())
+    let output = Command::new(gateway_bin())
         .args([
             "--config",
             config.to_str().unwrap(),
@@ -104,7 +104,7 @@ fn cli_run_dry_run_uses_project_user_and_env_config_layers() {
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::create_dir_all(&xdg).unwrap();
     std::fs::write(
-        project.join(".nemo-flow/sidecar.toml"),
+        project.join(".nemo-flow/gateway.toml"),
         r#"
 [server]
 openai_base_url = "http://project-openai"
@@ -112,7 +112,7 @@ openai_base_url = "http://project-openai"
     )
     .unwrap();
     std::fs::write(
-        xdg.join("sidecar.toml"),
+        xdg.join("gateway.toml"),
         r#"
 [server]
 anthropic_base_url = "http://user-anthropic"
@@ -123,10 +123,10 @@ command = "codex --full-auto"
     )
     .unwrap();
 
-    let output = Command::new(sidecar_bin())
+    let output = Command::new(gateway_bin())
         .current_dir(&nested)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
-        .env("NEMO_FLOW_SIDECAR_BIND", "127.0.0.1:0")
+        .env("NEMO_FLOW_GATEWAY_BIND", "127.0.0.1:0")
         .env("NEMO_FLOW_OPENAI_BASE_URL", "http://env-openai")
         .env("NEMO_FLOW_ANTHROPIC_BASE_URL", "http://env-anthropic")
         .env("NEMO_FLOW_ATIF_DIR", "env-atif")
@@ -145,9 +145,9 @@ command = "codex --full-auto"
 }
 
 #[test]
-fn cli_hook_forward_fails_open_without_sidecar_url() {
-    let mut child = Command::new(sidecar_bin())
-        .env_remove("NEMO_FLOW_SIDECAR_URL")
+fn cli_hook_forward_fails_open_without_gateway_url() {
+    let mut child = Command::new(gateway_bin())
+        .env_remove("NEMO_FLOW_GATEWAY_URL")
         .args(["hook-forward", "codex"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -158,13 +158,13 @@ fn cli_hook_forward_fails_open_without_sidecar_url() {
     let output = child.wait_with_output().unwrap();
 
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("missing sidecar URL"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("missing gateway URL"));
 }
 
 #[test]
-fn cli_hook_forward_fails_closed_without_sidecar_url() {
-    let mut child = Command::new(sidecar_bin())
-        .env_remove("NEMO_FLOW_SIDECAR_URL")
+fn cli_hook_forward_fails_closed_without_gateway_url() {
+    let mut child = Command::new(gateway_bin())
+        .env_remove("NEMO_FLOW_GATEWAY_URL")
         .args(["hook-forward", "codex", "--fail-closed"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -175,17 +175,17 @@ fn cli_hook_forward_fails_closed_without_sidecar_url() {
     let output = child.wait_with_output().unwrap();
 
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("missing sidecar URL"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("missing gateway URL"));
 }
 
 #[test]
 fn cli_hook_forward_posts_payload_headers_and_prints_response() {
     let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
-    let mut child = Command::new(sidecar_bin())
+    let mut child = Command::new(gateway_bin())
         .args([
             "hook-forward",
             "codex",
-            "--sidecar-url",
+            "--gateway-url",
             &server_url,
             "--atif-dir",
             "atif",
@@ -231,11 +231,11 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
 #[test]
 fn cli_hook_forward_reports_http_failure_when_fail_closed() {
     let (server_url, received) = spawn_single_request_server(503, "unavailable");
-    let mut child = Command::new(sidecar_bin())
+    let mut child = Command::new(gateway_bin())
         .args([
             "hook-forward",
             "cursor",
-            "--sidecar-url",
+            "--gateway-url",
             &server_url,
             "--fail-closed",
         ])
@@ -255,11 +255,11 @@ fn cli_hook_forward_reports_http_failure_when_fail_closed() {
 
 #[test]
 fn cli_hook_forward_reports_transport_failure_when_fail_closed() {
-    let mut child = Command::new(sidecar_bin())
+    let mut child = Command::new(gateway_bin())
         .args([
             "hook-forward",
             "codex",
-            "--sidecar-url",
+            "--gateway-url",
             "http://127.0.0.1:1",
             "--fail-closed",
         ])

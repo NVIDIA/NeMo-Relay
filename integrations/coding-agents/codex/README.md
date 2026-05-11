@@ -6,21 +6,21 @@ SPDX-License-Identifier: Apache-2.0
 # NeMo Flow Codex Observability
 
 This package contains Codex hook entries that forward canonical Codex hook JSON
-to `nemo-flow-sidecar` at `/hooks/codex`.
+to `nemo-flow` at `/hooks/codex`.
 
 Codex CLI is fully supported for local sessions. Codex GUI or app sessions are
 supported only when they run locally and honor the same hook/plugin config and
 provider routing. Cloud or remote Codex tasks are partial or unsupported for
-local sidecar LLM capture.
+local gateway LLM capture.
 
 Requires `codex-cli >= 0.129.0` (introduced the `features.hooks` flag and the
-provider alias surface the sidecar relies on).
+provider alias surface the gateway relies on).
 
 ## Files
 
 - `.codex-plugin/plugin.json` describes the Codex plugin package.
 - `hooks/hooks.json` contains hook entries that run
-  `nemo-flow-sidecar hook-forward codex`.
+  `nemo-flow hook-forward codex`.
 
 ## Captured Events
 
@@ -36,24 +36,24 @@ entries into `.codex/hooks.json`.
 
 ## Transparent Setup
 
-Build or install the sidecar binary so `nemo-flow-sidecar` is on `PATH`.
+Build or install the gateway binary so `nemo-flow` is on `PATH`.
 
 Run Codex through the wrapper:
 
 ```bash
-nemo-flow-sidecar run --atif-dir .nemo-flow/atif -- codex
+nemo-flow run --atif-dir .nemo-flow/atif -- codex
 ```
 
-The wrapper starts a per-invocation sidecar on a dynamic localhost port,
+The wrapper starts a per-invocation gateway on a dynamic localhost port,
 enables Codex hooks with CLI config overrides, injects hook commands that use
-`NEMO_FLOW_SIDECAR_URL`, and points Codex at a temporary `nemo-flow-openai`
-provider alias that uses the sidecar URL while preserving Codex's OpenAI auth
+`NEMO_FLOW_GATEWAY_URL`, and points Codex at a temporary `nemo-flow-openai`
+provider alias that uses the gateway URL while preserving Codex's OpenAI auth
 path.
 
 Inspect the launch without starting Codex:
 
 ```bash
-nemo-flow-sidecar run \
+nemo-flow run \
   --atif-dir .nemo-flow/atif \
   --openinference-endpoint http://127.0.0.1:4318/v1/traces \
   --dry-run \
@@ -63,8 +63,8 @@ nemo-flow-sidecar run \
 
 ## Shared Config
 
-Use `.nemo-flow/sidecar.toml` for project defaults or
-`~/.config/nemo-flow/sidecar.toml` for user defaults:
+Use `.nemo-flow/gateway.toml` for project defaults or
+`~/.config/nemo-flow/gateway.toml` for user defaults:
 
 ```toml
 [session]
@@ -78,7 +78,7 @@ command = "codex"
 Then run:
 
 ```bash
-nemo-flow-sidecar run --agent codex
+nemo-flow run --agent codex
 ```
 
 ## Persistent Setup
@@ -87,14 +87,14 @@ Use persistent hooks only when you do not want to launch Codex through the
 wrapper:
 
 ```bash
-nemo-flow-sidecar install codex \
+nemo-flow install codex \
   --scope user \
   --target both \
-  --sidecar-url http://127.0.0.1:4040 \
+  --gateway-url http://127.0.0.1:4040 \
   --atif-dir .nemo-flow/atif
 ```
 
-Then start the sidecar manually and configure local Codex to use a sidecar
+Then start the gateway manually and configure local Codex to use a gateway
 provider alias instead of overriding the reserved built-in `openai` provider:
 
 ```toml
@@ -117,16 +117,16 @@ ATIF was written:
 ls .nemo-flow/atif
 ```
 
-For a direct endpoint smoke test against a manually started sidecar:
+For a direct endpoint smoke test against a manually started gateway:
 
 ```bash
 curl -f http://127.0.0.1:4040/healthz
 printf '{"session_id":"smoke-codex","hook_event_name":"sessionStart"}' \
-  | NEMO_FLOW_SIDECAR_URL=http://127.0.0.1:4040 nemo-flow-sidecar hook-forward codex --fail-closed
+  | NEMO_FLOW_GATEWAY_URL=http://127.0.0.1:4040 nemo-flow hook-forward codex --fail-closed
 ```
 
 If hooks arrive but LLM spans are missing, confirm Codex was started by
-`nemo-flow-sidecar run` or that the active provider points to the sidecar URL.
+`nemo-flow run` or that the active provider points to the gateway URL.
 
 If LLM spans are present but attached to the top-level agent instead of a
 subagent, include `x-nemo-flow-subagent-id` on gateway requests or share
