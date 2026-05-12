@@ -6,33 +6,35 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
+import pytest
 from langgraph.callbacks import GraphCallbackHandler, GraphInterruptEvent, GraphResumeEvent
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Interrupt
 from typing_extensions import TypedDict
 
-import pytest
-
 import nemo_flow
 from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler as LangChainCallbackHandler
 from nemo_flow.integrations.langgraph import NemoFlowCallbackHandler
 
-
 if TYPE_CHECKING:
     from langgraph.graph import CompiledStateGraph
+
 
 class State(TypedDict):
     value: int
 
+
 def increment(state: State) -> State:
     return {"value": state["value"] + 1}
+
 
 async def aincrement(state: State) -> State:
     await asyncio.sleep(0)
     return {"value": state["value"] + 1}
+
 
 def _build_graph(use_async: bool = False) -> CompiledStateGraph:
     builder = StateGraph(State)
@@ -54,6 +56,7 @@ def graph_fixture() -> CompiledStateGraph:
 def async_graph_fixture() -> CompiledStateGraph:
     return _build_graph(use_async=True)
 
+
 @pytest.fixture(name="subscribed_events")
 def subscribed_events_fixture() -> list[nemo_flow.Event]:
     events: list[nemo_flow.Event] = []
@@ -65,6 +68,7 @@ def subscribed_events_fixture() -> list[nemo_flow.Event]:
     nemo_flow.subscribers.register(subscriber_name, event_recorder)
     yield events
     nemo_flow.subscribers.deregister(subscriber_name)
+
 
 def events_to_strings(events: list[nemo_flow.Event]) -> list[str]:
     event_strings: list[str] = []
@@ -85,10 +89,12 @@ def test_handler_type():
 
 
 @pytest.mark.parametrize("use_async", [False, True])
-def test_graph_callbacks(use_async: bool,
-                         sync_graph: CompiledStateGraph,
-                         async_graph: CompiledStateGraph,
-                         subscribed_events: list[nemo_flow.Event]):
+def test_graph_callbacks(
+    use_async: bool,
+    sync_graph: CompiledStateGraph,
+    async_graph: CompiledStateGraph,
+    subscribed_events: list[nemo_flow.Event],
+):
     graph = async_graph if use_async else sync_graph
     expected_events = [
         "scope.start.request",
@@ -114,7 +120,10 @@ def test_graph_lifecycle_callbacks_emit_marks(subscribed_events: list[nemo_flow.
     run_id = uuid4()
 
     expected_event_strings = [
-        'scope.start.request', 'mark.Graph Interrupt', 'mark.Graph Resume', 'scope.end.request',
+        "scope.start.request",
+        "mark.Graph Interrupt",
+        "mark.Graph Resume",
+        "scope.end.request",
     ]
 
     with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
@@ -137,9 +146,7 @@ def test_graph_lifecycle_callbacks_emit_marks(subscribed_events: list[nemo_flow.
             )
         )
 
-
     assert events_to_strings(subscribed_events) == expected_event_strings
-
 
     interupt_event = subscribed_events[1]
     assert interupt_event.data["interrupts"] == [{"id": "interrupt-1", "value": "needs approval"}]
