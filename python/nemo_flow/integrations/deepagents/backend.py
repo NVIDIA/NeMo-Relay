@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from deepagents.backends.protocol import (
     BackendProtocol,
@@ -226,14 +226,17 @@ class NemoFlowDeepAgentsSandboxBackend(NemoFlowDeepAgentsBackend, SandboxBackend
 
     @property
     def id(self) -> str:
-        return self._backend.id  # type: ignore[attr-defined]
+        # This call to `cast` here and in subsequent methods is necessary to avoid type mismatch linting errors
+        return cast(SandboxBackendProtocol, self._backend).id
 
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
-        kwargs = _execute_kwargs(self._backend, timeout)
+        backend = cast(SandboxBackendProtocol, self._backend)
+        kwargs = _execute_kwargs(backend, timeout)
         return self._call_sync("execute", (command,), kwargs)
 
     async def aexecute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
-        kwargs = _execute_kwargs(self._backend, timeout)
+        backend = cast(SandboxBackendProtocol, self._backend)
+        kwargs = _execute_kwargs(backend, timeout)
         return await self._call_async("aexecute", (command,), kwargs)
 
 

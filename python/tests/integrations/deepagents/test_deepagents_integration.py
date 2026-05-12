@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -50,7 +50,17 @@ def _filter_mark_events(events: list[nemo_flow.Event]) -> list[nemo_flow.MarkEve
     return [event for event in events if isinstance(event, nemo_flow.MarkEvent)]
 
 
-def tool_request(tool_name: str, args: dict[str, Any]) -> ToolCallRequest:
+def _mark_data(mark: nemo_flow.MarkEvent) -> dict[str, Any]:
+    assert isinstance(mark.data, dict)
+    return cast(dict[str, Any], mark.data)
+
+
+def _mark_metadata(mark: nemo_flow.MarkEvent) -> dict[str, Any]:
+    assert isinstance(mark.metadata, dict)
+    return cast(dict[str, Any], mark.metadata)
+
+
+def _mk_tool_request(tool_name: str, args: dict[str, Any]) -> ToolCallRequest:
     return ToolCallRequest(
         tool_call={"name": tool_name, "args": args, "id": "call-1"},
         tool=None,
@@ -86,17 +96,17 @@ def test_wrap_tool_call_emits_deepagents_marks(
         return ToolMessage(content="done", tool_call_id=request.tool_call["id"])
 
     with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-        result = middleware.wrap_tool_call(tool_request(tool_name, args), handler)
+        result = middleware.wrap_tool_call(_mk_tool_request(tool_name, args), handler)
 
     assert result.content == "done"
     mock_tool_execute.assert_awaited_once()
 
     marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == [f"{expected_mark} Start", f"{expected_mark} End"]
-    assert marks[0].metadata["deepagents_kind"] == expected_kind
-    assert marks[0].metadata["phase"] == "start"
-    assert marks[0].data["tool_name"] == tool_name
-    assert marks[1].metadata["phase"] == "end"
+    assert _mark_metadata(marks[0])["deepagents_kind"] == expected_kind
+    assert _mark_metadata(marks[0])["phase"] == "start"
+    assert _mark_data(marks[0])["tool_name"] == tool_name
+    assert _mark_metadata(marks[1])["phase"] == "end"
 
 
 async def test_awrap_tool_call_emits_deepagents_marks(
@@ -109,7 +119,7 @@ async def test_awrap_tool_call_emits_deepagents_marks(
 
     with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
         result = await middleware.awrap_tool_call(
-            tool_request("check_async_task", {"task_id": "task-1"}),
+            _mk_tool_request("check_async_task", {"task_id": "task-1"}),
             handler,
         )
 
@@ -121,7 +131,7 @@ async def test_awrap_tool_call_emits_deepagents_marks(
         "DeepAgents Async Subagent Start",
         "DeepAgents Async Subagent End",
     ]
-    assert marks[0].data["task_id"] == "task-1"
+    assert _mark_data(marks[0])["task_id"] == "task-1"
 
 
 def test_wrap_tool_call_emits_error_mark(
@@ -134,12 +144,12 @@ def test_wrap_tool_call_emits_error_mark(
 
     with pytest.raises(RuntimeError, match="approval failed"):
         with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-            middleware.wrap_tool_call(tool_request("task", {"name": "researcher"}), handler)
+            middleware.wrap_tool_call(_mk_tool_request("task", {"name": "researcher"}), handler)
 
     mock_tool_execute.assert_awaited_once()
     marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == ["DeepAgents Subagent Start", "DeepAgents Subagent Error"]
-    assert "RuntimeError" in marks[1].data["error"]
+    assert "RuntimeError" in _mark_data(marks[1])["error"]
 
 
 def test_before_agent_emits_configuration_mark(subscribed_events: list[nemo_flow.Event]) -> None:
@@ -155,10 +165,10 @@ def test_before_agent_emits_configuration_mark(subscribed_events: list[nemo_flow
 
     marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == ["DeepAgents Skills Configured"]
-    assert marks[0].metadata["deepagents_kind"] == "skill"
-    assert marks[0].data["skills"] == ["/skills/research/"]
-    assert marks[0].data["subagents"] == [{"name": "researcher"}]
-    assert marks[0].data["backend"] == "StateBackend"
+    assert _mark_metadata(marks[0])["deepagents_kind"] == "skill"
+    assert _mark_data(marks[0])["skills"] == ["/skills/research/"]
+    assert _mark_data(marks[0])["subagents"] == [{"name": "researcher"}]
+    assert _mark_data(marks[0])["backend"] == "StateBackend"
 
 
 def test_callback_handler_emits_human_in_the_loop_marks(subscribed_events: list[nemo_flow.Event]) -> None:
@@ -199,9 +209,9 @@ def test_callback_handler_emits_human_in_the_loop_marks(subscribed_events: list[
         "DeepAgents Human In The Loop Interrupt",
         "DeepAgents Human In The Loop Resume",
     ]
-    assert marks[0].metadata["deepagents_kind"] == "human_in_the_loop"
-    assert marks[0].data["interrupts"] == [{"id": "interrupt-1", "value": hitl_request}]
-    assert marks[1].metadata["phase"] == "resume"
+    assert _mark_metadata(marks[0])["deepagents_kind"] == "human_in_the_loop"
+    assert _mark_data(marks[0])["interrupts"] == [{"id": "interrupt-1", "value": hitl_request}]
+    assert _mark_metadata(marks[1])["phase"] == "resume"
 
 
 def test_callback_handler_falls_back_for_non_hitl_interrupt(subscribed_events: list[nemo_flow.Event]) -> None:
@@ -229,8 +239,8 @@ def test_callback_handler_falls_back_for_non_hitl_interrupt(subscribed_events: l
 
     marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == ["Graph Interrupt", "Graph Resume"]
-    assert marks[0].metadata["integration"] == "langgraph"
-    assert "deepagents_kind" not in marks[0].metadata
+    assert _mark_metadata(marks[0])["integration"] == "langgraph"
+    assert "deepagents_kind" not in _mark_metadata(marks[0])
 
 
 @pytest.mark.parametrize(
@@ -259,10 +269,10 @@ def test_observe_backend_emits_sync_marks(
     getattr(mock_backend, method_name).assert_called_once_with(*args, **expected_call_kwargs)
 
     marks = _filter_mark_events(subscribed_events)
-    assert marks[0].metadata["deepagents_kind"] == expected_kind
-    assert marks[0].data["backend"] == "MockBackend"
-    assert marks[0].data["method"] == method_name
-    assert marks[1].metadata["phase"] == "end"
+    assert _mark_metadata(marks[0])["deepagents_kind"] == expected_kind
+    assert _mark_data(marks[0])["backend"] == "MockBackend"
+    assert _mark_data(marks[0])["method"] == method_name
+    assert _mark_metadata(marks[1])["phase"] == "end"
 
 
 async def test_observe_backend_emits_async_marks(subscribed_events: list[nemo_flow.Event]) -> None:
@@ -278,7 +288,7 @@ async def test_observe_backend_emits_async_marks(subscribed_events: list[nemo_fl
 
     marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == ["DeepAgents Filesystem Start", "DeepAgents Filesystem End"]
-    assert "ReadResult" in marks[1].data["result"]
+    assert "ReadResult" in _mark_data(marks[1])["result"]
 
 
 def test_observe_backend_preserves_sandbox_protocol(subscribed_events: list[nemo_flow.Event]) -> None:
@@ -307,7 +317,7 @@ def test_observe_backend_preserves_sandbox_protocol(subscribed_events: list[nemo
 
     marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == ["DeepAgents Sandbox Start", "DeepAgents Sandbox End"]
-    assert marks[0].data["method"] == "execute"
+    assert _mark_data(marks[0])["method"] == "execute"
 
 
 def test_add_nemo_flow_integration_instruments_kwargs() -> None:
