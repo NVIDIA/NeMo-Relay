@@ -54,6 +54,19 @@ Use `--agent claude|codex|cursor|hermes` when a wrapper hides the agent
 command name. Use `--dry-run --print` to inspect generated config without
 launching.
 
+Use `nemo-flow doctor` to inspect environment, config, agent commands, hook
+readiness, observability outputs, and shell completions. Scope the report to one
+agent when troubleshooting launch readiness:
+
+```bash
+nemo-flow doctor
+nemo-flow doctor codex
+nemo-flow doctor hermes --json
+```
+
+The command is read-only: it reports missing ATIF directories, hook files, and
+agent commands instead of creating or patching them.
+
 Hermes transparent runs export the dynamic `NEMO_FLOW_GATEWAY_URL`, but Hermes
 hooks must already be present in `.hermes/config.yaml` before they can call the
 gateway. The setup wizard (`nemo-flow config`) writes that file for you when
@@ -65,12 +78,12 @@ project `.nemo-flow/config.toml`, then
 `~/.config/nemo-flow/config.toml`.
 
 ```toml
-[observability]
+[exporters]
 atif_dir = ".nemo-flow/atif"
-metadata = { team = "agent-observability" }
+openinference_endpoint = "http://127.0.0.1:4318/v1/traces"
 
-[export.openinference]
-endpoint = "http://127.0.0.1:4318/v1/traces"
+[observability]
+metadata = { team = "agent-observability" }
 
 [agents.codex]
 command = "codex"

@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::config::ExportersConfig;
 use std::path::PathBuf;
 
 fn empty_report() -> DoctorReport {
     DoctorReport {
         schema_version: 1,
         binary_version: "0.0.0-test",
+        target_agent: None,
         environment: EnvironmentInfo {
             os: "macos 25.3.0".into(),
             arch: "aarch64",
@@ -17,19 +19,23 @@ fn empty_report() -> DoctorReport {
             workspace: ConfigLayer {
                 path: PathBuf::from("/x/.nemo-flow/config.toml"),
                 status: Status::Info,
+                active: false,
                 details: "not present".into(),
             },
             global: ConfigLayer {
                 path: PathBuf::from("/x/.config/nemo-flow/config.toml"),
                 status: Status::Info,
+                active: false,
                 details: "not present".into(),
             },
             system: ConfigLayer {
                 path: PathBuf::from("/etc/nemo-flow/config.toml"),
                 status: Status::Info,
+                active: false,
                 details: "not present".into(),
             },
             default_agent: None,
+            configured_agents: vec![],
         },
         agents: vec![],
         observability: vec![],
@@ -74,6 +80,21 @@ fn exit_code_fails_when_workspace_config_is_invalid() {
 }
 
 #[test]
+fn exit_code_fails_when_agent_readiness_fails() {
+    let mut report = empty_report();
+    report.agents.push(AgentInfo {
+        name: "codex",
+        status: Status::Fail,
+        configured: true,
+        command: "codex".into(),
+        path: None,
+        version: None,
+        annotation: "configured command not found on $PATH".into(),
+    });
+    assert_eq!(exit_code(&report), 1);
+}
+
+#[test]
 fn format_human_emits_fixed_section_order() {
     let report = empty_report();
     let rendered = format_human(&report);
@@ -101,6 +122,38 @@ fn format_human_reports_all_checks_passed_on_clean_report() {
     let rendered = format_human(&report);
     assert!(rendered.contains("All checks passed."));
     assert!(!rendered.contains("warnings"));
+}
+
+#[test]
+fn format_human_uses_symbols_for_agent_statuses() {
+    let mut report = empty_report();
+    report.agents = vec![
+        AgentInfo {
+            name: "claude",
+            status: Status::Pass,
+            configured: true,
+            command: "claude".into(),
+            path: Some(PathBuf::from("/bin/claude")),
+            version: Some("1.0.0".into()),
+            annotation: "hooks: injected during run".into(),
+        },
+        AgentInfo {
+            name: "codex",
+            status: Status::Info,
+            configured: false,
+            command: "codex".into(),
+            path: None,
+            version: None,
+            annotation: "not configured".into(),
+        },
+    ];
+
+    let rendered = format_human(&report);
+
+    assert!(rendered.contains("    ✓  claude"));
+    assert!(rendered.contains("    ·  codex"));
+    assert!(!rendered.contains("    pass "));
+    assert!(!rendered.contains("    info "));
 }
 
 #[test]
@@ -140,8 +193,39 @@ fn format_json_is_stable_and_versioned() {
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     // schema_version pins the wire format. Bump only on breaking renames/removals.
     assert_eq!(parsed["schema_version"], 1);
+    assert!(parsed["target_agent"].is_null());
     assert!(parsed["environment"]["os"].is_string());
     assert!(parsed["agents"].is_array());
+}
+
+#[test]
+fn check_dir_writable_does_not_create_missing_dir() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing-atif");
+
+    assert!(check_dir_writable(&missing).is_err());
+    assert!(
+        !missing.exists(),
+        "doctor should not create missing ATIF directories while probing"
+    );
+}
+
+#[tokio::test]
+async fn collect_observability_warns_for_missing_atif_dir_without_creating_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing-atif");
+    let gateway = GatewayConfig {
+        exporters: ExportersConfig {
+            atif_dir: Some(missing.clone()),
+            ..Default::default()
+        },
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_observability(&gateway).await;
+
+    assert_eq!(checks[0].status, Status::Warn);
+    assert!(!missing.exists());
 }
 
 #[test]
@@ -149,15 +233,21 @@ fn format_agents_human_lists_supported_and_separates_detected() {
     let agents = vec![
         AgentInfo {
             name: "claude",
+            status: Status::Pass,
+            configured: true,
+            command: "claude".into(),
             path: Some(PathBuf::from("/opt/homebrew/bin/claude")),
             version: Some("2.1.4".into()),
-            annotation: String::new(),
+            annotation: "hooks: injected during run".into(),
         },
         AgentInfo {
             name: "codex",
+            status: Status::Info,
+            configured: false,
+            command: "codex".into(),
             path: None,
             version: None,
-            annotation: String::new(),
+            annotation: "not configured".into(),
         },
     ];
     let rendered = format_agents_human(&agents);
@@ -176,14 +266,20 @@ fn format_agents_human_lists_supported_and_separates_detected() {
 fn format_agents_json_matches_doctor_agents_shape() {
     let agents = vec![AgentInfo {
         name: "claude",
+        status: Status::Pass,
+        configured: true,
+        command: "claude".into(),
         path: Some(PathBuf::from("/opt/homebrew/bin/claude")),
         version: Some("2.1.4".into()),
-        annotation: String::new(),
+        annotation: "hooks: injected during run".into(),
     }];
     let json = format_agents_json(&agents).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert!(parsed.is_array());
     assert_eq!(parsed[0]["name"], "claude");
+    assert_eq!(parsed[0]["status"], "pass");
+    assert_eq!(parsed[0]["configured"], true);
+    assert_eq!(parsed[0]["command"], "claude");
     assert_eq!(parsed[0]["version"], "2.1.4");
     assert_eq!(parsed[0]["path"], "/opt/homebrew/bin/claude");
 }

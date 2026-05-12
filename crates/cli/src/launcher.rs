@@ -71,6 +71,7 @@ pub(crate) async fn easy_path(
         openai_base_url: None,
         anthropic_base_url: None,
         atif_dir: None,
+        atof_dir: None,
         openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
@@ -510,11 +511,15 @@ impl PreparedRun {
         let mut lines: Vec<String> = Vec::new();
         lines.push(format!("NeMo Flow → {}", agent.as_arg()));
         lines.push(format!("  Gateway        {gateway_url}"));
-        match &resolved.gateway.atif_dir {
+        match &resolved.gateway.exporters.atif_dir {
             Some(path) => lines.push(format!("  ATIF           {}", path.display())),
             None => lines.push("  ATIF           (disabled)".to_string()),
         }
-        match &resolved.gateway.openinference_endpoint {
+        match &resolved.gateway.exporters.atof_dir {
+            Some(path) => lines.push(format!("  ATOF           {}", path.display())),
+            None => lines.push("  ATOF           (disabled)".to_string()),
+        }
+        match &resolved.gateway.exporters.openinference_endpoint {
             Some(endpoint) => lines.push(format!("  OpenInference  {endpoint}")),
             None => lines.push("  OpenInference  (disabled)".to_string()),
         }
@@ -557,10 +562,13 @@ impl PreparedRun {
             "anthropic_base_url = {}",
             resolved.gateway.anthropic_base_url
         );
-        if let Some(path) = &resolved.gateway.atif_dir {
+        if let Some(path) = &resolved.gateway.exporters.atif_dir {
             println!("atif_dir = {}", path.display());
         }
-        if let Some(endpoint) = &resolved.gateway.openinference_endpoint {
+        if let Some(path) = &resolved.gateway.exporters.atof_dir {
+            println!("atof_dir = {}", path.display());
+        }
+        if let Some(endpoint) = &resolved.gateway.exporters.openinference_endpoint {
             println!("openinference_endpoint = {endpoint}");
         }
         println!("argv = {}", self.argv.join(" "));

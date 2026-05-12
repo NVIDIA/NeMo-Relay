@@ -5,6 +5,7 @@ use axum::http::HeaderMap;
 use serde_json::json;
 
 use super::*;
+use crate::config::ExportersConfig;
 use crate::model::{LlmEvent, LlmHintEvent, SessionEvent, ToolEvent};
 
 #[tokio::test]
@@ -13,8 +14,7 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -89,8 +89,7 @@ async fn writes_atif_on_session_end_from_header_config() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -152,8 +151,10 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: Some(temp.path().to_path_buf()),
-        openinference_endpoint: None,
+        exporters: ExportersConfig {
+            atif_dir: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        },
         metadata: None,
         plugin_config: None,
     };
@@ -228,8 +229,7 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -307,8 +307,7 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -359,7 +358,7 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
 async fn terminal_retry_for_unknown_session_is_ignored() {
     let temp = tempfile::tempdir().unwrap();
     let mut config = session_test_config();
-    config.atif_dir = Some(temp.path().to_path_buf());
+    config.exporters.atif_dir = Some(temp.path().to_path_buf());
     let manager = SessionManager::new(config);
 
     manager
@@ -386,8 +385,7 @@ async fn out_of_order_started_subagent_end_does_not_leak_scope() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -458,8 +456,7 @@ async fn agent_end_closes_nested_active_subagents_lifo() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -514,8 +511,7 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -558,7 +554,7 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
 async fn agent_end_closes_in_flight_gateway_llm() {
     let temp = tempfile::tempdir().unwrap();
     let mut config = session_test_config();
-    config.atif_dir = Some(temp.path().to_path_buf());
+    config.exporters.atif_dir = Some(temp.path().to_path_buf());
     let manager = SessionManager::new(config);
     let _active = manager
         .start_llm(
@@ -607,8 +603,7 @@ async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() 
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -664,8 +659,7 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -761,8 +755,7 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -876,8 +869,7 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -975,8 +967,7 @@ async fn no_active_hint_reuses_last_llm_owner() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -1083,7 +1074,7 @@ async fn no_active_hint_reuses_last_llm_owner() {
 async fn session_marks_cover_compaction_notifications_and_hook_marks() {
     let temp = tempfile::tempdir().unwrap();
     let mut config = session_test_config();
-    config.atif_dir = Some(temp.path().to_path_buf());
+    config.exporters.atif_dir = Some(temp.path().to_path_buf());
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
 
@@ -1635,8 +1626,7 @@ fn session_test_config() -> GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     }
@@ -1653,8 +1643,10 @@ async fn gateway_first_anthropic_call_labels_session_as_claude_code() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: Some(temp.path().to_path_buf()),
-        openinference_endpoint: None,
+        exporters: ExportersConfig {
+            atif_dir: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        },
         metadata: None,
         plugin_config: None,
     };
@@ -1701,8 +1693,10 @@ async fn gateway_first_openai_responses_call_labels_session_as_codex() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: Some(temp.path().to_path_buf()),
-        openinference_endpoint: None,
+        exporters: ExportersConfig {
+            atif_dir: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        },
         metadata: None,
         plugin_config: None,
     };
@@ -1745,8 +1739,10 @@ async fn synthetic_gateway_session_keeps_gateway_label() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: Some(temp.path().to_path_buf()),
-        openinference_endpoint: None,
+        exporters: ExportersConfig {
+            atif_dir: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        },
         metadata: None,
         plugin_config: None,
     };
@@ -1791,8 +1787,10 @@ async fn turn_ended_snapshots_atif_without_closing_scope() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: Some(temp.path().to_path_buf()),
-        openinference_endpoint: None,
+        exporters: ExportersConfig {
+            atif_dir: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        },
         metadata: None,
         plugin_config: None,
     };
@@ -1873,8 +1871,10 @@ async fn turn_ended_is_noop_for_session_with_no_agent_scope() {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: Some(temp.path().to_path_buf()),
-        openinference_endpoint: None,
+        exporters: ExportersConfig {
+            atif_dir: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        },
         metadata: None,
         plugin_config: None,
     };

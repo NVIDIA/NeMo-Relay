@@ -75,7 +75,7 @@ pub(crate) enum Command {
     Hermes(EasyPathCommand),
     /// Run the interactive setup (writes `.nemo-flow/config.toml`)
     Config(ConfigCommand),
-    /// Diagnose env, agents, config, observability (use `--json` for machine output)
+    /// Diagnose env, agents, config, observability (optionally scoped to one agent)
     Doctor(DoctorCommand),
     /// List supported and locally-detected agents (use `--json` for machine output)
     Agents(AgentsCommand),
@@ -92,6 +92,9 @@ pub(crate) enum Command {
 /// so it doesn't pollute the help output of subcommands where it has no meaning.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct DoctorCommand {
+    /// Limit readiness checks to one supported agent.
+    #[arg(value_enum)]
+    pub(crate) agent: Option<CodingAgent>,
     /// Emit machine-readable JSON instead of the formatted human report. Versioned via
     /// `schema_version`; stable shape for CI / evaluation harness consumption.
     #[arg(long)]
@@ -158,6 +161,9 @@ pub(crate) struct ServerArgs {
     /// Directory to write ATIF trajectory JSON files into per session
     #[arg(long, env = "NEMO_FLOW_ATIF_DIR")]
     pub(crate) atif_dir: Option<PathBuf>,
+    /// Directory to write per-event ATOF JSONL files into (one event per line, raw ATOF shape)
+    #[arg(long, env = "NEMO_FLOW_ATOF_DIR")]
+    pub(crate) atof_dir: Option<PathBuf>,
     /// OpenInference-compatible OTLP HTTP endpoint for streaming spans (Phoenix, Arize, etc.)
     #[arg(long, env = "NEMO_FLOW_OPENINFERENCE_ENDPOINT")]
     pub(crate) openinference_endpoint: Option<String>,
@@ -174,6 +180,7 @@ impl ServerArgs {
             || self.openai_base_url.is_some()
             || self.anthropic_base_url.is_some()
             || self.atif_dir.is_some()
+            || self.atof_dir.is_some()
             || self.openinference_endpoint.is_some()
             || self.config.is_some()
     }
@@ -184,10 +191,26 @@ pub(crate) struct GatewayConfig {
     pub(crate) bind: SocketAddr,
     pub(crate) openai_base_url: String,
     pub(crate) anthropic_base_url: String,
-    pub(crate) atif_dir: Option<PathBuf>,
-    pub(crate) openinference_endpoint: Option<String>,
+    pub(crate) exporters: ExportersConfig,
     pub(crate) metadata: Option<Value>,
     pub(crate) plugin_config: Option<Value>,
+}
+
+/// Sinks the gateway writes observability data to. Grouped because every layer (CLI flags, env,
+/// TOML, headers, session resolution) historically duplicated `atif_dir` / `openinference_endpoint`
+/// side-by-side; adding `atof_dir` doubled that plumbing. This struct is the single seat where
+/// exporter knobs live on the runtime model — flat CLI flags and TOML keys still exist for
+/// ergonomics, but they all funnel into here.
+///
+/// `atif_dir` — directory for per-session ATIF trajectory JSON files (one file per session).
+/// `atof_dir` — directory for per-event ATOF JSONL streams (one event per line, raw event shape).
+/// `openinference_endpoint` — OTLP HTTP endpoint for streaming OpenInference spans
+/// (Phoenix / Arize / OTLP-compatible).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ExportersConfig {
+    pub(crate) atif_dir: Option<PathBuf>,
+    pub(crate) atof_dir: Option<PathBuf>,
+    pub(crate) openinference_endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -198,6 +221,8 @@ pub(crate) struct HookForwardCommand {
     pub(crate) gateway_url: Option<String>,
     #[arg(long)]
     pub(crate) atif_dir: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) atof_dir: Option<PathBuf>,
     #[arg(long)]
     pub(crate) openinference_endpoint: Option<String>,
     #[arg(long)]
@@ -238,6 +263,8 @@ pub(crate) struct RunCommand {
     #[arg(long)]
     pub(crate) atif_dir: Option<PathBuf>,
     #[arg(long)]
+    pub(crate) atof_dir: Option<PathBuf>,
+    #[arg(long)]
     pub(crate) openinference_endpoint: Option<String>,
     #[arg(long)]
     pub(crate) session_metadata: Option<String>,
@@ -274,8 +301,7 @@ pub(crate) enum GatewayMode {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SessionConfig {
-    pub(crate) atif_dir: Option<PathBuf>,
-    pub(crate) openinference_endpoint: Option<String>,
+    pub(crate) exporters: ExportersConfig,
     pub(crate) metadata: Option<Value>,
     pub(crate) plugin_config: Option<Value>,
     pub(crate) profile: Option<String>,
@@ -287,11 +313,16 @@ impl GatewayConfig {
     // Header JSON fields are parsed opportunistically; invalid JSON is treated as absent here
     // because install and hook-forward validate generated header values before sending them.
     pub(crate) fn session_config_from_headers(&self, headers: &HeaderMap) -> SessionConfig {
-        let atif_dir = header_string(headers, "x-nemo-flow-atif-dir")
-            .map(PathBuf::from)
-            .or_else(|| self.atif_dir.clone());
-        let openinference_endpoint = header_string(headers, "x-nemo-flow-openinference-endpoint")
-            .or_else(|| self.openinference_endpoint.clone());
+        let exporters = ExportersConfig {
+            atif_dir: header_string(headers, "x-nemo-flow-atif-dir")
+                .map(PathBuf::from)
+                .or_else(|| self.exporters.atif_dir.clone()),
+            atof_dir: header_string(headers, "x-nemo-flow-atof-dir")
+                .map(PathBuf::from)
+                .or_else(|| self.exporters.atof_dir.clone()),
+            openinference_endpoint: header_string(headers, "x-nemo-flow-openinference-endpoint")
+                .or_else(|| self.exporters.openinference_endpoint.clone()),
+        };
         let metadata =
             header_json(headers, "x-nemo-flow-session-metadata").or_else(|| self.metadata.clone());
         let plugin_config = header_json(headers, "x-nemo-flow-plugin-config")
@@ -299,8 +330,7 @@ impl GatewayConfig {
         let profile = header_string(headers, "x-nemo-flow-config-profile");
         let gateway_mode = header_string(headers, "x-nemo-flow-gateway-mode");
         SessionConfig {
-            atif_dir,
-            openinference_endpoint,
+            exporters,
             metadata,
             plugin_config,
             profile,
@@ -356,6 +386,7 @@ impl Default for CursorAgentConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileConfig {
     upstream: Option<FileUpstreamConfig>,
+    exporters: Option<FileExportersConfig>,
     observability: Option<FileObservabilityConfig>,
     export: Option<FileExportConfig>,
     plugins: Option<FilePluginsConfig>,
@@ -371,12 +402,19 @@ struct FileUpstreamConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileObservabilityConfig {
     atif_dir: Option<PathBuf>,
+    atof_dir: Option<PathBuf>,
     metadata: Option<Value>,
 }
 
-// `[export.<backend>]` stays nested so future per-backend config (headers, timeout, protocol)
-// can live alongside `endpoint` without flattening into a wall of `<backend>_*` keys at the
-// observability layer.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct FileExportersConfig {
+    atif_dir: Option<PathBuf>,
+    atof_dir: Option<PathBuf>,
+    openinference_endpoint: Option<String>,
+}
+
+// Legacy `[export.<backend>]` shape. New configs use `[exporters]`; this stays readable so
+// existing user files do not break.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileExportConfig {
     openinference: Option<FileOpenInferenceConfig>,
@@ -428,8 +466,7 @@ impl Default for GatewayConfig {
                 .expect("valid default bind address"),
             openai_base_url: "https://api.openai.com".into(),
             anthropic_base_url: "https://api.anthropic.com".into(),
-            atif_dir: None,
-            openinference_endpoint: None,
+            exporters: ExportersConfig::default(),
             metadata: None,
             plugin_config: None,
         }
@@ -488,10 +525,13 @@ fn apply_run_url_overrides(config: &mut GatewayConfig, command: &RunCommand) {
         config.anthropic_base_url = value.clone();
     }
     if let Some(value) = &command.atif_dir {
-        config.atif_dir = Some(value.clone());
+        config.exporters.atif_dir = Some(value.clone());
+    }
+    if let Some(value) = &command.atof_dir {
+        config.exporters.atof_dir = Some(value.clone());
     }
     if let Some(value) = &command.openinference_endpoint {
-        config.openinference_endpoint = Some(value.clone());
+        config.exporters.openinference_endpoint = Some(value.clone());
     }
 }
 
@@ -523,10 +563,13 @@ fn apply_server_overrides(config: &mut GatewayConfig, args: &ServerArgs) {
         config.anthropic_base_url = value.clone();
     }
     if let Some(value) = &args.atif_dir {
-        config.atif_dir = Some(value.clone());
+        config.exporters.atif_dir = Some(value.clone());
+    }
+    if let Some(value) = &args.atof_dir {
+        config.exporters.atof_dir = Some(value.clone());
     }
     if let Some(value) = &args.openinference_endpoint {
-        config.openinference_endpoint = Some(value.clone());
+        config.exporters.openinference_endpoint = Some(value.clone());
     }
 }
 
@@ -620,6 +663,7 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
     apply_file_upstream_config(&mut resolved.gateway, config.upstream);
     apply_file_observability_config(&mut resolved.gateway, config.observability);
     apply_file_export_config(&mut resolved.gateway, config.export);
+    apply_file_exporters_config(&mut resolved.gateway, config.exporters);
     apply_file_plugins_config(&mut resolved.gateway, config.plugins);
     apply_file_agents_config(&mut resolved.agents, config.agents);
     Ok(())
@@ -639,10 +683,9 @@ fn apply_file_upstream_config(gateway: &mut GatewayConfig, upstream: Option<File
     }
 }
 
-// Applies observability sinks: ATIF trajectory directory and session metadata tags applied to
-// every span/trajectory. Missing fields preserve earlier merge layers. OpenInference endpoint
-// lives under `[export.openinference]` (see `apply_file_export_config`) so per-backend config
-// can grow there without restructuring this section.
+// Applies legacy observability sinks plus session metadata tags applied to every span/trajectory.
+// New configs put exporter sinks under `[exporters]`; these fields remain readable for existing
+// config files.
 fn apply_file_observability_config(
     gateway: &mut GatewayConfig,
     observability: Option<FileObservabilityConfig>,
@@ -651,16 +694,17 @@ fn apply_file_observability_config(
         return;
     };
     if let Some(value) = observability.atif_dir {
-        gateway.atif_dir = Some(value);
+        gateway.exporters.atif_dir = Some(value);
+    }
+    if let Some(value) = observability.atof_dir {
+        gateway.exporters.atof_dir = Some(value);
     }
     if let Some(value) = observability.metadata {
         gateway.metadata = Some(value);
     }
 }
 
-// Applies optional OpenInference export config. The nested shape leaves room for future
-// exporter-specific fields (e.g., `headers`, `timeout`, `protocol`) without flattening into
-// a wall of `openinference_*` keys at the observability layer.
+// Applies legacy optional OpenInference export config. New configs use `[exporters]`.
 fn apply_file_export_config(gateway: &mut GatewayConfig, export: Option<FileExportConfig>) {
     let Some(export) = export else {
         return;
@@ -668,7 +712,27 @@ fn apply_file_export_config(gateway: &mut GatewayConfig, export: Option<FileExpo
     if let Some(openinference) = export.openinference
         && let Some(value) = openinference.endpoint
     {
-        gateway.openinference_endpoint = Some(value);
+        gateway.exporters.openinference_endpoint = Some(value);
+    }
+}
+
+// Applies the current exporter config shape. This runs after the legacy shapes so `[exporters]`
+// wins when a file contains both old and new keys.
+fn apply_file_exporters_config(
+    gateway: &mut GatewayConfig,
+    exporters: Option<FileExportersConfig>,
+) {
+    let Some(exporters) = exporters else {
+        return;
+    };
+    if let Some(value) = exporters.atif_dir {
+        gateway.exporters.atif_dir = Some(value);
+    }
+    if let Some(value) = exporters.atof_dir {
+        gateway.exporters.atof_dir = Some(value);
+    }
+    if let Some(value) = exporters.openinference_endpoint {
+        gateway.exporters.openinference_endpoint = Some(value);
     }
 }
 
@@ -723,10 +787,13 @@ fn apply_env_config(config: &mut GatewayConfig) {
         config.anthropic_base_url = value;
     }
     if let Some(value) = std::env::var_os("NEMO_FLOW_ATIF_DIR") {
-        config.atif_dir = Some(PathBuf::from(value));
+        config.exporters.atif_dir = Some(PathBuf::from(value));
+    }
+    if let Some(value) = std::env::var_os("NEMO_FLOW_ATOF_DIR") {
+        config.exporters.atof_dir = Some(PathBuf::from(value));
     }
     if let Ok(value) = std::env::var("NEMO_FLOW_OPENINFERENCE_ENDPOINT") {
-        config.openinference_endpoint = Some(value);
+        config.exporters.openinference_endpoint = Some(value);
     }
 }
 

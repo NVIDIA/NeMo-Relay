@@ -67,7 +67,7 @@ async fn run() -> Result<ExitCode, error::CliError> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Some(Command::Doctor(command)) => doctor::run_doctor(command.json).await,
+        Some(Command::Doctor(command)) => doctor::run_doctor(command.agent, command.json).await,
         Some(Command::Agents(command)) => doctor::run_agents(command.json).await,
         Some(Command::Completions(command)) => {
             if command.install {
@@ -97,14 +97,15 @@ async fn run() -> Result<ExitCode, error::CliError> {
             //   OpenInference endpoint), they obviously want the long-running gateway daemon —
             //   keep that path so existing scripts that explicitly invoke daemon mode stay
             //   compatible.
-            // - Otherwise — no flags, no subcommand — interpret it as "I just typed nemo-flow,
-            //   tell me what to do" and run the setup wizard. This matches the design intent
-            //   ("bare invocation enters guided setup") instead of failing on a port bind that
-            //   the user never asked for.
+            // - Otherwise — no flags, no subcommand — use the first-run path only when no config
+            //   exists. Once configured, bare `nemo-flow` becomes a quick health check; explicit
+            //   `nemo-flow config` remains the reconfiguration path.
             if cli.server.requested_daemon_mode() {
                 let config = config::resolve_server_config(&cli.server)?;
                 server::serve(config.gateway).await?;
                 Ok(ExitCode::SUCCESS)
+            } else if config::any_config_file_exists() {
+                doctor::run_doctor(None, false).await
             } else {
                 setup::run(None).await?;
                 Ok(ExitCode::SUCCESS)

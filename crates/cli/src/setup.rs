@@ -43,8 +43,10 @@ impl ConfigScope {
 /// One of the built-in observability backends offered in setup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ObservabilityBackend {
-    /// Local ATIF trajectory files.
+    /// Local ATIF trajectory files (one JSON file per session).
     Atif,
+    /// Local ATOF raw-event JSONL streams (one line per event, raw ATOF shape).
+    Atof,
     /// OpenInference spans streamed to an HTTP endpoint (Phoenix, Arize, OTLP-compatible).
     OpenInference,
 }
@@ -53,6 +55,7 @@ impl ObservabilityBackend {
     fn label(self) -> &'static str {
         match self {
             Self::Atif => "ATIF trajectory files    ./atif/                  (recommended)",
+            Self::Atof => "ATOF event JSONL stream  ./atof/                  (raw events)",
             Self::OpenInference => {
                 "OpenInference spans      <endpoint URL>           (Phoenix / Arize / OTLP)"
             }
@@ -112,28 +115,32 @@ pub(crate) fn detect_installed_agents_in(path_var: Option<&std::ffi::OsStr>) -> 
 
 /// Builds the TOML document that represents the setup's answers. Pure and testable.
 ///
-/// The shape mirrors the schema landed in Phase 1: `[observability]`, `[export.openinference]`,
-/// `[agents.<name>]`. Sections are only emitted when the user opted into the corresponding
-/// behavior so the resulting file stays minimal.
+/// The shape mirrors the runtime model: exporter sinks live under `[exporters]`, agents under
+/// `[agents.<name>]`, and upstream overrides under `[upstream]`. Sections are only emitted when
+/// the user opted into the corresponding behavior so the resulting file stays minimal.
 pub(crate) fn build_config(answers: &SetupAnswers) -> DocumentMut {
     let mut doc = DocumentMut::new();
 
-    if answers.backends.contains(&ObservabilityBackend::Atif) {
-        let mut observability = Table::new();
-        observability["atif_dir"] = value("./atif");
-        doc["observability"] = Item::Table(observability);
-    }
-
-    if answers
+    // Build the exporter table once so selecting multiple backends produces a single section with
+    // all enabled sinks, not separate legacy observability/export blocks.
+    let want_atif = answers.backends.contains(&ObservabilityBackend::Atif);
+    let want_atof = answers.backends.contains(&ObservabilityBackend::Atof);
+    let want_openinference = answers
         .backends
         .contains(&ObservabilityBackend::OpenInference)
-        && let Some(endpoint) = answers.openinference_endpoint.as_deref()
-    {
-        let mut export = Table::new();
-        let mut openinference = Table::new();
-        openinference["endpoint"] = value(endpoint);
-        export.insert("openinference", Item::Table(openinference));
-        doc["export"] = Item::Table(export);
+        && answers.openinference_endpoint.is_some();
+    if want_atif || want_atof || want_openinference {
+        let mut exporters = Table::new();
+        if want_atif {
+            exporters["atif_dir"] = value("./atif");
+        }
+        if want_atof {
+            exporters["atof_dir"] = value("./atof");
+        }
+        if let Some(endpoint) = answers.openinference_endpoint.as_deref() {
+            exporters["openinference_endpoint"] = value(endpoint);
+        }
+        doc["exporters"] = Item::Table(exporters);
     }
 
     if !answers.agents.is_empty() {
@@ -169,8 +176,8 @@ pub(crate) fn build_config(answers: &SetupAnswers) -> DocumentMut {
 /// Writes the setup's TOML document to the scope-appropriate path(s).
 ///
 /// When `merge_scope` is `Some(agent)`, an existing `config.toml` at the target path is parsed
-/// and only the sections owned by THIS wizard run are replaced: `[observability]`,
-/// `[export.openinference]`, `[plugins]`, and the single `[agents.<agent>]` block. Other
+/// and only the sections owned by THIS wizard run are replaced: `[exporters]`,
+/// legacy `[observability]` / `[export]`, `[plugins]`, and the single `[agents.<agent>]` block. Other
 /// `[agents.*]` blocks are preserved. When `merge_scope` is `None`, the file is overwritten
 /// outright with the wizard's full output (the user explicitly chose which agents to include).
 ///
@@ -236,6 +243,7 @@ fn write_or_merge(
     // omits a section, the previous override is removed too. Otherwise accepting the default
     // (e.g. dropping a custom `openai_base_url`) could not actually revert the override —
     // the old value would silently survive.
+    replace_section(&mut existing, doc, "exporters");
     replace_section(&mut existing, doc, "observability");
     replace_section(&mut existing, doc, "export");
     replace_section(&mut existing, doc, "upstream");
@@ -480,6 +488,7 @@ struct Defaults {
     scope: Option<ConfigScope>,
     agents: Vec<CodingAgent>,
     atif_enabled: bool,
+    atof_enabled: bool,
     openinference_endpoint: Option<String>,
     openai_base_url: Option<String>,
 }
@@ -489,6 +498,7 @@ impl Defaults {
         self.scope.is_some()
             || !self.agents.is_empty()
             || self.atif_enabled
+            || self.atof_enabled
             || self.openinference_endpoint.is_some()
             || self.openai_base_url.is_some()
     }
@@ -525,21 +535,31 @@ fn read_existing_defaults() -> Option<Defaults> {
         (false, false) => None,
     };
 
+    let exporters = doc.get("exporters").and_then(|i| i.as_table());
+    let legacy_observability = doc.get("observability").and_then(|i| i.as_table());
+    let legacy_export = doc.get("export").and_then(|i| i.as_table());
+
     Some(Defaults {
         scope,
         agents: read_agents_from_doc(&doc),
-        atif_enabled: doc
-            .get("observability")
-            .and_then(|i| i.as_table())
-            .and_then(|t| t.get("atif_dir"))
-            .is_some(),
-        openinference_endpoint: doc
-            .get("export")
-            .and_then(|i| i.as_table())
-            .and_then(|t| t.get("openinference"))
-            .and_then(|i| i.as_table())
-            .and_then(|t| t.get("endpoint"))
+        atif_enabled: exporters.and_then(|t| t.get("atif_dir")).is_some()
+            || legacy_observability
+                .and_then(|t| t.get("atif_dir"))
+                .is_some(),
+        atof_enabled: exporters.and_then(|t| t.get("atof_dir")).is_some()
+            || legacy_observability
+                .and_then(|t| t.get("atof_dir"))
+                .is_some(),
+        openinference_endpoint: exporters
+            .and_then(|t| t.get("openinference_endpoint"))
             .and_then(|i| i.as_str())
+            .or_else(|| {
+                legacy_export
+                    .and_then(|t| t.get("openinference"))
+                    .and_then(|i| i.as_table())
+                    .and_then(|t| t.get("endpoint"))
+                    .and_then(|i| i.as_str())
+            })
             .map(str::to_string),
         openai_base_url: doc
             .get("upstream")
@@ -695,18 +715,21 @@ fn ask_backends(
 ) -> Result<(Vec<ObservabilityBackend>, Option<String>), CliError> {
     let options = [
         ObservabilityBackend::Atif,
+        ObservabilityBackend::Atof,
         ObservabilityBackend::OpenInference,
     ];
     let labels: Vec<&str> = options.iter().map(|b| b.label()).collect();
     // Pre-check from existing config when present. On first run, falls back to ATIF on (zero
-    // infra) and OpenInference off (needs an endpoint running).
+    // infra, trajectory replay is the common case), ATOF off (raw event noise — users opt in),
+    // and OpenInference off (needs an endpoint running).
     let defaults = if existing.has_any() {
         [
             existing.atif_enabled,
+            existing.atof_enabled,
             existing.openinference_endpoint.is_some(),
         ]
     } else {
-        [true, false]
+        [true, false, false]
     };
     let selected_idx = MultiSelect::with_theme(theme)
         .with_prompt("Observability backends?")
