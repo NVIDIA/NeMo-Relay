@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::ptr;
 use std::sync::Arc;
@@ -134,6 +135,30 @@ fn build_otel_config(
     }
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
+    }
+
+    Ok(config)
+}
+
+fn build_atof_config(
+    options: Option<AtofExporterConfig>,
+) -> napi::Result<nemo_flow::observability::atof::AtofExporterConfig> {
+    let options = options.unwrap_or_default();
+    let mut config = nemo_flow::observability::atof::AtofExporterConfig::new();
+
+    if let Some(output_directory) = options.output_directory {
+        config = config.with_output_directory(PathBuf::from(output_directory));
+    }
+    if let Some(filename) = options.filename {
+        config = config.with_filename(filename);
+    }
+    if let Some(mode) = options.mode {
+        let Some(mode) = nemo_flow::observability::atof::AtofExporterMode::parse(&mode) else {
+            return Err(napi::Error::from_reason(
+                "mode must be 'append' or 'overwrite'",
+            ));
+        };
+        config = config.with_mode(mode);
     }
 
     Ok(config)
@@ -2932,6 +2957,73 @@ impl AtifExporter {
     #[napi]
     pub fn clear(&self) {
         self.inner.clear();
+    }
+}
+
+/// Mutable configuration object for `AtofExporter`.
+#[napi(object)]
+#[derive(Default)]
+pub struct AtofExporterConfig {
+    /// Output directory. Defaults to the current working directory.
+    pub output_directory: Option<String>,
+    /// `"append"` (default) or `"overwrite"`.
+    pub mode: Option<String>,
+    /// Output filename. Defaults to `nemo-flow-events-YYYY-MM-DD-HH.MM.SS.jsonl`.
+    pub filename: Option<String>,
+}
+
+/// Filesystem-backed ATOF JSONL event exporter.
+#[napi]
+pub struct AtofExporter {
+    inner: nemo_flow::observability::atof::AtofExporter,
+}
+
+#[napi]
+impl AtofExporter {
+    /// Create a new ATOF JSONL exporter from a config object.
+    #[napi(constructor)]
+    pub fn new(config: Option<AtofExporterConfig>) -> napi::Result<Self> {
+        let inner = nemo_flow::observability::atof::AtofExporter::new(build_atof_config(config)?)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Return the JSONL output path.
+    #[napi(getter)]
+    pub fn path(&self) -> String {
+        self.inner.path().to_string_lossy().into_owned()
+    }
+
+    /// Register this exporter globally with the given name.
+    #[napi]
+    pub fn register(&self, name: String) -> napi::Result<()> {
+        self.inner
+            .register(&name)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Deregister a subscriber by name.
+    #[napi]
+    pub fn deregister(&self, name: String) -> napi::Result<bool> {
+        self.inner
+            .deregister(&name)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Flush the output file.
+    #[napi]
+    pub fn force_flush(&self) -> napi::Result<()> {
+        self.inner
+            .force_flush()
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Shut down the exporter by flushing output.
+    #[napi]
+    pub fn shutdown(&self) -> napi::Result<()> {
+        self.inner
+            .shutdown()
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }
 

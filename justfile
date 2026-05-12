@@ -155,8 +155,23 @@ ensure_docs_dependencies() {
     npm install --ignore-scripts
 }
 
+ensure_docs_node_workspace_compat() {
+    local node_modules="$NEMO_FLOW_REPO_ROOT/crates/node/node_modules"
+    local root_node_modules="$NEMO_FLOW_REPO_ROOT/node_modules"
+
+    # Historical versioned docs builds run older docs hooks that resolve
+    # TypeDoc peers only from crates/node/node_modules. A root npm install may
+    # hoist TypeScript to root node_modules, so materialize it where those
+    # immutable release tags expect it before sphinx-multiversion copies them.
+    if [[ ! -e "$node_modules/typescript" && -d "$root_node_modules/typescript" ]]; then
+        mkdir -p "$node_modules"
+        cp -R "$root_node_modules/typescript" "$node_modules/typescript"
+    fi
+}
+
 configure_docs_environment() {
     export SPHINX_AUTODOC_RELOAD_MODULES="${SPHINX_AUTODOC_RELOAD_MODULES:-1}"
+    ensure_docs_node_workspace_compat
 }
 
 prepare_parent_dir() {
@@ -898,6 +913,7 @@ test-openclaw:
     fi
     npm run typecheck --workspace=nemo-flow-openclaw
     npm test --workspace=nemo-flow-openclaw
+    npm run pack:check --workspace=nemo-flow-openclaw
 
 # --set [output_dir=<path>] [ci=true|false]
 test-wasm:
@@ -990,6 +1006,33 @@ package-node:
     packages=("$package_dir"/*.tgz)
     if ((${#packages[@]} == 0)); then
         echo "Error: No npm packages found in $package_dir"
+        exit 1
+    fi
+
+# --set [output_dir=<path>] [ref_name=<name>]
+package-openclaw:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    # If `ref_name` is empty, append the current short HEAD SHA to the version.
+    # If `ref_name` is set, write it as the exact package version before packing.
+    output_dir="{{ output_dir }}"
+    cd "$NEMO_FLOW_REPO_ROOT"
+    package_dir="$(prepare_package_dir openclaw)"
+    if [[ -z "{{ ref_name }}" ]]; then
+        sha="$(head_git_sha)"
+        version="$(read_npm_package_version integrations/openclaw/package.json)"
+        echo "Non-release build: appending commit hash to version"
+        set_npm_package_version integrations/openclaw/package.json package-lock.json "${version}-${sha}" integrations/openclaw
+    else
+        echo "Using explicit version {{ ref_name }}"
+        set_npm_package_version integrations/openclaw/package.json package-lock.json "{{ ref_name }}" integrations/openclaw
+    fi
+    npm install --workspace=nemo-flow-openclaw --ignore-scripts
+    npm pack --workspace=nemo-flow-openclaw --pack-destination "$package_dir"
+    shopt -s nullglob
+    packages=("$package_dir"/*.tgz)
+    if ((${#packages[@]} == 0)); then
+        echo "Error: No OpenClaw npm packages found in $package_dir"
         exit 1
     fi
 

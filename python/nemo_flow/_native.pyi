@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
 from datetime import datetime
-from typing import Literal, Optional, TypeAlias
+from typing import ClassVar, Literal, Optional, TypeAlias
 
 _JsonPrimitive: TypeAlias = str | int | float | bool | None
 _JsonValue: TypeAlias = _JsonPrimitive | list["_JsonValue"] | dict[str, "_JsonValue"]
@@ -710,6 +710,46 @@ class AtifExporter:
         ...
     def clear(self) -> None:
         """Clear collected events without changing subscriber registration."""
+        ...
+
+class AtofExporterMode:
+    """File write mode for ``AtofExporter``."""
+
+    Append: ClassVar[AtofExporterMode]
+    Overwrite: ClassVar[AtofExporterMode]
+
+class AtofExporterConfig:
+    """Mutable configuration for the filesystem-backed ATOF JSONL exporter."""
+
+    output_directory: str
+    mode: AtofExporterMode
+    filename: str
+
+    def __init__(self) -> None:
+        """Create an ATOF exporter config with native defaults."""
+        ...
+
+class AtofExporter:
+    """Filesystem-backed exporter that writes raw ATOF events as JSONL."""
+
+    def __init__(self, config: AtofExporterConfig) -> None:
+        """Create an ATOF JSONL exporter from config."""
+        ...
+    @property
+    def path(self) -> str:
+        """Return the JSONL output path."""
+        ...
+    def register(self, name: str) -> None:
+        """Register the exporter under ``name``."""
+        ...
+    def deregister(self, name: str) -> bool:
+        """Deregister ``name`` and return whether it existed."""
+        ...
+    def force_flush(self) -> None:
+        """Flush the output file."""
+        ...
+    def shutdown(self) -> None:
+        """Flush the output file before shutdown."""
         ...
 
 class ScopeStack:

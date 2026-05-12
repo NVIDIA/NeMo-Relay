@@ -8,5 +8,8 @@
     "crates/node",
     "crates/wasm",
     "integrations/openclaw"
-  ]
+  ],
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
 }

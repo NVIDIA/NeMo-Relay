@@ -137,6 +137,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyScopeEvent>()?;
     m.add_class::<PyMarkEvent>()?;
     m.add_class::<PyAtifExporter>()?;
+    m.add_class::<PyAtofExporterMode>()?;
+    m.add_class::<PyAtofExporterConfig>()?;
+    m.add_class::<PyAtofExporter>()?;
     m.add_class::<PyOpenTelemetryConfig>()?;
     m.add_class::<PyOpenTelemetrySubscriber>()?;
     m.add_class::<PyOpenInferenceConfig>()?;
