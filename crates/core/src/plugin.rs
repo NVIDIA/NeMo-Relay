@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
@@ -44,6 +44,7 @@ type PluginMap = HashMap<String, Arc<dyn Plugin>>;
 static PLUGIN_HANDLERS: LazyLock<RwLock<PluginMap>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 static ACTIVE_PLUGIN_CONFIGURATION: LazyLock<Mutex<Option<ActivePluginConfiguration>>> =
     LazyLock::new(|| Mutex::new(None));
+static BUILTIN_PLUGIN_REGISTRATION: OnceLock<Result<()>> = OnceLock::new();
 
 /// Error type for generic plugin operations.
 #[derive(Debug, Error)]
@@ -734,7 +735,24 @@ pub fn register_plugin(plugin: Arc<dyn Plugin>) -> Result<()> {
 /// Built-in plugins are available to validation and initialization without a
 /// binding or application-specific registration call.
 pub fn ensure_builtin_plugins_registered() -> Result<()> {
-    crate::observability::plugin_component::register_observability_component()
+    match BUILTIN_PLUGIN_REGISTRATION
+        .get_or_init(crate::observability::plugin_component::register_observability_component)
+    {
+        Ok(()) => Ok(()),
+        Err(err) => Err(clone_cached_plugin_error(err)),
+    }
+}
+
+fn clone_cached_plugin_error(err: &PluginError) -> PluginError {
+    match err {
+        PluginError::InvalidConfig(message) => PluginError::InvalidConfig(message.clone()),
+        PluginError::NotFound(message) => PluginError::NotFound(message.clone()),
+        PluginError::Serialization(err) => PluginError::Internal(err.to_string()),
+        PluginError::Internal(message) => PluginError::Internal(message.clone()),
+        PluginError::RegistrationFailed(message) => {
+            PluginError::RegistrationFailed(message.clone())
+        }
+    }
 }
 
 /// Removes a previously registered plugin.

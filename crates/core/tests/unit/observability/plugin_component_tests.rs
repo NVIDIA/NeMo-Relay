@@ -4,6 +4,7 @@
 //! Unit tests for the built-in observability plugin component.
 
 use super::*;
+use crate::api::event::{BaseEvent, EventCategory, ScopeEvent};
 use crate::api::runtime::NemoFlowContextState;
 use crate::api::runtime::global_context;
 use crate::api::scope::{PopScopeParams, PushScopeParams};
@@ -410,6 +411,79 @@ fn atif_defaults_create_one_file_per_top_level_agent() {
     let second_serialized = second_json.to_string();
     assert!(second_serialized.contains("second-agent"));
     assert!(!second_serialized.contains("first-agent"));
+}
+
+#[test]
+fn atif_completed_top_level_agent_is_evicted_after_write() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let dir = temp_dir("observability-atif-evict");
+    let root_uuid = crate::api::runtime::current_scope_stack()
+        .read()
+        .unwrap()
+        .root_uuid();
+    let agent = push_agent("evicted-agent");
+    let manager = Arc::new(Mutex::new(AtifDispatcher::new(AtifSectionConfig {
+        enabled: true,
+        output_directory: Some(dir.clone()),
+        ..AtifSectionConfig::default()
+    })));
+
+    let start_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(agent.uuid)
+            .parent_uuid(root_uuid)
+            .name("evicted-agent")
+            .build(),
+        ScopeCategory::Start,
+        vec![],
+        EventCategory::agent(),
+        None,
+    ));
+    manager
+        .lock()
+        .unwrap()
+        .observe_global(&start_event, "__test__", Arc::clone(&manager));
+    {
+        let dispatcher = manager.lock().unwrap();
+        assert!(dispatcher.agents.contains_key(&agent.uuid));
+        assert!(dispatcher.scope_subscribers.contains_key(&agent.uuid));
+    }
+
+    let end_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(agent.uuid)
+            .parent_uuid(root_uuid)
+            .name("evicted-agent")
+            .build(),
+        ScopeCategory::End,
+        vec![],
+        EventCategory::agent(),
+        None,
+    ));
+    let pending_write = manager
+        .lock()
+        .unwrap()
+        .observe_scope(&end_event, agent.uuid)
+        .unwrap();
+    let path = dir.join(format!("nemo-flow-atif-{}.json", agent.uuid));
+    assert!(!path.exists());
+    write_atif_file(&pending_write).unwrap();
+    let scope_subscriber = manager
+        .lock()
+        .unwrap()
+        .complete_scope_write(agent.uuid, Ok(()));
+    if let Some((scope_uuid, name)) = scope_subscriber {
+        let _ = scope_deregister_subscriber(&scope_uuid, &name);
+    }
+
+    let dispatcher = manager.lock().unwrap();
+    assert!(dispatcher.last_error.is_none());
+    assert!(!dispatcher.agents.contains_key(&agent.uuid));
+    assert!(!dispatcher.scope_subscribers.contains_key(&agent.uuid));
+    assert!(path.exists());
+    drop(dispatcher);
+    pop(&agent);
 }
 
 #[test]

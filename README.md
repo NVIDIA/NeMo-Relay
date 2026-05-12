@@ -64,8 +64,9 @@ consistent across frameworks and languages.
 - ✅ **Observability-ready events**: Preserve model metadata, tool call IDs,
   inputs, outputs, scope relationships, and lifecycle timing for downstream
   analysis.
-- ✅ **Built-in observability plugin**: Configure ATOF, ATIF, OpenTelemetry,
-  and OpenInference exporters without registering subscribers by hand.
+- ✅ **Built-in observability plugin**: Configure Agent Trajectory Observability
+  Format (ATOF), ATIF, OpenTelemetry, and OpenInference exporters without
+  registering subscribers by hand.
 - ✅ **Extension points for framework authors**: Wrap stable tool and provider
   callbacks while preserving framework-owned scheduling, retries, memory, and
   result handling.

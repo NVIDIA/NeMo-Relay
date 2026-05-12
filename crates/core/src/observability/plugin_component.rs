@@ -388,11 +388,32 @@ fn register_atif_dispatcher(
         "observability",
         ctx.qualify_name("atif.shutdown"),
         Box::new(move || {
-            let mut guard = manager.lock().map_err(|err| {
+            let work = {
+                let mut guard = manager.lock().map_err(|err| {
+                    PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
+                })?;
+                guard
+                    .flush_open_agents()
+                    .map_err(observability_registration_error)?
+            };
+            for (scope_uuid, name) in work.scope_subscribers {
+                let _ = scope_deregister_subscriber(&scope_uuid, &name);
+            }
+            for write in work.writes {
+                let agent_uuid = write.agent_uuid;
+                let result = write_atif_file(&write);
+                let mut guard = manager.lock().map_err(|err| {
+                    PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
+                })?;
+                guard
+                    .finish_agent_write(agent_uuid, result)
+                    .map_err(observability_registration_error)?;
+            }
+            let guard = manager.lock().map_err(|err| {
                 PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
             })?;
             guard
-                .flush_open_agents()
+                .last_error_result()
                 .map_err(observability_registration_error)
         }),
     ));
@@ -477,6 +498,17 @@ struct ManagedAtifExporter {
     written: bool,
 }
 
+struct PendingAtifWrite {
+    agent_uuid: Uuid,
+    path: PathBuf,
+    payload: Vec<u8>,
+}
+
+struct AtifFlushWork {
+    writes: Vec<PendingAtifWrite>,
+    scope_subscribers: Vec<(Uuid, String)>,
+}
+
 impl AtifDispatcher {
     fn new(config: AtifSectionConfig) -> Self {
         Self {
@@ -522,35 +554,88 @@ impl AtifDispatcher {
         }
     }
 
-    fn observe_scope(&mut self, event: &Event, agent_uuid: Uuid) {
+    fn observe_scope(&mut self, event: &Event, agent_uuid: Uuid) -> Option<PendingAtifWrite> {
         if self.last_error.is_some() {
-            return;
+            return None;
         }
-        let Some(agent) = self.agents.get_mut(&agent_uuid) else {
-            return;
-        };
+        let should_finalize =
+            event.uuid() == agent_uuid && event.scope_category() == Some(ScopeCategory::End);
+        let agent = self.agents.get_mut(&agent_uuid)?;
         (agent.exporter.subscriber())(event);
         agent.observed_events.push(event.clone());
-        if event.uuid() == agent_uuid
-            && event.scope_category() == Some(ScopeCategory::End)
-            && let Err(err) = write_atif_file(agent)
-        {
-            self.last_error = Some(err.to_string());
+        if !should_finalize || agent.written {
+            return None;
+        }
+        match prepare_atif_file(agent_uuid, agent) {
+            Ok(write) => Some(write),
+            Err(err) => {
+                self.last_error = Some(err.to_string());
+                None
+            }
         }
     }
 
-    fn flush_open_agents(&mut self) -> std::io::Result<()> {
+    fn complete_scope_write(
+        &mut self,
+        agent_uuid: Uuid,
+        result: std::io::Result<()>,
+    ) -> Option<(Uuid, String)> {
+        if self.finish_agent_write(agent_uuid, result).is_err() {
+            return None;
+        }
+        self.agents.remove(&agent_uuid);
+        self.scope_subscribers
+            .remove(&agent_uuid)
+            .map(|name| (agent_uuid, name))
+    }
+
+    fn flush_open_agents(&mut self) -> std::io::Result<AtifFlushWork> {
         // Plugin teardown may run before an agent scope closes. Remove dynamic
         // scope-local subscribers first so the later scope end event cannot
         // trigger a second write after the dispatcher has flushed.
-        for (scope_uuid, name) in std::mem::take(&mut self.scope_subscribers) {
-            let _ = scope_deregister_subscriber(&scope_uuid, &name);
-        }
-        for agent in self.agents.values_mut() {
-            if !agent.written {
-                write_atif_file(agent)?;
+        let scope_subscribers = std::mem::take(&mut self.scope_subscribers)
+            .into_iter()
+            .collect();
+        let agent_uuids = self
+            .agents
+            .iter()
+            .filter_map(|(agent_uuid, agent)| (!agent.written).then_some(*agent_uuid))
+            .collect::<Vec<_>>();
+        let mut writes = Vec::with_capacity(agent_uuids.len());
+        for agent_uuid in agent_uuids {
+            if let Some(agent) = self.agents.get_mut(&agent_uuid) {
+                writes.push(prepare_atif_file(agent_uuid, agent)?);
             }
         }
+        Ok(AtifFlushWork {
+            writes,
+            scope_subscribers,
+        })
+    }
+
+    fn finish_agent_write(
+        &mut self,
+        agent_uuid: Uuid,
+        result: std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        match result {
+            Ok(()) => {
+                if let Some(agent) = self.agents.get_mut(&agent_uuid) {
+                    agent.observed_events.clear();
+                }
+                Ok(())
+            }
+            Err(err) => {
+                if let Some(agent) = self.agents.get_mut(&agent_uuid) {
+                    agent.written = false;
+                }
+                self.last_error = Some(err.to_string());
+                Err(err)
+            }
+        }
+    }
+
+    fn last_error_result(&self) -> std::io::Result<()> {
         if let Some(message) = &self.last_error {
             return Err(std::io::Error::other(message.clone()));
         }
@@ -598,17 +683,32 @@ fn atif_scope_subscriber(
     agent_uuid: Uuid,
 ) -> EventSubscriberFn {
     Arc::new(move |event: &Event| {
-        let Ok(mut guard) = manager.lock() else {
+        let pending_write = {
+            let Ok(mut guard) = manager.lock() else {
+                return;
+            };
+            guard.observe_scope(event, agent_uuid)
+        };
+        let Some(write) = pending_write else {
             return;
         };
-        guard.observe_scope(event, agent_uuid);
+        let result = write_atif_file(&write);
+        let scope_subscriber = {
+            let Ok(mut guard) = manager.lock() else {
+                return;
+            };
+            guard.complete_scope_write(write.agent_uuid, result)
+        };
+        if let Some((scope_uuid, name)) = scope_subscriber {
+            let _ = scope_deregister_subscriber(&scope_uuid, &name);
+        }
     })
 }
 
-fn write_atif_file(agent: &mut ManagedAtifExporter) -> std::io::Result<()> {
-    if let Some(parent) = agent.path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+fn prepare_atif_file(
+    agent_uuid: Uuid,
+    agent: &mut ManagedAtifExporter,
+) -> std::io::Result<PendingAtifWrite> {
     let trajectory = agent.exporter.export();
     let mut value = serde_json::to_value(trajectory)?;
     if let Some(object) = value.as_object_mut() {
@@ -620,8 +720,19 @@ fn write_atif_file(agent: &mut ManagedAtifExporter) -> std::io::Result<()> {
         );
     }
     let payload = serde_json::to_vec_pretty(&value)?;
-    std::fs::write(&agent.path, payload)?;
     agent.written = true;
+    Ok(PendingAtifWrite {
+        agent_uuid,
+        path: agent.path.clone(),
+        payload,
+    })
+}
+
+fn write_atif_file(write: &PendingAtifWrite) -> std::io::Result<()> {
+    if let Some(parent) = write.path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&write.path, &write.payload)?;
     Ok(())
 }
 
