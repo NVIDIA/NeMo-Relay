@@ -15,6 +15,7 @@ The main entry points are:
 - ``nemo_flow.typed`` for codec-based typed wrappers
 - ``nemo_flow.plugin`` for global plugin configuration and custom plugin registration
 - ``nemo_flow.adaptive`` for adaptive component configuration helpers
+- ``nemo_flow.observability`` for observability component configuration helpers
 
 Top-level exports also include:
 
@@ -181,6 +182,7 @@ from nemo_flow import (  # noqa: E402
     guardrails,
     intercepts,
     llm,
+    observability,
     plugin,
     scope,
     scope_local,
@@ -422,6 +424,7 @@ __all__ = [
     "typed",
     "plugin",
     "adaptive",
+    "observability",
     # Scope stack isolation
     "ScopeStack",
     "create_scope_stack",

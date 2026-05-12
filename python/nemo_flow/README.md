@@ -44,7 +44,7 @@ runtime semantics as the Rust and Node.js surfaces.
 - ✅ **Subscribers and exporters**: Event consumers for observability and
   diagnostics.
 - ✅ **Plugin and typed helpers**: Public modules for plugins, codecs, typed
-  wrappers, and adaptive runtime behavior.
+  wrappers, adaptive runtime behavior, and observability plugin configuration.
 - ✅ **Shared Rust runtime semantics**: Python behavior aligned with the Rust
   and Node.js surfaces.
 
@@ -94,6 +94,7 @@ The public package modules are:
 - `nemo_flow.subscribers`
 - `nemo_flow.plugin`
 - `nemo_flow.adaptive`
+- `nemo_flow.observability`
 - `nemo_flow.typed`
 - `nemo_flow.codecs`
 

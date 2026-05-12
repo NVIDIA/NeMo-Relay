@@ -136,6 +136,7 @@ The table below compares subscriber and exporter options for common observabilit
 | ATIF exporter | Collect events and export ATIF v1.6 trajectories. |
 | OpenTelemetry subscriber | Export lifecycle events as OTLP spans. |
 | OpenInference subscriber | Export lifecycle events as OTLP spans with OpenInference-oriented semantics. |
+| Observability plugin | Configure ATOF, per-agent ATIF, OpenTelemetry, and OpenInference from one built-in plugin component. |
 
 ## Validate the Subscriber
 
@@ -164,5 +165,6 @@ Use these links to continue from this workflow into the next related task.
 - Export generic OTLP spans with [Advanced Guide: Export OpenTelemetry Data](opentelemetry.md).
 - Export traces with [Advanced Guide: Export OpenInference Data](advanced-guide.md).
 - Export trajectory artifacts with [Advanced Guide: Export ATIF](atif.md).
+- Configure standard exporters with [Basic Guide: Configure the Observability Plugin](observability-plugin.md).
 - Use [Code Examples](code-examples.md) for event shape, scope-local subscribers, ATIF, and OpenTelemetry snippets.
 - Add redaction with [Advanced Guide: Add Middleware](../instrument-applications/advanced-guide.md).

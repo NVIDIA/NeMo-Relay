@@ -32,7 +32,7 @@ should install it from npm rather than depend on the Rust crate directly.
 - 📡 **Emit one lifecycle stream**: Send runtime events to in-process
   subscribers, ATIF, OpenTelemetry, or OpenInference workflows.
 - 🧩 **Use package entry points by need**: Import the main runtime surface plus
-  typed, plugin, and adaptive helpers from npm.
+  typed, plugin, adaptive, and observability helpers from npm.
 
 ## What You Get
 
@@ -44,7 +44,8 @@ should install it from npm rather than depend on the Rust crate directly.
 - ✅ **Observability exporters**: Subscriber and exporter support for common
   runtime telemetry flows.
 - ✅ **Additional entry points**: `nemo-flow-node/typed`,
-  `nemo-flow-node/plugin`, and `nemo-flow-node/adaptive`.
+  `nemo-flow-node/plugin`, `nemo-flow-node/adaptive`, and
+  `nemo-flow-node/observability`.
 
 ## Installation
 
@@ -86,8 +87,8 @@ main().catch((error) => {
 ```
 
 The main runtime API is exported from `nemo-flow-node`. Additional entry points
-are available at `nemo-flow-node/typed`, `nemo-flow-node/plugin`, and
-`nemo-flow-node/adaptive`.
+are available at `nemo-flow-node/typed`, `nemo-flow-node/plugin`,
+`nemo-flow-node/adaptive`, and `nemo-flow-node/observability`.
 
 ## Documentation
 

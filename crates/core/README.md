@@ -44,6 +44,8 @@ Node.js bindings mirror the semantics exposed by this crate.
   scope that owns them and clean them up when that scope closes.
 - ✅ **Plugin primitives**: Register reusable runtime behavior configured from
   one shared plugin system.
+- ✅ **Built-in observability plugin**: Configure first-party ATOF, ATIF,
+  OpenTelemetry, and OpenInference exporters from the core crate.
 - ✅ **Codec and typed helpers**: Normalize provider requests and responses for
   framework integrations.
 - ✅ **Binding source of truth**: Use the runtime semantics mirrored by the

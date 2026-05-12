@@ -842,6 +842,35 @@ NemoFlowStatus nemo_flow_register_subscriber(const char *name,
 NemoFlowStatus nemo_flow_deregister_subscriber(const char *name);
 
 /**
+ * Return the built-in observability plugin kind.
+ *
+ * The caller owns the returned string and must free it with `nemo_flow_string_free`.
+ */
+char *nemo_flow_observability_plugin_kind(void);
+
+/**
+ * Return the default observability plugin config as JSON.
+ *
+ * # Safety
+ * `out_json` must be a valid, non-null pointer.
+ */
+NemoFlowStatus nemo_flow_observability_default_config_json(char **out_json);
+
+/**
+ * Wrap an observability config JSON object as a top-level plugin component.
+ *
+ * Pass null for `config_json` to use the default observability config. The
+ * returned JSON can be inserted into `PluginConfig.components`.
+ *
+ * # Safety
+ * `config_json`, when non-null, must be a valid C string. `out_json` must be a
+ * valid, non-null pointer.
+ */
+NemoFlowStatus nemo_flow_observability_component_spec_json(const char *config_json,
+                                                           bool enabled,
+                                                           char **out_json);
+
+/**
  * Creates a new ATIF exporter.
  *
  * # Parameters

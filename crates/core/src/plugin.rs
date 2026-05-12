@@ -729,6 +729,14 @@ pub fn register_plugin(plugin: Arc<dyn Plugin>) -> Result<()> {
     Ok(())
 }
 
+/// Registers core-provided plugin kinds.
+///
+/// Built-in plugins are available to validation and initialization without a
+/// binding or application-specific registration call.
+pub fn ensure_builtin_plugins_registered() -> Result<()> {
+    crate::observability::plugin_component::register_observability_component()
+}
+
 /// Removes a previously registered plugin.
 ///
 /// This affects future validation and initialization only. Active runtime
@@ -764,6 +772,7 @@ pub fn deregister_plugin(plugin_kind: &str) -> bool {
 /// Disabled or inactive components still appear here when their plugin kind is
 /// registered.
 pub fn list_plugin_kinds() -> Vec<String> {
+    let _ = ensure_builtin_plugins_registered();
     let mut kinds = PLUGIN_HANDLERS
         .read()
         .map(|guard| guard.keys().cloned().collect::<Vec<_>>())
@@ -784,6 +793,7 @@ pub fn list_plugin_kinds() -> Vec<String> {
 /// # Notes
 /// The returned plugin is shared by [`Arc`], so callers receive a cheap clone.
 pub fn lookup_plugin(plugin_kind: &str) -> Option<Arc<dyn Plugin>> {
+    let _ = ensure_builtin_plugins_registered();
     PLUGIN_HANDLERS
         .read()
         .ok()
@@ -806,6 +816,7 @@ pub fn lookup_plugin(plugin_kind: &str) -> Option<Arc<dyn Plugin>> {
 /// Validation checks host policy, plugin multiplicity rules, unknown component
 /// kinds, and plugin-provided validation hooks.
 pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
+    let _ = ensure_builtin_plugins_registered();
     let mut report = ConfigReport::default();
 
     if config.version != 1 {
@@ -967,6 +978,7 @@ struct ActivePluginConfiguration {
 }
 
 async fn initialize_plugin_components(config: &PluginConfig) -> Result<Vec<PluginRegistration>> {
+    ensure_builtin_plugins_registered()?;
     let totals = plugin_component_totals(config);
     let mut ordinals: HashMap<&str, usize> = HashMap::new();
     let mut registrations = vec![];

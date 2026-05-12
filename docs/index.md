@@ -194,6 +194,7 @@ Code Examples <build-plugins/code-examples>
 
 About <export-observability-data/about>
 Basic Guide: Register a Subscriber <export-observability-data/basic-guide>
+Basic Guide: Configure the Observability Plugin <export-observability-data/observability-plugin>
 Advanced Guide: Export OpenTelemetry Data <export-observability-data/opentelemetry>
 Advanced Guide: Export OpenInference Data <export-observability-data/advanced-guide>
 Advanced Guide: Export ATIF <export-observability-data/atif>
