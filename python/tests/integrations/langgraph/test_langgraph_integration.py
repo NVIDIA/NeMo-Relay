@@ -38,6 +38,7 @@ async def aincrement(state: State) -> State:
 
 
 def _build_graph(use_async: bool = False) -> CompiledStateGraph:
+    # The cast here avoids a ty linting error
     builder = StateGraph(cast(Any, State))
     if use_async:
         builder.add_node("increment", aincrement)
@@ -89,15 +90,9 @@ def test_handler_type():
     assert isinstance(handler, GraphCallbackHandler)
 
 
-@pytest.mark.parametrize("use_async", [False, True])
-def test_graph_callbacks(
-    use_async: bool,
-    sync_graph: CompiledStateGraph,
-    async_graph: CompiledStateGraph,
-    subscribed_events: list[nemo_flow.Event],
-):
-    graph = async_graph if use_async else sync_graph
-    expected_events = [
+class TestGraphCallbacks:
+    def __init__(self):
+        self._expected_events = [
         "scope.start.request",
         "scope.start.LangGraph",
         "scope.start.increment",
@@ -106,14 +101,26 @@ def test_graph_callbacks(
         "scope.end.request",
     ]
 
-    with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-        if use_async:
-            result = asyncio.run(graph.ainvoke({"value": 1}, config={"callbacks": [NemoFlowCallbackHandler()]}))
-        else:
+    def test_sync(self,
+        graph: CompiledStateGraph,
+        subscribed_events: list[nemo_flow.Event],
+    ):
+        with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
             result = graph.invoke({"value": 1}, config={"callbacks": [NemoFlowCallbackHandler()]})
 
-    assert result == {"value": 2}
-    assert events_to_strings(subscribed_events) == expected_events
+        assert result == {"value": 2}
+        assert events_to_strings(subscribed_events) == self._expected_events
+
+    async def test_async(self,
+        graph: CompiledStateGraph,
+        subscribed_events: list[nemo_flow.Event],
+    ):
+        with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
+            result = await graph.ainvoke({"value": 1}, config={"callbacks": [NemoFlowCallbackHandler()]})
+
+        assert result == {"value": 2}
+        assert events_to_strings(subscribed_events) == self._expected_events
+
 
 
 def test_graph_lifecycle_callbacks_emit_marks(subscribed_events: list[nemo_flow.Event]):
