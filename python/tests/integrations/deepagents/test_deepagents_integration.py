@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from deepagents.backends.protocol import ExecuteResponse, LsResult, ReadResult, SandboxBackendProtocol
+from deepagents.middleware.filesystem import supports_execution
 from langchain.agents.middleware import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.callbacks import GraphInterruptEvent, GraphResumeEvent
@@ -207,17 +209,17 @@ def test_callback_handler_emits_human_in_the_loop_marks(subscribed_events: list[
 
 
 @pytest.mark.parametrize(
-    ("method_name", "args", "kwargs", "expected_kind"),
+    ("method_name", "args", "kwargs", "expected_call_kwargs", "expected_kind"),
     [
-        ("execute", ("python main.py",), {}, "sandbox"),
-        ("read_file", ("/workspace/notes.md",), {}, "filesystem"),
-        ("grep", ("TODO",), {"path": "/workspace"}, "filesystem"),
+        ("read", ("/workspace/notes.md",), {}, {"offset": 0, "limit": 2000}, "filesystem"),
+        ("grep", ("TODO",), {"path": "/workspace"}, {"path": "/workspace", "glob": None}, "filesystem"),
     ],
 )
 def test_observe_backend_emits_sync_marks(
     method_name: str,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
+    expected_call_kwargs: dict[str, Any],
     expected_kind: str,
     subscribed_events: list[nemo_flow.Event],
 ) -> None:
@@ -229,7 +231,7 @@ def test_observe_backend_emits_sync_marks(
         result = getattr(backend, method_name)(*args, **kwargs)
 
     assert result == {"ok": True}
-    getattr(mock_backend, method_name).assert_called_once_with(*args, **kwargs)
+    getattr(mock_backend, method_name).assert_called_once_with(*args, **expected_call_kwargs)
 
     marks = mark_events(subscribed_events)
     assert marks[0].metadata["deepagents_kind"] == expected_kind
@@ -240,18 +242,47 @@ def test_observe_backend_emits_sync_marks(
 
 async def test_observe_backend_emits_async_marks(subscribed_events: list[nemo_flow.Event]) -> None:
     mock_backend = MagicMock(name="mock_backend")
-    mock_backend.aread_file = AsyncMock(return_value="contents")
+    mock_backend.aread = AsyncMock(return_value=ReadResult(file_data={"content": "contents", "encoding": "utf-8"}))
     backend = observe_backend(mock_backend, name="MockBackend")
 
     with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-        result = await backend.aread_file("/workspace/notes.md")
+        result = await backend.aread("/workspace/notes.md")
 
-    assert result == "contents"
-    mock_backend.aread_file.assert_awaited_once_with("/workspace/notes.md")
+    assert result == ReadResult(file_data={"content": "contents", "encoding": "utf-8"})
+    mock_backend.aread.assert_awaited_once_with("/workspace/notes.md", offset=0, limit=2000)
 
     marks = mark_events(subscribed_events)
     assert [mark.name for mark in marks] == ["DeepAgents Filesystem Start", "DeepAgents Filesystem End"]
-    assert marks[1].data["result"] == "contents"
+    assert "ReadResult" in marks[1].data["result"]
+
+
+def test_observe_backend_preserves_sandbox_protocol(subscribed_events: list[nemo_flow.Event]) -> None:
+    class MockSandboxBackend(SandboxBackendProtocol):
+        @property
+        def id(self) -> str:
+            return "sandbox-1"
+
+        def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+            return ExecuteResponse(output=f"{command}:{timeout}", exit_code=0)
+
+        def ls(self, path: str) -> LsResult:
+            return LsResult(entries=[{"path": path}])
+
+    plain_backend = observe_backend(MagicMock(name="plain_backend"))
+    sandbox_backend = observe_backend(MockSandboxBackend(), name="MockSandbox")
+
+    assert not supports_execution(plain_backend)
+    assert supports_execution(sandbox_backend)
+    assert sandbox_backend.id == "sandbox-1"
+
+    with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
+        result = sandbox_backend.execute("python main.py", timeout=10)
+
+    assert result == ExecuteResponse(output="python main.py:10", exit_code=0)
+
+    marks = mark_events(subscribed_events)
+    assert [mark.name for mark in marks] == ["DeepAgents Sandbox Start", "DeepAgents Sandbox End"]
+    assert marks[0].data["method"] == "execute"
 
 
 def test_add_nemo_flow_integration_instruments_kwargs() -> None:

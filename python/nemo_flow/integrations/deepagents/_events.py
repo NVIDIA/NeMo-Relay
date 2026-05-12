@@ -26,6 +26,7 @@ ASYNC_SUBAGENT_TOOLS = frozenset(
 # Mirrors the Deep Agents built-in filesystem tools listed in the backend docs:
 # https://docs.langchain.com/oss/python/deepagents/backends
 FILESYSTEM_TOOLS = frozenset({"ls", "read_file", "write_file", "edit_file", "glob", "grep"})
+FILESYSTEM_BACKEND_METHODS = frozenset({"ls", "read", "write", "edit", "glob", "grep"})
 # Deep Agents sandbox backends expose execute()/aexecute(); the tool name is execute.
 SANDBOX_TOOLS = frozenset({"execute"})
 
@@ -48,7 +49,9 @@ def backend_kind(method_name: str) -> str:
     normalized = method_name.removeprefix("a")
     if normalized in SANDBOX_TOOLS:
         return "sandbox"
-    if normalized in FILESYSTEM_TOOLS or normalized in {"upload_files", "download_file"}:
+    if normalized in FILESYSTEM_TOOLS or normalized in FILESYSTEM_BACKEND_METHODS:
+        return "filesystem"
+    if normalized in {"upload_files", "download_file", "download_files"}:
         return "filesystem"
     return "backend"
 
@@ -122,7 +125,7 @@ def tool_event_data(
         if value is not None:
             data[key] = summarize_value(value)
 
-    for key in ("path", "pattern", "glob", "command"):
+    for key in ("path", "file_path", "pattern", "glob", "command"):
         value = args.get(key)
         if value is not None:
             data[key] = summarize_value(value)
