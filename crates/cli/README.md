@@ -87,7 +87,7 @@ Run a supported agent through the gateway:
 
 ```bash
 nemo-flow codex
-nemo-flow claude -- chat "summarize this repository"
+nemo-flow claude -- "summarize this repository"
 ```
 
 Use `run --dry-run` to inspect resolved config without spawning the agent:
