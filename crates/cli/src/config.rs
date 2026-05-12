@@ -315,7 +315,7 @@ pub(crate) struct ResolvedConfig {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AgentConfigs {
-    pub(crate) claude_code: AgentCommandConfig,
+    pub(crate) claude: AgentCommandConfig,
     pub(crate) codex: AgentCommandConfig,
     pub(crate) cursor: CursorAgentConfig,
     pub(crate) hermes: AgentCommandConfig,
@@ -594,10 +594,18 @@ fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
 // Resolves the user config using XDG first and HOME/USERPROFILE second. Returning `None` keeps
 // config loading portable in minimal environments where no home directory is visible.
 fn user_config_path() -> Option<PathBuf> {
+    user_config_dir().map(|dir| dir.join("config.toml"))
+}
+
+/// Resolves the nemo-flow user config DIRECTORY (without trailing filename) using the same XDG
+/// rules as `user_config_path`. Exposed so wizard/doctor code paths that write to or display
+/// the global location stay in sync with the loader — without this, hard-coded
+/// `$HOME/.config/nemo-flow` references silently ignore `$XDG_CONFIG_HOME`.
+pub(crate) fn user_config_dir() -> Option<PathBuf> {
     if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(base).join("nemo-flow/config.toml"));
+        return Some(PathBuf::from(base).join("nemo-flow"));
     }
-    home_dir().map(|home| home.join(".config/nemo-flow/config.toml"))
+    home_dir().map(|home| home.join(".config/nemo-flow"))
 }
 
 // Applies the typed TOML config model to the resolved runtime config. Missing sections and fields
@@ -681,7 +689,7 @@ fn apply_file_agents_config(agents: &mut AgentConfigs, file_agents: Option<FileA
         return;
     };
     if let Some(value) = file_agents.claude {
-        agents.claude_code.command = value.command;
+        agents.claude.command = value.command;
     }
     if let Some(value) = file_agents.codex {
         agents.codex.command = value.command;

@@ -206,7 +206,7 @@ command = "codex --full-auto"
     assert!(merged.contains("[observability]"));
     assert!(merged.contains("[agents.claude]"));
     assert!(merged.contains(r#"command = "claude""#));
-    // Other agents and untouched sections survive.
+    // Other agents (not touched by this scoped run) survive.
     assert!(
         merged.contains("[agents.codex]"),
         "expected scoped merge to preserve [agents.codex], got:\n{merged}"
@@ -215,9 +215,12 @@ command = "codex --full-auto"
         merged.contains("codex --full-auto"),
         "expected scoped merge to preserve codex command, got:\n{merged}"
     );
+    // `[upstream]` is wizard-owned: the new doc omits it (no custom openai_base_url), so the
+    // prior override must be cleared. If we preserved it, accepting the default in a re-run
+    // could not actually revert a custom upstream URL.
     assert!(
-        merged.contains("http://old-openai"),
-        "expected scoped merge to preserve untouched [upstream], got:\n{merged}"
+        !merged.contains("http://old-openai"),
+        "expected scoped merge to clear stale [upstream] override when new doc omits it, got:\n{merged}"
     );
     // Old claude command should be gone.
     assert!(

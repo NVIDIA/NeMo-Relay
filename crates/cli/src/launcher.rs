@@ -215,7 +215,7 @@ fn resolved_agent(command: &RunCommand, argv: &[String]) -> Result<CodingAgent, 
 // commands should be passed after `--` by the caller.
 fn configured_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<Vec<String>> {
     let command = match agent {
-        CodingAgent::ClaudeCode => agents.claude_code.command.as_ref(),
+        CodingAgent::ClaudeCode => agents.claude.command.as_ref(),
         CodingAgent::Codex => agents.codex.command.as_ref(),
         CodingAgent::Cursor => agents.cursor.command.as_ref(),
         CodingAgent::Hermes => agents.hermes.command.as_ref(),
@@ -485,10 +485,17 @@ impl PreparedRun {
 
     // Prints a compact pre-launch status banner so users see at a glance where their observability
     // data is going (gateway URL, ATIF dir, OpenInference endpoint) before the agent's own UI takes
-    // over the terminal. Distinct from `print()` which is the verbose `--print` / `--dry-run` dump
-    // intended for inspection — this banner is always-on for live runs and wears the same
-    // NVIDIA-green rounded border as the intro banner so the brand frame stays consistent.
+    // over the terminal. Always emitted on stderr so it never contaminates piped/redirected agent
+    // output, and suppressed entirely when stdout is not a TTY — scripts capturing the agent stream
+    // get a clean pipe, interactive users still get the bordered frame. Distinct from `print()`,
+    // which is the verbose `--print` / `--dry-run` dump intended for inspection.
     fn print_live_status(&self, agent: CodingAgent, gateway_url: &str, resolved: &ResolvedConfig) {
+        // Suppress entirely on non-TTY stdout: when the user redirects the agent's stream to a
+        // file or pipes it into another tool, no banner should appear ahead of that output.
+        if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+            return;
+        }
+
         let mut lines: Vec<String> = Vec::new();
         lines.push(format!("NeMo Flow → {}", agent.as_arg()));
         lines.push(format!("  Gateway        {gateway_url}"));
@@ -507,25 +514,26 @@ impl PreparedRun {
             }
         }
 
-        let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout())
+        // Color decisions key off stderr (where we actually emit), not stdout.
+        let use_color = std::io::IsTerminal::is_terminal(&std::io::stderr())
             && std::env::var_os("NO_COLOR").is_none();
         let max_w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
         // 1-char padding on each side of the longest line.
         let inner = max_w + 2;
 
-        println!();
-        print_border_line('╭', '╮', inner, use_color);
+        eprintln!();
+        eprint_border_line('╭', '╮', inner, use_color);
         for line in &lines {
             let pad = max_w - line.chars().count();
             let body = format!(" {line}{spaces} ", spaces = " ".repeat(pad));
             if use_color {
-                println!("\x1b[38;5;112m│\x1b[0m{body}\x1b[38;5;112m│\x1b[0m");
+                eprintln!("\x1b[38;5;112m│\x1b[0m{body}\x1b[38;5;112m│\x1b[0m");
             } else {
-                println!("│{body}│");
+                eprintln!("│{body}│");
             }
         }
-        print_border_line('╰', '╯', inner, use_color);
-        println!();
+        eprint_border_line('╰', '╯', inner, use_color);
+        eprintln!();
     }
 
     // Prints the resolved transparent-run plan, including dynamic gateway URL, upstream base URLs,
@@ -602,13 +610,14 @@ fn codex_gateway_provider_config(gateway_url: &str) -> String {
 }
 
 // Prints one horizontal border line for the live-status frame in NVIDIA green when color is
-// enabled, otherwise plain ASCII-compatible box-drawing.
-fn print_border_line(left: char, right: char, inner_width: usize, color: bool) {
+// enabled, otherwise plain ASCII-compatible box-drawing. Writes to stderr so the banner doesn't
+// contaminate piped/redirected agent stdout.
+fn eprint_border_line(left: char, right: char, inner_width: usize, color: bool) {
     let dashes = "─".repeat(inner_width);
     if color {
-        println!("\x1b[38;5;112m{left}{dashes}{right}\x1b[0m");
+        eprintln!("\x1b[38;5;112m{left}{dashes}{right}\x1b[0m");
     } else {
-        println!("{left}{dashes}{right}");
+        eprintln!("{left}{dashes}{right}");
     }
 }
 

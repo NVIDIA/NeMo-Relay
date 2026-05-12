@@ -568,14 +568,14 @@ async fn forward_upstream_request(
     upstream.send().await
 }
 
-// Removes ChatGPT-Plus OAuth JWTs from inbound `Authorization` on OpenAI routes. Codex 0.130
-// keeps sending the JWT from `~/.codex/auth.json` even when its provider override declares
-// `requires_openai_auth=false`, and the JWT is a consumer token rejected by `api.openai.com` /
-// LiteLLM-fronted endpoints (NVIDIA's `inference-api.nvidia.com`) with 401. By dropping the JWT
-// here, `inject_provider_auth` then injects `OPENAI_API_KEY` from environment and the upstream
-// sees a valid bearer token. Hermes-style clients that send a real `sk-...` API key are not
-// affected — the JWT detector only triggers on `Bearer eyJ...` (base64 JSON header). Tracks
-// NMF-86.
+// Removes JWT-shaped bearer tokens from inbound `Authorization` on OpenAI routes when we have
+// a replacement `OPENAI_API_KEY` to inject. The detector triggers strictly on the `Bearer eyJ`
+// prefix (base64-encoded JSON header), which is what Codex 0.130 sends from `~/.codex/auth.json`
+// — that JWT is a consumer ChatGPT-Plus token rejected by `api.openai.com` / LiteLLM-fronted
+// endpoints (NVIDIA's `inference-api.nvidia.com`) with 401. After stripping, `inject_provider_auth`
+// substitutes the env-provided key and the upstream sees valid auth. ChatGPT OAuth flows in
+// general may use opaque tokens too, but those don't match the prefix and are forwarded as-is.
+// Real `sk-...` API keys are likewise unaffected. Tracks NMF-86.
 fn strip_chatgpt_oauth_for_openai_route(
     headers: &HeaderMap,
     route: ProviderRoute,

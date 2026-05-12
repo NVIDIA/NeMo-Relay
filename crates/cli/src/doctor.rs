@@ -137,8 +137,11 @@ fn collect_configuration(
     let workspace_path = cwd
         .map(|p| p.join(".nemo-flow").join("config.toml"))
         .unwrap_or_else(|| PathBuf::from(".nemo-flow/config.toml"));
-    let global_path = home
-        .map(|h| h.join(".config").join("nemo-flow").join("config.toml"))
+    // Use the same XDG-aware resolver the config loader uses, so doctor reports the path the
+    // runtime would actually read instead of a hard-coded `$HOME/.config/nemo-flow`.
+    let global_path = crate::config::user_config_dir()
+        .map(|dir| dir.join("config.toml"))
+        .or_else(|| home.map(|h| h.join(".config").join("nemo-flow").join("config.toml")))
         .unwrap_or_else(|| PathBuf::from("~/.config/nemo-flow/config.toml"));
     let system_path = PathBuf::from("/etc/nemo-flow/config.toml");
 
@@ -222,7 +225,11 @@ async fn probe_version(binary: &std::path::Path) -> Option<String> {
     cmd.arg("--version")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .stdin(Stdio::null());
+        .stdin(Stdio::null())
+        // Ensure the child gets killed if our future is dropped on timeout. Without this a
+        // misbehaving agent binary that exceeds NETWORK_TIMEOUT would leak as an orphan
+        // process for the lifetime of the doctor invocation (and beyond).
+        .kill_on_drop(true);
     let child = cmd.spawn().ok()?;
     let output = timeout(NETWORK_TIMEOUT, child.wait_with_output())
         .await
@@ -392,6 +399,20 @@ pub(crate) fn exit_code(report: &DoctorReport) -> u8 {
     u8::from(any_fail)
 }
 
+// Returns true if any check in the report carries a `Warn` status. Used by the human footer to
+// distinguish a fully-green report from one where everything passed but some checks issued
+// warnings — both exit 0, but the wording shouldn't.
+fn report_has_warn(report: &DoctorReport) -> bool {
+    report
+        .observability
+        .iter()
+        .chain(report.completions.iter())
+        .any(|c| matches!(c.status, Status::Warn))
+        || matches!(report.configuration.workspace.status, Status::Warn)
+        || matches!(report.configuration.global.status, Status::Warn)
+        || matches!(report.configuration.system.status, Status::Warn)
+}
+
 /// Renders the doctor report in the fixed human-readable layout the design doc shows. Sections
 /// stay in the same order across runs so users can diff across machines. The banner header lives
 /// in `crate::banner::print_doctor_header` (called from `run_doctor` before this renders) so the
@@ -458,10 +479,11 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
     out.push('\n');
 
     if exit_code(report) == 0 {
-        // Don't say "All checks passed" — `Warn` results still map to exit code 0, so a clean
-        // exit just means nothing is failing, not that everything is green. This wording keeps
-        // the footer accurate when the report carries warnings.
-        out.push_str("  No failing checks.\n");
+        if report_has_warn(report) {
+            out.push_str("  All checks passed, but some issued warnings; see details above.\n");
+        } else {
+            out.push_str("  All checks passed.\n");
+        }
     } else {
         out.push_str("  Some checks FAILED; see details above.\n");
     }

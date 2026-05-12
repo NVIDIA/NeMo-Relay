@@ -96,10 +96,11 @@ fn format_human_emits_fixed_section_order() {
 }
 
 #[test]
-fn format_human_reports_no_failing_checks_on_clean_report() {
+fn format_human_reports_all_checks_passed_on_clean_report() {
     let report = empty_report();
     let rendered = format_human(&report);
-    assert!(rendered.contains("No failing checks."));
+    assert!(rendered.contains("All checks passed."));
+    assert!(!rendered.contains("warnings"));
 }
 
 #[test]

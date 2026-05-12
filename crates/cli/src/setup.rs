@@ -192,13 +192,23 @@ pub(crate) fn save_config(
         written.push(path);
     }
     if matches!(scope, ConfigScope::Global | ConfigScope::Both) {
-        let global_dir = home.join(".config").join("nemo-flow");
+        let global_dir = global_config_dir(home);
         std::fs::create_dir_all(&global_dir)?;
         let path = global_dir.join("config.toml");
         write_or_merge(&path, doc, merge_scope)?;
         written.push(path);
     }
     Ok(written)
+}
+
+// Resolves the global nemo-flow config directory. Prefers `$XDG_CONFIG_HOME/nemo-flow` (matches
+// `config::user_config_dir`), falling back to `<home>/.config/nemo-flow`. Tests that pass a
+// tempdir for `home` get hermetic paths unless they set XDG_CONFIG_HOME explicitly.
+fn global_config_dir(home: &Path) -> PathBuf {
+    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
+        return PathBuf::from(base).join("nemo-flow");
+    }
+    home.join(".config").join("nemo-flow")
 }
 
 // Writes the wizard-built `doc` to `path`. When `merge_scope` is `Some(agent)` and the file
@@ -222,21 +232,37 @@ fn write_or_merge(
         .parse()
         .map_err(|err| CliError::Config(format!("could not parse existing config: {err}")))?;
     let agent_key = agent_key_and_command(agent).0;
-    merge_section(&mut existing, doc, "observability");
-    merge_section(&mut existing, doc, "export");
+    // Wizard-owned sections use REPLACE semantics: if the user re-runs setup and the new doc
+    // omits a section, the previous override is removed too. Otherwise accepting the default
+    // (e.g. dropping a custom `openai_base_url`) could not actually revert the override —
+    // the old value would silently survive.
+    replace_section(&mut existing, doc, "observability");
+    replace_section(&mut existing, doc, "export");
+    replace_section(&mut existing, doc, "upstream");
+    // `plugins` is not wizard-owned (users may hand-edit it). Preserve on omission.
     merge_section(&mut existing, doc, "plugins");
-    merge_section(&mut existing, doc, "upstream");
     merge_agents_entry(&mut existing, doc, agent_key);
     std::fs::write(path, existing.to_string())?;
     Ok(())
 }
 
 // Copies a top-level section from `src` into `dst`, replacing any existing entry under the same
-// key. If `src` does not contain the section, the existing entry in `dst` is left as-is — that
-// preserves shared settings like `[upstream]` that the wizard does not touch.
+// key. If `src` does not contain the section, the existing entry in `dst` is left as-is.
+// Use for shared/hand-edited sections the wizard does not own.
 fn merge_section(dst: &mut DocumentMut, src: &DocumentMut, key: &str) {
     if let Some(item) = src.get(key) {
         dst[key] = item.clone();
+    }
+}
+
+// Like `merge_section`, but when `src` omits the key the existing entry in `dst` is removed.
+// Use for wizard-owned sections (the wizard's output is authoritative for these keys).
+fn replace_section(dst: &mut DocumentMut, src: &DocumentMut, key: &str) {
+    match src.get(key) {
+        Some(item) => dst[key] = item.clone(),
+        None => {
+            dst.remove(key);
+        }
     }
 }
 
@@ -463,7 +489,7 @@ fn read_existing_defaults() -> Option<Defaults> {
     let workspace_path = cwd.join(".nemo-flow").join("config.toml");
     let global_path = home
         .as_ref()
-        .map(|h| h.join(".config").join("nemo-flow").join("config.toml"));
+        .map(|h| global_config_dir(h).join("config.toml"));
 
     let workspace_exists = workspace_path.exists();
     let global_exists = global_path.as_ref().is_some_and(|p| p.exists());
@@ -793,7 +819,7 @@ fn preview_paths(scope: ConfigScope, cwd: &Path, home: &Path) -> Vec<PathBuf> {
         paths.push(cwd.join(".nemo-flow").join("config.toml"));
     }
     if matches!(scope, ConfigScope::Global | ConfigScope::Both) {
-        paths.push(home.join(".config").join("nemo-flow").join("config.toml"));
+        paths.push(global_config_dir(home).join("config.toml"));
     }
     paths
 }
