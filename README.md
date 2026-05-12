@@ -135,6 +135,7 @@ Some framework integrations are maintained as packages in this repository. Other
 sample integrations are maintained as patch sets against upstream projects.
 
 ### Public API-based Integrations
+
 Some integrations can be implemented using public APIs without patching. Public
 API-based integrations live under language-specific integration packages such as
 `python/nemo_flow/integrations/` and `integrations/`.
@@ -144,6 +145,7 @@ and uses OpenClaw public plugin hooks to export NeMo Flow telemetry. See the
 [OpenClaw Plugin Guide](docs/integrate-frameworks/openclaw-plugin.md).
 
 ### Patch-based Integrations
+
 Use [third_party/README.md](third_party/README.md) for the clone, checkout, and
 patch-application workflow for those integrations.
 
