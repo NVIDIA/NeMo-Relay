@@ -121,7 +121,6 @@ fn build_config_emits_atof_write_options_when_atof_selected() {
         agents: vec![],
         backends: vec![ObservabilityBackend::Atof],
         openinference_endpoint: None,
-        openai_base_url: None,
         hermes_hooks_path: None,
     };
 
