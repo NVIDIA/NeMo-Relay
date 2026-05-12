@@ -64,19 +64,6 @@ def with_nemo_flow_observability(
     return observed
 
 
-def with_nemo_flow_callbacks(
-    config: Mapping[str, Any] | None = None,
-    *,
-    callback_handler: NemoFlowDeepAgentsCallbackHandler | None = None,
-) -> dict[str, Any]:
-    """Return an invocation config that includes the Deep Agents callback handler."""
-    observed = dict(config or {})
-    callbacks = list(observed.get("callbacks") or ())
-    callbacks.append(callback_handler or NemoFlowDeepAgentsCallbackHandler())
-    observed["callbacks"] = callbacks
-    return observed
-
-
 def _append_middleware(middleware: list[Any], new_middleware: NemoFlowDeepAgentsMiddleware) -> None:
     if any(isinstance(item, NemoFlowDeepAgentsMiddleware) for item in middleware):
         return
@@ -135,6 +122,5 @@ __all__ = [
     "NemoFlowDeepAgentsCallbackHandler",
     "NemoFlowDeepAgentsMiddleware",
     "observe_backend",
-    "with_nemo_flow_callbacks",
     "with_nemo_flow_observability",
 ]

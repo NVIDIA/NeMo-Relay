@@ -28,13 +28,13 @@ just build-python
 import nemo_flow
 from deepagents import create_deep_agent
 from nemo_flow.integrations.deepagents import (
-    with_nemo_flow_callbacks,
+    NemoFlowDeepAgentsCallbackHandler,
     with_nemo_flow_observability,
 )
 
 agent = create_deep_agent(
     **with_nemo_flow_observability(
-        model="openai:gpt-5.4",
+        model="nvidia:nvidia/nemotron-3-nano-30b-a3b",
         tools=[],
         skills=["/skills/research/"],
         name="main-agent",
@@ -44,7 +44,7 @@ agent = create_deep_agent(
 with nemo_flow.scope.scope("deepagents-request", nemo_flow.ScopeType.Agent):
     result = agent.invoke(
         {"messages": [{"role": "user", "content": "Research recent GPU news"}]},
-        config=with_nemo_flow_callbacks(),
+        config={"callbacks": [NemoFlowDeepAgentsCallbackHandler()]},
     )
 ```
 

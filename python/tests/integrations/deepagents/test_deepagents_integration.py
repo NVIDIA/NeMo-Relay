@@ -22,7 +22,6 @@ from nemo_flow.integrations.deepagents import (
     NemoFlowDeepAgentsCallbackHandler,
     NemoFlowDeepAgentsMiddleware,
     observe_backend,
-    with_nemo_flow_callbacks,
     with_nemo_flow_observability,
 )
 
@@ -274,12 +273,3 @@ def test_with_nemo_flow_observability_instruments_kwargs() -> None:
     assert any(isinstance(item, NemoFlowDeepAgentsMiddleware) for item in kwargs["middleware"])
     assert any(isinstance(item, NemoFlowDeepAgentsMiddleware) for item in kwargs["subagents"][0]["middleware"])
     assert kwargs["subagents"][1] is mock_compiled_subagent
-
-
-def test_with_nemo_flow_callbacks_preserves_existing_callbacks() -> None:
-    mock_callback = MagicMock(name="mock_callback")
-
-    config = with_nemo_flow_callbacks({"callbacks": [mock_callback]})
-
-    assert config["callbacks"][0] is mock_callback
-    assert isinstance(config["callbacks"][1], NemoFlowDeepAgentsCallbackHandler)
