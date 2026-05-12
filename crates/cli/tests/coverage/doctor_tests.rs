@@ -116,6 +116,24 @@ fn format_human_reports_failure_summary_when_anything_failed() {
 }
 
 #[test]
+fn format_human_distinguishes_pass_with_warnings_from_clean_pass() {
+    let mut report = empty_report();
+    report.observability.push(Check {
+        name: "ATIF dir",
+        status: Status::Warn,
+        details: "directory missing — will be created on first write".into(),
+    });
+    let rendered = format_human(&report);
+    // Exit code stays 0 (warns don't fail), but the footer must call out that warnings exist
+    // so users aren't lulled by an "All checks passed." string.
+    assert!(rendered.contains("All checks passed"));
+    assert!(
+        rendered.contains("warnings"),
+        "warn-only report should surface the word `warnings` in the footer, got:\n{rendered}"
+    );
+}
+
+#[test]
 fn format_json_is_stable_and_versioned() {
     let report = empty_report();
     let json = format_json(&report).unwrap();

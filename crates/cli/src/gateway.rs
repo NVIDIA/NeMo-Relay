@@ -553,9 +553,11 @@ async fn forward_upstream_request(
     // the upstream just receives no auth and 401s, which is no better than letting it reject the
     // JWT itself — and stripping silently can break setups that point the gateway at an upstream
     // that happens to accept the ChatGPT-Plus token.
+    // Whitespace-only keys are effectively missing: stripping the inbound JWT and injecting an
+    // empty/whitespace bearer just trades one 401 for another while losing observability.
     let has_openai_env = std::env::var("OPENAI_API_KEY")
         .ok()
-        .filter(|v| !v.is_empty())
+        .filter(|v| !v.trim().is_empty())
         .is_some();
     let sanitized = strip_chatgpt_oauth_for_openai_route(headers, route, has_openai_env);
     let mut upstream = http.request(method.clone(), url).body(body_bytes.clone());
@@ -645,6 +647,9 @@ where
     let Some(value) = env_lookup(env_var) else {
         return builder;
     };
+    // Trim before testing emptiness — a value of "   " is no more useful than "" and sending
+    // `Bearer ` with leading whitespace can confuse upstream auth parsers further down.
+    let value = value.trim().to_string();
     if value.is_empty() {
         return builder;
     }
@@ -727,9 +732,11 @@ pub(crate) async fn models(
             .map(|p| p.as_str())
             .unwrap_or(parts.uri.path()),
     );
+    // Whitespace-only keys are effectively missing: stripping the inbound JWT and injecting an
+    // empty/whitespace bearer just trades one 401 for another while losing observability.
     let has_openai_env = std::env::var("OPENAI_API_KEY")
         .ok()
-        .filter(|v| !v.is_empty())
+        .filter(|v| !v.trim().is_empty())
         .is_some();
     let sanitized = strip_chatgpt_oauth_for_openai_route(&parts.headers, provider, has_openai_env);
     let mut upstream = state.http.get(upstream_url);

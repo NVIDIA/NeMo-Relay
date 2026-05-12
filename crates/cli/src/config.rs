@@ -164,16 +164,18 @@ pub(crate) struct ServerArgs {
 }
 
 impl ServerArgs {
-    /// True when the user passed any daemon-specific server flag on the CLI. Used by the bare
-    /// `nemo-flow` dispatch to choose between "user wants the gateway daemon" (any daemon flag
-    /// present) and "user just typed the bare command" (start the setup wizard). `--config` is
-    /// excluded — it's relevant to every subcommand, not a daemon-mode signal.
+    /// True when the user passed any flag that signals "I want the gateway, not the wizard." Used
+    /// by the bare `nemo-flow` dispatch to choose between launching the long-running daemon and
+    /// dropping into setup. `--config` is included: someone running `nemo-flow --config <path>`
+    /// with no subcommand has explicitly pointed at a config file, which is only meaningful for
+    /// daemon startup — the wizard creates configs, it doesn't consume them.
     pub(crate) fn requested_daemon_mode(&self) -> bool {
         self.bind.is_some()
             || self.openai_base_url.is_some()
             || self.anthropic_base_url.is_some()
             || self.atif_dir.is_some()
             || self.openinference_endpoint.is_some()
+            || self.config.is_some()
     }
 }
 

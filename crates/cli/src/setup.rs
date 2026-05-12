@@ -276,12 +276,18 @@ fn merge_agents_entry(dst: &mut DocumentMut, src: &DocumentMut, agent_key: &str)
     else {
         return;
     };
-    if !dst.contains_key("agents") {
+    // Defensive: if the existing config has `agents = "literal"` or `agents = [...]` (anything
+    // not a table) the original `.as_table_mut().unwrap()` panicked. Replace any non-table
+    // value with a fresh table so a malformed user file degrades to an overwrite, not a crash.
+    let needs_init = dst
+        .get("agents")
+        .is_none_or(|item| item.as_table().is_none());
+    if needs_init {
         dst["agents"] = Item::Table(Table::new());
     }
     let agents_table = dst["agents"]
         .as_table_mut()
-        .expect("agents key was just inserted as a table");
+        .expect("agents key is a table after the init guard above");
     agents_table.insert(agent_key, src_agent.clone());
 }
 
@@ -310,19 +316,28 @@ pub(crate) fn reset(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
             let mut doc: DocumentMut = raw.parse().map_err(|err| {
                 CliError::Config(format!("could not parse existing config: {err}"))
             })?;
-            if let Some(agents) = doc.get_mut("agents").and_then(Item::as_table_mut) {
-                if agents.remove(agent_key).is_none() {
-                    println!(
-                        "  No `[agents.{agent_key}]` block to reset in {}",
-                        path.display()
-                    );
-                    return Ok(());
-                }
-                // Remove the empty `[agents]` table itself so the file stays tidy when no agent
-                // entries remain.
-                if agents.is_empty() {
-                    doc.remove("agents");
-                }
+            // Three reasons we have nothing to remove: no `[agents]` table at all, the `agents`
+            // key holds a non-table value, or the table is missing this specific agent's block.
+            // In every case we must report "nothing to reset" and skip the write — silently
+            // printing "✓ Removed" when nothing changed misleads the user about file state.
+            let Some(agents) = doc.get_mut("agents").and_then(Item::as_table_mut) else {
+                println!(
+                    "  No `[agents.{agent_key}]` block to reset in {}",
+                    path.display()
+                );
+                return Ok(());
+            };
+            if agents.remove(agent_key).is_none() {
+                println!(
+                    "  No `[agents.{agent_key}]` block to reset in {}",
+                    path.display()
+                );
+                return Ok(());
+            }
+            // Remove the empty `[agents]` table itself so the file stays tidy when no agent
+            // entries remain.
+            if agents.is_empty() {
+                doc.remove("agents");
             }
             std::fs::write(&path, doc.to_string())?;
             println!("  ✓ Removed `[agents.{agent_key}]` from {}", path.display());
