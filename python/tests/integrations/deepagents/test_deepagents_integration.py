@@ -178,6 +178,16 @@ def test_before_agent_emits_configuration_mark(subscribed_events: list[nemo_flow
 def test_callback_handler_emits_human_in_the_loop_marks(subscribed_events: list[nemo_flow.Event]) -> None:
     handler = NemoFlowDeepAgentsCallbackHandler()
     run_id = uuid4()
+    hitl_request = {
+        "action_requests": [
+            {
+                "name": "edit_file",
+                "args": {"file_path": "/workspace/notes.md"},
+                "description": "Tool execution requires approval",
+            }
+        ],
+        "review_configs": [{"action_name": "edit_file", "allowed_decisions": ["approve", "reject"]}],
+    }
 
     with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
         handler.on_interrupt(
@@ -186,7 +196,7 @@ def test_callback_handler_emits_human_in_the_loop_marks(subscribed_events: list[
                 status="interrupt_after",
                 checkpoint_id="checkpoint-1",
                 checkpoint_ns=("parent",),
-                interrupts=(Interrupt("needs approval", id="interrupt-1"),),
+                interrupts=(Interrupt(hitl_request, id="interrupt-1"),),
             )
         )
         handler.on_resume(
@@ -204,8 +214,37 @@ def test_callback_handler_emits_human_in_the_loop_marks(subscribed_events: list[
         "DeepAgents Human In The Loop Resume",
     ]
     assert marks[0].metadata["deepagents_kind"] == "human_in_the_loop"
-    assert marks[0].data["interrupts"] == [{"id": "interrupt-1", "value": "needs approval"}]
+    assert marks[0].data["interrupts"] == [{"id": "interrupt-1", "value": hitl_request}]
     assert marks[1].metadata["phase"] == "resume"
+
+
+def test_callback_handler_falls_back_for_non_hitl_interrupt(subscribed_events: list[nemo_flow.Event]) -> None:
+    handler = NemoFlowDeepAgentsCallbackHandler()
+    run_id = uuid4()
+
+    with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
+        handler.on_interrupt(
+            GraphInterruptEvent(
+                run_id=run_id,
+                status="interrupt_after",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ns=("parent",),
+                interrupts=(Interrupt("custom pause", id="interrupt-1"),),
+            )
+        )
+        handler.on_resume(
+            GraphResumeEvent(
+                run_id=run_id,
+                status="pending",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ns=("parent",),
+            )
+        )
+
+    marks = mark_events(subscribed_events)
+    assert [mark.name for mark in marks] == ["Graph Interrupt", "Graph Resume"]
+    assert marks[0].metadata["integration"] == "langgraph"
+    assert "deepagents_kind" not in marks[0].metadata
 
 
 @pytest.mark.parametrize(
