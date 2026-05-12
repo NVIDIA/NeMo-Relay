@@ -370,7 +370,7 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
         let api_specific = Some(ApiSpecificResponse::AnthropicMessages {
             object_type: raw.object_type,
             role: raw.role,
-            stop_reason: raw.stop_reason.clone(),
+            stop_reason: raw.stop_reason,
             stop_sequence: raw.stop_sequence,
             service_tier: raw.service_tier,
             container: raw.container,

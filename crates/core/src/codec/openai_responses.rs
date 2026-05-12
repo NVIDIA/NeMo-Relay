@@ -63,8 +63,22 @@ struct RawResponsesUsage {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     total_tokens: Option<u64>,
-    input_tokens_details: Option<Json>,
-    output_tokens_details: Option<Json>,
+    input_tokens_details: Option<RawInputTokensDetails>,
+    output_tokens_details: Option<RawOutputTokensDetails>,
+}
+
+#[derive(Deserialize, Clone)]
+struct RawInputTokensDetails {
+    cached_tokens: Option<u64>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, Json>,
+}
+
+#[derive(Deserialize, Clone)]
+struct RawOutputTokensDetails {
+    reasoning_tokens: Option<u64>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, Json>,
 }
 
 // ---------------------------------------------------------------------------
@@ -100,10 +114,22 @@ fn parse_arguments(arguments: &str) -> Json {
     serde_json::from_str(arguments).unwrap_or_else(|_| Json::String(arguments.to_string()))
 }
 
-fn cached_tokens_from_details(details: Option<&Json>) -> Option<u64> {
-    details
-        .and_then(|d| d.get("cached_tokens"))
-        .and_then(|v| v.as_u64())
+fn input_tokens_details_to_json(details: &RawInputTokensDetails) -> Json {
+    let mut obj = serde_json::Map::new();
+    if let Some(cached_tokens) = details.cached_tokens {
+        obj.insert("cached_tokens".into(), Json::from(cached_tokens));
+    }
+    obj.extend(details.extra.clone());
+    Json::Object(obj)
+}
+
+fn output_tokens_details_to_json(details: &RawOutputTokensDetails) -> Json {
+    let mut obj = serde_json::Map::new();
+    if let Some(reasoning_tokens) = details.reasoning_tokens {
+        obj.insert("reasoning_tokens".into(), Json::from(reasoning_tokens));
+    }
+    obj.extend(details.extra.clone());
+    Json::Object(obj)
 }
 
 /// Keys that are modeled in [`AnnotatedLlmRequest`] and should NOT go into `extra`.
@@ -320,21 +346,26 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
         let finish_reason =
             map_responses_finish_reason(raw.status.as_deref(), raw.incomplete_details.as_ref());
 
-        let input_tokens_details = raw
-            .usage
-            .as_ref()
-            .and_then(|u| u.input_tokens_details.clone());
-        let output_tokens_details = raw
-            .usage
-            .as_ref()
-            .and_then(|u| u.output_tokens_details.clone());
+        let input_tokens_details = raw.usage.as_ref().and_then(|u| {
+            u.input_tokens_details
+                .as_ref()
+                .map(input_tokens_details_to_json)
+        });
+        let output_tokens_details = raw.usage.as_ref().and_then(|u| {
+            u.output_tokens_details
+                .as_ref()
+                .map(output_tokens_details_to_json)
+        });
 
         // Map usage.
         let usage = raw.usage.map(|u| Usage {
             prompt_tokens: u.input_tokens,
             completion_tokens: u.output_tokens,
             total_tokens: u.total_tokens,
-            cache_read_tokens: cached_tokens_from_details(u.input_tokens_details.as_ref()),
+            cache_read_tokens: u
+                .input_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
             cache_write_tokens: None,
         });
 
@@ -486,7 +517,11 @@ impl LlmCodec for OpenAIResponsesCodec {
 
         let (system_text, input_messages) = split_system_and_input_messages(&annotated.messages);
         set_or_remove_string(obj, "instructions", system_text);
-        insert_serialized(obj, "input", &input_messages, "input")?;
+        if let Some(raw_input_items) = annotated.extra.get(UNPARSED_INPUT_ITEMS_KEY) {
+            obj.insert("input".into(), raw_input_items.clone());
+        } else {
+            insert_serialized(obj, "input", &input_messages, "input")?;
+        }
 
         // Overlay model if present.
         if let Some(ref model) = annotated.model {
@@ -556,6 +591,9 @@ impl LlmCodec for OpenAIResponsesCodec {
 
         // Merge extra fields back.
         for (k, v) in &annotated.extra {
+            if k == UNPARSED_INPUT_ITEMS_KEY {
+                continue;
+            }
             obj.insert(k.clone(), v.clone());
         }
 
