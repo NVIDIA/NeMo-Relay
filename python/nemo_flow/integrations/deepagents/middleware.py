@@ -128,7 +128,7 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
         *,
         result: Any = None,
         error: BaseException | None = None,
-    ):
+    ) -> None:
         if kind is not None:
             emit_mark(
                 mark_base_name(kind),
