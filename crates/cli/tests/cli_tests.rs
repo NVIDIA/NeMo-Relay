@@ -22,6 +22,17 @@ fn cli_help_exits_successfully() {
 }
 
 #[test]
+fn cli_version_exits_successfully() {
+    let output = Command::new(gateway_bin())
+        .arg("--version")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("nemo-flow "));
+}
+
+#[test]
 fn cli_help_lists_easy_path_agent_shortcuts() {
     let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -63,6 +74,93 @@ fn cli_easy_path_invokes_setup_when_no_config_found() {
         stderr.contains("setup requires a TTY"),
         "expected non-TTY setup error in stderr, got:\n{stderr}"
     );
+}
+
+#[test]
+fn cli_bare_invocation_invokes_setup_when_no_config_found() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "bare invocation should enter non-TTY setup when no config exists"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("setup requires a TTY"),
+        "expected non-TTY setup error in stderr, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn cli_bare_invocation_runs_doctor_when_config_exists() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(cwd.join(".nemo-flow")).unwrap();
+    std::fs::write(cwd.join(".nemo-flow/config.toml"), "[observability]\n").unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "bare invocation should run doctor when config exists: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Environment"));
+    assert!(stdout.contains("Configuration"));
+    assert!(stdout.contains("Agents detected"));
+}
+
+#[test]
+fn cli_bare_invocation_reports_invalid_config_resolution() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(cwd.join(".nemo-flow")).unwrap();
+    std::fs::write(
+        cwd.join(".nemo-flow/config.toml"),
+        r#"
+[exporters.atof]
+dir = "./atof"
+mode = "replace"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "bare invocation should fail doctor when config resolution fails"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Configuration"));
+    assert!(stdout.contains("Resolution"));
+    assert!(stdout.contains("invalid [exporters.atof].mode"));
 }
 
 #[test]

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::config::GatewayConfig;
+use crate::config::{ExportersConfig, GatewayConfig};
 use crate::server::AppState;
 use crate::session::SessionManager;
 use axum::body::Body;
@@ -83,8 +83,7 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
         openai_base_url: "http://openai/".into(),
 
         anthropic_base_url: "http://anthropic/".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -408,8 +407,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         openai_base_url: "http://openai".into(),
 
         anthropic_base_url: "http://anthropic".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -436,8 +434,7 @@ async fn models_rejects_non_get_requests_directly() {
         openai_base_url: "http://openai".into(),
 
         anthropic_base_url: "http://anthropic".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };

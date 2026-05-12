@@ -9,7 +9,7 @@
 //! - `DoctorReport` is the resulting pure data shape.
 //! - `format_human(&report)` / `format_json(&report)` render the report.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ use serde::Serialize;
 use tokio::time::timeout;
 
 use crate::config::{
-    CodingAgent, GatewayConfig, ResolvedConfig, ServerArgs, resolve_server_config,
+    AgentConfigs, CodingAgent, GatewayConfig, ResolvedConfig, ServerArgs, resolve_server_config,
 };
 use crate::error::CliError;
 
@@ -40,7 +40,7 @@ pub(crate) enum Status {
     Warn,
     Fail,
     /// The check ran but no relevant state was detected — purely informational (e.g. an agent
-    /// not on $PATH). Renders as a dim dot; not counted toward exit code.
+    /// not on $PATH). Renders as a dot; not counted toward exit code.
     Info,
 }
 
@@ -50,6 +50,7 @@ pub(crate) enum Status {
 pub(crate) struct DoctorReport {
     pub schema_version: u32,
     pub binary_version: &'static str,
+    pub target_agent: Option<String>,
     pub environment: EnvironmentInfo,
     pub configuration: ConfigurationInfo,
     pub agents: Vec<AgentInfo>,
@@ -69,19 +70,25 @@ pub(crate) struct ConfigurationInfo {
     pub workspace: ConfigLayer,
     pub global: ConfigLayer,
     pub system: ConfigLayer,
+    pub resolution: Check,
     pub default_agent: Option<String>,
+    pub configured_agents: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ConfigLayer {
     pub path: PathBuf,
     pub status: Status,
+    pub active: bool,
     pub details: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct AgentInfo {
     pub name: &'static str,
+    pub status: Status,
+    pub configured: bool,
+    pub command: String,
     pub path: Option<PathBuf>,
     pub version: Option<String>,
     /// Free-form annotation, e.g. "hooks: installed" once we wire up hook detection.
@@ -91,17 +98,43 @@ pub(crate) struct AgentInfo {
 /// Drives all checks and produces a single `DoctorReport`. Network probes are bounded by a
 /// short timeout so the command always returns quickly. Filesystem checks short-circuit on
 /// the first missing directory.
-pub(crate) async fn collect_report() -> Result<DoctorReport, CliError> {
-    let resolved = resolve_server_config(&ServerArgs::default()).unwrap_or_default();
+pub(crate) async fn collect_report(
+    target_agent: Option<CodingAgent>,
+) -> Result<DoctorReport, CliError> {
+    let (resolved, resolution) = match resolve_server_config(&ServerArgs::default()) {
+        Ok(resolved) => (
+            resolved,
+            Check {
+                name: "Resolution",
+                status: Status::Pass,
+                details: "valid".into(),
+            },
+        ),
+        Err(err) => (
+            ResolvedConfig::default(),
+            Check {
+                name: "Resolution",
+                status: Status::Fail,
+                details: format!("could not resolve merged config: {err}"),
+            },
+        ),
+    };
     let cwd = std::env::current_dir().ok();
     let home = home_dir();
+    let configured_agents = configured_agent_names(&resolved.agents);
 
     Ok(DoctorReport {
         schema_version: 1,
         binary_version: env!("CARGO_PKG_VERSION"),
+        target_agent: target_agent.map(|agent| agent.as_arg().to_string()),
         environment: collect_environment(),
-        configuration: collect_configuration(cwd.as_deref(), home.as_deref()),
-        agents: collect_agents().await,
+        configuration: collect_configuration(
+            cwd.as_deref(),
+            home.as_deref(),
+            resolution,
+            configured_agents,
+        ),
+        agents: collect_agents(target_agent, &resolved).await,
         observability: collect_observability(&resolved.gateway).await,
         completions: collect_completions(home.as_deref()),
     })
@@ -131,8 +164,10 @@ fn os_version() -> String {
 }
 
 fn collect_configuration(
-    cwd: Option<&std::path::Path>,
-    home: Option<&std::path::Path>,
+    cwd: Option<&Path>,
+    home: Option<&Path>,
+    resolution: Check,
+    configured_agents: Vec<String>,
 ) -> ConfigurationInfo {
     let workspace_path = cwd
         .map(|p| p.join(".nemo-flow").join("config.toml"))
@@ -149,17 +184,20 @@ fn collect_configuration(
         workspace: layer_status(&workspace_path),
         global: layer_status(&global_path),
         system: layer_status(&system_path),
+        resolution,
         // `default_agent` is reserved in the design for Phase 2 dispatch; not currently parsed
         // out of FileConfig. Doctor reports `None` until that lands.
         default_agent: None,
+        configured_agents,
     }
 }
 
-fn layer_status(path: &std::path::Path) -> ConfigLayer {
+fn layer_status(path: &Path) -> ConfigLayer {
     if !path.exists() {
         return ConfigLayer {
             path: path.to_path_buf(),
             status: Status::Info,
+            active: false,
             details: "not present".into(),
         };
     }
@@ -171,23 +209,29 @@ fn layer_status(path: &std::path::Path) -> ConfigLayer {
             Ok(_) => ConfigLayer {
                 path: path.to_path_buf(),
                 status: Status::Pass,
+                active: true,
                 details: "valid".into(),
             },
             Err(err) => ConfigLayer {
                 path: path.to_path_buf(),
                 status: Status::Fail,
+                active: false,
                 details: format!("invalid TOML: {err}"),
             },
         },
         Err(err) => ConfigLayer {
             path: path.to_path_buf(),
             status: Status::Fail,
+            active: false,
             details: format!("unreadable: {err}"),
         },
     }
 }
 
-async fn collect_agents() -> Vec<AgentInfo> {
+async fn collect_agents(
+    target_agent: Option<CodingAgent>,
+    resolved: &ResolvedConfig,
+) -> Vec<AgentInfo> {
     let supported = [
         (CodingAgent::ClaudeCode, "claude", "claude"),
         (CodingAgent::Codex, "codex", "codex"),
@@ -195,17 +239,45 @@ async fn collect_agents() -> Vec<AgentInfo> {
         (CodingAgent::Hermes, "hermes", "hermes"),
     ];
     let mut out = Vec::with_capacity(supported.len());
-    for (_, display_name, exec) in supported {
-        let path = which_on_path(exec);
+    for (agent, display_name, default_exec) in supported {
+        if target_agent.is_some_and(|target| target != agent) {
+            continue;
+        }
+        let configured = agent_configured(agent, &resolved.agents);
+        let target_requested = target_agent == Some(agent);
+        let command = agent_command(agent, &resolved.agents, default_exec);
+        let exec = command_executable(&command);
+        let path = which_command(exec);
         let version = match &path {
             Some(p) => probe_version(p).await,
             None => None,
         };
+        let mut status = agent_command_status(path.as_deref(), configured, target_requested);
+        let (hook_status, hook_details) =
+            hook_status(agent, &resolved.agents, configured || target_requested);
+        status = combine_status(status, hook_status, configured || target_requested);
+        let mut details = Vec::new();
+        details.push(if configured {
+            "configured".to_string()
+        } else if target_requested {
+            "not configured; first run will launch setup".to_string()
+        } else {
+            "not configured".to_string()
+        });
+        if path.is_none() {
+            details.push(format!("command `{exec}` not found"));
+        }
+        if !hook_details.is_empty() {
+            details.push(hook_details);
+        }
         out.push(AgentInfo {
             name: display_name,
+            status,
+            configured,
+            command,
             path,
             version,
-            annotation: String::new(),
+            annotation: details.join("; "),
         });
     }
     out
@@ -218,7 +290,154 @@ fn which_on_path(exec: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-async fn probe_version(binary: &std::path::Path) -> Option<String> {
+fn which_command(exec: &str) -> Option<PathBuf> {
+    let candidate = Path::new(exec);
+    if candidate.components().count() > 1 || candidate.is_absolute() {
+        return candidate.is_file().then(|| candidate.to_path_buf());
+    }
+    which_on_path(exec)
+}
+
+fn command_executable(command: &str) -> &str {
+    command.split_whitespace().next().unwrap_or(command)
+}
+
+fn agent_command(agent: CodingAgent, agents: &AgentConfigs, default_exec: &str) -> String {
+    configured_agent_command(agent, agents)
+        .cloned()
+        .unwrap_or_else(|| default_exec.to_string())
+}
+
+fn configured_agent_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<&String> {
+    match agent {
+        CodingAgent::ClaudeCode => agents.claude.command.as_ref(),
+        CodingAgent::Codex => agents.codex.command.as_ref(),
+        CodingAgent::Cursor => agents.cursor.command.as_ref(),
+        CodingAgent::Hermes => agents.hermes.command.as_ref(),
+    }
+}
+
+fn agent_configured(agent: CodingAgent, agents: &AgentConfigs) -> bool {
+    configured_agent_command(agent, agents).is_some()
+        || (matches!(agent, CodingAgent::Hermes) && agents.hermes.hooks_path.is_some())
+}
+
+fn configured_agent_names(agents: &AgentConfigs) -> Vec<String> {
+    [
+        (CodingAgent::ClaudeCode, "claude"),
+        (CodingAgent::Codex, "codex"),
+        (CodingAgent::Cursor, "cursor"),
+        (CodingAgent::Hermes, "hermes"),
+    ]
+    .into_iter()
+    .filter_map(|(agent, name)| agent_configured(agent, agents).then_some(name.to_string()))
+    .collect()
+}
+
+fn agent_command_status(path: Option<&Path>, configured: bool, target_requested: bool) -> Status {
+    match (path.is_some(), configured, target_requested) {
+        (true, false, true) => Status::Warn,
+        (true, _, _) => Status::Pass,
+        (false, true, _) | (false, _, true) => Status::Fail,
+        (false, false, false) => Status::Info,
+    }
+}
+
+fn combine_status(base: Status, hook: Status, readiness_required: bool) -> Status {
+    if matches!(base, Status::Fail) || matches!(hook, Status::Fail) {
+        return Status::Fail;
+    }
+    if matches!(base, Status::Warn) || (readiness_required && matches!(hook, Status::Warn)) {
+        return Status::Warn;
+    }
+    base
+}
+
+fn hook_status(
+    agent: CodingAgent,
+    agents: &AgentConfigs,
+    readiness_required: bool,
+) -> (Status, String) {
+    match agent {
+        CodingAgent::ClaudeCode | CodingAgent::Codex => {
+            (Status::Pass, "hooks: injected during run".into())
+        }
+        CodingAgent::Cursor if agents.cursor.patch_restore_hooks => {
+            (Status::Pass, "hooks: patched during run".into())
+        }
+        CodingAgent::Cursor => hook_file_status(
+            cursor_hooks_path(),
+            CodingAgent::Cursor,
+            readiness_required,
+            "hooks: user-managed",
+        ),
+        CodingAgent::Hermes => match agents.hermes.hooks_path.as_deref() {
+            Some(path) => hook_file_status(
+                Ok(path.to_path_buf()),
+                CodingAgent::Hermes,
+                readiness_required,
+                "hooks",
+            ),
+            None if readiness_required => (
+                Status::Fail,
+                "hooks: not installed; run `nemo-flow config hermes`".into(),
+            ),
+            None => (Status::Info, "hooks: not configured".into()),
+        },
+    }
+}
+
+fn hook_file_status(
+    path: Result<PathBuf, CliError>,
+    agent: CodingAgent,
+    readiness_required: bool,
+    label: &str,
+) -> (Status, String) {
+    let path = match path {
+        Ok(path) => path,
+        Err(err) => {
+            return (
+                Status::Fail,
+                format!("{label}: could not resolve path: {err}"),
+            );
+        }
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(raw) if raw.contains(&format!("hook-forward {}", agent.as_arg())) => (
+            Status::Pass,
+            format!("{label}: installed at {}", path.display()),
+        ),
+        Ok(_) if readiness_required => (
+            Status::Fail,
+            format!("{label}: missing NeMo Flow hook in {}", path.display()),
+        ),
+        Ok(_) => (
+            Status::Info,
+            format!("{label}: no NeMo Flow hook in {}", path.display()),
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && readiness_required => {
+            (Status::Fail, format!("{label}: missing {}", path.display()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            (Status::Info, format!("{label}: missing {}", path.display()))
+        }
+        Err(error) => (
+            Status::Fail,
+            format!("{label}: could not read {}: {error}", path.display()),
+        ),
+    }
+}
+
+fn cursor_hooks_path() -> Result<PathBuf, CliError> {
+    let cwd = std::env::current_dir()?;
+    let project = cwd
+        .ancestors()
+        .find(|ancestor| ancestor.join(".cursor").is_dir())
+        .unwrap_or(cwd.as_path());
+    Ok(project.join(".cursor/hooks.json"))
+}
+
+async fn probe_version(binary: &Path) -> Option<String> {
     // Spawn `<binary> --version` and read the first line of stdout. Bounded by the network
     // timeout (re-used as a generic short timeout) so a misbehaving binary doesn't hang doctor.
     let mut cmd = tokio::process::Command::new(binary);
@@ -247,7 +466,7 @@ async fn probe_version(binary: &std::path::Path) -> Option<String> {
 async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
     let mut checks = Vec::new();
 
-    checks.push(match &gateway.atif_dir {
+    checks.push(match &gateway.exporters.atif.dir {
         None => Check {
             name: "ATIF dir",
             status: Status::Info,
@@ -257,7 +476,15 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
             Ok(()) => Check {
                 name: "ATIF dir",
                 status: Status::Pass,
-                details: format!("{} (writable)", path.display()),
+                details: format!("{} (appears writable)", path.display()),
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Check {
+                name: "ATIF dir",
+                status: Status::Warn,
+                details: format!(
+                    "{}: not present; runtime will create it on export",
+                    path.display()
+                ),
             },
             Err(err) => Check {
                 name: "ATIF dir",
@@ -267,7 +494,35 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
         },
     });
 
-    checks.push(match &gateway.openinference_endpoint {
+    checks.push(match &gateway.exporters.atof.dir {
+        None => Check {
+            name: "ATOF dir",
+            status: Status::Info,
+            details: "not configured".into(),
+        },
+        Some(path) => match check_dir_writable(path) {
+            Ok(()) => Check {
+                name: "ATOF dir",
+                status: Status::Pass,
+                details: format!("{} (appears writable)", path.display()),
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Check {
+                name: "ATOF dir",
+                status: Status::Warn,
+                details: format!(
+                    "{}: not present; runtime will create it on first event",
+                    path.display()
+                ),
+            },
+            Err(err) => Check {
+                name: "ATOF dir",
+                status: Status::Fail,
+                details: format!("{}: {err}", path.display()),
+            },
+        },
+    });
+
+    checks.push(match &gateway.exporters.openinference.endpoint {
         None => Check {
             name: "OpenInference endpoint",
             status: Status::Info,
@@ -279,18 +534,20 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
     checks
 }
 
-fn check_dir_writable(dir: &std::path::Path) -> Result<(), std::io::Error> {
-    use std::fs::OpenOptions;
-    std::fs::create_dir_all(dir)?;
-    // PID-suffixed name + create_new=true so we can never overwrite a real user file even if
-    // they happen to have a `.nemo-flow-write-probe` of their own. The probe is removed
-    // immediately; the file just witnesses that we have write access here.
-    let probe = dir.join(format!(".nemo-flow-write-probe-{}", std::process::id()));
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&probe)?;
-    std::fs::remove_file(&probe).ok();
+fn check_dir_writable(dir: &Path) -> Result<(), std::io::Error> {
+    let metadata = std::fs::metadata(dir)?;
+    if !metadata.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path is not a directory",
+        ));
+    }
+    if metadata.permissions().readonly() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "directory is read-only",
+        ));
+    }
     Ok(())
 }
 
@@ -393,9 +650,14 @@ pub(crate) fn exit_code(report: &DoctorReport) -> u8 {
         .iter()
         .chain(report.completions.iter())
         .any(|c| matches!(c.status, Status::Fail))
+        || report
+            .agents
+            .iter()
+            .any(|agent| matches!(agent.status, Status::Fail))
         || matches!(report.configuration.workspace.status, Status::Fail)
         || matches!(report.configuration.global.status, Status::Fail)
-        || matches!(report.configuration.system.status, Status::Fail);
+        || matches!(report.configuration.system.status, Status::Fail)
+        || matches!(report.configuration.resolution.status, Status::Fail);
     u8::from(any_fail)
 }
 
@@ -408,9 +670,14 @@ fn report_has_warn(report: &DoctorReport) -> bool {
         .iter()
         .chain(report.completions.iter())
         .any(|c| matches!(c.status, Status::Warn))
+        || report
+            .agents
+            .iter()
+            .any(|agent| matches!(agent.status, Status::Warn))
         || matches!(report.configuration.workspace.status, Status::Warn)
         || matches!(report.configuration.global.status, Status::Warn)
         || matches!(report.configuration.system.status, Status::Warn)
+        || matches!(report.configuration.resolution.status, Status::Warn)
 }
 
 /// Renders the doctor report in the fixed human-readable layout the design doc shows. Sections
@@ -421,6 +688,9 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
     let mut out = String::new();
     out.push_str(&format!("\n  NeMo Flow {}\n", report.binary_version));
     out.push_str("  ─────────────────────────────────────────────\n");
+    if let Some(agent) = &report.target_agent {
+        out.push_str(&format!("  Target agent  {agent}\n\n"));
+    }
     out.push_str("  Environment\n");
     out.push_str(&format!(
         "    OS         {}\n",
@@ -445,22 +715,42 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
         "    System     {}\n",
         format_layer(&report.configuration.system)
     ));
+    if !matches!(report.configuration.resolution.status, Status::Pass) {
+        out.push_str(&format!(
+            "    Resolution {} {}\n",
+            format_status(report.configuration.resolution.status),
+            report.configuration.resolution.details
+        ));
+    }
+    if !report.configuration.configured_agents.is_empty() {
+        out.push_str(&format!(
+            "    Agents     {}\n",
+            report.configuration.configured_agents.join(", ")
+        ));
+    }
     out.push('\n');
 
     out.push_str("  Agents detected\n");
     for agent in &report.agents {
+        let status = format_status(agent.status);
         match &agent.path {
             Some(path) => {
                 let version = agent.version.as_deref().unwrap_or("(unknown version)");
                 out.push_str(&format!(
-                    "    {:<8} {}\n               {}\n",
+                    "    {}  {:<8} {}\n          command  {}\n          path     {}\n          {}\n",
+                    status,
                     agent.name,
                     version,
-                    path.display()
+                    agent.command,
+                    path.display(),
+                    agent.annotation
                 ));
             }
             None => {
-                out.push_str(&format!("    {:<8} not on $PATH\n", agent.name));
+                out.push_str(&format!(
+                    "    {}  {:<8} not on $PATH\n          command  {}\n          {}\n",
+                    status, agent.name, agent.command, agent.annotation
+                ));
             }
         }
     }
@@ -491,7 +781,17 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
 }
 
 fn format_layer(layer: &ConfigLayer) -> String {
-    format!("{}   {}", layer.path.display(), layer.details)
+    let active = if layer.active { " (loaded)" } else { "" };
+    format!("{}   {}{}", layer.path.display(), layer.details, active)
+}
+
+fn format_status(status: Status) -> &'static str {
+    match status {
+        Status::Pass => "✓",
+        Status::Warn => "!",
+        Status::Fail => "✗",
+        Status::Info => "·",
+    }
 }
 
 /// Renders the doctor report as machine-readable JSON. Versioned via `schema_version` so
@@ -504,7 +804,8 @@ pub(crate) fn format_json(report: &DoctorReport) -> Result<String, CliError> {
 /// Runs `agents` — a thin wrapper over `collect_agents` that emits only the agent list. Shares
 /// the same JSON schema as `doctor.agents` for consistency.
 pub(crate) async fn agents_report() -> Vec<AgentInfo> {
-    collect_agents().await
+    let resolved = resolve_server_config(&ServerArgs::default()).unwrap_or_default();
+    collect_agents(None, &resolved).await
 }
 
 /// Renders the agents listing in human form.
@@ -528,8 +829,12 @@ pub(crate) fn format_agents_human(agents: &[AgentInfo]) -> String {
                 .map(|p| p.display().to_string())
                 .unwrap_or_default();
             out.push_str(&format!(
-                "    {:<8} {}\n               {}\n",
-                agent.name, version, path
+                "    {}  {:<8} {}\n               {}\n               {}\n",
+                format_status(agent.status),
+                agent.name,
+                version,
+                path,
+                agent.annotation
             ));
         }
     }
@@ -545,8 +850,11 @@ pub(crate) fn format_agents_json(agents: &[AgentInfo]) -> Result<String, CliErro
 
 /// Top-level entry point invoked by `nemo-flow doctor`. Emits to stdout and returns the
 /// appropriate process exit code (0 on pass-or-warn, 1 on any failure).
-pub(crate) async fn run_doctor(json: bool) -> Result<std::process::ExitCode, CliError> {
-    let report = collect_report().await?;
+pub(crate) async fn run_doctor(
+    target_agent: Option<CodingAgent>,
+    json: bool,
+) -> Result<std::process::ExitCode, CliError> {
+    let report = collect_report(target_agent).await?;
     if json {
         print!("{}", format_json(&report)?);
     } else {

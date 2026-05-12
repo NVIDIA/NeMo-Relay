@@ -75,7 +75,7 @@ fn detect_installed_agents_finds_binaries_on_path() {
 }
 
 #[test]
-fn build_config_emits_observability_section_when_atif_selected() {
+fn build_config_emits_exporters_section_when_atif_selected() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![],
@@ -87,13 +87,15 @@ fn build_config_emits_observability_section_when_atif_selected() {
     let doc = build_config(&answers);
     let rendered = doc.to_string();
 
-    assert!(rendered.contains("[observability]"));
-    assert!(rendered.contains(r#"atif_dir = "./atif""#));
-    assert!(!rendered.contains("[export"));
+    assert!(rendered.contains("[exporters]"));
+    assert!(rendered.contains("[exporters.atif]"));
+    assert!(rendered.contains(r#"dir = "./atif""#));
+    assert!(!rendered.contains("[export."));
+    assert!(!rendered.contains("[observability]"));
 }
 
 #[test]
-fn build_config_emits_export_section_when_openinference_selected() {
+fn build_config_emits_exporters_section_when_openinference_selected() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![],
@@ -105,8 +107,30 @@ fn build_config_emits_export_section_when_openinference_selected() {
     let doc = build_config(&answers);
     let rendered = doc.to_string();
 
-    assert!(rendered.contains("[export.openinference]"));
+    assert!(rendered.contains("[exporters]"));
+    assert!(rendered.contains("[exporters.openinference]"));
     assert!(rendered.contains(r#"endpoint = "http://localhost:6006/v1/traces""#));
+    assert!(!rendered.contains("[export."));
+    assert!(!rendered.contains("[observability]"));
+}
+
+#[test]
+fn build_config_emits_atof_write_options_when_atof_selected() {
+    let answers = SetupAnswers {
+        scope: ConfigScope::Project,
+        agents: vec![],
+        backends: vec![ObservabilityBackend::Atof],
+        openinference_endpoint: None,
+        openai_base_url: None,
+        hermes_hooks_path: None,
+    };
+
+    let rendered = build_config(&answers).to_string();
+
+    assert!(rendered.contains("[exporters.atof]"));
+    assert!(rendered.contains(r#"dir = "./atof""#));
+    assert!(rendered.contains(r#"mode = "append""#));
+    assert!(rendered.contains(r#"filename_template = "{session_id}.jsonl""#));
 }
 
 #[test]
@@ -122,6 +146,7 @@ fn build_config_skips_empty_sections_when_no_backends_selected() {
     let doc = build_config(&answers);
     let rendered = doc.to_string();
 
+    assert!(!rendered.contains("[exporters]"));
     assert!(!rendered.contains("[observability]"));
     assert!(!rendered.contains("[export"));
     assert!(!rendered.contains("[agents]"));
@@ -165,7 +190,7 @@ fn save_config_writes_project_scope_to_workspace_dir() {
     assert_eq!(written.len(), 1);
     assert_eq!(written[0], temp.path().join(".nemo-flow/config.toml"));
     let contents = std::fs::read_to_string(&written[0]).unwrap();
-    assert!(contents.contains("[observability]"));
+    assert!(contents.contains("[exporters]"));
     assert!(contents.contains("[agents.claude]"));
 }
 
@@ -212,7 +237,7 @@ command = "codex --full-auto"
 
     let merged = std::fs::read_to_string(&existing_path).unwrap();
     // Wizard-owned sections are replaced with the new doc's content.
-    assert!(merged.contains("[observability]"));
+    assert!(merged.contains("[exporters]"));
     assert!(merged.contains("[agents.claude]"));
     assert!(merged.contains(r#"command = "claude""#));
     // Other agents (not touched by this scoped run) survive.

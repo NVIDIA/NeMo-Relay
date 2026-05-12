@@ -11,8 +11,15 @@ fn config() -> GatewayConfig {
         openai_base_url: "http://openai".into(),
 
         anthropic_base_url: "http://anthropic".into(),
-        atif_dir: Some(PathBuf::from("default-atif")),
-        openinference_endpoint: Some("http://default-otel".into()),
+        exporters: ExportersConfig {
+            atif: AtifExporterSettings {
+                dir: Some(PathBuf::from("default-atif")),
+            },
+            openinference: OpenInferenceExporterSettings {
+                endpoint: Some("http://default-otel".into()),
+            },
+            ..Default::default()
+        },
         metadata: None,
         plugin_config: None,
     }
@@ -48,9 +55,12 @@ fn session_config_prefers_headers_and_parses_json() {
 
     let session = config().session_config_from_headers(&headers);
 
-    assert_eq!(session.atif_dir, Some(PathBuf::from("header-atif")));
     assert_eq!(
-        session.openinference_endpoint.as_deref(),
+        session.exporters.atif.dir,
+        Some(PathBuf::from("header-atif"))
+    );
+    assert_eq!(
+        session.exporters.openinference.endpoint.as_deref(),
         Some("http://header-otel")
     );
     assert_eq!(session.profile.as_deref(), Some("profile-a"));
@@ -70,9 +80,12 @@ fn session_config_uses_defaults_and_ignores_bad_json() {
 
     let session = config().session_config_from_headers(&headers);
 
-    assert_eq!(session.atif_dir, Some(PathBuf::from("default-atif")));
     assert_eq!(
-        session.openinference_endpoint.as_deref(),
+        session.exporters.atif.dir,
+        Some(PathBuf::from("default-atif"))
+    );
+    assert_eq!(
+        session.exporters.openinference.endpoint.as_deref(),
         Some("http://default-otel")
     );
     assert_eq!(session.metadata, None);
@@ -116,12 +129,19 @@ fn explicit_toml_config_maps_supported_sections() {
 openai_base_url = "http://openai"
 anthropic_base_url = "http://anthropic"
 
-[observability]
-atif_dir = "atif"
-metadata = { team = "obs" }
+[exporters.atif]
+dir = "atif"
 
-[export.openinference]
+[exporters.atof]
+dir = "atof"
+mode = "overwrite"
+filename_template = "{session_id}-events.jsonl"
+
+[exporters.openinference]
 endpoint = "http://otel"
+
+[observability]
+metadata = { team = "obs" }
 
 [plugins]
 config = { components = [] }
@@ -147,6 +167,9 @@ command = "hermes --yolo chat"
         openai_base_url: None,
         anthropic_base_url: None,
         atif_dir: None,
+
+        atof_dir: None,
+
         openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
@@ -160,9 +183,21 @@ command = "hermes --yolo chat"
     assert_eq!(resolved.gateway.bind.to_string(), "127.0.0.1:0");
     assert_eq!(resolved.gateway.openai_base_url, "http://openai");
     assert_eq!(resolved.gateway.anthropic_base_url, "http://anthropic");
-    assert_eq!(resolved.gateway.atif_dir, Some(PathBuf::from("atif")));
     assert_eq!(
-        resolved.gateway.openinference_endpoint.as_deref(),
+        resolved.gateway.exporters.atif.dir,
+        Some(PathBuf::from("atif"))
+    );
+    assert_eq!(
+        resolved.gateway.exporters.atof.dir,
+        Some(PathBuf::from("atof"))
+    );
+    assert_eq!(resolved.gateway.exporters.atof.mode.as_str(), "overwrite");
+    assert_eq!(
+        resolved.gateway.exporters.atof.filename_template,
+        "{session_id}-events.jsonl"
+    );
+    assert_eq!(
+        resolved.gateway.exporters.openinference.endpoint.as_deref(),
         Some("http://otel")
     );
     assert_eq!(resolved.gateway.metadata, Some(json!({ "team": "obs" })));
@@ -199,6 +234,7 @@ metadata = { team = "file" }
         openai_base_url: Some("http://cli-openai".into()),
         anthropic_base_url: None,
         atif_dir: Some(PathBuf::from("cli-atif")),
+        atof_dir: None,
         openinference_endpoint: None,
         session_metadata: Some(r#"{"team":"cli"}"#.into()),
         plugin_config: None,
@@ -210,7 +246,10 @@ metadata = { team = "file" }
     let resolved = resolve_run_config(&command, None).unwrap();
 
     assert_eq!(resolved.gateway.openai_base_url, "http://cli-openai");
-    assert_eq!(resolved.gateway.atif_dir, Some(PathBuf::from("cli-atif")));
+    assert_eq!(
+        resolved.gateway.exporters.atif.dir,
+        Some(PathBuf::from("cli-atif"))
+    );
     assert_eq!(resolved.gateway.metadata, Some(json!({ "team": "cli" })));
 }
 
@@ -237,6 +276,9 @@ openai_base_url = "http://file-openai"
         openai_base_url: None,
         anthropic_base_url: None,
         atif_dir: None,
+
+        atof_dir: None,
+
         openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
@@ -258,6 +300,7 @@ fn server_resolution_applies_all_server_overrides() {
         openai_base_url: Some("http://cli-openai".into()),
         anthropic_base_url: Some("http://cli-anthropic".into()),
         atif_dir: Some(PathBuf::from("cli-atif")),
+        atof_dir: None,
         openinference_endpoint: Some("http://cli-otel".into()),
     };
 
@@ -266,9 +309,12 @@ fn server_resolution_applies_all_server_overrides() {
     assert_eq!(resolved.gateway.bind.to_string(), "127.0.0.1:0");
     assert_eq!(resolved.gateway.openai_base_url, "http://cli-openai");
     assert_eq!(resolved.gateway.anthropic_base_url, "http://cli-anthropic");
-    assert_eq!(resolved.gateway.atif_dir, Some(PathBuf::from("cli-atif")));
     assert_eq!(
-        resolved.gateway.openinference_endpoint.as_deref(),
+        resolved.gateway.exporters.atif.dir,
+        Some(PathBuf::from("cli-atif"))
+    );
+    assert_eq!(
+        resolved.gateway.exporters.openinference.endpoint.as_deref(),
         Some("http://cli-otel")
     );
 }
@@ -281,6 +327,7 @@ fn run_resolution_applies_all_run_overrides() {
         openai_base_url: Some("http://run-openai".into()),
         anthropic_base_url: Some("http://run-anthropic".into()),
         atif_dir: Some(PathBuf::from("run-atif")),
+        atof_dir: None,
         openinference_endpoint: Some("http://run-otel".into()),
         session_metadata: Some(r#"{"team":"run"}"#.into()),
         plugin_config: Some(r#"{"components":["x"]}"#.into()),
@@ -293,9 +340,12 @@ fn run_resolution_applies_all_run_overrides() {
 
     assert_eq!(resolved.gateway.openai_base_url, "http://run-openai");
     assert_eq!(resolved.gateway.anthropic_base_url, "http://run-anthropic");
-    assert_eq!(resolved.gateway.atif_dir, Some(PathBuf::from("run-atif")));
     assert_eq!(
-        resolved.gateway.openinference_endpoint.as_deref(),
+        resolved.gateway.exporters.atif.dir,
+        Some(PathBuf::from("run-atif"))
+    );
+    assert_eq!(
+        resolved.gateway.exporters.openinference.endpoint.as_deref(),
         Some("http://run-otel")
     );
     assert_eq!(resolved.gateway.metadata, Some(json!({ "team": "run" })));
