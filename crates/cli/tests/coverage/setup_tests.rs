@@ -89,7 +89,8 @@ fn build_config_emits_exporters_section_when_atif_selected() {
     let rendered = doc.to_string();
 
     assert!(rendered.contains("[exporters]"));
-    assert!(rendered.contains(r#"atif_dir = "./atif""#));
+    assert!(rendered.contains("[exporters.atif]"));
+    assert!(rendered.contains(r#"dir = "./atif""#));
     assert!(!rendered.contains("[export."));
     assert!(!rendered.contains("[observability]"));
 }
@@ -109,9 +110,29 @@ fn build_config_emits_exporters_section_when_openinference_selected() {
     let rendered = doc.to_string();
 
     assert!(rendered.contains("[exporters]"));
-    assert!(rendered.contains(r#"openinference_endpoint = "http://localhost:6006/v1/traces""#));
+    assert!(rendered.contains("[exporters.openinference]"));
+    assert!(rendered.contains(r#"endpoint = "http://localhost:6006/v1/traces""#));
     assert!(!rendered.contains("[export."));
     assert!(!rendered.contains("[observability]"));
+}
+
+#[test]
+fn build_config_emits_atof_write_options_when_atof_selected() {
+    let answers = SetupAnswers {
+        scope: ConfigScope::Project,
+        agents: vec![],
+        backends: vec![ObservabilityBackend::Atof],
+        openinference_endpoint: None,
+        openai_base_url: None,
+        hermes_hooks_path: None,
+    };
+
+    let rendered = build_config(&answers).to_string();
+
+    assert!(rendered.contains("[exporters.atof]"));
+    assert!(rendered.contains(r#"dir = "./atof""#));
+    assert!(rendered.contains(r#"mode = "append""#));
+    assert!(rendered.contains(r#"filename_template = "{session_id}.jsonl""#));
 }
 
 #[test]

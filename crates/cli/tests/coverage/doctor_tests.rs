@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::config::ExportersConfig;
+use crate::config::{AtifExporterSettings, ExportersConfig};
 use std::path::PathBuf;
 
 fn empty_report() -> DoctorReport {
@@ -216,7 +216,9 @@ async fn collect_observability_warns_for_missing_atif_dir_without_creating_it() 
     let missing = temp.path().join("missing-atif");
     let gateway = GatewayConfig {
         exporters: ExportersConfig {
-            atif_dir: Some(missing.clone()),
+            atif: AtifExporterSettings {
+                dir: Some(missing.clone()),
+            },
             ..Default::default()
         },
         ..GatewayConfig::default()

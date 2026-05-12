@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use axum::http::HeaderMap;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use nemo_flow::observability::atof::AtofExporterMode;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -196,21 +197,41 @@ pub(crate) struct GatewayConfig {
     pub(crate) plugin_config: Option<Value>,
 }
 
-/// Sinks the gateway writes observability data to. Grouped because every layer (CLI flags, env,
-/// TOML, headers, session resolution) historically duplicated `atif_dir` / `openinference_endpoint`
-/// side-by-side; adding `atof_dir` doubled that plumbing. This struct is the single seat where
-/// exporter knobs live on the runtime model — flat CLI flags and TOML keys still exist for
-/// ergonomics, but they all funnel into here.
-///
-/// `atif_dir` — directory for per-session ATIF trajectory JSON files (one file per session).
-/// `atof_dir` — directory for per-event ATOF JSONL streams (one event per line, raw event shape).
-/// `openinference_endpoint` — OTLP HTTP endpoint for streaming OpenInference spans
-/// (Phoenix / Arize / OTLP-compatible).
+/// Sinks the gateway writes observability data to. Each exporter has its own nested config so
+/// exporter-specific options (for example ATOF append/overwrite behavior) do not get flattened
+/// into unrelated backends.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ExportersConfig {
-    pub(crate) atif_dir: Option<PathBuf>,
-    pub(crate) atof_dir: Option<PathBuf>,
-    pub(crate) openinference_endpoint: Option<String>,
+    pub(crate) atif: AtifExporterSettings,
+    pub(crate) atof: AtofExporterSettings,
+    pub(crate) openinference: OpenInferenceExporterSettings,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AtifExporterSettings {
+    pub(crate) dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AtofExporterSettings {
+    pub(crate) dir: Option<PathBuf>,
+    pub(crate) mode: AtofExporterMode,
+    pub(crate) filename_template: String,
+}
+
+impl Default for AtofExporterSettings {
+    fn default() -> Self {
+        Self {
+            dir: None,
+            mode: AtofExporterMode::Append,
+            filename_template: "{session_id}.jsonl".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct OpenInferenceExporterSettings {
+    pub(crate) endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -314,14 +335,21 @@ impl GatewayConfig {
     // because install and hook-forward validate generated header values before sending them.
     pub(crate) fn session_config_from_headers(&self, headers: &HeaderMap) -> SessionConfig {
         let exporters = ExportersConfig {
-            atif_dir: header_string(headers, "x-nemo-flow-atif-dir")
-                .map(PathBuf::from)
-                .or_else(|| self.exporters.atif_dir.clone()),
-            atof_dir: header_string(headers, "x-nemo-flow-atof-dir")
-                .map(PathBuf::from)
-                .or_else(|| self.exporters.atof_dir.clone()),
-            openinference_endpoint: header_string(headers, "x-nemo-flow-openinference-endpoint")
-                .or_else(|| self.exporters.openinference_endpoint.clone()),
+            atif: AtifExporterSettings {
+                dir: header_string(headers, "x-nemo-flow-atif-dir")
+                    .map(PathBuf::from)
+                    .or_else(|| self.exporters.atif.dir.clone()),
+            },
+            atof: AtofExporterSettings {
+                dir: header_string(headers, "x-nemo-flow-atof-dir")
+                    .map(PathBuf::from)
+                    .or_else(|| self.exporters.atof.dir.clone()),
+                ..self.exporters.atof.clone()
+            },
+            openinference: OpenInferenceExporterSettings {
+                endpoint: header_string(headers, "x-nemo-flow-openinference-endpoint")
+                    .or_else(|| self.exporters.openinference.endpoint.clone()),
+            },
         };
         let metadata =
             header_json(headers, "x-nemo-flow-session-metadata").or_else(|| self.metadata.clone());
@@ -408,9 +436,25 @@ struct FileObservabilityConfig {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileExportersConfig {
+    atif: Option<FileAtifExporterConfig>,
+    atof: Option<FileAtofExporterConfig>,
+    openinference: Option<FileOpenInferenceConfig>,
+    // Legacy flat `[exporters]` keys from early CLI builds.
     atif_dir: Option<PathBuf>,
     atof_dir: Option<PathBuf>,
     openinference_endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct FileAtifExporterConfig {
+    dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct FileAtofExporterConfig {
+    dir: Option<PathBuf>,
+    mode: Option<String>,
+    filename_template: Option<String>,
 }
 
 // Legacy `[export.<backend>]` shape. New configs use `[exporters]`; this stays readable so
@@ -525,13 +569,13 @@ fn apply_run_url_overrides(config: &mut GatewayConfig, command: &RunCommand) {
         config.anthropic_base_url = value.clone();
     }
     if let Some(value) = &command.atif_dir {
-        config.exporters.atif_dir = Some(value.clone());
+        config.exporters.atif.dir = Some(value.clone());
     }
     if let Some(value) = &command.atof_dir {
-        config.exporters.atof_dir = Some(value.clone());
+        config.exporters.atof.dir = Some(value.clone());
     }
     if let Some(value) = &command.openinference_endpoint {
-        config.exporters.openinference_endpoint = Some(value.clone());
+        config.exporters.openinference.endpoint = Some(value.clone());
     }
 }
 
@@ -563,13 +607,13 @@ fn apply_server_overrides(config: &mut GatewayConfig, args: &ServerArgs) {
         config.anthropic_base_url = value.clone();
     }
     if let Some(value) = &args.atif_dir {
-        config.exporters.atif_dir = Some(value.clone());
+        config.exporters.atif.dir = Some(value.clone());
     }
     if let Some(value) = &args.atof_dir {
-        config.exporters.atof_dir = Some(value.clone());
+        config.exporters.atof.dir = Some(value.clone());
     }
     if let Some(value) = &args.openinference_endpoint {
-        config.exporters.openinference_endpoint = Some(value.clone());
+        config.exporters.openinference.endpoint = Some(value.clone());
     }
 }
 
@@ -663,7 +707,7 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
     apply_file_upstream_config(&mut resolved.gateway, config.upstream);
     apply_file_observability_config(&mut resolved.gateway, config.observability);
     apply_file_export_config(&mut resolved.gateway, config.export);
-    apply_file_exporters_config(&mut resolved.gateway, config.exporters);
+    apply_file_exporters_config(&mut resolved.gateway, config.exporters)?;
     apply_file_plugins_config(&mut resolved.gateway, config.plugins);
     apply_file_agents_config(&mut resolved.agents, config.agents);
     Ok(())
@@ -694,10 +738,10 @@ fn apply_file_observability_config(
         return;
     };
     if let Some(value) = observability.atif_dir {
-        gateway.exporters.atif_dir = Some(value);
+        gateway.exporters.atif.dir = Some(value);
     }
     if let Some(value) = observability.atof_dir {
-        gateway.exporters.atof_dir = Some(value);
+        gateway.exporters.atof.dir = Some(value);
     }
     if let Some(value) = observability.metadata {
         gateway.metadata = Some(value);
@@ -712,7 +756,7 @@ fn apply_file_export_config(gateway: &mut GatewayConfig, export: Option<FileExpo
     if let Some(openinference) = export.openinference
         && let Some(value) = openinference.endpoint
     {
-        gateway.exporters.openinference_endpoint = Some(value);
+        gateway.exporters.openinference.endpoint = Some(value);
     }
 }
 
@@ -721,19 +765,45 @@ fn apply_file_export_config(gateway: &mut GatewayConfig, export: Option<FileExpo
 fn apply_file_exporters_config(
     gateway: &mut GatewayConfig,
     exporters: Option<FileExportersConfig>,
-) {
+) -> Result<(), CliError> {
     let Some(exporters) = exporters else {
-        return;
+        return Ok(());
     };
     if let Some(value) = exporters.atif_dir {
-        gateway.exporters.atif_dir = Some(value);
+        gateway.exporters.atif.dir = Some(value);
     }
     if let Some(value) = exporters.atof_dir {
-        gateway.exporters.atof_dir = Some(value);
+        gateway.exporters.atof.dir = Some(value);
     }
     if let Some(value) = exporters.openinference_endpoint {
-        gateway.exporters.openinference_endpoint = Some(value);
+        gateway.exporters.openinference.endpoint = Some(value);
     }
+    if let Some(atif) = exporters.atif
+        && let Some(value) = atif.dir
+    {
+        gateway.exporters.atif.dir = Some(value);
+    }
+    if let Some(atof) = exporters.atof {
+        if let Some(value) = atof.dir {
+            gateway.exporters.atof.dir = Some(value);
+        }
+        if let Some(value) = atof.mode {
+            gateway.exporters.atof.mode = AtofExporterMode::parse(&value).ok_or_else(|| {
+                CliError::Config(format!(
+                    "invalid [exporters.atof].mode `{value}`; expected append or overwrite"
+                ))
+            })?;
+        }
+        if let Some(value) = atof.filename_template {
+            gateway.exporters.atof.filename_template = value;
+        }
+    }
+    if let Some(openinference) = exporters.openinference
+        && let Some(value) = openinference.endpoint
+    {
+        gateway.exporters.openinference.endpoint = Some(value);
+    }
+    Ok(())
 }
 
 // Applies plugin config. Reserved for the plugin runtime — stored on `GatewayConfig.plugin_config`
@@ -787,13 +857,13 @@ fn apply_env_config(config: &mut GatewayConfig) {
         config.anthropic_base_url = value;
     }
     if let Some(value) = std::env::var_os("NEMO_FLOW_ATIF_DIR") {
-        config.exporters.atif_dir = Some(PathBuf::from(value));
+        config.exporters.atif.dir = Some(PathBuf::from(value));
     }
     if let Some(value) = std::env::var_os("NEMO_FLOW_ATOF_DIR") {
-        config.exporters.atof_dir = Some(PathBuf::from(value));
+        config.exporters.atof.dir = Some(PathBuf::from(value));
     }
     if let Ok(value) = std::env::var("NEMO_FLOW_OPENINFERENCE_ENDPOINT") {
-        config.exporters.openinference_endpoint = Some(value);
+        config.exporters.openinference.endpoint = Some(value);
     }
 }
 

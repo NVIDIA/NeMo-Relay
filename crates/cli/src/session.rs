@@ -399,7 +399,7 @@ impl Session {
         if self.agent_scope.is_none() {
             return Ok(());
         }
-        if let (Some(exporter), Some(directory)) = (&self.atif, &self.config.exporters.atif_dir) {
+        if let (Some(exporter), Some(directory)) = (&self.atif, &self.config.exporters.atif.dir) {
             write_atif(directory, &self.session_id, exporter)?;
         }
         Ok(())
@@ -544,7 +544,7 @@ impl Session {
         if self.atof.is_some() {
             return Ok(());
         }
-        let Some(directory) = self.config.exporters.atof_dir.clone() else {
+        let Some(directory) = self.config.exporters.atof.dir.clone() else {
             return Ok(());
         };
         // Ensure the directory exists; AtofExporter opens the file via OpenOptions which won't
@@ -556,9 +556,14 @@ impl Session {
                 directory.display()
             ))
         })?;
+        let filename = render_atof_filename_template(
+            &self.config.exporters.atof.filename_template,
+            &self.session_id,
+        )?;
         let config = AtofExporterConfig::default()
             .with_output_directory(directory)
-            .with_filename(format!("{}.jsonl", self.session_id));
+            .with_mode(self.config.exporters.atof.mode)
+            .with_filename(filename);
         let exporter = AtofExporter::new(config)
             .map_err(|err| CliError::Config(format!("could not open ATOF file: {err}")))?;
         scope_register_subscriber(&root.uuid, "gateway-atof", exporter.subscriber())?;
@@ -569,7 +574,7 @@ impl Session {
     // Registers the ATIF exporter once when a session has ATIF output configured. The exporter keeps
     // the session agent metadata so downstream trajectory files can be attributed to this run.
     fn install_atif_observer(&mut self, root: &ScopeHandle) -> Result<(), CliError> {
-        if self.atif.is_some() || self.config.exporters.atif_dir.is_none() {
+        if self.atif.is_some() || self.config.exporters.atif.dir.is_none() {
             return Ok(());
         }
         let exporter = AtifExporter::new(
@@ -593,7 +598,7 @@ impl Session {
         if self.openinference.is_some() {
             return Ok(());
         }
-        let Some(endpoint) = &self.config.exporters.openinference_endpoint else {
+        let Some(endpoint) = &self.config.exporters.openinference.endpoint else {
             return Ok(());
         };
         let subscriber = OpenInferenceSubscriber::new(
@@ -946,7 +951,7 @@ impl Session {
             subscriber.force_flush()?;
             subscriber.shutdown()?;
         }
-        if let (Some(exporter), Some(directory)) = (&self.atif, &self.config.exporters.atif_dir) {
+        if let (Some(exporter), Some(directory)) = (&self.atif, &self.config.exporters.atif.dir) {
             write_atif(directory, &self.session_id, exporter)?;
         }
         // ATOF writes per-event JSONL as events arrive; flush + shutdown here just ensure the
@@ -1302,6 +1307,19 @@ fn validate_atif_session_id(session_id: &str) -> Result<(), CliError> {
         ));
     }
     Ok(())
+}
+
+fn render_atof_filename_template(template: &str, session_id: &str) -> Result<String, CliError> {
+    validate_atif_session_id(session_id)?;
+    let filename = template.replace("{session_id}", session_id);
+    let path = std::path::Path::new(&filename);
+    if filename.is_empty() || filename == "." || filename == ".." || path.components().count() != 1
+    {
+        return Err(CliError::InvalidPayload(
+            "ATOF filename template must render to a single safe filename".into(),
+        ));
+    }
+    Ok(filename)
 }
 
 // Scores how strongly a pending hint matches a gateway LLM request. Subagent/agent identity is

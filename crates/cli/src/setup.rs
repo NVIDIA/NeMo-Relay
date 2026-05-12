@@ -121,8 +121,8 @@ pub(crate) fn detect_installed_agents_in(path_var: Option<&std::ffi::OsStr>) -> 
 pub(crate) fn build_config(answers: &SetupAnswers) -> DocumentMut {
     let mut doc = DocumentMut::new();
 
-    // Build the exporter table once so selecting multiple backends produces a single section with
-    // all enabled sinks, not separate legacy observability/export blocks.
+    // Build the exporter table once so selecting multiple backends produces nested per-exporter
+    // sections, not separate legacy observability/export blocks.
     let want_atif = answers.backends.contains(&ObservabilityBackend::Atif);
     let want_atof = answers.backends.contains(&ObservabilityBackend::Atof);
     let want_openinference = answers
@@ -132,13 +132,21 @@ pub(crate) fn build_config(answers: &SetupAnswers) -> DocumentMut {
     if want_atif || want_atof || want_openinference {
         let mut exporters = Table::new();
         if want_atif {
-            exporters["atif_dir"] = value("./atif");
+            let mut atif = Table::new();
+            atif["dir"] = value("./atif");
+            exporters.insert("atif", Item::Table(atif));
         }
         if want_atof {
-            exporters["atof_dir"] = value("./atof");
+            let mut atof = Table::new();
+            atof["dir"] = value("./atof");
+            atof["mode"] = value("append");
+            atof["filename_template"] = value("{session_id}.jsonl");
+            exporters.insert("atof", Item::Table(atof));
         }
         if let Some(endpoint) = answers.openinference_endpoint.as_deref() {
-            exporters["openinference_endpoint"] = value(endpoint);
+            let mut openinference = Table::new();
+            openinference["endpoint"] = value(endpoint);
+            exporters.insert("openinference", Item::Table(openinference));
         }
         doc["exporters"] = Item::Table(exporters);
     }
@@ -542,17 +550,34 @@ fn read_existing_defaults() -> Option<Defaults> {
     Some(Defaults {
         scope,
         agents: read_agents_from_doc(&doc),
-        atif_enabled: exporters.and_then(|t| t.get("atif_dir")).is_some()
+        atif_enabled: exporters
+            .and_then(|t| t.get("atif"))
+            .and_then(|i| i.as_table())
+            .and_then(|t| t.get("dir"))
+            .is_some()
+            || exporters.and_then(|t| t.get("atif_dir")).is_some()
             || legacy_observability
                 .and_then(|t| t.get("atif_dir"))
                 .is_some(),
-        atof_enabled: exporters.and_then(|t| t.get("atof_dir")).is_some()
+        atof_enabled: exporters
+            .and_then(|t| t.get("atof"))
+            .and_then(|i| i.as_table())
+            .and_then(|t| t.get("dir"))
+            .is_some()
+            || exporters.and_then(|t| t.get("atof_dir")).is_some()
             || legacy_observability
                 .and_then(|t| t.get("atof_dir"))
                 .is_some(),
         openinference_endpoint: exporters
-            .and_then(|t| t.get("openinference_endpoint"))
+            .and_then(|t| t.get("openinference"))
+            .and_then(|i| i.as_table())
+            .and_then(|t| t.get("endpoint"))
             .and_then(|i| i.as_str())
+            .or_else(|| {
+                exporters
+                    .and_then(|t| t.get("openinference_endpoint"))
+                    .and_then(|i| i.as_str())
+            })
             .or_else(|| {
                 legacy_export
                     .and_then(|t| t.get("openinference"))

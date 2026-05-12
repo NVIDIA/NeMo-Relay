@@ -78,9 +78,16 @@ project `.nemo-flow/config.toml`, then
 `~/.config/nemo-flow/config.toml`.
 
 ```toml
-[exporters]
-atif_dir = ".nemo-flow/atif"
-openinference_endpoint = "http://127.0.0.1:4318/v1/traces"
+[exporters.atif]
+dir = ".nemo-flow/atif"
+
+[exporters.atof]
+dir = ".nemo-flow/atof"
+mode = "append" # append | overwrite
+filename_template = "{session_id}.jsonl"
+
+[exporters.openinference]
+endpoint = "http://127.0.0.1:4318/v1/traces"
 
 [observability]
 metadata = { team = "agent-observability" }

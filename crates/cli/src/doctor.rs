@@ -441,7 +441,7 @@ async fn probe_version(binary: &Path) -> Option<String> {
 async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
     let mut checks = Vec::new();
 
-    checks.push(match &gateway.exporters.atif_dir {
+    checks.push(match &gateway.exporters.atif.dir {
         None => Check {
             name: "ATIF dir",
             status: Status::Info,
@@ -469,7 +469,7 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
         },
     });
 
-    checks.push(match &gateway.exporters.atof_dir {
+    checks.push(match &gateway.exporters.atof.dir {
         None => Check {
             name: "ATOF dir",
             status: Status::Info,
@@ -497,7 +497,7 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
         },
     });
 
-    checks.push(match &gateway.exporters.openinference_endpoint {
+    checks.push(match &gateway.exporters.openinference.endpoint {
         None => Check {
             name: "OpenInference endpoint",
             status: Status::Info,
