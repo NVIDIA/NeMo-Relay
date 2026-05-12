@@ -393,12 +393,17 @@ def test_e2e_agent(
     assert isinstance(kwargs["backend"], NemoFlowDeepAgentsSandboxBackend)
     assert (tmp_path / "turtle").read_text() == "shell"
     assert result["messages"][-1].content == "created turtle"
-    assert any(
-        isinstance(message, ToolMessage)
-        and message.name == "write_file"
-        and message.content == "Updated file /turtle"
-        for message in result["messages"]
-    )
+    found_write_file_message = False
+    for message in result["messages"]:
+        if (
+            isinstance(message, ToolMessage)
+            and message.name == "write_file"
+            and message.content == "Updated file /turtle"
+        ):
+            found_write_file_message = True
+            break
+
+    assert found_write_file_message
 
     marks = _filter_mark_events(subscribed_events)
     assert any(_mark_data(mark).get("tool_name") == "write_file" for mark in marks)
