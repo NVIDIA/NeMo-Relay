@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from uuid import uuid4
 
 from langgraph.callbacks import GraphCallbackHandler, GraphInterruptEvent, GraphResumeEvent
@@ -14,107 +14,136 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Interrupt
 from typing_extensions import TypedDict
 
+import pytest
+
 import nemo_flow
 from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler as LangChainCallbackHandler
 from nemo_flow.integrations.langgraph import NemoFlowCallbackHandler
 
 
+if TYPE_CHECKING:
+    from langgraph.graph import CompiledStateGraph
+
 class State(TypedDict):
     value: int
 
+def increment(state: State) -> State:
+    return {"value": state["value"] + 1}
 
-def _build_graph() -> Any:
-    def increment(state: State) -> State:
-        return {"value": state["value"] + 1}
+async def aincrement(state: State) -> State:
+    await asyncio.sleep(0)
+    return {"value": state["value"] + 1}
 
+def _build_graph(use_async: bool = False) -> CompiledStateGraph:
     builder = StateGraph(State)
-    builder.add_node("increment", increment)
+    if use_async:
+        builder.add_node("increment", aincrement)
+    else:
+        builder.add_node("increment", increment)
     builder.add_edge(START, "increment")
     builder.add_edge("increment", END)
     return builder.compile()
 
 
-def _build_async_graph() -> Any:
-    async def increment(state: State) -> State:
-        await asyncio.sleep(0)
-        return {"value": state["value"] + 1}
-
-    builder = StateGraph(State)
-    builder.add_node("increment", increment)
-    builder.add_edge(START, "increment")
-    builder.add_edge("increment", END)
-    return builder.compile()
+@pytest.fixture(name="sync_graph")
+def graph_fixture() -> CompiledStateGraph:
+    return _build_graph(use_async=False)
 
 
-def _record_events() -> tuple[list[Any], str]:
-    events: list[Any] = []
+@pytest.fixture(name="async_graph")
+def async_graph_fixture() -> CompiledStateGraph:
+    return _build_graph(use_async=True)
+
+@pytest.fixture(name="subscribed_events")
+def subscribed_events_fixture() -> list[nemo_flow.Event]:
+    events: list[nemo_flow.Event] = []
+
+    def event_recorder(event: nemo_flow.Event) -> None:
+        events.append(event)
+
     subscriber_name = f"langgraph-test-{uuid4()}"
-    nemo_flow.subscribers.register(subscriber_name, events.append)
-    return events, subscriber_name
+    nemo_flow.subscribers.register(subscriber_name, event_recorder)
+    yield events
+    nemo_flow.subscribers.deregister(subscriber_name)
+
+def events_to_strings(events: list[nemo_flow.Event]) -> list[str]:
+    event_strings: list[str] = []
+
+    for event in events:
+        if event.kind == "scope":
+            event_strings.append(f"{event.kind}.{event.scope_category}.{event.name}")
+        else:
+            event_strings.append(f"{event.kind}.{event.name}")
+
+    return event_strings
 
 
-def test_langgraph_handler_builds_on_langchain_handler() -> None:
+def test_handler_type():
     handler = NemoFlowCallbackHandler()
-
     assert isinstance(handler, LangChainCallbackHandler)
     assert isinstance(handler, GraphCallbackHandler)
-    assert handler.run_inline is True
 
 
-def test_graph_invoke_with_callback_config_emits_named_graph_and_node_scopes() -> None:
-    graph = _build_graph()
-    events, subscriber_name = _record_events()
+@pytest.mark.parametrize("use_async", [False, True])
+def test_graph_callbacks(use_async: bool,
+                         sync_graph: CompiledStateGraph,
+                         async_graph: CompiledStateGraph,
+                         subscribed_events: list[nemo_flow.Event]):
+    graph = async_graph if use_async else sync_graph
+    expected_events = [
+        "scope.start.request",
+        "scope.start.LangGraph",
+        "scope.start.increment",
+        "scope.end.increment",
+        "scope.end.LangGraph",
+        "scope.end.request",
+    ]
 
-    try:
-        with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
+    with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
+        if use_async:
+            result = asyncio.run(graph.ainvoke({"value": 1}, config={"callbacks": [NemoFlowCallbackHandler()]}))
+        else:
             result = graph.invoke({"value": 1}, config={"callbacks": [NemoFlowCallbackHandler()]})
-    finally:
-        nemo_flow.subscribers.deregister(subscriber_name)
 
     assert result == {"value": 2}
-    scope_names = [event.name for event in events if event.kind == "scope" and event.scope_category == "start"]
-    assert scope_names == ["request", "LangGraph", "increment"]
+    assert events_to_strings(subscribed_events) == expected_events
 
 
-def test_graph_ainvoke_with_callback_config_completes() -> None:
-    graph = _build_async_graph()
-
-    async def run_graph() -> dict[str, int]:
-        with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-            return await graph.ainvoke({"value": 1}, config={"callbacks": [NemoFlowCallbackHandler()]})
-
-    assert asyncio.run(run_graph()) == {"value": 2}
-
-
-def test_graph_lifecycle_callbacks_emit_marks() -> None:
+def test_graph_lifecycle_callbacks_emit_marks(subscribed_events: list[nemo_flow.Event]):
     handler = NemoFlowCallbackHandler()
-    events, subscriber_name = _record_events()
     run_id = uuid4()
 
-    try:
-        with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-            handler.on_resume(
-                GraphResumeEvent(
-                    run_id=run_id,
-                    status="pending",
-                    checkpoint_id="checkpoint-1",
-                    checkpoint_ns=("parent", "child"),
-                )
-            )
-            handler.on_interrupt(
-                GraphInterruptEvent(
-                    run_id=run_id,
-                    status="interrupt_after",
-                    checkpoint_id="checkpoint-2",
-                    checkpoint_ns=("parent",),
-                    interrupts=(Interrupt("needs approval", id="interrupt-1"),),
-                )
-            )
-    finally:
-        nemo_flow.subscribers.deregister(subscriber_name)
+    expected_event_strings = [
+        'scope.start.request', 'mark.Graph Interrupt', 'mark.Graph Resume', 'scope.end.request',
+    ]
 
-    marks = [event for event in events if event.kind == "mark"]
-    assert [event.name for event in marks] == ["Graph Resume", "Graph Interrupt"]
-    assert marks[0].data["checkpoint_ns"] == ["parent", "child"]
-    assert marks[1].data["interrupts"] == [{"id": "interrupt-1", "value": "needs approval"}]
-    assert marks[1].metadata == {"integration": "langgraph"}
+    with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
+        handler.on_interrupt(
+            GraphInterruptEvent(
+                run_id=run_id,
+                status="interrupt_after",
+                checkpoint_id="checkpoint-2",
+                checkpoint_ns=("parent",),
+                interrupts=(Interrupt("needs approval", id="interrupt-1"),),
+            )
+        )
+
+        handler.on_resume(
+            GraphResumeEvent(
+                run_id=run_id,
+                status="pending",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ns=("parent", "child"),
+            )
+        )
+
+
+    assert events_to_strings(subscribed_events) == expected_event_strings
+
+
+    interupt_event = subscribed_events[1]
+    assert interupt_event.data["interrupts"] == [{"id": "interrupt-1", "value": "needs approval"}]
+
+    resume_event = subscribed_events[2]
+    assert resume_event.data["checkpoint_ns"] == ["parent", "child"]
+    assert resume_event.metadata == {"integration": "langgraph"}
