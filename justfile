@@ -155,8 +155,23 @@ ensure_docs_dependencies() {
     npm install --ignore-scripts
 }
 
+ensure_docs_node_workspace_compat() {
+    local node_modules="$NEMO_FLOW_REPO_ROOT/crates/node/node_modules"
+    local root_node_modules="$NEMO_FLOW_REPO_ROOT/node_modules"
+
+    # Historical versioned docs builds run older docs hooks that resolve
+    # TypeDoc peers only from crates/node/node_modules. A root npm install may
+    # hoist TypeScript to root node_modules, so materialize it where those
+    # immutable release tags expect it before sphinx-multiversion copies them.
+    if [[ ! -e "$node_modules/typescript" && -d "$root_node_modules/typescript" ]]; then
+        mkdir -p "$node_modules"
+        cp -R "$root_node_modules/typescript" "$node_modules/typescript"
+    fi
+}
+
 configure_docs_environment() {
     export SPHINX_AUTODOC_RELOAD_MODULES="${SPHINX_AUTODOC_RELOAD_MODULES:-1}"
+    ensure_docs_node_workspace_compat
 }
 
 prepare_parent_dir() {
