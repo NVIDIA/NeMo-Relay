@@ -5,15 +5,19 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from deepagents import create_deep_agent
+from deepagents.backends import LocalShellBackend
 from deepagents.backends.protocol import ExecuteResponse, LsResult, ReadResult, SandboxBackendProtocol
 from deepagents.middleware.filesystem import supports_execution
 from langchain.agents.middleware import ToolCallRequest
-from langchain_core.messages import ToolMessage
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.callbacks import GraphInterruptEvent, GraphResumeEvent
 from langgraph.types import Interrupt
 
@@ -25,6 +29,7 @@ from nemo_flow.integrations.deepagents import (
     add_nemo_flow_integration,
     observe_backend,
 )
+from nemo_flow.integrations.deepagents.backend import NemoFlowDeepAgentsSandboxBackend
 
 
 @pytest.fixture(name="mock_tool_execute")
@@ -39,6 +44,13 @@ def mock_tool_execute_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     monkeypatch.setattr(nemo_flow.scope, "get_handle", lambda: MagicMock(name="mock_handle"))
     monkeypatch.setattr(nemo_flow.typed, "tool_execute", mock_execute)
     return mock_execute
+
+
+class _MockDeepAgentsChatModel(FakeMessagesListChatModel):
+    model: str = "mock-model"
+
+    def bind_tools(self, _tools: Any, *_args: Any, **_kwargs: Any) -> _MockDeepAgentsChatModel:
+        return self
 
 
 @pytest.fixture(name="middleware")
@@ -91,7 +103,7 @@ def test_wrap_tool_call_emits_deepagents_marks(
     middleware: NemoFlowDeepAgentsMiddleware,
     mock_tool_execute: AsyncMock,
     subscribed_events: list[nemo_flow.Event],
-) -> None:
+):
     def handler(request: ToolCallRequest) -> ToolMessage:
         return ToolMessage(content="done", tool_call_id=request.tool_call["id"])
 
@@ -113,7 +125,7 @@ async def test_awrap_tool_call_emits_deepagents_marks(
     middleware: NemoFlowDeepAgentsMiddleware,
     mock_tool_execute: AsyncMock,
     subscribed_events: list[nemo_flow.Event],
-) -> None:
+):
     async def handler(request: ToolCallRequest) -> ToolMessage:
         return ToolMessage(content="started", tool_call_id=request.tool_call["id"])
 
@@ -138,7 +150,7 @@ def test_wrap_tool_call_emits_error_mark(
     middleware: NemoFlowDeepAgentsMiddleware,
     mock_tool_execute: AsyncMock,
     subscribed_events: list[nemo_flow.Event],
-) -> None:
+):
     def handler(request: ToolCallRequest) -> ToolMessage:
         raise RuntimeError("approval failed")
 
@@ -152,7 +164,7 @@ def test_wrap_tool_call_emits_error_mark(
     assert "RuntimeError" in _mark_data(marks[1])["error"]
 
 
-def test_before_agent_emits_configuration_mark(subscribed_events: list[nemo_flow.Event]) -> None:
+def test_before_agent_emits_configuration_mark(subscribed_events: list[nemo_flow.Event]):
     middleware = NemoFlowDeepAgentsMiddleware(
         agent_name="main-agent",
         skills=["/skills/research/"],
@@ -171,7 +183,7 @@ def test_before_agent_emits_configuration_mark(subscribed_events: list[nemo_flow
     assert _mark_data(marks[0])["backend"] == "StateBackend"
 
 
-def test_callback_handler_emits_human_in_the_loop_marks(subscribed_events: list[nemo_flow.Event]) -> None:
+def test_callback_handler_emits_human_in_the_loop_marks(subscribed_events: list[nemo_flow.Event]):
     handler = NemoFlowDeepAgentsCallbackHandler()
     run_id = uuid4()
     hitl_request = {
@@ -214,7 +226,7 @@ def test_callback_handler_emits_human_in_the_loop_marks(subscribed_events: list[
     assert _mark_metadata(marks[1])["phase"] == "resume"
 
 
-def test_callback_handler_falls_back_for_non_hitl_interrupt(subscribed_events: list[nemo_flow.Event]) -> None:
+def test_callback_handler_falls_back_for_non_hitl_interrupt(subscribed_events: list[nemo_flow.Event]):
     handler = NemoFlowDeepAgentsCallbackHandler()
     run_id = uuid4()
 
@@ -257,7 +269,7 @@ def test_observe_backend_emits_sync_marks(
     expected_call_kwargs: dict[str, Any],
     expected_kind: str,
     subscribed_events: list[nemo_flow.Event],
-) -> None:
+):
     mock_backend = MagicMock(name="mock_backend")
     getattr(mock_backend, method_name).return_value = {"ok": True}
     backend = observe_backend(mock_backend, name="MockBackend")
@@ -275,7 +287,7 @@ def test_observe_backend_emits_sync_marks(
     assert _mark_metadata(marks[1])["phase"] == "end"
 
 
-async def test_observe_backend_emits_async_marks(subscribed_events: list[nemo_flow.Event]) -> None:
+async def test_observe_backend_emits_async_marks(subscribed_events: list[nemo_flow.Event]):
     mock_backend = MagicMock(name="mock_backend")
     mock_backend.aread = AsyncMock(return_value=ReadResult(file_data={"content": "contents", "encoding": "utf-8"}))
     backend = observe_backend(mock_backend, name="MockBackend")
@@ -291,7 +303,7 @@ async def test_observe_backend_emits_async_marks(subscribed_events: list[nemo_fl
     assert "ReadResult" in _mark_data(marks[1])["result"]
 
 
-def test_observe_backend_preserves_sandbox_protocol(subscribed_events: list[nemo_flow.Event]) -> None:
+def test_observe_backend_preserves_sandbox_protocol(subscribed_events: list[nemo_flow.Event]):
     class MockSandboxBackend(SandboxBackendProtocol):
         @property
         def id(self) -> str:
@@ -320,8 +332,15 @@ def test_observe_backend_preserves_sandbox_protocol(subscribed_events: list[nemo
     assert _mark_data(marks[0])["method"] == "execute"
 
 
-def test_add_nemo_flow_integration_instruments_kwargs() -> None:
-    mock_backend = MagicMock(name="mock_backend")
+@pytest.mark.parametrize("use_sandbox", [False, True])
+def test_add_nemo_flow_integration(use_sandbox: bool):
+    if use_sandbox:
+        mock_backend = MagicMock(name="mock_sandbox_backend", spec=SandboxBackendProtocol)
+        expected_nemo_class = NemoFlowDeepAgentsSandboxBackend
+    else:
+        mock_backend = MagicMock(name="mock_backend")
+        expected_nemo_class = NemoFlowDeepAgentsBackend
+
     mock_compiled_subagent = MagicMock(name="mock_compiled_subagent")
     kwargs = add_nemo_flow_integration(
         model="mock-model",
@@ -335,7 +354,52 @@ def test_add_nemo_flow_integration_instruments_kwargs() -> None:
         ],
     )
 
-    assert isinstance(kwargs["backend"], NemoFlowDeepAgentsBackend)
+    assert isinstance(kwargs["backend"], expected_nemo_class)
     assert any(isinstance(item, NemoFlowDeepAgentsMiddleware) for item in kwargs["middleware"])
     assert any(isinstance(item, NemoFlowDeepAgentsMiddleware) for item in kwargs["subagents"][0]["middleware"])
     assert kwargs["subagents"][1] is mock_compiled_subagent
+
+
+def test_e2e_agent(
+    tmp_path: Path,
+    subscribed_events: list[nemo_flow.Event],
+):
+    model = _MockDeepAgentsChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "args": {"file_path": "/turtle", "content": "shell"},
+                        "id": "call-1",
+                    }
+                ],
+            ),
+            AIMessage(content="created turtle"),
+        ]
+    )
+    kwargs = add_nemo_flow_integration(
+        model=model,
+        tools=[],
+        name="main-agent",
+        backend=LocalShellBackend(root_dir=tmp_path, virtual_mode=True),
+    )
+    agent = create_deep_agent(**kwargs)
+
+    with nemo_flow.scope.scope("deepagents-request", nemo_flow.ScopeType.Agent):
+        result = agent.invoke({"messages": [{"role": "user", "content": "Create a file named turtle."}]})
+
+    assert isinstance(kwargs["backend"], NemoFlowDeepAgentsSandboxBackend)
+    assert (tmp_path / "turtle").read_text() == "shell"
+    assert result["messages"][-1].content == "created turtle"
+    assert any(
+        isinstance(message, ToolMessage)
+        and message.name == "write_file"
+        and message.content == "Updated file /turtle"
+        for message in result["messages"]
+    )
+
+    marks = _filter_mark_events(subscribed_events)
+    assert any(_mark_data(mark).get("tool_name") == "write_file" for mark in marks)
+    assert any(_mark_data(mark).get("method") == "write" for mark in marks)
