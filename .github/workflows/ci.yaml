@@ -205,6 +205,9 @@ jobs:
     if: ${{ needs.ci_check.result == 'success' && needs.ci_changes.outputs.run_openclaw == 'true' }}
     permissions:
       contents: read
+    with:
+      ref_type: ${{ github.ref_type }}
+      ref_name: ${{ github.ref_name }}
 
   ci_python:
     name: Python
@@ -299,7 +302,7 @@ jobs:
           if [[ "$publish_packages" == "true" ]]; then
             require_success "Rust" "$RUST_RESULT"
             require_success "Node.js" "$NODE_RESULT"
-            allow_success_or_skipped "OpenClaw" "$OPENCLAW_RESULT"
+            require_success "OpenClaw" "$OPENCLAW_RESULT"
             require_success "Python" "$PYTHON_RESULT"
             require_success "WebAssembly" "$WEBASSEMBLY_RESULT"
           else
@@ -444,6 +447,12 @@ jobs:
           name: wasm-bundler
           path: wasm-package/
 
+      - name: Download OpenClaw plugin artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: openclaw-npm
+          path: openclaw-package/
+
       - name: Select npm dist-tag
         run: |
           set -e
@@ -460,6 +469,14 @@ jobs:
           echo "Platform binaries included:"
           ls -la combined/package/*.node
           npm publish ./combined/package --access public --tag "${NEMO_FLOW_NPM_DIST_TAG}"
+
+      - name: Publish OpenClaw plugin package to npm
+        run: |
+          set -euo pipefail
+          for pkg in ./openclaw-package/*.tgz; do
+            echo "Publishing ${pkg}..."
+            npm publish "${pkg}" --access public --tag "${NEMO_FLOW_NPM_DIST_TAG}"
+          done
 
       - name: Publish WebAssembly package to npm
         run: |

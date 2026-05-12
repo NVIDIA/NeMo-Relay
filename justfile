@@ -898,6 +898,7 @@ test-openclaw:
     fi
     npm run typecheck --workspace=nemo-flow-openclaw
     npm test --workspace=nemo-flow-openclaw
+    npm run pack:check --workspace=nemo-flow-openclaw
 
 # --set [output_dir=<path>] [ci=true|false]
 test-wasm:
@@ -990,6 +991,33 @@ package-node:
     packages=("$package_dir"/*.tgz)
     if ((${#packages[@]} == 0)); then
         echo "Error: No npm packages found in $package_dir"
+        exit 1
+    fi
+
+# --set [output_dir=<path>] [ref_name=<name>]
+package-openclaw:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    # If `ref_name` is empty, append the current short HEAD SHA to the version.
+    # If `ref_name` is set, write it as the exact package version before packing.
+    output_dir="{{ output_dir }}"
+    cd "$NEMO_FLOW_REPO_ROOT"
+    package_dir="$(prepare_package_dir openclaw)"
+    if [[ -z "{{ ref_name }}" ]]; then
+        sha="$(head_git_sha)"
+        version="$(read_npm_package_version integrations/openclaw/package.json)"
+        echo "Non-release build: appending commit hash to version"
+        set_npm_package_version integrations/openclaw/package.json package-lock.json "${version}-${sha}" integrations/openclaw
+    else
+        echo "Using explicit version {{ ref_name }}"
+        set_npm_package_version integrations/openclaw/package.json package-lock.json "{{ ref_name }}" integrations/openclaw
+    fi
+    npm install --workspace=nemo-flow-openclaw --ignore-scripts
+    npm pack --workspace=nemo-flow-openclaw --pack-destination "$package_dir"
+    shopt -s nullglob
+    packages=("$package_dir"/*.tgz)
+    if ((${#packages[@]} == 0)); then
+        echo "Error: No OpenClaw npm packages found in $package_dir"
         exit 1
     fi
 
