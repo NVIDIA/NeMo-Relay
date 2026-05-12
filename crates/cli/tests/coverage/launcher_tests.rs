@@ -543,6 +543,13 @@ fn cursor_dry_run_does_not_write_hooks() {
     std::env::set_current_dir(previous).unwrap();
 }
 
+// This e2e test relies on argv[0] being a script literally named after a known agent (so
+// `CodingAgent::infer` recognises the basename without an explicit `--agent`). On Windows the
+// only practical way to invoke a `.cmd` / `.bat` shim is via `cmd.exe /C script.cmd`, which
+// makes argv[0] = `cmd.exe` and breaks inference. Gating Unix-only keeps cross-platform CI
+// green; real Windows agent-spawn coverage can come back with a `.exe` fake binary once the
+// launcher grows Windows support.
+#[cfg(unix)]
 #[tokio::test]
 async fn run_starts_gateway_injects_env_and_returns_agent_exit_code() {
     let temp = tempfile::tempdir().unwrap();
@@ -591,20 +598,6 @@ fn fake_agent_command(temp: &Path, output: &Path) -> Vec<String> {
     .unwrap();
     make_executable(&script);
     vec![script.display().to_string()]
-}
-
-#[cfg(windows)]
-fn fake_agent_command(temp: &Path, output: &Path) -> Vec<String> {
-    let script = temp.join("fake-agent.cmd");
-    std::fs::write(
-        &script,
-        format!(
-            "@echo off\r\n<nul set /p dummy=%NEMO_FLOW_GATEWAY_URL% > \"{}\"\r\nexit /b 7\r\n",
-            output.display()
-        ),
-    )
-    .unwrap();
-    vec!["cmd.exe".into(), "/C".into(), script.display().to_string()]
 }
 
 #[tokio::test]
