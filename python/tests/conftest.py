@@ -14,9 +14,11 @@ import pytest
 if typing.TYPE_CHECKING:
     import nemo_flow
 
+
 @pytest.fixture(name="subscribed_events")
 def subscribed_events_fixture() -> Iterator[list[nemo_flow.Event]]:
     import nemo_flow
+
     events: list[nemo_flow.Event] = []
 
     def event_recorder(event: nemo_flow.Event) -> None:
