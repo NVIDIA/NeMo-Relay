@@ -13,16 +13,17 @@ from nemo_flow.integrations.deepagents.callbacks import NemoFlowDeepAgentsCallba
 from nemo_flow.integrations.deepagents.middleware import NemoFlowDeepAgentsMiddleware
 
 
-def with_nemo_flow_observability(
+def add_nemo_flow_integration(
     kwargs: Mapping[str, Any] | None = None,
     *,
     instrument_subagents: bool = True,
     instrument_backend: bool = True,
     **overrides: Any,
 ) -> dict[str, Any]:
-    """Return ``create_deep_agent`` kwargs with NeMo Flow observability attached.
+    """
+    Receives the keyword arguments for ``create_deep_agent`` and returns them with NeMo Flow observability attached.
 
-    Use this helper as ``create_deep_agent(**with_nemo_flow_observability(...))``.
+    Use this helper as ``create_deep_agent(**add_nemo_flow_integration(...))``.
     It injects Deep Agents-aware middleware at the top level, adds the same
     middleware to dictionary-style custom subagents that do not inherit parent
     middleware, and optionally wraps the backend.
@@ -121,6 +122,6 @@ __all__ = [
     "NemoFlowDeepAgentsBackend",
     "NemoFlowDeepAgentsCallbackHandler",
     "NemoFlowDeepAgentsMiddleware",
+    "add_nemo_flow_integration",
     "observe_backend",
-    "with_nemo_flow_observability",
 ]

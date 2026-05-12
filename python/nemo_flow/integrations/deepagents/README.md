@@ -29,11 +29,11 @@ import nemo_flow
 from deepagents import create_deep_agent
 from nemo_flow.integrations.deepagents import (
     NemoFlowDeepAgentsCallbackHandler,
-    with_nemo_flow_observability,
+    add_nemo_flow_integration,
 )
 
 agent = create_deep_agent(
-    **with_nemo_flow_observability(
+    **add_nemo_flow_integration(
         model="nvidia:nvidia/nemotron-3-nano-30b-a3b",
         tools=[],
         skills=["/skills/research/"],
@@ -60,7 +60,7 @@ with nemo_flow.scope.scope("deepagents-request", nemo_flow.ScopeType.Agent):
 - Sandbox/local shell `execute` marks.
 - Configured skills and subagent summaries at agent-run start.
 - Direct backend method calls when the backend is wrapped with
-  `observe_backend()` or via `with_nemo_flow_observability(..., backend=...)`.
+  `observe_backend()` or via `add_nemo_flow_integration(..., backend=...)`.
 
 Remote async subagents still need NeMo Flow instrumentation in the remote graph
 or process to capture their internal model and tool calls. Supervisor-side

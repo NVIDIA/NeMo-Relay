@@ -21,8 +21,8 @@ from nemo_flow.integrations.deepagents import (
     NemoFlowDeepAgentsBackend,
     NemoFlowDeepAgentsCallbackHandler,
     NemoFlowDeepAgentsMiddleware,
+    add_nemo_flow_integration,
     observe_backend,
-    with_nemo_flow_observability,
 )
 
 
@@ -254,10 +254,10 @@ async def test_observe_backend_emits_async_marks(subscribed_events: list[nemo_fl
     assert marks[1].data["result"] == "contents"
 
 
-def test_with_nemo_flow_observability_instruments_kwargs() -> None:
+def test_add_nemo_flow_integration_instruments_kwargs() -> None:
     mock_backend = MagicMock(name="mock_backend")
     mock_compiled_subagent = MagicMock(name="mock_compiled_subagent")
-    kwargs = with_nemo_flow_observability(
+    kwargs = add_nemo_flow_integration(
         model="mock-model",
         name="main-agent",
         skills=["/skills/main/"],
