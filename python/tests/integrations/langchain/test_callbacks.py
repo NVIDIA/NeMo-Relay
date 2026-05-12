@@ -72,9 +72,7 @@ class TestScopeLifecycle:
         }
         assert run_id in handler._scope_handles
 
-    def test_on_chain_start_uses_callback_name(
-        self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock
-    ):
+    def test_on_chain_start_uses_callback_name(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock):
         run_id = uuid4()
 
         handler.on_chain_start(
