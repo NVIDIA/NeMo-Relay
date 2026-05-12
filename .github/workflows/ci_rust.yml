@@ -5,6 +5,12 @@ name: Rust
 
 on:
   workflow_call:
+    inputs:
+      run_package:
+        description: 'Whether to build package artifacts after tests pass'
+        required: false
+        default: true
+        type: boolean
     secrets:
       CODECOV_TOKEN:
         required: false
@@ -150,7 +156,7 @@ jobs:
   Package:
     name: Package (${{ matrix.platform }})
     needs: [Test]
-    if: ${{ !cancelled() && needs.Test.result == 'success' }}
+    if: ${{ inputs.run_package && !cancelled() && needs.Test.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:

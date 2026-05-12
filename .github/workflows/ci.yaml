@@ -171,6 +171,8 @@ jobs:
       contents: read
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    with:
+      run_package: ${{ needs.ci_changes.outputs.run_rust_package == 'true' }}
 
   ci_go:
     name: Go
@@ -194,6 +196,7 @@ jobs:
     with:
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
+      run_package: ${{ needs.ci_changes.outputs.run_node_package == 'true' }}
 
   ci_openclaw:
     name: OpenClaw
@@ -215,6 +218,7 @@ jobs:
     with:
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
+      run_package: ${{ needs.ci_changes.outputs.run_python_package == 'true' }}
 
   ci_wasm:
     name: WebAssembly
@@ -228,6 +232,7 @@ jobs:
     with:
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
+      run_package: ${{ needs.ci_changes.outputs.run_wasm_package == 'true' }}
 
   ci_required:
     name: CI Pipeline
