@@ -2,6 +2,50 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use std::sync::{Mutex, OnceLock};
+
+// Tests that exercise the global-config write path must run serially with respect to each other
+// because `save_config` reads `$XDG_CONFIG_HOME`. CI runners commonly set this var to a real
+// `/home/runner/.config` path, which would override the per-test `home` tempdir and make
+// path-prefix assertions racy/false. This guard clears the var for the duration of the test
+// and restores its prior value on drop.
+fn xdg_env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+struct XdgScope<'a> {
+    _guard: std::sync::MutexGuard<'a, ()>,
+    prev: Option<std::ffi::OsString>,
+}
+
+impl<'a> XdgScope<'a> {
+    fn cleared() -> Self {
+        let guard = xdg_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        // SAFETY: We hold the mutex for the lifetime of this scope, and the only other tests
+        // that touch XDG_CONFIG_HOME also go through this guard. Restored on drop.
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+        Self {
+            _guard: guard,
+            prev,
+        }
+    }
+}
+
+impl<'a> Drop for XdgScope<'a> {
+    fn drop(&mut self) {
+        // SAFETY: see `cleared()` above — the env mutex is still held.
+        unsafe {
+            match self.prev.take() {
+                Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+}
 
 // Stub-binary detection relies on the Unix executable bit. Windows-side agent presence checks
 // use a different mechanism (e.g. `.exe` extension matching), so this lookup test is gated to
@@ -231,6 +275,7 @@ command = "codex --full-auto"
 
 #[test]
 fn save_config_writes_both_scopes_when_both_selected() {
+    let _xdg = XdgScope::cleared();
     let answers = SetupAnswers {
         scope: ConfigScope::Both,
         agents: vec![],
