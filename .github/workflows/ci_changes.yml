@@ -109,12 +109,12 @@ jobs:
               base="$(jq -r '.base.ref // empty' <<< "$PR_INFO")"
             fi
             if [[ -z "$base" ]]; then
-              base="origin/${DEFAULT_BRANCH}"
+              base="${DEFAULT_BRANCH}"
             fi
           elif [[ -n "$EVENT_BEFORE" && "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]]; then
             base="$EVENT_BEFORE"
           else
-            base="origin/${DEFAULT_BRANCH}"
+            base="${DEFAULT_BRANCH}"
           fi
           printf 'base=%s\n' "$base" >> "$GITHUB_OUTPUT"
 
