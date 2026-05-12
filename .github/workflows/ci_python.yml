@@ -110,6 +110,22 @@ jobs:
           set -e
           UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
 
+      - name: Install Windows ARM64 OpenSSL
+        if: ${{ matrix.platform == 'windows-arm64' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vcpkgRoot = Join-Path $env:RUNNER_TEMP 'vcpkg'
+          git clone --branch 2026.04.27 --depth 1 https://github.com/microsoft/vcpkg $vcpkgRoot
+          & (Join-Path $vcpkgRoot 'bootstrap-vcpkg.bat') -disableMetrics
+          & (Join-Path $vcpkgRoot 'vcpkg.exe') install openssl:arm64-windows-static-md --clean-after-build --disable-metrics
+
+          $opensslDir = Join-Path $vcpkgRoot 'installed\arm64-windows-static-md'
+          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_DIR=$opensslDir"
+          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_STATIC=1"
+          Add-Content -Path $env:GITHUB_ENV -Value "VCPKG_ROOT=$vcpkgRoot"
+          Add-Content -Path $env:GITHUB_ENV -Value "VCPKGRS_TRIPLET=arm64-windows-static-md"
+
       - name: Run Python tests with coverage
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-python
