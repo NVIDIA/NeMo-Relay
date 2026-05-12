@@ -67,11 +67,6 @@ pub(crate) struct SetupAnswers {
     pub agents: Vec<CodingAgent>,
     pub backends: Vec<ObservabilityBackend>,
     pub openinference_endpoint: Option<String>,
-    /// Custom OpenAI-compatible upstream URL written to `[upstream] openai_base_url`. `None`
-    /// when the user keeps the default (`api.openai.com`) — keeps minimal configs minimal.
-    /// Currently surfaced by the codex setup branch; reusable by any future agent on the
-    /// OpenAI route family.
-    pub openai_base_url: Option<String>,
     /// Path recorded under `[agents.hermes].hooks_path` when hermes is selected. Set by `run`
     /// from `hermes_hooks_path_for_scope` so the wizard preview shows the file the launcher
     /// will reference. `None` when hermes wasn't selected.
@@ -155,12 +150,6 @@ pub(crate) fn build_config(answers: &SetupAnswers) -> DocumentMut {
             agents_table.insert(key, Item::Table(agent_table));
         }
         doc["agents"] = Item::Table(agents_table);
-    }
-
-    if let Some(base_url) = answers.openai_base_url.as_deref() {
-        let mut upstream = Table::new();
-        upstream["openai_base_url"] = value(base_url);
-        doc["upstream"] = Item::Table(upstream);
     }
 
     doc
@@ -399,19 +388,15 @@ pub(crate) fn prompt_user(
     };
     let (backends, openinference_endpoint) = ask_backends(&theme, &defaults)?;
 
-    let openai_base_url = if agents.contains(&CodingAgent::Codex) {
+    if agents.contains(&CodingAgent::Codex) {
         print_codex_api_key_guide();
-        ask_openai_base_url(&theme, defaults.openai_base_url.as_deref())?
-    } else {
-        None
-    };
+    }
 
     Ok(SetupAnswers {
         scope,
         agents,
         backends,
         openinference_endpoint,
-        openai_base_url,
         hermes_hooks_path: None,
     })
 }
@@ -481,7 +466,6 @@ struct Defaults {
     agents: Vec<CodingAgent>,
     atif_enabled: bool,
     openinference_endpoint: Option<String>,
-    openai_base_url: Option<String>,
 }
 
 impl Defaults {
@@ -490,7 +474,6 @@ impl Defaults {
             || !self.agents.is_empty()
             || self.atif_enabled
             || self.openinference_endpoint.is_some()
-            || self.openai_base_url.is_some()
     }
 }
 
@@ -541,12 +524,6 @@ fn read_existing_defaults() -> Option<Defaults> {
             .and_then(|t| t.get("endpoint"))
             .and_then(|i| i.as_str())
             .map(str::to_string),
-        openai_base_url: doc
-            .get("upstream")
-            .and_then(|i| i.as_table())
-            .and_then(|t| t.get("openai_base_url"))
-            .and_then(|i| i.as_str())
-            .map(str::to_string),
     })
 }
 
@@ -571,41 +548,19 @@ fn read_agents_from_doc(doc: &DocumentMut) -> Vec<CodingAgent> {
 }
 
 fn print_codex_api_key_guide() {
-    // Codex 0.130 only accepts `wire_api="responses"` (codex#7782 removed `chat`), so codex
-    // transparent run requires a Responses-compatible upstream. The gateway injects the API
-    // key on outbound forwards (NMF-86) — user just sets OPENAI_API_KEY in their environment;
-    // any Bearer-token key works (OpenAI, internal proxy, etc.) as long as the upstream
-    // accepts it.
+    // Codex supports two auth flows (see `codex-rs/login/src/auth/manager.rs`):
+    //   1. ChatGPT-Plus PKCE OAuth via `codex --login` → tokens stored in `~/.codex/auth.json`
+    //   2. OpenAI API key via `OPENAI_API_KEY` env var
+    // The gateway routes to the correct upstream automatically: ChatGPT OAuth goes to
+    // `chatgpt.com/backend-api/codex`, API key goes to `api.openai.com`.
     println!();
     println!("  ℹ Codex sends Responses-API requests through the gateway.");
-    println!("    The gateway injects OPENAI_API_KEY on outbound forwards. Set it before");
-    println!("    launching codex:  export OPENAI_API_KEY=...");
-    println!("    Any Bearer-token key works (OpenAI developer key, internal proxy, etc.)");
-    println!("    — the ChatGPT-Plus OAuth in ~/.codex/auth.json is NOT used.");
+    println!("    Authentication (pick one):");
+    println!("      • ChatGPT-Plus login:  codex --login  (uses ~/.codex/auth.json)");
+    println!("      • OpenAI API key:      export OPENAI_API_KEY=sk-...");
+    println!("    When OPENAI_API_KEY is set the gateway uses it; otherwise the");
+    println!("    ChatGPT-Plus OAuth token is forwarded to the ChatGPT backend.");
     println!();
-}
-
-fn ask_openai_base_url(
-    theme: &ColorfulTheme,
-    existing: Option<&str>,
-) -> Result<Option<String>, CliError> {
-    // Pre-fill with the existing `[upstream] openai_base_url` if there is one, else the OpenAI
-    // default. We return Some only when the user's value differs from the OpenAI default —
-    // matching the upstream behavior (writes minimal configs, omits the default).
-    let initial = existing.unwrap_or("https://api.openai.com");
-    let url: String = Input::with_theme(theme)
-        .with_prompt("Codex upstream URL (Responses-compatible)")
-        .with_initial_text(initial)
-        .interact_text()
-        .map_err(setup_error)?;
-    // Treat blank input the same as accepting the default — otherwise `openai_base_url = ""`
-    // lands in config.toml and the launcher tries to use an empty URL on the next run.
-    let url = url.trim();
-    if url.is_empty() || url == "https://api.openai.com" {
-        Ok(None)
-    } else {
-        Ok(Some(url.to_string()))
-    }
 }
 
 fn ensure_tty() -> Result<(), CliError> {

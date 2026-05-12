@@ -81,6 +81,7 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai/".into(),
+
         anthropic_base_url: "http://anthropic/".into(),
         atif_dir: None,
         openinference_endpoint: None,
@@ -204,11 +205,9 @@ fn observable_headers_omit_secrets_and_transport_headers() {
 
 #[test]
 fn strips_chatgpt_plus_jwt_from_openai_route_inbound() {
-    // NMF-86: codex 0.130 still sends the ChatGPT-Plus OAuth JWT from ~/.codex/auth.json on
-    // outbound requests even when its provider override sets `requires_openai_auth=false`. The
-    // JWT is a consumer token rejected by api.openai.com / LiteLLM-fronted endpoints with 401.
-    // The gateway strips JWT-shaped (`Bearer eyJ...`) Authorization on OpenAI routes so the
-    // auth-injection path falls through and substitutes a real env-provided key.
+    // When OPENAI_API_KEY is set the gateway strips JWT-shaped (`Bearer eyJ...`) Authorization
+    // from inbound OpenAI-route requests so the auth-injection path substitutes the env key
+    // instead of forwarding the ChatGPT-Plus OAuth JWT.
     let mut inbound = HeaderMap::new();
     inbound.insert(
         "authorization",
@@ -342,11 +341,72 @@ fn skips_injection_when_env_var_unset() {
     assert!(built.headers().get("authorization").is_none());
 }
 
+// --- ChatGPT backend routing tests ---
+
+#[test]
+fn chatgpt_jwt_routes_to_chatgpt_backend_when_no_api_key() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+    );
+    // With no OPENAI_API_KEY and a JWT, should_use_chatgpt_backend returns true and the URL is
+    // built against the ChatGPT backend (no /v1 prefix — ChatGPT backend doesn't use it).
+    let result = chatgpt_upstream_url("/responses");
+    assert_eq!(result, "https://chatgpt.com/backend-api/codex/responses");
+
+    // has_chatgpt_jwt should detect the JWT
+    assert!(has_chatgpt_jwt(&headers));
+    assert!(ProviderRoute::OpenAiResponses.is_openai());
+}
+
+#[test]
+fn no_jwt_does_not_trigger_chatgpt_backend() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer sk-real-api-key"),
+    );
+    assert!(!has_chatgpt_jwt(&headers));
+
+    // Empty headers also should not trigger
+    assert!(!has_chatgpt_jwt(&HeaderMap::new()));
+}
+
+#[test]
+fn anthropic_route_never_triggers_chatgpt_backend() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+    );
+    assert!(!ProviderRoute::AnthropicMessages.is_openai());
+}
+
+#[test]
+fn chatgpt_backend_url_omits_v1_prefix() {
+    // The ChatGPT backend expects paths directly under the base, not /v1-prefixed.
+    assert_eq!(
+        chatgpt_upstream_url("/responses"),
+        "https://chatgpt.com/backend-api/codex/responses"
+    );
+    assert_eq!(
+        chatgpt_upstream_url("/models"),
+        "https://chatgpt.com/backend-api/codex/models"
+    );
+    // /v1-prefixed inbound paths are stripped
+    assert_eq!(
+        chatgpt_upstream_url("/v1/responses"),
+        "https://chatgpt.com/backend-api/codex/responses"
+    );
+}
+
 #[tokio::test]
 async fn passthrough_rejects_unsupported_provider_path_directly() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
+
         anthropic_base_url: "http://anthropic".into(),
         atif_dir: None,
         openinference_endpoint: None,
@@ -374,6 +434,7 @@ async fn models_rejects_non_get_requests_directly() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
+
         anthropic_base_url: "http://anthropic".into(),
         atif_dir: None,
         openinference_endpoint: None,

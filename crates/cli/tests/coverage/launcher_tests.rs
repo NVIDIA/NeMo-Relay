@@ -222,10 +222,10 @@ fn prepares_codex_config_overrides() {
             .iter()
             .any(|arg| arg.contains("model_providers.nemo-flow-openai")
                 && arg.contains("base_url=\"http://127.0.0.1:1234\"")
-                // NMF-86 mitigation: codex must NOT send credentials. The gateway injects
-                // OPENAI_API_KEY itself, so the JWT from ~/.codex/auth.json never reaches
-                // api.openai.com.
-                && arg.contains("requires_openai_auth=false")
+                // Codex sends its own credentials (ChatGPT-Plus OAuth or OPENAI_API_KEY).
+                // When OPENAI_API_KEY is in the environment the gateway substitutes it;
+                // otherwise codex's own auth is forwarded as-is.
+                && arg.contains("requires_openai_auth=true")
                 && arg.contains("supports_websockets=false"))
     );
     assert!(

@@ -81,7 +81,6 @@ fn build_config_emits_observability_section_when_atif_selected() {
         agents: vec![],
         backends: vec![ObservabilityBackend::Atif],
         openinference_endpoint: None,
-        openai_base_url: None,
         hermes_hooks_path: None,
     };
 
@@ -100,7 +99,6 @@ fn build_config_emits_export_section_when_openinference_selected() {
         agents: vec![],
         backends: vec![ObservabilityBackend::OpenInference],
         openinference_endpoint: Some("http://localhost:6006/v1/traces".into()),
-        openai_base_url: None,
         hermes_hooks_path: None,
     };
 
@@ -118,7 +116,6 @@ fn build_config_skips_empty_sections_when_no_backends_selected() {
         agents: vec![],
         backends: vec![],
         openinference_endpoint: None,
-        openai_base_url: None,
         hermes_hooks_path: None,
     };
 
@@ -137,7 +134,6 @@ fn build_config_emits_agents_block_with_user_facing_keys() {
         agents: vec![CodingAgent::ClaudeCode, CodingAgent::Codex],
         backends: vec![],
         openinference_endpoint: None,
-        openai_base_url: None,
         hermes_hooks_path: None,
     };
 
@@ -152,42 +148,12 @@ fn build_config_emits_agents_block_with_user_facing_keys() {
 }
 
 #[test]
-fn build_config_writes_upstream_block_for_custom_openai_base_url() {
-    let answers = SetupAnswers {
-        scope: ConfigScope::Project,
-        agents: vec![CodingAgent::Codex],
-        backends: vec![ObservabilityBackend::Atif],
-        openinference_endpoint: None,
-        openai_base_url: Some("https://litellm.internal/v1".into()),
-        hermes_hooks_path: None,
-    };
-    let rendered = build_config(&answers).to_string();
-    assert!(rendered.contains("[upstream]"));
-    assert!(rendered.contains(r#"openai_base_url = "https://litellm.internal/v1""#));
-}
-
-#[test]
-fn build_config_omits_upstream_block_when_openai_base_url_is_none() {
-    let answers = SetupAnswers {
-        scope: ConfigScope::Project,
-        agents: vec![CodingAgent::Codex],
-        backends: vec![ObservabilityBackend::Atif],
-        openinference_endpoint: None,
-        openai_base_url: None,
-        hermes_hooks_path: None,
-    };
-    let rendered = build_config(&answers).to_string();
-    assert!(!rendered.contains("[upstream]"));
-}
-
-#[test]
 fn save_config_writes_project_scope_to_workspace_dir() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![CodingAgent::ClaudeCode],
         backends: vec![ObservabilityBackend::Atif],
         openinference_endpoint: None,
-        openai_base_url: None,
         hermes_hooks_path: None,
     };
     let doc = build_config(&answers);
@@ -232,7 +198,6 @@ command = "codex --full-auto"
         agents: vec![CodingAgent::ClaudeCode],
         backends: vec![ObservabilityBackend::Atif],
         openinference_endpoint: None,
-        openai_base_url: None,
         hermes_hooks_path: None,
     };
     let doc = build_config(&answers);
@@ -281,7 +246,6 @@ fn save_config_writes_both_scopes_when_both_selected() {
         agents: vec![],
         backends: vec![ObservabilityBackend::Atif],
         openinference_endpoint: None,
-        openai_base_url: None,
         hermes_hooks_path: None,
     };
     let doc = build_config(&answers);
@@ -302,7 +266,6 @@ fn build_config_emits_hooks_path_for_hermes_when_set() {
         agents: vec![CodingAgent::Hermes],
         backends: vec![],
         openinference_endpoint: None,
-        openai_base_url: None,
         hermes_hooks_path: Some(std::path::PathBuf::from("/tmp/proj/.hermes/config.yaml")),
     };
     let rendered = build_config(&answers).to_string();

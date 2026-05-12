@@ -371,21 +371,31 @@ impl PreparedRun {
     // overriding `model_providers.openai`. Uses `features.hooks=true` introduced in codex-cli
     // 0.129; the older `features.codex_hooks` is deprecated. Requires codex-cli >= 0.129.0.
     fn prepare_codex(&mut self, gateway_url: &str) {
-        // Codex provider override now uses `requires_openai_auth=false` (see NMF-86): codex no
-        // longer sends credentials, the gateway injects `OPENAI_API_KEY` instead. Surface the
-        // missing-key state EARLY on stderr — a buried `self.notes.push` only renders under
-        // `--print` / `--dry-run`, which means the silent live-run case (the one users actually
-        // hit) would discover the missing key as a confusing 401 mid-session.
-        if std::env::var("OPENAI_API_KEY")
+        // Codex resolves auth via `CodexAuth::from_auth_dot_json` (`codex-rs/login/src/auth/
+        // manager.rs`): `auth_mode=ApiKey` uses `OPENAI_API_KEY`, `auth_mode=Chatgpt` uses the
+        // OAuth token from `~/.codex/auth.json`. With `requires_openai_auth=true` the provider
+        // config tells Codex to attach whichever credential it has. The gateway then either
+        // substitutes `OPENAI_API_KEY` (routing to `api.openai.com`) or forwards the JWT as-is
+        // (routing to `chatgpt.com/backend-api/codex`). Warn when neither source is present.
+        let has_openai_key = std::env::var("OPENAI_API_KEY")
             .ok()
-            .is_none_or(|v| v.is_empty())
-        {
+            .is_some_and(|v| !v.is_empty());
+        // Codex persists OAuth tokens to `~/.codex/auth.json` via `AuthDotJson` in
+        // `codex-rs/login/src/auth/storage.rs`. Check for the file rather than parsing it —
+        // Codex handles token refresh itself at runtime.
+        let has_codex_auth = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(|h| {
+                std::path::PathBuf::from(h)
+                    .join(".codex/auth.json")
+                    .exists()
+            })
+            .unwrap_or(false);
+        if !has_openai_key && !has_codex_auth {
             eprintln!(
-                "warning: OPENAI_API_KEY is not set. Codex routes through the NeMo Flow gateway, \
-                 which forwards to api.openai.com using OPENAI_API_KEY from the environment. \
-                 Without it the upstream will return 401. Export your key before launching codex \
-                 (e.g. `export OPENAI_API_KEY=sk-...`), or pass `--openai-base-url` to an upstream \
-                 that needs no key."
+                "warning: No OpenAI credentials found. Either export OPENAI_API_KEY \
+                 (e.g. `export OPENAI_API_KEY=sk-...`), log in to codex (`codex --login`), \
+                 or pass `--openai-base-url` to an upstream that needs no key."
             );
         }
         let hook_command = hook_forward_command(&transparent_hook_executable(), CodingAgent::Codex);
@@ -611,11 +621,14 @@ fn codex_gateway_provider_config(gateway_url: &str) -> String {
     // upstreams the user falls back to daemon mode and points codex directly at its configured
     // upstream — we observe hooks but not LLM calls.
     //
-    // `requires_openai_auth=false` so codex doesn't send the ChatGPT-Plus OAuth JWT from
-    // `~/.codex/auth.json` (the JWT is rejected by `api.openai.com` with 401). The gateway
-    // injects `OPENAI_API_KEY` itself; see `gateway.rs::inject_provider_auth`. Tracks NMF-86.
+    // `requires_openai_auth=true` so Codex's `resolve_provider_auth` (`codex-rs/model-provider/
+    // src/auth.rs`) attaches credentials via `BearerAuthProvider`. When the auth mode is
+    // `Chatgpt` the token is an OAuth JWT; when `ApiKey` it is the `OPENAI_API_KEY` value.
+    // The gateway inspects the inbound `Authorization` header: if `OPENAI_API_KEY` is set in the
+    // environment the JWT is replaced (see `gateway.rs::strip_chatgpt_oauth_for_openai_route`
+    // and `inject_provider_auth`); otherwise the JWT is forwarded to the ChatGPT backend.
     format!(
-        "model_providers.nemo-flow-openai={{name=\"NeMo Flow OpenAI\",base_url={},wire_api=\"responses\",requires_openai_auth=false,supports_websockets=false}}",
+        "model_providers.nemo-flow-openai={{name=\"NeMo Flow OpenAI\",base_url={},wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false}}",
         toml_string(gateway_url)
     )
 }

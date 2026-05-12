@@ -9,6 +9,7 @@ fn config() -> GatewayConfig {
     GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
+
         anthropic_base_url: "http://anthropic".into(),
         atif_dir: Some(PathBuf::from("default-atif")),
         openinference_endpoint: Some("http://default-otel".into()),
