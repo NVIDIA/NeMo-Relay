@@ -38,6 +38,7 @@ Use these guide links to move from the overview into task-specific instructions.
 - [Basic Guide: Wrap Tool Calls](wrap-tool-calls.md) explains where to place managed tool wrappers and tool lifecycle fallbacks.
 - [Basic Guide: Wrap LLM Calls](wrap-llm-calls.md) explains where to place managed provider wrappers, model names, streaming behavior, and LLM lifecycle fallbacks.
 - [Advanced Guide: Coding-Agent Gateway](coding-agent-gateway.md) describes the Rust gateway for observing Codex, Claude Code, Cursor, and Hermes through canonical hooks plus a passthrough LLM gateway.
+- [OpenClaw Plugin Guide](openclaw-plugin.md) covers configuring the OpenClaw plugin, mapping OpenClaw hooks to NeMo Flow telemetry, and understanding current LLM replay fidelity boundaries.
 - [Claude Code Gateway Guide](coding-agent-claude-code.md) covers transparent Claude Code runs, Anthropic gateway routing, ATIF verification, and unsupported Claude application modes.
 - [Codex Gateway Guide](coding-agent-codex.md) covers transparent Codex CLI runs, local GUI/app caveats, model provider routing, and remote-task limits.
 - [Cursor Gateway Guide](coding-agent-cursor.md) covers transparent Cursor runs, temporary hook patching, GUI and CLI smoke tests, and gateway routing limits.

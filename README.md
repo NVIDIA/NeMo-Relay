@@ -133,28 +133,36 @@ The table below summarizes the support level for each binding surface.
 
 ## Third-Party Integrations
 
-Some framework integrations are maintained as patch sets against upstream
-projects rather than as packages in this repository.
+Some framework integrations are maintained as packages in this repository. Other
+sample integrations are maintained as patch sets against upstream projects.
 
 ### Public API-based Integrations
-Some integrations can be implemented using public APIs without patching. Currently the Python based integrations are located under `python/nemo_flow/integrations/` with their own README files and test suites.
+
+Some integrations can be implemented using public APIs without patching. Public
+API-based integrations live under language-specific integration packages such as
+`python/nemo_flow/integrations/` and `integrations/`.
+
+The OpenClaw observability plugin is available under `integrations/openclaw/`
+and uses OpenClaw public plugin hooks to export NeMo Flow telemetry. See the
+[OpenClaw package README](integrations/openclaw/README.md).
 
 ### Patch-based Integrations
+
 Use [third_party/README.md](third_party/README.md) for the clone, checkout, and
 patch-application workflow for those integrations.
 
 ### Support Matrix
 
-The following table summarizes maintained third-party patch integrations and whether each provides observability, request intercepts, execution intercepts, and conditional execution.
+The following table summarizes maintained third-party integrations and whether each provides observability, request intercepts, execution intercepts, and conditional execution.
 
 | Integration | Method | Observability | Request Intercepts | Execution Intercepts | Conditional Execution |
 |---|---|---|---|---|---|
 | [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
 | [opencode](third_party/README-opencode.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
-| [OpenClaw](third_party/README-openclaw.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| [OpenClaw](integrations/openclaw/README.md) | `nemo-flow-openclaw` package, `nemo-flow` plugin ID | ✅ Yes | ❌ No | ❌ No | ❌ No |
 | [Hermes Agent](third_party/README-hermes-agent.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
 
-All patches offer experimental support. Our roadmap includes switching over to first-party plugins and packages.
+Patch-based integrations offer experimental support. Our roadmap includes switching over to first-party plugins and packages where upstream extension points allow it.
 
 ## Roadmap
 

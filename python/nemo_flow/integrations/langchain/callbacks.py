@@ -22,6 +22,9 @@ _logger = logging.getLogger(__name__)
 class NemoFlowCallbackHandler(BaseCallbackHandler):
     """Bridge LangChain chain run IDs to NeMo Flow Agent scopes."""
 
+    # We need to run inline to ensure scopes are pushed and popped in the correct order.
+    run_inline = True
+
     def __init__(self) -> None:
         super().__init__()
         self._scope_handles: dict[UUID, typing.Any] = {}
@@ -39,9 +42,10 @@ class NemoFlowCallbackHandler(BaseCallbackHandler):
     ) -> typing.Any:
         """Push a NeMo Flow Agent scope for a LangChain chain run."""
         try:
-            name: str | None = None
+            name = kwargs.get("name")
+
             if serialized is not None:
-                name = serialized.get("name")
+                name = name or serialized.get("name")
                 if name is None:
                     id_list = serialized.get("id")
                     if isinstance(id_list, list) and len(id_list) > 0:
