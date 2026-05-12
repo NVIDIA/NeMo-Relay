@@ -93,15 +93,16 @@ def test_handler_type():
 class TestGraphCallbacks:
     def __init__(self):
         self._expected_events = [
-        "scope.start.request",
-        "scope.start.LangGraph",
-        "scope.start.increment",
-        "scope.end.increment",
-        "scope.end.LangGraph",
-        "scope.end.request",
-    ]
+            "scope.start.request",
+            "scope.start.LangGraph",
+            "scope.start.increment",
+            "scope.end.increment",
+            "scope.end.LangGraph",
+            "scope.end.request",
+        ]
 
-    def test_sync(self,
+    def test_sync(
+        self,
         graph: CompiledStateGraph,
         subscribed_events: list[nemo_flow.Event],
     ):
@@ -111,7 +112,8 @@ class TestGraphCallbacks:
         assert result == {"value": 2}
         assert events_to_strings(subscribed_events) == self._expected_events
 
-    async def test_async(self,
+    async def test_async(
+        self,
         graph: CompiledStateGraph,
         subscribed_events: list[nemo_flow.Event],
     ):
@@ -120,7 +122,6 @@ class TestGraphCallbacks:
 
         assert result == {"value": 2}
         assert events_to_strings(subscribed_events) == self._expected_events
-
 
 
 def test_graph_lifecycle_callbacks_emit_marks(subscribed_events: list[nemo_flow.Event]):
