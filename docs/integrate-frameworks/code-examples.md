@@ -285,9 +285,13 @@ event(
 
 ::::
 
-## Sample Third-Party Integrations
+## Sample Third-Party Patch Integrations
 
-NeMo Flow keeps sample third-party integrations as patch sets under `patches/` and pinned upstream checkouts under `third_party/`.
+NeMo Flow keeps sample third-party integrations as patch sets under `patches/`
+and pinned upstream checkouts under `third_party/`. For the current OpenClaw
+end-user integration, use the [OpenClaw Plugin Guide](openclaw-plugin.md).
+
+The following table lists maintained patch checkouts:
 
 | Integration | Upstream Checkout |
 |---|---|
@@ -295,14 +299,13 @@ NeMo Flow keeps sample third-party integrations as patch sets under `patches/` a
 | LangChain | `third_party/langchain` |
 | LangChain NVIDIA | `third_party/langchain-nvidia` |
 | LangGraph | `third_party/langgraph` |
-| OpenClaw | `third_party/openclaw` |
+| OpenClaw (legacy patch) | `third_party/openclaw` |
 | opencode | `third_party/opencode` |
 
 ## Quickstart: Apply Maintained Patches
 
 From the repository root, use the wrapper scripts when you want the maintained
 NeMo Flow patches applied to the pinned third-party checkouts:
-
 
 | Script | Purpose |
 |---|---|
