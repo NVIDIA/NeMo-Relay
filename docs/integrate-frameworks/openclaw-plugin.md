@@ -15,8 +15,13 @@ outputs, verify exported traces, and understand current LLM replay fidelity.
 
 ## Requirements
 
+Required:
+
 - OpenClaw `2026.5.6` or newer.
 - The OpenClaw CLI available as `openclaw`.
+
+Optional:
+
 - Node.js and npm when installing or managing the package directly.
 - A Phoenix instance or OTLP collector when exporting OpenInference or
   OpenTelemetry spans.
@@ -31,7 +36,7 @@ openclaw gateway restart
 ```
 
 OpenClaw uses the package `nemo-flow-openclaw` for installation and the plugin
-manifest id `nemo-flow` for configuration. Use `nemo-flow` in
+manifest ID `nemo-flow` for configuration. Use `nemo-flow` in
 `plugins.allow`, `plugins.entries`, `plugins inspect`, and gateway status
 commands.
 
@@ -48,7 +53,7 @@ plugin.
 
 ## Enable the Plugin
 
-Allow the `nemo-flow` plugin id and grant conversation hook access when OpenClaw
+Allow the `nemo-flow` plugin ID and grant conversation hook access when OpenClaw
 runs with restrictive plugin settings:
 
 ```json

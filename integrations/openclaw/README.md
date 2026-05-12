@@ -21,7 +21,7 @@ OpenInference/Phoenix spans.
 
 ## What You Get
 
-- OpenClaw plugin id `nemo-flow`.
+- OpenClaw plugin ID `nemo-flow`.
 - ATIF JSON export enabled by default.
 - Optional OpenTelemetry OTLP export.
 - Optional OpenInference/Phoenix OTLP export.
@@ -45,11 +45,11 @@ openclaw gateway restart
 ```
 
 OpenClaw uses the package `nemo-flow-openclaw` for installation and the plugin
-manifest id `nemo-flow` for configuration.
+manifest ID `nemo-flow` for configuration.
 
 ## Getting Started
 
-Enable the `nemo-flow` plugin id and grant conversation hook access when
+Enable the `nemo-flow` plugin ID and grant conversation hook access when
 OpenClaw runs with restrictive plugin settings:
 
 ```json
@@ -71,11 +71,123 @@ OpenClaw runs with restrictive plugin settings:
 
 Plugin configuration lives under `plugins.entries["nemo-flow"].config`.
 
-## Documentation
+## Configure Outputs
 
-For full configuration, verification, troubleshooting, and current LLM replay
-fidelity limits, use the
-[OpenClaw Plugin Guide](../../docs/integrate-frameworks/openclaw-plugin.md).
+ATIF export is enabled by default. OpenTelemetry and OpenInference subscribers
+are disabled until configured.
+
+Use ATIF-only local export when you want JSON trace files:
+
+```json
+{
+  "atif": {
+    "enabled": true,
+    "outputDir": "./nemo-flow-atif"
+  },
+  "telemetry": {
+    "otel": {
+      "enabled": false
+    },
+    "openInference": {
+      "enabled": false
+    }
+  }
+}
+```
+
+Use OpenInference/Phoenix export when you want Phoenix-compatible LLM traces:
+
+```json
+{
+  "telemetry": {
+    "openInference": {
+      "enabled": true,
+      "transport": "http_binary",
+      "endpoint": "http://localhost:6006/v1/traces",
+      "serviceName": "openclaw-nemo-flow"
+    }
+  }
+}
+```
+
+Use OpenTelemetry OTLP export when you want generic OTLP traces:
+
+```json
+{
+  "telemetry": {
+    "otel": {
+      "enabled": true,
+      "transport": "http_binary",
+      "endpoint": "http://localhost:4318/v1/traces",
+      "serviceName": "openclaw-nemo-flow"
+    }
+  }
+}
+```
+
+Privacy defaults capture prompts and responses, and strip tool arguments and
+tool results:
+
+```json
+{
+  "capture": {
+    "includePrompts": true,
+    "includeResponses": true,
+    "stripToolArgs": true,
+    "stripToolResults": true
+  }
+}
+```
+
+## Verify the Integration
+
+Inspect the plugin runtime:
+
+```bash
+openclaw plugins inspect nemo-flow --runtime --json
+```
+
+Run an OpenClaw session with the plugin enabled, then verify the configured
+sink:
+
+- ATIF: confirm JSON files appear in the configured `atif.outputDir`.
+- OpenTelemetry: confirm spans arrive at the configured OTLP collector.
+- OpenInference: confirm spans arrive at the configured OpenInference/Phoenix
+  endpoint.
+
+The plugin also registers the `operator.admin` scoped gateway method
+`nemoFlow.status`. If your CLI is already paired with admin-capable gateway
+access, run:
+
+```bash
+openclaw gateway call nemoFlow.status --json
+```
+
+## Current Limits
+
+The plugin maps supported OpenClaw hook events into NeMo Flow telemetry without
+changing OpenClaw execution behavior.
+
+Current OpenClaw public hooks expose request, response, message-write, and
+provider timing details through separate event streams. The plugin correlates
+those events within the same session, provider, model, and run. When timing
+cannot be paired safely, it emits diagnostic marks instead of inventing
+latency.
+
+## Troubleshooting
+
+If the plugin does not load, verify the package was installed with
+`openclaw plugins install`, `plugins.allow` includes `nemo-flow`,
+`plugins.entries["nemo-flow"].enabled` is not disabled, and the gateway was
+restarted after configuration changes.
+
+If conversation payloads are missing, verify
+`hooks.allowConversationAccess` is enabled for the plugin and the OpenClaw
+session emits the relevant LLM, message-write, and tool hooks.
+
+If no export output appears, verify `atif.outputDir`,
+`telemetry.otel.endpoint`, or `telemetry.openInference.endpoint`, then confirm
+the configured collector or output directory is reachable.
 
 ## Development
 

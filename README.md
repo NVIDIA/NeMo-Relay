@@ -142,7 +142,7 @@ API-based integrations live under language-specific integration packages such as
 
 The OpenClaw observability plugin is available under `integrations/openclaw/`
 and uses OpenClaw public plugin hooks to export NeMo Flow telemetry. See the
-[OpenClaw Plugin Guide](docs/integrate-frameworks/openclaw-plugin.md).
+[OpenClaw package README](integrations/openclaw/README.md).
 
 ### Patch-based Integrations
 
@@ -157,7 +157,7 @@ The following table summarizes maintained third-party integrations and whether e
 |---|---|---|---|---|---|
 | [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
 | [opencode](third_party/README-opencode.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
-| [OpenClaw](docs/integrate-frameworks/openclaw-plugin.md) | `nemo-flow-openclaw` plugin | ✅ Yes | ❌ No | ❌ No | ❌ No |
+| [OpenClaw](integrations/openclaw/README.md) | `nemo-flow-openclaw` package, `nemo-flow` plugin ID | ✅ Yes | ❌ No | ❌ No | ❌ No |
 | [Hermes Agent](third_party/README-hermes-agent.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
 
 Patch-based integrations offer experimental support. Our roadmap includes switching over to first-party plugins and packages where upstream extension points allow it.
