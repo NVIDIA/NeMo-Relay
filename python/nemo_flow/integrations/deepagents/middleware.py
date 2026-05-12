@@ -110,9 +110,10 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
 
     def _tool_context(self, request: ToolCallRequest) -> tuple[str, Mapping[str, Any], str | None]:
         tool_name = request.tool_call["name"]
-        raw_args = request.tool_call.get("args") or {}
-
-        if isinstance(raw_args, Mapping):
+        raw_args = request.tool_call.get("args")
+        if raw_args is None:
+            tool_args = {}
+        elif isinstance(raw_args, Mapping):
             tool_args = raw_args
         else:
             tool_args = {"value": raw_args}

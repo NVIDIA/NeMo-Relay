@@ -116,7 +116,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $vcpkgRoot = Join-Path $env:RUNNER_TEMP 'vcpkg'
-          git clone --branch 2026.04.27 --depth 1 https://github.com/microsoft/vcpkg $vcpkgRoot
+          git clone https://github.com/microsoft/vcpkg $vcpkgRoot
+          git -C $vcpkgRoot checkout --detach 56bb2411609227288b70117ead2c47585ba07713
           & (Join-Path $vcpkgRoot 'bootstrap-vcpkg.bat') -disableMetrics
           & (Join-Path $vcpkgRoot 'vcpkg.exe') install openssl:arm64-windows-static-md --clean-after-build --disable-metrics
 
