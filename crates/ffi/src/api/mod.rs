@@ -35,7 +35,7 @@ use crate::error::{
     status_from_plugin_error,
 };
 use crate::types::{
-    FfiAtifExporter, FfiCodecHandle, FfiLLMHandle, FfiOpenInferenceSubscriber,
+    FfiAtifExporter, FfiAtofExporter, FfiCodecHandle, FfiLLMHandle, FfiOpenInferenceSubscriber,
     FfiOpenTelemetrySubscriber, FfiPluginContext, FfiScopeHandle, FfiScopeStack, FfiToolHandle,
     NemoFlowScopeType,
 };
