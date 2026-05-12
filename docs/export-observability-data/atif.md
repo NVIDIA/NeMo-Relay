@@ -13,6 +13,11 @@ You will create an ATIF exporter, register it as a subscriber, run instrumented 
 
 Unlike OpenTelemetry and OpenInference export, ATIF export is in-process and buffered. The exporter collects events until you call `export`, `export_json`, or `clear`.
 
+For automatic per-agent file export, use the built-in
+[Observability plugin](observability-plugin.md). Its `atif` section creates one
+scope-local exporter for each top-level agent scope and writes each trajectory
+when that agent scope ends.
+
 ## Before You Start
 
 Complete these steps:
@@ -130,6 +135,7 @@ Choose one of these patterns:
 | One exporter per run | Each agent run should produce one trajectory. |
 | Long-lived exporter with `clear` | A test or local tool exports multiple trajectories in one process. |
 | Filtered analysis by root scope | Concurrent runs share one process but can be separated later. |
+| Observability plugin ATIF section | Each direct child agent scope should write its own trajectory file automatically. |
 
 For production services, prefer bounded collection windows. Long-lived unbounded exporters can accumulate more event data than expected.
 

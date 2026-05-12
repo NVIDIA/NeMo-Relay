@@ -14,6 +14,10 @@ event stream. Subscribers consume that stream inside the process, and
 exporter-oriented subscribers write raw ATOF JSONL or translate it into formats
 such as ATIF, OpenTelemetry, and OpenInference.
 
+For standard exporters, use the built-in `observability` plugin to configure
+ATOF, per-agent ATIF, OpenTelemetry, and OpenInference from one plugin document.
+Each section is disabled unless it explicitly sets `enabled: true`.
+
 Use these guides to confirm what ran, where it belonged, which model or tool was
 involved, and what sanitized payload was observed across Rust, Python, and
 Node.js.
@@ -35,6 +39,7 @@ If you have not instrumented any scopes, tools, or LLM calls yet, start with [In
 The following guides describe available tutorials and exporters:
 
 - [Basic Guide: Register a Subscriber](basic-guide.md) shows a simple subscriber lifecycle and validation workflow.
+- [Basic Guide: Configure the Observability Plugin](observability-plugin.md) shows the built-in exporter plugin and its config schema.
 - [Code Examples](code-examples.md#atof-jsonl-export) shows how to write raw ATOF events as JSONL.
 - [Advanced Guide: Export OpenTelemetry Data](opentelemetry.md) shows how to export generic OTLP spans.
 - [Advanced Guide: Export OpenInference Data](advanced-guide.md) shows how to configure and operate the OpenInference exporter.
@@ -50,7 +55,6 @@ request, use stable service identity fields, keep credentials outside source
 code, flush during graceful shutdown, and filter by `root_uuid` when analyzing
 concurrent agent runs.
 
-The filesystem-backed ATOF JSONL exporter is available on native Rust, Python,
-Node.js, Go, and C FFI surfaces. It is not exposed in WebAssembly because
-arbitrary filesystem writes are not portable across browser and hosted WASM
-environments.
+The filesystem-backed ATOF JSONL exporter and ATIF plugin file sink require
+native filesystem access. Use explicit plugin teardown or exporter shutdown to
+flush files during graceful shutdown.

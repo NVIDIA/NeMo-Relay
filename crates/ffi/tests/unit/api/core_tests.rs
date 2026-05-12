@@ -57,6 +57,11 @@ fn test_ffi_plugin_config_validate_initialize_and_clear() {
             .as_array()
             .is_some_and(|values| values.iter().any(|value| value == "adaptive"))
     );
+    assert!(
+        kinds
+            .as_array()
+            .is_some_and(|values| values.iter().any(|value| value == "observability"))
+    );
 
     let mut configured_json = ptr::null_mut();
     assert_eq!(
@@ -82,6 +87,288 @@ fn test_ffi_plugin_config_validate_initialize_and_clear() {
         NemoFlowStatus::Ok
     );
     assert_eq!(unsafe { returned_json(cleared_json) }, Json::Null);
+}
+
+#[test]
+fn test_ffi_observability_plugin_file_sinks() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    reset_globals();
+    let _ = nemo_flow_clear_plugin_configuration();
+    let dir = std::env::temp_dir().join(unique_name("ffi_observability_plugin"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir_text = dir.to_string_lossy().into_owned();
+
+    let config = cstring(
+        &json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "observability",
+                    "enabled": true,
+                    "config": {
+                        "version": 1,
+                        "atof": {
+                            "enabled": true,
+                            "output_directory": dir_text,
+                            "filename": "events.jsonl",
+                            "mode": "overwrite"
+                        },
+                        "atif": {
+                            "enabled": true,
+                            "agent_name": "ffi-agent",
+                            "agent_version": "1.2.3",
+                            "model_name": "ffi-model",
+                            "tool_definitions": [{"name": "search"}],
+                            "extra": {"binding": "ffi"},
+                            "output_directory": dir_text,
+                            "filename_template": "trajectory-{session_id}.json"
+                        }
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    );
+
+    unsafe {
+        assert_eq!(
+            take_string(nemo_flow_observability_plugin_kind()).unwrap(),
+            "observability"
+        );
+        let mut default_config_json = ptr::null_mut();
+        assert_eq!(
+            nemo_flow_observability_default_config_json(&mut default_config_json),
+            NemoFlowStatus::Ok
+        );
+        assert_eq!(returned_json(default_config_json)["version"], json!(1));
+        let mut component_json = ptr::null_mut();
+        assert_eq!(
+            nemo_flow_observability_component_spec_json(ptr::null(), true, &mut component_json),
+            NemoFlowStatus::Ok
+        );
+        let component = returned_json(component_json);
+        assert_eq!(component["kind"], "observability");
+        assert_eq!(component["enabled"], true);
+
+        let mut report_json = ptr::null_mut();
+        assert_eq!(
+            nemo_flow_validate_plugin_config(config.as_ptr(), &mut report_json),
+            NemoFlowStatus::Ok
+        );
+        assert_eq!(returned_json(report_json)["diagnostics"], json!([]));
+
+        let mut initialized_json = ptr::null_mut();
+        assert_eq!(
+            nemo_flow_initialize_plugins(config.as_ptr(), &mut initialized_json),
+            NemoFlowStatus::Ok
+        );
+        assert_eq!(returned_json(initialized_json)["diagnostics"], json!([]));
+
+        let stack = fresh_scope_stack();
+        let scope_name = cstring("ffi-observability-agent");
+        let input = cstring(r#"{"agent":true}"#);
+        let mut scope = ptr::null_mut();
+        assert_eq!(
+            nemo_flow_push_scope(
+                scope_name.as_ptr(),
+                NemoFlowScopeType::Agent,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                input.as_ptr(),
+                &mut scope,
+            ),
+            NemoFlowStatus::Ok
+        );
+        let scope_uuid = take_string(nemo_flow_scope_handle_uuid(scope)).unwrap();
+
+        let mark_name = cstring("ffi-observability-mark");
+        let mark_data = cstring(r#"{"step":1}"#);
+        assert_eq!(
+            nemo_flow_event(mark_name.as_ptr(), scope, mark_data.as_ptr(), ptr::null()),
+            NemoFlowStatus::Ok
+        );
+        assert_eq!(nemo_flow_pop_scope(scope, ptr::null()), NemoFlowStatus::Ok);
+        nemo_flow_scope_handle_free(scope);
+        nemo_flow_scope_stack_free(stack);
+        assert_eq!(nemo_flow_clear_plugin_configuration(), NemoFlowStatus::Ok);
+
+        let jsonl = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+        assert_eq!(jsonl.trim().lines().count(), 3);
+
+        let trajectory_path = dir.join(format!("trajectory-{scope_uuid}.json"));
+        let trajectory: Json =
+            serde_json::from_str(&std::fs::read_to_string(trajectory_path).unwrap()).unwrap();
+        assert_eq!(trajectory["agent"]["name"], "ffi-agent");
+        assert_eq!(trajectory["agent"]["version"], "1.2.3");
+        assert_eq!(trajectory["agent"]["model_name"], "ffi-model");
+        assert!(
+            trajectory["extra"]
+                .to_string()
+                .contains("ffi-observability-agent")
+        );
+    }
+}
+
+#[test]
+fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    reset_globals();
+    let _ = nemo_flow_clear_plugin_configuration();
+    let dir = std::env::temp_dir().join(unique_name("ffi_observability_plugin_multi_agent"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir_text = dir.to_string_lossy().into_owned();
+
+    let config = cstring(
+        &json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "observability",
+                    "enabled": true,
+                    "config": {
+                        "version": 1,
+                        "atif": {
+                            "enabled": true,
+                            "output_directory": dir_text,
+                            "filename_template": "trajectory-{session_id}.json"
+                        }
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    );
+
+    unsafe {
+        let mut initialized_json = ptr::null_mut();
+        assert_eq!(
+            nemo_flow_initialize_plugins(config.as_ptr(), &mut initialized_json),
+            NemoFlowStatus::Ok
+        );
+        assert_eq!(returned_json(initialized_json)["diagnostics"], json!([]));
+
+        let stack = fresh_scope_stack();
+
+        let first_name = cstring("ffi-first-agent");
+        let first_input = cstring(r#"{"agent":"first"}"#);
+        let mut first = ptr::null_mut();
+        assert_eq!(
+            nemo_flow_push_scope(
+                first_name.as_ptr(),
+                NemoFlowScopeType::Agent,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                first_input.as_ptr(),
+                &mut first,
+            ),
+            NemoFlowStatus::Ok
+        );
+        let first_uuid = take_string(nemo_flow_scope_handle_uuid(first)).unwrap();
+
+        let first_mark = cstring("ffi-first-mark");
+        let first_mark_data = cstring(r#"{"agent":"first"}"#);
+        assert_eq!(
+            nemo_flow_event(
+                first_mark.as_ptr(),
+                first,
+                first_mark_data.as_ptr(),
+                ptr::null()
+            ),
+            NemoFlowStatus::Ok
+        );
+
+        let nested_name = cstring("ffi-nested-agent");
+        let nested_input = cstring(r#"{"agent":"nested"}"#);
+        let mut nested = ptr::null_mut();
+        assert_eq!(
+            nemo_flow_push_scope(
+                nested_name.as_ptr(),
+                NemoFlowScopeType::Agent,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                nested_input.as_ptr(),
+                &mut nested,
+            ),
+            NemoFlowStatus::Ok
+        );
+        let nested_mark = cstring("ffi-nested-mark");
+        let nested_mark_data = cstring(r#"{"agent":"nested"}"#);
+        assert_eq!(
+            nemo_flow_event(
+                nested_mark.as_ptr(),
+                nested,
+                nested_mark_data.as_ptr(),
+                ptr::null()
+            ),
+            NemoFlowStatus::Ok
+        );
+        assert_eq!(nemo_flow_pop_scope(nested, ptr::null()), NemoFlowStatus::Ok);
+        nemo_flow_scope_handle_free(nested);
+        assert_eq!(nemo_flow_pop_scope(first, ptr::null()), NemoFlowStatus::Ok);
+        nemo_flow_scope_handle_free(first);
+
+        let second_name = cstring("ffi-second-agent");
+        let second_input = cstring(r#"{"agent":"second"}"#);
+        let mut second = ptr::null_mut();
+        assert_eq!(
+            nemo_flow_push_scope(
+                second_name.as_ptr(),
+                NemoFlowScopeType::Agent,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                second_input.as_ptr(),
+                &mut second,
+            ),
+            NemoFlowStatus::Ok
+        );
+        let second_uuid = take_string(nemo_flow_scope_handle_uuid(second)).unwrap();
+        let second_mark = cstring("ffi-second-mark");
+        let second_mark_data = cstring(r#"{"agent":"second"}"#);
+        assert_eq!(
+            nemo_flow_event(
+                second_mark.as_ptr(),
+                second,
+                second_mark_data.as_ptr(),
+                ptr::null()
+            ),
+            NemoFlowStatus::Ok
+        );
+        assert_eq!(nemo_flow_pop_scope(second, ptr::null()), NemoFlowStatus::Ok);
+        nemo_flow_scope_handle_free(second);
+        nemo_flow_scope_stack_free(stack);
+        assert_eq!(nemo_flow_clear_plugin_configuration(), NemoFlowStatus::Ok);
+
+        let files = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .ok()
+                    .and_then(|entry| entry.file_name().into_string().ok())
+                    .is_some_and(|name| name.starts_with("trajectory-"))
+            })
+            .count();
+        assert_eq!(files, 2);
+
+        let first_payload =
+            std::fs::read_to_string(dir.join(format!("trajectory-{first_uuid}.json"))).unwrap();
+        let second_payload =
+            std::fs::read_to_string(dir.join(format!("trajectory-{second_uuid}.json"))).unwrap();
+        assert!(first_payload.contains("ffi-first-agent"));
+        assert!(first_payload.contains("ffi-nested-agent"));
+        assert!(!first_payload.contains("ffi-second-agent"));
+        assert!(second_payload.contains("ffi-second-agent"));
+        assert!(!second_payload.contains("ffi-first-agent"));
+        assert!(!second_payload.contains("ffi-nested-agent"));
+    }
 }
 
 #[test]

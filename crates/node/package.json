@@ -40,6 +40,10 @@
     "./adaptive": {
       "types": "./adaptive.d.ts",
       "default": "./adaptive.js"
+    },
+    "./observability": {
+      "types": "./observability.d.ts",
+      "default": "./observability.js"
     }
   },
   "engines": {

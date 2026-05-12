@@ -48,6 +48,13 @@ const MODULES = [
     pageName: 'adaptive',
     title: 'Adaptive',
   },
+  {
+    declaration: 'observability.d.ts',
+    deppath: './declarations/observability.d',
+    entryTarget: './declarations/observability',
+    pageName: 'observability',
+    title: 'Observability',
+  },
 ];
 
 // These rewrites are a docs-only compatibility layer for TypeDoc/sphinx-js
@@ -85,6 +92,31 @@ const DECLARATION_REWRITES = new Map([
   ],
   [
     'adaptive.d.ts',
+    [
+      {
+        original: "import type { Json } from './index';",
+        replacement: 'type Json = import("./index").Json;',
+      },
+      {
+        original: "import type { ConfigPolicy, ConfigDiagnostic, ConfigReport } from './plugin';\n\nexport { ConfigPolicy, ConfigDiagnostic, ConfigReport };",
+        replacement: [
+          'export type ConfigPolicy = import("./plugin").ConfigPolicy;',
+          'export type ConfigDiagnostic = import("./plugin").ConfigDiagnostic;',
+          'export type ConfigReport = import("./plugin").ConfigReport;',
+        ].join('\n'),
+      },
+      {
+        original: 'export interface ComponentSpec {',
+        replacement: 'interface ComponentSpecShape {',
+      },
+      {
+        original: '): ComponentSpec;',
+        replacement: '): ComponentSpecShape;',
+      },
+    ],
+  ],
+  [
+    'observability.d.ts',
     [
       {
         original: "import type { Json } from './index';",

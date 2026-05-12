@@ -89,9 +89,7 @@ offline analysis, replay, or debugging.
 ### ATOF JSONL Exporter
 
 The ATOF JSONL exporter writes the canonical event stream to a native
-filesystem path as one raw ATOF event per line. It is available for native
-Rust, Python, Node.js, Go, and C FFI use. It is not exposed in WebAssembly
-because arbitrary filesystem writes are not portable there.
+filesystem path as one raw ATOF event per line.
 
 ### OpenTelemetry Subscriber
 
@@ -106,6 +104,10 @@ OpenInference semantics for model-centric observability.
 Detailed setup, configuration, and API shape for these subscribers belongs in
 [Export Observability Data](../../export-observability-data/basic-guide.md)
 and [Observability Code Examples](../../export-observability-data/code-examples.md).
+For configuration-driven setup, use the built-in
+[`observability` plugin](../../export-observability-data/observability-plugin.md)
+to install ATOF, ATIF, OpenTelemetry, and OpenInference subscribers from one
+plugin component.
 
 ## Practical Guidance
 

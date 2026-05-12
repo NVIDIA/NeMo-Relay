@@ -17,7 +17,7 @@ This summary lists the package identity and support status for the binding.
 
 The Node.js binding is built with `napi-rs`. The package root exports the core
 runtime lifecycle APIs, and the package also publishes focused subpath exports
-for typed helpers, plugin helpers, and adaptive helpers.
+for typed helpers, plugin helpers, adaptive helpers, and observability helpers.
 
 ## Main Binding Surfaces
 
@@ -27,6 +27,7 @@ These entry points are the primary APIs to use from this binding.
 - `nemo-flow-node/typed`: typed wrappers and codec-aware execution helpers
 - `nemo-flow-node/plugin`: plugin-facing helpers and configuration types
 - `nemo-flow-node/adaptive`: adaptive helpers layered on top of the runtime
+- `nemo-flow-node/observability`: built-in observability plugin helpers
 
 ## How To Read The Generated Pages
 
@@ -36,6 +37,7 @@ The generated pages are organized around the package export map:
 - `Typed Helpers`: the `./typed` export
 - `Plugins`: the `./plugin` export
 - `Adaptive`: the `./adaptive` export
+- `Observability`: the `./observability` export
 
 Use the generated Node.js pages for symbol-level documentation:
 
@@ -43,6 +45,7 @@ Use the generated Node.js pages for symbol-level documentation:
 - {doc}`Typed Helpers <_generated/typed>`
 - {doc}`Plugins <_generated/plugin>`
 - {doc}`Adaptive <_generated/adaptive>`
+- {doc}`Observability <_generated/observability>`
 
 ```{toctree}
 :maxdepth: 1
@@ -51,6 +54,7 @@ runtime <_generated/runtime>
 typed <_generated/typed>
 plugin <_generated/plugin>
 adaptive <_generated/adaptive>
+observability <_generated/observability>
 ```
 
 ## Related Guides
@@ -64,6 +68,7 @@ Use these links to continue from the API reference into task-focused guides.
 - [Subscribers](../../../about/concepts/subscribers.md)
 - [Plugins](../../../about/concepts/plugins.md)
 - [Adaptive Optimization](../../../use-adaptive-optimization/about.md)
+- [Configure the Observability Plugin](../../../export-observability-data/observability-plugin.md)
 - [Instrument a Tool Call](../../../instrument-applications/instrument-tool-call.md)
 - [Typed Wrappers and Codecs](../../../integrate-frameworks/using-codecs.md)
 - [Framework Integration Surfaces](../../../integrate-frameworks/about.md)
