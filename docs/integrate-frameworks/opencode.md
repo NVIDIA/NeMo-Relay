@@ -77,7 +77,7 @@ Create or update `opencode.json` in the OpenCode project directory:
 {
   "plugin": [
     [
-      "file:///absolute/path/to/NeMo-Flow/integrations/opencode-plugin",
+      "nemo-flow-opencode",
       {
         "enabled": true,
         "atofPath": "./.nemoflow/opencode.atof.jsonl",
