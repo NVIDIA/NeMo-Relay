@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import pytest
@@ -37,7 +38,7 @@ async def aincrement(state: State) -> State:
 
 
 def _build_graph(use_async: bool = False) -> CompiledStateGraph:
-    builder = StateGraph(State)
+    builder = StateGraph(cast(Any, State))
     if use_async:
         builder.add_node("increment", aincrement)
     else:
@@ -58,7 +59,7 @@ def async_graph_fixture() -> CompiledStateGraph:
 
 
 @pytest.fixture(name="subscribed_events")
-def subscribed_events_fixture() -> list[nemo_flow.Event]:
+def subscribed_events_fixture() -> Iterator[list[nemo_flow.Event]]:
     events: list[nemo_flow.Event] = []
 
     def event_recorder(event: nemo_flow.Event) -> None:
@@ -74,7 +75,7 @@ def events_to_strings(events: list[nemo_flow.Event]) -> list[str]:
     event_strings: list[str] = []
 
     for event in events:
-        if event.kind == "scope":
+        if isinstance(event, nemo_flow.ScopeEvent):
             event_strings.append(f"{event.kind}.{event.scope_category}.{event.name}")
         else:
             event_strings.append(f"{event.kind}.{event.name}")
@@ -148,9 +149,13 @@ def test_graph_lifecycle_callbacks_emit_marks(subscribed_events: list[nemo_flow.
 
     assert events_to_strings(subscribed_events) == expected_event_strings
 
-    interupt_event = subscribed_events[1]
-    assert interupt_event.data["interrupts"] == [{"id": "interrupt-1", "value": "needs approval"}]
+    interrupt_event = subscribed_events[1]
+    assert isinstance(interrupt_event, nemo_flow.MarkEvent)
+    interrupt_data = cast(dict[str, Any], interrupt_event.data)
+    assert interrupt_data["interrupts"] == [{"id": "interrupt-1", "value": "needs approval"}]
 
     resume_event = subscribed_events[2]
-    assert resume_event.data["checkpoint_ns"] == ["parent", "child"]
+    assert isinstance(resume_event, nemo_flow.MarkEvent)
+    resume_data = cast(dict[str, Any], resume_event.data)
+    assert resume_data["checkpoint_ns"] == ["parent", "child"]
     assert resume_event.metadata == {"integration": "langgraph"}
