@@ -13,8 +13,8 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::config::{
-    AgentConfigs, CodingAgent, GatewayConfig, ResolvedConfig, RunCommand, ServerArgs,
-    resolve_run_config,
+    AgentConfigs, CodingAgent, EasyPathCommand, GatewayConfig, ResolvedConfig, RunCommand,
+    ServerArgs, any_config_file_exists, resolve_run_config,
 };
 use crate::error::CliError;
 use crate::installer::{generated_hooks, hook_forward_command, merge_hooks, read_json_file};
@@ -33,6 +33,53 @@ pub(crate) async fn run(
     let run = TransparentRun::new(command, inherited).await?;
     run.print_if_requested();
     run.execute().await
+}
+
+/// Runs the easy-path bare-agent shortcut (`nemo-flow claude`, `nemo-flow codex`, etc.).
+///
+/// If no config file is present at any discovery layer, this fires the interactive setup inline
+/// (`crate::setup::run`) which writes a `config.toml`, then proceeds to launch the agent. When
+/// config IS present, the easy path constructs a synthetic `RunCommand` and delegates to the
+/// same transparent-run pipeline `nemo-flow run` uses — same observability wiring, same agent
+/// argv resolution, same lifecycle management.
+pub(crate) async fn easy_path(
+    agent: CodingAgent,
+    command: EasyPathCommand,
+    inherited: Option<&ServerArgs>,
+) -> Result<ExitCode, CliError> {
+    // Explicit `--config <path>` short-circuits the discovery-based setup trigger: when the
+    // user has pointed at a specific file, that file is the contract — fire setup only if it
+    // doesn't exist yet, and never run setup just because no config lives at any default
+    // discovery location.
+    let explicit_config = inherited.and_then(|args| args.config.as_deref());
+    let needs_setup = match explicit_config {
+        Some(path) => !path.exists(),
+        None => !any_config_file_exists(),
+    };
+    if needs_setup {
+        // No config anywhere — fire setup inline, scoped to the agent the user typed. After
+        // it returns, config discovery will pick up the freshly-written `config.toml` and
+        // `run()` below will see a populated environment. If setup errors (non-TTY, user
+        // cancelled), surface that directly.
+        crate::setup::run(Some(agent)).await?;
+    }
+    let synthetic = RunCommand {
+        agent: Some(agent),
+        // Forward the explicit config path so `run` parses the same file the user asked for,
+        // rather than re-discovering from defaults.
+        config: explicit_config.map(std::path::Path::to_path_buf),
+        openai_base_url: None,
+        anthropic_base_url: None,
+        atif_dir: None,
+        atof_dir: None,
+        openinference_endpoint: None,
+        session_metadata: None,
+        plugin_config: None,
+        dry_run: false,
+        print: false,
+        command: command.command,
+    };
+    run(synthetic, inherited).await
 }
 
 struct TransparentRun {
@@ -84,6 +131,8 @@ impl TransparentRun {
         if self.dry_run {
             return Ok(ExitCode::SUCCESS);
         }
+        self.prepared
+            .print_live_status(self.agent, &self.gateway_url, &self.resolved);
         execute_live_run(
             self.listener,
             self.resolved.gateway,
@@ -128,24 +177,35 @@ fn resolve_agent_and_argv(
     Ok((agent, argv))
 }
 
-// Returns the command argv supplied on the CLI, or the configured command for an explicitly selected
-// agent. Empty CLI argv without `--agent` is rejected before inference because there is no executable
-// name to inspect.
+// Resolves the full argv to spawn. When `--agent` is set (the easy-path and explicit `--agent`
+// flows both go through this case), the configured agent command is the base argv and anything
+// after `--` is appended as pass-through args. When `--agent` is absent, `command.command` IS
+// the full argv (e.g., `nemo-flow run -- codex --model X` runs that exact command and infers
+// the agent from argv[0]).
 fn resolved_argv(command: &RunCommand, agents: &AgentConfigs) -> Result<Vec<String>, CliError> {
-    if !command.command.is_empty() {
-        return Ok(command.command.clone());
+    if let Some(agent) = command.agent {
+        let mut argv = configured_command(agent, agents)
+            .unwrap_or_else(|| vec![default_command_for(agent).to_string()]);
+        argv.extend(command.command.iter().cloned());
+        return Ok(argv);
     }
-    let agent = command.agent.ok_or_else(|| {
-        CliError::Launch(
+    if command.command.is_empty() {
+        return Err(CliError::Launch(
             "missing command; pass -- <agent-command> or --agent with a configured command".into(),
-        )
-    })?;
-    configured_command(agent, agents).ok_or_else(|| {
-        CliError::Launch(format!(
-            "no configured command for {}; pass -- <agent-command>",
-            agent.as_arg()
-        ))
-    })
+        ));
+    }
+    Ok(command.command.clone())
+}
+
+// Default agent binary names used when no `[agents.<name>] command = "..."` override is in the
+// resolved config. Matches the executable on $PATH that the wizard's detection probes for.
+const fn default_command_for(agent: CodingAgent) -> &'static str {
+    match agent {
+        CodingAgent::ClaudeCode => "claude",
+        CodingAgent::Codex => "codex",
+        CodingAgent::Cursor => "cursor-agent",
+        CodingAgent::Hermes => "hermes",
+    }
 }
 
 // Uses an explicit `--agent` when present and otherwise infers the agent from argv[0]. Inference is
@@ -156,7 +216,7 @@ fn resolved_agent(command: &RunCommand, argv: &[String]) -> Result<CodingAgent, 
     }
     CodingAgent::infer(&argv[0]).ok_or_else(|| {
         CliError::Launch(format!(
-            "could not infer coding agent from command {:?}; pass --agent claude-code, --agent codex, --agent cursor, or --agent hermes",
+            "could not infer coding agent from command {:?}; pass --agent claude, --agent codex, --agent cursor, or --agent hermes",
             argv[0]
         ))
     })
@@ -167,7 +227,7 @@ fn resolved_agent(command: &RunCommand, argv: &[String]) -> Result<CodingAgent, 
 // commands should be passed after `--` by the caller.
 fn configured_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<Vec<String>> {
     let command = match agent {
-        CodingAgent::ClaudeCode => agents.claude_code.command.as_ref(),
+        CodingAgent::ClaudeCode => agents.claude.command.as_ref(),
         CodingAgent::Codex => agents.codex.command.as_ref(),
         CodingAgent::Cursor => agents.cursor.command.as_ref(),
         CodingAgent::Hermes => agents.hermes.command.as_ref(),
@@ -252,7 +312,7 @@ impl PreparedRun {
                     }
                 }
             }
-            CodingAgent::Hermes => run.prepare_hermes(),
+            CodingAgent::Hermes => run.prepare_hermes(resolved.agents.hermes.hooks_path.as_deref()),
         }
         Ok(run)
     }
@@ -312,6 +372,33 @@ impl PreparedRun {
     // overriding `model_providers.openai`. Uses `features.hooks=true` introduced in codex-cli
     // 0.129; the older `features.codex_hooks` is deprecated. Requires codex-cli >= 0.129.0.
     fn prepare_codex(&mut self, gateway_url: &str) {
+        // Codex resolves auth via `CodexAuth::from_auth_dot_json` (`codex-rs/login/src/auth/
+        // manager.rs`): `auth_mode=ApiKey` uses `OPENAI_API_KEY`, `auth_mode=Chatgpt` uses the
+        // OAuth token from `~/.codex/auth.json`. With `requires_openai_auth=true` the provider
+        // config tells Codex to attach whichever credential it has. The gateway then either
+        // substitutes `OPENAI_API_KEY` (routing to `api.openai.com`) or forwards the JWT as-is
+        // (routing to `chatgpt.com/backend-api/codex`). Warn when neither source is present.
+        let has_openai_key = std::env::var("OPENAI_API_KEY")
+            .ok()
+            .is_some_and(|v| !v.is_empty());
+        // Codex persists OAuth tokens to `~/.codex/auth.json` via `AuthDotJson` in
+        // `codex-rs/login/src/auth/storage.rs`. Check for the file rather than parsing it —
+        // Codex handles token refresh itself at runtime.
+        let has_codex_auth = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(|h| {
+                std::path::PathBuf::from(h)
+                    .join(".codex/auth.json")
+                    .exists()
+            })
+            .unwrap_or(false);
+        if !has_openai_key && !has_codex_auth {
+            eprintln!(
+                "warning: No OpenAI credentials found. Either export OPENAI_API_KEY \
+                 (e.g. `export OPENAI_API_KEY=sk-...`), log in to codex (`codex --login`), \
+                 or pass `--openai-base-url` to an upstream that needs no key."
+            );
+        }
         let hook_command = hook_forward_command(&transparent_hook_executable(), CodingAgent::Codex);
         let mut args = vec![
             "--config".to_string(),
@@ -358,12 +445,18 @@ impl PreparedRun {
         Ok(())
     }
 
-    // Notes Hermes' persistent-hook requirement. Hermes hook approval is outside this launcher, so
-    // run mode only exports the live gateway URL for hooks that are already installed and approved.
-    fn prepare_hermes(&mut self) {
-        self.notes.push(
-            "Hermes shell hooks must be configured with `nemo-flow install hermes`; this run exports the dynamic gateway URL for approved hooks".into(),
-        );
+    // Surfaces where hermes' shell hooks live so users know what `nemo-flow config hermes` wrote.
+    // Hermes reads hooks from .hermes/config.yaml on its own; this launcher only exports the live
+    // gateway URL via NEMO_FLOW_GATEWAY_URL so installed hooks reach the ephemeral gateway.
+    fn prepare_hermes(&mut self, hooks_path: Option<&std::path::Path>) {
+        let note = match hooks_path {
+            Some(path) => format!(
+                "Hermes hooks at {} — re-run `nemo-flow config hermes` to refresh.",
+                path.display()
+            ),
+            None => "Hermes hooks not yet installed — run `nemo-flow config hermes` once so hermes traces under this gateway.".into(),
+        };
+        self.notes.push(note);
     }
 
     // Spawns the prepared child process with injected environment and waits for its exit status.
@@ -412,6 +505,67 @@ impl PreparedRun {
         Ok(())
     }
 
+    // Prints a compact pre-launch status banner so users see at a glance where their observability
+    // data is going (gateway URL, ATIF dir, OpenInference endpoint) before the agent's own UI takes
+    // over the terminal. Always emitted on stderr so it never contaminates piped/redirected agent
+    // output, and suppressed entirely when stdout is not a TTY — scripts capturing the agent stream
+    // get a clean pipe, interactive users still get the bordered frame. Distinct from `print()`,
+    // which is the verbose `--print` / `--dry-run` dump intended for inspection.
+    fn print_live_status(&self, agent: CodingAgent, gateway_url: &str, resolved: &ResolvedConfig) {
+        // Suppress entirely on non-TTY stdout: when the user redirects the agent's stream to a
+        // file or pipes it into another tool, no banner should appear ahead of that output.
+        if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+            return;
+        }
+
+        let mut lines: Vec<String> = Vec::new();
+        lines.push(format!("NeMo Flow → {}", agent.as_arg()));
+        lines.push(format!("  Gateway        {gateway_url}"));
+        match &resolved.gateway.exporters.atif.dir {
+            Some(path) => lines.push(format!("  ATIF           {}", path.display())),
+            None => lines.push("  ATIF           (disabled)".to_string()),
+        }
+        match &resolved.gateway.exporters.atof.dir {
+            Some(path) => lines.push(format!(
+                "  ATOF           {} ({})",
+                path.display(),
+                resolved.gateway.exporters.atof.mode.as_str()
+            )),
+            None => lines.push("  ATOF           (disabled)".to_string()),
+        }
+        match &resolved.gateway.exporters.openinference.endpoint {
+            Some(endpoint) => lines.push(format!("  OpenInference  {endpoint}")),
+            None => lines.push("  OpenInference  (disabled)".to_string()),
+        }
+        if !self.notes.is_empty() {
+            lines.push(String::new());
+            for note in &self.notes {
+                lines.push(format!("⚠ {note}"));
+            }
+        }
+
+        // Color decisions key off stderr (where we actually emit), not stdout.
+        let use_color = std::io::IsTerminal::is_terminal(&std::io::stderr())
+            && std::env::var_os("NO_COLOR").is_none();
+        let max_w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+        // 1-char padding on each side of the longest line.
+        let inner = max_w + 2;
+
+        eprintln!();
+        eprint_border_line('╭', '╮', inner, use_color);
+        for line in &lines {
+            let pad = max_w - line.chars().count();
+            let body = format!(" {line}{spaces} ", spaces = " ".repeat(pad));
+            if use_color {
+                eprintln!("\x1b[38;5;112m│\x1b[0m{body}\x1b[38;5;112m│\x1b[0m");
+            } else {
+                eprintln!("│{body}│");
+            }
+        }
+        eprint_border_line('╰', '╯', inner, use_color);
+        eprintln!();
+    }
+
     // Prints the resolved transparent-run plan, including dynamic gateway URL, upstream base URLs,
     // argv/env injection, and any agent-specific notes or temporary files.
     fn print(&self, agent: CodingAgent, gateway_url: &str, resolved: &ResolvedConfig) {
@@ -422,10 +576,21 @@ impl PreparedRun {
             "anthropic_base_url = {}",
             resolved.gateway.anthropic_base_url
         );
-        if let Some(path) = &resolved.gateway.atif_dir {
+        if let Some(path) = &resolved.gateway.exporters.atif.dir {
             println!("atif_dir = {}", path.display());
         }
-        if let Some(endpoint) = &resolved.gateway.openinference_endpoint {
+        if let Some(path) = &resolved.gateway.exporters.atof.dir {
+            println!("atof_dir = {}", path.display());
+            println!(
+                "atof_mode = {}",
+                resolved.gateway.exporters.atof.mode.as_str()
+            );
+            println!(
+                "atof_filename_template = {}",
+                resolved.gateway.exporters.atof.filename_template
+            );
+        }
+        if let Some(endpoint) = &resolved.gateway.exporters.openinference.endpoint {
             println!("openinference_endpoint = {endpoint}");
         }
         println!("argv = {}", self.argv.join(" "));
@@ -470,10 +635,34 @@ async fn wait_for_health(gateway_url: &str) -> Result<(), CliError> {
 }
 
 fn codex_gateway_provider_config(gateway_url: &str) -> String {
+    // `wire_api="responses"` is the only value codex 0.130+ accepts; the `chat` value was
+    // removed (codex#7782). Codex transparent run therefore only works against upstreams that
+    // implement `/v1/responses` (api.openai.com or a Responses-compatible proxy). For other
+    // upstreams the user falls back to daemon mode and points codex directly at its configured
+    // upstream — we observe hooks but not LLM calls.
+    //
+    // `requires_openai_auth=true` so Codex's `resolve_provider_auth` (`codex-rs/model-provider/
+    // src/auth.rs`) attaches credentials via `BearerAuthProvider`. When the auth mode is
+    // `Chatgpt` the token is an OAuth JWT; when `ApiKey` it is the `OPENAI_API_KEY` value.
+    // The gateway inspects the inbound `Authorization` header: if `OPENAI_API_KEY` is set in the
+    // environment the JWT is replaced (see `gateway.rs::strip_chatgpt_oauth_for_openai_route`
+    // and `inject_provider_auth`); otherwise the JWT is forwarded to the ChatGPT backend.
     format!(
         "model_providers.nemo-flow-openai={{name=\"NeMo Flow OpenAI\",base_url={},wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false}}",
         toml_string(gateway_url)
     )
+}
+
+// Prints one horizontal border line for the live-status frame in NVIDIA green when color is
+// enabled, otherwise plain ASCII-compatible box-drawing. Writes to stderr so the banner doesn't
+// contaminate piped/redirected agent stdout.
+fn eprint_border_line(left: char, right: char, inner_width: usize, color: bool) {
+    let dashes = "─".repeat(inner_width);
+    if color {
+        eprintln!("\x1b[38;5;112m{left}{dashes}{right}\x1b[0m");
+    } else {
+        eprintln!("{left}{dashes}{right}");
+    }
 }
 
 // Returns the absolute path of the running gateway binary so injected hooks can find it

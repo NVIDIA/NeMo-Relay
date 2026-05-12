@@ -13,6 +13,7 @@ use tokio::task::JoinHandle;
 use tower::ServiceExt;
 
 use super::*;
+use crate::config::ExportersConfig;
 use crate::error::CliError;
 
 struct TestServer {
@@ -36,9 +37,9 @@ fn test_config() -> GatewayConfig {
     GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     }
