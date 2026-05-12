@@ -1,5 +1,5 @@
 {
-  "name": "@nvidia/nemoflow-opencode-plugin",
+  "name": "nemo-flow-opencode",
   "version": "0.2.0",
   "description": "OpenCode server plugin that exports NeMo Flow observability data.",
   "type": "module",
