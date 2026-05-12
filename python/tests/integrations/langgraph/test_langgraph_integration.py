@@ -103,22 +103,22 @@ class TestGraphCallbacks:
 
     def test_sync(
         self,
-        graph: CompiledStateGraph,
+        sync_graph: CompiledStateGraph,
         subscribed_events: list[nemo_flow.Event],
     ):
         with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-            result = graph.invoke({"value": 1}, config={"callbacks": [NemoFlowCallbackHandler()]})
+            result = sync_graph.invoke({"value": 1}, config={"callbacks": [NemoFlowCallbackHandler()]})
 
         assert result == {"value": 2}
         assert events_to_strings(subscribed_events) == self._expected_events
 
     async def test_async(
         self,
-        graph: CompiledStateGraph,
+        async_graph: CompiledStateGraph,
         subscribed_events: list[nemo_flow.Event],
     ):
         with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-            result = await graph.ainvoke({"value": 1}, config={"callbacks": [NemoFlowCallbackHandler()]})
+            result = await async_graph.ainvoke({"value": 1}, config={"callbacks": [NemoFlowCallbackHandler()]})
 
         assert result == {"value": 2}
         assert events_to_strings(subscribed_events) == self._expected_events
