@@ -214,7 +214,8 @@ fn strips_chatgpt_plus_jwt_from_openai_route_inbound() {
         "authorization",
         HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
     );
-    let sanitized = strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::OpenAiResponses);
+    let sanitized =
+        strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::OpenAiResponses, true);
     assert!(sanitized.get("authorization").is_none());
 }
 
@@ -227,7 +228,8 @@ fn preserves_real_bearer_keys_on_openai_route() {
         "authorization",
         HeaderValue::from_static("Bearer sk-real-provider-key"),
     );
-    let sanitized = strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::OpenAiResponses);
+    let sanitized =
+        strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::OpenAiResponses, true);
     assert_eq!(
         sanitized.get("authorization").unwrap(),
         "Bearer sk-real-provider-key"
@@ -245,7 +247,22 @@ fn does_not_touch_anthropic_route_authorization() {
         HeaderValue::from_static("Bearer eyJ.anthropic.case"),
     );
     let sanitized =
-        strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::AnthropicMessages);
+        strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::AnthropicMessages, true);
+    assert!(sanitized.get("authorization").is_some());
+}
+
+#[test]
+fn preserves_jwt_when_no_replacement_key_available() {
+    // If OPENAI_API_KEY isn't set the gateway has nothing to inject after stripping, so leave
+    // the inbound bearer in place. Stripping would silently de-auth setups that point at an
+    // upstream which happens to accept the ChatGPT-Plus token.
+    let mut inbound = HeaderMap::new();
+    inbound.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+    );
+    let sanitized =
+        strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::OpenAiResponses, false);
     assert!(sanitized.get("authorization").is_some());
 }
 

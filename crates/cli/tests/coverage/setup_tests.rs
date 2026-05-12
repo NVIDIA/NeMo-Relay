@@ -20,27 +20,14 @@ fn detect_installed_agents_finds_binaries_on_path() {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    // SAFETY: we restore PATH on drop via the guard below. Tests are not run concurrently
-    // within the same binary by default (cargo test --jobs 1 for parallel safety), and we
-    // do not assert on agent ordering or unrelated PATH entries.
-    let original_path = std::env::var_os("PATH");
-    unsafe {
-        std::env::set_var("PATH", temp.path());
-    }
-
-    let detected = detect_installed_agents();
+    // Use the pure-function variant that takes PATH as an arg instead of mutating the global
+    // env var. Tests run in parallel by default; touching `std::env::set_var("PATH", ...)` would
+    // race with every other test that reads the environment.
+    let detected = detect_installed_agents_in(Some(temp.path().as_os_str()));
     assert!(detected.contains(&CodingAgent::ClaudeCode));
     assert!(detected.contains(&CodingAgent::Cursor));
     assert!(!detected.contains(&CodingAgent::Codex));
     assert!(!detected.contains(&CodingAgent::Hermes));
-
-    unsafe {
-        if let Some(value) = original_path {
-            std::env::set_var("PATH", value);
-        } else {
-            std::env::remove_var("PATH");
-        }
-    }
 }
 
 #[test]

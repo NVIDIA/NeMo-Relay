@@ -87,7 +87,7 @@ pub(crate) fn detect_installed_agents() -> Vec<CodingAgent> {
     detect_installed_agents_in(std::env::var_os("PATH").as_deref())
 }
 
-fn detect_installed_agents_in(path_var: Option<&std::ffi::OsStr>) -> Vec<CodingAgent> {
+pub(crate) fn detect_installed_agents_in(path_var: Option<&std::ffi::OsStr>) -> Vec<CodingAgent> {
     let Some(path_var) = path_var else {
         return Vec::new();
     };
@@ -557,10 +557,13 @@ fn ask_openai_base_url(
         .with_initial_text(initial)
         .interact_text()
         .map_err(setup_error)?;
-    if url == "https://api.openai.com" {
+    // Treat blank input the same as accepting the default — otherwise `openai_base_url = ""`
+    // lands in config.toml and the launcher tries to use an empty URL on the next run.
+    let url = url.trim();
+    if url.is_empty() || url == "https://api.openai.com" {
         Ok(None)
     } else {
-        Ok(Some(url))
+        Ok(Some(url.to_string()))
     }
 }
 

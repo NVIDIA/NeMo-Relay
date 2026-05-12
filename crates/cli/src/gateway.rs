@@ -549,7 +549,15 @@ async fn forward_upstream_request(
     headers: &HeaderMap,
     route: ProviderRoute,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    let sanitized = strip_chatgpt_oauth_for_openai_route(headers, route);
+    // Only strip the inbound JWT when we actually have a replacement key to inject. Without one
+    // the upstream just receives no auth and 401s, which is no better than letting it reject the
+    // JWT itself — and stripping silently can break setups that point the gateway at an upstream
+    // that happens to accept the ChatGPT-Plus token.
+    let has_openai_env = std::env::var("OPENAI_API_KEY")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .is_some();
+    let sanitized = strip_chatgpt_oauth_for_openai_route(headers, route, has_openai_env);
     let mut upstream = http.request(method.clone(), url).body(body_bytes.clone());
     for (name, value) in &sanitized {
         if should_forward_request_header(name) {
@@ -568,13 +576,18 @@ async fn forward_upstream_request(
 // sees a valid bearer token. Hermes-style clients that send a real `sk-...` API key are not
 // affected — the JWT detector only triggers on `Bearer eyJ...` (base64 JSON header). Tracks
 // NMF-86.
-fn strip_chatgpt_oauth_for_openai_route(headers: &HeaderMap, route: ProviderRoute) -> HeaderMap {
+fn strip_chatgpt_oauth_for_openai_route(
+    headers: &HeaderMap,
+    route: ProviderRoute,
+    has_replacement_key: bool,
+) -> HeaderMap {
     if !matches!(
         route,
         ProviderRoute::OpenAiResponses
             | ProviderRoute::OpenAiChatCompletions
             | ProviderRoute::OpenAiModels
-    ) {
+    ) || !has_replacement_key
+    {
         return headers.clone();
     }
     let mut out = headers.clone();
@@ -714,7 +727,11 @@ pub(crate) async fn models(
             .map(|p| p.as_str())
             .unwrap_or(parts.uri.path()),
     );
-    let sanitized = strip_chatgpt_oauth_for_openai_route(&parts.headers, provider);
+    let has_openai_env = std::env::var("OPENAI_API_KEY")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .is_some();
+    let sanitized = strip_chatgpt_oauth_for_openai_route(&parts.headers, provider, has_openai_env);
     let mut upstream = state.http.get(upstream_url);
     for (name, value) in &sanitized {
         if should_forward_request_header(name) {

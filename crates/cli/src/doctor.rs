@@ -273,9 +273,16 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
 }
 
 fn check_dir_writable(dir: &std::path::Path) -> Result<(), std::io::Error> {
+    use std::fs::OpenOptions;
     std::fs::create_dir_all(dir)?;
-    let probe = dir.join(".nemo-flow-write-probe");
-    std::fs::write(&probe, b"")?;
+    // PID-suffixed name + create_new=true so we can never overwrite a real user file even if
+    // they happen to have a `.nemo-flow-write-probe` of their own. The probe is removed
+    // immediately; the file just witnesses that we have write access here.
+    let probe = dir.join(format!(".nemo-flow-write-probe-{}", std::process::id()));
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)?;
     std::fs::remove_file(&probe).ok();
     Ok(())
 }
@@ -451,7 +458,10 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
     out.push('\n');
 
     if exit_code(report) == 0 {
-        out.push_str("  All checks passed.\n");
+        // Don't say "All checks passed" — `Warn` results still map to exit code 0, so a clean
+        // exit just means nothing is failing, not that everything is green. This wording keeps
+        // the footer accurate when the report carries warnings.
+        out.push_str("  No failing checks.\n");
     } else {
         out.push_str("  Some checks FAILED; see details above.\n");
     }

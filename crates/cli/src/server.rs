@@ -42,7 +42,8 @@ pub(crate) async fn serve(config: GatewayConfig) -> Result<(), CliError> {
             CliError::Launch(format!(
                 "cannot bind {} — port is already in use. Most likely cause: another \
                  `nemo-flow` daemon is already running. Fix one of:\n  \
-                 • kill the running daemon: `pkill -f nemo-flow`\n  \
+                 • stop the running daemon (Unix: `pkill -f nemo-flow`, Windows: \
+                 `taskkill /IM nemo-flow.exe`)\n  \
                  • use an ephemeral port: `nemo-flow --bind 127.0.0.1:0`\n  \
                  • pick a free port: `nemo-flow --bind 127.0.0.1:4041`",
                 config.bind
