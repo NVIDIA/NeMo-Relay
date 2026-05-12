@@ -22,7 +22,7 @@ Top-level exports also include:
   ``set_thread_scope_stack()``, and ``scope_stack_active()``
 - native runtime types such as ``ScopeHandle``, ``ToolHandle``, ``LLMHandle``,
   ``LLMRequest``, ``ScopeType``, and the lifecycle event classes
-- observability helpers such as ``AtifExporter``,
+- observability helpers such as ``AtifExporter``, ``AtofExporter``,
   ``OpenTelemetrySubscriber``, and ``OpenInferenceSubscriber``
 - JSON and callback type aliases used by middleware, typed wrappers, and
   plugin-facing configuration helpers
@@ -80,6 +80,9 @@ from nemo_flow._native import (
     AnnotatedLLMRequest,
     AnnotatedLLMResponse,
     AtifExporter,
+    AtofExporter,
+    AtofExporterConfig,
+    AtofExporterMode,
     LLMAttributes,
     LLMHandle,
     LLMRequest,
@@ -441,6 +444,9 @@ __all__ = [
     "AnnotatedLLMRequest",
     "AnnotatedLLMResponse",
     "AtifExporter",
+    "AtofExporterMode",
+    "AtofExporterConfig",
+    "AtofExporter",
     "OpenInferenceConfig",
     "OpenInferenceSubscriber",
     "OpenTelemetryConfig",

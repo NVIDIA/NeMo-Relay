@@ -50,6 +50,8 @@ pub struct FfiEvent(pub Event);
 pub struct FfiScopeStack(pub ScopeStackHandle);
 /// Opaque ATIF exporter handle.
 pub struct FfiAtifExporter(pub nemo_flow::observability::atif::AtifExporter);
+/// Opaque ATOF JSONL exporter handle.
+pub struct FfiAtofExporter(pub nemo_flow::observability::atof::AtofExporter);
 /// Opaque OpenTelemetry subscriber handle.
 pub struct FfiOpenTelemetrySubscriber(pub nemo_flow::observability::otel::OpenTelemetrySubscriber);
 /// Opaque OpenInference subscriber handle.
@@ -224,6 +226,17 @@ pub unsafe extern "C" fn nemo_flow_scope_stack_free(ptr: *mut FfiScopeStack) {
 /// `ptr` must be a valid pointer returned by `nemo_flow_atif_exporter_create`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_flow_atif_exporter_free(ptr: *mut FfiAtifExporter) {
+    if !ptr.is_null() {
+        drop(unsafe { Box::from_raw(ptr) });
+    }
+}
+
+/// Free an ATOF JSONL exporter handle previously returned by `nemo_flow_atof_exporter_create`.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `nemo_flow_atof_exporter_create`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_atof_exporter_free(ptr: *mut FfiAtofExporter) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }

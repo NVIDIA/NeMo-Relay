@@ -132,6 +132,7 @@ The table below compares subscriber and exporter options for common observabilit
 |---|---|
 | Custom subscriber | Consume events in process. |
 | Scope-local subscriber | Observe one request or tenant and clean up when its scope closes. |
+| ATOF JSONL exporter | Write raw ATOF events as one JSON object per line. |
 | ATIF exporter | Collect events and export ATIF v1.6 trajectories. |
 | OpenTelemetry subscriber | Export lifecycle events as OTLP spans. |
 | OpenInference subscriber | Export lifecycle events as OTLP spans with OpenInference-oriented semantics. |

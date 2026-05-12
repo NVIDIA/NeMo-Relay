@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use pyo3::prelude::*;
+use std::path::PathBuf;
 use tokio::runtime::{Handle, Runtime};
 
 use super::{
@@ -124,6 +125,133 @@ impl PyAtifExporter {
 
     pub(crate) fn __repr__(&self) -> String {
         "<AtifExporter>".to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ATOF JSONL exporter
+// ---------------------------------------------------------------------------
+
+/// File write behavior for ``AtofExporter``.
+#[pyclass(name = "AtofExporterMode", eq, eq_int, from_py_object)]
+#[derive(Clone, PartialEq)]
+pub enum PyAtofExporterMode {
+    Append = 0,
+    Overwrite = 1,
+}
+
+impl From<PyAtofExporterMode> for nemo_flow::observability::atof::AtofExporterMode {
+    fn from(value: PyAtofExporterMode) -> Self {
+        match value {
+            PyAtofExporterMode::Append => Self::Append,
+            PyAtofExporterMode::Overwrite => Self::Overwrite,
+        }
+    }
+}
+
+impl From<nemo_flow::observability::atof::AtofExporterMode> for PyAtofExporterMode {
+    fn from(value: nemo_flow::observability::atof::AtofExporterMode) -> Self {
+        match value {
+            nemo_flow::observability::atof::AtofExporterMode::Append => Self::Append,
+            nemo_flow::observability::atof::AtofExporterMode::Overwrite => Self::Overwrite,
+        }
+    }
+}
+
+/// Mutable configuration object for the filesystem-backed ATOF JSONL exporter.
+#[pyclass(name = "AtofExporterConfig")]
+pub struct PyAtofExporterConfig {
+    #[pyo3(get, set)]
+    pub(crate) output_directory: String,
+    #[pyo3(get, set)]
+    pub(crate) mode: PyAtofExporterMode,
+    #[pyo3(get, set)]
+    pub(crate) filename: String,
+}
+
+impl PyAtofExporterConfig {
+    fn to_rust_config(&self) -> nemo_flow::observability::atof::AtofExporterConfig {
+        nemo_flow::observability::atof::AtofExporterConfig::new()
+            .with_output_directory(PathBuf::from(self.output_directory.clone()))
+            .with_mode(self.mode.clone().into())
+            .with_filename(self.filename.clone())
+    }
+}
+
+#[pymethods]
+impl PyAtofExporterConfig {
+    #[new]
+    pub(crate) fn new() -> Self {
+        let config = nemo_flow::observability::atof::AtofExporterConfig::new();
+        Self {
+            output_directory: config.output_directory.to_string_lossy().into_owned(),
+            mode: config.mode.into(),
+            filename: config.filename,
+        }
+    }
+
+    pub(crate) fn __repr__(&self) -> String {
+        format!(
+            "<AtofExporterConfig output_directory={:?} filename={:?}>",
+            self.output_directory, self.filename
+        )
+    }
+}
+
+/// Filesystem-backed ATOF JSONL exporter.
+///
+/// Register the exporter under a subscriber name, run instrumented application
+/// code, then deregister and shut down the exporter to flush output.
+#[pyclass(name = "AtofExporter")]
+pub struct PyAtofExporter {
+    inner: nemo_flow::observability::atof::AtofExporter,
+}
+
+#[pymethods]
+impl PyAtofExporter {
+    #[new]
+    pub(crate) fn new(config: PyRef<'_, PyAtofExporterConfig>) -> PyResult<Self> {
+        let inner = nemo_flow::observability::atof::AtofExporter::new(config.to_rust_config())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Return the JSONL output path.
+    #[getter]
+    pub(crate) fn path(&self) -> String {
+        self.inner.path().to_string_lossy().into_owned()
+    }
+
+    /// Register this exporter globally under ``name``.
+    pub(crate) fn register(&self, name: String) -> PyResult<()> {
+        self.inner
+            .register(&name)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Deregister a global subscriber by name.
+    pub(crate) fn deregister(&self, name: String) -> PyResult<bool> {
+        self.inner
+            .deregister(&name)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Flush the output file.
+    pub(crate) fn force_flush(&self) -> PyResult<()> {
+        self.inner
+            .force_flush()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Shut down the exporter by flushing output.
+    pub(crate) fn shutdown(&self) -> PyResult<()> {
+        self.inner
+            .shutdown()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    pub(crate) fn __repr__(&self) -> String {
+        "<AtofExporter>".to_string()
     }
 }
 

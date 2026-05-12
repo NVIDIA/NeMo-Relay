@@ -167,6 +167,109 @@ scope_register_subscriber(&scope.uuid, "scoped-logger", Arc::new(|event| {
 
 ::::
 
+## ATOF JSONL Export
+
+Use the ATOF JSONL exporter when you want the raw canonical event stream on
+disk. The exporter writes one ATOF event JSON object per line, opens files in
+append mode by default, and flushes after every event. WebAssembly does not
+expose this filesystem-backed exporter.
+
+::::{tab-set}
+:sync-group: language
+
+:::{tab-item} Python
+:sync: python
+
+```python
+from nemo_flow import AtofExporter, AtofExporterConfig, AtofExporterMode
+
+config = AtofExporterConfig()
+config.output_directory = "logs"
+config.mode = AtofExporterMode.Append
+config.filename = "nemo-flow-events.jsonl"
+
+exporter = AtofExporter(config)
+exporter.register("atof-jsonl")
+
+# Run instrumented application work here.
+
+exporter.deregister("atof-jsonl")
+exporter.shutdown()
+```
+:::
+
+:::{tab-item} Node.js
+:sync: node
+
+```ts
+import { AtofExporter } from 'nemo-flow-node';
+
+const exporter = new AtofExporter({
+  outputDirectory: 'logs',
+  mode: 'append',
+  filename: 'nemo-flow-events.jsonl',
+});
+
+exporter.register('atof-jsonl');
+
+// Run instrumented application work here.
+
+exporter.deregister('atof-jsonl');
+exporter.shutdown();
+```
+:::
+
+:::{tab-item} Rust
+:sync: rust
+
+```rust
+use nemo_flow::observability::atof::{
+    AtofExporter, AtofExporterConfig, AtofExporterMode,
+};
+
+let exporter = AtofExporter::new(
+    AtofExporterConfig::new()
+        .with_output_directory("logs")
+        .with_mode(AtofExporterMode::Append)
+        .with_filename("nemo-flow-events.jsonl"),
+)?;
+
+exporter.register("atof-jsonl")?;
+
+// Run instrumented application work here.
+
+exporter.deregister("atof-jsonl")?;
+exporter.shutdown()?;
+```
+:::
+
+:::{tab-item} Go
+:sync: go
+
+```go
+exporter, err := nemo_flow.NewAtofExporter(nemo_flow.AtofExporterConfig{
+    OutputDirectory: "logs",
+    Mode:            nemo_flow.AtofExporterModeAppend,
+    Filename:        "nemo-flow-events.jsonl",
+})
+if err != nil {
+    return err
+}
+defer exporter.Close()
+
+if err := exporter.Register("atof-jsonl"); err != nil {
+    return err
+}
+
+// Run instrumented application work here.
+
+_ = exporter.Deregister("atof-jsonl")
+return exporter.Shutdown()
+```
+:::
+
+::::
+
 ## ATIF Export
 
 The ATIF exporter collects lifecycle events and exports an ATIF trajectory for offline analysis, replay, or debugging.
@@ -332,6 +435,7 @@ The table below summarizes which exporter or subscriber to start with for each g
 | Subscriber / Exporter | Purpose |
 |---|---|
 | Custom subscriber | Consume events in process. |
+| ATOF JSONL exporter | Write raw ATOF events as one JSON object per line. |
 | ATIF exporter | Collect events and export ATIF v1.6 trajectories. |
 | OpenTelemetry subscriber | Export lifecycle events as OTLP spans. |
 | OpenInference subscriber | Export lifecycle events as OTLP spans with OpenInference-oriented semantics. |
