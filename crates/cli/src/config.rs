@@ -15,6 +15,7 @@ use crate::error::CliError;
 #[derive(Debug, Clone, Parser)]
 #[command(name = "nemo-flow")]
 #[command(about = "Coding-agent gateway for NeMo Flow observability")]
+#[command(version)]
 pub(crate) struct Cli {
     #[command(flatten)]
     pub(crate) server: ServerArgs,

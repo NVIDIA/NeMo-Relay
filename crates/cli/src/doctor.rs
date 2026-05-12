@@ -70,6 +70,7 @@ pub(crate) struct ConfigurationInfo {
     pub workspace: ConfigLayer,
     pub global: ConfigLayer,
     pub system: ConfigLayer,
+    pub resolution: Check,
     pub default_agent: Option<String>,
     pub configured_agents: Vec<String>,
 }
@@ -100,7 +101,24 @@ pub(crate) struct AgentInfo {
 pub(crate) async fn collect_report(
     target_agent: Option<CodingAgent>,
 ) -> Result<DoctorReport, CliError> {
-    let resolved = resolve_server_config(&ServerArgs::default()).unwrap_or_default();
+    let (resolved, resolution) = match resolve_server_config(&ServerArgs::default()) {
+        Ok(resolved) => (
+            resolved,
+            Check {
+                name: "Resolution",
+                status: Status::Pass,
+                details: "valid".into(),
+            },
+        ),
+        Err(err) => (
+            ResolvedConfig::default(),
+            Check {
+                name: "Resolution",
+                status: Status::Fail,
+                details: format!("could not resolve merged config: {err}"),
+            },
+        ),
+    };
     let cwd = std::env::current_dir().ok();
     let home = home_dir();
     let configured_agents = configured_agent_names(&resolved.agents);
@@ -110,7 +128,12 @@ pub(crate) async fn collect_report(
         binary_version: env!("CARGO_PKG_VERSION"),
         target_agent: target_agent.map(|agent| agent.as_arg().to_string()),
         environment: collect_environment(),
-        configuration: collect_configuration(cwd.as_deref(), home.as_deref(), configured_agents),
+        configuration: collect_configuration(
+            cwd.as_deref(),
+            home.as_deref(),
+            resolution,
+            configured_agents,
+        ),
         agents: collect_agents(target_agent, &resolved).await,
         observability: collect_observability(&resolved.gateway).await,
         completions: collect_completions(home.as_deref()),
@@ -143,6 +166,7 @@ fn os_version() -> String {
 fn collect_configuration(
     cwd: Option<&Path>,
     home: Option<&Path>,
+    resolution: Check,
     configured_agents: Vec<String>,
 ) -> ConfigurationInfo {
     let workspace_path = cwd
@@ -160,6 +184,7 @@ fn collect_configuration(
         workspace: layer_status(&workspace_path),
         global: layer_status(&global_path),
         system: layer_status(&system_path),
+        resolution,
         // `default_agent` is reserved in the design for Phase 2 dispatch; not currently parsed
         // out of FileConfig. Doctor reports `None` until that lands.
         default_agent: None,
@@ -631,7 +656,8 @@ pub(crate) fn exit_code(report: &DoctorReport) -> u8 {
             .any(|agent| matches!(agent.status, Status::Fail))
         || matches!(report.configuration.workspace.status, Status::Fail)
         || matches!(report.configuration.global.status, Status::Fail)
-        || matches!(report.configuration.system.status, Status::Fail);
+        || matches!(report.configuration.system.status, Status::Fail)
+        || matches!(report.configuration.resolution.status, Status::Fail);
     u8::from(any_fail)
 }
 
@@ -651,6 +677,7 @@ fn report_has_warn(report: &DoctorReport) -> bool {
         || matches!(report.configuration.workspace.status, Status::Warn)
         || matches!(report.configuration.global.status, Status::Warn)
         || matches!(report.configuration.system.status, Status::Warn)
+        || matches!(report.configuration.resolution.status, Status::Warn)
 }
 
 /// Renders the doctor report in the fixed human-readable layout the design doc shows. Sections
@@ -688,6 +715,13 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
         "    System     {}\n",
         format_layer(&report.configuration.system)
     ));
+    if !matches!(report.configuration.resolution.status, Status::Pass) {
+        out.push_str(&format!(
+            "    Resolution {} {}\n",
+            format_status(report.configuration.resolution.status),
+            report.configuration.resolution.details
+        ));
+    }
     if !report.configuration.configured_agents.is_empty() {
         out.push_str(&format!(
             "    Agents     {}\n",

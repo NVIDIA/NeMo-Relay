@@ -22,6 +22,17 @@ fn cli_help_exits_successfully() {
 }
 
 #[test]
+fn cli_version_exits_successfully() {
+    let output = Command::new(gateway_bin())
+        .arg("--version")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("nemo-flow "));
+}
+
+#[test]
 fn cli_help_lists_easy_path_agent_shortcuts() {
     let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -116,6 +127,40 @@ fn cli_bare_invocation_runs_doctor_when_config_exists() {
     assert!(stdout.contains("Environment"));
     assert!(stdout.contains("Configuration"));
     assert!(stdout.contains("Agents detected"));
+}
+
+#[test]
+fn cli_bare_invocation_reports_invalid_config_resolution() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(cwd.join(".nemo-flow")).unwrap();
+    std::fs::write(
+        cwd.join(".nemo-flow/config.toml"),
+        r#"
+[exporters.atof]
+dir = "./atof"
+mode = "replace"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "bare invocation should fail doctor when config resolution fails"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Configuration"));
+    assert!(stdout.contains("Resolution"));
+    assert!(stdout.contains("invalid [exporters.atof].mode"));
 }
 
 #[test]

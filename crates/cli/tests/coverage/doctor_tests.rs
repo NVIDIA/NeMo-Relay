@@ -34,6 +34,11 @@ fn empty_report() -> DoctorReport {
                 active: false,
                 details: "not present".into(),
             },
+            resolution: Check {
+                name: "Resolution",
+                status: Status::Pass,
+                details: "valid".into(),
+            },
             default_agent: None,
             configured_agents: vec![],
         },
@@ -76,6 +81,14 @@ fn exit_code_fails_when_workspace_config_is_invalid() {
     let mut report = empty_report();
     report.configuration.workspace.status = Status::Fail;
     report.configuration.workspace.details = "invalid TOML".into();
+    assert_eq!(exit_code(&report), 1);
+}
+
+#[test]
+fn exit_code_fails_when_config_resolution_fails() {
+    let mut report = empty_report();
+    report.configuration.resolution.status = Status::Fail;
+    report.configuration.resolution.details = "invalid gateway configuration shape".into();
     assert_eq!(exit_code(&report), 1);
 }
 
@@ -165,6 +178,19 @@ fn format_human_reports_failure_summary_when_anything_failed() {
         details: "not writable".into(),
     });
     let rendered = format_human(&report);
+    assert!(rendered.contains("Some checks FAILED"));
+}
+
+#[test]
+fn format_human_reports_config_resolution_failure() {
+    let mut report = empty_report();
+    report.configuration.resolution.status = Status::Fail;
+    report.configuration.resolution.details =
+        "could not resolve merged config: invalid [exporters.atof].mode".into();
+
+    let rendered = format_human(&report);
+
+    assert!(rendered.contains("Resolution ✗ could not resolve merged config"));
     assert!(rendered.contains("Some checks FAILED"));
 }
 
