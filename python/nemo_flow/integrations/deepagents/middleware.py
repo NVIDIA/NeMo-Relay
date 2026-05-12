@@ -57,11 +57,13 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
         """Wrap a sync Deep Agents tool call with NeMo Flow tool execution and marks."""
         tool_name, tool_args, kind = self._tool_context(request)
         self._emit_tool_mark(kind, "start", tool_name, tool_args)
+
         try:
             result = super().wrap_tool_call(request, handler)
         except Exception as error:
             self._emit_tool_mark(kind, "error", tool_name, tool_args, error=error)
             raise
+
         self._emit_tool_mark(kind, "end", tool_name, tool_args, result=result)
         return result
 
@@ -73,11 +75,13 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
         """Wrap an async Deep Agents tool call with NeMo Flow tool execution and marks."""
         tool_name, tool_args, kind = self._tool_context(request)
         self._emit_tool_mark(kind, "start", tool_name, tool_args)
+
         try:
             result = await super().awrap_tool_call(request, handler)
         except Exception as error:
             self._emit_tool_mark(kind, "error", tool_name, tool_args, error=error)
             raise
+
         self._emit_tool_mark(kind, "end", tool_name, tool_args, result=result)
         return result
 
@@ -85,10 +89,13 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
         data: dict[str, Any] = {}
         if self._agent_name is not None:
             data["agent_name"] = self._agent_name
+
         if self._skills is not None:
             data["skills"] = list(self._skills)
+
         if self._subagents is not None:
             data["subagents"] = list(self._subagents)
+
         if self._backend_name is not None:
             data["backend"] = self._backend_name
 
@@ -104,7 +111,12 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
     def _tool_context(self, request: ToolCallRequest) -> tuple[str, Mapping[str, Any], str | None]:
         tool_name = request.tool_call["name"]
         raw_args = request.tool_call.get("args") or {}
-        tool_args = raw_args if isinstance(raw_args, Mapping) else {"value": raw_args}
+
+        if isinstance(raw_args, Mapping):
+            tool_args = raw_args
+        else:
+            tool_args = {"value": raw_args}
+
         return tool_name, tool_args, tool_kind(tool_name)
 
     def _emit_tool_mark(
@@ -116,14 +128,12 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
         *,
         result: Any = None,
         error: BaseException | None = None,
-    ) -> None:
-        if kind is None:
-            return
-
-        emit_mark(
-            mark_base_name(kind),
-            kind,
-            phase,
-            tool_event_data(tool_name, tool_args, result=result, error=error),
-            metadata={"agent_name": self._agent_name} if self._agent_name is not None else None,
-        )
+    ):
+        if kind is not None:
+            emit_mark(
+                mark_base_name(kind),
+                kind,
+                phase,
+                tool_event_data(tool_name, tool_args, result=result, error=error),
+                metadata={"agent_name": self._agent_name} if self._agent_name is not None else None,
+            )
