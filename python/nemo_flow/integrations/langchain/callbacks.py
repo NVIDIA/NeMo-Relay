@@ -22,6 +22,7 @@ _logger = logging.getLogger(__name__)
 class NemoFlowCallbackHandler(BaseCallbackHandler):
     """Bridge LangChain chain run IDs to NeMo Flow Agent scopes."""
 
+    # We need to run inline to ensure scopes are pushed and popped in the correct order.
     run_inline = True
 
     def __init__(self) -> None:
