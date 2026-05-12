@@ -60,20 +60,10 @@ command = "claude"
 Then run `nemo-flow run --agent claude` to use the configured
 command. User config takes priority over project and global config.
 
-## Persistent Install
+## Standalone Gateway
 
-Use persistent hooks only when you want Claude Code configured outside the
-wrapper:
-
-```bash
-nemo-flow install claude-code \
-  --scope user \
-  --target cli \
-  --gateway-url http://127.0.0.1:4040 \
-  --atif-dir .nemo-flow/atif
-```
-
-Then start the gateway manually:
+Use the long-running gateway only when you want Claude Code running outside the
+wrapper (e.g., already configured by an IDE):
 
 ```bash
 NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
@@ -87,7 +77,10 @@ claude
 ```
 
 The gateway forwards Anthropic `/v1/messages`, `/v1/messages/count_tokens`, and
-model routes without rewriting provider JSON.
+model routes without rewriting provider JSON. Hook events (tool calls, session
+markers) are only captured when running through `nemo-flow claude` or
+`nemo-flow run --agent claude`, which inject ephemeral hooks into the launched
+process.
 
 ## Captured Events
 

@@ -72,20 +72,10 @@ Then run:
 nemo-flow run --agent claude
 ```
 
-## Persistent Setup
+## Standalone Gateway
 
-Use persistent hooks only when you do not want to launch Claude Code through the
-wrapper:
-
-```bash
-nemo-flow install claude-code \
-  --scope user \
-  --target cli \
-  --gateway-url http://127.0.0.1:4040 \
-  --atif-dir .nemo-flow/atif
-```
-
-Start the gateway in one terminal:
+Use the long-running gateway only when you do not want to launch Claude Code
+through the wrapper. Start the gateway in one terminal:
 
 ```bash
 NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
@@ -97,6 +87,9 @@ Launch Claude Code from another terminal with the gateway environment:
 export ANTHROPIC_BASE_URL=http://127.0.0.1:4040
 claude
 ```
+
+Hook events (tool calls, session markers) are only captured when running
+through the wrapper, which injects ephemeral hooks per-run.
 
 ## Verify
 

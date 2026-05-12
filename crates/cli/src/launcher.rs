@@ -300,7 +300,7 @@ impl PreparedRun {
                     }
                 }
             }
-            CodingAgent::Hermes => run.prepare_hermes(),
+            CodingAgent::Hermes => run.prepare_hermes(resolved.agents.hermes.hooks_path.as_deref()),
         }
         Ok(run)
     }
@@ -423,12 +423,18 @@ impl PreparedRun {
         Ok(())
     }
 
-    // Notes Hermes' persistent-hook requirement. Hermes hook approval is outside this launcher, so
-    // run mode only exports the live gateway URL for hooks that are already installed and approved.
-    fn prepare_hermes(&mut self) {
-        self.notes.push(
-            "Hermes shell hooks must be configured with `nemo-flow install hermes`; this run exports the dynamic gateway URL for approved hooks".into(),
-        );
+    // Surfaces where hermes' shell hooks live so users know what `nemo-flow config hermes` wrote.
+    // Hermes reads hooks from .hermes/config.yaml on its own; this launcher only exports the live
+    // gateway URL via NEMO_FLOW_GATEWAY_URL so installed hooks reach the ephemeral gateway.
+    fn prepare_hermes(&mut self, hooks_path: Option<&std::path::Path>) {
+        let note = match hooks_path {
+            Some(path) => format!(
+                "Hermes hooks at {} — re-run `nemo-flow config hermes` to refresh.",
+                path.display()
+            ),
+            None => "Hermes hooks not yet installed — run `nemo-flow config hermes` once so hermes traces under this gateway.".into(),
+        };
+        self.notes.push(note);
     }
 
     // Spawns the prepared child process with injected environment and waits for its exit status.
@@ -583,8 +589,8 @@ fn codex_gateway_provider_config(gateway_url: &str) -> String {
     // `wire_api="responses"` is the only value codex 0.130+ accepts; the `chat` value was
     // removed (codex#7782). Codex transparent run therefore only works against upstreams that
     // implement `/v1/responses` (api.openai.com or a Responses-compatible proxy). For other
-    // upstreams the user falls back to daemon mode + `nemo-flow install codex` and codex talks
-    // directly to its configured upstream — we observe hooks but not LLM calls.
+    // upstreams the user falls back to daemon mode and points codex directly at its configured
+    // upstream — we observe hooks but not LLM calls.
     //
     // `requires_openai_auth=false` so codex doesn't send the ChatGPT-Plus OAuth JWT from
     // `~/.codex/auth.json` (the JWT is rejected by `api.openai.com` with 401). The gateway

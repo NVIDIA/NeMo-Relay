@@ -43,6 +43,7 @@ fn uses_configured_command_when_no_argv_is_supplied() {
     let agents = AgentConfigs {
         codex: AgentCommandConfig {
             command: Some("codex --full-auto".into()),
+            hooks_path: None,
         },
         ..AgentConfigs::default()
     };
@@ -71,6 +72,7 @@ fn uses_configured_hermes_command_when_no_argv_is_supplied() {
     let agents = AgentConfigs {
         hermes: AgentCommandConfig {
             command: Some("hermes --yolo chat".into()),
+            hooks_path: None,
         },
         ..AgentConfigs::default()
     };
@@ -322,7 +324,7 @@ fn prepares_hermes_hook_environment() {
             .iter()
             .any(|(name, _)| name == "HERMES_ACCEPT_HOOKS")
     );
-    assert!(prepared.notes[0].contains("approved hooks"));
+    assert!(prepared.notes[0].contains("nemo-flow config hermes"));
 }
 
 #[test]

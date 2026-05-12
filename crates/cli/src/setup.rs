@@ -17,6 +17,7 @@ use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::config::CodingAgent;
 use crate::error::CliError;
+use crate::installer::{hermes_hooks, hook_forward_command, merge_hermes_config};
 
 /// Where the setup saves its output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +72,10 @@ pub(crate) struct SetupAnswers {
     /// Currently surfaced by the codex setup branch; reusable by any future agent on the
     /// OpenAI route family.
     pub openai_base_url: Option<String>,
+    /// Path recorded under `[agents.hermes].hooks_path` when hermes is selected. Set by `run`
+    /// from `hermes_hooks_path_for_scope` so the wizard preview shows the file the launcher
+    /// will reference. `None` when hermes wasn't selected.
+    pub hermes_hooks_path: Option<PathBuf>,
 }
 
 /// Scans `$PATH` for the supported coding-agent binaries and returns the ones present.
@@ -142,6 +147,11 @@ pub(crate) fn build_config(answers: &SetupAnswers) -> DocumentMut {
             };
             let mut agent_table = Table::new();
             agent_table["command"] = value(command);
+            if matches!(agent, CodingAgent::Hermes)
+                && let Some(path) = answers.hermes_hooks_path.as_deref()
+            {
+                agent_table["hooks_path"] = value(path.display().to_string());
+            }
             agents_table.insert(key, Item::Table(agent_table));
         }
         doc["agents"] = Item::Table(agents_table);
@@ -361,7 +371,65 @@ pub(crate) fn prompt_user(
         backends,
         openinference_endpoint,
         openai_base_url,
+        hermes_hooks_path: None,
     })
+}
+
+/// Returns the path the wizard will record under `[agents.hermes].hooks_path` and write hermes
+/// hooks to. For `Both` scope, the project path wins (matches the config-merge precedence). For
+/// `Global` scope, the home path wins. Returns `None` when hermes is not in the selection.
+pub(crate) fn hermes_hooks_path_for_scope(
+    agents: &[CodingAgent],
+    scope: ConfigScope,
+    cwd: &Path,
+    home: &Path,
+) -> Option<PathBuf> {
+    if !agents.contains(&CodingAgent::Hermes) {
+        return None;
+    }
+    match scope {
+        ConfigScope::Project | ConfigScope::Both => Some(cwd.join(".hermes").join("config.yaml")),
+        ConfigScope::Global => Some(home.join(".hermes").join("config.yaml")),
+    }
+}
+
+/// Writes/merges `.hermes/config.yaml` hook config for every scope-applicable location so hermes
+/// fires `nemo-flow hook-forward hermes` on every hook event after setup. Idempotent: existing
+/// hook entries are preserved and our generated groups are appended only when missing.
+///
+/// Returns the list of paths actually written so callers can surface them to the user.
+pub(crate) fn install_hermes_hooks(
+    scope: ConfigScope,
+    cwd: &Path,
+    home: &Path,
+) -> Result<Vec<PathBuf>, CliError> {
+    let generated = hermes_hooks(&hook_forward_command("nemo-flow", CodingAgent::Hermes));
+    let mut written = Vec::new();
+    for path in hermes_hook_targets(scope, cwd, home) {
+        let existing = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(CliError::Io(error)),
+        };
+        let merged = merge_hermes_config(&existing, generated.clone())?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, merged)?;
+        written.push(path);
+    }
+    Ok(written)
+}
+
+fn hermes_hook_targets(scope: ConfigScope, cwd: &Path, home: &Path) -> Vec<PathBuf> {
+    let mut targets = Vec::new();
+    if matches!(scope, ConfigScope::Project | ConfigScope::Both) {
+        targets.push(cwd.join(".hermes").join("config.yaml"));
+    }
+    if matches!(scope, ConfigScope::Global | ConfigScope::Both) {
+        targets.push(home.join(".hermes").join("config.yaml"));
+    }
+    targets
 }
 
 /// Pre-filled wizard defaults read from an existing `config.toml`. When the file is missing or
@@ -682,20 +750,31 @@ fn agent_key_and_command(agent: CodingAgent) -> (&'static str, &'static str) {
 /// `nemo-flow config` asks the full set so users can configure multiple agents at once.
 pub(crate) async fn run(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
     let detected = detect_installed_agents();
-    let answers = prompt_user(&detected, agent_hint)?;
-    let doc = build_config(&answers);
+    let mut answers = prompt_user(&detected, agent_hint)?;
 
     let cwd = std::env::current_dir()?;
     let home = home_dir().ok_or_else(|| {
         CliError::Config("cannot determine home directory (set $HOME or $USERPROFILE)".into())
     })?;
-    let preview_paths = preview_paths(answers.scope, &cwd, &home);
+    answers.hermes_hooks_path =
+        hermes_hooks_path_for_scope(&answers.agents, answers.scope, &cwd, &home);
+
+    let doc = build_config(&answers);
+    let mut preview_paths = preview_paths(answers.scope, &cwd, &home);
+    preview_paths.extend(
+        hermes_hook_targets(answers.scope, &cwd, &home)
+            .into_iter()
+            .filter(|_| answers.agents.contains(&CodingAgent::Hermes)),
+    );
 
     if !confirm_summary(&preview_paths, &doc)? {
         return Err(CliError::Config("setup cancelled — no config saved".into()));
     }
 
-    let written = save_config(&doc, answers.scope, &cwd, &home, agent_hint)?;
+    let mut written = save_config(&doc, answers.scope, &cwd, &home, agent_hint)?;
+    if answers.agents.contains(&CodingAgent::Hermes) {
+        written.extend(install_hermes_hooks(answers.scope, &cwd, &home)?);
+    }
     println!();
     println!("  ✓ Saved:");
     for path in &written {

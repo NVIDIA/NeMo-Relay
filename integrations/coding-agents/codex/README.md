@@ -81,21 +81,17 @@ Then run:
 nemo-flow run --agent codex
 ```
 
-## Persistent Setup
+## Standalone Gateway
 
-Use persistent hooks only when you do not want to launch Codex through the
-wrapper:
+Use the long-running gateway only when you do not want to launch Codex through
+the wrapper. Start the gateway manually:
 
 ```bash
-nemo-flow install codex \
-  --scope user \
-  --target both \
-  --gateway-url http://127.0.0.1:4040 \
-  --atif-dir .nemo-flow/atif
+NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
 ```
 
-Then start the gateway manually and configure local Codex to use a gateway
-provider alias instead of overriding the reserved built-in `openai` provider:
+Then configure local Codex to use a gateway provider alias instead of
+overriding the reserved built-in `openai` provider:
 
 ```toml
 model_provider = "nemo-flow-openai"

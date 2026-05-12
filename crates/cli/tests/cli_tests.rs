@@ -66,37 +66,6 @@ fn cli_easy_path_invokes_setup_when_no_config_found() {
 }
 
 #[test]
-fn cli_install_dry_run_plans_without_writing() {
-    let temp = tempfile::tempdir().unwrap();
-    let output = Command::new(gateway_bin())
-        .env("HOME", temp.path())
-        .args([
-            "install",
-            "codex",
-            "--dry-run",
-            "--print",
-            "--target",
-            "both",
-            "--gateway-url",
-            "http://127.0.0.1:4040",
-            "--session-metadata",
-            r#"{"team":"cli"}"#,
-            "--plugin-config",
-            r#"{"components":[]}"#,
-            "--gateway-mode",
-            "required",
-        ])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Dry run: would install"));
-    assert!(stdout.contains("hook-forward codex"));
-    assert!(!temp.path().join(".codex/hooks.json").exists());
-}
-
-#[test]
 fn cli_run_dry_run_resolves_config_and_command() {
     let temp = tempfile::tempdir().unwrap();
     let config = temp.path().join("config.toml");

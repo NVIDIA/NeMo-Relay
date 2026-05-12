@@ -42,10 +42,6 @@ async fn main() -> ExitCode {
 async fn run() -> Result<ExitCode, error::CliError> {
     let cli = Cli::parse();
     match cli.command {
-        Some(Command::Install(command)) => {
-            installer::install(command)?;
-            Ok(ExitCode::SUCCESS)
-        }
         Some(Command::HookForward(command)) => {
             installer::hook_forward(command).await?;
             Ok(ExitCode::SUCCESS)

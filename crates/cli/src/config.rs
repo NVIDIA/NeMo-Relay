@@ -64,11 +64,10 @@ pub(crate) enum Command {
     Cursor(EasyPathCommand),
     /// Run Hermes with observability (setup on first use)
     #[command(
-        long_about = "Run NVIDIA's Hermes agent under a NeMo Flow gateway. Unlike the other \
-                      agents, Hermes is typically run with persistent shell hooks (install via \
-                      `nemo-flow install hermes`) and a long-running gateway daemon on a fixed \
-                      port. The Hermes config (`~/.hermes/config.yaml`) must point its \
-                      `model.base_url` at that daemon.",
+        long_about = "Run NVIDIA's Hermes agent under a NeMo Flow gateway. Hermes reads hooks \
+                      from `.hermes/config.yaml`; first-run setup writes that file alongside \
+                      `.nemo-flow/config.toml` so every subsequent invocation traces \
+                      automatically. Re-run `nemo-flow config hermes` to refresh the hooks.",
         after_help = "Examples:\n  \
                       nemo-flow hermes\n  \
                       nemo-flow hermes -- chat --provider custom"
@@ -84,8 +83,6 @@ pub(crate) enum Command {
     Completions(CompletionsCommand),
     /// Run an agent deterministically (no wizard; errors if config is missing)
     Run(RunCommand),
-    /// Install persistent hooks into an agent's own config directory (advanced)
-    Install(InstallCommand),
     /// Internal: subprocess used by installed hooks to forward events. Not typed by humans.
     #[command(hide = true)]
     HookForward(HookForwardCommand),
@@ -192,38 +189,6 @@ pub(crate) struct GatewayConfig {
 }
 
 #[derive(Debug, Clone, Args)]
-pub(crate) struct InstallCommand {
-    #[arg(value_enum)]
-    pub(crate) agent: CodingAgent,
-    #[arg(long, value_enum, default_value = "user")]
-    pub(crate) scope: InstallScope,
-    #[arg(long, value_enum, default_value = "both")]
-    pub(crate) target: InstallTarget,
-    #[arg(long, default_value = "http://127.0.0.1:4040")]
-    pub(crate) gateway_url: String,
-    #[arg(long)]
-    pub(crate) atif_dir: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) openinference_endpoint: Option<String>,
-    #[arg(long)]
-    pub(crate) profile: Option<String>,
-    #[arg(long)]
-    pub(crate) session_metadata: Option<String>,
-    #[arg(long)]
-    pub(crate) plugin_config: Option<String>,
-    #[arg(long, value_enum)]
-    pub(crate) gateway_mode: Option<GatewayMode>,
-    #[arg(long)]
-    pub(crate) dry_run: bool,
-    #[arg(long)]
-    pub(crate) print: bool,
-    #[arg(long, hide = true)]
-    pub(crate) home_dir: Option<PathBuf>,
-    #[arg(long, hide = true)]
-    pub(crate) project_dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Args)]
 pub(crate) struct HookForwardCommand {
     #[arg(value_enum)]
     pub(crate) agent: CodingAgent,
@@ -299,21 +264,6 @@ pub(crate) enum CodingAgent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
-pub(crate) enum InstallScope {
-    User,
-    Project,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab-case")]
-pub(crate) enum InstallTarget {
-    Cli,
-    Gui,
-    Both,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab-case")]
 pub(crate) enum GatewayMode {
     HookOnly,
     Passthrough,
@@ -374,6 +324,9 @@ pub(crate) struct AgentConfigs {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AgentCommandConfig {
     pub(crate) command: Option<String>,
+    /// Recorded by `nemo-flow config` when it installs hermes shell hooks. Other agents leave
+    /// this empty; the launcher reads it only to print a "hooks live here" pointer for hermes.
+    pub(crate) hooks_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -453,6 +406,7 @@ struct FileAgentsConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileAgentCommandConfig {
     command: Option<String>,
+    hooks_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -740,6 +694,7 @@ fn apply_file_agents_config(agents: &mut AgentConfigs, file_agents: Option<FileA
     }
     if let Some(value) = file_agents.hermes {
         agents.hermes.command = value.command;
+        agents.hermes.hooks_path = value.hooks_path;
     }
 }
 

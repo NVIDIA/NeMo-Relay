@@ -2,10 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use std::os::unix::fs::PermissionsExt;
 
+// Stub-binary detection relies on the Unix executable bit. Windows-side agent presence checks
+// use a different mechanism (e.g. `.exe` extension matching), so this lookup test is gated to
+// Unix to keep cross-platform CI green; covering the Windows code path is left to a separate
+// test once the launcher grows real Windows support.
+#[cfg(unix)]
 #[test]
 fn detect_installed_agents_finds_binaries_on_path() {
+    use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();
     // Drop stub binaries for two of the four supported agents — confirming detection picks up
     // only the ones present and ignores the others.
@@ -46,6 +51,7 @@ fn build_config_emits_observability_section_when_atif_selected() {
         backends: vec![ObservabilityBackend::Atif],
         openinference_endpoint: None,
         openai_base_url: None,
+        hermes_hooks_path: None,
     };
 
     let doc = build_config(&answers);
@@ -64,6 +70,7 @@ fn build_config_emits_export_section_when_openinference_selected() {
         backends: vec![ObservabilityBackend::OpenInference],
         openinference_endpoint: Some("http://localhost:6006/v1/traces".into()),
         openai_base_url: None,
+        hermes_hooks_path: None,
     };
 
     let doc = build_config(&answers);
@@ -81,6 +88,7 @@ fn build_config_skips_empty_sections_when_no_backends_selected() {
         backends: vec![],
         openinference_endpoint: None,
         openai_base_url: None,
+        hermes_hooks_path: None,
     };
 
     let doc = build_config(&answers);
@@ -99,6 +107,7 @@ fn build_config_emits_agents_block_with_user_facing_keys() {
         backends: vec![],
         openinference_endpoint: None,
         openai_base_url: None,
+        hermes_hooks_path: None,
     };
 
     let doc = build_config(&answers);
@@ -119,6 +128,7 @@ fn build_config_writes_upstream_block_for_custom_openai_base_url() {
         backends: vec![ObservabilityBackend::Atif],
         openinference_endpoint: None,
         openai_base_url: Some("https://litellm.internal/v1".into()),
+        hermes_hooks_path: None,
     };
     let rendered = build_config(&answers).to_string();
     assert!(rendered.contains("[upstream]"));
@@ -133,6 +143,7 @@ fn build_config_omits_upstream_block_when_openai_base_url_is_none() {
         backends: vec![ObservabilityBackend::Atif],
         openinference_endpoint: None,
         openai_base_url: None,
+        hermes_hooks_path: None,
     };
     let rendered = build_config(&answers).to_string();
     assert!(!rendered.contains("[upstream]"));
@@ -146,6 +157,7 @@ fn save_config_writes_project_scope_to_workspace_dir() {
         backends: vec![ObservabilityBackend::Atif],
         openinference_endpoint: None,
         openai_base_url: None,
+        hermes_hooks_path: None,
     };
     let doc = build_config(&answers);
     let temp = tempfile::tempdir().unwrap();
@@ -190,6 +202,7 @@ command = "codex --full-auto"
         backends: vec![ObservabilityBackend::Atif],
         openinference_endpoint: None,
         openai_base_url: None,
+        hermes_hooks_path: None,
     };
     let doc = build_config(&answers);
     save_config(
@@ -234,6 +247,7 @@ fn save_config_writes_both_scopes_when_both_selected() {
         backends: vec![ObservabilityBackend::Atif],
         openinference_endpoint: None,
         openai_base_url: None,
+        hermes_hooks_path: None,
     };
     let doc = build_config(&answers);
     let cwd = tempfile::tempdir().unwrap();
@@ -244,4 +258,45 @@ fn save_config_writes_both_scopes_when_both_selected() {
     assert_eq!(written.len(), 2);
     assert!(written.iter().any(|p| p.starts_with(cwd.path())));
     assert!(written.iter().any(|p| p.starts_with(home.path())));
+}
+
+#[test]
+fn build_config_emits_hooks_path_for_hermes_when_set() {
+    let answers = SetupAnswers {
+        scope: ConfigScope::Project,
+        agents: vec![CodingAgent::Hermes],
+        backends: vec![],
+        openinference_endpoint: None,
+        openai_base_url: None,
+        hermes_hooks_path: Some(std::path::PathBuf::from("/tmp/proj/.hermes/config.yaml")),
+    };
+    let rendered = build_config(&answers).to_string();
+    assert!(rendered.contains("[agents.hermes]"));
+    assert!(rendered.contains(r#"hooks_path = "/tmp/proj/.hermes/config.yaml""#));
+}
+
+#[test]
+fn install_hermes_hooks_writes_yaml_and_merges_existing() {
+    let cwd = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    // Seed an existing hermes config so we can verify the merge preserves user state.
+    let project_hermes = cwd.path().join(".hermes");
+    std::fs::create_dir_all(&project_hermes).unwrap();
+    std::fs::write(
+        project_hermes.join("config.yaml"),
+        "model:\n  provider: auto\n",
+    )
+    .unwrap();
+
+    let written = install_hermes_hooks(ConfigScope::Both, cwd.path(), home.path()).unwrap();
+
+    assert_eq!(written.len(), 2);
+    let project_yaml = std::fs::read_to_string(cwd.path().join(".hermes/config.yaml")).unwrap();
+    assert!(project_yaml.contains("nemo-flow hook-forward hermes"));
+    assert!(
+        project_yaml.contains("provider: auto"),
+        "existing model block must survive merge"
+    );
+    let home_yaml = std::fs::read_to_string(home.path().join(".hermes/config.yaml")).unwrap();
+    assert!(home_yaml.contains("nemo-flow hook-forward hermes"));
 }

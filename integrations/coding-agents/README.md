@@ -29,9 +29,9 @@ environment variables, or shared TOML config.
   for Codex LLM gateway routing.
 - `cursor/` installs a Cursor `.cursor/hooks.json` bundle targeting
   `POST /hooks/cursor`.
-- Hermes does not require a static bundle in this directory. Use
-  `nemo-flow install hermes` to merge hook commands into
-  `.hermes/config.yaml`.
+- Hermes does not require a static bundle in this directory. The setup wizard
+  (`nemo-flow config`) merges hook commands into `.hermes/config.yaml` when
+  hermes is selected.
 - `hermes/` contains a native Hermes Python plugin prototype that writes ATIF
   from Hermes plugin middleware without running the gateway HTTP process.
 
@@ -55,8 +55,9 @@ command name. Use `--dry-run --print` to inspect generated config without
 launching.
 
 Hermes transparent runs export the dynamic `NEMO_FLOW_GATEWAY_URL`, but Hermes
-hooks still need to be installed or approved in Hermes configuration before
-they can call the gateway.
+hooks must already be present in `.hermes/config.yaml` before they can call the
+gateway. The setup wizard (`nemo-flow config`) writes that file for you when
+you select hermes.
 
 Shared TOML config is loaded from `/etc/nemo-flow/config.toml`, then nearest
 project `.nemo-flow/config.toml`, then
@@ -78,50 +79,18 @@ command = "codex"
 command = "hermes"
 ```
 
-## Persistent Setup
+## Hook Forwarding
 
-Use `install` only when you want persistent hook configuration:
+Hooks call `nemo-flow hook-forward <agent>` with the canonical hook payload on
+stdin. The wrapper injects `NEMO_FLOW_GATEWAY_URL` so the same hook command
+reaches the ephemeral per-run gateway; hermes hooks fall back to an embedded
+`--gateway-url` when running outside the wrapper.
 
-```bash
-nemo-flow install claude-code --scope user --target cli --gateway-url http://127.0.0.1:4040
-nemo-flow install codex --scope user --target both --gateway-url http://127.0.0.1:4040
-nemo-flow install cursor --scope project --target gui --gateway-url http://127.0.0.1:4040
-nemo-flow install hermes --scope user --target cli --gateway-url http://127.0.0.1:4040
-```
+`hook-forward` prints the vendor-specific response and fails open by default
+(observability outages do not block the coding agent). Add `--fail-closed` to
+generated hook commands when policy requires hook delivery to block the agent.
 
-Inspect generated changes before writing:
-
-```bash
-nemo-flow install codex \
-  --scope user \
-  --target both \
-  --gateway-url http://127.0.0.1:4040 \
-  --atif-dir .nemo-flow/atif \
-  --dry-run \
-  --print
-```
-
-The installer backs up existing config files, merges only NeMo Flow hook
-entries, and avoids adding duplicate NeMo Flow entries on repeated runs. In
-persistent mode you start the gateway yourself and pass `--gateway-url` or set
-`NEMO_FLOW_GATEWAY_URL` for hook forwarding.
-
-## Common Options
-
-Static bundles rely on `NEMO_FLOW_GATEWAY_URL` from `nemo-flow run` and
-call:
-
-```bash
-nemo-flow hook-forward <agent>
-```
-
-Persistent installer output includes `--gateway-url` and any selected export or
-session options in the generated command.
-
-`hook-forward` reads the canonical hook JSON from standard input, forwards it to
-the matching gateway endpoint, and prints the vendor-specific hook response.
-
-Useful wrapper and install options:
+Useful wrapper options:
 
 - `--atif-dir <path>` writes ATIF trajectories on session end.
 - `--openinference-endpoint <url>` exports OpenInference traces.
@@ -131,8 +100,6 @@ Useful wrapper and install options:
 - `--profile <name>` records a configuration profile in session metadata.
 - `--gateway-mode hook-only|passthrough|required` records the expected gateway
   behavior in session metadata.
-- `--fail-closed` can be added to generated hook commands when the agent should
-  block on hook delivery failures. The default is fail-open.
 
 ## LLM Gateway
 
@@ -150,7 +117,7 @@ The gateway exposes these passthrough routes:
 - `GET /v1/models`
 
 Transparent runs configure provider routing automatically where the launched
-agent supports local routing. Persistent installs require you to point the
+agent supports local routing. Standalone gateway mode requires you to point the
 agent's provider base URL at the gateway manually.
 
 ## Verify Export
