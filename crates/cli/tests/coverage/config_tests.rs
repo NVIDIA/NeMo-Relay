@@ -107,23 +107,25 @@ fn agent_inference_uses_executable_basename() {
 #[test]
 fn explicit_toml_config_maps_supported_sections() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("gateway.toml");
+    let path = temp.path().join("config.toml");
     std::fs::write(
         &path,
         r#"
-[server]
+[upstream]
 openai_base_url = "http://openai"
 anthropic_base_url = "http://anthropic"
 
-[session]
+[observability]
 atif_dir = "atif"
 metadata = { team = "obs" }
-plugin_config = { components = [] }
 
 [export.openinference]
 endpoint = "http://otel"
 
-[agents.claude-code]
+[plugins]
+config = { components = [] }
+
+[agents.claude]
 command = "claude"
 
 [agents.codex]
@@ -177,14 +179,14 @@ command = "hermes --yolo chat"
 #[test]
 fn cli_run_overrides_config_values() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("gateway.toml");
+    let path = temp.path().join("config.toml");
     std::fs::write(
         &path,
         r#"
-[server]
+[upstream]
 openai_base_url = "http://file-openai"
 
-[session]
+[observability]
 atif_dir = "file-atif"
 metadata = { team = "file" }
 "#,
@@ -214,11 +216,11 @@ metadata = { team = "file" }
 #[test]
 fn run_inherits_top_level_server_flags_when_subcommand_flags_are_absent() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("gateway.toml");
+    let path = temp.path().join("config.toml");
     std::fs::write(
         &path,
         r#"
-[server]
+[upstream]
 openai_base_url = "http://file-openai"
 "#,
     )
@@ -317,7 +319,7 @@ fn malformed_shared_config_reports_context() {
     assert!(error.contains("invalid TOML"));
 
     let invalid_shape = temp.path().join("invalid-shape.toml");
-    std::fs::write(&invalid_shape, "server = \"not-a-table\"").unwrap();
+    std::fs::write(&invalid_shape, "upstream = \"not-a-table\"").unwrap();
     let args = ServerArgs {
         config: Some(invalid_shape),
         ..ServerArgs::default()
@@ -331,11 +333,11 @@ fn malformed_shared_config_reports_context() {
 #[test]
 fn recursive_toml_merge_replaces_scalars_and_preserves_tables() {
     let mut left: toml::Value = r#"
-[server]
+[upstream]
 openai_base_url = "http://old"
 anthropic_base_url = "http://anthropic"
 
-[session.metadata]
+[observability.metadata]
 team = "old"
 env = "dev"
 "#
@@ -343,10 +345,10 @@ env = "dev"
     .map(toml::Value::Table)
     .unwrap();
     let right: toml::Value = r#"
-[server]
+[upstream]
 openai_base_url = "http://new"
 
-[session.metadata]
+[observability.metadata]
 team = "new"
 "#
     .parse::<toml::Table>()
@@ -356,13 +358,19 @@ team = "new"
     merge_toml(&mut left, right);
 
     assert_eq!(
-        left["server"]["openai_base_url"].as_str(),
+        left["upstream"]["openai_base_url"].as_str(),
         Some("http://new")
     );
     assert_eq!(
-        left["server"]["anthropic_base_url"].as_str(),
+        left["upstream"]["anthropic_base_url"].as_str(),
         Some("http://anthropic")
     );
-    assert_eq!(left["session"]["metadata"]["team"].as_str(), Some("new"));
-    assert_eq!(left["session"]["metadata"]["env"].as_str(), Some("dev"));
+    assert_eq!(
+        left["observability"]["metadata"]["team"].as_str(),
+        Some("new")
+    );
+    assert_eq!(
+        left["observability"]["metadata"]["env"].as_str(),
+        Some("dev")
+    );
 }

@@ -60,7 +60,7 @@ fn generates_claude_install_file() {
         json["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap()
-            .contains("hook-forward claude-code")
+            .contains("hook-forward claude")
     );
 }
 
@@ -250,7 +250,7 @@ fn install_writes_file_and_backs_up_existing_config() {
     install(command(CodingAgent::ClaudeCode, temp.path())).unwrap();
 
     let installed = std::fs::read_to_string(&settings).unwrap();
-    assert!(installed.contains("hook-forward claude-code"));
+    assert!(installed.contains("hook-forward claude"));
     let backups: Vec<_> = std::fs::read_dir(&claude_dir)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())

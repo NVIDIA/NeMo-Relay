@@ -13,8 +13,8 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::config::{
-    AgentConfigs, CodingAgent, GatewayConfig, ResolvedConfig, RunCommand, ServerArgs,
-    resolve_run_config,
+    AgentConfigs, CodingAgent, EasyPathCommand, GatewayConfig, ResolvedConfig, RunCommand,
+    ServerArgs, any_config_file_exists, resolve_run_config,
 };
 use crate::error::CliError;
 use crate::installer::{generated_hooks, hook_forward_command, merge_hooks, read_json_file};
@@ -33,6 +33,41 @@ pub(crate) async fn run(
     let run = TransparentRun::new(command, inherited).await?;
     run.print_if_requested();
     run.execute().await
+}
+
+/// Runs the easy-path bare-agent shortcut (`nemo-flow claude`, `nemo-flow codex`, etc.).
+///
+/// If no config file is present at any discovery layer, this fires the interactive setup inline
+/// (`crate::setup::run`) which writes a `config.toml`, then proceeds to launch the agent. When
+/// config IS present, the easy path constructs a synthetic `RunCommand` and delegates to the
+/// same transparent-run pipeline `nemo-flow run` uses — same observability wiring, same agent
+/// argv resolution, same lifecycle management.
+pub(crate) async fn easy_path(
+    agent: CodingAgent,
+    command: EasyPathCommand,
+    inherited: Option<&ServerArgs>,
+) -> Result<ExitCode, CliError> {
+    if !any_config_file_exists() {
+        // No config anywhere — fire setup inline, scoped to the agent the user typed. After
+        // it returns, config discovery will pick up the freshly-written `config.toml` and
+        // `run()` below will see a populated environment. If setup errors (non-TTY, user
+        // cancelled), surface that directly.
+        crate::setup::run(Some(agent)).await?;
+    }
+    let synthetic = RunCommand {
+        agent: Some(agent),
+        config: None,
+        openai_base_url: None,
+        anthropic_base_url: None,
+        atif_dir: None,
+        openinference_endpoint: None,
+        session_metadata: None,
+        plugin_config: None,
+        dry_run: false,
+        print: false,
+        command: command.command,
+    };
+    run(synthetic, inherited).await
 }
 
 struct TransparentRun {
@@ -84,6 +119,8 @@ impl TransparentRun {
         if self.dry_run {
             return Ok(ExitCode::SUCCESS);
         }
+        self.prepared
+            .print_live_status(self.agent, &self.gateway_url, &self.resolved);
         execute_live_run(
             self.listener,
             self.resolved.gateway,
@@ -128,24 +165,35 @@ fn resolve_agent_and_argv(
     Ok((agent, argv))
 }
 
-// Returns the command argv supplied on the CLI, or the configured command for an explicitly selected
-// agent. Empty CLI argv without `--agent` is rejected before inference because there is no executable
-// name to inspect.
+// Resolves the full argv to spawn. When `--agent` is set (the easy-path and explicit `--agent`
+// flows both go through this case), the configured agent command is the base argv and anything
+// after `--` is appended as pass-through args. When `--agent` is absent, `command.command` IS
+// the full argv (e.g., `nemo-flow run -- codex --model X` runs that exact command and infers
+// the agent from argv[0]).
 fn resolved_argv(command: &RunCommand, agents: &AgentConfigs) -> Result<Vec<String>, CliError> {
-    if !command.command.is_empty() {
-        return Ok(command.command.clone());
+    if let Some(agent) = command.agent {
+        let mut argv = configured_command(agent, agents)
+            .unwrap_or_else(|| vec![default_command_for(agent).to_string()]);
+        argv.extend(command.command.iter().cloned());
+        return Ok(argv);
     }
-    let agent = command.agent.ok_or_else(|| {
-        CliError::Launch(
+    if command.command.is_empty() {
+        return Err(CliError::Launch(
             "missing command; pass -- <agent-command> or --agent with a configured command".into(),
-        )
-    })?;
-    configured_command(agent, agents).ok_or_else(|| {
-        CliError::Launch(format!(
-            "no configured command for {}; pass -- <agent-command>",
-            agent.as_arg()
-        ))
-    })
+        ));
+    }
+    Ok(command.command.clone())
+}
+
+// Default agent binary names used when no `[agents.<name>] command = "..."` override is in the
+// resolved config. Matches the executable on $PATH that the wizard's detection probes for.
+const fn default_command_for(agent: CodingAgent) -> &'static str {
+    match agent {
+        CodingAgent::ClaudeCode => "claude",
+        CodingAgent::Codex => "codex",
+        CodingAgent::Cursor => "cursor-agent",
+        CodingAgent::Hermes => "hermes",
+    }
 }
 
 // Uses an explicit `--agent` when present and otherwise infers the agent from argv[0]. Inference is
@@ -156,7 +204,7 @@ fn resolved_agent(command: &RunCommand, argv: &[String]) -> Result<CodingAgent, 
     }
     CodingAgent::infer(&argv[0]).ok_or_else(|| {
         CliError::Launch(format!(
-            "could not infer coding agent from command {:?}; pass --agent claude-code, --agent codex, --agent cursor, or --agent hermes",
+            "could not infer coding agent from command {:?}; pass --agent claude, --agent codex, --agent cursor, or --agent hermes",
             argv[0]
         ))
     })
@@ -312,6 +360,23 @@ impl PreparedRun {
     // overriding `model_providers.openai`. Uses `features.hooks=true` introduced in codex-cli
     // 0.129; the older `features.codex_hooks` is deprecated. Requires codex-cli >= 0.129.0.
     fn prepare_codex(&mut self, gateway_url: &str) {
+        // Codex provider override now uses `requires_openai_auth=false` (see NMF-86): codex no
+        // longer sends credentials, the gateway injects `OPENAI_API_KEY` instead. Surface the
+        // missing-key state EARLY on stderr — a buried `self.notes.push` only renders under
+        // `--print` / `--dry-run`, which means the silent live-run case (the one users actually
+        // hit) would discover the missing key as a confusing 401 mid-session.
+        if std::env::var("OPENAI_API_KEY")
+            .ok()
+            .is_none_or(|v| v.is_empty())
+        {
+            eprintln!(
+                "warning: OPENAI_API_KEY is not set. Codex routes through the NeMo Flow gateway, \
+                 which forwards to api.openai.com using OPENAI_API_KEY from the environment. \
+                 Without it the upstream will return 401. Export your key before launching codex \
+                 (e.g. `export OPENAI_API_KEY=sk-...`), or pass `--openai-base-url` to an upstream \
+                 that needs no key."
+            );
+        }
         let hook_command = hook_forward_command(&transparent_hook_executable(), CodingAgent::Codex);
         let mut args = vec![
             "--config".to_string(),
@@ -412,6 +477,51 @@ impl PreparedRun {
         Ok(())
     }
 
+    // Prints a compact pre-launch status banner so users see at a glance where their observability
+    // data is going (gateway URL, ATIF dir, OpenInference endpoint) before the agent's own UI takes
+    // over the terminal. Distinct from `print()` which is the verbose `--print` / `--dry-run` dump
+    // intended for inspection — this banner is always-on for live runs and wears the same
+    // NVIDIA-green rounded border as the intro banner so the brand frame stays consistent.
+    fn print_live_status(&self, agent: CodingAgent, gateway_url: &str, resolved: &ResolvedConfig) {
+        let mut lines: Vec<String> = Vec::new();
+        lines.push(format!("NeMo Flow → {}", agent.as_arg()));
+        lines.push(format!("  Gateway        {gateway_url}"));
+        match &resolved.gateway.atif_dir {
+            Some(path) => lines.push(format!("  ATIF           {}", path.display())),
+            None => lines.push("  ATIF           (disabled)".to_string()),
+        }
+        match &resolved.gateway.openinference_endpoint {
+            Some(endpoint) => lines.push(format!("  OpenInference  {endpoint}")),
+            None => lines.push("  OpenInference  (disabled)".to_string()),
+        }
+        if !self.notes.is_empty() {
+            lines.push(String::new());
+            for note in &self.notes {
+                lines.push(format!("⚠ {note}"));
+            }
+        }
+
+        let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout())
+            && std::env::var_os("NO_COLOR").is_none();
+        let max_w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+        // 1-char padding on each side of the longest line.
+        let inner = max_w + 2;
+
+        println!();
+        print_border_line('╭', '╮', inner, use_color);
+        for line in &lines {
+            let pad = max_w - line.chars().count();
+            let body = format!(" {line}{spaces} ", spaces = " ".repeat(pad));
+            if use_color {
+                println!("\x1b[38;5;112m│\x1b[0m{body}\x1b[38;5;112m│\x1b[0m");
+            } else {
+                println!("│{body}│");
+            }
+        }
+        print_border_line('╰', '╯', inner, use_color);
+        println!();
+    }
+
     // Prints the resolved transparent-run plan, including dynamic gateway URL, upstream base URLs,
     // argv/env injection, and any agent-specific notes or temporary files.
     fn print(&self, agent: CodingAgent, gateway_url: &str, resolved: &ResolvedConfig) {
@@ -470,10 +580,30 @@ async fn wait_for_health(gateway_url: &str) -> Result<(), CliError> {
 }
 
 fn codex_gateway_provider_config(gateway_url: &str) -> String {
+    // `wire_api="responses"` is the only value codex 0.130+ accepts; the `chat` value was
+    // removed (codex#7782). Codex transparent run therefore only works against upstreams that
+    // implement `/v1/responses` (api.openai.com or a Responses-compatible proxy). For other
+    // upstreams the user falls back to daemon mode + `nemo-flow install codex` and codex talks
+    // directly to its configured upstream — we observe hooks but not LLM calls.
+    //
+    // `requires_openai_auth=false` so codex doesn't send the ChatGPT-Plus OAuth JWT from
+    // `~/.codex/auth.json` (the JWT is rejected by `api.openai.com` with 401). The gateway
+    // injects `OPENAI_API_KEY` itself; see `gateway.rs::inject_provider_auth`. Tracks NMF-86.
     format!(
-        "model_providers.nemo-flow-openai={{name=\"NeMo Flow OpenAI\",base_url={},wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false}}",
+        "model_providers.nemo-flow-openai={{name=\"NeMo Flow OpenAI\",base_url={},wire_api=\"responses\",requires_openai_auth=false,supports_websockets=false}}",
         toml_string(gateway_url)
     )
+}
+
+// Prints one horizontal border line for the live-status frame in NVIDIA green when color is
+// enabled, otherwise plain ASCII-compatible box-drawing.
+fn print_border_line(left: char, right: char, inner_width: usize, color: bool) {
+    let dashes = "─".repeat(inner_width);
+    if color {
+        println!("\x1b[38;5;112m{left}{dashes}{right}\x1b[0m");
+    } else {
+        println!("{left}{dashes}{right}");
+    }
 }
 
 // Returns the absolute path of the running gateway binary so injected hooks can find it

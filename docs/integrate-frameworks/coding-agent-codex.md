@@ -50,14 +50,14 @@ nemo-flow run --agent codex -- my-codex-wrapper
 
 ## Shared Config
 
-Create `.nemo-flow/gateway.toml` for project defaults or
-`~/.config/nemo-flow/gateway.toml` for user defaults:
+Create `.nemo-flow/config.toml` for project defaults or
+`~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[server]
+[upstream]
 openai_base_url = "https://api.openai.com"
 
-[session]
+[observability]
 atif_dir = ".nemo-flow/atif"
 metadata = { team = "agent-observability" }
 

@@ -288,6 +288,7 @@ fn build_buffered_func(
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
     let headers = prepared.headers.clone();
+    let route = prepared.provider;
     Arc::new(move |_request| {
         let http = http.clone();
         let method = method.clone();
@@ -299,7 +300,9 @@ fn build_buffered_func(
         let response_bytes = response_bytes.clone();
         Box::pin(async move {
             let response =
-                match forward_upstream_request(&http, &method, &url, &body_bytes, &headers).await {
+                match forward_upstream_request(&http, &method, &url, &body_bytes, &headers, route)
+                    .await
+                {
                     Ok(response) => response,
                     Err(error) => {
                         let message = error.to_string();
@@ -419,6 +422,7 @@ fn build_streaming_func(
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
     let headers = prepared.headers.clone();
+    let route = prepared.provider;
     Arc::new(move |_request| {
         let http = http.clone();
         let method = method.clone();
@@ -429,7 +433,9 @@ fn build_streaming_func(
         let upstream_error = upstream_error.clone();
         Box::pin(async move {
             let response =
-                match forward_upstream_request(&http, &method, &url, &body_bytes, &headers).await {
+                match forward_upstream_request(&http, &method, &url, &body_bytes, &headers, route)
+                    .await
+                {
                     Ok(response) => response,
                     Err(error) => {
                         let message = error.to_string();
@@ -531,21 +537,111 @@ fn encode_sse_frame(event_json: &Value, route: ProviderRoute) -> String {
 }
 
 // Forwards the buffered request to the upstream provider with only the safe request headers. This
-// is shared by the buffered and streaming managed funcs so header filtering stays consistent.
+// is shared by the buffered and streaming managed funcs so header filtering stays consistent. When
+// the inbound request carries no auth (e.g., codex with `requires_openai_auth=false` per NMF-86)
+// the gateway injects the provider's API key from environment so the upstream sees authenticated
+// traffic without forcing the agent to manage credentials.
 async fn forward_upstream_request(
     http: &reqwest::Client,
     method: &Method,
     url: &str,
     body_bytes: &Bytes,
     headers: &HeaderMap,
+    route: ProviderRoute,
 ) -> Result<reqwest::Response, reqwest::Error> {
+    let sanitized = strip_chatgpt_oauth_for_openai_route(headers, route);
     let mut upstream = http.request(method.clone(), url).body(body_bytes.clone());
-    for (name, value) in headers {
+    for (name, value) in &sanitized {
         if should_forward_request_header(name) {
             upstream = upstream.header(name, value);
         }
     }
+    upstream = inject_provider_auth(upstream, route, &sanitized);
     upstream.send().await
+}
+
+// Removes ChatGPT-Plus OAuth JWTs from inbound `Authorization` on OpenAI routes. Codex 0.130
+// keeps sending the JWT from `~/.codex/auth.json` even when its provider override declares
+// `requires_openai_auth=false`, and the JWT is a consumer token rejected by `api.openai.com` /
+// LiteLLM-fronted endpoints (NVIDIA's `inference-api.nvidia.com`) with 401. By dropping the JWT
+// here, `inject_provider_auth` then injects `OPENAI_API_KEY` from environment and the upstream
+// sees a valid bearer token. Hermes-style clients that send a real `sk-...` API key are not
+// affected — the JWT detector only triggers on `Bearer eyJ...` (base64 JSON header). Tracks
+// NMF-86.
+fn strip_chatgpt_oauth_for_openai_route(headers: &HeaderMap, route: ProviderRoute) -> HeaderMap {
+    if !matches!(
+        route,
+        ProviderRoute::OpenAiResponses
+            | ProviderRoute::OpenAiChatCompletions
+            | ProviderRoute::OpenAiModels
+    ) {
+        return headers.clone();
+    }
+    let mut out = headers.clone();
+    let looks_like_jwt = out
+        .get(http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.starts_with("Bearer eyJ"))
+        .unwrap_or(false);
+    if looks_like_jwt {
+        out.remove(http::header::AUTHORIZATION);
+    }
+    out
+}
+
+// If the inbound request has no provider auth header (Authorization / x-api-key / api-key), read
+// the provider's standard API key env var and attach it to the outbound request. Tracks NMF-86:
+// codex 0.130 prefers `~/.codex/auth.json` ChatGPT-Plus OAuth over `OPENAI_API_KEY` and that JWT is
+// rejected by `api.openai.com`, so codex now runs with `requires_openai_auth=false` and the
+// gateway owns credentials. If neither inbound auth nor the env var is present, the request is
+// forwarded as-is and the upstream returns a real 401 (caller can detect and surface).
+fn inject_provider_auth(
+    builder: reqwest::RequestBuilder,
+    route: ProviderRoute,
+    inbound: &HeaderMap,
+) -> reqwest::RequestBuilder {
+    inject_provider_auth_with_env(builder, route, inbound, |key| std::env::var(key).ok())
+}
+
+// Pure variant exposed for tests. The env lookup is injected so cases can be exercised without
+// mutating process env state (which races with parallel test execution).
+fn inject_provider_auth_with_env<F>(
+    builder: reqwest::RequestBuilder,
+    route: ProviderRoute,
+    inbound: &HeaderMap,
+    env_lookup: F,
+) -> reqwest::RequestBuilder
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let already_authed = inbound.contains_key(http::header::AUTHORIZATION)
+        || inbound.contains_key("x-api-key")
+        || inbound.contains_key("api-key")
+        || inbound.contains_key("anthropic-api-key");
+    if already_authed {
+        return builder;
+    }
+    let (env_var, header_name) = match route {
+        ProviderRoute::OpenAiResponses
+        | ProviderRoute::OpenAiChatCompletions
+        | ProviderRoute::OpenAiModels => ("OPENAI_API_KEY", http::header::AUTHORIZATION.as_str()),
+        ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
+            ("ANTHROPIC_API_KEY", "x-api-key")
+        }
+    };
+    let Some(value) = env_lookup(env_var) else {
+        return builder;
+    };
+    if value.is_empty() {
+        return builder;
+    }
+    let header_value = match route {
+        ProviderRoute::OpenAiResponses
+        | ProviderRoute::OpenAiChatCompletions
+        | ProviderRoute::OpenAiModels => format!("Bearer {value}"),
+        ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => value,
+    };
+    builder.header(header_name, header_value)
 }
 
 // Plain byte passthrough used for streaming routes that lack a typed codec. The managed pipeline
@@ -561,6 +657,7 @@ async fn passthrough_streaming(
         &prepared.upstream_url,
         &prepared.body_bytes,
         &prepared.headers,
+        prepared.provider,
     )
     .await?;
     let status = response.status();
@@ -617,12 +714,14 @@ pub(crate) async fn models(
             .map(|p| p.as_str())
             .unwrap_or(parts.uri.path()),
     );
+    let sanitized = strip_chatgpt_oauth_for_openai_route(&parts.headers, provider);
     let mut upstream = state.http.get(upstream_url);
-    for (name, value) in &parts.headers {
+    for (name, value) in &sanitized {
         if should_forward_request_header(name) {
             upstream = upstream.header(name, value);
         }
     }
+    upstream = inject_provider_auth(upstream, provider, &sanitized);
     let upstream_response = upstream.send().await?;
     let status = upstream_response.status();
     let headers = response_headers(upstream_response.headers());

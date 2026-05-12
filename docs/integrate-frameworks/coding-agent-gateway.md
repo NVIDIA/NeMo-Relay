@@ -86,27 +86,29 @@ and project config. CLI flags and environment variables override file config.
 
 Config file locations are:
 
-- `/etc/nemo-flow/gateway.toml`
-- `.nemo-flow/gateway.toml`
-- `$XDG_CONFIG_HOME/nemo-flow/gateway.toml`
-- `~/.config/nemo-flow/gateway.toml`
+- `/etc/nemo-flow/config.toml`
+- `.nemo-flow/config.toml`
+- `$XDG_CONFIG_HOME/nemo-flow/config.toml`
+- `~/.config/nemo-flow/config.toml`
 
 Example:
 
 ```toml
-[server]
+[upstream]
 openai_base_url = "https://api.openai.com"
 anthropic_base_url = "https://api.anthropic.com"
 
-[session]
+[observability]
 atif_dir = ".nemo-flow/atif"
 metadata = { team = "agent-observability" }
-plugin_config = { components = [] }
+
+[plugins]
+config = { components = [] }
 
 [export.openinference]
 endpoint = "http://127.0.0.1:4318/v1/traces"
 
-[agents.claude-code]
+[agents.claude]
 command = "claude"
 
 [agents.codex]

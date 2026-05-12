@@ -1,0 +1,727 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! First-run setup for `nemo-flow` configuration.
+//!
+//! Drives the three required prompts (scope, agents, observability backends) plus an optional
+//! OpenInference endpoint follow-up, then writes a `config.toml` to the chosen scope. Pure
+//! helpers (`detect_installed_agents`, `build_config`, `save_config`) are split out from the
+//! `dialoguer`-driven orchestrator so the data path can be unit-tested without a TTY.
+
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
+
+use dialoguer::theme::ColorfulTheme;
+use dialoguer::{Confirm, Input, MultiSelect, Select};
+use toml_edit::{DocumentMut, Item, Table, value};
+
+use crate::config::CodingAgent;
+use crate::error::CliError;
+
+/// Where the setup saves its output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConfigScope {
+    /// `./.nemo-flow/config.toml` (walked-up workspace dir).
+    Project,
+    /// `~/.config/nemo-flow/config.toml` (or `$XDG_CONFIG_HOME/nemo-flow/config.toml`).
+    Global,
+    /// Both project and global; project takes precedence per merge order.
+    Both,
+}
+
+impl ConfigScope {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Project => "project   ./.nemo-flow/config.toml          (recommended)",
+            Self::Global => "global    ~/.config/nemo-flow/config.toml",
+            Self::Both => "both      project overrides global",
+        }
+    }
+}
+
+/// One of the built-in observability backends offered in setup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ObservabilityBackend {
+    /// Local ATIF trajectory files.
+    Atif,
+    /// OpenInference spans streamed to an HTTP endpoint (Phoenix, Arize, OTLP-compatible).
+    OpenInference,
+}
+
+impl ObservabilityBackend {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Atif => "ATIF trajectory files    ./atif/                  (recommended)",
+            Self::OpenInference => {
+                "OpenInference spans      <endpoint URL>           (Phoenix / Arize / OTLP)"
+            }
+        }
+    }
+}
+
+/// Resolved answers from setup. Built either by `prompt_user` (interactive) or by tests.
+#[derive(Debug, Clone)]
+pub(crate) struct SetupAnswers {
+    pub scope: ConfigScope,
+    pub agents: Vec<CodingAgent>,
+    pub backends: Vec<ObservabilityBackend>,
+    pub openinference_endpoint: Option<String>,
+    /// Custom OpenAI-compatible upstream URL written to `[upstream] openai_base_url`. `None`
+    /// when the user keeps the default (`api.openai.com`) — keeps minimal configs minimal.
+    /// Currently surfaced by the codex setup branch; reusable by any future agent on the
+    /// OpenAI route family.
+    pub openai_base_url: Option<String>,
+}
+
+/// Scans `$PATH` for the supported coding-agent binaries and returns the ones present.
+///
+/// The lookup uses the same set of executable names that `CodingAgent::infer` already recognizes;
+/// detection is pure and deterministic given a fixed PATH so it can be exercised in tests by
+/// constructing a tempdir with stub binaries and pointing `$PATH` at it.
+pub(crate) fn detect_installed_agents() -> Vec<CodingAgent> {
+    detect_installed_agents_in(std::env::var_os("PATH").as_deref())
+}
+
+fn detect_installed_agents_in(path_var: Option<&std::ffi::OsStr>) -> Vec<CodingAgent> {
+    let Some(path_var) = path_var else {
+        return Vec::new();
+    };
+    // Pairs of (CodingAgent, exec name to look for on $PATH).
+    let candidates = [
+        (CodingAgent::ClaudeCode, "claude"),
+        (CodingAgent::Codex, "codex"),
+        (CodingAgent::Cursor, "cursor-agent"),
+        (CodingAgent::Hermes, "hermes"),
+    ];
+    candidates
+        .into_iter()
+        .filter_map(|(agent, exec)| {
+            let found = std::env::split_paths(path_var).any(|dir| {
+                let candidate = dir.join(exec);
+                candidate.is_file()
+            });
+            found.then_some(agent)
+        })
+        .collect()
+}
+
+/// Builds the TOML document that represents the setup's answers. Pure and testable.
+///
+/// The shape mirrors the schema landed in Phase 1: `[observability]`, `[export.openinference]`,
+/// `[agents.<name>]`. Sections are only emitted when the user opted into the corresponding
+/// behavior so the resulting file stays minimal.
+pub(crate) fn build_config(answers: &SetupAnswers) -> DocumentMut {
+    let mut doc = DocumentMut::new();
+
+    if answers.backends.contains(&ObservabilityBackend::Atif) {
+        let mut observability = Table::new();
+        observability["atif_dir"] = value("./atif");
+        doc["observability"] = Item::Table(observability);
+    }
+
+    if answers
+        .backends
+        .contains(&ObservabilityBackend::OpenInference)
+        && let Some(endpoint) = answers.openinference_endpoint.as_deref()
+    {
+        let mut export = Table::new();
+        let mut openinference = Table::new();
+        openinference["endpoint"] = value(endpoint);
+        export.insert("openinference", Item::Table(openinference));
+        doc["export"] = Item::Table(export);
+    }
+
+    if !answers.agents.is_empty() {
+        let mut agents_table = Table::new();
+        for agent in &answers.agents {
+            let (key, command) = match agent {
+                CodingAgent::ClaudeCode => ("claude", "claude"),
+                CodingAgent::Codex => ("codex", "codex"),
+                CodingAgent::Cursor => ("cursor", "cursor-agent"),
+                CodingAgent::Hermes => ("hermes", "hermes"),
+            };
+            let mut agent_table = Table::new();
+            agent_table["command"] = value(command);
+            agents_table.insert(key, Item::Table(agent_table));
+        }
+        doc["agents"] = Item::Table(agents_table);
+    }
+
+    if let Some(base_url) = answers.openai_base_url.as_deref() {
+        let mut upstream = Table::new();
+        upstream["openai_base_url"] = value(base_url);
+        doc["upstream"] = Item::Table(upstream);
+    }
+
+    doc
+}
+
+/// Writes the setup's TOML document to the scope-appropriate path(s).
+///
+/// When `merge_scope` is `Some(agent)`, an existing `config.toml` at the target path is parsed
+/// and only the sections owned by THIS wizard run are replaced: `[observability]`,
+/// `[export.openinference]`, `[plugins]`, and the single `[agents.<agent>]` block. Other
+/// `[agents.*]` blocks are preserved. When `merge_scope` is `None`, the file is overwritten
+/// outright with the wizard's full output (the user explicitly chose which agents to include).
+///
+/// Returns the list of paths written. `home` and `cwd` are explicit so tests can drive this with
+/// tempdirs.
+pub(crate) fn save_config(
+    doc: &DocumentMut,
+    scope: ConfigScope,
+    cwd: &Path,
+    home: &Path,
+    merge_scope: Option<CodingAgent>,
+) -> Result<Vec<PathBuf>, CliError> {
+    let mut written = Vec::new();
+    if matches!(scope, ConfigScope::Project | ConfigScope::Both) {
+        let project_dir = cwd.join(".nemo-flow");
+        std::fs::create_dir_all(&project_dir)?;
+        let path = project_dir.join("config.toml");
+        write_or_merge(&path, doc, merge_scope)?;
+        written.push(path);
+    }
+    if matches!(scope, ConfigScope::Global | ConfigScope::Both) {
+        let global_dir = home.join(".config").join("nemo-flow");
+        std::fs::create_dir_all(&global_dir)?;
+        let path = global_dir.join("config.toml");
+        write_or_merge(&path, doc, merge_scope)?;
+        written.push(path);
+    }
+    Ok(written)
+}
+
+// Writes the wizard-built `doc` to `path`. When `merge_scope` is `Some(agent)` and the file
+// already exists, preserves any `[agents.<other>]` blocks while replacing the shared sections
+// and the target agent's block. When `merge_scope` is `None`, just overwrites the file.
+fn write_or_merge(
+    path: &Path,
+    doc: &DocumentMut,
+    merge_scope: Option<CodingAgent>,
+) -> Result<(), CliError> {
+    let Some(agent) = merge_scope else {
+        std::fs::write(path, doc.to_string())?;
+        return Ok(());
+    };
+    if !path.exists() {
+        std::fs::write(path, doc.to_string())?;
+        return Ok(());
+    }
+    let existing_raw = std::fs::read_to_string(path)?;
+    let mut existing: DocumentMut = existing_raw
+        .parse()
+        .map_err(|err| CliError::Config(format!("could not parse existing config: {err}")))?;
+    let agent_key = agent_key_and_command(agent).0;
+    merge_section(&mut existing, doc, "observability");
+    merge_section(&mut existing, doc, "export");
+    merge_section(&mut existing, doc, "plugins");
+    merge_section(&mut existing, doc, "upstream");
+    merge_agents_entry(&mut existing, doc, agent_key);
+    std::fs::write(path, existing.to_string())?;
+    Ok(())
+}
+
+// Copies a top-level section from `src` into `dst`, replacing any existing entry under the same
+// key. If `src` does not contain the section, the existing entry in `dst` is left as-is — that
+// preserves shared settings like `[upstream]` that the wizard does not touch.
+fn merge_section(dst: &mut DocumentMut, src: &DocumentMut, key: &str) {
+    if let Some(item) = src.get(key) {
+        dst[key] = item.clone();
+    }
+}
+
+// Replaces the single `[agents.<agent>]` block in `dst` with the one from `src`. If `src` does
+// not contain that block, the existing entry in `dst` is left as-is.
+fn merge_agents_entry(dst: &mut DocumentMut, src: &DocumentMut, agent_key: &str) {
+    let Some(src_agent) = src
+        .get("agents")
+        .and_then(|item| item.as_table())
+        .and_then(|table| table.get(agent_key))
+    else {
+        return;
+    };
+    if !dst.contains_key("agents") {
+        dst["agents"] = Item::Table(Table::new());
+    }
+    let agents_table = dst["agents"]
+        .as_table_mut()
+        .expect("agents key was just inserted as a table");
+    agents_table.insert(agent_key, src_agent.clone());
+}
+
+/// Removes the project `config.toml` (or just one agent's block within it).
+///
+/// `agent_hint = None` deletes the whole project config file. `agent_hint = Some(agent)` parses
+/// the existing file and removes only `[agents.<agent>]`, leaving every other section intact.
+/// In both cases this targets the *project* layer; global and system layers are left to direct
+/// editing because they typically aren't owned by the wizard.
+pub(crate) fn reset(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
+    let cwd = std::env::current_dir()?;
+    let path = cwd.join(".nemo-flow").join("config.toml");
+    if !path.exists() {
+        println!("  No project config to reset at {}", path.display());
+        return Ok(());
+    }
+    match agent_hint {
+        None => {
+            std::fs::remove_file(&path)?;
+            println!("  ✓ Removed {}", path.display());
+            println!("  Run `nemo-flow config` to set up again.");
+        }
+        Some(agent) => {
+            let agent_key = agent_key_and_command(agent).0;
+            let raw = std::fs::read_to_string(&path)?;
+            let mut doc: DocumentMut = raw.parse().map_err(|err| {
+                CliError::Config(format!("could not parse existing config: {err}"))
+            })?;
+            if let Some(agents) = doc.get_mut("agents").and_then(Item::as_table_mut) {
+                if agents.remove(agent_key).is_none() {
+                    println!(
+                        "  No `[agents.{agent_key}]` block to reset in {}",
+                        path.display()
+                    );
+                    return Ok(());
+                }
+                // Remove the empty `[agents]` table itself so the file stays tidy when no agent
+                // entries remain.
+                if agents.is_empty() {
+                    doc.remove("agents");
+                }
+            }
+            std::fs::write(&path, doc.to_string())?;
+            println!("  ✓ Removed `[agents.{agent_key}]` from {}", path.display());
+        }
+    }
+    Ok(())
+}
+
+/// Drives the interactive setup. Returns the answers so callers can either save them or feed
+/// the resulting config back into a launch path. Errors when stdin isn't a TTY so non-interactive
+/// callers fall back to explicit flags instead of hanging on a prompt that nobody will see.
+///
+/// When `agent_hint` is `Some`, the agent multi-select is skipped — the user already declared
+/// intent by typing `nemo-flow claude` (or another agent name), so respect that and only ask
+/// scope + backends. To set up multiple agents, the user re-runs `nemo-flow config` later.
+pub(crate) fn prompt_user(
+    detected_agents: &[CodingAgent],
+    agent_hint: Option<CodingAgent>,
+) -> Result<SetupAnswers, CliError> {
+    ensure_tty()?;
+    let defaults = read_existing_defaults().unwrap_or_default();
+    crate::banner::print_intro();
+    match agent_hint {
+        Some(agent) => {
+            let (name, _) = agent_key_and_command(agent);
+            println!("  Setting up observability for {name}.");
+            println!("  Re-run `nemo-flow config` later to configure additional agents.");
+        }
+        None => {
+            println!("  Let's set up observability for your coding agent.");
+            println!("  This runs once. Re-run later with `nemo-flow config`.");
+        }
+    }
+    // Only print the detected-agents listing for the unscoped wizard (`nemo-flow config`),
+    // where the user is about to pick from the multi-select. When the agent was already chosen
+    // via the easy-path shortcut (`nemo-flow codex`), listing the other three agents is noise.
+    if agent_hint.is_none() {
+        println!();
+        print_detected_agents(detected_agents);
+    }
+    if defaults.has_any() {
+        println!();
+        println!("  Existing config detected — current values are pre-selected.");
+    }
+    println!();
+    // Keybinding hint shown once: dialoguer's MultiSelect needs SPACE to toggle and ENTER to
+    // confirm, but doesn't surface that itself. Without this line, users hit Enter expecting
+    // to check a box and the prompt confirms with the wrong selection.
+    println!(
+        "  Tip: ↑/↓ to move, SPACE to toggle a checkbox, ENTER to confirm. Defaults are pre-selected."
+    );
+    println!();
+
+    let theme = ColorfulTheme::default();
+    let scope = ask_scope(&theme, defaults.scope)?;
+    let agents = match agent_hint {
+        Some(agent) => vec![agent],
+        None => ask_agents(&theme, detected_agents, &defaults.agents)?,
+    };
+    let (backends, openinference_endpoint) = ask_backends(&theme, &defaults)?;
+
+    let openai_base_url = if agents.contains(&CodingAgent::Codex) {
+        print_codex_api_key_guide();
+        ask_openai_base_url(&theme, defaults.openai_base_url.as_deref())?
+    } else {
+        None
+    };
+
+    Ok(SetupAnswers {
+        scope,
+        agents,
+        backends,
+        openinference_endpoint,
+        openai_base_url,
+    })
+}
+
+/// Pre-filled wizard defaults read from an existing `config.toml`. When the file is missing or
+/// unparseable the defaults are all-empty and the wizard behaves like a first-run setup.
+#[derive(Debug, Clone, Default)]
+struct Defaults {
+    scope: Option<ConfigScope>,
+    agents: Vec<CodingAgent>,
+    atif_enabled: bool,
+    openinference_endpoint: Option<String>,
+    openai_base_url: Option<String>,
+}
+
+impl Defaults {
+    fn has_any(&self) -> bool {
+        self.scope.is_some()
+            || !self.agents.is_empty()
+            || self.atif_enabled
+            || self.openinference_endpoint.is_some()
+            || self.openai_base_url.is_some()
+    }
+}
+
+/// Reads the highest-precedence existing config file and derives wizard defaults from it.
+/// Workspace config wins over global; if both exist, scope defaults to `Both`. Missing or
+/// malformed files yield `None` (the wizard then behaves as if no config existed).
+fn read_existing_defaults() -> Option<Defaults> {
+    let cwd = std::env::current_dir().ok()?;
+    let home = home_dir();
+
+    let workspace_path = cwd.join(".nemo-flow").join("config.toml");
+    let global_path = home
+        .as_ref()
+        .map(|h| h.join(".config").join("nemo-flow").join("config.toml"));
+
+    let workspace_exists = workspace_path.exists();
+    let global_exists = global_path.as_ref().is_some_and(|p| p.exists());
+
+    let read_doc =
+        |path: &Path| -> Option<DocumentMut> { std::fs::read_to_string(path).ok()?.parse().ok() };
+
+    let doc = match (workspace_exists, global_exists) {
+        (true, _) => read_doc(&workspace_path)?,
+        (false, true) => read_doc(global_path.as_ref()?)?,
+        (false, false) => return None,
+    };
+
+    let scope = match (workspace_exists, global_exists) {
+        (true, true) => Some(ConfigScope::Both),
+        (true, false) => Some(ConfigScope::Project),
+        (false, true) => Some(ConfigScope::Global),
+        (false, false) => None,
+    };
+
+    Some(Defaults {
+        scope,
+        agents: read_agents_from_doc(&doc),
+        atif_enabled: doc
+            .get("observability")
+            .and_then(|i| i.as_table())
+            .and_then(|t| t.get("atif_dir"))
+            .is_some(),
+        openinference_endpoint: doc
+            .get("export")
+            .and_then(|i| i.as_table())
+            .and_then(|t| t.get("openinference"))
+            .and_then(|i| i.as_table())
+            .and_then(|t| t.get("endpoint"))
+            .and_then(|i| i.as_str())
+            .map(str::to_string),
+        openai_base_url: doc
+            .get("upstream")
+            .and_then(|i| i.as_table())
+            .and_then(|t| t.get("openai_base_url"))
+            .and_then(|i| i.as_str())
+            .map(str::to_string),
+    })
+}
+
+fn read_agents_from_doc(doc: &DocumentMut) -> Vec<CodingAgent> {
+    let Some(table) = doc.get("agents").and_then(|i| i.as_table()) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for (key, _) in table.iter() {
+        let agent = match key {
+            "claude" => Some(CodingAgent::ClaudeCode),
+            "codex" => Some(CodingAgent::Codex),
+            "cursor" => Some(CodingAgent::Cursor),
+            "hermes" => Some(CodingAgent::Hermes),
+            _ => None,
+        };
+        if let Some(agent) = agent {
+            found.push(agent);
+        }
+    }
+    found
+}
+
+fn print_codex_api_key_guide() {
+    // Codex 0.130 only accepts `wire_api="responses"` (codex#7782 removed `chat`), so codex
+    // transparent run requires a Responses-compatible upstream. The gateway injects the API
+    // key on outbound forwards (NMF-86) — user just sets OPENAI_API_KEY in their environment;
+    // any Bearer-token key works (OpenAI, internal proxy, etc.) as long as the upstream
+    // accepts it.
+    println!();
+    println!("  ℹ Codex sends Responses-API requests through the gateway.");
+    println!("    The gateway injects OPENAI_API_KEY on outbound forwards. Set it before");
+    println!("    launching codex:  export OPENAI_API_KEY=...");
+    println!("    Any Bearer-token key works (OpenAI developer key, internal proxy, etc.)");
+    println!("    — the ChatGPT-Plus OAuth in ~/.codex/auth.json is NOT used.");
+    println!();
+}
+
+fn ask_openai_base_url(
+    theme: &ColorfulTheme,
+    existing: Option<&str>,
+) -> Result<Option<String>, CliError> {
+    // Pre-fill with the existing `[upstream] openai_base_url` if there is one, else the OpenAI
+    // default. We return Some only when the user's value differs from the OpenAI default —
+    // matching the upstream behavior (writes minimal configs, omits the default).
+    let initial = existing.unwrap_or("https://api.openai.com");
+    let url: String = Input::with_theme(theme)
+        .with_prompt("Codex upstream URL (Responses-compatible)")
+        .with_initial_text(initial)
+        .interact_text()
+        .map_err(setup_error)?;
+    if url == "https://api.openai.com" {
+        Ok(None)
+    } else {
+        Ok(Some(url))
+    }
+}
+
+fn ensure_tty() -> Result<(), CliError> {
+    if !std::io::stdin().is_terminal() {
+        return Err(CliError::Config(
+            "interactive setup requires a TTY; pass `--config <path>` or set up \
+             `.nemo-flow/config.toml` manually"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+fn print_detected_agents(detected: &[CodingAgent]) {
+    println!("  Detected agents on $PATH:");
+    for agent in detected {
+        let (name, _) = agent_key_and_command(*agent);
+        println!("    ✓ {name}");
+    }
+    if detected.is_empty() {
+        println!("    (none — you can still configure observability and add agents later)");
+    }
+}
+
+fn ask_scope(
+    theme: &ColorfulTheme,
+    existing: Option<ConfigScope>,
+) -> Result<ConfigScope, CliError> {
+    let options = [ConfigScope::Project, ConfigScope::Global, ConfigScope::Both];
+    let labels: Vec<&str> = options.iter().map(|s| s.label()).collect();
+    // Cursor starts on the user's existing scope if there is one (so re-running the wizard
+    // doesn't accidentally relocate their config), else `Project` per the design default.
+    let default_idx = existing
+        .and_then(|s| options.iter().position(|opt| *opt == s))
+        .unwrap_or(0);
+    let idx = Select::with_theme(theme)
+        .with_prompt("Save config where?")
+        .items(&labels)
+        .default(default_idx)
+        .interact()
+        .map_err(setup_error)?;
+    Ok(options[idx])
+}
+
+fn ask_agents(
+    theme: &ColorfulTheme,
+    detected: &[CodingAgent],
+    configured: &[CodingAgent],
+) -> Result<Vec<CodingAgent>, CliError> {
+    let all_supported = [
+        CodingAgent::ClaudeCode,
+        CodingAgent::Codex,
+        CodingAgent::Cursor,
+        CodingAgent::Hermes,
+    ];
+    let labels: Vec<String> = all_supported
+        .iter()
+        .map(|a| {
+            let (name, _) = agent_key_and_command(*a);
+            name.to_string()
+        })
+        .collect();
+    // Pre-check: union of "already in the existing config" and "detected on $PATH". The existing
+    // entries take precedence — if the user previously deselected an agent that's on PATH, we
+    // shouldn't re-check it for them. On first run (no existing config), this falls back to
+    // pre-checking everything detected.
+    let defaults: Vec<bool> = if configured.is_empty() {
+        all_supported.iter().map(|a| detected.contains(a)).collect()
+    } else {
+        all_supported
+            .iter()
+            .map(|a| configured.contains(a))
+            .collect()
+    };
+    let selected_idx = MultiSelect::with_theme(theme)
+        .with_prompt("Which agents to observe?")
+        .items(&labels)
+        .defaults(&defaults)
+        .interact()
+        .map_err(setup_error)?;
+    Ok(selected_idx.into_iter().map(|i| all_supported[i]).collect())
+}
+
+fn ask_backends(
+    theme: &ColorfulTheme,
+    existing: &Defaults,
+) -> Result<(Vec<ObservabilityBackend>, Option<String>), CliError> {
+    let options = [
+        ObservabilityBackend::Atif,
+        ObservabilityBackend::OpenInference,
+    ];
+    let labels: Vec<&str> = options.iter().map(|b| b.label()).collect();
+    // Pre-check from existing config when present. On first run, falls back to ATIF on (zero
+    // infra) and OpenInference off (needs an endpoint running).
+    let defaults = if existing.has_any() {
+        [
+            existing.atif_enabled,
+            existing.openinference_endpoint.is_some(),
+        ]
+    } else {
+        [true, false]
+    };
+    let selected_idx = MultiSelect::with_theme(theme)
+        .with_prompt("Observability backends?")
+        .items(&labels)
+        .defaults(&defaults)
+        .interact()
+        .map_err(setup_error)?;
+    let backends: Vec<ObservabilityBackend> =
+        selected_idx.into_iter().map(|i| options[i]).collect();
+
+    let openinference_endpoint = if backends.contains(&ObservabilityBackend::OpenInference) {
+        let initial = existing
+            .openinference_endpoint
+            .as_deref()
+            .unwrap_or("http://localhost:6006/v1/traces");
+        let endpoint: String = Input::with_theme(theme)
+            .with_prompt("OpenInference endpoint URL")
+            .with_initial_text(initial)
+            .interact_text()
+            .map_err(setup_error)?;
+        Some(endpoint)
+    } else {
+        None
+    };
+
+    Ok((backends, openinference_endpoint))
+}
+
+/// Confirms the summary with the user before writing the file. Returns true if the user accepted.
+/// Shows both the destination path(s) and the exact TOML body about to be written so the user
+/// can verify what they're committing to instead of confirming a path blind.
+pub(crate) fn confirm_summary(
+    written_paths: &[PathBuf],
+    doc: &DocumentMut,
+) -> Result<bool, CliError> {
+    println!();
+    println!("  ─── Summary ─────────────────────────────────────────────");
+    println!("  Will write to:");
+    for path in written_paths {
+        println!("    {}", path.display());
+    }
+    println!();
+    println!("  Contents:");
+    for line in doc.to_string().lines() {
+        println!("    {line}");
+    }
+    println!();
+    Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Looks good?")
+        .default(true)
+        .interact()
+        .map_err(setup_error)
+}
+
+fn setup_error(err: dialoguer::Error) -> CliError {
+    // dialoguer errors are mostly IO. Translate cancellation (Ctrl-C, EOF on stdin) into a
+    // friendly "cancelled" message; surface anything else as the raw error.
+    match err {
+        dialoguer::Error::IO(io_err)
+            if matches!(
+                io_err.kind(),
+                std::io::ErrorKind::Interrupted | std::io::ErrorKind::UnexpectedEof
+            ) =>
+        {
+            CliError::Config("setup cancelled — no config saved".into())
+        }
+        other => CliError::Config(format!("setup error: {other}")),
+    }
+}
+
+fn agent_key_and_command(agent: CodingAgent) -> (&'static str, &'static str) {
+    match agent {
+        CodingAgent::ClaudeCode => ("claude", "claude"),
+        CodingAgent::Codex => ("codex", "codex"),
+        CodingAgent::Cursor => ("cursor", "cursor-agent"),
+        CodingAgent::Hermes => ("hermes", "hermes"),
+    }
+}
+
+/// Top-level setup entry point used by `nemo-flow config` and the easy-path fallback.
+/// Detects agents, prompts the user, writes the config, prints a final summary.
+///
+/// `agent_hint` carries the agent the user typed on the easy path (`nemo-flow claude`); when
+/// `Some`, the agent multi-select is skipped because intent is already declared. `None` from
+/// `nemo-flow config` asks the full set so users can configure multiple agents at once.
+pub(crate) async fn run(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
+    let detected = detect_installed_agents();
+    let answers = prompt_user(&detected, agent_hint)?;
+    let doc = build_config(&answers);
+
+    let cwd = std::env::current_dir()?;
+    let home = home_dir().ok_or_else(|| {
+        CliError::Config("cannot determine home directory (set $HOME or $USERPROFILE)".into())
+    })?;
+    let preview_paths = preview_paths(answers.scope, &cwd, &home);
+
+    if !confirm_summary(&preview_paths, &doc)? {
+        return Err(CliError::Config("setup cancelled — no config saved".into()));
+    }
+
+    let written = save_config(&doc, answers.scope, &cwd, &home, agent_hint)?;
+    println!();
+    println!("  ✓ Saved:");
+    for path in &written {
+        println!("    {}", path.display());
+    }
+    println!();
+    Ok(())
+}
+
+fn preview_paths(scope: ConfigScope, cwd: &Path, home: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if matches!(scope, ConfigScope::Project | ConfigScope::Both) {
+        paths.push(cwd.join(".nemo-flow").join("config.toml"));
+    }
+    if matches!(scope, ConfigScope::Global | ConfigScope::Both) {
+        paths.push(home.join(".config").join("nemo-flow").join("config.toml"));
+    }
+    paths
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
+#[cfg(test)]
+#[path = "../tests/coverage/setup_tests.rs"]
+mod tests;

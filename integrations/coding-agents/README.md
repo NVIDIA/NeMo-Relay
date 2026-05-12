@@ -50,7 +50,7 @@ nemo-flow run --atif-dir .nemo-flow/atif -- cursor-agent
 nemo-flow run --atif-dir .nemo-flow/atif -- hermes
 ```
 
-Use `--agent claude-code|codex|cursor|hermes` when a wrapper hides the agent
+Use `--agent claude|codex|cursor|hermes` when a wrapper hides the agent
 command name. Use `--dry-run --print` to inspect generated config without
 launching.
 
@@ -58,13 +58,13 @@ Hermes transparent runs export the dynamic `NEMO_FLOW_GATEWAY_URL`, but Hermes
 hooks still need to be installed or approved in Hermes configuration before
 they can call the gateway.
 
-Shared TOML config is loaded from `/etc/nemo-flow/gateway.toml`, then nearest
-project `.nemo-flow/gateway.toml`, then
-`$XDG_CONFIG_HOME/nemo-flow/gateway.toml` or
-`~/.config/nemo-flow/gateway.toml`.
+Shared TOML config is loaded from `/etc/nemo-flow/config.toml`, then nearest
+project `.nemo-flow/config.toml`, then
+`$XDG_CONFIG_HOME/nemo-flow/config.toml` or
+`~/.config/nemo-flow/config.toml`.
 
 ```toml
-[session]
+[observability]
 atif_dir = ".nemo-flow/atif"
 metadata = { team = "agent-observability" }
 

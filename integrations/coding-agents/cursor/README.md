@@ -58,11 +58,11 @@ nemo-flow run \
 
 ## Shared Config
 
-Use `.nemo-flow/gateway.toml` for project defaults or
-`~/.config/nemo-flow/gateway.toml` for user defaults:
+Use `.nemo-flow/config.toml` for project defaults or
+`~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[session]
+[observability]
 atif_dir = ".nemo-flow/atif"
 metadata = { team = "agent-observability" }
 

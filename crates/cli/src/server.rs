@@ -34,7 +34,23 @@ pub(crate) struct AppState {
 /// Tests and transparent run mode use `serve_listener` directly so they can supply an already
 /// bound ephemeral listener and optional shutdown channel.
 pub(crate) async fn serve(config: GatewayConfig) -> Result<(), CliError> {
-    let listener = TcpListener::bind(config.bind).await?;
+    let listener = TcpListener::bind(config.bind).await.map_err(|err| {
+        // Translate the common bind-failure (port already in use) into an actionable message.
+        // Plain `io error: Address already in use (os error 48)` is unhelpful; the friendly
+        // version names the likely cause and points at the real fixes.
+        if err.kind() == std::io::ErrorKind::AddrInUse {
+            CliError::Launch(format!(
+                "cannot bind {} — port is already in use. Most likely cause: another \
+                 `nemo-flow` daemon is already running. Fix one of:\n  \
+                 • kill the running daemon: `pkill -f nemo-flow`\n  \
+                 • use an ephemeral port: `nemo-flow --bind 127.0.0.1:0`\n  \
+                 • pick a free port: `nemo-flow --bind 127.0.0.1:4041`",
+                config.bind
+            ))
+        } else {
+            CliError::Io(err)
+        }
+    })?;
     serve_listener(listener, config, None).await
 }
 

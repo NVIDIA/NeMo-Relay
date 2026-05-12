@@ -22,6 +22,50 @@ fn cli_help_exits_successfully() {
 }
 
 #[test]
+fn cli_help_lists_easy_path_agent_shortcuts() {
+    let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    for agent in ["claude", "codex", "cursor", "hermes"] {
+        assert!(
+            stdout.contains(&format!("  {agent}")),
+            "expected `--help` to list `{agent}` subcommand, got:\n{stdout}"
+        );
+    }
+}
+
+#[test]
+fn cli_easy_path_invokes_setup_when_no_config_found() {
+    // When no config exists anywhere, the easy path fires setup. In a non-TTY test
+    // context the setup errors with a clear "requires a TTY" message; that's the contract
+    // we lock in here. Interactive testing of setup itself lives in the unit tests
+    // (build_config, save_config) since spawning real prompt UI from cargo-test is brittle.
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .arg("claude")
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "easy path should exit non-zero when no config + no TTY for setup"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("setup requires a TTY"),
+        "expected non-TTY setup error in stderr, got:\n{stderr}"
+    );
+}
+
+#[test]
 fn cli_install_dry_run_plans_without_writing() {
     let temp = tempfile::tempdir().unwrap();
     let output = Command::new(gateway_bin())
@@ -55,15 +99,15 @@ fn cli_install_dry_run_plans_without_writing() {
 #[test]
 fn cli_run_dry_run_resolves_config_and_command() {
     let temp = tempfile::tempdir().unwrap();
-    let config = temp.path().join("gateway.toml");
+    let config = temp.path().join("config.toml");
     std::fs::write(
         &config,
         r#"
-[server]
+[upstream]
 openai_base_url = "http://file-openai"
 anthropic_base_url = "http://file-anthropic"
 
-[session]
+[observability]
 atif_dir = "file-atif"
 
 [export.openinference]
@@ -104,17 +148,17 @@ fn cli_run_dry_run_uses_project_user_and_env_config_layers() {
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::create_dir_all(&xdg).unwrap();
     std::fs::write(
-        project.join(".nemo-flow/gateway.toml"),
+        project.join(".nemo-flow/config.toml"),
         r#"
-[server]
+[upstream]
 openai_base_url = "http://project-openai"
 "#,
     )
     .unwrap();
     std::fs::write(
-        xdg.join("gateway.toml"),
+        xdg.join("config.toml"),
         r#"
-[server]
+[upstream]
 anthropic_base_url = "http://user-anthropic"
 
 [agents.codex]

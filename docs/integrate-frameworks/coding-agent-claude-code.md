@@ -37,27 +37,27 @@ nemo-flow run \
 If a launcher hides the command name, pass the agent explicitly:
 
 ```bash
-nemo-flow run --agent claude-code -- my-claude-wrapper
+nemo-flow run --agent claude -- my-claude-wrapper
 ```
 
 ## Shared Config
 
-Create `.nemo-flow/gateway.toml` for project defaults or
-`~/.config/nemo-flow/gateway.toml` for user defaults:
+Create `.nemo-flow/config.toml` for project defaults or
+`~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[session]
+[observability]
 atif_dir = ".nemo-flow/atif"
 metadata = { team = "agent-observability" }
 
 [export.openinference]
 endpoint = "http://127.0.0.1:4318/v1/traces"
 
-[agents.claude-code]
+[agents.claude]
 command = "claude"
 ```
 
-Then run `nemo-flow run --agent claude-code` to use the configured
+Then run `nemo-flow run --agent claude` to use the configured
 command. User config takes priority over project and global config.
 
 ## Persistent Install
@@ -110,7 +110,7 @@ Then check that hook forwarding reaches the gateway:
 ```bash
 curl -f http://127.0.0.1:4040/healthz
 printf '{"session_id":"smoke-claude","hook_event_name":"SessionStart"}' \
-  | NEMO_FLOW_GATEWAY_URL=http://127.0.0.1:4040 nemo-flow hook-forward claude-code --fail-closed
+  | NEMO_FLOW_GATEWAY_URL=http://127.0.0.1:4040 nemo-flow hook-forward claude --fail-closed
 ```
 
 The response should be valid Claude Code hook JSON. For most lifecycle events it
