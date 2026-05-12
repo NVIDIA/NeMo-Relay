@@ -13,8 +13,6 @@ import nemo_flow
 
 _logger = logging.getLogger(__name__)
 
-MAX_FIELD_CHARS = 1024
-
 SYNC_SUBAGENT_TOOLS = frozenset({"task"})
 ASYNC_SUBAGENT_TOOLS = frozenset(
     {
@@ -25,7 +23,10 @@ ASYNC_SUBAGENT_TOOLS = frozenset(
         "list_async_tasks",
     }
 )
+# Mirrors the Deep Agents built-in filesystem tools listed in the backend docs:
+# https://docs.langchain.com/oss/python/deepagents/backends
 FILESYSTEM_TOOLS = frozenset({"ls", "read_file", "write_file", "edit_file", "glob", "grep"})
+# Deep Agents sandbox backends expose execute()/aexecute(); the tool name is execute.
 SANDBOX_TOOLS = frozenset({"execute"})
 
 
@@ -75,15 +76,15 @@ def json_safe(value: Any) -> nemo_flow.Json:
         return [json_safe(item) for item in value]
     if isinstance(value, bytes | bytearray):
         return f"<{type(value).__name__}: {len(value)} bytes>"
-    return _truncate(repr(value))
+    return repr(value)
 
 
 def summarize_value(value: Any) -> nemo_flow.Json:
-    """Return a bounded JSON-compatible representation for observability payloads."""
+    """Return a JSON-compatible representation for observability payloads."""
     if value is None or isinstance(value, int | float | bool):
         return value
     if isinstance(value, str):
-        return _truncate(value)
+        return value
     if isinstance(value, bytes | bytearray):
         return f"<{type(value).__name__}: {len(value)} bytes>"
     if isinstance(value, Mapping):
@@ -93,14 +94,14 @@ def summarize_value(value: Any) -> nemo_flow.Json:
 
     content = getattr(value, "content", None)
     if isinstance(content, str):
-        summary: dict[str, nemo_flow.Json] = {"content": _truncate(content)}
+        summary: dict[str, nemo_flow.Json] = {"content": content}
         for attr in ("name", "id", "tool_call_id"):
             attr_value = getattr(value, attr, None)
             if attr_value is not None:
                 summary[attr] = summarize_value(attr_value)
         return summary
 
-    return _truncate(repr(value))
+    return repr(value)
 
 
 def tool_event_data(
@@ -182,9 +183,3 @@ def emit_mark(
         )
     except Exception:
         _logger.debug("NeMo Flow: Deep Agents mark emission failed", exc_info=True)
-
-
-def _truncate(value: str) -> str:
-    if len(value) <= MAX_FIELD_CHARS:
-        return value
-    return f"{value[:MAX_FIELD_CHARS]}...<truncated>"
