@@ -39,18 +39,30 @@ on:
       run_node:
         description: 'Whether Node.js jobs should run'
         value: ${{ jobs.changes.outputs.run_node }}
+      run_node_package:
+        description: 'Whether Node.js packaging jobs should run'
+        value: ${{ jobs.changes.outputs.run_node_package }}
       run_openclaw:
         description: 'Whether OpenClaw integration jobs should run'
         value: ${{ jobs.changes.outputs.run_openclaw }}
       run_python:
         description: 'Whether Python jobs should run'
         value: ${{ jobs.changes.outputs.run_python }}
+      run_python_package:
+        description: 'Whether Python packaging jobs should run'
+        value: ${{ jobs.changes.outputs.run_python_package }}
       run_rust:
         description: 'Whether Rust jobs should run'
         value: ${{ jobs.changes.outputs.run_rust }}
+      run_rust_package:
+        description: 'Whether Rust packaging jobs should run'
+        value: ${{ jobs.changes.outputs.run_rust_package }}
       run_wasm:
         description: 'Whether WebAssembly jobs should run'
         value: ${{ jobs.changes.outputs.run_wasm }}
+      run_wasm_package:
+        description: 'Whether WebAssembly packaging jobs should run'
+        value: ${{ jobs.changes.outputs.run_wasm_package }}
 
 jobs:
   changes:
@@ -65,10 +77,14 @@ jobs:
       run_docs: ${{ (inputs.full_ci || startsWith(inputs.ref_name, 'pull-request/')) && (inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.docs == 'true') }}
       run_go: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.go == 'true' }}
       run_node: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.node == 'true' }}
+      run_node_package: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.node_package == 'true' }}
       run_openclaw: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.openclaw == 'true' }}
       run_python: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.python == 'true' }}
+      run_python_package: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.python_package == 'true' }}
       run_rust: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.rust == 'true' }}
+      run_rust_package: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.rust_package == 'true' }}
       run_wasm: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.wasm == 'true' }}
+      run_wasm_package: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.wasm_package == 'true' }}
 
     steps:
       - name: Checkout
@@ -93,12 +109,12 @@ jobs:
               base="$(jq -r '.base.ref // empty' <<< "$PR_INFO")"
             fi
             if [[ -z "$base" ]]; then
-              base="origin/${DEFAULT_BRANCH}"
+              base="${DEFAULT_BRANCH}"
             fi
           elif [[ -n "$EVENT_BEFORE" && "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]]; then
             base="$EVENT_BEFORE"
           else
-            base="origin/${DEFAULT_BRANCH}"
+            base="${DEFAULT_BRANCH}"
           fi
           printf 'base=%s\n' "$base" >> "$GITHUB_OUTPUT"
 
