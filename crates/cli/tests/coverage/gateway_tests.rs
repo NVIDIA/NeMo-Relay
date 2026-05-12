@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::config::GatewayConfig;
+use crate::config::{ExportersConfig, GatewayConfig};
 use crate::server::AppState;
 use crate::session::SessionManager;
 use axum::body::Body;
@@ -81,9 +81,9 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai/".into(),
+
         anthropic_base_url: "http://anthropic/".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -202,14 +202,212 @@ fn observable_headers_omit_secrets_and_transport_headers() {
     assert!(!observed.contains_key("connection"));
 }
 
+#[test]
+fn strips_chatgpt_plus_jwt_from_openai_route_inbound() {
+    // When OPENAI_API_KEY is set the gateway strips JWT-shaped (`Bearer eyJ...`) Authorization
+    // from inbound OpenAI-route requests so the auth-injection path substitutes the env key
+    // instead of forwarding the ChatGPT-Plus OAuth JWT.
+    let mut inbound = HeaderMap::new();
+    inbound.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+    );
+    let sanitized =
+        strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::OpenAiResponses, true);
+    assert!(sanitized.get("authorization").is_none());
+}
+
+#[test]
+fn preserves_real_bearer_keys_on_openai_route() {
+    // Real provider keys (Hermes's `sk-...` against NVIDIA, an actual OpenAI dev key, etc.)
+    // must pass through untouched — only the consumer JWT shape (`Bearer eyJ...`) is stripped.
+    let mut inbound = HeaderMap::new();
+    inbound.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer sk-real-provider-key"),
+    );
+    let sanitized =
+        strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::OpenAiResponses, true);
+    assert_eq!(
+        sanitized.get("authorization").unwrap(),
+        "Bearer sk-real-provider-key"
+    );
+}
+
+#[test]
+fn does_not_touch_anthropic_route_authorization() {
+    // Defensive — the JWT shape only conflicts with OpenAI routes; Anthropic routes use
+    // `x-api-key` anyway. Leaving Anthropic's Authorization alone avoids any cross-provider
+    // edge cases.
+    let mut inbound = HeaderMap::new();
+    inbound.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer eyJ.anthropic.case"),
+    );
+    let sanitized =
+        strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::AnthropicMessages, true);
+    assert!(sanitized.get("authorization").is_some());
+}
+
+#[test]
+fn preserves_jwt_when_no_replacement_key_available() {
+    // If OPENAI_API_KEY isn't set the gateway has nothing to inject after stripping, so leave
+    // the inbound bearer in place. Stripping would silently de-auth setups that point at an
+    // upstream which happens to accept the ChatGPT-Plus token.
+    let mut inbound = HeaderMap::new();
+    inbound.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+    );
+    let sanitized =
+        strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::OpenAiResponses, false);
+    assert!(sanitized.get("authorization").is_some());
+}
+
+#[test]
+fn injects_openai_bearer_when_inbound_has_no_auth() {
+    // NMF-86 mitigation: codex now sends no credentials, so the gateway must inject
+    // `Authorization: Bearer ${OPENAI_API_KEY}` on outbound forwards to api.openai.com.
+    let http = Client::new();
+    let inbound = HeaderMap::new();
+    let env = |k: &str| match k {
+        "OPENAI_API_KEY" => Some("sk-test-123".into()),
+        _ => None,
+    };
+    let builder = http.get("http://upstream/v1/responses");
+    let built =
+        inject_provider_auth_with_env(builder, ProviderRoute::OpenAiResponses, &inbound, env)
+            .build()
+            .unwrap();
+    assert_eq!(
+        built.headers().get("authorization").unwrap(),
+        "Bearer sk-test-123"
+    );
+}
+
+#[test]
+fn injects_anthropic_x_api_key_for_anthropic_routes() {
+    let http = Client::new();
+    let inbound = HeaderMap::new();
+    let env = |k: &str| match k {
+        "ANTHROPIC_API_KEY" => Some("sk-ant-test".into()),
+        _ => None,
+    };
+    let builder = http.post("http://upstream/v1/messages");
+    let built =
+        inject_provider_auth_with_env(builder, ProviderRoute::AnthropicMessages, &inbound, env)
+            .build()
+            .unwrap();
+    assert_eq!(built.headers().get("x-api-key").unwrap(), "sk-ant-test");
+    // Anthropic uses `x-api-key`, not Authorization. The gateway must not duplicate the secret
+    // into a Bearer header — that would defeat the purpose of using the provider's standard
+    // auth scheme and might trigger upstream-side rejection of the conflicting auth.
+    assert!(built.headers().get("authorization").is_none());
+}
+
+#[test]
+fn skips_injection_when_inbound_already_has_authorization() {
+    // If the agent (e.g., a future codex version, or anyone using the gateway directly) sends
+    // its own auth, we must not stomp on it.
+    let http = Client::new();
+    let mut inbound = HeaderMap::new();
+    inbound.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer agent-supplied"),
+    );
+    let env = |_: &str| Some("sk-test-from-env".into());
+    let builder = http.post("http://upstream/v1/responses");
+    let built =
+        inject_provider_auth_with_env(builder, ProviderRoute::OpenAiResponses, &inbound, env)
+            .build()
+            .unwrap();
+    // The builder doesn't carry inbound headers itself (forward_upstream_request adds them in a
+    // separate loop), so the only header on `built` would be the env-injected one. Since the
+    // inbound had auth, we expect no injection at all.
+    assert!(built.headers().get("authorization").is_none());
+}
+
+#[test]
+fn skips_injection_when_env_var_unset() {
+    let http = Client::new();
+    let inbound = HeaderMap::new();
+    let env = |_: &str| None;
+    let builder = http.post("http://upstream/v1/responses");
+    let built =
+        inject_provider_auth_with_env(builder, ProviderRoute::OpenAiResponses, &inbound, env)
+            .build()
+            .unwrap();
+    assert!(built.headers().get("authorization").is_none());
+}
+
+// --- ChatGPT backend routing tests ---
+
+#[test]
+fn chatgpt_jwt_routes_to_chatgpt_backend_when_no_api_key() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+    );
+    // With no OPENAI_API_KEY and a JWT, should_use_chatgpt_backend returns true and the URL is
+    // built against the ChatGPT backend (no /v1 prefix — ChatGPT backend doesn't use it).
+    let result = chatgpt_upstream_url("/responses");
+    assert_eq!(result, "https://chatgpt.com/backend-api/codex/responses");
+
+    // has_chatgpt_jwt should detect the JWT
+    assert!(has_chatgpt_jwt(&headers));
+    assert!(ProviderRoute::OpenAiResponses.is_openai());
+}
+
+#[test]
+fn no_jwt_does_not_trigger_chatgpt_backend() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer sk-real-api-key"),
+    );
+    assert!(!has_chatgpt_jwt(&headers));
+
+    // Empty headers also should not trigger
+    assert!(!has_chatgpt_jwt(&HeaderMap::new()));
+}
+
+#[test]
+fn anthropic_route_never_triggers_chatgpt_backend() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+    );
+    assert!(!ProviderRoute::AnthropicMessages.is_openai());
+}
+
+#[test]
+fn chatgpt_backend_url_omits_v1_prefix() {
+    // The ChatGPT backend expects paths directly under the base, not /v1-prefixed.
+    assert_eq!(
+        chatgpt_upstream_url("/responses"),
+        "https://chatgpt.com/backend-api/codex/responses"
+    );
+    assert_eq!(
+        chatgpt_upstream_url("/models"),
+        "https://chatgpt.com/backend-api/codex/models"
+    );
+    // /v1-prefixed inbound paths are stripped
+    assert_eq!(
+        chatgpt_upstream_url("/v1/responses"),
+        "https://chatgpt.com/backend-api/codex/responses"
+    );
+}
+
 #[tokio::test]
 async fn passthrough_rejects_unsupported_provider_path_directly() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
+
         anthropic_base_url: "http://anthropic".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -234,9 +432,9 @@ async fn models_rejects_non_get_requests_directly() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
+
         anthropic_base_url: "http://anthropic".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };

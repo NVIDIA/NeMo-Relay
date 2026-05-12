@@ -49,11 +49,11 @@ nemo-flow run --agent hermes -- my-hermes-wrapper
 
 ## Shared Config
 
-Create `.nemo-flow/gateway.toml` for project defaults or
-`~/.config/nemo-flow/gateway.toml` for user defaults:
+Create `.nemo-flow/config.toml` for project defaults or
+`~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[session]
+[observability]
 atif_dir = ".nemo-flow/atif"
 metadata = { team = "agent-observability" }
 
@@ -67,38 +67,31 @@ command = "hermes"
 Then run `nemo-flow run --agent hermes` to use the configured command.
 User config takes priority over project and global config.
 
-## Persistent Install
+## Hermes Hook Setup
 
-Use persistent hooks to merge NeMo Flow hook commands into
-`~/.hermes/config.yaml` or the project `.hermes/config.yaml`:
+Unlike the other agents, Hermes reads hooks from `.hermes/config.yaml`. The
+setup wizard writes that file for you when you select hermes — running
+`nemo-flow config` (or `nemo-flow config hermes` to scope to one agent) merges
+NeMo Flow hook commands into the YAML, preserving any existing config, and
+records the path under `[agents.hermes].hooks_path` in `.nemo-flow/config.toml`.
 
-```bash
-nemo-flow install hermes \
-  --scope user \
-  --target cli \
-  --gateway-url http://127.0.0.1:4040 \
-  --atif-dir .nemo-flow/atif
-```
+The generated Hermes hooks cover `on_session_start`, `on_session_end`,
+`on_session_finalize`, `on_session_reset`, `pre_llm_call`, `post_llm_call`,
+`pre_tool_call`, `post_tool_call`, `subagent_start`, and `subagent_stop`.
 
-The installer preserves existing YAML config, appends missing NeMo Flow hook
-entries, and backs up the file before writing. The generated Hermes hooks cover
-`on_session_start`, `on_session_end`, `on_session_finalize`,
-`on_session_reset`, `pre_llm_call`, `post_llm_call`, `pre_tool_call`,
-`post_tool_call`, `subagent_start`, and `subagent_stop`.
+Hermes hook forwarding prefers `NEMO_FLOW_GATEWAY_URL` when set (this is what
+`nemo-flow hermes` injects on every run). When launched outside the wrapper —
+e.g., bare `hermes` against a long-running gateway — the hook command falls
+back to `--gateway-url http://127.0.0.1:4040`.
 
-Hermes hook forwarding prefers `NEMO_FLOW_GATEWAY_URL` when it is set, even if
-the installed command also includes `--gateway-url`. This lets persistent hook
-config work with `nemo-flow run`, where each run uses a dynamic local
-port. Without `NEMO_FLOW_GATEWAY_URL`, the installed `--gateway-url` is used.
-
-Then start the gateway manually for persistent mode:
+For standalone gateway mode, start the daemon manually:
 
 ```bash
 NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
 ```
 
-Point Hermes provider traffic at `http://127.0.0.1:4040` for any provider mode
-that exposes a local OpenAI-compatible or Anthropic-compatible base URL.
+Then point Hermes provider traffic at `http://127.0.0.1:4040` for any provider
+mode that exposes a local OpenAI-compatible or Anthropic-compatible base URL.
 
 ## Smoke Test
 

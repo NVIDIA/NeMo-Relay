@@ -37,43 +37,33 @@ nemo-flow run \
 If a launcher hides the command name, pass the agent explicitly:
 
 ```bash
-nemo-flow run --agent claude-code -- my-claude-wrapper
+nemo-flow run --agent claude -- my-claude-wrapper
 ```
 
 ## Shared Config
 
-Create `.nemo-flow/gateway.toml` for project defaults or
-`~/.config/nemo-flow/gateway.toml` for user defaults:
+Create `.nemo-flow/config.toml` for project defaults or
+`~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[session]
+[observability]
 atif_dir = ".nemo-flow/atif"
 metadata = { team = "agent-observability" }
 
 [export.openinference]
 endpoint = "http://127.0.0.1:4318/v1/traces"
 
-[agents.claude-code]
+[agents.claude]
 command = "claude"
 ```
 
-Then run `nemo-flow run --agent claude-code` to use the configured
+Then run `nemo-flow run --agent claude` to use the configured
 command. User config takes priority over project and global config.
 
-## Persistent Install
+## Standalone Gateway
 
-Use persistent hooks only when you want Claude Code configured outside the
-wrapper:
-
-```bash
-nemo-flow install claude-code \
-  --scope user \
-  --target cli \
-  --gateway-url http://127.0.0.1:4040 \
-  --atif-dir .nemo-flow/atif
-```
-
-Then start the gateway manually:
+Use the long-running gateway only when you want Claude Code running outside the
+wrapper (e.g., already configured by an IDE):
 
 ```bash
 NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
@@ -87,7 +77,10 @@ claude
 ```
 
 The gateway forwards Anthropic `/v1/messages`, `/v1/messages/count_tokens`, and
-model routes without rewriting provider JSON.
+model routes without rewriting provider JSON. Hook events (tool calls, session
+markers) are only captured when running through `nemo-flow claude` or
+`nemo-flow run --agent claude`, which inject ephemeral hooks into the launched
+process.
 
 ## Captured Events
 
@@ -110,7 +103,7 @@ Then check that hook forwarding reaches the gateway:
 ```bash
 curl -f http://127.0.0.1:4040/healthz
 printf '{"session_id":"smoke-claude","hook_event_name":"SessionStart"}' \
-  | NEMO_FLOW_GATEWAY_URL=http://127.0.0.1:4040 nemo-flow hook-forward claude-code --fail-closed
+  | NEMO_FLOW_GATEWAY_URL=http://127.0.0.1:4040 nemo-flow hook-forward claude --fail-closed
 ```
 
 The response should be valid Claude Code hook JSON. For most lifecycle events it

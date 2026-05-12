@@ -58,11 +58,11 @@ nemo-flow run \
 
 ## Shared Config
 
-Use `.nemo-flow/gateway.toml` for project defaults or
-`~/.config/nemo-flow/gateway.toml` for user defaults:
+Use `.nemo-flow/config.toml` for project defaults or
+`~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[session]
+[observability]
 atif_dir = ".nemo-flow/atif"
 metadata = { team = "agent-observability" }
 
@@ -77,21 +77,18 @@ Then run:
 nemo-flow run --agent cursor
 ```
 
-## Persistent Setup
+## Standalone Gateway
 
-Use persistent hooks only when you do not want to launch Cursor through the
-wrapper:
+Use the long-running gateway only when you do not want to launch Cursor
+through the wrapper (e.g., the Cursor GUI). Start the gateway manually:
 
 ```bash
-nemo-flow install cursor \
-  --scope project \
-  --target gui \
-  --gateway-url http://127.0.0.1:4040 \
-  --atif-dir .nemo-flow/atif
+NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
 ```
 
-Then start the gateway manually and point Cursor provider traffic at
-`http://127.0.0.1:4040` where Cursor exposes provider base URL configuration.
+Then point Cursor provider traffic at `http://127.0.0.1:4040` where Cursor
+exposes provider base URL configuration. Hook events are only captured when
+running through the wrapper.
 
 ## Verify
 

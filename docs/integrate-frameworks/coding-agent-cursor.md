@@ -50,11 +50,11 @@ nemo-flow run --agent cursor -- my-cursor-wrapper
 
 ## Shared Config
 
-Create `.nemo-flow/gateway.toml` for project defaults or
-`~/.config/nemo-flow/gateway.toml` for user defaults:
+Create `.nemo-flow/config.toml` for project defaults or
+`~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[session]
+[observability]
 atif_dir = ".nemo-flow/atif"
 metadata = { team = "agent-observability" }
 
@@ -66,22 +66,19 @@ patch_restore_hooks = true
 Then run `nemo-flow run --agent cursor` to use the configured command.
 User config takes priority over project and global config.
 
-## Persistent Install
+## Standalone Gateway
 
-Use persistent hooks only when you want Cursor configured outside the wrapper:
+Use the long-running gateway only when you want Cursor running outside the
+wrapper (e.g., the Cursor GUI). Start the gateway manually:
 
 ```bash
-nemo-flow install cursor \
-  --scope project \
-  --target gui \
-  --gateway-url http://127.0.0.1:4040 \
-  --atif-dir .nemo-flow/atif
+NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
 ```
 
-Then start the gateway manually and point Cursor provider traffic at
-`http://127.0.0.1:4040` where Cursor exposes provider base URL configuration.
-Hook-only Cursor mode observes agent and tool lifecycle but cannot provide
-complete LLM lifecycle. Missing LLM spans are expected when Cursor sends model
+Then point Cursor provider traffic at `http://127.0.0.1:4040` wherever Cursor
+exposes provider base URL configuration. Without the wrapper, hook events are
+not captured — Cursor GUI mode only emits LLM lifecycle as traffic passes
+through the gateway. Missing LLM spans are expected when Cursor sends model
 traffic directly to the provider or through a remote service.
 
 ## Captured Events
