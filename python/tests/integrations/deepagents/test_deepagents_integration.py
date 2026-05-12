@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -26,19 +25,6 @@ from nemo_flow.integrations.deepagents import (
     add_nemo_flow_integration,
     observe_backend,
 )
-
-
-@pytest.fixture(name="subscribed_events")
-def subscribed_events_fixture() -> Iterator[list[nemo_flow.Event]]:
-    events: list[nemo_flow.Event] = []
-
-    def event_recorder(event: nemo_flow.Event) -> None:
-        events.append(event)
-
-    subscriber_name = f"deepagents-test-{uuid4()}"
-    nemo_flow.subscribers.register(subscriber_name, event_recorder)
-    yield events
-    nemo_flow.subscribers.deregister(subscriber_name)
 
 
 @pytest.fixture(name="mock_tool_execute")
