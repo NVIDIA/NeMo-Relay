@@ -46,7 +46,7 @@ def middleware_fixture() -> NemoFlowDeepAgentsMiddleware:
     return NemoFlowDeepAgentsMiddleware(agent_name="main-agent")
 
 
-def mark_events(events: list[nemo_flow.Event]) -> list[nemo_flow.MarkEvent]:
+def _filter_mark_events(events: list[nemo_flow.Event]) -> list[nemo_flow.MarkEvent]:
     return [event for event in events if isinstance(event, nemo_flow.MarkEvent)]
 
 
@@ -91,7 +91,7 @@ def test_wrap_tool_call_emits_deepagents_marks(
     assert result.content == "done"
     mock_tool_execute.assert_awaited_once()
 
-    marks = mark_events(subscribed_events)
+    marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == [f"{expected_mark} Start", f"{expected_mark} End"]
     assert marks[0].metadata["deepagents_kind"] == expected_kind
     assert marks[0].metadata["phase"] == "start"
@@ -116,7 +116,7 @@ async def test_awrap_tool_call_emits_deepagents_marks(
     assert result.content == "started"
     mock_tool_execute.assert_awaited_once()
 
-    marks = mark_events(subscribed_events)
+    marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == [
         "DeepAgents Async Subagent Start",
         "DeepAgents Async Subagent End",
@@ -137,7 +137,7 @@ def test_wrap_tool_call_emits_error_mark(
             middleware.wrap_tool_call(tool_request("task", {"name": "researcher"}), handler)
 
     mock_tool_execute.assert_awaited_once()
-    marks = mark_events(subscribed_events)
+    marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == ["DeepAgents Subagent Start", "DeepAgents Subagent Error"]
     assert "RuntimeError" in marks[1].data["error"]
 
@@ -153,7 +153,7 @@ def test_before_agent_emits_configuration_mark(subscribed_events: list[nemo_flow
     with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
         middleware.before_agent(MagicMock(name="mock_state"), MagicMock(name="mock_runtime"))
 
-    marks = mark_events(subscribed_events)
+    marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == ["DeepAgents Skills Configured"]
     assert marks[0].metadata["deepagents_kind"] == "skill"
     assert marks[0].data["skills"] == ["/skills/research/"]
@@ -194,7 +194,7 @@ def test_callback_handler_emits_human_in_the_loop_marks(subscribed_events: list[
             )
         )
 
-    marks = mark_events(subscribed_events)
+    marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == [
         "DeepAgents Human In The Loop Interrupt",
         "DeepAgents Human In The Loop Resume",
@@ -227,7 +227,7 @@ def test_callback_handler_falls_back_for_non_hitl_interrupt(subscribed_events: l
             )
         )
 
-    marks = mark_events(subscribed_events)
+    marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == ["Graph Interrupt", "Graph Resume"]
     assert marks[0].metadata["integration"] == "langgraph"
     assert "deepagents_kind" not in marks[0].metadata
@@ -258,7 +258,7 @@ def test_observe_backend_emits_sync_marks(
     assert result == {"ok": True}
     getattr(mock_backend, method_name).assert_called_once_with(*args, **expected_call_kwargs)
 
-    marks = mark_events(subscribed_events)
+    marks = _filter_mark_events(subscribed_events)
     assert marks[0].metadata["deepagents_kind"] == expected_kind
     assert marks[0].data["backend"] == "MockBackend"
     assert marks[0].data["method"] == method_name
@@ -276,7 +276,7 @@ async def test_observe_backend_emits_async_marks(subscribed_events: list[nemo_fl
     assert result == ReadResult(file_data={"content": "contents", "encoding": "utf-8"})
     mock_backend.aread.assert_awaited_once_with("/workspace/notes.md", offset=0, limit=2000)
 
-    marks = mark_events(subscribed_events)
+    marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == ["DeepAgents Filesystem Start", "DeepAgents Filesystem End"]
     assert "ReadResult" in marks[1].data["result"]
 
@@ -305,7 +305,7 @@ def test_observe_backend_preserves_sandbox_protocol(subscribed_events: list[nemo
 
     assert result == ExecuteResponse(output="python main.py:10", exit_code=0)
 
-    marks = mark_events(subscribed_events)
+    marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == ["DeepAgents Sandbox Start", "DeepAgents Sandbox End"]
     assert marks[0].data["method"] == "execute"
 
