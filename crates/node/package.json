@@ -68,7 +68,7 @@
     "c8": "^11.0.0",
     "prettier": "^3.8.2",
     "typedoc": "^0.28.0",
-    "typescript": "^5.8.2"
+    "typescript": "^5.9.3"
   },
   "license": "Apache-2.0"
 }

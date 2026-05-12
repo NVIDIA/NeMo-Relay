@@ -21,6 +21,7 @@ dependencies:
   - 'about.toml'
   - 'crates/**/Cargo.toml'
   - 'crates/**/package.json'
+  - 'integrations/**/package.json'
   - 'package.json'
   - 'package-lock.json'
   - 'pyproject.toml'
@@ -68,6 +69,9 @@ node:
   - 'crates/node/src/**'
   - 'crates/node/tests/**/*.mjs'
   - 'scripts/test-support/**'
+
+openclaw:
+  - 'integrations/openclaw/**'
 
 python:
   - 'crates/python/Cargo.toml'

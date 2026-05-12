@@ -1,0 +1,268 @@
+{
+  "id": "nemo-flow",
+  "name": "NeMo Flow Observability",
+  "description": "ATIF, OpenInference, and OpenTelemetry telemetry through NeMo Flow.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enables the NeMo Flow observability plugin."
+      },
+      "backend": {
+        "type": "string",
+        "enum": [
+          "hooks"
+        ],
+        "default": "hooks",
+        "description": "Telemetry backend implementation. Only the hook-backed backend is supported."
+      },
+      "nemoFlow": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "pluginConfig": {
+            "type": "object",
+            "additionalProperties": true,
+            "default": {
+              "version": 1,
+              "components": []
+            },
+            "description": "NeMo Flow plugin-host config. Components are rejected by the hook backend; omit this to use the default host config."
+          }
+        },
+        "description": "NeMo Flow plugin-host configuration used during startup."
+      },
+      "atif": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Writes per-session ATIF JSON files when enabled."
+          },
+          "outputDir": {
+            "type": "string",
+            "description": "Directory for ATIF JSON output. Relative paths are resolved through the OpenClaw plugin API."
+          },
+          "agentName": {
+            "type": "string",
+            "default": "openclaw",
+            "description": "Agent name recorded in ATIF exports."
+          },
+          "agentVersion": {
+            "type": "string",
+            "description": "Agent version recorded in ATIF exports. Defaults to the OpenClaw plugin API version when omitted."
+          }
+        },
+        "description": "ATIF file export settings."
+      },
+      "telemetry": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "openInference": {
+            "$ref": "#/$defs/openInferenceSubscriber",
+            "description": "OpenInference/Phoenix subscriber configuration."
+          },
+          "otel": {
+            "$ref": "#/$defs/otelSubscriber",
+            "description": "OpenTelemetry subscriber configuration."
+          }
+        },
+        "description": "OTLP telemetry subscriber settings."
+      },
+      "capture": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "includePrompts": {
+            "type": "boolean",
+            "default": true,
+            "description": "Includes LLM prompt text in replayed telemetry when true."
+          },
+          "includeResponses": {
+            "type": "boolean",
+            "default": true,
+            "description": "Includes LLM response text in replayed telemetry when true."
+          },
+          "stripToolArgs": {
+            "type": "boolean",
+            "default": true,
+            "description": "Strips tool arguments from replayed tool spans by default."
+          },
+          "stripToolResults": {
+            "type": "boolean",
+            "default": true,
+            "description": "Strips tool results from replayed tool spans by default."
+          }
+        },
+        "description": "Controls sensitive payload capture for replayed LLM and tool telemetry."
+      },
+      "correlation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "llmOutputGraceMs": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 250,
+            "description": "Milliseconds to wait for a matching llm_input before replaying an llm_output with a placeholder request."
+          },
+          "recordTtlMs": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 600000,
+            "description": "Maximum age in milliseconds for buffered correlation records."
+          },
+          "maxRecordsPerKey": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 32,
+            "description": "Maximum buffered records per correlation key."
+          }
+        },
+        "description": "Bounded correlation settings for matching OpenClaw hook events into replay spans."
+      }
+    },
+    "$defs": {
+      "otelSubscriber": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enables this telemetry subscriber."
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "http_binary",
+              "grpc"
+            ],
+            "default": "http_binary",
+            "description": "OTLP transport protocol."
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "OTLP collector endpoint. Uses subscriber defaults when omitted."
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "String-valued headers sent to the OTLP endpoint."
+          },
+          "resourceAttributes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "String-valued resource attributes attached to exported telemetry."
+          },
+          "serviceName": {
+            "type": "string",
+            "default": "openclaw-nemo-flow",
+            "description": "OTLP service.name resource attribute."
+          },
+          "serviceNamespace": {
+            "type": "string",
+            "default": "nemo-flow",
+            "description": "OTLP service.namespace resource attribute."
+          },
+          "serviceVersion": {
+            "type": "string",
+            "default": "unknown",
+            "description": "OTLP service.version resource attribute."
+          },
+          "instrumentationScope": {
+            "type": "string",
+            "description": "Instrumentation scope name used by this subscriber.",
+            "default": "nemo-flow-otel"
+          },
+          "timeoutMillis": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 3000,
+            "description": "Exporter timeout in milliseconds."
+          }
+        },
+        "description": "OpenTelemetry OTLP subscriber configuration."
+      },
+      "openInferenceSubscriber": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enables this telemetry subscriber."
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "http_binary",
+              "grpc"
+            ],
+            "default": "http_binary",
+            "description": "OTLP transport protocol."
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "OTLP collector endpoint. Uses subscriber defaults when omitted."
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "String-valued headers sent to the OTLP endpoint."
+          },
+          "resourceAttributes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "String-valued resource attributes attached to exported telemetry."
+          },
+          "serviceName": {
+            "type": "string",
+            "default": "openclaw-nemo-flow",
+            "description": "OTLP service.name resource attribute."
+          },
+          "serviceNamespace": {
+            "type": "string",
+            "default": "nemo-flow",
+            "description": "OTLP service.namespace resource attribute."
+          },
+          "serviceVersion": {
+            "type": "string",
+            "default": "unknown",
+            "description": "OTLP service.version resource attribute."
+          },
+          "instrumentationScope": {
+            "type": "string",
+            "description": "Instrumentation scope name used by this subscriber.",
+            "default": "nemo-flow-openinference"
+          },
+          "timeoutMillis": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 3000,
+            "description": "Exporter timeout in milliseconds."
+          }
+        },
+        "description": "OpenInference/Phoenix OTLP subscriber configuration."
+      }
+    },
+    "description": "Configuration for the NeMo Flow OpenClaw observability plugin."
+  }
+}

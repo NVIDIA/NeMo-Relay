@@ -9,8 +9,8 @@ NeMo Flow includes open source dependencies across Rust, Python, and Node.js pac
 
 Dependency attribution files live at the repository root:
 
-- `ATTRIBUTIONS-Rust.md`
-- `ATTRIBUTIONS-Python.md`
-- `ATTRIBUTIONS-Node.md`
+- [`ATTRIBUTIONS-Rust.md`](../../../ATTRIBUTIONS-Rust.md)
+- [`ATTRIBUTIONS-Python.md`](../../../ATTRIBUTIONS-Python.md)
+- [`ATTRIBUTIONS-Node.md`](../../../ATTRIBUTIONS-Node.md)
 
 Use the repository root `LICENSE` file for the NeMo Flow project license.

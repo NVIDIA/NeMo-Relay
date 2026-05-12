@@ -86,7 +86,7 @@ jobs:
         run: uv sync --no-default-groups --group docs --no-install-project
 
       - name: Install Node.js Documentation Dependencies
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/crates/node
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: npm ci --ignore-scripts
 
       - name: Materialize Main Branch For Versioned Docs

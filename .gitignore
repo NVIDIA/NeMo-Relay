@@ -27,6 +27,8 @@ crates/node/index.js
 crates/node/index.d.ts
 crates/node/coverage/
 crates/node/junit.xml
+integrations/openclaw/dist/
+integrations/openclaw/.test-dist/
 
 # WebAssembly
 crates/wasm/pkg/

@@ -86,6 +86,13 @@ of the canonical event stream.
 The ATIF exporter collects lifecycle events and emits trajectory artifacts for
 offline analysis, replay, or debugging.
 
+### ATOF JSONL Exporter
+
+The ATOF JSONL exporter writes the canonical event stream to a native
+filesystem path as one raw ATOF event per line. It is available for native
+Rust, Python, Node.js, Go, and C FFI use. It is not exposed in WebAssembly
+because arbitrary filesystem writes are not portable there.
+
 ### OpenTelemetry Subscriber
 
 The OpenTelemetry subscriber maps runtime events into OTLP traces for tracing

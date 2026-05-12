@@ -5,8 +5,10 @@
 
 use super::*;
 use std::ffi::{CStr, CString};
+use std::fs;
 use std::ptr;
 use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use nemo_flow::plugin::PluginRegistrationContext;
 use serde_json::{Value as Json, json};
@@ -16,20 +18,21 @@ use nemo_flow_ffi::callable::{NemoFlowLlmExecNextFn, NemoFlowToolExecNextFn};
 use nemo_flow_ffi::convert::nemo_flow_string_free;
 use nemo_flow_ffi::error::{NemoFlowStatus, nemo_flow_last_error, set_last_error};
 use nemo_flow_ffi::types::{
-    FfiAtifExporter, FfiEvent, FfiLLMHandle, FfiLLMRequest, FfiOpenTelemetrySubscriber,
-    FfiScopeStack, FfiToolHandle, nemo_flow_atif_exporter_free, nemo_flow_event_data,
-    nemo_flow_event_input, nemo_flow_event_metadata, nemo_flow_event_model_name,
-    nemo_flow_event_name, nemo_flow_event_output, nemo_flow_event_parent_uuid,
-    nemo_flow_event_scope_type, nemo_flow_event_timestamp, nemo_flow_event_tool_call_id,
-    nemo_flow_event_uuid, nemo_flow_llm_handle_attributes, nemo_flow_llm_handle_free,
-    nemo_flow_llm_handle_name, nemo_flow_llm_handle_parent_uuid, nemo_flow_llm_handle_uuid,
-    nemo_flow_llm_request_content, nemo_flow_llm_request_free, nemo_flow_llm_request_headers,
-    nemo_flow_llm_request_new, nemo_flow_otel_subscriber_free, nemo_flow_scope_handle_attributes,
-    nemo_flow_scope_handle_data, nemo_flow_scope_handle_free, nemo_flow_scope_handle_metadata,
-    nemo_flow_scope_handle_name, nemo_flow_scope_handle_parent_uuid,
-    nemo_flow_scope_handle_scope_type, nemo_flow_scope_handle_uuid, nemo_flow_scope_stack_free,
-    nemo_flow_tool_handle_attributes, nemo_flow_tool_handle_free, nemo_flow_tool_handle_name,
-    nemo_flow_tool_handle_parent_uuid, nemo_flow_tool_handle_uuid,
+    FfiAtifExporter, FfiAtofExporter, FfiEvent, FfiLLMHandle, FfiLLMRequest,
+    FfiOpenTelemetrySubscriber, FfiScopeStack, FfiToolHandle, nemo_flow_atif_exporter_free,
+    nemo_flow_atof_exporter_free, nemo_flow_event_data, nemo_flow_event_input,
+    nemo_flow_event_metadata, nemo_flow_event_model_name, nemo_flow_event_name,
+    nemo_flow_event_output, nemo_flow_event_parent_uuid, nemo_flow_event_scope_type,
+    nemo_flow_event_timestamp, nemo_flow_event_tool_call_id, nemo_flow_event_uuid,
+    nemo_flow_llm_handle_attributes, nemo_flow_llm_handle_free, nemo_flow_llm_handle_name,
+    nemo_flow_llm_handle_parent_uuid, nemo_flow_llm_handle_uuid, nemo_flow_llm_request_content,
+    nemo_flow_llm_request_free, nemo_flow_llm_request_headers, nemo_flow_llm_request_new,
+    nemo_flow_otel_subscriber_free, nemo_flow_scope_handle_attributes, nemo_flow_scope_handle_data,
+    nemo_flow_scope_handle_free, nemo_flow_scope_handle_metadata, nemo_flow_scope_handle_name,
+    nemo_flow_scope_handle_parent_uuid, nemo_flow_scope_handle_scope_type,
+    nemo_flow_scope_handle_uuid, nemo_flow_scope_stack_free, nemo_flow_tool_handle_attributes,
+    nemo_flow_tool_handle_free, nemo_flow_tool_handle_name, nemo_flow_tool_handle_parent_uuid,
+    nemo_flow_tool_handle_uuid,
 };
 use nemo_flow_ffi::{api, callable, types};
 
@@ -65,6 +68,16 @@ fn lock_unpoisoned<T>(mutex: &'static Mutex<T>) -> std::sync::MutexGuard<'static
 
 fn cstring(s: &str) -> CString {
     CString::new(s).unwrap()
+}
+
+fn temp_dir(prefix: &str) -> std::path::PathBuf {
+    let id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("nemo-flow-{prefix}-{id}"));
+    fs::create_dir_all(&path).unwrap();
+    path
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -649,4 +662,103 @@ fn scope_stack_create_reports_null_pointer_errors() {
         .to_string_lossy()
         .into_owned();
     assert!(message.contains("out pointer is null"));
+}
+
+#[test]
+fn atof_exporter_writes_raw_jsonl_events() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let stack = unsafe { fresh_scope_stack() };
+    let dir = temp_dir("ffi-atof");
+    let output_directory = cstring(dir.to_str().unwrap());
+    let mode = cstring("overwrite");
+    let filename = cstring("events.jsonl");
+    let mut exporter: *mut FfiAtofExporter = ptr::null_mut();
+
+    assert_eq!(
+        unsafe {
+            api::nemo_flow_atof_exporter_create(
+                output_directory.as_ptr(),
+                mode.as_ptr(),
+                filename.as_ptr(),
+                &mut exporter,
+            )
+        },
+        NemoFlowStatus::Ok
+    );
+    assert!(!exporter.is_null());
+
+    let mut path_ptr = ptr::null_mut();
+    assert_eq!(
+        unsafe { api::nemo_flow_atof_exporter_path(exporter, &mut path_ptr) },
+        NemoFlowStatus::Ok
+    );
+    let path = unsafe { take_string(path_ptr) }.unwrap();
+    assert!(path.ends_with("events.jsonl"));
+
+    let subscriber_name = cstring("ffi_atof_exporter");
+    assert_eq!(
+        unsafe { api::nemo_flow_atof_exporter_register(exporter, subscriber_name.as_ptr()) },
+        NemoFlowStatus::Ok
+    );
+
+    let scope_name = cstring("ffi_atof_scope");
+    let input = cstring(r#"{"scope":true}"#);
+    let mut scope = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            nemo_flow_push_scope(
+                scope_name.as_ptr(),
+                NemoFlowScopeType::Agent,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                input.as_ptr(),
+                &mut scope,
+            )
+        },
+        NemoFlowStatus::Ok
+    );
+
+    let event_name = cstring("ffi_atof_mark");
+    let event_data = cstring(r#"{"step":1}"#);
+    assert_eq!(
+        unsafe { nemo_flow_event(event_name.as_ptr(), scope, event_data.as_ptr(), ptr::null()) },
+        NemoFlowStatus::Ok
+    );
+
+    let output = cstring(r#"{"done":true}"#);
+    assert_eq!(
+        unsafe { nemo_flow_pop_scope(scope, output.as_ptr()) },
+        NemoFlowStatus::Ok
+    );
+    unsafe { nemo_flow_scope_handle_free(scope) };
+
+    assert_eq!(
+        unsafe { api::nemo_flow_atof_exporter_deregister(subscriber_name.as_ptr()) },
+        NemoFlowStatus::Ok
+    );
+    assert_eq!(
+        unsafe { api::nemo_flow_atof_exporter_force_flush(exporter) },
+        NemoFlowStatus::Ok
+    );
+    assert_eq!(
+        unsafe { api::nemo_flow_atof_exporter_shutdown(exporter) },
+        NemoFlowStatus::Ok
+    );
+
+    let records = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Json>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0]["kind"], "scope");
+    assert_eq!(records[1]["name"], "ffi_atof_mark");
+    assert_eq!(records[2]["scope_category"], "end");
+
+    unsafe {
+        nemo_flow_atof_exporter_free(exporter);
+        nemo_flow_scope_stack_free(stack);
+    }
 }

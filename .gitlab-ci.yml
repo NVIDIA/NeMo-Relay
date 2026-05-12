@@ -264,9 +264,31 @@ publish:artifactory:cargo:
       [registries]
       artifactory = { index = "sparse+${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL}" }
       EOF
-      export CARGO_REGISTRIES_ARTIFACTORY_TOKEN="${NEMO_FLOW_CI_ARTIFACTORY_KEY}"
+      export CARGO_REGISTRIES_ARTIFACTORY_TOKEN="Bearer ${NEMO_FLOW_CI_ARTIFACTORY_KEY}"
+      export NEMO_FLOW_ARTIFACTORY_CRATE_DIRS="core adaptive ffi cli"
 
-      for crate in nemo-flow nemo-flow-adaptive nemo-flow-ffi nemo-flow-sidecar; do
+      crates="$(
+        uv run --no-project python - <<'PY'
+      import os
+      import tomllib
+      from pathlib import Path
+
+      manifest = Path("Cargo.toml")
+      text = manifest.read_text()
+      for crate_dir in os.environ["NEMO_FLOW_ARTIFACTORY_CRATE_DIRS"].split():
+          before = f'path = "crates/{crate_dir}"'
+          after = f'{before}, registry = "artifactory"'
+          if after not in text:
+              text = text.replace(before, after)
+      manifest.write_text(text)
+
+      for crate_dir in os.environ["NEMO_FLOW_ARTIFACTORY_CRATE_DIRS"].split():
+          crate_manifest = Path("crates") / crate_dir / "Cargo.toml"
+          print(tomllib.loads(crate_manifest.read_text())["package"]["name"])
+      PY
+      )"
+
+      for crate in $crates; do
         cargo publish --package "$crate" --registry artifactory --allow-dirty
       done
 
