@@ -10,44 +10,43 @@ that needs NeMo Flow observability. The plugin observes supported OpenClaw
 plugin hooks and converts them into NeMo Flow sessions, LLM spans, tool spans,
 marks, ATIF JSON, OpenTelemetry spans, and OpenInference/Phoenix spans.
 
-The plugin lives under `integrations/openclaw/` and declares both OpenClaw
-entrypoint styles:
+Use this guide to install the plugin, enable it in OpenClaw, configure telemetry
+outputs, verify exported traces, and understand current LLM replay fidelity.
 
-- `openclaw.extensions`: `./index.ts` for source-based plugin workflows
-- `openclaw.runtimeExtensions`: `./dist/index.js` for built runtime workflows
+## Requirements
 
-Use this guide when you want to enable the plugin, configure telemetry outputs,
-understand the hook mapping, or troubleshoot LLM replay fidelity.
+- OpenClaw `2026.5.6` or newer.
+- The OpenClaw CLI available as `openclaw`.
+- Node.js and npm when installing or managing the package directly.
+- A Phoenix instance or OTLP collector when exporting OpenInference or
+  OpenTelemetry spans.
 
-## Build And Validate
+## Install
 
-Run these commands from the repository root:
-
-```bash
-npm ci --ignore-scripts
-npm run build --workspace=nemo-flow-openclaw
-npm run typecheck --workspace=nemo-flow-openclaw
-npm test --workspace=nemo-flow-openclaw
-```
-
-The CI-equivalent repository recipe is:
+Install the plugin with OpenClaw so OpenClaw can register and manage it:
 
 ```bash
-just --set ci true test-openclaw
+openclaw plugins install npm:nemo-flow-openclaw
+openclaw gateway restart
 ```
 
-Use the optional package payload check before changing package metadata or
-entrypoints:
+OpenClaw uses the package `nemo-flow-openclaw` for installation and the plugin
+manifest id `nemo-flow` for configuration. Use `nemo-flow` in
+`plugins.allow`, `plugins.entries`, `plugins inspect`, and gateway status
+commands.
+
+If you manage OpenClaw plugin dependencies directly in a Node.js project,
+install the package with npm:
 
 ```bash
-npm run pack:check --workspace=nemo-flow-openclaw
+npm install nemo-flow-openclaw
 ```
 
-The build emits production files under `integrations/openclaw/dist/`. Test
-build artifacts are written under `integrations/openclaw/.test-dist/` and are
-excluded from the installable package.
+Installing with npm makes the package available to that project. Use
+`openclaw plugins install` when you want OpenClaw to register and manage the
+plugin.
 
-## Enable The Plugin
+## Enable the Plugin
 
 Allow the `nemo-flow` plugin id and grant conversation hook access when OpenClaw
 runs with restrictive plugin settings:
@@ -74,6 +73,12 @@ runs with restrictive plugin settings:
 conversation-sensitive hook payloads such as LLM prompts, LLM responses, agent
 finalization messages, and tool payloads.
 
+Restart the gateway after changing plugin configuration:
+
+```bash
+openclaw gateway restart
+```
+
 ## Configure Outputs
 
 Plugin configuration is passed through
@@ -82,7 +87,7 @@ Plugin configuration is passed through
 ATIF export is enabled by default. OpenTelemetry and OpenInference subscribers
 are disabled until explicitly configured.
 
-For ATIF-only local export:
+Use the following configuration for ATIF-only local export:
 
 ```json
 {
@@ -101,7 +106,7 @@ For ATIF-only local export:
 }
 ```
 
-For OpenTelemetry OTLP export:
+Use the following configuration for OpenTelemetry OTLP export:
 
 ```json
 {
@@ -116,7 +121,7 @@ For OpenTelemetry OTLP export:
 }
 ```
 
-For OpenInference/Phoenix OTLP export:
+Use the following configuration for OpenInference/Phoenix OTLP export:
 
 ```json
 {
@@ -152,12 +157,53 @@ Correlation uses bounded in-memory records. By default, the plugin waits 250 ms
 for a matching `llm_input` after an `llm_output`, keeps correlation records for
 600 seconds, and keeps at most 32 records per correlation key.
 
+## Verify the Integration
+
+Inspect the plugin runtime:
+
+```bash
+openclaw plugins inspect nemo-flow --runtime --json
+```
+
+This verifies that the plugin package is installed, enabled, importable, and
+exposes its config schema. It does not prove that every hook and gateway method
+surface is active in a running gateway.
+
+Run an OpenClaw session with the plugin enabled, then verify the configured
+sink:
+
+- ATIF: confirm JSON files appear in the configured `atif.outputDir`.
+- OpenTelemetry: confirm spans arrive at the configured OTLP collector.
+- OpenInference: confirm spans arrive at the configured OpenInference/Phoenix
+  endpoint.
+
+The plugin also registers the `operator.admin` scoped gateway method
+`nemoFlow.status`. If your CLI is already paired with admin-capable gateway
+access, run:
+
+```bash
+openclaw gateway call nemoFlow.status --json
+```
+
+Otherwise, pass your normal admin-capable gateway auth options:
+
+```bash
+openclaw gateway call nemoFlow.status --token "$OPENCLAW_GATEWAY_TOKEN" --json
+```
+
+If OpenClaw requests a device scope upgrade for `operator.admin`, approve it
+through the normal OpenClaw device approval flow and retry the status call.
+
+The status response reports backend state, output health for `atif`, `otel`,
+and `openInference`, replay counters, and the latest degraded or unavailable
+reason when present.
+
 ## Runtime Mapping
 
 The plugin maps supported OpenClaw hook events into NeMo Flow telemetry without
 changing OpenClaw execution behavior.
 
-| OpenClaw Hook | NeMo Flow Behavior |
+| OpenClaw hook | NeMo Flow behavior |
 | --- | --- |
 | `gateway_start` | Touches the replay backend early; session roots still open lazily from session-scoped hooks. |
 | `gateway_stop` | Drains open sessions, shuts down subscribers, and clears the NeMo Flow plugin host. |
@@ -173,9 +219,9 @@ changing OpenClaw execution behavior.
 
 ## LLM Replay Fidelity
 
-OpenClaw currently exposes request, response, message-write, and provider-timing
-details through separate hook events. The plugin correlates those events within
-the same session, provider, model, and run.
+OpenClaw currently exposes request, response, message-write, and provider
+timing details through separate hook events. The plugin correlates those events
+within the same session, provider, model, and run.
 
 When model timing cannot be safely paired with an assistant turn, the plugin
 emits diagnostic marks instead of inventing latency. This keeps traces honest
@@ -184,53 +230,14 @@ and makes current fidelity boundaries explicit.
 When OpenClaw provides usage data, the plugin maps input, output, total, cache
 read, cache write, and cost fields into OpenInference-friendly usage fields.
 
-## Health
-
-The plugin registers the `operator.admin` scoped gateway method
-`nemoFlow.status`.
-
-The response reports:
-
-- backend status: `not_initialized`, `disabled`, `ready`, `degraded`,
-  `stopping`, or `stopped`
-- output health for `atif`, `otel`, and `openInference`
-- replay counters for replayed LLM spans, replayed tool spans, emitted marks,
-  ATIF files written, replay errors, and skipped events
-- last degraded or unavailable reason when present
-
-Use output health to verify each configured sink:
-
-- ATIF: confirm JSON files appear in the configured `atif.outputDir`
-- OTel: confirm spans arrive at the configured OTLP collector
-- OpenInference: confirm spans arrive at the configured OpenInference/Phoenix
-  endpoint
-
-## Verify The Integration
-
-Use this verification flow after enabling the plugin:
-
-1. Build the plugin.
-2. Run `just --set ci true test-openclaw`.
-3. Start an OpenClaw session with the `nemo-flow` plugin enabled.
-4. Confirm ATIF files or OpenInference/Phoenix spans are produced, depending on
-   the configured outputs.
-5. Check `nemoFlow.status` for backend state, output health, replay counters,
-   and degraded-output reasons.
-
-The optional live smoke test requires a working installed `nemo-flow-node`
-binding:
-
-```bash
-npm run test:live --workspace=nemo-flow-openclaw
-```
-
 ## Troubleshooting
 
 If the plugin does not load:
 
+- verify the package was installed with `openclaw plugins install`
 - verify `plugins.allow` includes `nemo-flow`
-- verify the source or built OpenClaw entrypoint exists
 - verify `plugins.entries["nemo-flow"].enabled` is not disabled
+- restart the gateway after config changes
 
 If conversation payloads are missing:
 

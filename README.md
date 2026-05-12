@@ -131,8 +131,8 @@ The table below summarizes the support level for each binding surface.
 
 ## Third-Party Integrations
 
-Some framework integrations are maintained as patch sets against upstream
-projects rather than as packages in this repository.
+Some framework integrations are maintained as packages in this repository. Other
+sample integrations are maintained as patch sets against upstream projects.
 
 ### Public API-based Integrations
 Some integrations can be implemented using public APIs without patching. Public
@@ -149,16 +149,16 @@ patch-application workflow for those integrations.
 
 ### Support Matrix
 
-The following table summarizes maintained third-party patch integrations and whether each provides observability, request intercepts, execution intercepts, and conditional execution.
+The following table summarizes maintained third-party integrations and whether each provides observability, request intercepts, execution intercepts, and conditional execution.
 
 | Integration | Method | Observability | Request Intercepts | Execution Intercepts | Conditional Execution |
 |---|---|---|---|---|---|
 | [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
 | [opencode](third_party/README-opencode.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
-| [OpenClaw](third_party/README-openclaw.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| [OpenClaw](docs/integrate-frameworks/openclaw-plugin.md) | `nemo-flow-openclaw` plugin | ✅ Yes | ❌ No | ❌ No | ❌ No |
 | [Hermes Agent](third_party/README-hermes-agent.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
 
-All patches offer experimental support. Our roadmap includes switching over to first-party plugins and packages.
+Patch-based integrations offer experimental support. Our roadmap includes switching over to first-party plugins and packages where upstream extension points allow it.
 
 ## Roadmap
 
