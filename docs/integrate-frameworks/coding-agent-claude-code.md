@@ -15,13 +15,19 @@ gateway controls as Claude Code.
 Use the wrapper for no-install local observability:
 
 ```bash
-nemo-flow run -- claude
+nemo-flow claude
 ```
 
-The wrapper infers Claude Code from `claude`, starts a gateway on a dynamic
-`127.0.0.1` port, creates a temporary Claude plugin directory with NeMo Flow
-hooks, passes that plugin with `--plugin-dir`, and sets
-`ANTHROPIC_BASE_URL` to the gateway URL for the launched process.
+Pass Claude Code arguments after `--`:
+
+```bash
+nemo-flow claude -- "summarize this repository"
+```
+
+This shortcut is equivalent to `nemo-flow run -- claude`. The wrapper starts a
+gateway on a dynamic `127.0.0.1` port, creates a temporary Claude plugin
+directory with NeMo Flow hooks, passes that plugin with `--plugin-dir`, and
+sets `ANTHROPIC_BASE_URL` to the gateway URL for the launched process.
 
 Inspect what would be launched without starting Claude Code:
 
@@ -30,12 +36,6 @@ nemo-flow run \
   --dry-run \
   --print \
   -- claude
-```
-
-If a launcher hides the command name, pass the agent explicitly:
-
-```bash
-nemo-flow run --agent claude -- my-claude-wrapper
 ```
 
 ## Shared Config
@@ -68,7 +68,7 @@ endpoint = "http://127.0.0.1:4318/v1/traces"
 ```
 
 Run `nemo-flow run --agent claude` to use the configured command and plugin
-config. User config takes priority over project and global config.
+config. User config takes priority over project and system config.
 
 ## Standalone Gateway
 

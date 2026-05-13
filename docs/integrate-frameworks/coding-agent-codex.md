@@ -30,14 +30,20 @@ upstream as [openai/codex#21639](https://github.com/openai/codex/issues/21639).
 Use the wrapper for no-install local observability:
 
 ```bash
-nemo-flow run -- codex
+nemo-flow codex
 ```
 
-The wrapper infers Codex from `codex`, starts a gateway on a dynamic
-`127.0.0.1` port, enables Codex hooks with CLI config overrides, injects hook
-commands that use `NEMO_FLOW_GATEWAY_URL`, and points Codex at a temporary
-`nemo-flow-openai` provider alias that uses the gateway URL while preserving
-Codex's OpenAI auth path.
+Pass Codex arguments after `--`:
+
+```bash
+nemo-flow codex -- exec "Summarize this repository."
+```
+
+This shortcut is equivalent to `nemo-flow run -- codex`. The wrapper starts a
+gateway on a dynamic `127.0.0.1` port, enables Codex hooks with CLI config
+overrides, injects hook commands that use `NEMO_FLOW_GATEWAY_URL`, and points
+Codex at a temporary `nemo-flow-openai` provider alias that uses the gateway
+URL while preserving Codex's OpenAI auth path.
 
 Inspect what would be launched without starting Codex:
 
@@ -46,12 +52,6 @@ nemo-flow run \
   --dry-run \
   --print \
   -- codex
-```
-
-If a launcher hides the command name, pass the agent explicitly:
-
-```bash
-nemo-flow run --agent codex -- my-codex-wrapper
 ```
 
 ## Shared Config
@@ -83,7 +83,7 @@ output_directory = ".nemo-flow/atif"
 ```
 
 Run `nemo-flow run --agent codex` to use the configured command and plugin
-config. User config takes priority over project and global config.
+config. User config takes priority over project and system config.
 
 ## Standalone Gateway
 

@@ -52,23 +52,36 @@ under the active session scope.
 
 ## Transparent Run
 
-Use `nemo-flow run` for no-install local observability. The wrapper
-starts a gateway on a dynamic `127.0.0.1` port, injects the resolved hook and
-gateway configuration into the launched coding agent, and stops the gateway
-when the agent exits.
+Use the agent shortcuts for no-install local observability. The wrapper starts
+a gateway on a dynamic `127.0.0.1` port, injects the resolved hook and gateway
+configuration into the launched coding agent, and stops the gateway when the
+agent exits.
+
+```bash
+nemo-flow codex
+nemo-flow claude
+nemo-flow cursor
+nemo-flow hermes
+```
+
+Use `nemo-flow run -- <command>` when you want to launch an explicit command
+instead of the built-in shortcut:
 
 ```bash
 nemo-flow run -- codex
-nemo-flow run -- claude
-nemo-flow run -- cursor-agent
-nemo-flow run -- hermes
 ```
 
-The wrapper infers the agent from the command basename. Use `--agent` when a
-launcher or wrapper hides the real agent name:
+If a launcher or wrapper hides the real agent name, set that wrapper as the
+configured command and pass `--agent`. The same pattern applies to Claude Code,
+Codex, Cursor, and Hermes:
+
+```toml
+[agents.codex]
+command = "my-codex-wrapper"
+```
 
 ```bash
-nemo-flow run --agent codex -- my-codex-wrapper
+nemo-flow run --agent codex
 ```
 
 Hermes is different from the other transparent modes: `run --agent hermes`
@@ -80,8 +93,8 @@ environment, gateway URL, and final command without launching the agent.
 
 ## Shared Configuration
 
-Shared TOML config is optional. The gateway loads defaults, then global config,
-then project config, then user config. User config takes priority over global
+Shared TOML config is optional. The gateway loads defaults, then system config,
+then project config, then user config. User config takes priority over system
 and project config. CLI flags and environment variables override file config.
 
 Config file locations are:

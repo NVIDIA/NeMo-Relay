@@ -24,13 +24,19 @@ model routing is configurable.
 Use the wrapper for no-install local observability:
 
 ```bash
-nemo-flow run -- cursor-agent
+nemo-flow cursor
 ```
 
-The wrapper infers Cursor from `cursor` or `cursor-agent`, starts a gateway on a
-dynamic `127.0.0.1` port, temporarily merges NeMo Flow hook entries into the
-project `.cursor/hooks.json`, launches Cursor, and restores the original hook
-file after the agent exits.
+Pass Cursor arguments after `--`:
+
+```bash
+nemo-flow cursor -- agent --resume <session-id>
+```
+
+This shortcut is equivalent to `nemo-flow run -- cursor-agent`. The wrapper
+starts a gateway on a dynamic `127.0.0.1` port, temporarily merges NeMo Flow
+hook entries into the project `.cursor/hooks.json`, launches Cursor, and
+restores the original hook file after the agent exits.
 
 Inspect what would be launched without starting Cursor:
 
@@ -39,12 +45,6 @@ nemo-flow run \
   --dry-run \
   --print \
   -- cursor-agent
-```
-
-If a launcher hides the command name, pass the agent explicitly:
-
-```bash
-nemo-flow run --agent cursor -- my-cursor-wrapper
 ```
 
 ## Shared Config
@@ -74,7 +74,7 @@ output_directory = ".nemo-flow/atif"
 ```
 
 Run `nemo-flow run --agent cursor` to use the configured command and plugin
-config. User config takes priority over project and global config.
+config. User config takes priority over project and system config.
 
 ## Standalone Gateway
 

@@ -21,14 +21,20 @@ Use the wrapper when you want the gateway lifetime managed for a local Hermes
 process:
 
 ```bash
-nemo-flow run -- hermes
+nemo-flow hermes
 ```
 
-The wrapper infers Hermes from `hermes` or `hermes-agent`, starts a gateway on a
-dynamic `127.0.0.1` port, and exports `NEMO_FLOW_GATEWAY_URL` for the launched
-process. Hermes hook configuration is not temporary in this mode. Install hooks
-first, or configure equivalent Hermes shell hooks, so approved hook commands can
-discover the dynamic gateway URL.
+Pass Hermes arguments after `--`:
+
+```bash
+nemo-flow hermes -- chat --provider custom
+```
+
+This shortcut is equivalent to `nemo-flow run -- hermes`. The wrapper starts a
+gateway on a dynamic `127.0.0.1` port and exports `NEMO_FLOW_GATEWAY_URL` for
+the launched process. Hermes hook configuration is not temporary in this mode.
+Install hooks first, or configure equivalent Hermes shell hooks, so approved
+hook commands can discover the dynamic gateway URL.
 
 Inspect what would be launched without starting Hermes:
 
@@ -37,12 +43,6 @@ nemo-flow run \
   --dry-run \
   --print \
   -- hermes
-```
-
-If a launcher hides the command name, pass the agent explicitly:
-
-```bash
-nemo-flow run --agent hermes -- my-hermes-wrapper
 ```
 
 ## Shared Config
@@ -75,7 +75,7 @@ endpoint = "http://127.0.0.1:4318/v1/traces"
 ```
 
 Run `nemo-flow run --agent hermes` to use the configured command and plugin
-config. User config takes priority over project and global config.
+config. User config takes priority over project and system config.
 
 ## Hermes Hook Setup
 

@@ -25,8 +25,8 @@ serde_json = "1"
 
 - `nemo-flow` is the core Rust runtime surface.
 - `nemo-flow-adaptive` is the companion crate for adaptive runtime primitives and Redis-backed learning components.
-- `nemo-flow-cli` is a binary crate. Use `cargo install --path
-  ../NeMo-Flow/crates/cli` when you need the local coding-agent gateway.
+- `nemo-flow-cli` is a binary crate. Use `cargo install nemo-flow-cli` when
+  you need the coding-agent gateway.
 
 ### Install from a Package Manager
 

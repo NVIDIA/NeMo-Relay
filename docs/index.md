@@ -56,6 +56,7 @@ targets.
 These paths map common reader goals to the most relevant documentation entry points.
 
 - **End Users**: Start with [Prerequisites](getting-started/prerequisites.md) and [Quick Start](getting-started/quick-start.md).
+- **Coding-Agent CLI Users**: Start with [Advanced Guide: Coding-Agent Gateway](integrate-frameworks/coding-agent-gateway.md), then use the per-agent guide for Claude Code, Codex, Cursor, or Hermes.
 - **Agent Framework Developers**: Start with [Integrate into Frameworks](integrate-frameworks/about.md).
 - **Plugin Writers**: Start with [Build Plugins](build-plugins/about.md), then continue to [Basic Guide: Define a Plugin](build-plugins/basic-guide.md).
 - **Contributors**: Start with [Contribute](contribute/about.md) and the repository root `CONTRIBUTING.md` guide.
