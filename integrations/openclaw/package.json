@@ -1,6 +1,6 @@
 {
   "name": "nemo-flow-openclaw",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "NeMo Flow-authored observability plugin for OpenClaw.",
   "type": "module",
   "main": "./dist/index.js",
