@@ -317,7 +317,7 @@ fn plugin_toml_path_resolution_tracks_config_scope() {
 }
 
 #[test]
-fn discovered_plugin_toml_uses_user_over_project_precedence() {
+fn discovered_plugin_toml_replaces_components_by_precedence() {
     let temp = tempfile::tempdir().unwrap();
     let project_plugin = temp.path().join("project-plugin.toml");
     let user_plugin = temp.path().join("user-plugin.toml");
@@ -336,6 +336,13 @@ version = 1
 [components.config.atof]
 enabled = true
 filename = "project.jsonl"
+
+[[components]]
+kind = "adaptive"
+enabled = true
+
+[components.config]
+mode = "project-only"
 "#,
     )
     .unwrap();

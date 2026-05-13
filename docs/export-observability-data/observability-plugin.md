@@ -69,9 +69,24 @@ startup. Define it with one of these sources:
 - `plugin.toml` next to the resolved `config.toml`, or in the same discovered
   system, project, and user scopes as `config.toml`.
 
-When multiple discovered `plugin.toml` files are present, the gateway applies
-the same precedence as `config.toml`: system first, then project, then user.
-User-level plugin config overrides project-level plugin config.
+When multiple discovered `plugin.toml` files are present, the gateway loads
+them from lowest to highest precedence:
+
+1. System: `/etc/nemo-flow/plugin.toml`
+2. Project: `.nemo-flow/plugin.toml`
+3. User: `$XDG_CONFIG_HOME/nemo-flow/plugin.toml`, or
+   `~/.config/nemo-flow/plugin.toml`
+
+Later files override earlier files. TOML tables merge recursively, so a
+higher-precedence file can override one nested key while preserving sibling
+keys from lower-precedence files.
+
+`[[components]]` is different because TOML represents it as an array. Arrays
+are replaced rather than appended. If a project `plugin.toml` defines an
+observability component and a user `plugin.toml` defines an adaptive component,
+the effective config contains only the user adaptive component. Put the full
+component list in the highest-precedence `plugin.toml` that should control the
+run.
 
 Use only one source for plugin config. The gateway reports an error when
 `plugin.toml`, `[plugins].config`, or `--plugin-config` are used together.
