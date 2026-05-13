@@ -16,7 +16,7 @@ same local hook and gateway controls as Claude Code.
 
 - `.claude-plugin/plugin.json` describes the Claude Code hook package.
 - `hooks/hooks.json` contains hook entries that run
-  `nemo-flow hook-forward claude-code`.
+  `nemo-flow hook-forward claude`.
 
 ## Captured Events
 
@@ -54,38 +54,28 @@ nemo-flow run \
 
 ## Shared Config
 
-Use `.nemo-flow/gateway.toml` for project defaults or
-`~/.config/nemo-flow/gateway.toml` for user defaults:
+Use `.nemo-flow/config.toml` for project defaults or
+`~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[session]
+[observability]
 atif_dir = ".nemo-flow/atif"
 metadata = { team = "agent-observability" }
 
-[agents.claude-code]
+[agents.claude]
 command = "claude"
 ```
 
 Then run:
 
 ```bash
-nemo-flow run --agent claude-code
+nemo-flow run --agent claude
 ```
 
-## Persistent Setup
+## Standalone Gateway
 
-Use persistent hooks only when you do not want to launch Claude Code through the
-wrapper:
-
-```bash
-nemo-flow install claude-code \
-  --scope user \
-  --target cli \
-  --gateway-url http://127.0.0.1:4040 \
-  --atif-dir .nemo-flow/atif
-```
-
-Start the gateway in one terminal:
+Use the long-running gateway only when you do not want to launch Claude Code
+through the wrapper. Start the gateway in one terminal:
 
 ```bash
 NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
@@ -97,6 +87,9 @@ Launch Claude Code from another terminal with the gateway environment:
 export ANTHROPIC_BASE_URL=http://127.0.0.1:4040
 claude
 ```
+
+Hook events (tool calls, session markers) are only captured when running
+through the wrapper, which injects ephemeral hooks per-run.
 
 ## Verify
 
@@ -112,7 +105,7 @@ For a direct endpoint smoke test against a manually started gateway:
 ```bash
 curl -f http://127.0.0.1:4040/healthz
 printf '{"session_id":"smoke-claude","hook_event_name":"SessionStart"}' \
-  | NEMO_FLOW_GATEWAY_URL=http://127.0.0.1:4040 nemo-flow hook-forward claude-code --fail-closed
+  | NEMO_FLOW_GATEWAY_URL=http://127.0.0.1:4040 nemo-flow hook-forward claude --fail-closed
 ```
 
 If hooks arrive but LLM spans are missing, confirm the Claude Code process was

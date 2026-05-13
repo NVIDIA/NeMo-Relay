@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
@@ -44,6 +44,7 @@ type PluginMap = HashMap<String, Arc<dyn Plugin>>;
 static PLUGIN_HANDLERS: LazyLock<RwLock<PluginMap>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 static ACTIVE_PLUGIN_CONFIGURATION: LazyLock<Mutex<Option<ActivePluginConfiguration>>> =
     LazyLock::new(|| Mutex::new(None));
+static BUILTIN_PLUGIN_REGISTRATION: OnceLock<Result<()>> = OnceLock::new();
 
 /// Error type for generic plugin operations.
 #[derive(Debug, Error)]
@@ -729,6 +730,31 @@ pub fn register_plugin(plugin: Arc<dyn Plugin>) -> Result<()> {
     Ok(())
 }
 
+/// Registers core-provided plugin kinds.
+///
+/// Built-in plugins are available to validation and initialization without a
+/// binding or application-specific registration call.
+pub fn ensure_builtin_plugins_registered() -> Result<()> {
+    match BUILTIN_PLUGIN_REGISTRATION
+        .get_or_init(crate::observability::plugin_component::register_observability_component)
+    {
+        Ok(()) => Ok(()),
+        Err(err) => Err(clone_cached_plugin_error(err)),
+    }
+}
+
+fn clone_cached_plugin_error(err: &PluginError) -> PluginError {
+    match err {
+        PluginError::InvalidConfig(message) => PluginError::InvalidConfig(message.clone()),
+        PluginError::NotFound(message) => PluginError::NotFound(message.clone()),
+        PluginError::Serialization(err) => PluginError::Internal(err.to_string()),
+        PluginError::Internal(message) => PluginError::Internal(message.clone()),
+        PluginError::RegistrationFailed(message) => {
+            PluginError::RegistrationFailed(message.clone())
+        }
+    }
+}
+
 /// Removes a previously registered plugin.
 ///
 /// This affects future validation and initialization only. Active runtime
@@ -764,6 +790,7 @@ pub fn deregister_plugin(plugin_kind: &str) -> bool {
 /// Disabled or inactive components still appear here when their plugin kind is
 /// registered.
 pub fn list_plugin_kinds() -> Vec<String> {
+    let _ = ensure_builtin_plugins_registered();
     let mut kinds = PLUGIN_HANDLERS
         .read()
         .map(|guard| guard.keys().cloned().collect::<Vec<_>>())
@@ -784,6 +811,7 @@ pub fn list_plugin_kinds() -> Vec<String> {
 /// # Notes
 /// The returned plugin is shared by [`Arc`], so callers receive a cheap clone.
 pub fn lookup_plugin(plugin_kind: &str) -> Option<Arc<dyn Plugin>> {
+    let _ = ensure_builtin_plugins_registered();
     PLUGIN_HANDLERS
         .read()
         .ok()
@@ -806,6 +834,7 @@ pub fn lookup_plugin(plugin_kind: &str) -> Option<Arc<dyn Plugin>> {
 /// Validation checks host policy, plugin multiplicity rules, unknown component
 /// kinds, and plugin-provided validation hooks.
 pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
+    let _ = ensure_builtin_plugins_registered();
     let mut report = ConfigReport::default();
 
     if config.version != 1 {
@@ -967,6 +996,7 @@ struct ActivePluginConfiguration {
 }
 
 async fn initialize_plugin_components(config: &PluginConfig) -> Result<Vec<PluginRegistration>> {
+    ensure_builtin_plugins_registered()?;
     let totals = plugin_component_totals(config);
     let mut ordinals: HashMap<&str, usize> = HashMap::new();
     let mut registrations = vec![];

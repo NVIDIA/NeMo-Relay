@@ -30,6 +30,12 @@ use crate::session::{GatewayCallPrep, LlmGatewayStart};
 
 const MAX_BODY_BYTES: usize = 100 * 1024 * 1024;
 
+// ChatGPT backend base URL used by Codex when authenticated with ChatGPT-Plus OAuth. Mirrors the
+// `CHATGPT_CODEX_BASE_URL` constant in `codex-rs/model-provider-info/src/lib.rs`, which Codex
+// selects in `ModelProviderInfo::to_api_provider` when `auth_mode` is `Chatgpt` or
+// `ChatgptAuthTokens`. The standard `api.openai.com/v1` base is used for API-key auth instead.
+const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+
 /// Proxies supported LLM API requests through NeMo Flow's managed execution pipeline.
 ///
 /// The gateway buffers the inbound body once, opens a managed LLM call against the resolved
@@ -81,14 +87,16 @@ async fn prepare_gateway_request(
         .await
         .map_err(|error| CliError::InvalidPayload(error.to_string()))?;
     let request_json = serde_json::from_slice::<Value>(&body_bytes).unwrap_or(Value::Null);
-    let upstream_url = provider.upstream_url(
-        config,
-        parts
-            .uri
-            .path_and_query()
-            .map(|p| p.as_str())
-            .unwrap_or(parts.uri.path()),
-    );
+    let path_and_query = parts
+        .uri
+        .path_and_query()
+        .map(|p| p.as_str())
+        .unwrap_or(parts.uri.path());
+    let upstream_url = if should_use_chatgpt_backend(provider, &parts.headers) {
+        chatgpt_upstream_url(path_and_query)
+    } else {
+        provider.upstream_url(config, path_and_query)
+    };
     let streaming = request_json
         .get("stream")
         .and_then(Value::as_bool)
@@ -288,6 +296,7 @@ fn build_buffered_func(
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
     let headers = prepared.headers.clone();
+    let route = prepared.provider;
     Arc::new(move |_request| {
         let http = http.clone();
         let method = method.clone();
@@ -299,7 +308,9 @@ fn build_buffered_func(
         let response_bytes = response_bytes.clone();
         Box::pin(async move {
             let response =
-                match forward_upstream_request(&http, &method, &url, &body_bytes, &headers).await {
+                match forward_upstream_request(&http, &method, &url, &body_bytes, &headers, route)
+                    .await
+                {
                     Ok(response) => response,
                     Err(error) => {
                         let message = error.to_string();
@@ -419,6 +430,7 @@ fn build_streaming_func(
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
     let headers = prepared.headers.clone();
+    let route = prepared.provider;
     Arc::new(move |_request| {
         let http = http.clone();
         let method = method.clone();
@@ -429,7 +441,9 @@ fn build_streaming_func(
         let upstream_error = upstream_error.clone();
         Box::pin(async move {
             let response =
-                match forward_upstream_request(&http, &method, &url, &body_bytes, &headers).await {
+                match forward_upstream_request(&http, &method, &url, &body_bytes, &headers, route)
+                    .await
+                {
                     Ok(response) => response,
                     Err(error) => {
                         let message = error.to_string();
@@ -531,21 +545,164 @@ fn encode_sse_frame(event_json: &Value, route: ProviderRoute) -> String {
 }
 
 // Forwards the buffered request to the upstream provider with only the safe request headers. This
-// is shared by the buffered and streaming managed funcs so header filtering stays consistent.
+// is shared by the buffered and streaming managed funcs so header filtering stays consistent. When
+// `OPENAI_API_KEY` is set the gateway replaces any inbound ChatGPT-Plus OAuth JWT with the env
+// key; otherwise the inbound credentials are forwarded as-is.
 async fn forward_upstream_request(
     http: &reqwest::Client,
     method: &Method,
     url: &str,
     body_bytes: &Bytes,
     headers: &HeaderMap,
+    route: ProviderRoute,
 ) -> Result<reqwest::Response, reqwest::Error> {
+    // Only strip the inbound JWT when we actually have a replacement key to inject. Without one
+    // the upstream just receives no auth and 401s, which is no better than letting it reject the
+    // JWT itself — and stripping silently can break setups that point the gateway at an upstream
+    // that happens to accept the ChatGPT-Plus token.
+    // Whitespace-only keys are effectively missing: stripping the inbound JWT and injecting an
+    // empty/whitespace bearer just trades one 401 for another while losing observability.
+    let has_openai_env = std::env::var("OPENAI_API_KEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .is_some();
+    let sanitized = strip_chatgpt_oauth_for_openai_route(headers, route, has_openai_env);
     let mut upstream = http.request(method.clone(), url).body(body_bytes.clone());
-    for (name, value) in headers {
+    for (name, value) in &sanitized {
         if should_forward_request_header(name) {
             upstream = upstream.header(name, value);
         }
     }
+    upstream = inject_provider_auth(upstream, route, &sanitized);
     upstream.send().await
+}
+
+// Builds the upstream URL for the ChatGPT backend. Codex's standard base URL is
+// `api.openai.com/v1` (the `/v1` is part of the base), while the ChatGPT backend base is
+// `chatgpt.com/backend-api/codex` (no `/v1`). Both append `/responses` to their base, so the
+// ChatGPT path is `.../codex/responses`, not `.../codex/v1/responses`. Strip any `/v1` prefix
+// that the gateway's route matcher may have included from the inbound request path.
+fn chatgpt_upstream_url(path_and_query: &str) -> String {
+    let path = path_and_query.strip_prefix("/v1").unwrap_or(path_and_query);
+    format!("{CHATGPT_CODEX_BASE_URL}{path}")
+}
+
+// Returns `true` when the `Authorization` header carries a JWT-shaped bearer token (`Bearer eyJ`
+// prefix). Codex stores ChatGPT-Plus OAuth tokens in `~/.codex/auth.json` as a `TokenData`
+// struct with `access_token`, `refresh_token`, and `id_token` fields (see
+// `codex-rs/login/src/token_data.rs`). The access token is a JWT whose base64 header starts
+// with `eyJ`. Real `sk-...` API keys and opaque tokens do not match this pattern.
+fn has_chatgpt_jwt(headers: &HeaderMap) -> bool {
+    headers
+        .get(http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("Bearer eyJ"))
+}
+
+// Returns `true` when the gateway should route the request to the ChatGPT backend
+// (`chatgpt.com/backend-api/codex`) instead of the configured `openai_base_url`. Mirrors the
+// base-URL selection in Codex's `ModelProviderInfo::to_api_provider` (`codex-rs/model-provider-
+// info/src/lib.rs`): ChatGPT OAuth routes to `CHATGPT_CODEX_BASE_URL`, API-key auth routes to
+// `api.openai.com/v1`. Fires when all of: (1) the route is OpenAI-family, (2) the inbound
+// request carries a ChatGPT OAuth JWT, and (3) no `OPENAI_API_KEY` is available to substitute.
+fn should_use_chatgpt_backend(route: ProviderRoute, headers: &HeaderMap) -> bool {
+    route.is_openai()
+        && has_chatgpt_jwt(headers)
+        && std::env::var("OPENAI_API_KEY")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .is_none()
+}
+
+// Removes JWT-shaped bearer tokens from inbound `Authorization` on OpenAI routes when we have a
+// replacement `OPENAI_API_KEY` to inject. Codex's `BearerAuthProvider` (`codex-rs/model-provider/
+// src/bearer_auth_provider.rs`) always sets an `Authorization: Bearer <token>` header — either
+// the ChatGPT OAuth access token (a JWT starting `eyJ`) or a plain API key (`sk-...`). When
+// `OPENAI_API_KEY` is set, the gateway strips the JWT so `inject_provider_auth` can substitute
+// the env key for the `api.openai.com` route. When the key is absent, the JWT is preserved and
+// `should_use_chatgpt_backend` routes to the ChatGPT backend. Real `sk-...` keys are unaffected.
+fn strip_chatgpt_oauth_for_openai_route(
+    headers: &HeaderMap,
+    route: ProviderRoute,
+    has_replacement_key: bool,
+) -> HeaderMap {
+    if !matches!(
+        route,
+        ProviderRoute::OpenAiResponses
+            | ProviderRoute::OpenAiChatCompletions
+            | ProviderRoute::OpenAiModels
+    ) || !has_replacement_key
+    {
+        return headers.clone();
+    }
+    let mut out = headers.clone();
+    let looks_like_jwt = out
+        .get(http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.starts_with("Bearer eyJ"))
+        .unwrap_or(false);
+    if looks_like_jwt {
+        out.remove(http::header::AUTHORIZATION);
+    }
+    out
+}
+
+// If the inbound request has no provider auth header (Authorization / x-api-key / api-key), read
+// the provider's standard API key env var and attach it to the outbound request. When codex sends
+// its ChatGPT-Plus OAuth JWT the gateway forwards it unless `OPENAI_API_KEY` is set, in which case
+// `strip_chatgpt_oauth_for_openai_route` removes the JWT first and this function injects the env
+// key. If neither inbound auth nor the env var is present, the request is forwarded as-is and the
+// upstream returns a real 401 (caller can detect and surface).
+fn inject_provider_auth(
+    builder: reqwest::RequestBuilder,
+    route: ProviderRoute,
+    inbound: &HeaderMap,
+) -> reqwest::RequestBuilder {
+    inject_provider_auth_with_env(builder, route, inbound, |key| std::env::var(key).ok())
+}
+
+// Pure variant exposed for tests. The env lookup is injected so cases can be exercised without
+// mutating process env state (which races with parallel test execution).
+fn inject_provider_auth_with_env<F>(
+    builder: reqwest::RequestBuilder,
+    route: ProviderRoute,
+    inbound: &HeaderMap,
+    env_lookup: F,
+) -> reqwest::RequestBuilder
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let already_authed = inbound.contains_key(http::header::AUTHORIZATION)
+        || inbound.contains_key("x-api-key")
+        || inbound.contains_key("api-key")
+        || inbound.contains_key("anthropic-api-key");
+    if already_authed {
+        return builder;
+    }
+    let (env_var, header_name) = match route {
+        ProviderRoute::OpenAiResponses
+        | ProviderRoute::OpenAiChatCompletions
+        | ProviderRoute::OpenAiModels => ("OPENAI_API_KEY", http::header::AUTHORIZATION.as_str()),
+        ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
+            ("ANTHROPIC_API_KEY", "x-api-key")
+        }
+    };
+    let Some(value) = env_lookup(env_var) else {
+        return builder;
+    };
+    // Trim before testing emptiness — a value of "   " is no more useful than "" and sending
+    // `Bearer ` with leading whitespace can confuse upstream auth parsers further down.
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return builder;
+    }
+    let header_value = match route {
+        ProviderRoute::OpenAiResponses
+        | ProviderRoute::OpenAiChatCompletions
+        | ProviderRoute::OpenAiModels => format!("Bearer {value}"),
+        ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => value,
+    };
+    builder.header(header_name, header_value)
 }
 
 // Plain byte passthrough used for streaming routes that lack a typed codec. The managed pipeline
@@ -561,6 +718,7 @@ async fn passthrough_streaming(
         &prepared.upstream_url,
         &prepared.body_bytes,
         &prepared.headers,
+        prepared.provider,
     )
     .await?;
     let status = response.status();
@@ -609,20 +767,30 @@ pub(crate) async fn models(
         );
     }
     let provider = ProviderRoute::OpenAiModels;
-    let upstream_url = provider.upstream_url(
-        &state.config,
-        parts
-            .uri
-            .path_and_query()
-            .map(|p| p.as_str())
-            .unwrap_or(parts.uri.path()),
-    );
+    let path_and_query = parts
+        .uri
+        .path_and_query()
+        .map(|p| p.as_str())
+        .unwrap_or(parts.uri.path());
+    let upstream_url = if should_use_chatgpt_backend(provider, &parts.headers) {
+        chatgpt_upstream_url(path_and_query)
+    } else {
+        provider.upstream_url(&state.config, path_and_query)
+    };
+    // Whitespace-only keys are effectively missing: stripping the inbound JWT and injecting an
+    // empty/whitespace bearer just trades one 401 for another while losing observability.
+    let has_openai_env = std::env::var("OPENAI_API_KEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .is_some();
+    let sanitized = strip_chatgpt_oauth_for_openai_route(&parts.headers, provider, has_openai_env);
     let mut upstream = state.http.get(upstream_url);
-    for (name, value) in &parts.headers {
+    for (name, value) in &sanitized {
         if should_forward_request_header(name) {
             upstream = upstream.header(name, value);
         }
     }
+    upstream = inject_provider_auth(upstream, provider, &sanitized);
     let upstream_response = upstream.send().await?;
     let status = upstream_response.status();
     let headers = response_headers(upstream_response.headers());
@@ -656,6 +824,13 @@ impl ProviderRoute {
         }
     }
 
+    const fn is_openai(self) -> bool {
+        matches!(
+            self,
+            Self::OpenAiResponses | Self::OpenAiChatCompletions | Self::OpenAiModels
+        )
+    }
+
     // Returns the provider route name recorded in LLM event metadata. These names split OpenAI API
     // variants because their request/response schemas differ even when they share a base URL.
     const fn name(self) -> &'static str {
@@ -674,12 +849,19 @@ impl ProviderRoute {
     fn upstream_url(self, config: &crate::config::GatewayConfig, path_and_query: &str) -> String {
         let base = match self {
             Self::OpenAiResponses | Self::OpenAiChatCompletions | Self::OpenAiModels => {
-                config.openai_base_url.trim_end_matches('/')
+                config.openai_base_url.as_str()
             }
             Self::AnthropicMessages | Self::AnthropicCountTokens => {
-                config.anthropic_base_url.trim_end_matches('/')
+                config.anthropic_base_url.as_str()
             }
         };
+        self.upstream_url_with_base(base, path_and_query)
+    }
+
+    // Like `upstream_url` but with an explicit base URL. Used by the ChatGPT OAuth fallback path
+    // which routes to `CHATGPT_CODEX_BASE_URL` instead of the configured `openai_base_url`.
+    fn upstream_url_with_base(self, base: &str, path_and_query: &str) -> String {
+        let base = base.trim_end_matches('/');
         let path_and_query = match self {
             Self::OpenAiResponses | Self::OpenAiChatCompletions | Self::OpenAiModels
                 if !path_and_query.starts_with("/v1/") =>

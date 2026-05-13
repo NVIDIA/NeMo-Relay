@@ -25,14 +25,16 @@ module tree.
 
 These entry points are the primary APIs to use from this binding.
 
-- `nemo-flow`: core runtime APIs for scopes, tools, LLMs, registries, subscribers, codecs, streams, and observability
+- `nemo-flow`: core runtime APIs for scopes, tools, LLMs, registries, subscribers, codecs, streams, observability exporters, and the built-in observability plugin
 - `nemo-flow-adaptive`: adaptive runtime helpers, learner implementations, storage backends, and adaptive configuration
 - `nemo-flow-cli`: binary gateway for coding-agent hooks and passthrough LLM observability
 - `nemo-flow-ffi`: raw C ABI used by downstream native bindings
 
 Within `nemo-flow`, most integrations start in `api`, especially the `scope`,
 `tool`, `llm`, `registry`, and `subscriber` modules. Other important public
-modules include `codec`, `observability`, `stream`, `error`, and `json`.
+modules include `codec`, `observability`, `stream`, `error`, and `json`. The
+`observability::plugin_component` module contains the built-in `observability`
+plugin config types.
 
 Within `nemo-flow-adaptive`, the main surfaces include adaptive configuration,
 plugin components, storage abstractions, learners, trie-backed data
@@ -74,6 +76,7 @@ Use these links to continue from the API reference into task-focused guides.
 - [Subscribers](../../../about/concepts/subscribers.md)
 - [Plugins](../../../about/concepts/plugins.md)
 - [Adaptive Optimization](../../../use-adaptive-optimization/about.md)
+- [Configure the Observability Plugin](../../../export-observability-data/observability-plugin.md)
 - [Typed Wrappers and Codecs](../../../integrate-frameworks/using-codecs.md)
 - [Framework Integration Surfaces](../../../integrate-frameworks/about.md)
 - [Coding-Agent Gateway](../../../integrate-frameworks/coding-agent-gateway.md)

@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::http::HeaderMap;
+use nemo_flow::observability::atof::AtofExporterMode;
 use serde_json::json;
 
 use super::*;
+use crate::config::{AtifExporterSettings, AtofExporterSettings, ExportersConfig};
 use crate::model::{LlmEvent, LlmHintEvent, SessionEvent, ToolEvent};
 
 #[tokio::test]
@@ -12,9 +14,9 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -88,9 +90,9 @@ async fn writes_atif_on_session_end_from_header_config() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -142,6 +144,56 @@ async fn writes_atif_on_session_end_from_header_config() {
 }
 
 #[tokio::test]
+async fn writes_atof_with_configured_mode_and_filename_template() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("custom-atof-mode.jsonl");
+    std::fs::write(&output, "{\"existing\":true}\n").unwrap();
+    let config = GatewayConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        openai_base_url: "http://127.0.0.1".into(),
+        anthropic_base_url: "http://127.0.0.1".into(),
+        exporters: ExportersConfig {
+            atof: AtofExporterSettings {
+                dir: Some(temp.path().to_path_buf()),
+                mode: AtofExporterMode::Overwrite,
+                filename_template: "custom-{session_id}.jsonl".into(),
+            },
+            ..Default::default()
+        },
+        metadata: None,
+        plugin_config: None,
+    };
+    let manager = SessionManager::new(config);
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "atof-mode".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SessionStart".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::AgentEnded(SessionEvent {
+                    session_id: "atof-mode".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SessionEnd".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let contents = std::fs::read_to_string(output).unwrap();
+    assert!(!contents.contains("existing"));
+    assert!(contents.contains("atof-mode"));
+}
+
+#[tokio::test]
 async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
     // Regression test: hermes-agent and other integrations can emit terminal hooks more than once
     // per session. Without idempotency in `end_agent`, the second AgentEnded would re-open an
@@ -151,9 +203,14 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: Some(temp.path().to_path_buf()),
-        openinference_endpoint: None,
+        exporters: ExportersConfig {
+            atif: AtifExporterSettings {
+                dir: Some(temp.path().to_path_buf()),
+            },
+            ..Default::default()
+        },
         metadata: None,
         plugin_config: None,
     };
@@ -227,9 +284,9 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -306,9 +363,9 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -359,7 +416,7 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
 async fn terminal_retry_for_unknown_session_is_ignored() {
     let temp = tempfile::tempdir().unwrap();
     let mut config = session_test_config();
-    config.atif_dir = Some(temp.path().to_path_buf());
+    config.exporters.atif.dir = Some(temp.path().to_path_buf());
     let manager = SessionManager::new(config);
 
     manager
@@ -385,9 +442,9 @@ async fn out_of_order_started_subagent_end_does_not_leak_scope() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -457,9 +514,9 @@ async fn agent_end_closes_nested_active_subagents_lifo() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -513,9 +570,9 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -558,7 +615,7 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
 async fn agent_end_closes_in_flight_gateway_llm() {
     let temp = tempfile::tempdir().unwrap();
     let mut config = session_test_config();
-    config.atif_dir = Some(temp.path().to_path_buf());
+    config.exporters.atif.dir = Some(temp.path().to_path_buf());
     let manager = SessionManager::new(config);
     let _active = manager
         .start_llm(
@@ -606,9 +663,9 @@ async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() 
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -663,9 +720,9 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -760,9 +817,9 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -875,9 +932,9 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -974,9 +1031,9 @@ async fn no_active_hint_reuses_last_llm_owner() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -1083,7 +1140,7 @@ async fn no_active_hint_reuses_last_llm_owner() {
 async fn session_marks_cover_compaction_notifications_and_hook_marks() {
     let temp = tempfile::tempdir().unwrap();
     let mut config = session_test_config();
-    config.atif_dir = Some(temp.path().to_path_buf());
+    config.exporters.atif.dir = Some(temp.path().to_path_buf());
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
 
@@ -1634,9 +1691,9 @@ fn session_test_config() -> GatewayConfig {
     GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: None,
-        openinference_endpoint: None,
+        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     }
@@ -1652,9 +1709,14 @@ async fn gateway_first_anthropic_call_labels_session_as_claude_code() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: Some(temp.path().to_path_buf()),
-        openinference_endpoint: None,
+        exporters: ExportersConfig {
+            atif: AtifExporterSettings {
+                dir: Some(temp.path().to_path_buf()),
+            },
+            ..Default::default()
+        },
         metadata: None,
         plugin_config: None,
     };
@@ -1700,9 +1762,14 @@ async fn gateway_first_openai_responses_call_labels_session_as_codex() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: Some(temp.path().to_path_buf()),
-        openinference_endpoint: None,
+        exporters: ExportersConfig {
+            atif: AtifExporterSettings {
+                dir: Some(temp.path().to_path_buf()),
+            },
+            ..Default::default()
+        },
         metadata: None,
         plugin_config: None,
     };
@@ -1744,9 +1811,14 @@ async fn synthetic_gateway_session_keeps_gateway_label() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: Some(temp.path().to_path_buf()),
-        openinference_endpoint: None,
+        exporters: ExportersConfig {
+            atif: AtifExporterSettings {
+                dir: Some(temp.path().to_path_buf()),
+            },
+            ..Default::default()
+        },
         metadata: None,
         plugin_config: None,
     };
@@ -1790,9 +1862,14 @@ async fn turn_ended_snapshots_atif_without_closing_scope() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: Some(temp.path().to_path_buf()),
-        openinference_endpoint: None,
+        exporters: ExportersConfig {
+            atif: AtifExporterSettings {
+                dir: Some(temp.path().to_path_buf()),
+            },
+            ..Default::default()
+        },
         metadata: None,
         plugin_config: None,
     };
@@ -1872,9 +1949,14 @@ async fn turn_ended_is_noop_for_session_with_no_agent_scope() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
+
         anthropic_base_url: "http://127.0.0.1".into(),
-        atif_dir: Some(temp.path().to_path_buf()),
-        openinference_endpoint: None,
+        exporters: ExportersConfig {
+            atif: AtifExporterSettings {
+                dir: Some(temp.path().to_path_buf()),
+            },
+            ..Default::default()
+        },
         metadata: None,
         plugin_config: None,
     };

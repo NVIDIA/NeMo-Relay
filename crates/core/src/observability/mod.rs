@@ -17,3 +17,4 @@ pub mod atof;
 pub mod openinference;
 #[cfg(feature = "otel")]
 pub mod otel;
+pub mod plugin_component;

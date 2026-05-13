@@ -18,6 +18,9 @@ fn infers_agent_from_command_or_uses_override() {
         openai_base_url: None,
         anthropic_base_url: None,
         atif_dir: None,
+
+        atof_dir: None,
+
         openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
@@ -43,6 +46,7 @@ fn uses_configured_command_when_no_argv_is_supplied() {
     let agents = AgentConfigs {
         codex: AgentCommandConfig {
             command: Some("codex --full-auto".into()),
+            hooks_path: None,
         },
         ..AgentConfigs::default()
     };
@@ -52,6 +56,9 @@ fn uses_configured_command_when_no_argv_is_supplied() {
         openai_base_url: None,
         anthropic_base_url: None,
         atif_dir: None,
+
+        atof_dir: None,
+
         openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
@@ -71,6 +78,7 @@ fn uses_configured_hermes_command_when_no_argv_is_supplied() {
     let agents = AgentConfigs {
         hermes: AgentCommandConfig {
             command: Some("hermes --yolo chat".into()),
+            hooks_path: None,
         },
         ..AgentConfigs::default()
     };
@@ -80,6 +88,9 @@ fn uses_configured_hermes_command_when_no_argv_is_supplied() {
         openai_base_url: None,
         anthropic_base_url: None,
         atif_dir: None,
+
+        atof_dir: None,
+
         openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
@@ -102,6 +113,9 @@ fn inference_failure_has_actionable_message() {
         openai_base_url: None,
         anthropic_base_url: None,
         atif_dir: None,
+
+        atof_dir: None,
+
         openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
@@ -114,17 +128,24 @@ fn inference_failure_has_actionable_message() {
         .unwrap_err()
         .to_string();
 
-    assert!(error.contains("pass --agent claude-code"));
+    assert!(error.contains("pass --agent claude"));
 }
 
 #[test]
-fn missing_configured_command_has_actionable_messages() {
+fn missing_command_without_agent_errors() {
+    // Bare `nemo-flow run` (no command, no --agent) errors — we have nothing to spawn and no
+    // argv[0] to infer an agent from. With --agent set, we fall back to the agent's default
+    // binary name (e.g., `cursor-agent`), so that branch is exercised in the resolution test
+    // below rather than here.
     let command = RunCommand {
         agent: None,
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
         atif_dir: None,
+
+        atof_dir: None,
+
         openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
@@ -138,16 +159,60 @@ fn missing_configured_command_has_actionable_messages() {
         .to_string();
 
     assert!(error.contains("missing command"));
+}
 
+#[test]
+fn agent_without_configured_command_falls_back_to_default_binary() {
+    // `--agent cursor` with no `[agents.cursor] command = "..."` override resolves to the
+    // default executable name on $PATH (`cursor-agent` for the Cursor agent).
     let command = RunCommand {
         agent: Some(CodingAgent::Cursor),
-        ..command
-    };
-    let error = resolve_agent_and_argv(&command, &AgentConfigs::default())
-        .unwrap_err()
-        .to_string();
+        config: None,
+        openai_base_url: None,
+        anthropic_base_url: None,
+        atif_dir: None,
 
-    assert!(error.contains("no configured command for cursor"));
+        atof_dir: None,
+
+        openinference_endpoint: None,
+        session_metadata: None,
+        plugin_config: None,
+        dry_run: false,
+        print: false,
+        command: vec![],
+    };
+
+    let (agent, argv) = resolve_agent_and_argv(&command, &AgentConfigs::default()).unwrap();
+    assert_eq!(agent, CodingAgent::Cursor);
+    assert_eq!(argv, vec!["cursor-agent"]);
+}
+
+#[test]
+fn agent_with_passthrough_args_appends_to_configured_command() {
+    // The easy-path uses this code path: `nemo-flow codex -- --model X` resolves to the
+    // configured (or default) codex command with `--model X` appended.
+    let command = RunCommand {
+        agent: Some(CodingAgent::Codex),
+        config: None,
+        openai_base_url: None,
+        anthropic_base_url: None,
+        atif_dir: None,
+
+        atof_dir: None,
+
+        openinference_endpoint: None,
+        session_metadata: None,
+        plugin_config: None,
+        dry_run: false,
+        print: false,
+        command: vec!["--model".into(), "openai/openai/gpt-5.1-codex".into()],
+    };
+
+    let (_, argv) = resolve_agent_and_argv(&command, &AgentConfigs::default()).unwrap();
+    assert_eq!(
+        argv,
+        vec!["codex", "--model", "openai/openai/gpt-5.1-codex"]
+    );
 }
 
 #[test]
@@ -178,6 +243,9 @@ fn prepares_codex_config_overrides() {
             .iter()
             .any(|arg| arg.contains("model_providers.nemo-flow-openai")
                 && arg.contains("base_url=\"http://127.0.0.1:1234\"")
+                // Codex sends its own credentials (ChatGPT-Plus OAuth or OPENAI_API_KEY).
+                // When OPENAI_API_KEY is in the environment the gateway substitutes it;
+                // otherwise codex's own auth is forwarded as-is.
                 && arg.contains("requires_openai_auth=true")
                 && arg.contains("supports_websockets=false"))
     );
@@ -277,7 +345,7 @@ fn prepares_hermes_hook_environment() {
             .iter()
             .any(|(name, _)| name == "HERMES_ACCEPT_HOOKS")
     );
-    assert!(prepared.notes[0].contains("approved hooks"));
+    assert!(prepared.notes[0].contains("nemo-flow config hermes"));
 }
 
 #[test]
@@ -496,17 +564,31 @@ fn cursor_dry_run_does_not_write_hooks() {
     std::env::set_current_dir(previous).unwrap();
 }
 
+// This e2e test relies on argv[0] being a script literally named after a known agent (so
+// `CodingAgent::infer` recognises the basename without an explicit `--agent`). On Windows the
+// only practical way to invoke a `.cmd` / `.bat` shim is via `cmd.exe /C script.cmd`, which
+// makes argv[0] = `cmd.exe` and breaks inference. Gating Unix-only keeps cross-platform CI
+// green; real Windows agent-spawn coverage can come back with a `.exe` fake binary once the
+// launcher grows Windows support.
+#[cfg(unix)]
 #[tokio::test]
 async fn run_starts_gateway_injects_env_and_returns_agent_exit_code() {
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("env.txt");
     let command_argv = fake_agent_command(temp.path(), &output);
     let command = RunCommand {
-        agent: Some(CodingAgent::Codex),
+        // Leave `agent: None` so the launcher infers from argv[0] and uses `command_argv`
+        // (our fake-agent.sh) as the full argv. With --agent set, the resolver appends
+        // command as pass-through after the configured/default binary — not what this test
+        // wants, since it specifically asserts that argv[0] is the fake script.
+        agent: None,
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
         atif_dir: None,
+
+        atof_dir: None,
+
         openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
@@ -525,7 +607,11 @@ async fn run_starts_gateway_injects_env_and_returns_agent_exit_code() {
 
 #[cfg(unix)]
 fn fake_agent_command(temp: &Path, output: &Path) -> Vec<String> {
-    let script = temp.join("fake-agent.sh");
+    // Name the script `codex` (not `fake-agent.sh`) so `CodingAgent::infer` recognizes the
+    // argv[0] basename without us needing to set `--agent` explicitly. With `--agent` set,
+    // the resolver appends `command.command` as pass-through args after the configured/default
+    // binary — wrong for this test, which wants the fake script itself to be argv[0].
+    let script = temp.join("codex");
     std::fs::write(
         &script,
         format!(
@@ -538,20 +624,6 @@ fn fake_agent_command(temp: &Path, output: &Path) -> Vec<String> {
     vec![script.display().to_string()]
 }
 
-#[cfg(windows)]
-fn fake_agent_command(temp: &Path, output: &Path) -> Vec<String> {
-    let script = temp.join("fake-agent.cmd");
-    std::fs::write(
-        &script,
-        format!(
-            "@echo off\r\n<nul set /p dummy=%NEMO_FLOW_GATEWAY_URL% > \"{}\"\r\nexit /b 7\r\n",
-            output.display()
-        ),
-    )
-    .unwrap();
-    vec!["cmd.exe".into(), "/C".into(), script.display().to_string()]
-}
-
 #[tokio::test]
 async fn dry_run_does_not_spawn_agent() {
     let command = RunCommand {
@@ -560,6 +632,9 @@ async fn dry_run_does_not_spawn_agent() {
         openai_base_url: None,
         anthropic_base_url: None,
         atif_dir: None,
+
+        atof_dir: None,
+
         openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,

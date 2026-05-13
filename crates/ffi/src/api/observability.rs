@@ -3,8 +3,9 @@
 
 use super::{
     Duration, FfiAtifExporter, FfiAtofExporter, FfiOpenInferenceSubscriber,
-    FfiOpenTelemetrySubscriber, NemoFlowStatus, c_char, c_str_to_string, clear_last_error,
-    core_subscriber_api, set_last_error, status_from_error, str_to_c_string, tokio_runtime,
+    FfiOpenTelemetrySubscriber, NemoFlowStatus, c_char, c_str_to_json, c_str_to_string,
+    clear_last_error, core_subscriber_api, json_to_c_string, set_last_error, status_from_error,
+    str_to_c_string, tokio_runtime,
 };
 
 type AtofExporter = nemo_flow::observability::atof::AtofExporter;
@@ -15,6 +16,8 @@ type OpenTelemetryConfig = nemo_flow::observability::otel::OpenTelemetryConfig;
 type OpenTelemetrySubscriber = nemo_flow::observability::otel::OpenTelemetrySubscriber;
 type OpenInferenceConfig = nemo_flow::observability::openinference::OpenInferenceConfig;
 type OpenInferenceSubscriber = nemo_flow::observability::openinference::OpenInferenceSubscriber;
+type ObservabilityComponentSpec = nemo_flow::observability::plugin_component::ComponentSpec;
+type ObservabilityConfig = nemo_flow::observability::plugin_component::ObservabilityConfig;
 
 fn status_from_atof_error(error: &AtofExporterError) -> NemoFlowStatus {
     set_last_error(&error.to_string());
@@ -22,6 +25,88 @@ fn status_from_atof_error(error: &AtofExporterError) -> NemoFlowStatus {
         AtofExporterError::Runtime(error) => status_from_error(error),
         _ => NemoFlowStatus::Internal,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Observability plugin component helpers
+// ---------------------------------------------------------------------------
+
+/// Return the built-in observability plugin kind.
+///
+/// The caller owns the returned string and must free it with `nemo_flow_string_free`.
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_flow_observability_plugin_kind() -> *mut c_char {
+    str_to_c_string(nemo_flow::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND)
+}
+
+/// Return the default observability plugin config as JSON.
+///
+/// # Safety
+/// `out_json` must be a valid, non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_observability_default_config_json(
+    out_json: *mut *mut c_char,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if out_json.is_null() {
+        set_last_error("out_json pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let config_json = match serde_json::to_value(ObservabilityConfig::default()) {
+        Ok(value) => value,
+        Err(error) => {
+            set_last_error(&error.to_string());
+            return NemoFlowStatus::Internal;
+        }
+    };
+    unsafe { *out_json = json_to_c_string(&config_json) };
+    NemoFlowStatus::Ok
+}
+
+/// Wrap an observability config JSON object as a top-level plugin component.
+///
+/// Pass null for `config_json` to use the default observability config. The
+/// returned JSON can be inserted into `PluginConfig.components`.
+///
+/// # Safety
+/// `config_json`, when non-null, must be a valid C string. `out_json` must be a
+/// valid, non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_observability_component_spec_json(
+    config_json: *const c_char,
+    enabled: bool,
+    out_json: *mut *mut c_char,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if out_json.is_null() {
+        set_last_error("out_json pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let config = if config_json.is_null() {
+        ObservabilityConfig::default()
+    } else {
+        let Some(config_value) = c_str_to_json(config_json) else {
+            return NemoFlowStatus::InvalidJson;
+        };
+        match serde_json::from_value::<ObservabilityConfig>(config_value) {
+            Ok(config) => config,
+            Err(error) => {
+                set_last_error(&error.to_string());
+                return NemoFlowStatus::InvalidJson;
+            }
+        }
+    };
+    let component: nemo_flow::plugin::PluginComponentSpec =
+        ObservabilityComponentSpec { enabled, config }.into();
+    let component_json = match serde_json::to_value(component) {
+        Ok(value) => value,
+        Err(error) => {
+            set_last_error(&error.to_string());
+            return NemoFlowStatus::Internal;
+        }
+    };
+    unsafe { *out_json = json_to_c_string(&component_json) };
+    NemoFlowStatus::Ok
 }
 
 // ---------------------------------------------------------------------------

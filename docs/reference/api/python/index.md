@@ -29,7 +29,7 @@ These entry points are the primary APIs to use from this binding.
 - `nemo_flow.guardrails` and `nemo_flow.intercepts`: register global middleware
 - `nemo_flow.scope_local`: register middleware against a specific scope hierarchy
 - `nemo_flow.subscribers`: observe emitted runtime lifecycle events
-- `nemo_flow.plugin` and `nemo_flow.adaptive`: configure plugin-backed and adaptive behavior
+- `nemo_flow.plugin`, `nemo_flow.adaptive`, and `nemo_flow.observability`: configure plugin-backed, adaptive, and exporter behavior
 - `nemo_flow.typed` and `nemo_flow.codecs`: use typed wrappers and request/response codecs
 
 ## How To Read The Generated Pages
@@ -46,6 +46,7 @@ will find submodule pages for the public binding surface, including:
 - `subscribers`
 - `plugin`
 - `adaptive`
+- `observability`
 - `typed`
 - `codecs`
 
@@ -69,5 +70,6 @@ Use these links to continue from the API reference into task-focused guides.
 - [Subscribers](../../../about/concepts/subscribers.md)
 - [Plugins](../../../about/concepts/plugins.md)
 - [Adaptive Optimization](../../../use-adaptive-optimization/about.md)
+- [Configure the Observability Plugin](../../../export-observability-data/observability-plugin.md)
 - [Typed Wrappers and Codecs](../../../integrate-frameworks/using-codecs.md)
 - [Framework Integration Surfaces](../../../integrate-frameworks/about.md)
