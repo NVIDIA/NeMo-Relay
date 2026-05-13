@@ -52,6 +52,9 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 	if err := ClearPluginConfiguration(); err != nil {
 		t.Fatalf("%s: %v", ClearPluginConfigurationFailed, err)
 	}
+	t.Cleanup(func() {
+		requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
+	})
 	dir := t.TempDir()
 	config := NewObservabilityConfig()
 	atof := NewObservabilityAtofConfig()
@@ -182,6 +185,9 @@ func TestObservabilityAtifOpenAgentFlushesOnClear(t *testing.T) {
 	if err := ClearPluginConfiguration(); err != nil {
 		t.Fatalf("%s: %v", ClearPluginConfigurationFailed, err)
 	}
+	t.Cleanup(func() {
+		requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
+	})
 	dir := t.TempDir()
 	config := NewObservabilityConfig()
 	atif := NewObservabilityAtifConfig()
