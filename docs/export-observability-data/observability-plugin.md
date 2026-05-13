@@ -93,6 +93,10 @@ Use only one source for plugin config. The gateway reports an error when
 
 `plugin.toml` uses the generic plugin config shape at the file root:
 
+`version = 1` is recommended for clarity but not required. The root plugin
+config version and observability component config version both default to `1`
+when omitted; unsupported non-`1` versions fail validation by default.
+
 ```toml
 version = 1
 
