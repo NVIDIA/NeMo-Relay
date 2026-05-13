@@ -59,40 +59,27 @@ names from the plugin namespace:
 The active runtime names include the component namespace prefix used by the
 plugin system.
 
-## CLI Gateway `plugin.toml`
+## CLI Gateway `plugins.toml`
 
 The `nemo-flow` CLI gateway can activate one process-level plugin config at
-startup. Define it with one of these sources:
+startup from `plugins.toml`. Use the interactive editor for the Observability
+component:
 
-- `--plugin-config` JSON on the command line.
-- `[plugins].config` in `config.toml`.
-- `plugin.toml` next to the resolved `config.toml`, or in the same discovered
-  system, project, and user scopes as `config.toml`.
+```bash
+nemo-flow plugins edit
+nemo-flow plugins edit --project
+```
 
-When multiple discovered `plugin.toml` files are present, the gateway loads
-them from lowest to highest precedence:
+See [Plugin Configuration Files](../build-plugins/plugin-configuration-files.md)
+for discovery locations, precedence, merge behavior, editor controls, conflicts
+with `[plugins].config` or `--plugin-config`, and validation behavior.
 
-1. System: `/etc/nemo-flow/plugin.toml`
-2. Project: `.nemo-flow/plugin.toml`
-3. User: `$XDG_CONFIG_HOME/nemo-flow/plugin.toml`, or
-   `~/.config/nemo-flow/plugin.toml`
-
-Later files override earlier files. TOML tables merge recursively, so a
-higher-precedence file can override one nested key while preserving sibling
-keys from lower-precedence files.
-
-The top-level `[[components]]` array is merged by component `kind`. A
-higher-precedence component with the same `kind` is merged into the lower
-precedence component, and higher-precedence values win on conflicts. Components
-with different `kind` values compose, so a project `observability` component and
-a user `adaptive` component are both active in the effective config.
-
-Use only one source for plugin config. The gateway reports an error when
-`plugin.toml`, `[plugins].config`, or `--plugin-config` are used together.
-
-`plugin.toml` uses the generic plugin config shape at the file root. The
+`plugins.toml` uses the generic plugin config shape at the file root. The
 example below shows every observability section; include only the sections you
-want to configure. Missing sections behave like disabled sections.
+want to configure. Missing sections behave like disabled sections when no
+lower-precedence `plugins.toml` supplies that section. In a layered
+`plugins.toml` setup, omission inherits lower-precedence values; write
+`enabled = false` to disable an inherited section.
 
 `version = 1` is recommended for clarity but not required. The root plugin
 config version and observability component config version both default to `1`

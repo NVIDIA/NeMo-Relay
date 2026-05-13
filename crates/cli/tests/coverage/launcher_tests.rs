@@ -17,11 +17,6 @@ fn infers_agent_from_command_or_uses_override() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -55,11 +50,6 @@ fn uses_configured_command_when_no_argv_is_supplied() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -87,11 +77,6 @@ fn uses_configured_hermes_command_when_no_argv_is_supplied() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -112,11 +97,6 @@ fn inference_failure_has_actionable_message() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -142,11 +122,6 @@ fn missing_command_without_agent_errors() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -170,11 +145,6 @@ fn agent_without_configured_command_falls_back_to_default_binary() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -196,11 +166,6 @@ fn agent_with_passthrough_args_appends_to_configured_command() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -585,11 +550,6 @@ async fn run_starts_gateway_injects_env_and_returns_agent_exit_code() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -631,11 +591,6 @@ async fn dry_run_does_not_spawn_agent() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: true,

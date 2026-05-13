@@ -15,7 +15,7 @@ gateway controls as Claude Code.
 Use the wrapper for no-install local observability:
 
 ```bash
-nemo-flow run --atif-dir .nemo-flow/atif -- claude
+nemo-flow run -- claude
 ```
 
 The wrapper infers Claude Code from `claude`, starts a gateway on a dynamic
@@ -27,8 +27,6 @@ Inspect what would be launched without starting Claude Code:
 
 ```bash
 nemo-flow run \
-  --atif-dir .nemo-flow/atif \
-  --openinference-endpoint http://127.0.0.1:4318/v1/traces \
   --dry-run \
   --print \
   -- claude
@@ -46,19 +44,31 @@ Create `.nemo-flow/config.toml` for project defaults or
 `~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[observability]
-atif_dir = ".nemo-flow/atif"
-metadata = { team = "agent-observability" }
-
-[export.openinference]
-endpoint = "http://127.0.0.1:4318/v1/traces"
-
 [agents.claude]
 command = "claude"
 ```
 
-Then run `nemo-flow run --agent claude` to use the configured
-command. User config takes priority over project and global config.
+Then configure observability with `nemo-flow plugins edit --project` or
+`.nemo-flow/plugins.toml`:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = ".nemo-flow/atif"
+
+[components.config.openinference]
+enabled = true
+endpoint = "http://127.0.0.1:4318/v1/traces"
+```
+
+Run `nemo-flow run --agent claude` to use the configured command and plugin
+config. User config takes priority over project and global config.
 
 ## Standalone Gateway
 
@@ -66,7 +76,7 @@ Use the long-running gateway only when you want Claude Code running outside the
 wrapper (e.g., already configured by an IDE):
 
 ```bash
-NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
+nemo-flow --bind 127.0.0.1:4040
 ```
 
 Launch Claude Code from another terminal with the gateway environment:
@@ -119,8 +129,8 @@ ls .nemo-flow/atif
 ```
 
 The gateway exports `<session-id>.atif.json` on session end. If no file appears,
-confirm that `SessionEnd` hooks fire, `--atif-dir` or `NEMO_FLOW_ATIF_DIR` is
-set, and the gateway process can write to the directory.
+confirm that `SessionEnd` hooks fire, `plugins.toml` enables the ATIF exporter,
+and the gateway process can write to the configured directory.
 
 ## Troubleshoot LLM Lifecycle
 

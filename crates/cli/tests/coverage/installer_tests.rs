@@ -93,10 +93,7 @@ fn helper_formatting_and_headers_cover_optional_paths() {
     assert!(event_matches_tools("PermissionRequest"));
     assert!(!event_matches_tools("SessionStart"));
 
-    let temp = tempfile::tempdir().unwrap();
     let headers = gateway_headers(
-        Some(temp.path()),
-        Some("http://otel"),
         Some("profile"),
         Some(r#"{"team":"obs"}"#),
         Some(r#"{"plugins":[]}"#),
@@ -118,7 +115,7 @@ fn helper_formatting_and_headers_cover_optional_paths() {
         .is_err()
     );
 
-    let headers = gateway_headers(None, None, None, None, None, None).unwrap();
+    let headers = gateway_headers(None, None, None, None).unwrap();
     assert!(headers.is_empty());
 }
 

@@ -155,6 +155,9 @@ inferred from the plugin namespace instead of exposed in public config.
 
 Detailed observability plugin configuration belongs in [Configure the Observability Plugin](../../export-observability-data/observability-plugin.md).
 
+For the CLI gateway's `plugins.toml` discovery, precedence, merge, and editing
+rules, see [Plugin Configuration Files](../../build-plugins/plugin-configuration-files.md).
+
 ## Practical Guidance
 
 Use these practices when applying the concept in application or integration code.

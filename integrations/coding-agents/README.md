@@ -44,10 +44,10 @@ temporary hook and gateway configuration, runs the agent, and shuts the gateway
 down when the agent exits.
 
 ```bash
-nemo-flow run --atif-dir .nemo-flow/atif -- claude
-nemo-flow run --atif-dir .nemo-flow/atif -- codex
-nemo-flow run --atif-dir .nemo-flow/atif -- cursor-agent
-nemo-flow run --atif-dir .nemo-flow/atif -- hermes
+nemo-flow run -- claude
+nemo-flow run -- codex
+nemo-flow run -- cursor-agent
+nemo-flow run -- hermes
 ```
 
 Use `--agent claude|codex|cursor|hermes` when a wrapper hides the agent
@@ -78,25 +78,31 @@ project `.nemo-flow/config.toml`, then
 `~/.config/nemo-flow/config.toml`.
 
 ```toml
-[exporters.atif]
-dir = ".nemo-flow/atif"
-
-[exporters.atof]
-dir = ".nemo-flow/atof"
-mode = "append" # append | overwrite
-filename_template = "{session_id}.jsonl"
-
-[exporters.openinference]
-endpoint = "http://127.0.0.1:4318/v1/traces"
-
-[observability]
-metadata = { team = "agent-observability" }
-
 [agents.codex]
 command = "codex"
 
 [agents.hermes]
 command = "hermes"
+```
+
+Observability exporters are configured in `plugins.toml`. Run
+`nemo-flow plugins edit --project` to create `.nemo-flow/plugins.toml`, or
+write the plugin config directly:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = ".nemo-flow/atif"
+
+[components.config.openinference]
+enabled = true
+endpoint = "http://127.0.0.1:4318/v1/traces"
 ```
 
 ## Hook Forwarding
@@ -112,8 +118,6 @@ generated hook commands when policy requires hook delivery to block the agent.
 
 Useful wrapper options:
 
-- `--atif-dir <path>` writes ATIF trajectories on session end.
-- `--openinference-endpoint <url>` exports OpenInference traces.
 - `--session-metadata '<json>'` adds structured metadata to the agent begin
   event.
 - `--plugin-config '<json>'` records scope-local plugin configuration metadata.

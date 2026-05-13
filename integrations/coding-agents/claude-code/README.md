@@ -33,7 +33,7 @@ Build or install the gateway binary so `nemo-flow` is on `PATH`.
 Run Claude Code through the wrapper:
 
 ```bash
-nemo-flow run --atif-dir .nemo-flow/atif -- claude
+nemo-flow run -- claude
 ```
 
 The wrapper starts a per-invocation gateway on a dynamic localhost port,
@@ -45,8 +45,6 @@ Inspect the launch without starting Claude Code:
 
 ```bash
 nemo-flow run \
-  --atif-dir .nemo-flow/atif \
-  --openinference-endpoint http://127.0.0.1:4318/v1/traces \
   --dry-run \
   --print \
   -- claude
@@ -58,12 +56,23 @@ Use `.nemo-flow/config.toml` for project defaults or
 `~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[observability]
-atif_dir = ".nemo-flow/atif"
-metadata = { team = "agent-observability" }
-
 [agents.claude]
 command = "claude"
+```
+
+Configure observability with `nemo-flow plugins edit --project` or
+`.nemo-flow/plugins.toml`:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = ".nemo-flow/atif"
 ```
 
 Then run:
@@ -78,7 +87,7 @@ Use the long-running gateway only when you do not want to launch Claude Code
 through the wrapper. Start the gateway in one terminal:
 
 ```bash
-NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
+nemo-flow --bind 127.0.0.1:4040
 ```
 
 Launch Claude Code from another terminal with the gateway environment:

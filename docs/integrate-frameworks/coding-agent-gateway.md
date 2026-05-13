@@ -95,18 +95,8 @@ Example:
 
 ```toml
 [upstream]
-openai_base_url = "https://api.openai.com"
+openai_base_url = "https://api.openai.com/v1"
 anthropic_base_url = "https://api.anthropic.com"
-
-[observability]
-atif_dir = ".nemo-flow/atif"
-metadata = { team = "agent-observability" }
-
-[plugins]
-config = { components = [] }
-
-[export.openinference]
-endpoint = "http://127.0.0.1:4318/v1/traces"
 
 [agents.claude]
 command = "claude"
@@ -122,6 +112,26 @@ patch_restore_hooks = true
 command = "hermes"
 ```
 
+Observability exporters are configured in `plugins.toml`. Use
+`nemo-flow plugins edit` for the user file, `nemo-flow plugins edit --project`
+for `.nemo-flow/plugins.toml`, or write the plugin config directly:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = ".nemo-flow/atif"
+
+[components.config.openinference]
+enabled = true
+endpoint = "http://127.0.0.1:4318/v1/traces"
+```
+
 Transparent runs always bind the managed gateway to `127.0.0.1:0`. The selected
 port is discovered by the wrapper and exposed to hooks through
 `NEMO_FLOW_GATEWAY_URL`.
@@ -131,17 +141,13 @@ Common environment variables for direct gateway server use are:
 - `NEMO_FLOW_GATEWAY_BIND`
 - `NEMO_FLOW_OPENAI_BASE_URL`
 - `NEMO_FLOW_ANTHROPIC_BASE_URL`
-- `NEMO_FLOW_OPENINFERENCE_ENDPOINT`
-- `NEMO_FLOW_ATIF_DIR`
 
-Per-session configuration controls the scope-local OpenInference subscriber,
-the ATIF exporter, structured metadata on the top-level agent begin event, and
-the plugin configuration metadata associated with the session.
+Plugin configuration controls process-level Observability exporters. Per-session
+configuration controls structured metadata on the top-level agent begin event
+and the plugin configuration metadata associated with the session.
 
 `hook-forward` can also pass per-session configuration through headers:
 
-- `x-nemo-flow-atif-dir`
-- `x-nemo-flow-openinference-endpoint`
 - `x-nemo-flow-config-profile`
 - `x-nemo-flow-session-metadata`
 - `x-nemo-flow-plugin-config`
@@ -228,8 +234,6 @@ default so observability outages do not block the coding agent. Add
 
 Optional flags map to gateway headers:
 
-- `--atif-dir` sets `x-nemo-flow-atif-dir`.
-- `--openinference-endpoint` sets `x-nemo-flow-openinference-endpoint`.
 - `--session-metadata` sets `x-nemo-flow-session-metadata`.
 - `--plugin-config` sets `x-nemo-flow-plugin-config`.
 - `--profile` sets `x-nemo-flow-config-profile`.

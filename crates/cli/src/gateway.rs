@@ -577,8 +577,8 @@ async fn forward_upstream_request(
     upstream.send().await
 }
 
-// Builds the upstream URL for the ChatGPT backend. Codex's standard base URL is
-// `api.openai.com/v1` (the `/v1` is part of the base), while the ChatGPT backend base is
+// Builds the upstream URL for the ChatGPT backend. OpenAI API bases commonly include `/v1`, while
+// the ChatGPT backend base is
 // `chatgpt.com/backend-api/codex` (no `/v1`). Both append `/responses` to their base, so the
 // ChatGPT path is `.../codex/responses`, not `.../codex/v1/responses`. Strip any `/v1` prefix
 // that the gateway's route matcher may have included from the inbound request path.
@@ -863,14 +863,23 @@ impl ProviderRoute {
     fn upstream_url_with_base(self, base: &str, path_and_query: &str) -> String {
         let base = base.trim_end_matches('/');
         let path_and_query = match self {
-            Self::OpenAiResponses | Self::OpenAiChatCompletions | Self::OpenAiModels
-                if !path_and_query.starts_with("/v1/") =>
-            {
-                format!("/v1{path_and_query}")
+            Self::OpenAiResponses | Self::OpenAiChatCompletions | Self::OpenAiModels => {
+                normalize_openai_path_for_base(base, path_and_query)
             }
             _ => path_and_query.to_string(),
         };
         format!("{base}{path_and_query}")
+    }
+}
+
+fn normalize_openai_path_for_base(base: &str, path_and_query: &str) -> String {
+    match (base.ends_with("/v1"), path_and_query.starts_with("/v1/")) {
+        (true, true) => path_and_query
+            .strip_prefix("/v1")
+            .expect("path was checked to start with /v1")
+            .to_string(),
+        (false, false) => format!("/v1{path_and_query}"),
+        _ => path_and_query.to_string(),
     }
 }
 

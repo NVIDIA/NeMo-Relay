@@ -24,7 +24,7 @@ model routing is configurable.
 Use the wrapper for no-install local observability:
 
 ```bash
-nemo-flow run --atif-dir .nemo-flow/atif -- cursor-agent
+nemo-flow run -- cursor-agent
 ```
 
 The wrapper infers Cursor from `cursor` or `cursor-agent`, starts a gateway on a
@@ -36,7 +36,6 @@ Inspect what would be launched without starting Cursor:
 
 ```bash
 nemo-flow run \
-  --atif-dir .nemo-flow/atif \
   --dry-run \
   --print \
   -- cursor-agent
@@ -54,17 +53,28 @@ Create `.nemo-flow/config.toml` for project defaults or
 `~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[observability]
-atif_dir = ".nemo-flow/atif"
-metadata = { team = "agent-observability" }
-
 [agents.cursor]
 command = "cursor-agent"
 patch_restore_hooks = true
 ```
 
-Then run `nemo-flow run --agent cursor` to use the configured command.
-User config takes priority over project and global config.
+Then configure observability with `nemo-flow plugins edit --project` or
+`.nemo-flow/plugins.toml`:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = ".nemo-flow/atif"
+```
+
+Run `nemo-flow run --agent cursor` to use the configured command and plugin
+config. User config takes priority over project and global config.
 
 ## Standalone Gateway
 
@@ -72,7 +82,7 @@ Use the long-running gateway only when you want Cursor running outside the
 wrapper (e.g., the Cursor GUI). Start the gateway manually:
 
 ```bash
-NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
+nemo-flow --bind 127.0.0.1:4040
 ```
 
 Then point Cursor provider traffic at `http://127.0.0.1:4040` wherever Cursor
@@ -122,7 +132,8 @@ ls .nemo-flow/atif
 
 The gateway writes `<session-id>.atif.json` on session end. If the file is
 missing, confirm Cursor loaded `.cursor/hooks.json`, the gateway binary is on
-`PATH`, and `--atif-dir` or `NEMO_FLOW_ATIF_DIR` is configured.
+`PATH`, and `plugins.toml` enables the ATIF exporter with a writable
+`output_directory`.
 
 ## Troubleshoot LLM Lifecycle
 

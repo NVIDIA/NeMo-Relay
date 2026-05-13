@@ -21,7 +21,7 @@ Use the wrapper when you want the gateway lifetime managed for a local Hermes
 process:
 
 ```bash
-nemo-flow run --atif-dir .nemo-flow/atif -- hermes
+nemo-flow run -- hermes
 ```
 
 The wrapper infers Hermes from `hermes` or `hermes-agent`, starts a gateway on a
@@ -34,8 +34,6 @@ Inspect what would be launched without starting Hermes:
 
 ```bash
 nemo-flow run \
-  --atif-dir .nemo-flow/atif \
-  --openinference-endpoint http://127.0.0.1:4318/v1/traces \
   --dry-run \
   --print \
   -- hermes
@@ -53,19 +51,31 @@ Create `.nemo-flow/config.toml` for project defaults or
 `~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[observability]
-atif_dir = ".nemo-flow/atif"
-metadata = { team = "agent-observability" }
-
-[export.openinference]
-endpoint = "http://127.0.0.1:4318/v1/traces"
-
 [agents.hermes]
 command = "hermes"
 ```
 
-Then run `nemo-flow run --agent hermes` to use the configured command.
-User config takes priority over project and global config.
+Then configure observability with `nemo-flow plugins edit --project` or
+`.nemo-flow/plugins.toml`:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = ".nemo-flow/atif"
+
+[components.config.openinference]
+enabled = true
+endpoint = "http://127.0.0.1:4318/v1/traces"
+```
+
+Run `nemo-flow run --agent hermes` to use the configured command and plugin
+config. User config takes priority over project and global config.
 
 ## Hermes Hook Setup
 
@@ -87,7 +97,7 @@ back to `--gateway-url http://127.0.0.1:4040`.
 For standalone gateway mode, start the daemon manually:
 
 ```bash
-NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
+nemo-flow --bind 127.0.0.1:4040
 ```
 
 Then point Hermes provider traffic at `http://127.0.0.1:4040` for any provider

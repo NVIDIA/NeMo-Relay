@@ -39,7 +39,7 @@ Build or install the gateway binary so `nemo-flow` is on `PATH`.
 Run Cursor through the wrapper:
 
 ```bash
-nemo-flow run --atif-dir .nemo-flow/atif -- cursor-agent
+nemo-flow run -- cursor-agent
 ```
 
 The wrapper starts a per-invocation gateway on a dynamic localhost port,
@@ -50,7 +50,6 @@ Inspect the launch without starting Cursor:
 
 ```bash
 nemo-flow run \
-  --atif-dir .nemo-flow/atif \
   --dry-run \
   --print \
   -- cursor-agent
@@ -62,13 +61,24 @@ Use `.nemo-flow/config.toml` for project defaults or
 `~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[observability]
-atif_dir = ".nemo-flow/atif"
-metadata = { team = "agent-observability" }
-
 [agents.cursor]
 command = "cursor-agent"
 patch_restore_hooks = true
+```
+
+Configure observability with `nemo-flow plugins edit --project` or
+`.nemo-flow/plugins.toml`:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = ".nemo-flow/atif"
 ```
 
 Then run:
@@ -83,7 +93,7 @@ Use the long-running gateway only when you do not want to launch Cursor
 through the wrapper (e.g., the Cursor GUI). Start the gateway manually:
 
 ```bash
-NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
+nemo-flow --bind 127.0.0.1:4040
 ```
 
 Then point Cursor provider traffic at `http://127.0.0.1:4040` where Cursor

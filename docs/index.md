@@ -182,6 +182,7 @@ Code Examples <integrate-frameworks/code-examples>
 About <build-plugins/about>
 Basic Guide: Define a Plugin <build-plugins/basic-guide>
 Basic Guide: Validate Plugin Configuration <build-plugins/validate-configuration>
+Basic Guide: Plugin Configuration Files <build-plugins/plugin-configuration-files>
 Basic Guide: Register Plugin Behavior <build-plugins/register-behavior>
 Advanced Guide: Design Plugin Configuration <build-plugins/advanced-configuration>
 NeMo Guardrails Example Plugin <build-plugins/nemoguardrails>

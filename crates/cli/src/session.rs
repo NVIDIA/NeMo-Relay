@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,13 +14,9 @@ use nemo_flow::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeHandle, ScopeType,
     event as emit_mark_event, get_handle, pop_scope, push_scope,
 };
-use nemo_flow::api::subscriber::scope_register_subscriber;
 use nemo_flow::api::tool::{
     ToolCallEndParams, ToolCallParams, ToolHandle, tool_call, tool_call_end,
 };
-use nemo_flow::observability::atif::{AtifAgentInfo, AtifExporter};
-use nemo_flow::observability::atof::{AtofExporter, AtofExporterConfig};
-use nemo_flow::observability::openinference::{OpenInferenceConfig, OpenInferenceSubscriber};
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
 
@@ -99,9 +94,6 @@ struct Session {
     pending_tool_hints: Vec<PendingToolHint>,
     last_llm_owner: Option<LastLlmOwner>,
     config: SessionConfig,
-    atif: Option<AtifExporter>,
-    atof: Option<AtofExporter>,
-    openinference: Option<OpenInferenceSubscriber>,
 }
 
 #[derive(Debug, Clone)]
@@ -162,7 +154,7 @@ impl SessionManager {
     /// Applies normalized hook events to their owning sessions in arrival order.
     ///
     /// Session configuration is re-read from headers for each request so installed hook commands can
-    /// override exporters or metadata per invocation. Empty sessions are removed after lifecycle
+    /// override metadata per invocation. Empty sessions are removed after lifecycle
     /// closure to avoid retaining stale correlation state.
     ///
     /// When an `AgentStarted` event arrives for a session that was already created by the gateway
@@ -332,11 +324,6 @@ impl SessionManager {
             session.add_tool_hints_from_llm_response(response, owner_subagent_id);
         }
     }
-
-    #[cfg(test)]
-    pub(crate) async fn open_session_count(&self) -> usize {
-        self.inner.lock().await.len()
-    }
 }
 
 impl Session {
@@ -357,9 +344,6 @@ impl Session {
             pending_tool_hints: Vec::new(),
             last_llm_owner: None,
             config,
-            atif: None,
-            atof: None,
-            openinference: None,
         }
     }
 
@@ -372,7 +356,7 @@ impl Session {
                 match event {
                     NormalizedEvent::AgentStarted(event) => self.start_agent(event),
                     NormalizedEvent::AgentEnded(event) => self.end_agent(event),
-                    NormalizedEvent::TurnEnded(_) => self.snapshot_atif(),
+                    NormalizedEvent::TurnEnded(_) => Ok(()),
                     NormalizedEvent::SubagentStarted(event) => self.start_subagent(event),
                     NormalizedEvent::SubagentEnded(event) => self.end_subagent(event),
                     NormalizedEvent::LlmHint(event) => self.add_llm_hint(event),
@@ -387,22 +371,6 @@ impl Session {
                 }
             })
             .await
-    }
-
-    /// Writes ATIF for the current session without closing the agent scope or shutting observers
-    /// down. Triggered by `TurnEnded` (per-turn `Stop` hooks). Each turn produces a cumulative
-    /// snapshot — `AtifExporter::export()` is documented as non-destructive, so subsequent turns
-    /// add events on top and last-write-wins semantics yield a complete trajectory by the final
-    /// turn. No-op when `agent_scope` was never opened or when the session has no ATIF observer
-    /// installed (e.g., `atif_dir` not configured).
-    fn snapshot_atif(&mut self) -> Result<(), CliError> {
-        if self.agent_scope.is_none() {
-            return Ok(());
-        }
-        if let (Some(exporter), Some(directory)) = (&self.atif, &self.config.exporters.atif.dir) {
-            write_atif(directory, &self.session_id, exporter)?;
-        }
-        Ok(())
     }
 
     // Legacy manual-lifecycle gateway start used by tests. Production code uses
@@ -494,15 +462,13 @@ impl Session {
         self.ensure_agent_started(event.metadata)
     }
 
-    // Lazily opens the root agent scope, installs observers on the root handle, and merges metadata
-    // from config, event payload, and gateway headers. Later calls are no-ops to keep duplicate
-    // hooks from nesting agent scopes.
+    // Lazily opens the root agent scope and merges metadata from config, event payload, and
+    // gateway headers. Later calls are no-ops to keep duplicate hooks from nesting agent scopes.
     fn ensure_agent_started(&mut self, event_metadata: Value) -> Result<(), CliError> {
         if self.agent_scope.is_some() {
             return Ok(());
         }
-        let root = get_handle()?;
-        self.install_observers(&root)?;
+        let _root = get_handle()?;
         let metadata = merge_metadata(
             merge_metadata(
                 self.config.metadata.clone().unwrap_or(Value::Null),
@@ -526,99 +492,11 @@ impl Session {
         Ok(())
     }
 
-    // Installs configured exporters exactly once per session root. ATIF, ATOF, and OpenInference
-    // are scope-local subscribers so they disappear with the session and do not affect unrelated
-    // concurrent agent runs.
-    fn install_observers(&mut self, root: &ScopeHandle) -> Result<(), CliError> {
-        self.install_atif_observer(root)?;
-        self.install_atof_observer(root)?;
-        self.install_openinference_observer(root)?;
-        Ok(())
-    }
-
-    // Registers the ATOF JSONL exporter once when a session has an ATOF directory configured.
-    // The file is named after the session id so concurrent sessions never share a writer.
-    // Append mode keeps existing per-session files intact across re-runs of the same session id
-    // (e.g., a resumed conversation).
-    fn install_atof_observer(&mut self, root: &ScopeHandle) -> Result<(), CliError> {
-        if self.atof.is_some() {
-            return Ok(());
-        }
-        let Some(directory) = self.config.exporters.atof.dir.clone() else {
-            return Ok(());
-        };
-        // Ensure the directory exists; AtofExporter opens the file via OpenOptions which won't
-        // create parent dirs. Failure is non-fatal — surfaced as a CliError so the caller can
-        // decide to continue without ATOF rather than aborting the whole session.
-        std::fs::create_dir_all(&directory).map_err(|err| {
-            CliError::Config(format!(
-                "could not create ATOF directory {}: {err}",
-                directory.display()
-            ))
-        })?;
-        let filename = render_atof_filename_template(
-            &self.config.exporters.atof.filename_template,
-            &self.session_id,
-        )?;
-        let config = AtofExporterConfig::default()
-            .with_output_directory(directory)
-            .with_mode(self.config.exporters.atof.mode)
-            .with_filename(filename);
-        let exporter = AtofExporter::new(config)
-            .map_err(|err| CliError::Config(format!("could not open ATOF file: {err}")))?;
-        scope_register_subscriber(&root.uuid, "gateway-atof", exporter.subscriber())?;
-        self.atof = Some(exporter);
-        Ok(())
-    }
-
-    // Registers the ATIF exporter once when a session has ATIF output configured. The exporter keeps
-    // the session agent metadata so downstream trajectory files can be attributed to this run.
-    fn install_atif_observer(&mut self, root: &ScopeHandle) -> Result<(), CliError> {
-        if self.atif.is_some() || self.config.exporters.atif.dir.is_none() {
-            return Ok(());
-        }
-        let exporter = AtifExporter::new(
-            self.session_id.clone(),
-            AtifAgentInfo {
-                name: self.agent_kind.as_str().to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                model_name: None,
-                tool_definitions: None,
-                extra: self.config.metadata.clone(),
-            },
-        );
-        scope_register_subscriber(&root.uuid, "gateway-atif", exporter.subscriber())?;
-        self.atif = Some(exporter);
-        Ok(())
-    }
-
-    // Registers the OpenInference subscriber once when an endpoint is configured. Endpoint ownership
-    // remains on the session config so repeated start events cannot duplicate subscribers.
-    fn install_openinference_observer(&mut self, root: &ScopeHandle) -> Result<(), CliError> {
-        if self.openinference.is_some() {
-            return Ok(());
-        }
-        let Some(endpoint) = &self.config.exporters.openinference.endpoint else {
-            return Ok(());
-        };
-        let subscriber = OpenInferenceSubscriber::new(
-            OpenInferenceConfig::new()
-                .with_endpoint(endpoint.clone())
-                .with_service_name("nemo-flow-cli"),
-        )?;
-        scope_register_subscriber(&root.uuid, "gateway-openinference", subscriber.subscriber())?;
-        self.openinference = Some(subscriber);
-        Ok(())
-    }
-
     // Closes the session in a fail-safe order: active LLMs/tools first, nested subagents from the
-    // top down, correlation state, then the root agent scope. Observer flush/export happens after
-    // the root scope ends so terminal events are included.
+    // top down, correlation state, then the root agent scope.
     fn end_agent(&mut self, event: SessionEvent) -> Result<(), CliError> {
         // Duplicate agent-end hooks (e.g., hermes-agent emitting `on_session_end` more than once
-        // per session) must not reopen the agent scope. Without this guard, `ensure_agent_started`
-        // would create an empty scope and `flush_observers` would overwrite the already-written
-        // ATIF trajectory with an empty session.
+        // per session) must not reopen the agent scope.
         if self.agent_scope.is_none() {
             return Ok(());
         }
@@ -628,7 +506,6 @@ impl Session {
         self.close_active_subagents_for_agent_end()?;
         self.clear_correlation_state();
         self.close_agent_scope(event.payload)?;
-        self.flush_observers()?;
         Ok(())
     }
 
@@ -944,29 +821,6 @@ impl Session {
         Ok(())
     }
 
-    // Flushes and shuts down configured observers, then writes ATIF output if requested. This runs
-    // only on agent end, so long-lived sessions keep subscribers active across intermediate hooks.
-    fn flush_observers(&mut self) -> Result<(), CliError> {
-        if let Some(subscriber) = &self.openinference {
-            subscriber.force_flush()?;
-            subscriber.shutdown()?;
-        }
-        if let (Some(exporter), Some(directory)) = (&self.atif, &self.config.exporters.atif.dir) {
-            write_atif(directory, &self.session_id, exporter)?;
-        }
-        // ATOF writes per-event JSONL as events arrive; flush + shutdown here just ensure the
-        // BufWriter is drained and the file is closed cleanly before the session record is dropped.
-        if let Some(exporter) = &self.atof {
-            exporter
-                .force_flush()
-                .map_err(|err| CliError::Config(format!("ATOF flush failed: {err}")))?;
-            exporter
-                .shutdown()
-                .map_err(|err| CliError::Config(format!("ATOF shutdown failed: {err}")))?;
-        }
-        Ok(())
-    }
-
     // Prunes expired LLM hints and sticky owner state. The TTLs prevent old hook activity from
     // incorrectly capturing later gateway calls when agents reuse a process or session id.
     fn cleanup_correlation_state(&mut self) {
@@ -1274,52 +1128,6 @@ impl Session {
             .collect();
         (best.len() == 1).then_some(best[0].0)
     }
-}
-
-// Writes the complete ATIF trajectory for a finished session to `{session_id}.atif.json`, creating
-// the target directory lazily. Serialization failures are reported as invalid payloads because they
-// indicate exporter output could not be represented as JSON.
-fn write_atif(
-    directory: &PathBuf,
-    session_id: &str,
-    exporter: &AtifExporter,
-) -> Result<(), CliError> {
-    std::fs::create_dir_all(directory)?;
-    validate_atif_session_id(session_id)?;
-    let path = directory.join(format!("{session_id}.atif.json"));
-    let trajectory = exporter.export();
-    let serialized = serde_json::to_vec_pretty(&trajectory)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?;
-    std::fs::write(path, serialized)?;
-    Ok(())
-}
-
-fn validate_atif_session_id(session_id: &str) -> Result<(), CliError> {
-    if session_id.is_empty()
-        || session_id == "."
-        || session_id == ".."
-        || !session_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
-        return Err(CliError::InvalidPayload(
-            "session id is not safe for ATIF export filename".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn render_atof_filename_template(template: &str, session_id: &str) -> Result<String, CliError> {
-    validate_atif_session_id(session_id)?;
-    let filename = template.replace("{session_id}", session_id);
-    let path = std::path::Path::new(&filename);
-    if filename.is_empty() || filename == "." || filename == ".." || path.components().count() != 1
-    {
-        return Err(CliError::InvalidPayload(
-            "ATOF filename template must render to a single safe filename".into(),
-        ));
-    }
-    Ok(filename)
 }
 
 // Scores how strongly a pending hint matches a gateway LLM request. Subagent/agent identity is

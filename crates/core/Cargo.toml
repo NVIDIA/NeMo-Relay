@@ -15,6 +15,7 @@ workspace = true
 
 [features]
 default = ["otel", "openinference"]
+schema = ["dep:schemars"]
 otel = [
     "dep:async-trait",
     "dep:getrandom",
@@ -47,6 +48,7 @@ openinference = [
 uuid = { workspace = true, features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+schemars = { version = "0.8", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 bitflags = { version = "2", features = ["serde"] }
 thiserror = "2"
