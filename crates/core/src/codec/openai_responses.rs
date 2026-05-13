@@ -304,6 +304,7 @@ fn decode_openai_or_anthropic_tool_choice(value: &Json) -> Option<ToolChoice> {
     match obj.get("type").and_then(|v| v.as_str()) {
         Some("auto") => Some(ToolChoice::Auto),
         Some("any") => Some(ToolChoice::Required),
+        Some("none") => Some(ToolChoice::None),
         Some("tool") => {
             let name = obj.get("name").and_then(|v| v.as_str())?.to_string();
             Some(ToolChoice::Specific(ToolChoiceFunction {

@@ -530,6 +530,18 @@ fn test_decode_request_accepts_anthropic_hint_tool_choice() {
 }
 
 #[test]
+fn test_decode_request_accepts_anthropic_none_tool_choice_object() {
+    let codec = OpenAIResponsesCodec;
+    let request = make_request(json!({
+        "model": "gpt-4o",
+        "input": "hello",
+        "tool_choice": {"type": "none"}
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    assert_eq!(annotated.tool_choice, Some(ToolChoice::None));
+}
+
+#[test]
 fn test_decode_request_litellm_reasoning_input_item_preserved_and_controls_extracted() {
     let codec = OpenAIResponsesCodec;
     let request = make_request(fixture_json(include_str!(

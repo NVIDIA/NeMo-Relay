@@ -4,7 +4,8 @@
 //! Unit tests for acg profile in the NeMo Flow adaptive crate.
 
 use nemo_flow::codec::request::{
-    AnnotatedLlmRequest, ContentPart, FunctionDefinition, Message, MessageContent, ToolDefinition,
+    AnnotatedLlmRequest, ContentPart, FunctionDefinition, Message, MessageContent,
+    OpenAiImageUrl, ToolDefinition,
 };
 use serde_json::json;
 
@@ -122,4 +123,37 @@ fn acg_profile_helpers_cover_none_paths_and_short_hash() {
     assert_eq!(tool_schema_fingerprint(None), "no-tools");
     assert_eq!(short_hash("short"), "short");
     assert_eq!(message_role_tag(&too_short.messages[0]), "user");
+}
+
+#[test]
+fn acg_profile_image_parts_contribute_stable_fingerprint_signal() {
+    let with_image_a = request(
+        vec![Message::User {
+            content: MessageContent::Parts(vec![ContentPart::ImageUrl {
+                image_url: OpenAiImageUrl {
+                    url: "https://example.com/a.png".to_string(),
+                    detail: Some("high".to_string()),
+                },
+            }]),
+            name: None,
+        }],
+        None,
+    );
+    let with_image_b = request(
+        vec![Message::User {
+            content: MessageContent::Parts(vec![ContentPart::ImageUrl {
+                image_url: OpenAiImageUrl {
+                    url: "https://example.com/b.png".to_string(),
+                    detail: Some("high".to_string()),
+                },
+            }]),
+            name: None,
+        }],
+        None,
+    );
+
+    assert_ne!(
+        learning_seed_fingerprint(&with_image_a),
+        learning_seed_fingerprint(&with_image_b)
+    );
 }

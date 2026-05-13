@@ -187,9 +187,13 @@ fn extract_text(content: &MessageContent) -> String {
         MessageContent::Text(text) => text.clone(),
         MessageContent::Parts(parts) => parts
             .iter()
-            .filter_map(|part| match part {
-                ContentPart::Text { text } => Some(text.as_str()),
-                ContentPart::ImageUrl { .. } => None,
+            .map(|part| match part {
+                ContentPart::Text { text } => text.clone(),
+                ContentPart::ImageUrl { image_url } => format!(
+                    "[image:{}:{}]",
+                    image_url.detail.as_deref().unwrap_or("none"),
+                    sha256_hex(&image_url.url)
+                ),
             })
             .collect::<Vec<_>>()
             .join("\n"),

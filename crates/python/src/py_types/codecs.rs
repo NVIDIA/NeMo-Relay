@@ -48,6 +48,31 @@ pub struct PyAnnotatedLLMRequest {
     pub inner: AnnotatedLLMRequest,
 }
 
+fn optional_json_getter(
+    py: Python<'_>,
+    value: &Option<serde_json::Value>,
+) -> PyResult<Py<PyAny>> {
+    match value {
+        Some(value) => json_to_py(py, value),
+        None => Ok(py.None()),
+    }
+}
+
+fn optional_json_setter(
+    target: &mut Option<serde_json::Value>,
+    value: &Bound<'_, PyAny>,
+    field: &str,
+) -> PyResult<()> {
+    if value.is_none() {
+        *target = None;
+    } else {
+        *target = Some(pythonize::depythonize(value).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid {field}: {e}"))
+        })?);
+    }
+    Ok(())
+}
+
 #[pymethods]
 impl PyAnnotatedLLMRequest {
     /// Create a new AnnotatedLLMRequest.
@@ -238,6 +263,136 @@ impl PyAnnotatedLLMRequest {
             })?);
         }
         Ok(())
+    }
+
+    #[getter]
+    pub(crate) fn store(&self) -> Option<bool> {
+        self.inner.store
+    }
+
+    #[setter]
+    pub(crate) fn set_store(&mut self, value: Option<bool>) {
+        self.inner.store = value;
+    }
+
+    #[getter]
+    pub(crate) fn previous_response_id(&self) -> Option<String> {
+        self.inner.previous_response_id.clone()
+    }
+
+    #[setter]
+    pub(crate) fn set_previous_response_id(&mut self, value: Option<String>) {
+        self.inner.previous_response_id = value;
+    }
+
+    #[getter]
+    pub(crate) fn truncation(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        optional_json_getter(py, &self.inner.truncation)
+    }
+
+    #[setter]
+    pub(crate) fn set_truncation(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        optional_json_setter(&mut self.inner.truncation, value, "truncation")
+    }
+
+    #[getter]
+    pub(crate) fn reasoning(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        optional_json_getter(py, &self.inner.reasoning)
+    }
+
+    #[setter]
+    pub(crate) fn set_reasoning(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        optional_json_setter(&mut self.inner.reasoning, value, "reasoning")
+    }
+
+    #[getter]
+    pub(crate) fn include(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        optional_json_getter(py, &self.inner.include)
+    }
+
+    #[setter]
+    pub(crate) fn set_include(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        optional_json_setter(&mut self.inner.include, value, "include")
+    }
+
+    #[getter]
+    pub(crate) fn user(&self) -> Option<String> {
+        self.inner.user.clone()
+    }
+
+    #[setter]
+    pub(crate) fn set_user(&mut self, value: Option<String>) {
+        self.inner.user = value;
+    }
+
+    #[getter]
+    pub(crate) fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        optional_json_getter(py, &self.inner.metadata)
+    }
+
+    #[setter]
+    pub(crate) fn set_metadata(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        optional_json_setter(&mut self.inner.metadata, value, "metadata")
+    }
+
+    #[getter]
+    pub(crate) fn service_tier(&self) -> Option<String> {
+        self.inner.service_tier.clone()
+    }
+
+    #[setter]
+    pub(crate) fn set_service_tier(&mut self, value: Option<String>) {
+        self.inner.service_tier = value;
+    }
+
+    #[getter]
+    pub(crate) fn parallel_tool_calls(&self) -> Option<bool> {
+        self.inner.parallel_tool_calls
+    }
+
+    #[setter]
+    pub(crate) fn set_parallel_tool_calls(&mut self, value: Option<bool>) {
+        self.inner.parallel_tool_calls = value;
+    }
+
+    #[getter]
+    pub(crate) fn max_output_tokens(&self) -> Option<u64> {
+        self.inner.max_output_tokens
+    }
+
+    #[setter]
+    pub(crate) fn set_max_output_tokens(&mut self, value: Option<u64>) {
+        self.inner.max_output_tokens = value;
+    }
+
+    #[getter]
+    pub(crate) fn max_tool_calls(&self) -> Option<u64> {
+        self.inner.max_tool_calls
+    }
+
+    #[setter]
+    pub(crate) fn set_max_tool_calls(&mut self, value: Option<u64>) {
+        self.inner.max_tool_calls = value;
+    }
+
+    #[getter]
+    pub(crate) fn top_logprobs(&self) -> Option<u64> {
+        self.inner.top_logprobs
+    }
+
+    #[setter]
+    pub(crate) fn set_top_logprobs(&mut self, value: Option<u64>) {
+        self.inner.top_logprobs = value;
+    }
+
+    #[getter]
+    pub(crate) fn stream(&self) -> Option<bool> {
+        self.inner.stream
+    }
+
+    #[setter]
+    pub(crate) fn set_stream(&mut self, value: Option<bool>) {
+        self.inner.stream = value;
     }
 
     #[getter]
