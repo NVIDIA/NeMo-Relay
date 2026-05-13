@@ -48,10 +48,7 @@ pub struct PyAnnotatedLLMRequest {
     pub inner: AnnotatedLLMRequest,
 }
 
-fn optional_json_getter(
-    py: Python<'_>,
-    value: &Option<serde_json::Value>,
-) -> PyResult<Py<PyAny>> {
+fn optional_json_getter(py: Python<'_>, value: &Option<serde_json::Value>) -> PyResult<Py<PyAny>> {
     match value {
         Some(value) => json_to_py(py, value),
         None => Ok(py.None()),

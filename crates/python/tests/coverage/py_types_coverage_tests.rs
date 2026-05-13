@@ -1102,7 +1102,9 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         annotated.set_store(Some(true));
         annotated.set_previous_response_id(Some("resp_1".into()));
         let updated_truncation = json_to_py(py, &json!("disabled")).unwrap();
-        annotated.set_truncation(updated_truncation.bind(py)).unwrap();
+        annotated
+            .set_truncation(updated_truncation.bind(py))
+            .unwrap();
         let updated_reasoning = json_to_py(py, &json!({"effort": "low"})).unwrap();
         annotated.set_reasoning(updated_reasoning.bind(py)).unwrap();
         let updated_include = json_to_py(py, &json!(["reasoning.encrypted_content"])).unwrap();

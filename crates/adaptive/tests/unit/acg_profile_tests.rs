@@ -4,8 +4,8 @@
 //! Unit tests for acg profile in the NeMo Flow adaptive crate.
 
 use nemo_flow::codec::request::{
-    AnnotatedLlmRequest, ContentPart, FunctionDefinition, Message, MessageContent,
-    OpenAiImageUrl, ToolDefinition,
+    AnnotatedLlmRequest, ContentPart, FunctionDefinition, Message, MessageContent, OpenAiImageUrl,
+    ToolDefinition,
 };
 use serde_json::json;
 
