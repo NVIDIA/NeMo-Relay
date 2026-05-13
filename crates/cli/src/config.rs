@@ -169,6 +169,9 @@ pub(crate) struct ServerArgs {
     /// OpenInference-compatible OTLP HTTP endpoint for streaming spans (Phoenix, Arize, etc.)
     #[arg(long, env = "NEMO_FLOW_OPENINFERENCE_ENDPOINT")]
     pub(crate) openinference_endpoint: Option<String>,
+    /// Generic plugin configuration JSON for process-level gateway plugin activation.
+    #[arg(long, env = "NEMO_FLOW_PLUGIN_CONFIG")]
+    pub(crate) plugin_config: Option<String>,
 }
 
 impl ServerArgs {
@@ -184,6 +187,7 @@ impl ServerArgs {
             || self.atif_dir.is_some()
             || self.atof_dir.is_some()
             || self.openinference_endpoint.is_some()
+            || self.plugin_config.is_some()
             || self.config.is_some()
     }
 }
@@ -522,7 +526,7 @@ impl Default for GatewayConfig {
 /// server-facing command-line layer so launcher-only settings cannot leak into daemon mode.
 pub(crate) fn resolve_server_config(args: &ServerArgs) -> Result<ResolvedConfig, CliError> {
     let mut resolved = load_shared_config(args.config.as_ref())?;
-    apply_server_overrides(&mut resolved.gateway, args);
+    apply_server_overrides(&mut resolved.gateway, args)?;
     Ok(resolved)
 }
 
@@ -541,7 +545,7 @@ pub(crate) fn resolve_run_config(
         .or_else(|| inherited.and_then(|args| args.config.as_ref()));
     let mut resolved = load_shared_config(config)?;
     if let Some(args) = inherited {
-        apply_server_overrides(&mut resolved.gateway, args);
+        apply_server_overrides(&mut resolved.gateway, args)?;
     }
     apply_run_overrides(&mut resolved.gateway, command)?;
     resolved.gateway.bind = "127.0.0.1:0"
@@ -588,14 +592,14 @@ fn apply_run_json_overrides(
         config.metadata = Some(parse_json_option("session metadata", value)?);
     }
     if let Some(value) = &command.plugin_config {
-        config.plugin_config = Some(parse_json_option("plugin config", value)?);
+        apply_cli_plugin_config(config, value)?;
     }
     Ok(())
 }
 
 // Applies direct server flags on top of already-merged configuration. Only present options mutate
 // the config so lower-priority file values survive when a flag was omitted.
-fn apply_server_overrides(config: &mut GatewayConfig, args: &ServerArgs) {
+fn apply_server_overrides(config: &mut GatewayConfig, args: &ServerArgs) -> Result<(), CliError> {
     if let Some(value) = args.bind {
         config.bind = value;
     }
@@ -614,13 +618,19 @@ fn apply_server_overrides(config: &mut GatewayConfig, args: &ServerArgs) {
     if let Some(value) = &args.openinference_endpoint {
         config.exporters.openinference.endpoint = Some(value.clone());
     }
+    if let Some(value) = &args.plugin_config {
+        apply_cli_plugin_config(config, value)?;
+    }
+    Ok(())
 }
 
 // Loads config from the ordered shared locations, deep-merges TOML tables, maps the typed file
-// shape onto runtime structs, then lets environment variables override file values. Invalid TOML
-// or typed shapes fail closed because they indicate an operator configuration error.
+// shape onto runtime structs, applies a sibling/discovered plugin.toml when present, then lets
+// environment variables override file values. Invalid TOML or typed shapes fail closed because
+// they indicate an operator configuration error.
 fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, CliError> {
     let mut merged = toml::Value::Table(toml::map::Map::new());
+    let mut config_toml_plugin_sources = Vec::new();
     for path in config_paths(explicit) {
         if path.exists() {
             let raw = std::fs::read_to_string(&path)?;
@@ -630,14 +640,30 @@ fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, CliE
                 .map_err(|error| {
                     CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
                 })?;
+            if has_config_toml_plugin_config(&parsed) {
+                config_toml_plugin_sources.push(path.clone());
+            }
             merge_toml(&mut merged, parsed);
         }
     }
+    if config_toml_plugin_sources.len() > 1 {
+        return Err(CliError::Config(format!(
+            "plugin config is defined in multiple config.toml files: {}; move it to one \
+             [plugins].config block or use plugin.toml",
+            format_paths(&config_toml_plugin_sources)
+        )));
+    }
+    let plugin_toml = load_plugin_toml_config(explicit)?;
     let mut resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         ..ResolvedConfig::default()
     };
     apply_file_config(&mut resolved, merged)?;
+    apply_plugin_toml_config(
+        &mut resolved.gateway,
+        config_toml_plugin_sources.first(),
+        plugin_toml,
+    )?;
     apply_env_config(&mut resolved.gateway);
     Ok(resolved)
 }
@@ -667,11 +693,44 @@ fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
     paths
 }
 
+// Returns the plugin config search path. An explicit gateway config path scopes plugin.toml to the
+// same directory so `--config path/to/config.toml` can be extended by `path/to/plugin.toml` without
+// reading unrelated implicit project/user/global plugin files.
+fn plugin_config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
+    if let Some(path) = explicit {
+        return path
+            .parent()
+            .map(|parent| vec![parent.join("plugin.toml")])
+            .unwrap_or_default();
+    }
+    let mut paths = vec![PathBuf::from("/etc/nemo-flow/plugin.toml")];
+    if let Ok(cwd) = std::env::current_dir()
+        && let Some(project) = find_project_plugin_config(&cwd)
+    {
+        paths.push(project);
+    }
+    if let Some(user) = user_config_dir() {
+        paths.push(user.join("plugin.toml"));
+    }
+    paths
+}
+
 // Walks upward from the current directory and returns the nearest project-local gateway config.
 // The first hit wins so nested projects can override parent workspace defaults.
 fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
     for ancestor in start.ancestors() {
         let path = ancestor.join(".nemo-flow/config.toml");
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+// Walks upward from the current directory and returns the nearest project-local plugin config.
+fn find_project_plugin_config(start: &std::path::Path) -> Option<PathBuf> {
+    for ancestor in start.ancestors() {
+        let path = ancestor.join(".nemo-flow/plugin.toml");
         if path.exists() {
             return Some(path);
         }
@@ -816,6 +875,70 @@ fn apply_file_plugins_config(gateway: &mut GatewayConfig, plugins: Option<FilePl
     }
 }
 
+#[derive(Debug, Clone)]
+struct PluginTomlConfig {
+    value: Value,
+    sources: Vec<PathBuf>,
+}
+
+fn load_plugin_toml_config(
+    explicit: Option<&PathBuf>,
+) -> Result<Option<PluginTomlConfig>, CliError> {
+    let mut merged = toml::Value::Table(toml::map::Map::new());
+    let mut sources = Vec::new();
+    for path in plugin_config_paths(explicit) {
+        if path.exists() {
+            let raw = std::fs::read_to_string(&path)?;
+            let parsed = raw
+                .parse::<toml::Table>()
+                .map(toml::Value::Table)
+                .map_err(|error| {
+                    CliError::Config(format!(
+                        "invalid plugin TOML in {}: {error}",
+                        path.display()
+                    ))
+                })?;
+            merge_toml(&mut merged, parsed);
+            sources.push(path);
+        }
+    }
+    if sources.is_empty() {
+        return Ok(None);
+    }
+    let value = serde_json::to_value(merged)
+        .map_err(|error| CliError::Config(format!("invalid plugin TOML shape: {error}")))?;
+    Ok(Some(PluginTomlConfig { value, sources }))
+}
+
+fn apply_plugin_toml_config(
+    gateway: &mut GatewayConfig,
+    config_toml_plugin_source: Option<&PathBuf>,
+    plugin_toml: Option<PluginTomlConfig>,
+) -> Result<(), CliError> {
+    let Some(plugin_toml) = plugin_toml else {
+        return Ok(());
+    };
+    if let Some(config_source) = config_toml_plugin_source {
+        return Err(CliError::Config(format!(
+            "plugin config is defined in both {} and {}; choose one source",
+            config_source.display(),
+            format_paths(&plugin_toml.sources)
+        )));
+    }
+    gateway.plugin_config = Some(plugin_toml.value);
+    Ok(())
+}
+
+fn apply_cli_plugin_config(config: &mut GatewayConfig, value: &str) -> Result<(), CliError> {
+    if config.plugin_config.is_some() {
+        return Err(CliError::Config(
+            "plugin config is defined by both --plugin-config and file configuration; choose one source".into(),
+        ));
+    }
+    config.plugin_config = Some(parse_json_option("plugin config", value)?);
+    Ok(())
+}
+
 // Applies configured agent commands and Cursor's temporary-hook behavior. Cursor's
 // `patch_restore_hooks` flag is intentionally tri-state in file config so omitted values preserve
 // the safe default while explicit `false` disables temporary hook mutation.
@@ -882,6 +1005,21 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
         }
         (left, right) => *left = right,
     }
+}
+
+fn has_config_toml_plugin_config(value: &toml::Value) -> bool {
+    value
+        .get("plugins")
+        .and_then(|plugins| plugins.get("config"))
+        .is_some()
+}
+
+fn format_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 // Parses JSON-valued CLI options into runtime metadata/config values and labels errors with the

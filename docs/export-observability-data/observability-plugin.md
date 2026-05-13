@@ -59,6 +59,46 @@ names from the plugin namespace:
 The active runtime names include the component namespace prefix used by the
 plugin system.
 
+## CLI Gateway `plugin.toml`
+
+The `nemo-flow` CLI gateway can activate one process-level plugin config at
+startup. Define it with one of these sources:
+
+- `--plugin-config` JSON on the command line.
+- `[plugins].config` in `config.toml`.
+- `plugin.toml` next to the resolved `config.toml`, or in the same discovered
+  system, project, and user scopes as `config.toml`.
+
+Use only one source for plugin config. The gateway reports an error when
+`plugin.toml`, `[plugins].config`, or `--plugin-config` are used together.
+
+`plugin.toml` uses the generic plugin config shape at the file root:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.atof]
+enabled = true
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
+
+[components.config.atif]
+enabled = true
+output_directory = "logs"
+filename_template = "trajectory-{session_id}.json"
+```
+
+The file format is generic. Other plugin kinds can use the same `components`
+array when their plugin implementation is registered in the gateway process.
+
 ## ATOF Section
 
 Use ATOF when you want the raw ATOF `0.1` event stream as JSONL.
