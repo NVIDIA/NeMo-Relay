@@ -20,10 +20,6 @@ fn make_request(content: Json) -> LlmRequest {
     }
 }
 
-fn fixture_json(path: &str) -> Json {
-    serde_json::from_str(path).expect("valid fixture json")
-}
-
 /// Full Responses API response with message, function_call, reasoning, and usage.
 fn full_responses_response() -> Json {
     json!({
@@ -390,9 +386,15 @@ fn test_decode_invalid_json() {
 #[test]
 fn test_decode_request_with_input_array() {
     let codec = OpenAIResponsesCodec;
-    let mut request_json = fixture_json(include_str!(
-        "../../fixtures/codec/openai_responses/strict_messages_array.json"
-    ));
+    let mut request_json = json!({
+        "model": "gpt-4o",
+        "instructions": "Be helpful.",
+        "input": [
+            { "role": "user", "content": "What is 2+2?" },
+            { "role": "assistant", "content": "4" },
+            { "role": "user", "content": "And 3+3?" }
+        ]
+    });
     request_json["tools"] = json!([{
         "type": "function",
         "function": {
@@ -501,9 +503,13 @@ fn test_decode_request_openai_controls_typed() {
 #[test]
 fn test_decode_request_input_array_preserves_unparsed_items_in_extra() {
     let codec = OpenAIResponsesCodec;
-    let request = make_request(fixture_json(include_str!(
-        "../../fixtures/codec/openai_responses/mixed_input_with_function_call_output.json"
-    )));
+    let request = make_request(json!({
+        "model": "gpt-4o",
+        "input": [
+            { "role": "user", "content": "hello" },
+            { "type": "function_call_output", "call_id": "call_1", "output": "ok" }
+        ]
+    }));
     let annotated = codec.decode(&request).unwrap();
     // strict-first behavior: no partial message extraction on mixed arrays
     assert!(annotated.messages.is_empty());
@@ -521,9 +527,11 @@ fn test_decode_request_input_array_preserves_unparsed_items_in_extra() {
 #[test]
 fn test_decode_request_accepts_anthropic_hint_tool_choice() {
     let codec = OpenAIResponsesCodec;
-    let request = make_request(fixture_json(include_str!(
-        "../../fixtures/codec/openai_responses/anthropic_tool_choice_hint.json"
-    )));
+    let request = make_request(json!({
+        "model": "gpt-4o",
+        "input": "Hi",
+        "tool_choice": { "type": "auto", "disable_parallel_tool_use": true }
+    }));
     let annotated = codec.decode(&request).unwrap();
     assert_eq!(annotated.tool_choice, Some(ToolChoice::Auto));
     assert_eq!(annotated.parallel_tool_calls, Some(false));
@@ -544,9 +552,21 @@ fn test_decode_request_accepts_anthropic_none_tool_choice_object() {
 #[test]
 fn test_decode_request_litellm_reasoning_input_item_preserved_and_controls_extracted() {
     let codec = OpenAIResponsesCodec;
-    let request = make_request(fixture_json(include_str!(
-        "../../fixtures/codec/openai_responses/litellm_reasoning_input_item.json"
-    )));
+    let request = make_request(json!({
+        "model": "gpt-5-mini",
+        "input": [
+            { "type": "reasoning", "id": "rs_1", "summary": "work", "status": null },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{ "type": "input_text", "text": "What is 2+2?" }]
+            }
+        ],
+        "reasoning": { "effort": "minimal" },
+        "truncation": "disabled",
+        "store": true,
+        "parallel_tool_calls": true
+    }));
     let annotated = codec.decode(&request).unwrap();
     // strict-first parse: mixed input array preserved whole in extra
     assert!(annotated.messages.is_empty());
@@ -566,9 +586,24 @@ fn test_decode_request_litellm_reasoning_input_item_preserved_and_controls_extra
 #[test]
 fn test_decode_request_sglang_extensions_preserved_in_extra() {
     let codec = OpenAIResponsesCodec;
-    let request = make_request(fixture_json(include_str!(
-        "../../fixtures/codec/openai_responses/sglang_responses_request_with_extensions.json"
-    )));
+    let request = make_request(json!({
+        "model": "gpt-oss-120b",
+        "input": "Summarize this",
+        "request_id": "resp_custom_1",
+        "priority": 3,
+        "extra_key": "tenant-a",
+        "cache_salt": "salt-123",
+        "frequency_penalty": 0.1,
+        "presence_penalty": 0.2,
+        "top_k": 40,
+        "min_p": 0.05,
+        "repetition_penalty": 1.02,
+        "store": true,
+        "truncation": "auto",
+        "reasoning": { "effort": "low" },
+        "parallel_tool_calls": true,
+        "tool_choice": "none"
+    }));
     let annotated = codec.decode(&request).unwrap();
     // core controls extracted
     assert_eq!(annotated.store, Some(true));

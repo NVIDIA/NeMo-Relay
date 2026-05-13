@@ -1,5 +1,0 @@
-{
-  "model": "gpt-4o",
-  "input": "Hi",
-  "tool_choice": { "type": "auto", "disable_parallel_tool_use": true }
-}

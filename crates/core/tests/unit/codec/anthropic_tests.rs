@@ -20,10 +20,6 @@ fn make_request(content: Json) -> LlmRequest {
     }
 }
 
-fn fixture_json(path: &str) -> Json {
-    serde_json::from_str(path).expect("valid fixture json")
-}
-
 /// Full Anthropic Messages response with text, tool_use, thinking, usage, etc.
 fn full_anthropic_response() -> Json {
     json!({
@@ -546,9 +542,14 @@ fn test_decode_request_service_tier_and_parallel_tool_calls() {
 #[test]
 fn test_decode_request_vllm_tool_choice_none_and_extensions_preserved() {
     let codec = AnthropicMessagesCodec;
-    let request = make_request(fixture_json(include_str!(
-        "../../fixtures/codec/anthropic/vllm_tool_choice_none_with_extensions.json"
-    )));
+    let request = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "max_tokens": 100,
+        "tool_choice": { "type": "none", "disable_parallel_tool_use": true },
+        "kv_transfer_params": { "mode": "decode" },
+        "chat_template_kwargs": { "include_system": true }
+    }));
     let annotated = codec.decode(&request).unwrap();
     assert_eq!(annotated.tool_choice, Some(ToolChoice::None));
     assert_eq!(annotated.parallel_tool_calls, Some(false));
@@ -565,9 +566,18 @@ fn test_decode_request_vllm_tool_choice_none_and_extensions_preserved() {
 #[test]
 fn test_decode_request_vllm_system_array_ignores_non_text_blocks() {
     let codec = AnthropicMessagesCodec;
-    let request = make_request(fixture_json(include_str!(
-        "../../fixtures/codec/anthropic/vllm_system_block_with_non_text.json"
-    )));
+    let request = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "messages": [{ "role": "user", "content": "Describe this" }],
+        "max_tokens": 100,
+        "system": [
+            {
+                "type": "image",
+                "source": { "type": "base64", "media_type": "image/png", "data": "abcd" }
+            },
+            { "type": "text", "text": "Only answer in one sentence." }
+        ]
+    }));
     let annotated = codec.decode(&request).unwrap();
     assert_eq!(
         annotated.system_prompt(),
@@ -578,9 +588,15 @@ fn test_decode_request_vllm_system_array_ignores_non_text_blocks() {
 #[test]
 fn test_decode_request_litellm_bridge_thinking_output_config_preserved_in_extra() {
     let codec = AnthropicMessagesCodec;
-    let request = make_request(fixture_json(include_str!(
-        "../../fixtures/codec/anthropic/litellm_thinking_output_config_reasoning_effort.json"
-    )));
+    let request = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "max_tokens": 128,
+        "thinking": { "type": "enabled", "budget_tokens": 2048 },
+        "output_config": { "effort": "low" },
+        "reasoning_effort": "minimal",
+        "tool_choice": { "type": "any", "disable_parallel_tool_use": false }
+    }));
     let annotated = codec.decode(&request).unwrap();
     // stable extraction
     assert_eq!(annotated.tool_choice, Some(ToolChoice::Required));
@@ -603,9 +619,25 @@ fn test_decode_request_litellm_bridge_thinking_output_config_preserved_in_extra(
 #[test]
 fn test_decode_request_litellm_cache_control_blocks_preserved() {
     let codec = AnthropicMessagesCodec;
-    let request = make_request(fixture_json(include_str!(
-        "../../fixtures/codec/anthropic/litellm_cache_control_blocks.json"
-    )));
+    let request = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 128,
+        "system": [
+            { "type": "text", "text": "Be terse", "cache_control": { "type": "ephemeral" } }
+        ],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello",
+                        "cache_control": { "type": "ephemeral", "scope": "global" }
+                    }
+                ]
+            }
+        ]
+    }));
     let annotated = codec.decode(&request).unwrap();
     // System text should still extract.
     assert_eq!(annotated.system_prompt(), Some("Be terse"));

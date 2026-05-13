@@ -1,7 +1,0 @@
-{
-  "model": "gpt-4o",
-  "input": [
-    { "role": "user", "content": "hello" },
-    { "type": "function_call_output", "call_id": "call_1", "output": "ok" }
-  ]
-}
