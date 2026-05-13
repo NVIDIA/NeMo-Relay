@@ -236,6 +236,16 @@ impl Default for ScopeStack {
 /// concurrent readers.
 pub type ScopeStackHandle = Arc<RwLock<ScopeStack>>;
 
+/// Captured thread-local scope stack binding.
+///
+/// This preserves both the visible scope stack handle and whether it was
+/// explicitly installed on the current thread.
+#[derive(Clone)]
+pub struct ThreadScopeStackBinding {
+    stack: ScopeStackHandle,
+    explicit: bool,
+}
+
 /// Create a new scope stack handle with an implicit root scope.
 ///
 /// The returned handle wraps a freshly initialized [`ScopeStack`] inside an
@@ -295,6 +305,23 @@ pub fn current_scope_stack() -> ScopeStackHandle {
 pub fn set_thread_scope_stack(handle: ScopeStackHandle) {
     THREAD_SCOPE_STACK.with(|stack| *stack.borrow_mut() = handle);
     THREAD_SCOPE_STACK_EXPLICIT.with(|flag| flag.set(true));
+}
+
+/// Capture the current thread-local scope stack binding.
+///
+/// This is intended for foreign runtimes that temporarily bind a scope stack to
+/// an OS thread and need to restore the exact previous state before releasing
+/// that thread back to their scheduler.
+pub fn capture_thread_scope_stack() -> ThreadScopeStackBinding {
+    let stack = THREAD_SCOPE_STACK.with(|stack| stack.borrow().clone());
+    let explicit = THREAD_SCOPE_STACK_EXPLICIT.with(|flag| flag.get());
+    ThreadScopeStackBinding { stack, explicit }
+}
+
+/// Restore a previously captured thread-local scope stack binding.
+pub fn restore_thread_scope_stack(binding: ThreadScopeStackBinding) {
+    THREAD_SCOPE_STACK.with(|stack| *stack.borrow_mut() = binding.stack);
+    THREAD_SCOPE_STACK_EXPLICIT.with(|flag| flag.set(binding.explicit));
 }
 
 /// Synchronize the thread-local scope stack without marking it explicit.

@@ -44,10 +44,23 @@ func TestAtofExporterLifecycleWritesRawJSONL(t *testing.T) {
 
 	name := "go_atof_" + time.Now().Format("150405.000000")
 	requireNoError(t, exporter.Register(name), "Register failed")
-	handle, err := PushScope("atof_scope", ScopeTypeAgent, WithInput(json.RawMessage(`{"scope":true}`)))
-	requireNoError(t, err, "PushScope failed")
-	requireNoError(t, EmitEvent("atof_mark", WithEventParent(handle), WithEventData(json.RawMessage(`{"step":1}`))), "EmitEvent failed")
-	requireNoError(t, PopScope(handle, WithOutput(json.RawMessage(`{"done":true}`))), "PopScope failed")
+	stack, err := NewScopeStack()
+	requireNoError(t, err, "NewScopeStack failed")
+	defer stack.Close()
+	var runErr error
+	stack.Run(func() {
+		handle, err := PushScope("atof_scope", ScopeTypeAgent, WithInput(json.RawMessage(`{"scope":true}`)))
+		if err != nil {
+			runErr = err
+			return
+		}
+		if err := EmitEvent("atof_mark", WithEventParent(handle), WithEventData(json.RawMessage(`{"step":1}`))); err != nil {
+			runErr = err
+			return
+		}
+		runErr = PopScope(handle, WithOutput(json.RawMessage(`{"done":true}`)))
+	})
+	requireNoError(t, runErr, "scope lifecycle failed")
 	requireNoError(t, exporter.Deregister(name), "Deregister failed")
 	requireNoError(t, exporter.Deregister(name), "repeated Deregister should be safe")
 	requireNoError(t, exporter.ForceFlush(), "ForceFlush failed")

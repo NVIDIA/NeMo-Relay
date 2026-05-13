@@ -17,8 +17,9 @@ pub use callbacks::{
 };
 pub use global::global_context;
 pub use scope_stack::{
-    ScopeStack, ScopeStackHandle, TASK_SCOPE_STACK, create_scope_stack, current_scope_stack,
-    propagate_scope_to_thread, scope_stack_active, set_thread_scope_stack, sync_thread_scope_stack,
-    task_scope_push, task_scope_remove, task_scope_top,
+    ScopeStack, ScopeStackHandle, TASK_SCOPE_STACK, ThreadScopeStackBinding,
+    capture_thread_scope_stack, create_scope_stack, current_scope_stack, propagate_scope_to_thread,
+    restore_thread_scope_stack, scope_stack_active, set_thread_scope_stack,
+    sync_thread_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
 };
 pub use state::NemoFlowContextState;

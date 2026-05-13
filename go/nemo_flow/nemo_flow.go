@@ -31,6 +31,7 @@ package nemo_flow
 
 typedef struct FfiScopeHandle FfiScopeHandle;
 typedef struct FfiScopeStack FfiScopeStack;
+typedef struct FfiThreadScopeStackBinding FfiThreadScopeStackBinding;
 typedef struct FfiToolHandle FfiToolHandle;
 typedef struct FfiLLMHandle FfiLLMHandle;
 typedef struct FfiLLMRequest FfiLLMRequest;
@@ -211,6 +212,8 @@ extern void nemo_flow_string_free(char* ptr);
 // Scope stack isolation
 extern int32_t nemo_flow_scope_stack_create(FfiScopeStack** out);
 extern int32_t nemo_flow_scope_stack_set_thread(const FfiScopeStack* stack);
+extern int32_t nemo_flow_scope_stack_capture_thread(FfiThreadScopeStackBinding** out);
+extern int32_t nemo_flow_scope_stack_restore_thread(FfiThreadScopeStackBinding* binding);
 extern _Bool nemo_flow_scope_stack_active(void);
 extern void nemo_flow_scope_stack_free(FfiScopeStack* ptr);
 
@@ -1500,8 +1503,22 @@ func (s *ScopeStack) Close() {
 // This is the canonical way to propagate a scope stack to a worker goroutine.
 func (s *ScopeStack) Run(fn func()) {
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	C.nemo_flow_scope_stack_set_thread(s.ptr)
+	var binding *C.FfiThreadScopeStackBinding
+	if err := checkStatus(C.nemo_flow_scope_stack_capture_thread(&binding)); err != nil {
+		runtime.UnlockOSThread()
+		panic(err)
+	}
+	defer func() {
+		status := C.nemo_flow_scope_stack_restore_thread(binding)
+		if err := checkStatus(status); err != nil {
+			runtime.UnlockOSThread()
+			panic(err)
+		}
+		runtime.UnlockOSThread()
+	}()
+	if err := checkStatus(C.nemo_flow_scope_stack_set_thread(s.ptr)); err != nil {
+		panic(err)
+	}
 	fn()
 }
 
