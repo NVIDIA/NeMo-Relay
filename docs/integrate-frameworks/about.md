@@ -29,6 +29,10 @@ Use these signals to decide whether this documentation path matches your current
 - Are building or reviewing third-party integration patches
 
 If you own the application call sites directly, use [Instrument Applications](../instrument-applications/about.md) first.
+If your application uses [LangChain](https://www.langchain.com/langchain) or
+[LangGraph](https://www.langchain.com/langgraph), start with
+[LangChain Integration](../getting-started/python/langchain.md) or
+[LangGraph Integration](../getting-started/python/langgraph.md).
 
 ## Guides
 

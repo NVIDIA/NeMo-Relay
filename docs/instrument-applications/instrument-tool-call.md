@@ -21,7 +21,7 @@ You will wrap one existing tool callback with the managed tool execution API. Th
 
 Complete one binding Quick Start guide first:
 
-- [Python Quick Start](../getting-started/python.md)
+- [Python Quick Start](../getting-started/python/index.md)
 - [Node.js Quick Start](../getting-started/nodejs.md)
 - [Rust Quick Start](../getting-started/rust.md)
 
