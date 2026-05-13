@@ -135,8 +135,6 @@ async fn send_hook_forward_request(
         .build()?
         .post(url)
         .headers(gateway_headers(
-            command.atif_dir.as_deref(),
-            command.openinference_endpoint.as_deref(),
             command.profile.as_deref(),
             command.session_metadata.as_deref(),
             command.plugin_config.as_deref(),
@@ -405,20 +403,12 @@ fn validate_optional_json(name: &str, value: Option<&str>) -> Result<(), CliErro
 // Converts optional session/export/gateway settings into gateway headers for hook-forward. Each
 // absent value is omitted so the server can fall back to file, environment, or default config.
 fn gateway_headers(
-    atif_dir: Option<&Path>,
-    openinference_endpoint: Option<&str>,
     profile: Option<&str>,
     session_metadata: Option<&str>,
     plugin_config: Option<&str>,
     gateway_mode: Option<GatewayMode>,
 ) -> Result<HeaderMap, CliError> {
     let mut headers = HeaderMap::new();
-    insert_header_path(&mut headers, "x-nemo-flow-atif-dir", atif_dir)?;
-    insert_header(
-        &mut headers,
-        "x-nemo-flow-openinference-endpoint",
-        openinference_endpoint,
-    )?;
     insert_header(&mut headers, "x-nemo-flow-config-profile", profile)?;
     insert_header(
         &mut headers,
@@ -449,21 +439,6 @@ fn insert_header(
         );
     }
     Ok(())
-}
-
-// Converts an optional filesystem path to a header value using loss-tolerant display text. This
-// mirrors hook-forward behavior, where paths are passed as strings.
-fn insert_header_path(
-    headers: &mut HeaderMap,
-    name: &'static str,
-    value: Option<&Path>,
-) -> Result<(), CliError> {
-    if let Some(value) = value {
-        let value = value.to_string_lossy();
-        insert_header(headers, name, Some(value.as_ref()))
-    } else {
-        Ok(())
-    }
 }
 
 #[cfg(test)]

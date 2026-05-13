@@ -224,8 +224,13 @@ fn test_decode_response_thinking_blocks_in_api_specific() {
     let resp = codec.decode_response(&full_anthropic_response()).unwrap();
     match resp.api_specific.unwrap() {
         ApiSpecificResponse::AnthropicMessages {
+            object_type,
+            role,
+            stop_reason,
             content_blocks,
             stop_sequence,
+            service_tier,
+            container,
         } => {
             let blocks = content_blocks.unwrap();
             // Should contain ALL content blocks
@@ -239,7 +244,12 @@ fn test_decode_response_thinking_blocks_in_api_specific() {
             assert!(types.contains(&"redacted_thinking"));
             assert!(types.contains(&"text"));
             assert!(types.contains(&"tool_use"));
+            assert_eq!(object_type.as_deref(), Some("message"));
+            assert_eq!(role.as_deref(), Some("assistant"));
+            assert_eq!(stop_reason.as_deref(), Some("end_turn"));
             assert_eq!(stop_sequence, None);
+            assert_eq!(service_tier, None);
+            assert_eq!(container, None);
         }
         other => panic!("Expected AnthropicMessages, got {other:?}"),
     }
@@ -261,6 +271,11 @@ fn test_decode_response_stop_sequence_value() {
         ApiSpecificResponse::AnthropicMessages {
             stop_sequence,
             content_blocks: _,
+            object_type: _,
+            role: _,
+            stop_reason: _,
+            service_tier: _,
+            container: _,
         } => {
             assert_eq!(stop_sequence, Some("\n\nHuman:".into()));
         }
@@ -282,13 +297,23 @@ fn test_decode_response_extra_fields_preserved() {
         "container": { "id": "container_abc123" }
     });
     let resp = codec.decode_response(&response).unwrap();
-    // type, role, container should be in extra
-    assert_eq!(resp.extra.get("type"), Some(&json!("message")));
-    assert_eq!(resp.extra.get("role"), Some(&json!("assistant")));
-    assert_eq!(
-        resp.extra.get("container"),
-        Some(&json!({"id": "container_abc123"}))
-    );
+    // type/role/container are now modeled in api_specific.
+    assert!(resp.extra.get("type").is_none());
+    assert!(resp.extra.get("role").is_none());
+    assert!(resp.extra.get("container").is_none());
+    match resp.api_specific.unwrap() {
+        ApiSpecificResponse::AnthropicMessages {
+            object_type,
+            role,
+            container,
+            ..
+        } => {
+            assert_eq!(object_type.as_deref(), Some("message"));
+            assert_eq!(role.as_deref(), Some("assistant"));
+            assert_eq!(container, Some(json!({"id":"container_abc123"})));
+        }
+        other => panic!("Expected AnthropicMessages, got {other:?}"),
+    }
 }
 
 #[test]
@@ -495,11 +520,129 @@ fn test_decode_request_extra_fields() {
         "stream": true
     }));
     let annotated = codec.decode(&request).unwrap();
-    assert_eq!(
-        annotated.extra.get("metadata"),
-        Some(&json!({"user_id": "abc"}))
-    );
+    assert_eq!(annotated.metadata, Some(json!({"user_id": "abc"})));
     assert_eq!(annotated.extra.get("stream"), Some(&json!(true)));
+}
+
+#[test]
+fn test_decode_request_service_tier_and_parallel_tool_calls() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(json!({
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 100,
+        "service_tier": "default",
+        "tool_choice": { "type": "auto", "disable_parallel_tool_use": true }
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    assert_eq!(annotated.service_tier.as_deref(), Some("default"));
+    assert_eq!(annotated.parallel_tool_calls, Some(false));
+}
+
+#[test]
+fn test_decode_request_vllm_tool_choice_none_and_extensions_preserved() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "max_tokens": 100,
+        "tool_choice": { "type": "none", "disable_parallel_tool_use": true },
+        "kv_transfer_params": { "mode": "decode" },
+        "chat_template_kwargs": { "include_system": true }
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    assert_eq!(annotated.tool_choice, Some(ToolChoice::None));
+    assert_eq!(annotated.parallel_tool_calls, Some(false));
+    assert_eq!(
+        annotated.extra.get("kv_transfer_params"),
+        Some(&json!({"mode":"decode"}))
+    );
+    assert_eq!(
+        annotated.extra.get("chat_template_kwargs"),
+        Some(&json!({"include_system":true}))
+    );
+}
+
+#[test]
+fn test_decode_request_vllm_system_array_ignores_non_text_blocks() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "messages": [{ "role": "user", "content": "Describe this" }],
+        "max_tokens": 100,
+        "system": [
+            {
+                "type": "image",
+                "source": { "type": "base64", "media_type": "image/png", "data": "abcd" }
+            },
+            { "type": "text", "text": "Only answer in one sentence." }
+        ]
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    assert_eq!(
+        annotated.system_prompt(),
+        Some("Only answer in one sentence.")
+    );
+}
+
+#[test]
+fn test_decode_request_litellm_bridge_thinking_output_config_preserved_in_extra() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "max_tokens": 128,
+        "thinking": { "type": "enabled", "budget_tokens": 2048 },
+        "output_config": { "effort": "low" },
+        "reasoning_effort": "minimal",
+        "tool_choice": { "type": "any", "disable_parallel_tool_use": false }
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    // stable extraction
+    assert_eq!(annotated.tool_choice, Some(ToolChoice::Required));
+    assert_eq!(annotated.parallel_tool_calls, Some(true));
+    // bridge-specific controls preserved losslessly
+    assert_eq!(
+        annotated.extra.get("thinking"),
+        Some(&json!({"type":"enabled","budget_tokens":2048}))
+    );
+    assert_eq!(
+        annotated.extra.get("output_config"),
+        Some(&json!({"effort":"low"}))
+    );
+    assert_eq!(
+        annotated.extra.get("reasoning_effort"),
+        Some(&json!("minimal"))
+    );
+}
+
+#[test]
+fn test_decode_request_litellm_cache_control_blocks_preserved() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 128,
+        "system": [
+            { "type": "text", "text": "Be terse", "cache_control": { "type": "ephemeral" } }
+        ],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello",
+                        "cache_control": { "type": "ephemeral", "scope": "global" }
+                    }
+                ]
+            }
+        ]
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    // System text should still extract.
+    assert_eq!(annotated.system_prompt(), Some("Be terse"));
+    // `system` is a modeled key in Anthropic decode and should not live in extra.
+    assert!(annotated.extra.get("system").is_none());
 }
 
 // ===================================================================
@@ -523,6 +666,41 @@ fn test_encode_round_trip_preserves_unmodeled_fields() {
     // Unmodeled fields preserved
     assert_eq!(obj.get("metadata"), Some(&json!({"user_id": "abc"})));
     assert_eq!(obj.get("stream"), Some(&json!(true)));
+}
+
+#[test]
+fn test_encode_writes_anthropic_modeled_controls() {
+    let codec = AnthropicMessagesCodec;
+    let mut annotated = codec
+        .decode(&make_request(json!({
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 100,
+            "tool_choice": { "type": "auto" }
+        })))
+        .unwrap();
+    annotated.metadata = Some(json!({"user_id":"abc"}));
+    annotated.service_tier = Some("default".into());
+    annotated.parallel_tool_calls = Some(false);
+    let encoded = codec
+        .encode(
+            &annotated,
+            &make_request(json!({
+                "messages": [{ "role": "user", "content": "Hi" }],
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 100,
+                "tool_choice": { "type": "auto" }
+            })),
+        )
+        .unwrap();
+    let obj = encoded.content.as_object().unwrap();
+    assert_eq!(obj.get("metadata"), Some(&json!({"user_id":"abc"})));
+    assert_eq!(obj.get("service_tier"), Some(&json!("default")));
+    assert_eq!(
+        obj.get("tool_choice")
+            .and_then(|v| v.get("disable_parallel_tool_use")),
+        Some(&json!(true))
+    );
 }
 
 #[test]
@@ -692,6 +870,19 @@ fn test_helper_and_error_paths_cover_remaining_anthropic_branches() {
             },
         }]),
         tool_choice: Some(ToolChoice::None),
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
         extra: serde_json::Map::new(),
     };
 
@@ -708,7 +899,7 @@ fn test_helper_and_error_paths_cover_remaining_anthropic_branches() {
     assert_eq!(obj.get("temperature"), Some(&json!(0.3)));
     assert_eq!(obj.get("top_p"), Some(&json!(0.8)));
     assert_eq!(obj.get("stop_sequences"), Some(&json!(["END"])));
-    assert_eq!(obj.get("tool_choice"), Some(&json!({"type": "auto"})));
+    assert_eq!(obj.get("tool_choice"), Some(&json!({"type": "none"})));
     assert_eq!(obj.get("system"), Some(&json!("First\nSecond")));
 
     let tools = obj.get("tools").unwrap().as_array().unwrap();

@@ -586,6 +586,19 @@ fn test_stream_request_event_and_handle_wrappers_cover_remaining_methods() {
             params: None,
             tools: None,
             tool_choice: None,
+            store: None,
+            previous_response_id: None,
+            truncation: None,
+            reasoning: None,
+            include: None,
+            user: None,
+            metadata: None,
+            service_tier: None,
+            parallel_tool_calls: None,
+            max_output_tokens: None,
+            max_tool_calls: None,
+            top_logprobs: None,
+            stream: None,
             extra: serde_json::Map::new(),
         };
         let annotated_response = AnnotatedLLMResponse {
@@ -1055,6 +1068,19 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
             py_to_json(annotated.extra(py).unwrap().bind(py)).unwrap()["provider"],
             json!("test")
         );
+        assert_eq!(annotated.store(), None);
+        assert_eq!(annotated.previous_response_id(), None);
+        assert!(annotated.truncation(py).unwrap().bind(py).is_none());
+        assert!(annotated.reasoning(py).unwrap().bind(py).is_none());
+        assert!(annotated.include(py).unwrap().bind(py).is_none());
+        assert_eq!(annotated.user(), None);
+        assert!(annotated.metadata(py).unwrap().bind(py).is_none());
+        assert_eq!(annotated.service_tier(), None);
+        assert_eq!(annotated.parallel_tool_calls(), None);
+        assert_eq!(annotated.max_output_tokens(), None);
+        assert_eq!(annotated.max_tool_calls(), None);
+        assert_eq!(annotated.top_logprobs(), None);
+        assert_eq!(annotated.stream(), None);
 
         let updated_messages =
             json_to_py(py, &json!([{"role": "user", "content": "updated"}])).unwrap();
@@ -1073,10 +1099,54 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         annotated.set_tools(updated_tools.bind(py)).unwrap();
         let updated_choice = json_to_py(py, &json!("auto")).unwrap();
         annotated.set_tool_choice(updated_choice.bind(py)).unwrap();
+        annotated.set_store(Some(true));
+        annotated.set_previous_response_id(Some("resp_1".into()));
+        let updated_truncation = json_to_py(py, &json!("disabled")).unwrap();
+        annotated
+            .set_truncation(updated_truncation.bind(py))
+            .unwrap();
+        let updated_reasoning = json_to_py(py, &json!({"effort": "low"})).unwrap();
+        annotated.set_reasoning(updated_reasoning.bind(py)).unwrap();
+        let updated_include = json_to_py(py, &json!(["reasoning.encrypted_content"])).unwrap();
+        annotated.set_include(updated_include.bind(py)).unwrap();
+        annotated.set_user(Some("user-1".into()));
+        let updated_metadata = json_to_py(py, &json!({"tenant": "qa"})).unwrap();
+        annotated.set_metadata(updated_metadata.bind(py)).unwrap();
+        annotated.set_service_tier(Some("default".into()));
+        annotated.set_parallel_tool_calls(Some(false));
+        annotated.set_max_output_tokens(Some(128));
+        annotated.set_max_tool_calls(Some(3));
+        annotated.set_top_logprobs(Some(2));
+        annotated.set_stream(Some(true));
         let updated_extra = json_to_py(py, &json!({"updated": true})).unwrap();
         annotated.set_extra(updated_extra.bind(py)).unwrap();
         assert_eq!(annotated.model(), Some("updated-model".into()));
         assert_eq!(annotated.last_user_message(), Some("updated".into()));
+        assert_eq!(annotated.store(), Some(true));
+        assert_eq!(annotated.previous_response_id(), Some("resp_1".into()));
+        assert_eq!(
+            py_to_json(annotated.truncation(py).unwrap().bind(py)).unwrap(),
+            json!("disabled")
+        );
+        assert_eq!(
+            py_to_json(annotated.reasoning(py).unwrap().bind(py)).unwrap(),
+            json!({"effort": "low"})
+        );
+        assert_eq!(
+            py_to_json(annotated.include(py).unwrap().bind(py)).unwrap(),
+            json!(["reasoning.encrypted_content"])
+        );
+        assert_eq!(annotated.user(), Some("user-1".into()));
+        assert_eq!(
+            py_to_json(annotated.metadata(py).unwrap().bind(py)).unwrap(),
+            json!({"tenant": "qa"})
+        );
+        assert_eq!(annotated.service_tier(), Some("default".into()));
+        assert_eq!(annotated.parallel_tool_calls(), Some(false));
+        assert_eq!(annotated.max_output_tokens(), Some(128));
+        assert_eq!(annotated.max_tool_calls(), Some(3));
+        assert_eq!(annotated.top_logprobs(), Some(2));
+        assert_eq!(annotated.stream(), Some(true));
         assert_eq!(
             py_to_json(annotated.extra(py).unwrap().bind(py)).unwrap(),
             json!({"updated": true})
@@ -1085,9 +1155,17 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         annotated.set_params(py.None().bind(py)).unwrap();
         annotated.set_tools(py.None().bind(py)).unwrap();
         annotated.set_tool_choice(py.None().bind(py)).unwrap();
+        annotated.set_truncation(py.None().bind(py)).unwrap();
+        annotated.set_reasoning(py.None().bind(py)).unwrap();
+        annotated.set_include(py.None().bind(py)).unwrap();
+        annotated.set_metadata(py.None().bind(py)).unwrap();
         assert!(annotated.params(py).unwrap().bind(py).is_none());
         assert!(annotated.tools(py).unwrap().bind(py).is_none());
         assert!(annotated.tool_choice(py).unwrap().bind(py).is_none());
+        assert!(annotated.truncation(py).unwrap().bind(py).is_none());
+        assert!(annotated.reasoning(py).unwrap().bind(py).is_none());
+        assert!(annotated.include(py).unwrap().bind(py).is_none());
+        assert!(annotated.metadata(py).unwrap().bind(py).is_none());
 
         let bad_messages = json_to_py(py, &json!([{"content": "missing role"}])).unwrap();
         let err = PyAnnotatedLLMRequest::new(bad_messages.bind(py), None, None, None, None, None)
@@ -1342,6 +1420,19 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                     },
                 }]),
                 tool_choice: Some(nemo_flow::codec::request::ToolChoice::Auto),
+                store: None,
+                previous_response_id: None,
+                truncation: None,
+                reasoning: None,
+                include: None,
+                user: None,
+                metadata: None,
+                service_tier: None,
+                parallel_tool_calls: None,
+                max_output_tokens: None,
+                max_tool_calls: None,
+                top_logprobs: None,
+                stream: None,
                 extra: serde_json::Map::new(),
             },
         };

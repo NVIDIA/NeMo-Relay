@@ -45,10 +45,15 @@ pub struct AnthropicMessagesCodec;
 #[derive(Deserialize)]
 struct RawAnthropicResponse {
     id: Option<String>,
+    #[serde(rename = "type")]
+    object_type: Option<String>,
+    role: Option<String>,
     model: Option<String>,
     content: Option<Vec<Json>>,
     stop_reason: Option<String>,
     stop_sequence: Option<String>,
+    service_tier: Option<String>,
+    container: Option<Json>,
     usage: Option<RawAnthropicUsage>,
     #[serde(flatten)]
     extra: serde_json::Map<String, Json>,
@@ -94,6 +99,8 @@ const MODELED_REQUEST_KEYS: &[&str] = &[
     "stop_sequences",
     "tools",
     "tool_choice",
+    "metadata",
+    "service_tier",
 ];
 
 /// Decode the Anthropic `tool_choice` JSON value into a normalized [`ToolChoice`].
@@ -101,6 +108,7 @@ const MODELED_REQUEST_KEYS: &[&str] = &[
 /// Anthropic format:
 /// - `{"type": "auto"}` -> `ToolChoice::Auto`
 /// - `{"type": "any"}` -> `ToolChoice::Required`
+/// - `{"type": "none"}` -> `ToolChoice::None`
 /// - `{"type": "tool", "name": "X"}` -> `ToolChoice::Specific`
 fn decode_anthropic_tool_choice(val: &Json) -> Option<ToolChoice> {
     let obj = val.as_object()?;
@@ -108,6 +116,7 @@ fn decode_anthropic_tool_choice(val: &Json) -> Option<ToolChoice> {
     match tc_type {
         "auto" => Some(ToolChoice::Auto),
         "any" => Some(ToolChoice::Required),
+        "none" => Some(ToolChoice::None),
         "tool" => {
             let name = obj.get("name")?.as_str()?.to_string();
             Some(ToolChoice::Specific(ToolChoiceFunction {
@@ -119,16 +128,36 @@ fn decode_anthropic_tool_choice(val: &Json) -> Option<ToolChoice> {
     }
 }
 
+/// Extract Anthropic `disable_parallel_tool_use` from tool_choice and map
+/// to normalized `parallel_tool_calls` semantics.
+fn decode_parallel_tool_calls(val: &Json) -> Option<bool> {
+    let obj = val.as_object()?;
+    obj.get("disable_parallel_tool_use")
+        .and_then(|v| v.as_bool())
+        .map(|disabled| !disabled)
+}
+
 /// Encode a normalized [`ToolChoice`] back into Anthropic JSON format.
 fn encode_anthropic_tool_choice(tc: &ToolChoice) -> Json {
     match tc {
         ToolChoice::Auto => serde_json::json!({"type": "auto"}),
         ToolChoice::Required => serde_json::json!({"type": "any"}),
-        ToolChoice::None => serde_json::json!({"type": "auto"}), // Anthropic has no "none"; fall back to auto
+        ToolChoice::None => serde_json::json!({"type": "none"}),
         ToolChoice::Specific(func) => {
             serde_json::json!({"type": "tool", "name": func.function.name})
         }
     }
+}
+
+fn encode_tool_choice_with_parallel_hint(
+    tc: &ToolChoice,
+    parallel_tool_calls: Option<bool>,
+) -> Json {
+    let mut value = encode_anthropic_tool_choice(tc);
+    if let (Some(parallel), Some(obj)) = (parallel_tool_calls, value.as_object_mut()) {
+        obj.insert("disable_parallel_tool_use".into(), Json::Bool(!parallel));
+    }
+    value
 }
 
 /// Extract the system prompt from an Anthropic top-level `system` field.
@@ -179,9 +208,9 @@ fn extract_system_text(msg: &Message) -> Option<String> {
         } => {
             let texts: Vec<&str> = parts
                 .iter()
-                .map(|p| {
-                    let super::request::ContentPart::Text { text } = p;
-                    text.as_str()
+                .filter_map(|p| match p {
+                    super::request::ContentPart::Text { text } => Some(text.as_str()),
+                    super::request::ContentPart::ImageUrl { .. } => None,
                 })
                 .collect();
             if texts.is_empty() {
@@ -339,7 +368,12 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
         // Build API-specific fields: all content blocks + stop_sequence.
         let api_specific_content_blocks = raw.content.clone();
         let api_specific = Some(ApiSpecificResponse::AnthropicMessages {
+            object_type: raw.object_type,
+            role: raw.role,
+            stop_reason: raw.stop_reason,
             stop_sequence: raw.stop_sequence,
+            service_tier: raw.service_tier,
+            container: raw.container,
             content_blocks: api_specific_content_blocks,
         });
 
@@ -435,6 +469,7 @@ impl LlmCodec for AnthropicMessagesCodec {
         let tool_choice = obj
             .get("tool_choice")
             .and_then(decode_anthropic_tool_choice);
+        let parallel_tool_calls = obj.get("tool_choice").and_then(decode_parallel_tool_calls);
 
         // Collect extra fields (keys not in MODELED_REQUEST_KEYS).
         let extra: serde_json::Map<String, Json> = obj
@@ -449,6 +484,22 @@ impl LlmCodec for AnthropicMessagesCodec {
             params,
             tools,
             tool_choice,
+            store: None,
+            previous_response_id: None,
+            truncation: None,
+            reasoning: None,
+            include: None,
+            user: None,
+            metadata: obj.get("metadata").cloned(),
+            service_tier: obj
+                .get("service_tier")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            parallel_tool_calls,
+            max_output_tokens: None,
+            max_tool_calls: None,
+            top_logprobs: None,
+            stream: None,
             extra,
         })
     }
@@ -493,8 +544,15 @@ impl LlmCodec for AnthropicMessagesCodec {
         if let Some(ref tool_choice) = annotated.tool_choice {
             obj.insert(
                 "tool_choice".into(),
-                encode_anthropic_tool_choice(tool_choice),
+                encode_tool_choice_with_parallel_hint(tool_choice, annotated.parallel_tool_calls),
             );
+        }
+
+        if let Some(ref metadata) = annotated.metadata {
+            obj.insert("metadata".into(), metadata.clone());
+        }
+        if let Some(ref service_tier) = annotated.service_tier {
+            obj.insert("service_tier".into(), Json::String(service_tier.clone()));
         }
 
         // Merge extra fields back.

@@ -6,6 +6,7 @@ package nemo_flow
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 )
@@ -123,12 +124,20 @@ func TestScopeStackActiveInsideRun(t *testing.T) {
 	defer stack.Close()
 
 	var active bool
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if ScopeStackActive() {
+		t.Fatal("expected ScopeStackActive() to be false before Run")
+	}
 	stack.Run(func() {
 		active = ScopeStackActive()
 	})
 
 	if !active {
 		t.Error("expected ScopeStackActive() to be true inside Run")
+	}
+	if ScopeStackActive() {
+		t.Error("expected ScopeStackActive() to be restored after Run")
 	}
 }
 

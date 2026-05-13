@@ -185,6 +185,11 @@ typedef struct FfiScopeStack FfiScopeStack;
 typedef struct FfiStream FfiStream;
 
 /**
+ * Opaque handle to a captured thread-local scope stack binding.
+ */
+typedef struct FfiThreadScopeStackBinding FfiThreadScopeStackBinding;
+
+/**
  * Opaque handle representing an active tool call.
  */
 typedef struct FfiToolHandle FfiToolHandle;
@@ -1769,6 +1774,29 @@ NemoFlowStatus nemo_flow_scope_stack_create(struct FfiScopeStack **out);
  * `stack` must be a valid, non-null `FfiScopeStack` pointer.
  */
 NemoFlowStatus nemo_flow_scope_stack_set_thread(const struct FfiScopeStack *stack);
+
+/**
+ * Capture the current thread-local scope stack binding.
+ *
+ * The returned binding must be restored with
+ * `nemo_flow_scope_stack_restore_thread`.
+ *
+ * # Parameters
+ * - `out`: On success, receives a heap-allocated binding handle.
+ *
+ * # Safety
+ * `out` must be a valid, non-null pointer.
+ */
+NemoFlowStatus nemo_flow_scope_stack_capture_thread(struct FfiThreadScopeStackBinding **out);
+
+/**
+ * Restore and free a captured thread-local scope stack binding.
+ *
+ * # Safety
+ * `binding` must be a valid pointer returned by
+ * `nemo_flow_scope_stack_capture_thread`.
+ */
+NemoFlowStatus nemo_flow_scope_stack_restore_thread(struct FfiThreadScopeStackBinding *binding);
 
 /**
  * Returns whether the current execution context has an explicitly-initialized

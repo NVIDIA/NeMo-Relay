@@ -205,6 +205,58 @@ async fn test_stream_wrapper_emits_end_event() {
 }
 
 #[tokio::test]
+async fn test_stream_wrapper_drop_emits_end_event_for_partial_stream() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "stream_drop_end_test",
+        Arc::new(move |e: &Event| {
+            captured.lock().unwrap().push(e.clone());
+        }),
+    )
+    .unwrap();
+
+    let inner = make_stream(vec![
+        Ok(json!({"token": "partial"})),
+        Ok(json!({"token": "unread"})),
+    ]);
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"messages": []}),
+    };
+    let handle = llm_call(
+        LlmCallParams::builder()
+            .name("stream_drop_llm")
+            .request(&request)
+            .attributes(LlmAttributes::STREAMING)
+            .build(),
+    )
+    .unwrap();
+
+    let (collector, finalizer, _collected) = make_collector_finalizer();
+    let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
+
+    assert_eq!(
+        wrapper.next().await.unwrap().unwrap(),
+        json!({"token": "partial"})
+    );
+    drop(wrapper);
+
+    let events = events.lock().unwrap();
+    let end_event = events
+        .iter()
+        .find(|event| is_llm_end(event))
+        .expect("expected END event when a partial stream is dropped");
+    assert_eq!(end_event.output(), Some(&json!([{"token": "partial"}])));
+
+    drop(events);
+    deregister_subscriber("stream_drop_end_test").unwrap();
+}
+
+#[tokio::test]
 async fn test_stream_wrapper_error_propagation() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();

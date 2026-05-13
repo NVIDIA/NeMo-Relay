@@ -99,6 +99,7 @@ impl From<ComponentSpec> for PluginComponentSpec {
 /// behavior as a section with `enabled = false`: it contributes no runtime
 /// subscribers and performs no export work.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ObservabilityConfig {
     /// Observability config schema version.
     #[serde(default = "default_observability_config_version")]
@@ -140,6 +141,7 @@ impl Default for ObservabilityConfig {
 /// stream as JSONL. The exporter uses the current working directory and a
 /// timestamped filename when no explicit path settings are supplied.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct AtofSectionConfig {
     /// Whether ATOF JSONL export is active.
     #[serde(default)]
@@ -152,6 +154,7 @@ pub struct AtofSectionConfig {
     pub filename: Option<String>,
     /// File open mode: `append` or `overwrite`.
     #[serde(default = "default_atof_mode")]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "atof_mode_schema"))]
     pub mode: String,
 }
 
@@ -173,6 +176,7 @@ impl Default for AtofSectionConfig {
 /// placeholder in [`AtifSectionConfig::filename_template`] is required so
 /// concurrent sibling agents cannot overwrite each other's trajectory files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct AtifSectionConfig {
     /// Whether ATIF export is active.
     #[serde(default)]
@@ -221,12 +225,14 @@ impl Default for AtifSectionConfig {
 /// construct different subscriber implementations. Both sections are disabled
 /// by default and use `http_binary` transport unless configured otherwise.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct OtlpSectionConfig {
     /// Whether the subscriber is active.
     #[serde(default)]
     pub enabled: bool,
     /// OTLP transport: `http_binary` or `grpc`.
     #[serde(default = "default_otlp_transport")]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "otlp_transport_schema"))]
     pub transport: String,
     /// OTLP endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -268,6 +274,82 @@ impl Default for OtlpSectionConfig {
             instrumentation_scope: None,
             timeout_millis: default_timeout_millis(),
         }
+    }
+}
+
+crate::editor_config! {
+    impl ObservabilityConfig {
+        atof => {
+            label: "ATOF",
+            kind: Section,
+            optional: true,
+            nested: AtofSectionConfig,
+            default: AtofSectionConfig,
+        },
+        atif => {
+            label: "ATIF",
+            kind: Section,
+            optional: true,
+            nested: AtifSectionConfig,
+            default: AtifSectionConfig,
+        },
+        opentelemetry => {
+            label: "OpenTelemetry",
+            kind: Section,
+            optional: true,
+            nested: OtlpSectionConfig,
+            default: OtlpSectionConfig,
+        },
+        openinference => {
+            label: "OpenInference",
+            kind: Section,
+            optional: true,
+            nested: OtlpSectionConfig,
+            default: OtlpSectionConfig,
+        },
+        policy => {
+            label: "policy",
+            kind: Section,
+            nested: ConfigPolicy,
+            default: ConfigPolicy,
+        },
+    }
+}
+
+crate::editor_config! {
+    impl AtofSectionConfig {
+        enabled => { label: "enabled", kind: Boolean },
+        output_directory => { label: "output_directory", kind: String, optional: true },
+        filename => { label: "filename", kind: String, optional: true },
+        mode => { label: "mode", kind: Enum, values: ["append", "overwrite"] },
+    }
+}
+
+crate::editor_config! {
+    impl AtifSectionConfig {
+        enabled => { label: "enabled", kind: Boolean },
+        agent_name => { label: "agent_name", kind: String },
+        agent_version => { label: "agent_version", kind: String },
+        model_name => { label: "model_name", kind: String },
+        tool_definitions => { label: "tool_definitions", kind: Json, optional: true },
+        extra => { label: "extra", kind: Json, optional: true },
+        output_directory => { label: "output_directory", kind: String, optional: true },
+        filename_template => { label: "filename_template", kind: String },
+    }
+}
+
+crate::editor_config! {
+    impl OtlpSectionConfig {
+        enabled => { label: "enabled", kind: Boolean },
+        transport => { label: "transport", kind: Enum, values: ["http_binary", "grpc"] },
+        endpoint => { label: "endpoint", kind: String, optional: true },
+        headers => { label: "headers", kind: StringMap },
+        resource_attributes => { label: "resource_attributes", kind: StringMap },
+        service_name => { label: "service_name", kind: String },
+        service_namespace => { label: "service_namespace", kind: String, optional: true },
+        service_version => { label: "service_version", kind: String, optional: true },
+        instrumentation_scope => { label: "instrumentation_scope", kind: String, optional: true },
+        timeout_millis => { label: "timeout_millis", kind: Integer },
     }
 }
 
@@ -321,6 +403,45 @@ pub fn register_observability_component() -> PluginResult<()> {
 /// already active plugin configuration.
 pub fn deregister_observability_component() -> bool {
     deregister_plugin(OBSERVABILITY_PLUGIN_KIND)
+}
+
+/// Returns the JSON Schema for the observability component configuration.
+#[cfg(feature = "schema")]
+pub fn observability_config_schema() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(ObservabilityConfig))
+        .expect("observability config schema should serialize")
+}
+
+#[cfg(feature = "schema")]
+fn atof_mode_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+    string_enum_schema(generator, &["append", "overwrite"], Some("append"))
+}
+
+#[cfg(feature = "schema")]
+fn otlp_transport_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    string_enum_schema(generator, &["http_binary", "grpc"], Some("http_binary"))
+}
+
+#[cfg(feature = "schema")]
+fn string_enum_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+    values: &[&str],
+    default: Option<&str>,
+) -> schemars::schema::Schema {
+    let mut schema: schemars::schema::SchemaObject =
+        <String as schemars::JsonSchema>::json_schema(generator).into();
+    schema.enum_values = Some(
+        values
+            .iter()
+            .map(|value| Json::String((*value).into()))
+            .collect(),
+    );
+    if let Some(default) = default {
+        schema.metadata().default = Some(Json::String(default.into()));
+    }
+    schema.into()
 }
 
 fn register_observability(

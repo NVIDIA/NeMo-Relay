@@ -28,6 +28,11 @@ Plugins use a structured plugin configuration with:
 
 Start with [Basic Guide: Define a Plugin](../build-plugins/basic-guide.md) when you need reusable middleware, subscribers, or adaptive behavior.
 
+The `nemo-flow` CLI gateway reads plugin files named `plugins.toml`. See
+[Plugin Configuration Files](../build-plugins/plugin-configuration-files.md)
+for file locations, precedence, merge behavior, editor controls, and validation
+rules.
+
 ## Observability Setup
 
 ATOF exporters, ATIF exporters, OpenTelemetry subscribers, and OpenInference

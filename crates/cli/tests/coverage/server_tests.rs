@@ -23,7 +23,6 @@ use tokio::task::JoinHandle;
 use tower::ServiceExt;
 
 use super::*;
-use crate::config::ExportersConfig;
 use crate::error::CliError;
 
 static PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -85,7 +84,6 @@ fn test_config() -> GatewayConfig {
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     }

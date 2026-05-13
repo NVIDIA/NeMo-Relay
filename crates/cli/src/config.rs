@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axum::http::HeaderMap;
-use clap::{Args, Parser, Subcommand, ValueEnum};
-use nemo_flow::observability::atof::AtofExporterMode;
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -77,6 +77,8 @@ pub(crate) enum Command {
     Hermes(EasyPathCommand),
     /// Run the interactive setup (writes `.nemo-flow/config.toml`)
     Config(ConfigCommand),
+    /// Create or edit plugin configuration (writes `plugins.toml`)
+    Plugins(PluginsCommand),
     /// Diagnose env, agents, config, observability (optionally scoped to one agent)
     Doctor(DoctorCommand),
     /// List supported and locally-detected agents (use `--json` for machine output)
@@ -146,6 +148,39 @@ pub(crate) struct ConfigCommand {
     pub(crate) reset: bool,
 }
 
+/// Args for `nemo-flow plugins`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PluginsCommand {
+    #[command(subcommand)]
+    pub(crate) command: PluginsSubcommand,
+}
+
+/// Plugin configuration subcommands.
+#[derive(Debug, Clone, Subcommand)]
+pub(crate) enum PluginsSubcommand {
+    /// Interactively create or edit the Observability plugin in `plugins.toml`.
+    Edit(PluginsEditCommand),
+}
+
+/// Args for `nemo-flow plugins edit`.
+#[derive(Debug, Clone, Default, Args)]
+#[command(group(
+    ArgGroup::new("scope")
+        .args(["user", "project", "global"])
+        .multiple(false)
+))]
+pub(crate) struct PluginsEditCommand {
+    /// Edit the user config at `$XDG_CONFIG_HOME/nemo-flow/plugins.toml`.
+    #[arg(long)]
+    pub(crate) user: bool,
+    /// Edit the nearest project config at `.nemo-flow/plugins.toml`.
+    #[arg(long)]
+    pub(crate) project: bool,
+    /// Edit the system config at `/etc/nemo-flow/plugins.toml`.
+    #[arg(long)]
+    pub(crate) global: bool,
+}
+
 #[derive(Debug, Clone, Default, Args)]
 pub(crate) struct ServerArgs {
     /// Path to an explicit config file (disables auto-discovery of workspace/global/system)
@@ -154,21 +189,12 @@ pub(crate) struct ServerArgs {
     /// Address for the gateway to listen on in daemon mode (default 127.0.0.1:4040)
     #[arg(long, env = "NEMO_FLOW_GATEWAY_BIND")]
     pub(crate) bind: Option<SocketAddr>,
-    /// Upstream OpenAI-compatible base URL (e.g. https://api.openai.com, NVIDIA inference)
+    /// Upstream OpenAI-compatible base URL (e.g. https://api.openai.com/v1, NVIDIA inference)
     #[arg(long, env = "NEMO_FLOW_OPENAI_BASE_URL")]
     pub(crate) openai_base_url: Option<String>,
     /// Upstream Anthropic base URL (e.g. https://api.anthropic.com)
     #[arg(long, env = "NEMO_FLOW_ANTHROPIC_BASE_URL")]
     pub(crate) anthropic_base_url: Option<String>,
-    /// Directory to write ATIF trajectory JSON files into per session
-    #[arg(long, env = "NEMO_FLOW_ATIF_DIR")]
-    pub(crate) atif_dir: Option<PathBuf>,
-    /// Directory to write per-event ATOF JSONL files into (one event per line, raw ATOF shape)
-    #[arg(long, env = "NEMO_FLOW_ATOF_DIR")]
-    pub(crate) atof_dir: Option<PathBuf>,
-    /// OpenInference-compatible OTLP HTTP endpoint for streaming spans (Phoenix, Arize, etc.)
-    #[arg(long, env = "NEMO_FLOW_OPENINFERENCE_ENDPOINT")]
-    pub(crate) openinference_endpoint: Option<String>,
     /// Generic plugin configuration JSON for process-level gateway plugin activation.
     #[arg(long, env = "NEMO_FLOW_PLUGIN_CONFIG")]
     pub(crate) plugin_config: Option<String>,
@@ -184,9 +210,6 @@ impl ServerArgs {
         self.bind.is_some()
             || self.openai_base_url.is_some()
             || self.anthropic_base_url.is_some()
-            || self.atif_dir.is_some()
-            || self.atof_dir.is_some()
-            || self.openinference_endpoint.is_some()
             || self.plugin_config.is_some()
             || self.config.is_some()
     }
@@ -197,46 +220,8 @@ pub(crate) struct GatewayConfig {
     pub(crate) bind: SocketAddr,
     pub(crate) openai_base_url: String,
     pub(crate) anthropic_base_url: String,
-    pub(crate) exporters: ExportersConfig,
     pub(crate) metadata: Option<Value>,
     pub(crate) plugin_config: Option<Value>,
-}
-
-/// Sinks the gateway writes observability data to. Each exporter has its own nested config so
-/// exporter-specific options (for example ATOF append/overwrite behavior) do not get flattened
-/// into unrelated backends.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ExportersConfig {
-    pub(crate) atif: AtifExporterSettings,
-    pub(crate) atof: AtofExporterSettings,
-    pub(crate) openinference: OpenInferenceExporterSettings,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct AtifExporterSettings {
-    pub(crate) dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct AtofExporterSettings {
-    pub(crate) dir: Option<PathBuf>,
-    pub(crate) mode: AtofExporterMode,
-    pub(crate) filename_template: String,
-}
-
-impl Default for AtofExporterSettings {
-    fn default() -> Self {
-        Self {
-            dir: None,
-            mode: AtofExporterMode::Append,
-            filename_template: "{session_id}.jsonl".into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct OpenInferenceExporterSettings {
-    pub(crate) endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -245,12 +230,6 @@ pub(crate) struct HookForwardCommand {
     pub(crate) agent: CodingAgent,
     #[arg(long)]
     pub(crate) gateway_url: Option<String>,
-    #[arg(long)]
-    pub(crate) atif_dir: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) atof_dir: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) openinference_endpoint: Option<String>,
     #[arg(long)]
     pub(crate) profile: Option<String>,
     #[arg(long)]
@@ -265,9 +244,8 @@ pub(crate) struct HookForwardCommand {
 
 /// Args for the easy-path agent shortcut (`nemo-flow claude`, `nemo-flow codex`, etc.).
 /// Holds only pass-through agent args; the agent itself is selected by which subcommand variant
-/// is invoked, and all observability/upstream settings come from the resolved config file. If no
-/// config file is present, the dispatcher fires setup (Phase 3). Phase 2 errors with a
-/// pointer to `nemo-flow config` since setup isn't wired up yet.
+/// is invoked, and upstream settings come from the resolved config file. If no config file is
+/// present, the dispatcher fires setup.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct EasyPathCommand {
     /// Pass-through args forwarded to the underlying agent process. Use `--` to separate them
@@ -286,12 +264,6 @@ pub(crate) struct RunCommand {
     pub(crate) openai_base_url: Option<String>,
     #[arg(long)]
     pub(crate) anthropic_base_url: Option<String>,
-    #[arg(long)]
-    pub(crate) atif_dir: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) atof_dir: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) openinference_endpoint: Option<String>,
     #[arg(long)]
     pub(crate) session_metadata: Option<String>,
     #[arg(long)]
@@ -327,7 +299,6 @@ pub(crate) enum GatewayMode {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SessionConfig {
-    pub(crate) exporters: ExportersConfig,
     pub(crate) metadata: Option<Value>,
     pub(crate) plugin_config: Option<Value>,
     pub(crate) profile: Option<String>,
@@ -339,23 +310,6 @@ impl GatewayConfig {
     // Header JSON fields are parsed opportunistically; invalid JSON is treated as absent here
     // because install and hook-forward validate generated header values before sending them.
     pub(crate) fn session_config_from_headers(&self, headers: &HeaderMap) -> SessionConfig {
-        let exporters = ExportersConfig {
-            atif: AtifExporterSettings {
-                dir: header_string(headers, "x-nemo-flow-atif-dir")
-                    .map(PathBuf::from)
-                    .or_else(|| self.exporters.atif.dir.clone()),
-            },
-            atof: AtofExporterSettings {
-                dir: header_string(headers, "x-nemo-flow-atof-dir")
-                    .map(PathBuf::from)
-                    .or_else(|| self.exporters.atof.dir.clone()),
-                ..self.exporters.atof.clone()
-            },
-            openinference: OpenInferenceExporterSettings {
-                endpoint: header_string(headers, "x-nemo-flow-openinference-endpoint")
-                    .or_else(|| self.exporters.openinference.endpoint.clone()),
-            },
-        };
         let metadata =
             header_json(headers, "x-nemo-flow-session-metadata").or_else(|| self.metadata.clone());
         let plugin_config = header_json(headers, "x-nemo-flow-plugin-config")
@@ -363,7 +317,6 @@ impl GatewayConfig {
         let profile = header_string(headers, "x-nemo-flow-config-profile");
         let gateway_mode = header_string(headers, "x-nemo-flow-gateway-mode");
         SessionConfig {
-            exporters,
             metadata,
             plugin_config,
             profile,
@@ -418,9 +371,6 @@ impl Default for CursorAgentConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileConfig {
     upstream: Option<FileUpstreamConfig>,
-    exporters: Option<FileExportersConfig>,
-    observability: Option<FileObservabilityConfig>,
-    export: Option<FileExportConfig>,
     plugins: Option<FilePluginsConfig>,
     agents: Option<FileAgentsConfig>,
 }
@@ -429,48 +379,6 @@ struct FileConfig {
 struct FileUpstreamConfig {
     openai_base_url: Option<String>,
     anthropic_base_url: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct FileObservabilityConfig {
-    atif_dir: Option<PathBuf>,
-    atof_dir: Option<PathBuf>,
-    metadata: Option<Value>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct FileExportersConfig {
-    atif: Option<FileAtifExporterConfig>,
-    atof: Option<FileAtofExporterConfig>,
-    openinference: Option<FileOpenInferenceConfig>,
-    // Legacy flat `[exporters]` keys from early CLI builds.
-    atif_dir: Option<PathBuf>,
-    atof_dir: Option<PathBuf>,
-    openinference_endpoint: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct FileAtifExporterConfig {
-    dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct FileAtofExporterConfig {
-    dir: Option<PathBuf>,
-    mode: Option<String>,
-    filename_template: Option<String>,
-}
-
-// Legacy `[export.<backend>]` shape. New configs use `[exporters]`; this stays readable so
-// existing user files do not break.
-#[derive(Debug, Clone, Default, Deserialize)]
-struct FileExportConfig {
-    openinference: Option<FileOpenInferenceConfig>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct FileOpenInferenceConfig {
-    endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -504,16 +412,15 @@ struct FileCursorAgentConfig {
 
 impl Default for GatewayConfig {
     // Supplies conservative local gateway defaults: bind only to loopback, route OpenAI and
-    // Anthropic requests to their public bases, and leave exporters/plugins disabled until config,
+    // Anthropic requests to their public bases, and leave plugins disabled until config,
     // environment, or headers explicitly opt in.
     fn default() -> Self {
         Self {
             bind: "127.0.0.1:4040"
                 .parse()
                 .expect("valid default bind address"),
-            openai_base_url: "https://api.openai.com".into(),
+            openai_base_url: "https://api.openai.com/v1".into(),
             anthropic_base_url: "https://api.anthropic.com".into(),
-            exporters: ExportersConfig::default(),
             metadata: None,
             plugin_config: None,
         }
@@ -546,7 +453,7 @@ pub(crate) fn resolve_run_config(
     let mut resolved = load_shared_config(config)?;
     if let Some(args) = inherited {
         // Run-subcommand plugin config has higher precedence than inherited top-level plugin
-        // config. Skip only that inherited field so file/plugin.toml conflicts are still caught
+        // config. Skip only that inherited field so file/plugins.toml conflicts are still caught
         // when the run-level override is applied below.
         if command.plugin_config.is_some() && args.plugin_config.is_some() {
             let mut inherited = args.clone();
@@ -580,15 +487,6 @@ fn apply_run_url_overrides(config: &mut GatewayConfig, command: &RunCommand) {
     if let Some(value) = &command.anthropic_base_url {
         config.anthropic_base_url = value.clone();
     }
-    if let Some(value) = &command.atif_dir {
-        config.exporters.atif.dir = Some(value.clone());
-    }
-    if let Some(value) = &command.atof_dir {
-        config.exporters.atof.dir = Some(value.clone());
-    }
-    if let Some(value) = &command.openinference_endpoint {
-        config.exporters.openinference.endpoint = Some(value.clone());
-    }
 }
 
 // Parses JSON-bearing run overrides after simple values. Invalid metadata or plugin config fails
@@ -618,23 +516,16 @@ fn apply_server_overrides(config: &mut GatewayConfig, args: &ServerArgs) -> Resu
     if let Some(value) = &args.anthropic_base_url {
         config.anthropic_base_url = value.clone();
     }
-    if let Some(value) = &args.atif_dir {
-        config.exporters.atif.dir = Some(value.clone());
-    }
-    if let Some(value) = &args.atof_dir {
-        config.exporters.atof.dir = Some(value.clone());
-    }
-    if let Some(value) = &args.openinference_endpoint {
-        config.exporters.openinference.endpoint = Some(value.clone());
-    }
     if let Some(value) = &args.plugin_config {
         apply_cli_plugin_config(config, value)?;
     }
     Ok(())
 }
 
+const PLUGINS_TOML: &str = "plugins.toml";
+
 // Loads config from the ordered shared locations, deep-merges TOML tables, maps the typed file
-// shape onto runtime structs, applies a sibling/discovered plugin.toml when present, then lets
+// shape onto runtime structs, applies a sibling/discovered plugins.toml when present, then lets
 // environment variables override file values. Invalid TOML or typed shapes fail closed because
 // they indicate an operator configuration error.
 fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, CliError> {
@@ -649,6 +540,15 @@ fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, CliE
                 .map_err(|error| {
                     CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
                 })?;
+            let legacy_observability = legacy_observability_sections(&parsed);
+            if !legacy_observability.is_empty() {
+                return Err(CliError::Config(format!(
+                    "legacy observability config in {} is no longer supported: {}; configure \
+                     observability in plugins.toml with `nemo-flow plugins edit`",
+                    path.display(),
+                    legacy_observability.join(", ")
+                )));
+            }
             if has_config_toml_plugin_config(&parsed) {
                 config_toml_plugin_sources.push(path.clone());
             }
@@ -658,7 +558,7 @@ fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, CliE
     if config_toml_plugin_sources.len() > 1 {
         return Err(CliError::Config(format!(
             "plugin config is defined in multiple config.toml files: {}; move it to one \
-             [plugins].config block or use plugin.toml",
+             [plugins].config block or use plugins.toml",
             format_paths(&config_toml_plugin_sources)
         )));
     }
@@ -702,14 +602,14 @@ fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
     paths
 }
 
-// Returns the plugin config search path. An explicit gateway config path scopes plugin.toml to the
-// same directory so `--config path/to/config.toml` can be extended by `path/to/plugin.toml` without
+// Returns the plugin config search path. An explicit gateway config path scopes plugins.toml to the
+// same directory so `--config path/to/config.toml` can be extended by `path/to/plugins.toml` without
 // reading unrelated implicit project/user/global plugin files.
 fn plugin_config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
     if let Some(path) = explicit {
         return path
             .parent()
-            .map(|parent| vec![parent.join("plugin.toml")])
+            .map(|parent| vec![parent.join(PLUGINS_TOML)])
             .unwrap_or_default();
     }
     implicit_plugin_config_paths(std::env::current_dir().ok().as_deref(), user_config_dir())
@@ -721,14 +621,14 @@ fn implicit_plugin_config_paths(
 ) -> Vec<PathBuf> {
     // Ordered from lowest to highest precedence. User-level plugin config intentionally loads last
     // so an operator can override project-local plugin defaults without editing the checkout.
-    let mut paths = vec![PathBuf::from("/etc/nemo-flow/plugin.toml")];
+    let mut paths = vec![PathBuf::from("/etc/nemo-flow").join(PLUGINS_TOML)];
     if let Some(cwd) = cwd
         && let Some(project) = find_project_plugin_config(cwd)
     {
         paths.push(project);
     }
     if let Some(user) = user_config_dir {
-        paths.push(user.join("plugin.toml"));
+        paths.push(user.join(PLUGINS_TOML));
     }
     paths
 }
@@ -748,12 +648,29 @@ fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
 // Walks upward from the current directory and returns the nearest project-local plugin config.
 fn find_project_plugin_config(start: &std::path::Path) -> Option<PathBuf> {
     for ancestor in start.ancestors() {
-        let path = ancestor.join(".nemo-flow/plugin.toml");
+        let path = ancestor.join(".nemo-flow").join(PLUGINS_TOML);
         if path.exists() {
             return Some(path);
         }
     }
     None
+}
+
+pub(crate) fn user_plugin_config_path() -> Option<PathBuf> {
+    user_config_dir().map(|dir| dir.join(PLUGINS_TOML))
+}
+
+pub(crate) fn project_plugin_config_path(start: &std::path::Path) -> PathBuf {
+    find_project_plugin_config(start)
+        .or_else(|| {
+            find_project_config(start)
+                .and_then(|path| path.parent().map(|parent| parent.join(PLUGINS_TOML)))
+        })
+        .unwrap_or_else(|| start.join(".nemo-flow").join(PLUGINS_TOML))
+}
+
+pub(crate) fn global_plugin_config_path() -> PathBuf {
+    PathBuf::from("/etc/nemo-flow").join(PLUGINS_TOML)
 }
 
 // Resolves the user config using XDG first and HOME/USERPROFILE second. Returning `None` keeps
@@ -781,9 +698,6 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
         CliError::Config(format!("invalid gateway configuration shape: {error}"))
     })?;
     apply_file_upstream_config(&mut resolved.gateway, config.upstream);
-    apply_file_observability_config(&mut resolved.gateway, config.observability);
-    apply_file_export_config(&mut resolved.gateway, config.export);
-    apply_file_exporters_config(&mut resolved.gateway, config.exporters)?;
     apply_file_plugins_config(&mut resolved.gateway, config.plugins);
     apply_file_agents_config(&mut resolved.agents, config.agents);
     Ok(())
@@ -801,85 +715,6 @@ fn apply_file_upstream_config(gateway: &mut GatewayConfig, upstream: Option<File
     if let Some(value) = upstream.anthropic_base_url {
         gateway.anthropic_base_url = value;
     }
-}
-
-// Applies legacy observability sinks plus session metadata tags applied to every span/trajectory.
-// New configs put exporter sinks under `[exporters]`; these fields remain readable for existing
-// config files.
-fn apply_file_observability_config(
-    gateway: &mut GatewayConfig,
-    observability: Option<FileObservabilityConfig>,
-) {
-    let Some(observability) = observability else {
-        return;
-    };
-    if let Some(value) = observability.atif_dir {
-        gateway.exporters.atif.dir = Some(value);
-    }
-    if let Some(value) = observability.atof_dir {
-        gateway.exporters.atof.dir = Some(value);
-    }
-    if let Some(value) = observability.metadata {
-        gateway.metadata = Some(value);
-    }
-}
-
-// Applies legacy optional OpenInference export config. New configs use `[exporters]`.
-fn apply_file_export_config(gateway: &mut GatewayConfig, export: Option<FileExportConfig>) {
-    let Some(export) = export else {
-        return;
-    };
-    if let Some(openinference) = export.openinference
-        && let Some(value) = openinference.endpoint
-    {
-        gateway.exporters.openinference.endpoint = Some(value);
-    }
-}
-
-// Applies the current exporter config shape. This runs after the legacy shapes so `[exporters]`
-// wins when a file contains both old and new keys.
-fn apply_file_exporters_config(
-    gateway: &mut GatewayConfig,
-    exporters: Option<FileExportersConfig>,
-) -> Result<(), CliError> {
-    let Some(exporters) = exporters else {
-        return Ok(());
-    };
-    if let Some(value) = exporters.atif_dir {
-        gateway.exporters.atif.dir = Some(value);
-    }
-    if let Some(value) = exporters.atof_dir {
-        gateway.exporters.atof.dir = Some(value);
-    }
-    if let Some(value) = exporters.openinference_endpoint {
-        gateway.exporters.openinference.endpoint = Some(value);
-    }
-    if let Some(atif) = exporters.atif
-        && let Some(value) = atif.dir
-    {
-        gateway.exporters.atif.dir = Some(value);
-    }
-    if let Some(atof) = exporters.atof {
-        if let Some(value) = atof.dir {
-            gateway.exporters.atof.dir = Some(value);
-        }
-        if let Some(value) = atof.mode {
-            gateway.exporters.atof.mode = AtofExporterMode::parse(&value).ok_or_else(|| {
-                CliError::Config(format!(
-                    "invalid [exporters.atof].mode `{value}`; expected append or overwrite"
-                ))
-            })?;
-        }
-        if let Some(value) = atof.filename_template {
-            gateway.exporters.atof.filename_template = value;
-        }
-    }
-    if let Some(openinference) = exporters.openinference
-        && let Some(value) = openinference.endpoint
-    {
-        gateway.exporters.openinference.endpoint = Some(value);
-    }
-    Ok(())
 }
 
 // Applies plugin config. The gateway activates process-level plugin config at startup; hook headers
@@ -923,6 +758,7 @@ where
                         path.display()
                     ))
                 })?;
+            validate_plugin_toml_component_kinds(&path, &parsed)?;
             merge_plugin_toml(&mut merged, parsed);
             sources.push(path);
         }
@@ -990,7 +826,7 @@ fn apply_file_agents_config(agents: &mut AgentConfigs, file_agents: Option<FileA
 }
 
 // Applies environment variables after file configuration. Invalid bind values are ignored here to
-// preserve existing startup behavior, while string/path values replace earlier layers when present.
+// preserve existing startup behavior, while string values replace earlier layers when present.
 fn apply_env_config(config: &mut GatewayConfig) {
     if let Ok(value) = std::env::var("NEMO_FLOW_GATEWAY_BIND")
         && let Ok(value) = value.parse()
@@ -1002,15 +838,6 @@ fn apply_env_config(config: &mut GatewayConfig) {
     }
     if let Ok(value) = std::env::var("NEMO_FLOW_ANTHROPIC_BASE_URL") {
         config.anthropic_base_url = value;
-    }
-    if let Some(value) = std::env::var_os("NEMO_FLOW_ATIF_DIR") {
-        config.exporters.atif.dir = Some(PathBuf::from(value));
-    }
-    if let Some(value) = std::env::var_os("NEMO_FLOW_ATOF_DIR") {
-        config.exporters.atof.dir = Some(PathBuf::from(value));
-    }
-    if let Ok(value) = std::env::var("NEMO_FLOW_OPENINFERENCE_ENDPOINT") {
-        config.exporters.openinference.endpoint = Some(value);
     }
 }
 
@@ -1033,7 +860,7 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
 }
 
 // Plugin TOML uses normal recursive TOML merging except for the top-level components array. Each
-// component is keyed by `kind`, so project/user plugin.toml files can add distinct plugin kinds or
+// component is keyed by `kind`, so project/user plugins.toml files can add distinct plugin kinds or
 // override one plugin kind without restating every other component.
 fn merge_plugin_toml(left: &mut toml::Value, right: toml::Value) {
     match (left, right) {
@@ -1085,11 +912,56 @@ fn component_kind(component: &toml::Value) -> Option<&str> {
         .and_then(toml::Value::as_str)
 }
 
+fn validate_plugin_toml_component_kinds(path: &Path, value: &toml::Value) -> Result<(), CliError> {
+    let Some(components) = value.get("components").and_then(toml::Value::as_array) else {
+        return Ok(());
+    };
+    let mut seen = HashSet::new();
+    let mut duplicates = Vec::new();
+    for component in components {
+        let Some(kind) = component_kind(component) else {
+            continue;
+        };
+        if !seen.insert(kind.to_string()) {
+            duplicates.push(kind.to_string());
+        }
+    }
+    duplicates.sort();
+    duplicates.dedup();
+    if duplicates.is_empty() {
+        Ok(())
+    } else {
+        Err(CliError::Config(format!(
+            "duplicate plugin component kind in {}: {}; declare each kind once per plugins.toml",
+            path.display(),
+            duplicates.join(", ")
+        )))
+    }
+}
+
 fn has_config_toml_plugin_config(value: &toml::Value) -> bool {
     value
         .get("plugins")
         .and_then(|plugins| plugins.get("config"))
         .is_some()
+}
+
+fn legacy_observability_sections(value: &toml::Value) -> Vec<&'static str> {
+    let mut sections = Vec::new();
+    if value.get("exporters").is_some() {
+        sections.push("[exporters]");
+    }
+    if value.get("observability").is_some() {
+        sections.push("[observability]");
+    }
+    if value
+        .get("export")
+        .and_then(|export| export.get("openinference"))
+        .is_some()
+    {
+        sections.push("[export.openinference]");
+    }
+    sections
 }
 
 fn format_paths(paths: &[PathBuf]) -> String {

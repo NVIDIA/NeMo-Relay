@@ -3,8 +3,7 @@
 
 //! First-run setup for `nemo-flow` configuration.
 //!
-//! Drives the three required prompts (scope, agents, observability backends) plus an optional
-//! OpenInference endpoint follow-up, then writes a `config.toml` to the chosen scope. Pure
+//! Drives the required scope and agent prompts, then writes a `config.toml` to the chosen scope. Pure
 //! helpers (`detect_installed_agents`, `build_config`, `save_config`) are split out from the
 //! `dialoguer`-driven orchestrator so the data path can be unit-tested without a TTY.
 
@@ -12,7 +11,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use dialoguer::theme::ColorfulTheme;
-use dialoguer::{Confirm, Input, MultiSelect, Select};
+use dialoguer::{Confirm, MultiSelect, Select};
 use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::config::CodingAgent;
@@ -40,36 +39,11 @@ impl ConfigScope {
     }
 }
 
-/// One of the built-in observability backends offered in setup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ObservabilityBackend {
-    /// Local ATIF trajectory files (one JSON file per session).
-    Atif,
-    /// Local ATOF raw-event JSONL streams (one line per event, raw ATOF shape).
-    Atof,
-    /// OpenInference spans streamed to an HTTP endpoint (Phoenix, Arize, OTLP-compatible).
-    OpenInference,
-}
-
-impl ObservabilityBackend {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Atif => "ATIF trajectory files    ./atif/                  (recommended)",
-            Self::Atof => "ATOF event JSONL stream  ./atof/                  (raw events)",
-            Self::OpenInference => {
-                "OpenInference spans      <endpoint URL>           (Phoenix / Arize / OTLP)"
-            }
-        }
-    }
-}
-
 /// Resolved answers from setup. Built either by `prompt_user` (interactive) or by tests.
 #[derive(Debug, Clone)]
 pub(crate) struct SetupAnswers {
     pub scope: ConfigScope,
     pub agents: Vec<CodingAgent>,
-    pub backends: Vec<ObservabilityBackend>,
-    pub openinference_endpoint: Option<String>,
     /// Path recorded under `[agents.hermes].hooks_path` when hermes is selected. Set by `run`
     /// from `hermes_hooks_path_for_scope` so the wizard preview shows the file the launcher
     /// will reference. `None` when hermes wasn't selected.
@@ -110,72 +84,17 @@ pub(crate) fn detect_installed_agents_in(path_var: Option<&std::ffi::OsStr>) -> 
 
 /// Builds the TOML document that represents the setup's answers. Pure and testable.
 ///
-/// The shape mirrors the runtime model: exporter sinks live under `[exporters]`, agents under
-/// `[agents.<name>]`, and upstream overrides under `[upstream]`. Sections are only emitted when
-/// the user opted into the corresponding behavior so the resulting file stays minimal.
+/// The shape mirrors the runtime model: agents live under `[agents.<name>]`.
+/// Sections are only emitted when the user opted into the corresponding behavior so the resulting
+/// file stays minimal.
 pub(crate) fn build_config(answers: &SetupAnswers) -> DocumentMut {
     let mut doc = DocumentMut::new();
-
-    if let Some(exporters) = build_exporters_table(answers) {
-        doc["exporters"] = Item::Table(exporters);
-    }
 
     if let Some(agents_table) = build_agents_table(answers) {
         doc["agents"] = Item::Table(agents_table);
     }
 
     doc
-}
-
-fn build_exporters_table(answers: &SetupAnswers) -> Option<Table> {
-    if !has_selected_exporter(answers) {
-        return None;
-    }
-
-    let mut exporters = Table::new();
-    if answers.backends.contains(&ObservabilityBackend::Atif) {
-        insert_atif_exporter(&mut exporters);
-    }
-    if answers.backends.contains(&ObservabilityBackend::Atof) {
-        insert_atof_exporter(&mut exporters);
-    }
-    if answers
-        .backends
-        .contains(&ObservabilityBackend::OpenInference)
-        && let Some(endpoint) = answers.openinference_endpoint.as_deref()
-    {
-        insert_openinference_exporter(&mut exporters, endpoint);
-    }
-    Some(exporters)
-}
-
-fn has_selected_exporter(answers: &SetupAnswers) -> bool {
-    answers.backends.contains(&ObservabilityBackend::Atif)
-        || answers.backends.contains(&ObservabilityBackend::Atof)
-        || (answers
-            .backends
-            .contains(&ObservabilityBackend::OpenInference)
-            && answers.openinference_endpoint.is_some())
-}
-
-fn insert_atif_exporter(exporters: &mut Table) {
-    let mut atif = Table::new();
-    atif["dir"] = value("./atif");
-    exporters.insert("atif", Item::Table(atif));
-}
-
-fn insert_atof_exporter(exporters: &mut Table) {
-    let mut atof = Table::new();
-    atof["dir"] = value("./atof");
-    atof["mode"] = value("append");
-    atof["filename_template"] = value("{session_id}.jsonl");
-    exporters.insert("atof", Item::Table(atof));
-}
-
-fn insert_openinference_exporter(exporters: &mut Table, endpoint: &str) {
-    let mut openinference = Table::new();
-    openinference["endpoint"] = value(endpoint);
-    exporters.insert("openinference", Item::Table(openinference));
 }
 
 fn build_agents_table(answers: &SetupAnswers) -> Option<Table> {
@@ -201,10 +120,10 @@ fn build_agents_table(answers: &SetupAnswers) -> Option<Table> {
 /// Writes the setup's TOML document to the scope-appropriate path(s).
 ///
 /// When `merge_scope` is `Some(agent)`, an existing `config.toml` at the target path is parsed
-/// and only the sections owned by THIS wizard run are replaced: `[exporters]`,
-/// legacy `[observability]` / `[export]`, `[plugins]`, and the single `[agents.<agent>]` block. Other
-/// `[agents.*]` blocks are preserved. When `merge_scope` is `None`, the file is overwritten
-/// outright with the wizard's full output (the user explicitly chose which agents to include).
+/// and only the single `[agents.<agent>]` block owned by THIS wizard run is replaced. Other
+/// `[agents.*]` blocks and hand-edited shared sections such as `[plugins]` are preserved when
+/// omitted from the wizard output. When `merge_scope` is `None`, the file is overwritten outright
+/// with the wizard's full output (the user explicitly chose which agents to include).
 ///
 /// Returns the list of paths written. `home` and `cwd` are explicit so tests can drive this with
 /// tempdirs.
@@ -264,14 +183,6 @@ fn write_or_merge(
         .parse()
         .map_err(|err| CliError::Config(format!("could not parse existing config: {err}")))?;
     let agent_key = agent_key_and_command(agent).0;
-    // Wizard-owned sections use REPLACE semantics: if the user re-runs setup and the new doc
-    // omits a section, the previous override is removed too. Otherwise accepting the default
-    // (e.g. dropping a custom `openai_base_url`) could not actually revert the override —
-    // the old value would silently survive.
-    replace_section(&mut existing, doc, "exporters");
-    replace_section(&mut existing, doc, "observability");
-    replace_section(&mut existing, doc, "export");
-    replace_section(&mut existing, doc, "upstream");
     // `plugins` is not wizard-owned (users may hand-edit it). Preserve on omission.
     merge_section(&mut existing, doc, "plugins");
     merge_agents_entry(&mut existing, doc, agent_key);
@@ -285,17 +196,6 @@ fn write_or_merge(
 fn merge_section(dst: &mut DocumentMut, src: &DocumentMut, key: &str) {
     if let Some(item) = src.get(key) {
         dst[key] = item.clone();
-    }
-}
-
-// Like `merge_section`, but when `src` omits the key the existing entry in `dst` is removed.
-// Use for wizard-owned sections (the wizard's output is authoritative for these keys).
-fn replace_section(dst: &mut DocumentMut, src: &DocumentMut, key: &str) {
-    match src.get(key) {
-        Some(item) => dst[key] = item.clone(),
-        None => {
-            dst.remove(key);
-        }
     }
 }
 
@@ -385,7 +285,7 @@ pub(crate) fn reset(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
 ///
 /// When `agent_hint` is `Some`, the agent multi-select is skipped — the user already declared
 /// intent by typing `nemo-flow claude` (or another agent name), so respect that and only ask
-/// scope + backends. To set up multiple agents, the user re-runs `nemo-flow config` later.
+/// scope and agents. To set up multiple agents, the user re-runs `nemo-flow config` later.
 pub(crate) fn prompt_user(
     detected_agents: &[CodingAgent],
     agent_hint: Option<CodingAgent>,
@@ -396,11 +296,11 @@ pub(crate) fn prompt_user(
     match agent_hint {
         Some(agent) => {
             let (name, _) = agent_key_and_command(agent);
-            println!("  Setting up observability for {name}.");
+            println!("  Setting up {name}.");
             println!("  Re-run `nemo-flow config` later to configure additional agents.");
         }
         None => {
-            println!("  Let's set up observability for your coding agent.");
+            println!("  Let's set up your coding agent.");
             println!("  This runs once. Re-run later with `nemo-flow config`.");
         }
     }
@@ -430,8 +330,6 @@ pub(crate) fn prompt_user(
         Some(agent) => vec![agent],
         None => ask_agents(&theme, detected_agents, &defaults.agents)?,
     };
-    let (backends, openinference_endpoint) = ask_backends(&theme, &defaults)?;
-
     if agents.contains(&CodingAgent::Codex) {
         print_codex_api_key_guide();
     }
@@ -439,8 +337,6 @@ pub(crate) fn prompt_user(
     Ok(SetupAnswers {
         scope,
         agents,
-        backends,
-        openinference_endpoint,
         hermes_hooks_path: None,
     })
 }
@@ -508,18 +404,11 @@ fn hermes_hook_targets(scope: ConfigScope, cwd: &Path, home: &Path) -> Vec<PathB
 struct Defaults {
     scope: Option<ConfigScope>,
     agents: Vec<CodingAgent>,
-    atif_enabled: bool,
-    atof_enabled: bool,
-    openinference_endpoint: Option<String>,
 }
 
 impl Defaults {
     fn has_any(&self) -> bool {
-        self.scope.is_some()
-            || !self.agents.is_empty()
-            || self.atif_enabled
-            || self.atof_enabled
-            || self.openinference_endpoint.is_some()
+        self.scope.is_some() || !self.agents.is_empty()
     }
 }
 
@@ -554,49 +443,9 @@ fn read_existing_defaults() -> Option<Defaults> {
         (false, false) => None,
     };
 
-    let exporters = doc.get("exporters").and_then(|i| i.as_table());
-    let legacy_observability = doc.get("observability").and_then(|i| i.as_table());
-    let legacy_export = doc.get("export").and_then(|i| i.as_table());
-
     Some(Defaults {
         scope,
         agents: read_agents_from_doc(&doc),
-        atif_enabled: exporters
-            .and_then(|t| t.get("atif"))
-            .and_then(|i| i.as_table())
-            .and_then(|t| t.get("dir"))
-            .is_some()
-            || exporters.and_then(|t| t.get("atif_dir")).is_some()
-            || legacy_observability
-                .and_then(|t| t.get("atif_dir"))
-                .is_some(),
-        atof_enabled: exporters
-            .and_then(|t| t.get("atof"))
-            .and_then(|i| i.as_table())
-            .and_then(|t| t.get("dir"))
-            .is_some()
-            || exporters.and_then(|t| t.get("atof_dir")).is_some()
-            || legacy_observability
-                .and_then(|t| t.get("atof_dir"))
-                .is_some(),
-        openinference_endpoint: exporters
-            .and_then(|t| t.get("openinference"))
-            .and_then(|i| i.as_table())
-            .and_then(|t| t.get("endpoint"))
-            .and_then(|i| i.as_str())
-            .or_else(|| {
-                exporters
-                    .and_then(|t| t.get("openinference_endpoint"))
-                    .and_then(|i| i.as_str())
-            })
-            .or_else(|| {
-                legacy_export
-                    .and_then(|t| t.get("openinference"))
-                    .and_then(|i| i.as_table())
-                    .and_then(|t| t.get("endpoint"))
-                    .and_then(|i| i.as_str())
-            })
-            .map(str::to_string),
     })
 }
 
@@ -654,7 +503,7 @@ fn print_detected_agents(detected: &[CodingAgent]) {
         println!("    ✓ {name}");
     }
     if detected.is_empty() {
-        println!("    (none — you can still configure observability and add agents later)");
+        println!("    (none — you can still add agents later)");
     }
 }
 
@@ -715,55 +564,6 @@ fn ask_agents(
         .interact()
         .map_err(setup_error)?;
     Ok(selected_idx.into_iter().map(|i| all_supported[i]).collect())
-}
-
-fn ask_backends(
-    theme: &ColorfulTheme,
-    existing: &Defaults,
-) -> Result<(Vec<ObservabilityBackend>, Option<String>), CliError> {
-    let options = [
-        ObservabilityBackend::Atif,
-        ObservabilityBackend::Atof,
-        ObservabilityBackend::OpenInference,
-    ];
-    let labels: Vec<&str> = options.iter().map(|b| b.label()).collect();
-    // Pre-check from existing config when present. On first run, falls back to ATIF on (zero
-    // infra, trajectory replay is the common case), ATOF off (raw event noise — users opt in),
-    // and OpenInference off (needs an endpoint running).
-    let defaults = if existing.has_any() {
-        [
-            existing.atif_enabled,
-            existing.atof_enabled,
-            existing.openinference_endpoint.is_some(),
-        ]
-    } else {
-        [true, false, false]
-    };
-    let selected_idx = MultiSelect::with_theme(theme)
-        .with_prompt("Observability backends?")
-        .items(&labels)
-        .defaults(&defaults)
-        .interact()
-        .map_err(setup_error)?;
-    let backends: Vec<ObservabilityBackend> =
-        selected_idx.into_iter().map(|i| options[i]).collect();
-
-    let openinference_endpoint = if backends.contains(&ObservabilityBackend::OpenInference) {
-        let initial = existing
-            .openinference_endpoint
-            .as_deref()
-            .unwrap_or("http://localhost:6006/v1/traces");
-        let endpoint: String = Input::with_theme(theme)
-            .with_prompt("OpenInference endpoint URL")
-            .with_initial_text(initial)
-            .interact_text()
-            .map_err(setup_error)?;
-        Some(endpoint)
-    } else {
-        None
-    };
-
-    Ok((backends, openinference_endpoint))
 }
 
 /// Confirms the summary with the user before writing the file. Returns true if the user accepted.
@@ -855,6 +655,7 @@ pub(crate) async fn run(agent_hint: Option<CodingAgent>) -> Result<(), CliError>
     for path in &written {
         println!("    {}", path.display());
     }
+    println!("  Configure observability with `nemo-flow plugins edit`.");
     println!();
     Ok(())
 }

@@ -33,6 +33,7 @@ Use these guide links to move from the overview into task-specific instructions.
 
 - [Basic Guide: Define a Plugin](basic-guide.md) explains plugin kinds, shape, runtime ownership, and the activation lifecycle.
 - [Basic Guide: Validate Plugin Configuration](validate-configuration.md) covers JSON-compatible config, validation rules, and structured diagnostics.
+- [Basic Guide: Plugin Configuration Files](plugin-configuration-files.md) documents `plugins.toml` file discovery, precedence, merge behavior, and editor controls for the CLI gateway.
 - [Basic Guide: Register Plugin Behavior](register-behavior.md) shows how to initialize config and install subscribers or middleware through `PluginContext`.
 - [Advanced Guide: Design Plugin Configuration](advanced-configuration.md) covers validation rules, advanced configuration patterns, rollout controls, and `PluginContext` usage.
 - [NeMo Guardrails Example Plugin](nemoguardrails.md) shows an external Python plugin that applies NeMo Guardrails checks around NeMo Flow LLM and tool calls.

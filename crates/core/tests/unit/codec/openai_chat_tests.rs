@@ -6,7 +6,7 @@
 use super::*;
 use serde_json::json;
 
-use super::super::request::MessageContent;
+use super::super::request::{ContentPart, MessageContent, OpenAiImageUrl};
 use super::super::response::{ApiSpecificResponse, FinishReason};
 
 // -------------------------------------------------------------------
@@ -538,12 +538,36 @@ fn test_decode_request_extra_fields() {
         "response_format": {"type": "json_object"}
     }));
     let annotated = codec.decode(&request).unwrap();
-    assert_eq!(annotated.extra.get("stream"), Some(&json!(true)));
+    assert_eq!(annotated.stream, Some(true));
     assert_eq!(annotated.extra.get("seed"), Some(&json!(42)));
     assert_eq!(
         annotated.extra.get("response_format"),
         Some(&json!({"type": "json_object"}))
     );
+}
+
+#[test]
+fn test_decode_request_openai_chat_typed_controls() {
+    let codec = OpenAIChatCodec;
+    let request = make_request(json!({
+        "messages": [{"role": "user", "content": "Hi"}],
+        "model": "gpt-4o",
+        "store": true,
+        "user": "u1",
+        "metadata": {"k":"v"},
+        "service_tier": "default",
+        "parallel_tool_calls": true,
+        "top_logprobs": 2,
+        "stream": true
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    assert_eq!(annotated.store, Some(true));
+    assert_eq!(annotated.user.as_deref(), Some("u1"));
+    assert_eq!(annotated.metadata, Some(json!({"k":"v"})));
+    assert_eq!(annotated.service_tier.as_deref(), Some("default"));
+    assert_eq!(annotated.parallel_tool_calls, Some(true));
+    assert_eq!(annotated.top_logprobs, Some(2));
+    assert_eq!(annotated.stream, Some(true));
 }
 
 #[test]
@@ -554,6 +578,44 @@ fn test_decode_request_no_messages_key() {
     }));
     let annotated = codec.decode(&request).unwrap();
     assert!(annotated.messages.is_empty());
+}
+
+#[test]
+fn test_decode_request_multimodal_image_url_parts() {
+    let codec = OpenAIChatCodec;
+    let request = make_request(json!({
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe this"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/cat.png", "detail": "high"}}
+            ]
+        }],
+        "model": "gpt-4o"
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    match &annotated.messages[0] {
+        Message::User { content, .. } => match content {
+            MessageContent::Parts(parts) => {
+                assert_eq!(
+                    parts,
+                    &vec![
+                        ContentPart::Text {
+                            text: "describe this".into()
+                        },
+                        ContentPart::ImageUrl {
+                            image_url: OpenAiImageUrl {
+                                url: "https://example.com/cat.png".into(),
+                                detail: Some("high".into())
+                            }
+                        }
+                    ]
+                );
+            }
+            _ => panic!("expected parts content"),
+        },
+        _ => panic!("expected user message"),
+    }
 }
 
 // ===================================================================
@@ -593,6 +655,92 @@ fn test_encode_with_modified_model() {
     let encoded = codec.encode(&annotated, &original).unwrap();
     let obj = encoded.content.as_object().unwrap();
     assert_eq!(obj.get("model"), Some(&json!("gpt-4o-mini")));
+}
+
+#[test]
+fn test_encode_writes_openai_chat_typed_controls() {
+    let codec = OpenAIChatCodec;
+    let mut annotated = codec
+        .decode(&make_request(json!({
+            "messages": [{"role":"user","content":"hi"}],
+            "model": "gpt-4o"
+        })))
+        .unwrap();
+    annotated.store = Some(false);
+    annotated.user = Some("u2".into());
+    annotated.metadata = Some(json!({"m":1}));
+    annotated.service_tier = Some("default".into());
+    annotated.parallel_tool_calls = Some(false);
+    annotated.top_logprobs = Some(1);
+    annotated.stream = Some(true);
+    let encoded = codec
+        .encode(
+            &annotated,
+            &make_request(json!({"messages":[{"role":"user","content":"hi"}],"model":"gpt-4o"})),
+        )
+        .unwrap();
+    let obj = encoded.content.as_object().unwrap();
+    assert_eq!(obj.get("store"), Some(&json!(false)));
+    assert_eq!(obj.get("user"), Some(&json!("u2")));
+    assert_eq!(obj.get("metadata"), Some(&json!({"m":1})));
+    assert_eq!(obj.get("service_tier"), Some(&json!("default")));
+    assert_eq!(obj.get("parallel_tool_calls"), Some(&json!(false)));
+    assert_eq!(obj.get("top_logprobs"), Some(&json!(1)));
+    assert_eq!(obj.get("stream"), Some(&json!(true)));
+}
+
+#[test]
+fn test_encode_chat_extra_overrides_typed_controls() {
+    let codec = OpenAIChatCodec;
+    let mut annotated = codec
+        .decode(&make_request(json!({
+            "messages": [{"role":"user","content":"hi"}],
+            "model": "gpt-4o"
+        })))
+        .unwrap();
+    annotated.store = Some(false);
+    annotated.extra.insert("store".into(), json!(true));
+    let encoded = codec
+        .encode(
+            &annotated,
+            &make_request(json!({"messages":[{"role":"user","content":"hi"}],"model":"gpt-4o"})),
+        )
+        .unwrap();
+    let obj = encoded.content.as_object().unwrap();
+    assert_eq!(obj.get("store"), Some(&json!(true)));
+}
+
+#[test]
+fn test_encode_request_multimodal_image_url_parts() {
+    let codec = OpenAIChatCodec;
+    let original = make_request(json!({
+        "messages": [{"role":"user","content":"hi"}],
+        "model": "gpt-4o"
+    }));
+    let mut annotated = codec.decode(&original).unwrap();
+    annotated.messages = vec![Message::User {
+        content: MessageContent::Parts(vec![
+            ContentPart::Text {
+                text: "describe this".into(),
+            },
+            ContentPart::ImageUrl {
+                image_url: OpenAiImageUrl {
+                    url: "https://example.com/cat.png".into(),
+                    detail: Some("low".into()),
+                },
+            },
+        ]),
+        name: None,
+    }];
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(
+        encoded.content["messages"][0]["content"][1]["type"],
+        json!("image_url")
+    );
+    assert_eq!(
+        encoded.content["messages"][0]["content"][1]["image_url"]["url"],
+        json!("https://example.com/cat.png")
+    );
 }
 
 #[test]
@@ -673,6 +821,19 @@ fn test_helper_and_error_paths_cover_remaining_chat_branches() {
             },
         }]),
         tool_choice: Some(ToolChoice::Required),
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
         extra: serde_json::Map::new(),
     };
     let encoded = codec
@@ -716,6 +877,19 @@ fn test_encode_injects_stream_options_on_streaming_request() {
         params: None,
         tools: None,
         tool_choice: None,
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
         extra: serde_json::Map::new(),
     };
     let encoded = codec
@@ -748,6 +922,19 @@ fn test_encode_preserves_caller_stream_options() {
         params: None,
         tools: None,
         tool_choice: None,
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
         extra: serde_json::Map::new(),
     };
     let caller_set = json!({
@@ -778,6 +965,19 @@ fn test_encode_does_not_inject_stream_options_on_non_streaming() {
         params: None,
         tools: None,
         tool_choice: None,
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
         extra: serde_json::Map::new(),
     };
 
