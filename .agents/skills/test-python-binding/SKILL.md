@@ -29,6 +29,17 @@ Use this skill when the change is primarily in `python/nemo_flow`,
 6. If the native Rust bridge changed, add the Rust crate tests for
    `nemo-flow-python`.
 
+## Python Test Style
+
+- Pytest is used to run tests.
+- Do not add `@pytest.mark.asyncio` to any test. Async tests are automatically detected and run by the async runner; the decorator is unnecessary clutter.
+- Do not add a `-> None` return type annotation to test functions. This is not a common convention in pytest and adds unnecessary verbosity.
+- When mocking a class, do not define a new class. Use `unittest.mock.MagicMock` or `unittest.mock.AsyncMock`, with the `spec` constructor argument when necessary.
+- The name of the mocked class should be prefixed with `mock`, not `fake`.
+- Prefer pytest fixtures over helper methods.
+- Prefer `pytest.mark.parametrize` over creating individual tests for
+  different input types.
+
 ## Common Commands
 
 ```bash
