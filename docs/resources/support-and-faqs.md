@@ -120,7 +120,7 @@ Start with Python, Node.js, or Rust. These are the primary documented bindings
 and have the broadest getting-started, concept, guide, and generated API
 coverage.
 
-- Use [Python Quick Start](../getting-started/python.md) when you are adding
+- Use [Python Quick Start](../getting-started/python/index.md) when you are adding
   NeMo Flow to Python application code or agent harnesses.
 - Use [Node.js Quick Start](../getting-started/nodejs.md) when your application,
   framework integration, or plugin-facing code runs in Node.js.

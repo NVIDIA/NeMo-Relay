@@ -91,4 +91,4 @@ pip install "nemo-flow[langgraph,langchain-nvidia]"
 ```
 
 ## Observability
-Refer to [Export Observability Data](../export-observability-data/about.md) for details on exporting NeMo Flow observability data to third-party systems.
+Refer to [Export Observability Data](../../export-observability-data/about.md) for details on exporting NeMo Flow observability data to third-party systems.
