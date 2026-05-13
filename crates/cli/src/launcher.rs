@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use nemo_flow::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
+use nemo_flow::plugin::PluginConfig;
 use reqwest::Client;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -291,6 +293,9 @@ impl PreparedRun {
             cursor_restore: None,
             notes: Vec::new(),
         };
+        if let Some(path) = path_with_transparent_hook_dir() {
+            run.env.push(("PATH".into(), path));
+        }
         match agent {
             CodingAgent::ClaudeCode => {
                 if dry_run {
@@ -518,14 +523,22 @@ impl PreparedRun {
         let mut lines: Vec<String> = Vec::new();
         lines.push(format!("NeMo Flow → {}", agent.as_arg()));
         lines.push(format!("  Gateway        {gateway_url}"));
-        lines.push(format!(
-            "  Plugins        {}",
-            if resolved.gateway.plugin_config.is_some() {
-                "configured"
-            } else {
-                "not configured"
+        let destinations = exporter_destinations(&resolved.gateway);
+        if destinations.is_empty() {
+            lines.push("  Exporters      not configured".into());
+        } else {
+            for (index, destination) in destinations.iter().enumerate() {
+                lines.push(format!(
+                    "  {}{}",
+                    if index == 0 {
+                        "Exporters      "
+                    } else {
+                        "               "
+                    },
+                    destination
+                ));
             }
-        ));
+        }
         if !self.notes.is_empty() {
             lines.push(String::new());
             for note in &self.notes {
@@ -565,14 +578,14 @@ impl PreparedRun {
             "anthropic_base_url = {}",
             resolved.gateway.anthropic_base_url
         );
-        println!(
-            "plugins = {}",
-            if resolved.gateway.plugin_config.is_some() {
-                "configured"
-            } else {
-                "not_configured"
+        let destinations = exporter_destinations(&resolved.gateway);
+        if destinations.is_empty() {
+            println!("exporters = not_configured");
+        } else {
+            for destination in destinations {
+                println!("exporter = {destination}");
             }
-        );
+        }
         println!("argv = {}", self.argv.join(" "));
         for (name, value) in &self.env {
             println!("env.{name} = {value}");
@@ -584,6 +597,89 @@ impl PreparedRun {
             println!("note = {note}");
         }
     }
+}
+
+fn exporter_destinations(config: &GatewayConfig) -> Vec<String> {
+    let Some(plugin_config) = config.plugin_config.as_ref() else {
+        return Vec::new();
+    };
+    let Ok(plugin_config) = serde_json::from_value::<PluginConfig>(plugin_config.clone()) else {
+        return vec!["configured (invalid plugin config)".into()];
+    };
+    let Some(component) = plugin_config
+        .components
+        .iter()
+        .find(|component| component.kind == OBSERVABILITY_PLUGIN_KIND)
+    else {
+        return Vec::new();
+    };
+    if !component.enabled {
+        return Vec::new();
+    }
+    let Ok(observability) =
+        serde_json::from_value::<ObservabilityConfig>(Value::Object(component.config.clone()))
+    else {
+        return vec!["Observability configured (invalid config)".into()];
+    };
+    observability_exporter_destinations(&observability)
+}
+
+fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<String> {
+    let mut destinations = Vec::new();
+    if let Some(section) = config.atof.as_ref().filter(|section| section.enabled) {
+        let directory = section
+            .output_directory
+            .clone()
+            .unwrap_or_else(current_output_directory);
+        let path = directory.join(
+            section
+                .filename
+                .clone()
+                .unwrap_or_else(|| "nemo-flow-events-<timestamp>.jsonl".into()),
+        );
+        destinations.push(format!("ATOF {}", path.display()));
+    }
+    if let Some(section) = config.atif.as_ref().filter(|section| section.enabled) {
+        let directory = section
+            .output_directory
+            .clone()
+            .unwrap_or_else(current_output_directory);
+        destinations.push(format!(
+            "ATIF {}",
+            directory.join(&section.filename_template).display()
+        ));
+    }
+    if let Some(section) = config
+        .opentelemetry
+        .as_ref()
+        .filter(|section| section.enabled)
+    {
+        destinations.push(format!(
+            "OpenTelemetry {}",
+            section
+                .endpoint
+                .as_deref()
+                .unwrap_or("OTLP endpoint from environment/default")
+        ));
+    }
+    if let Some(section) = config
+        .openinference
+        .as_ref()
+        .filter(|section| section.enabled)
+    {
+        destinations.push(format!(
+            "OpenInference {}",
+            section
+                .endpoint
+                .as_deref()
+                .unwrap_or("OTLP endpoint from environment/default")
+        ));
+    }
+    destinations
+}
+
+fn current_output_directory() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 // Converts a process status into the launcher status code while preserving normal 0-255 exits. Signal
@@ -656,6 +752,28 @@ fn transparent_hook_executable() -> String {
         .ok()
         .and_then(|path| path.to_str().map(str::to_owned))
         .unwrap_or_else(|| "nemo-flow".to_string())
+}
+
+// Appends the running gateway binary's directory to the child agent PATH. Transparent hooks use
+// the absolute executable path when possible, but adding the directory also covers hook loaders or
+// user-managed hook commands that resolve `nemo-flow` through PATH inside the launched agent. Keep
+// user PATH precedence intact so normal agent tool resolution does not change.
+fn path_with_transparent_hook_dir() -> Option<String> {
+    let dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))?;
+    let mut paths: Vec<PathBuf> = std::env::var_os("PATH")
+        .as_deref()
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .collect();
+    if !paths.iter().any(|path| path == &dir) {
+        paths.push(dir);
+    }
+    std::env::join_paths(paths)
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 // Inserts generated agent flags immediately after the last argv element that looks like the agent

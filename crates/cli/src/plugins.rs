@@ -76,6 +76,14 @@ fn shortcut_label(label: impl AsRef<str>, shortcut: &str) -> String {
     )
 }
 
+fn configured_label(configured: bool, label: impl AsRef<str>) -> String {
+    if configured {
+        format!("{} {}", style("✓").green(), label.as_ref())
+    } else {
+        format!("  {}", label.as_ref())
+    }
+}
+
 fn print_save_success(path: &Path) {
     println!("  {} Saved {}", style("✔").green(), path.display());
 }
@@ -103,11 +111,12 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
             "Toggle Observability component [{}]",
             status_label(component_enabled(&config))
         ))];
-        items.extend(
-            section_fields
-                .iter()
-                .map(|section| MenuItem::new(format!("Edit {}", section.label))),
-        );
+        items.extend(section_fields.iter().map(|section| {
+            MenuItem::new(configured_label(
+                section_configured(&observability, *section),
+                format!("Edit {}", section.label),
+            ))
+        }));
         items.push(MenuItem::new(shortcut_label("Preview TOML", "p")));
         items.push(MenuItem::new(shortcut_label(
             format!("Save to {}", path.display()),
@@ -460,9 +469,10 @@ fn edit_section(
             )));
         }
         for field in fields {
+            let configured = section_field_configured(config, section, *field)?;
             items.push(MenuItem::new(format!(
                 "{} = {}",
-                field.name,
+                configured_label(configured, field.name),
                 section_field_value(config, section, field.name)?
                     .map(|value| display_field_value(section, *field, &value))
                     .or_else(|| default_field_value(section, *field)
@@ -752,6 +762,35 @@ fn section_enabled(config: &ObservabilityConfig, section: EditorFieldSpec) -> Op
         .flatten()
         .and_then(|section| section.get("enabled").cloned())
         .and_then(|enabled| enabled.as_bool())
+}
+
+fn section_configured(config: &ObservabilityConfig, section: EditorFieldSpec) -> bool {
+    let Ok(Some(value)) = section_value(config, section) else {
+        return false;
+    };
+    if section.optional {
+        return true;
+    }
+    section
+        .default_value()
+        .as_ref()
+        .is_none_or(|default| default != &value)
+}
+
+fn section_field_configured(
+    config: &ObservabilityConfig,
+    section: EditorFieldSpec,
+    field: EditorFieldSpec,
+) -> Result<bool, CliError> {
+    let Some(value) = section_field_value(config, section, field.name)? else {
+        return Ok(false);
+    };
+    if field.optional {
+        return Ok(true);
+    }
+    Ok(default_field_value(section, field)
+        .as_ref()
+        .is_none_or(|default| default != &value))
 }
 
 fn section_field_value(

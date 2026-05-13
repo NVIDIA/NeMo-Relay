@@ -42,6 +42,25 @@ fn plugin_menu_uses_setup_theme_markers() {
 }
 
 #[test]
+fn plugin_menu_marks_configured_sections_and_fields() {
+    let mut observability = ObservabilityConfig::default();
+    let atof = ObservabilityConfig::editor_schema().field("atof").unwrap();
+    let mode = atof.schema().unwrap().field("mode").unwrap();
+    let output_directory = atof.schema().unwrap().field("output_directory").unwrap();
+
+    assert!(!section_configured(&observability, atof));
+    ensure_section(&mut observability, atof);
+    assert!(section_configured(&observability, atof));
+    assert!(!section_field_configured(&observability, atof, mode).unwrap());
+    assert!(!section_field_configured(&observability, atof, output_directory).unwrap());
+
+    set_section_field(&mut observability, atof, "output_directory", json!("logs")).unwrap();
+    assert!(section_field_configured(&observability, atof, output_directory).unwrap());
+    assert!(configured_label(true, "Edit ATOF").contains('✓'));
+    assert!(!configured_label(false, "Edit ATIF").contains('✓'));
+}
+
+#[test]
 fn editor_model_renders_valid_observability_plugin_config() {
     let mut config = PluginConfig::default();
     ensure_observability_component(&mut config).unwrap();

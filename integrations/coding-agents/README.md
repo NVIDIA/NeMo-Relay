@@ -25,7 +25,7 @@ environment variables, or shared TOML config.
 - `claude-code/` installs Claude Code hook entries targeting
   `POST /hooks/claude-code`.
 - `codex/` installs Codex hook entries targeting `POST /hooks/codex` and enables
-  `codex_hooks = true`. Use `nemo-flow run` or a gateway provider alias
+  `[features].hooks = true`. Use `nemo-flow run` or a gateway provider alias
   for Codex LLM gateway routing.
 - `cursor/` installs a Cursor `.cursor/hooks.json` bundle targeting
   `POST /hooks/cursor`.

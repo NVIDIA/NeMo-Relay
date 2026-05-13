@@ -17,6 +17,14 @@ local gateway cannot observe provider traffic that never reaches the machine.
 versions either reject the provider override or do not recognize the hooks
 feature flag.
 
+```{warning}
+As of Codex 0.129, Codex requires hooks to be manually reviewed and activated
+before they run. Generated NeMo Flow hook configuration is not enough on its own
+if Codex leaves those hooks inactive. Review and activate the installed or
+injected hooks in Codex before expecting NeMo Flow events. This is being tracked
+upstream as [openai/codex#21639](https://github.com/openai/codex/issues/21639).
+```
+
 ## Transparent Run
 
 Use the wrapper for no-install local observability:
@@ -116,9 +124,10 @@ NeMo Flow events.
 
 The transparent wrapper passes hook entries as Codex CLI config overrides and
 sets `features.hooks=true` for that launched process. Persistent install writes
-`.codex/config.toml` with `hooks = true` and merges generated hook entries into
-`.codex/hooks.json`. (`features.codex_hooks` is the legacy alias of
-`features.hooks`; new docs and configurations should prefer the canonical name.)
+`.codex/config.toml` with `[features].hooks = true` and merges generated hook
+entries into `.codex/hooks.json`. (`features.codex_hooks` is the legacy alias
+of `features.hooks`; new docs and configurations should prefer the canonical
+name.)
 
 ## Smoke Test
 
@@ -147,9 +156,9 @@ Codex sessions (Codex's hook surface has no `SessionEnd`-equivalent event, so
 the gateway uses each per-turn `Stop` hook to snapshot the trajectory; the file
 grows cumulatively across turns and the final write reflects the full session).
 For agents that do emit a session-end hook, the same file is written once on
-session close. If the file is missing, confirm `hooks = true`, hook config
-loading, and that `plugins.toml` enables the ATIF exporter with a writable
-`output_directory`.
+session close. If the file is missing, confirm `[features].hooks = true`, hook
+config loading, and that `plugins.toml` enables the ATIF exporter with a
+writable `output_directory`.
 
 ## Troubleshoot LLM Lifecycle
 

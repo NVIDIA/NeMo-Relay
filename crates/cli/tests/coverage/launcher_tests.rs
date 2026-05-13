@@ -226,6 +226,86 @@ fn prepares_codex_config_overrides() {
             .iter()
             .any(|arg| arg.contains("hooks.SessionStart"))
     );
+    let path = prepared
+        .env
+        .iter()
+        .find_map(|(name, value)| (name == "PATH").then_some(value))
+        .expect("transparent run should set PATH for hook subprocesses");
+    let current_exe_dir = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let entries = std::env::split_paths(path).collect::<Vec<_>>();
+    assert!(entries.iter().any(|entry| entry == &current_exe_dir));
+    if !std::env::var_os("PATH")
+        .as_deref()
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .any(|entry| entry == current_exe_dir)
+    {
+        assert_eq!(entries.last(), Some(&current_exe_dir));
+    }
+}
+
+#[test]
+fn exporter_destinations_describe_observability_outputs() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": OBSERVABILITY_PLUGIN_KIND,
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": "logs",
+                        "filename": "events.jsonl"
+                    },
+                    "atif": {
+                        "enabled": true,
+                        "output_directory": "trajectories",
+                        "filename_template": "agent-{session_id}.json"
+                    },
+                    "opentelemetry": {
+                        "enabled": true,
+                        "endpoint": "http://127.0.0.1:4318/v1/traces"
+                    },
+                    "openinference": {
+                        "enabled": true
+                    }
+                }
+            }]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let destinations = exporter_destinations(&gateway);
+
+    assert!(destinations.iter().any(|line| line
+        == &format!(
+            "ATOF {}",
+            PathBuf::from("logs").join("events.jsonl").display()
+        )));
+    assert!(destinations.iter().any(|line| line
+        == &format!(
+            "ATIF {}",
+            PathBuf::from("trajectories")
+                .join("agent-{session_id}.json")
+                .display()
+        )));
+    assert!(
+        destinations
+            .iter()
+            .any(|line| line == "OpenTelemetry http://127.0.0.1:4318/v1/traces")
+    );
+    assert!(
+        destinations
+            .iter()
+            .any(|line| line == "OpenInference OTLP endpoint from environment/default")
+    );
 }
 
 #[test]
