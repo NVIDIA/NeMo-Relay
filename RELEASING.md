@@ -32,7 +32,7 @@ The release pipeline publishes these package surfaces from a tag push:
 |---|---|
 | crates.io | `nemo-flow`, `nemo-flow-adaptive`, `nemo-flow-ffi`, `nemo-flow-cli` |
 | PyPI | `nemo-flow` |
-| npm | `nemo-flow-node`, `nemo-flow-wasm` |
+| npm | `nemo-flow-node`, `nemo-flow-openclaw`, `nemo-flow-wasm` |
 | GitHub Pages | The documentation site, including the versioned docs build |
 
 Go remains source-first. There is no separate Go package-manager publication
@@ -51,6 +51,8 @@ NeMo Flow versions are anchored on the workspace SemVer in the repository root
 - `crates/node/package.json` carries the base npm version for the Node.js
   package. The repository-root `package-lock.json` carries the npm workspace
   lock entries and must be updated with it.
+- `integrations/openclaw/package.json` carries the base npm version for the
+  OpenClaw plugin package and must stay aligned with the same release version.
 - The Python package version is derived at packaging time. `pyproject.toml`
   stays `dynamic = ["version"]` in the repository, and the packaging recipe
   writes a concrete version into `pyproject.toml` and `crates/python/Cargo.toml`
@@ -76,12 +78,50 @@ CI rejects tags that do not match the required format.
 
 The tag text must match the version that the packaging jobs publish.
 
+Release tags for a frozen release line should be created from the matching
+`release/*` branch, not from `main`.
+
+## Code Freeze
+
+When code freeze begins for a target release, create a release branch from the
+latest `main` commit. Name the branch from the target release major and minor
+version:
+
+These examples assume `upstream` is the NVIDIA repository remote
+(`NVIDIA/NeMo-Flow`). The `origin` remote is usually a maintainer's personal
+fork.
+
+```bash
+git fetch upstream main
+git checkout -b release/0.2 upstream/main
+git push upstream release/0.2
+```
+
+After creating the release branch, open a PR against `main` that does both of
+the following:
+
+1. Add the new `release/*` branch to
+   [`.github/nightly-alpha-branches.yaml`](.github/nightly-alpha-branches.yaml)
+   so nightly alpha tags continue for the frozen release line.
+2. Bump all package versions on `main` to the next release line:
+
+   ```bash
+   just set-version <next-version>
+   ```
+
+New PRs that must go into the upcoming release must target the new `release/*`
+branch. Changes intended for later releases should continue to target `main`.
+
+When a release branch no longer needs nightly alpha tags, open a PR against
+`main` to remove that branch from
+[`.github/nightly-alpha-branches.yaml`](.github/nightly-alpha-branches.yaml).
+
 ## Before You Cut A Release
 
 Before you create a release tag, confirm the following:
 
-1. The intended release commit is already on `main` or on the release branch
-   you intend to tag.
+1. The intended release commit is already on the release branch you intend to
+   tag. For frozen release lines, tag the matching `release/*` branch.
 2. The release commit contains the final version bump, docs updates, and any
    public API changes that belong in the release.
 3. The working tree you use for local validation is clean or disposable.
@@ -97,20 +137,31 @@ Before you create a release tag, confirm the following:
 
 ## Prepare The Release Commit
 
-Update the versioned source files in the release PR or release-prep commit:
+Update the versioned source files in the release PR or release-prep commit.
+Prefer the repository helper:
 
-1. Update the root [`Cargo.toml`](Cargo.toml) workspace version.
-2. Update the root [`Cargo.toml`](Cargo.toml) `workspace.dependencies` versions
-   for `nemo-flow`, `nemo-flow-adaptive`, `nemo-flow-ffi`, and
-   `nemo-flow-cli`.
-3. Update [`crates/node/package.json`](crates/node/package.json) and the
-   `crates/node` entry in the root [`package-lock.json`](package-lock.json) to
-   the same release version.
-4. Review docs and snippets that mention explicit versions, including:
-   - [`README.md`](README.md)
-   - [`CONTRIBUTING.md`](CONTRIBUTING.md)
-   - [`docs/getting-started/installation.md`](docs/getting-started/installation.md)
-   - Any binding README or example that pins a release number
+```bash
+just set-version <release-version>
+```
+
+The helper updates:
+
+1. The root [`Cargo.toml`](Cargo.toml) workspace version.
+2. The root [`Cargo.toml`](Cargo.toml) `workspace.dependencies` versions for
+   `nemo-flow`, `nemo-flow-adaptive`, `nemo-flow-ffi`, and `nemo-flow-cli`.
+3. [`crates/node/package.json`](crates/node/package.json) and the `crates/node`
+   entry in the root [`package-lock.json`](package-lock.json) to the same
+   release version.
+4. [`integrations/openclaw/package.json`](integrations/openclaw/package.json)
+   and the `integrations/openclaw` entry in the root
+   [`package-lock.json`](package-lock.json) to the same release version.
+
+Review docs and snippets that mention explicit versions, including:
+
+- [`README.md`](README.md)
+- [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- [`docs/getting-started/installation.md`](docs/getting-started/installation.md)
+- Any binding README or example that pins a release number
 
 Do not commit a static Python package version into `pyproject.toml` just to cut
 the release. The packaging workflow stamps that file during the build.
@@ -135,6 +186,7 @@ If you want to validate the packaging recipes before pushing a tag, run:
 
 ```bash
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-node
+just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-openclaw
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-python
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-wasm
 ```
@@ -150,18 +202,18 @@ After the release commit is merged and validated, create and push the raw
 SemVer tag:
 
 ```bash
-git fetch origin
-git checkout main
-git pull --ff-only
+git fetch upstream release/0.1
+git checkout release/0.1
+git pull --ff-only upstream release/0.1
 git tag 0.1.0
-git push origin 0.1.0
+git push upstream 0.1.0
 ```
 
 Use the prerelease form when needed:
 
 ```bash
 git tag 0.1.0-rc.1
-git push origin 0.1.0-rc.1
+git push upstream 0.1.0-rc.1
 ```
 
 ## What CI Does On A Tag Push
@@ -178,6 +230,7 @@ The release pipeline then:
 3. Builds and uploads the versioned GitHub Pages documentation artifact.
 4. Builds publishable package artifacts with the exact tag version:
    - `package-node` packs the npm Node.js package.
+   - `package-openclaw` packs the npm OpenClaw plugin package.
    - `package-python` builds platform wheels.
    - `package-wasm` packs the npm WebAssembly package.
 5. Publishes packages from the top-level workflow after the reusable packaging
@@ -188,8 +241,8 @@ The release pipeline then:
      the top-level workflow
    - `publish-python` uploads the wheel artifacts to PyPI with trusted
      publishing from the top-level workflow
-   - `publish-npm` publishes the Node.js and WebAssembly npm packages through npm
-     trusted publishing from the top-level workflow
+   - `publish-npm` publishes the Node.js, OpenClaw plugin, and WebAssembly npm
+     packages through npm trusted publishing from the top-level workflow
      - Stable tags publish to the npm `latest` dist-tag
      - Prerelease tags such as `0.1.0-rc.1` publish to the npm `next`
        dist-tag so they do not become the default upgrade target
@@ -210,8 +263,8 @@ The workflow boundary is split intentionally:
 npm trusted publishing has its own registry-side constraints:
 
 - Each npm package can only have one trusted publisher configured at a time.
-- Because this repository publishes both `nemo-flow-node` and
-  `nemo-flow-wasm`, configure trusted publishers for both packages before
+- Because this repository publishes `nemo-flow-node`, `nemo-flow-openclaw`, and
+  `nemo-flow-wasm`, configure trusted publishers for all three packages before
   pushing a release tag.
 - npm trusted publishing currently supports GitHub-hosted runners, not
   self-hosted runners.
@@ -242,7 +295,8 @@ After the release is live, verify:
 
 1. The expected crates are visible on crates.io.
 2. The `nemo-flow` wheel is visible on PyPI.
-3. The `nemo-flow-node` and `nemo-flow-wasm` packages are visible on npm.
+3. The `nemo-flow-node`, `nemo-flow-openclaw`, and `nemo-flow-wasm` packages
+   are visible on npm.
 4. The GitHub Pages deployment completed successfully.
 5. The GitHub Release page is complete and accurate.
 
