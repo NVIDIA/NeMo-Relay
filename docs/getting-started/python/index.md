@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 
 This quick start shows the smallest Python workflow that emits scope, tool, and LLM events.
 
-[LangChain](https://www.langchain.com/langchain) and [LangGraph](https://www.langchain.com/langgraph) users should start with the [LangChain integration](../getting-started/python-langchain.md) or [LangGraph integration](../getting-started/python-langgraph.md) guides for the best experience in those frameworks.
+[LangChain](https://www.langchain.com/langchain) and [LangGraph](https://www.langchain.com/langgraph) users should start with the [LangChain integration](../getting-started/langchain.md) or [LangGraph integration](../getting-started/langgraph.md) guides for the best experience in those frameworks.
 
 ## Choose an Install Path
 
