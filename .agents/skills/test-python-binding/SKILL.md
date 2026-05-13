@@ -37,6 +37,7 @@ Use this skill when the change is primarily in `python/nemo_flow`,
 - When mocking a class, do not define a new class. Use `unittest.mock.MagicMock` or `unittest.mock.AsyncMock`, with the `spec` constructor argument when necessary.
 - The name of the mocked class should be prefixed with `mock`, not `fake`.
 - Prefer pytest fixtures over helper methods.
+- Do not repeat fixtures, if a fixture is needed in multiple test files, place it in a `conftest.py` file.
 - Prefer `pytest.mark.parametrize` over creating individual tests for
   different input types.
 
