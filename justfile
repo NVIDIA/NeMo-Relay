@@ -313,84 +313,6 @@ try {
 NODE
 }
 
-set_npm_package_dependency_version() {
-    local pkg_path="$1"
-    local lock_path="${2:-}"
-    local dependency_name="$3"
-    local version="$4"
-    local lock_package_path="${5:-}"
-
-    node - "$pkg_path" "$lock_path" "$dependency_name" "$version" "$lock_package_path" <<'NODE'
-const fs = require('fs');
-const [pkgPath, lockPath, dependencyName, version, lockPackagePath] = process.argv.slice(2);
-
-function readJson(path) {
-  return JSON.parse(fs.readFileSync(path, 'utf8'));
-}
-
-function writeJson(path, value) {
-  fs.writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
-}
-
-function updateDependency(container, label) {
-  if (
-    !container.dependencies ||
-    typeof container.dependencies !== 'object' ||
-    !Object.prototype.hasOwnProperty.call(container.dependencies, dependencyName)
-  ) {
-    throw new Error(`${label} missing dependencies["${dependencyName}"]`);
-  }
-
-  if (container.dependencies[dependencyName] === version) {
-    return false;
-  }
-
-  container.dependencies[dependencyName] = version;
-  return true;
-}
-
-try {
-  const manifest = readJson(pkgPath);
-  const manifestChanged = updateDependency(manifest, pkgPath);
-  let lock = null;
-  let lockChanged = false;
-
-  if (lockPath) {
-    lock = readJson(lockPath);
-    if (!lock.packages) {
-      throw new Error(`${lockPath} missing packages`);
-    }
-
-    const packageEntryKey = lockPackagePath || '';
-    const packageEntry = lock.packages[packageEntryKey];
-    if (!packageEntry) {
-      throw new Error(`${lockPath} missing packages["${packageEntryKey}"]`);
-    }
-    lockChanged = updateDependency(packageEntry, `${lockPath} packages["${packageEntryKey}"]`);
-  }
-
-  if (manifestChanged) {
-    writeJson(pkgPath, manifest);
-    console.log(`${pkgPath} dependency ${dependencyName} updated to ${version}`);
-  } else {
-    console.log(`${pkgPath} dependency ${dependencyName} already set to ${version}`);
-  }
-
-  if (lockPath) {
-    if (lockChanged) {
-      writeJson(lockPath, lock);
-      console.log(`${lockPath} dependency ${dependencyName} updated to ${version}`);
-    } else {
-      console.log(`${lockPath} dependency ${dependencyName} already set to ${version}`);
-    }
-  }
-} catch (error) {
-  console.error(`Error updating package dependency: ${error.message}`);
-  process.exit(1);
-}
-NODE
-}
-
 read_workspace_version() {
     local python_executable=""
     python_executable="$(uv_python_executable)"
@@ -1067,7 +989,7 @@ package-node:
     if [[ -z "{{ ref_name }}" ]]; then
         sha="$(head_git_sha)"
         version="$(read_npm_package_version crates/node/package.json)"
-        package_version="${version}-${sha}"
+        package_version="${version}+${sha}"
         echo "Non-release build: appending commit hash to version"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
     else
@@ -1075,12 +997,6 @@ package-node:
         echo "Using explicit version {{ ref_name }}"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
     fi
-    set_npm_package_dependency_version \
-        integrations/openclaw/package.json \
-        package-lock.json \
-        nemo-flow-node \
-        "$package_version" \
-        integrations/openclaw
     build_args=(build)
     if is_true "{{ ci }}" && [[ "$(uname -s)" == "Linux" ]]; then
         # Zig is provided by the uv.lock `ziglang` entry; keep any explicit CI

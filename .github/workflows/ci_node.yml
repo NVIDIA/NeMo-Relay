@@ -180,7 +180,7 @@ jobs:
           if [ "${{ inputs.ref_type }}" = "tag" ]; then
             version="${{ inputs.ref_name }}"
           else
-            version="${version}-${sha}"
+            version="${version}+${sha}"
           fi
           printf 'NEMO_FLOW_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
