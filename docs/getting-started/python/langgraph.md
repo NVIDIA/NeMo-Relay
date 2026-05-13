@@ -12,15 +12,27 @@ observability to [LangGraph](https://www.langchain.com/langgraph) workflows thro
 
 Install the LangGraph integration extra in your application environment.
 
+::::{tab-set}
+:sync-group: install-tool
+
+:::{tab-item} uv
+:selected:
+:sync: uv
+
 ```bash
 uv add "nemo-flow[langgraph]"
 ```
+:::
 
-If you are not using `uv`, install the same extra with `pip`:
+:::{tab-item} pip
+:sync: pip
 
 ```bash
 pip install "nemo-flow[langgraph]"
 ```
+:::
+
+::::
 
 Installing the `langgraph` extra also installs the LangChain integration
 dependencies.
@@ -82,13 +94,27 @@ def agent_node(state: dict, config: RunnableConfig) -> dict:
 Install the NVIDIA LangChain provider if you want to run the nested agent
 example as written:
 
+::::{tab-set}
+:sync-group: install-tool
+
+:::{tab-item} uv
+:selected:
+:sync: uv
+
 ```bash
 uv add "nemo-flow[langgraph,langchain-nvidia]"
 ```
+:::
+
+:::{tab-item} pip
+:sync: pip
 
 ```bash
 pip install "nemo-flow[langgraph,langchain-nvidia]"
 ```
+:::
+
+::::
 
 ## Observability
 Refer to [Export Observability Data](../../export-observability-data/about.md) for details on exporting NeMo Flow observability data to third-party systems.

@@ -12,26 +12,52 @@ observability to [LangChain](https://www.langchain.com/langchain) agents.
 
 Install the LangChain integration extra in your application environment.
 
+::::{tab-set}
+:sync-group: install-tool
+
+:::{tab-item} uv
+:selected:
+:sync: uv
+
 ```bash
 uv add "nemo-flow[langchain]"
 ```
+:::
 
-If you are not using `uv`, install the same extra with `pip`:
+:::{tab-item} pip
+:sync: pip
 
 ```bash
 pip install "nemo-flow[langchain]"
 ```
+:::
+
+::::
 
 The example below uses the NVIDIA LangChain provider. Install that provider
 extra too if you want to run the example as written:
 
+::::{tab-set}
+:sync-group: install-tool
+
+:::{tab-item} uv
+:selected:
+:sync: uv
+
 ```bash
 uv add "nemo-flow[langchain,langchain-nvidia]"
 ```
+:::
+
+:::{tab-item} pip
+:sync: pip
 
 ```bash
 pip install "nemo-flow[langchain,langchain-nvidia]"
 ```
+:::
+
+::::
 
 ## Usage Example
 
