@@ -78,9 +78,13 @@ pub(crate) async fn serve_listener(
         None => axum::serve(listener, app).await,
     };
     let clear_result = plugin_activation.clear();
-    serve_result?;
-    clear_result?;
-    Ok(())
+    if let Err(serve_error) = serve_result {
+        if let Err(clear_error) = clear_result {
+            eprintln!("plugin teardown failed after server error: {clear_error}");
+        }
+        return Err(serve_error.into());
+    }
+    clear_result
 }
 
 /// Builds the gateway HTTP router and shared state.

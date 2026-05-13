@@ -81,12 +81,11 @@ Later files override earlier files. TOML tables merge recursively, so a
 higher-precedence file can override one nested key while preserving sibling
 keys from lower-precedence files.
 
-`[[components]]` is different because TOML represents it as an array. Arrays
-are replaced rather than appended. If a project `plugin.toml` defines an
-observability component and a user `plugin.toml` defines an adaptive component,
-the effective config contains only the user adaptive component. Put the full
-component list in the highest-precedence `plugin.toml` that should control the
-run.
+The top-level `[[components]]` array is merged by component `kind`. A
+higher-precedence component with the same `kind` is merged into the lower
+precedence component, and higher-precedence values win on conflicts. Components
+with different `kind` values compose, so a project `observability` component and
+a user `adaptive` component are both active in the effective config.
 
 Use only one source for plugin config. The gateway reports an error when
 `plugin.toml`, `[plugins].config`, or `--plugin-config` are used together.

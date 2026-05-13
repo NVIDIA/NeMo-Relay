@@ -545,7 +545,16 @@ pub(crate) fn resolve_run_config(
         .or_else(|| inherited.and_then(|args| args.config.as_ref()));
     let mut resolved = load_shared_config(config)?;
     if let Some(args) = inherited {
-        apply_server_overrides(&mut resolved.gateway, args)?;
+        // Run-subcommand plugin config has higher precedence than inherited top-level plugin
+        // config. Skip only that inherited field so file/plugin.toml conflicts are still caught
+        // when the run-level override is applied below.
+        if command.plugin_config.is_some() && args.plugin_config.is_some() {
+            let mut inherited = args.clone();
+            inherited.plugin_config = None;
+            apply_server_overrides(&mut resolved.gateway, &inherited)?;
+        } else {
+            apply_server_overrides(&mut resolved.gateway, args)?;
+        }
     }
     apply_run_overrides(&mut resolved.gateway, command)?;
     resolved.gateway.bind = "127.0.0.1:0"
@@ -914,7 +923,7 @@ where
                         path.display()
                     ))
                 })?;
-            merge_toml(&mut merged, parsed);
+            merge_plugin_toml(&mut merged, parsed);
             sources.push(path);
         }
     }
@@ -1021,6 +1030,59 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
         }
         (left, right) => *left = right,
     }
+}
+
+// Plugin TOML uses normal recursive TOML merging except for the top-level components array. Each
+// component is keyed by `kind`, so project/user plugin.toml files can add distinct plugin kinds or
+// override one plugin kind without restating every other component.
+fn merge_plugin_toml(left: &mut toml::Value, right: toml::Value) {
+    match (left, right) {
+        (toml::Value::Table(left), toml::Value::Table(right)) => {
+            for (key, value) in right {
+                match (key.as_str(), left.get_mut(&key)) {
+                    ("components", Some(existing)) => merge_plugin_components(existing, value),
+                    (_, Some(existing)) => merge_toml(existing, value),
+                    _ => {
+                        left.insert(key, value);
+                    }
+                }
+            }
+        }
+        (left, right) => *left = right,
+    }
+}
+
+fn merge_plugin_components(left: &mut toml::Value, right: toml::Value) {
+    let toml::Value::Array(left_components) = left else {
+        *left = right;
+        return;
+    };
+    let toml::Value::Array(right_components) = right else {
+        *left = right;
+        return;
+    };
+
+    for component in right_components {
+        let Some(kind) = component_kind(&component).map(str::to_owned) else {
+            left_components.push(component);
+            continue;
+        };
+        if let Some(existing) = left_components
+            .iter_mut()
+            .find(|candidate| component_kind(candidate) == Some(kind.as_str()))
+        {
+            merge_toml(existing, component);
+        } else {
+            left_components.push(component);
+        }
+    }
+}
+
+fn component_kind(component: &toml::Value) -> Option<&str> {
+    component
+        .as_table()
+        .and_then(|table| table.get("kind"))
+        .and_then(toml::Value::as_str)
 }
 
 fn has_config_toml_plugin_config(value: &toml::Value) -> bool {

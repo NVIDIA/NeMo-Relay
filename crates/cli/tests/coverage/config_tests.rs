@@ -317,7 +317,7 @@ fn plugin_toml_path_resolution_tracks_config_scope() {
 }
 
 #[test]
-fn discovered_plugin_toml_replaces_components_by_precedence() {
+fn discovered_plugin_toml_upserts_components_by_kind() {
     let temp = tempfile::tempdir().unwrap();
     let project_plugin = temp.path().join("project-plugin.toml");
     let user_plugin = temp.path().join("user-plugin.toml");
@@ -360,7 +360,17 @@ version = 1
 
 [components.config.atof]
 enabled = true
-filename = "user.jsonl"
+
+[components.config.atif]
+enabled = true
+filename_template = "user-{session_id}.json"
+
+[[components]]
+kind = "custom"
+enabled = true
+
+[components.config]
+source = "user"
 "#,
     )
     .unwrap();
@@ -379,8 +389,26 @@ filename = "user.jsonl"
                         "version": 1,
                         "atof": {
                             "enabled": true,
-                            "filename": "user.jsonl"
+                            "filename": "project.jsonl"
+                        },
+                        "atif": {
+                            "enabled": true,
+                            "filename_template": "user-{session_id}.json"
                         }
+                    }
+                },
+                {
+                    "kind": "adaptive",
+                    "enabled": true,
+                    "config": {
+                        "mode": "project-only"
+                    }
+                },
+                {
+                    "kind": "custom",
+                    "enabled": true,
+                    "config": {
+                        "source": "user"
                     }
                 }
             ]
@@ -518,6 +546,35 @@ openai_base_url = "http://file-openai"
     let resolved = resolve_run_config(&command, Some(&server)).unwrap();
 
     assert_eq!(resolved.gateway.openai_base_url, "http://top-level-openai");
+}
+
+#[test]
+fn run_plugin_config_overrides_inherited_top_level_plugin_config() {
+    let server = ServerArgs {
+        plugin_config: Some(r#"{"components":["top-level"]}"#.into()),
+        ..ServerArgs::default()
+    };
+    let command = RunCommand {
+        agent: Some(CodingAgent::Codex),
+        config: None,
+        openai_base_url: None,
+        anthropic_base_url: None,
+        atif_dir: None,
+        atof_dir: None,
+        openinference_endpoint: None,
+        session_metadata: None,
+        plugin_config: Some(r#"{"components":["run"]}"#.into()),
+        dry_run: false,
+        print: false,
+        command: vec!["codex".into()],
+    };
+
+    let resolved = resolve_run_config(&command, Some(&server)).unwrap();
+
+    assert_eq!(
+        resolved.gateway.plugin_config,
+        Some(json!({ "components": ["run"] }))
+    );
 }
 
 #[test]
