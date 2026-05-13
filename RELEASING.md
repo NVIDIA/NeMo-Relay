@@ -87,12 +87,14 @@ When code freeze begins for a target release, create a release branch from the
 latest `main` commit. Name the branch from the target release major and minor
 version:
 
+These examples assume `upstream` is the NVIDIA repository remote
+(`NVIDIA/NeMo-Flow`). The `origin` remote is usually a maintainer's personal
+fork.
+
 ```bash
-git fetch origin
-git checkout main
-git pull --ff-only
-git checkout -b release/0.2
-git push origin release/0.2
+git fetch upstream main
+git checkout -b release/0.2 upstream/main
+git push upstream release/0.2
 ```
 
 After creating the release branch, open a PR against `main` that does both of
@@ -200,18 +202,18 @@ After the release commit is merged and validated, create and push the raw
 SemVer tag:
 
 ```bash
-git fetch origin
+git fetch upstream release/0.1
 git checkout release/0.1
-git pull --ff-only
+git pull --ff-only upstream release/0.1
 git tag 0.1.0
-git push origin 0.1.0
+git push upstream 0.1.0
 ```
 
 Use the prerelease form when needed:
 
 ```bash
 git tag 0.1.0-rc.1
-git push origin 0.1.0-rc.1
+git push upstream 0.1.0-rc.1
 ```
 
 ## What CI Does On A Tag Push

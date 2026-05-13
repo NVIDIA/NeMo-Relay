@@ -17,21 +17,24 @@ opening the PR.
 
 ## Workflow
 
-1. Confirm or infer the target release version from `origin/main:Cargo.toml`.
+This workflow assumes `upstream` is the NVIDIA repository remote
+(`NVIDIA/NeMo-Flow`). The `origin` remote can be a maintainer's personal fork.
+
+1. Confirm or infer the target release version from `upstream/main:Cargo.toml`.
    Derive the release branch as `release/<major>.<minor>`.
 2. Prompt for `<next-version>` if the user did not provide it. This is the
    version that `main` moves to after the release branch is cut.
-3. Fetch the latest `main` and create the release branch from `origin/main`:
+3. Fetch the latest `main` and create the release branch from `upstream/main`:
 
    ```bash
-   git fetch origin main
-   git branch release/<major>.<minor> origin/main
-   git push origin release/<major>.<minor>
+   git fetch upstream main
+   git branch release/<major>.<minor> upstream/main
+   git push upstream release/<major>.<minor>
    ```
 
    If the remote release branch already exists, verify it points where expected
    before continuing.
-4. Create a PR branch from latest `origin/main`, for example
+4. Create a PR branch from latest `upstream/main`, for example
    `docs/code-freeze-<major>.<minor>`.
 5. Update `.github/nightly-alpha-branches.yaml` to include the new release
    branch.
