@@ -75,61 +75,20 @@ fn detect_installed_agents_finds_binaries_on_path() {
 }
 
 #[test]
-fn build_config_emits_exporters_section_when_atif_selected() {
+fn build_config_does_not_emit_observability_exporters() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![],
-        backends: vec![ObservabilityBackend::Atif],
-        openinference_endpoint: None,
-        hermes_hooks_path: None,
-    };
-
-    let doc = build_config(&answers);
-    let rendered = doc.to_string();
-
-    assert!(rendered.contains("[exporters]"));
-    assert!(rendered.contains("[exporters.atif]"));
-    assert!(rendered.contains(r#"dir = "./atif""#));
-    assert!(!rendered.contains("[export."));
-    assert!(!rendered.contains("[observability]"));
-}
-
-#[test]
-fn build_config_emits_exporters_section_when_openinference_selected() {
-    let answers = SetupAnswers {
-        scope: ConfigScope::Project,
-        agents: vec![],
-        backends: vec![ObservabilityBackend::OpenInference],
-        openinference_endpoint: Some("http://localhost:6006/v1/traces".into()),
-        hermes_hooks_path: None,
-    };
-
-    let doc = build_config(&answers);
-    let rendered = doc.to_string();
-
-    assert!(rendered.contains("[exporters]"));
-    assert!(rendered.contains("[exporters.openinference]"));
-    assert!(rendered.contains(r#"endpoint = "http://localhost:6006/v1/traces""#));
-    assert!(!rendered.contains("[export."));
-    assert!(!rendered.contains("[observability]"));
-}
-
-#[test]
-fn build_config_emits_atof_write_options_when_atof_selected() {
-    let answers = SetupAnswers {
-        scope: ConfigScope::Project,
-        agents: vec![],
-        backends: vec![ObservabilityBackend::Atof],
-        openinference_endpoint: None,
         hermes_hooks_path: None,
     };
 
     let rendered = build_config(&answers).to_string();
 
-    assert!(rendered.contains("[exporters.atof]"));
-    assert!(rendered.contains(r#"dir = "./atof""#));
-    assert!(rendered.contains(r#"mode = "append""#));
-    assert!(rendered.contains(r#"filename_template = "{session_id}.jsonl""#));
+    assert!(!rendered.contains("[exporters]"));
+    assert!(!rendered.contains("[export."));
+    assert!(!rendered.contains("[observability]"));
+    assert!(!rendered.contains("[exporters.atif]"));
+    assert!(!rendered.contains("[exporters.openinference]"));
 }
 
 #[test]
@@ -137,8 +96,6 @@ fn build_config_skips_empty_sections_when_no_backends_selected() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![],
-        backends: vec![],
-        openinference_endpoint: None,
         hermes_hooks_path: None,
     };
 
@@ -156,8 +113,6 @@ fn build_config_emits_agents_block_with_user_facing_keys() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![CodingAgent::ClaudeCode, CodingAgent::Codex],
-        backends: vec![],
-        openinference_endpoint: None,
         hermes_hooks_path: None,
     };
 
@@ -176,8 +131,6 @@ fn save_config_writes_project_scope_to_workspace_dir() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![CodingAgent::ClaudeCode],
-        backends: vec![ObservabilityBackend::Atif],
-        openinference_endpoint: None,
         hermes_hooks_path: None,
     };
     let doc = build_config(&answers);
@@ -189,7 +142,7 @@ fn save_config_writes_project_scope_to_workspace_dir() {
     assert_eq!(written.len(), 1);
     assert_eq!(written[0], temp.path().join(".nemo-flow/config.toml"));
     let contents = std::fs::read_to_string(&written[0]).unwrap();
-    assert!(contents.contains("[exporters]"));
+    assert!(!contents.contains("[exporters]"));
     assert!(contents.contains("[agents.claude]"));
 }
 
@@ -220,8 +173,6 @@ command = "codex --full-auto"
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![CodingAgent::ClaudeCode],
-        backends: vec![ObservabilityBackend::Atif],
-        openinference_endpoint: None,
         hermes_hooks_path: None,
     };
     let doc = build_config(&answers);
@@ -235,8 +186,7 @@ command = "codex --full-auto"
     .unwrap();
 
     let merged = std::fs::read_to_string(&existing_path).unwrap();
-    // Wizard-owned sections are replaced with the new doc's content.
-    assert!(merged.contains("[exporters]"));
+    assert!(!merged.contains("[exporters]"));
     assert!(merged.contains("[agents.claude]"));
     assert!(merged.contains(r#"command = "claude""#));
     // Other agents (not touched by this scoped run) survive.
@@ -248,12 +198,10 @@ command = "codex --full-auto"
         merged.contains("codex --full-auto"),
         "expected scoped merge to preserve codex command, got:\n{merged}"
     );
-    // `[upstream]` is wizard-owned: the new doc omits it (no custom openai_base_url), so the
-    // prior override must be cleared. If we preserved it, accepting the default in a re-run
-    // could not actually revert a custom upstream URL.
+    // Setup no longer owns upstream/provider settings.
     assert!(
-        !merged.contains("http://old-openai"),
-        "expected scoped merge to clear stale [upstream] override when new doc omits it, got:\n{merged}"
+        merged.contains("http://old-openai"),
+        "expected scoped merge to preserve [upstream], got:\n{merged}"
     );
     // Old claude command should be gone.
     assert!(
@@ -268,8 +216,6 @@ fn save_config_writes_both_scopes_when_both_selected() {
     let answers = SetupAnswers {
         scope: ConfigScope::Both,
         agents: vec![],
-        backends: vec![ObservabilityBackend::Atif],
-        openinference_endpoint: None,
         hermes_hooks_path: None,
     };
     let doc = build_config(&answers);
@@ -288,8 +234,6 @@ fn build_config_emits_hooks_path_for_hermes_when_set() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![CodingAgent::Hermes],
-        backends: vec![],
-        openinference_endpoint: None,
         hermes_hooks_path: Some(std::path::PathBuf::from("/tmp/proj/.hermes/config.yaml")),
     };
     let rendered = build_config(&answers).to_string();
@@ -315,6 +259,7 @@ fn install_hermes_hooks_writes_yaml_and_merges_existing() {
     assert_eq!(written.len(), 2);
     let project_yaml = std::fs::read_to_string(cwd.path().join(".hermes/config.yaml")).unwrap();
     assert!(project_yaml.contains("nemo-flow hook-forward hermes"));
+    assert!(project_yaml.contains("api_request_error"));
     assert!(
         project_yaml.contains("provider: auto"),
         "existing model block must survive merge"

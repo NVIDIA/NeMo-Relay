@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+const eventsJSONLFilename = "events.jsonl"
+
 func TestNewAtofExporterConfigDefaults(t *testing.T) {
 	config := NewAtofExporterConfig()
 
@@ -31,47 +33,38 @@ func TestAtofExporterLifecycleWritesRawJSONL(t *testing.T) {
 	exporter, err := NewAtofExporter(AtofExporterConfig{
 		OutputDirectory: dir,
 		Mode:            AtofExporterModeOverwrite,
-		Filename:        "events.jsonl",
+		Filename:        eventsJSONLFilename,
 	})
-	if err != nil {
-		t.Fatalf("NewAtofExporter failed: %v", err)
-	}
+	requireNoError(t, err, "NewAtofExporter failed")
 	defer exporter.Close()
 
 	path, err := exporter.Path()
-	if err != nil {
-		t.Fatalf("Path failed: %v", err)
-	}
-	if filepath.Base(path) != "events.jsonl" {
-		t.Fatalf("expected events.jsonl path, got %q", path)
-	}
+	requireNoError(t, err, "Path failed")
+	requireEqual(t, filepath.Base(path), eventsJSONLFilename, "expected %s path", eventsJSONLFilename)
 
 	name := "go_atof_" + time.Now().Format("150405.000000")
-	if err := exporter.Register(name); err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
-	handle, err := PushScope("atof_scope", ScopeTypeAgent, WithInput(json.RawMessage(`{"scope":true}`)))
-	if err != nil {
-		t.Fatalf("PushScope failed: %v", err)
-	}
-	if err := EmitEvent("atof_mark", WithEventParent(handle), WithEventData(json.RawMessage(`{"step":1}`))); err != nil {
-		t.Fatalf("EmitEvent failed: %v", err)
-	}
-	if err := PopScope(handle, WithOutput(json.RawMessage(`{"done":true}`))); err != nil {
-		t.Fatalf("PopScope failed: %v", err)
-	}
-	if err := exporter.Deregister(name); err != nil {
-		t.Fatalf("Deregister failed: %v", err)
-	}
-	if err := exporter.Deregister(name); err != nil {
-		t.Fatalf("repeated Deregister should be safe, got: %v", err)
-	}
-	if err := exporter.ForceFlush(); err != nil {
-		t.Fatalf("ForceFlush failed: %v", err)
-	}
-	if err := exporter.Shutdown(); err != nil {
-		t.Fatalf("Shutdown failed: %v", err)
-	}
+	requireNoError(t, exporter.Register(name), "Register failed")
+	stack, err := NewScopeStack()
+	requireNoError(t, err, "NewScopeStack failed")
+	defer stack.Close()
+	var runErr error
+	stack.Run(func() {
+		handle, err := PushScope("atof_scope", ScopeTypeAgent, WithInput(json.RawMessage(`{"scope":true}`)))
+		if err != nil {
+			runErr = err
+			return
+		}
+		if err := EmitEvent("atof_mark", WithEventParent(handle), WithEventData(json.RawMessage(`{"step":1}`))); err != nil {
+			runErr = err
+			return
+		}
+		runErr = PopScope(handle, WithOutput(json.RawMessage(`{"done":true}`)))
+	})
+	requireNoError(t, runErr, "scope lifecycle failed")
+	requireNoError(t, exporter.Deregister(name), "Deregister failed")
+	requireNoError(t, exporter.Deregister(name), "repeated Deregister should be safe")
+	requireNoError(t, exporter.ForceFlush(), "ForceFlush failed")
+	requireNoError(t, exporter.Shutdown(), "Shutdown failed")
 
 	records := readAtofRecords(t, path)
 	if len(records) != 3 {
@@ -90,14 +83,14 @@ func TestAtofExporterLifecycleWritesRawJSONL(t *testing.T) {
 
 func TestAtofExporterAppendAndOverwriteModes(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "events.jsonl")
+	path := filepath.Join(dir, eventsJSONLFilename)
 	if err := os.WriteFile(path, []byte("{\"existing\":true}\n"), 0o600); err != nil {
 		t.Fatalf("write seed file: %v", err)
 	}
 
 	appendExporter, err := NewAtofExporter(AtofExporterConfig{
 		OutputDirectory: dir,
-		Filename:        "events.jsonl",
+		Filename:        eventsJSONLFilename,
 	})
 	if err != nil {
 		t.Fatalf("append NewAtofExporter failed: %v", err)
@@ -113,7 +106,7 @@ func TestAtofExporterAppendAndOverwriteModes(t *testing.T) {
 	overwriteExporter, err := NewAtofExporter(AtofExporterConfig{
 		OutputDirectory: dir,
 		Mode:            AtofExporterModeOverwrite,
-		Filename:        "events.jsonl",
+		Filename:        eventsJSONLFilename,
 	})
 	if err != nil {
 		t.Fatalf("overwrite NewAtofExporter failed: %v", err)
@@ -152,4 +145,18 @@ func mustReadFile(t *testing.T, path string) []byte {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return content
+}
+
+func requireNoError(t *testing.T, err error, message string) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("%s: %v", message, err)
+	}
+}
+
+func requireEqual[T comparable](t *testing.T, got T, want T, message string, args ...any) {
+	t.Helper()
+	if got != want {
+		t.Fatalf(message+", got %q", append(args, got)...)
+	}
 }

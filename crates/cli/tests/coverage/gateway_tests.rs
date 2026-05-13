@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::config::{ExportersConfig, GatewayConfig};
+use crate::config::GatewayConfig;
 use crate::server::AppState;
 use crate::session::SessionManager;
 use axum::body::Body;
@@ -80,10 +80,9 @@ fn selects_provider_routes() {
 fn provider_routes_preserve_path_query_and_choose_upstream() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
-        openai_base_url: "http://openai/".into(),
+        openai_base_url: "http://openai/v1/".into(),
 
         anthropic_base_url: "http://anthropic/".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -103,6 +102,36 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
     assert_eq!(
         ProviderRoute::AnthropicMessages.upstream_url(&config, "/v1/messages"),
         "http://anthropic/v1/messages"
+    );
+}
+
+#[test]
+fn openai_upstream_url_accepts_origin_or_v1_base() {
+    let mut config = GatewayConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        openai_base_url: "http://openai".into(),
+        anthropic_base_url: "http://anthropic".into(),
+        metadata: None,
+        plugin_config: None,
+    };
+
+    assert_eq!(
+        ProviderRoute::OpenAiResponses.upstream_url(&config, "/responses"),
+        "http://openai/v1/responses"
+    );
+    assert_eq!(
+        ProviderRoute::OpenAiResponses.upstream_url(&config, "/v1/responses"),
+        "http://openai/v1/responses"
+    );
+
+    config.openai_base_url = "http://openai/v1".into();
+    assert_eq!(
+        ProviderRoute::OpenAiResponses.upstream_url(&config, "/responses"),
+        "http://openai/v1/responses"
+    );
+    assert_eq!(
+        ProviderRoute::OpenAiResponses.upstream_url(&config, "/v1/responses"),
+        "http://openai/v1/responses"
     );
 }
 
@@ -407,7 +436,6 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         openai_base_url: "http://openai".into(),
 
         anthropic_base_url: "http://anthropic".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -434,7 +462,6 @@ async fn models_rejects_non_get_requests_directly() {
         openai_base_url: "http://openai".into(),
 
         anthropic_base_url: "http://anthropic".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };

@@ -22,7 +22,7 @@ Good starting points:
 - [Basic Guide: Adding Scopes and Marks](../instrument-applications/adding-scopes-and-marks.md)
 - [Basic Guide: Instrument a Tool Call](../instrument-applications/instrument-tool-call.md)
 - [Basic Guide: Instrument an LLM Call](../instrument-applications/instrument-llm-call.md)
-- [Python Quick Start](../getting-started/python.md)
+- [Python Quick Start](../getting-started/python/index.md)
 - [Node.js Quick Start](../getting-started/nodejs.md)
 - [Rust Quick Start](../getting-started/rust.md)
 

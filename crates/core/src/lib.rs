@@ -57,6 +57,7 @@
 //! easy addition and removal at runtime.
 pub mod api;
 pub mod codec;
+pub mod config_editor;
 mod context;
 pub mod error;
 pub mod json;

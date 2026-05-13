@@ -59,6 +59,96 @@ names from the plugin namespace:
 The active runtime names include the component namespace prefix used by the
 plugin system.
 
+## CLI Gateway `plugins.toml`
+
+The `nemo-flow` CLI gateway can activate one process-level plugin config at
+startup from `plugins.toml`. Use the interactive editor for the Observability
+component:
+
+```bash
+nemo-flow plugins edit
+nemo-flow plugins edit --project
+```
+
+See [Plugin Configuration Files](../build-plugins/plugin-configuration-files.md)
+for discovery locations, precedence, merge behavior, editor controls, conflicts
+with `[plugins].config` or `--plugin-config`, and validation behavior.
+
+`plugins.toml` uses the generic plugin config shape at the file root. The
+example below shows every observability section; include only the sections you
+want to configure. Missing sections behave like disabled sections when no
+lower-precedence `plugins.toml` supplies that section. In a layered
+`plugins.toml` setup, omission inherits lower-precedence values; write
+`enabled = false` to disable an inherited section.
+
+`version = 1` is recommended for clarity but not required. The root plugin
+config version and observability component config version both default to `1`
+when omitted; unsupported non-`1` versions fail validation by default.
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.atof]
+enabled = true
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
+
+[components.config.atif]
+enabled = true
+output_directory = "logs"
+filename_template = "trajectory-{session_id}.json"
+
+[components.config.opentelemetry]
+enabled = true
+transport = "http_binary"
+endpoint = "http://localhost:4318/v1/traces"
+service_name = "nemo-flow"
+service_namespace = "agent"
+service_version = "0.2.0"
+instrumentation_scope = "nemo-flow-observability"
+timeout_millis = 3000
+
+[components.config.opentelemetry.headers]
+authorization = "Bearer <token>"
+
+[components.config.opentelemetry.resource_attributes]
+"deployment.environment" = "dev"
+"service.instance.id" = "local"
+
+[components.config.openinference]
+enabled = true
+transport = "http_binary"
+endpoint = "http://localhost:6006/v1/traces"
+service_name = "nemo-flow"
+service_namespace = "agent"
+service_version = "0.2.0"
+instrumentation_scope = "nemo-flow-openinference"
+timeout_millis = 3000
+
+[components.config.openinference.headers]
+authorization = "Bearer <token>"
+
+[components.config.openinference.resource_attributes]
+"deployment.environment" = "dev"
+"service.instance.id" = "local"
+
+[components.config.policy]
+unknown_component = "warn"
+unknown_field = "warn"
+unsupported_value = "error"
+```
+
+The file format is generic. Other plugin kinds can use the same `components`
+array when their plugin implementation is registered in the gateway process.
+
 ## ATOF Section
 
 Use ATOF when you want the raw ATOF `0.1` event stream as JSONL.

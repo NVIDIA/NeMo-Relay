@@ -21,30 +21,28 @@ Use the wrapper when you want the gateway lifetime managed for a local Hermes
 process:
 
 ```bash
-nemo-flow run --atif-dir .nemo-flow/atif -- hermes
+nemo-flow hermes
 ```
 
-The wrapper infers Hermes from `hermes` or `hermes-agent`, starts a gateway on a
-dynamic `127.0.0.1` port, and exports `NEMO_FLOW_GATEWAY_URL` for the launched
-process. Hermes hook configuration is not temporary in this mode. Install hooks
-first, or configure equivalent Hermes shell hooks, so approved hook commands can
-discover the dynamic gateway URL.
+Pass Hermes arguments after `--`:
+
+```bash
+nemo-flow hermes -- chat --provider custom
+```
+
+This shortcut is equivalent to `nemo-flow run -- hermes`. The wrapper starts a
+gateway on a dynamic `127.0.0.1` port and exports `NEMO_FLOW_GATEWAY_URL` for
+the launched process. Hermes hook configuration is not temporary in this mode.
+Install hooks first, or configure equivalent Hermes shell hooks, so approved
+hook commands can discover the dynamic gateway URL.
 
 Inspect what would be launched without starting Hermes:
 
 ```bash
 nemo-flow run \
-  --atif-dir .nemo-flow/atif \
-  --openinference-endpoint http://127.0.0.1:4318/v1/traces \
   --dry-run \
   --print \
   -- hermes
-```
-
-If a launcher hides the command name, pass the agent explicitly:
-
-```bash
-nemo-flow run --agent hermes -- my-hermes-wrapper
 ```
 
 ## Shared Config
@@ -53,19 +51,31 @@ Create `.nemo-flow/config.toml` for project defaults or
 `~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[observability]
-atif_dir = ".nemo-flow/atif"
-metadata = { team = "agent-observability" }
-
-[export.openinference]
-endpoint = "http://127.0.0.1:4318/v1/traces"
-
 [agents.hermes]
 command = "hermes"
 ```
 
-Then run `nemo-flow run --agent hermes` to use the configured command.
-User config takes priority over project and global config.
+Then configure observability with `nemo-flow plugins edit --project` or
+`.nemo-flow/plugins.toml`:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = ".nemo-flow/atif"
+
+[components.config.openinference]
+enabled = true
+endpoint = "http://127.0.0.1:4318/v1/traces"
+```
+
+Run `nemo-flow run --agent hermes` to use the configured command and plugin
+config. User config takes priority over project and system config.
 
 ## Hermes Hook Setup
 
@@ -87,7 +97,7 @@ back to `--gateway-url http://127.0.0.1:4040`.
 For standalone gateway mode, start the daemon manually:
 
 ```bash
-NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
+nemo-flow --bind 127.0.0.1:4040
 ```
 
 Then point Hermes provider traffic at `http://127.0.0.1:4040` for any provider
@@ -110,15 +120,17 @@ relying on unattended capture.
 
 ## Verify Export
 
-End or finalize the Hermes session and confirm ATIF exists:
+End a Hermes turn or finalize the session and confirm ATIF exists:
 
 ```bash
 ls .nemo-flow/atif
 ```
 
-The gateway writes `<session-id>.atif.json` when it receives
-`on_session_finalize` or `on_session_reset`. `on_session_end` is treated as a
-per-turn mark and does not close the NeMo Flow session by itself.
+The gateway writes or updates an ATIF snapshot when it receives
+`on_session_end`, `on_session_finalize`, or `on_session_reset`.
+`on_session_end` is a per-turn snapshot boundary: it does not close the NeMo
+Flow session and does not emit a visible trajectory mark. `on_session_finalize`
+and `on_session_reset` close the session.
 
 ## Troubleshoot LLM Lifecycle
 

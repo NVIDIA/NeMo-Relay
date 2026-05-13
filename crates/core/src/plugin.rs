@@ -75,6 +75,7 @@ pub type Result<T> = std::result::Result<T, PluginError>;
 
 /// Canonical plugin configuration document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PluginConfig {
     /// Plugin config schema version.
     #[serde(default = "default_plugin_config_version")]
@@ -99,6 +100,7 @@ impl Default for PluginConfig {
 
 /// One configured plugin component.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PluginComponentSpec {
     /// Registered plugin kind string.
     pub kind: String,
@@ -126,6 +128,7 @@ impl PluginComponentSpec {
 
 /// Structured validation report.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigReport {
     /// Validation and compatibility diagnostics in evaluation order.
     #[serde(default)]
@@ -143,6 +146,7 @@ impl ConfigReport {
 
 /// One validation or compatibility diagnostic.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigDiagnostic {
     /// Severity level for the diagnostic.
     pub level: DiagnosticLevel,
@@ -160,6 +164,7 @@ pub struct ConfigDiagnostic {
 
 /// Diagnostic severity.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum DiagnosticLevel {
     /// Non-fatal compatibility or validation issue.
@@ -170,6 +175,7 @@ pub enum DiagnosticLevel {
 
 /// Policy for how unsupported plugin/runtime config is handled.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigPolicy {
     /// Policy applied when a component kind is unknown to the plugin registry.
     #[serde(default = "default_warn")]
@@ -192,8 +198,29 @@ impl Default for ConfigPolicy {
     }
 }
 
+crate::editor_config! {
+    impl ConfigPolicy {
+        unknown_component => {
+            label: "unknown_component",
+            kind: Enum,
+            values: ["warn", "ignore", "error"],
+        },
+        unknown_field => {
+            label: "unknown_field",
+            kind: Enum,
+            values: ["warn", "ignore", "error"],
+        },
+        unsupported_value => {
+            label: "unsupported_value",
+            kind: Enum,
+            values: ["warn", "ignore", "error"],
+        },
+    }
+}
+
 /// Per-policy behavior for unsupported configuration.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum UnsupportedBehavior {
     /// Suppress the diagnostic entirely.
@@ -868,6 +895,13 @@ pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
     }
 
     report
+}
+
+/// Returns the JSON Schema for the canonical plugin configuration document.
+#[cfg(feature = "schema")]
+pub fn plugin_config_schema() -> Json {
+    serde_json::to_value(schemars::schema_for!(PluginConfig))
+        .expect("plugin config schema should serialize")
 }
 
 /// Configures the active global plugin components.

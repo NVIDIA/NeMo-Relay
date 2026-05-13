@@ -209,3 +209,9 @@ impl Stream for LlmStreamWrapper {
         }
     }
 }
+
+impl Drop for LlmStreamWrapper {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}

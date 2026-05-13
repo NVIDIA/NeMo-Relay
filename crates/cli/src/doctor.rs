@@ -13,7 +13,10 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use nemo_flow::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
+use nemo_flow::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
 use serde::Serialize;
+use serde_json::Value;
 use tokio::time::timeout;
 
 use crate::config::{
@@ -466,72 +469,154 @@ async fn probe_version(binary: &Path) -> Option<String> {
 async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
     let mut checks = Vec::new();
 
-    checks.push(match &gateway.exporters.atif.dir {
-        None => Check {
-            name: "ATIF dir",
+    let Some(plugin_value) = &gateway.plugin_config else {
+        checks.push(Check {
+            name: "Plugins",
             status: Status::Info,
-            details: "not configured".into(),
-        },
-        Some(path) => match check_dir_writable(path) {
-            Ok(()) => Check {
-                name: "ATIF dir",
-                status: Status::Pass,
-                details: format!("{} (appears writable)", path.display()),
-            },
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Check {
-                name: "ATIF dir",
-                status: Status::Warn,
-                details: format!(
-                    "{}: not present; runtime will create it on export",
-                    path.display()
-                ),
-            },
-            Err(err) => Check {
-                name: "ATIF dir",
-                status: Status::Fail,
-                details: format!("{}: {err}", path.display()),
-            },
-        },
-    });
+            details: "plugins.toml not configured".into(),
+        });
+        return checks;
+    };
 
-    checks.push(match &gateway.exporters.atof.dir {
-        None => Check {
-            name: "ATOF dir",
-            status: Status::Info,
-            details: "not configured".into(),
-        },
-        Some(path) => match check_dir_writable(path) {
-            Ok(()) => Check {
-                name: "ATOF dir",
-                status: Status::Pass,
-                details: format!("{} (appears writable)", path.display()),
-            },
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Check {
-                name: "ATOF dir",
-                status: Status::Warn,
-                details: format!(
-                    "{}: not present; runtime will create it on first event",
-                    path.display()
-                ),
-            },
-            Err(err) => Check {
-                name: "ATOF dir",
+    let plugin_config = match serde_json::from_value::<PluginConfig>(plugin_value.clone()) {
+        Ok(config) => config,
+        Err(err) => {
+            checks.push(Check {
+                name: "Plugins",
                 status: Status::Fail,
-                details: format!("{}: {err}", path.display()),
-            },
-        },
-    });
+                details: format!("invalid plugin config: {err}"),
+            });
+            return checks;
+        }
+    };
+    let report = validate_plugin_config(&plugin_config);
+    if report.diagnostics.is_empty() {
+        checks.push(Check {
+            name: "Plugins",
+            status: Status::Pass,
+            details: "validation passed".into(),
+        });
+    } else {
+        for diagnostic in report.diagnostics {
+            checks.push(Check {
+                name: "Plugin diagnostic",
+                status: if diagnostic.level == DiagnosticLevel::Error {
+                    Status::Fail
+                } else {
+                    Status::Warn
+                },
+                details: format!("{}: {}", diagnostic.code, diagnostic.message),
+            });
+        }
+    }
 
-    checks.push(match &gateway.exporters.openinference.endpoint {
-        None => Check {
-            name: "OpenInference endpoint",
+    if let Some(config) = observability_component_config(plugin_value) {
+        collect_observability_component_checks(&mut checks, config).await;
+    } else {
+        checks.push(Check {
+            name: "Observability plugin",
             status: Status::Info,
-            details: "not configured".into(),
-        },
-        Some(url) => probe_http(url).await,
-    });
+            details: "component not configured".into(),
+        });
+    }
 
     checks
+}
+
+async fn collect_observability_component_checks(checks: &mut Vec<Check>, config: &Value) {
+    for section in ["atof", "atif"] {
+        if section_enabled(config, section) {
+            let label = if section == "atof" {
+                "ATOF dir"
+            } else {
+                "ATIF dir"
+            };
+            match section_output_directory(config, section) {
+                Some(path) => checks.push(check_directory(label, &path)),
+                None => checks.push(Check {
+                    name: label,
+                    status: Status::Info,
+                    details: "enabled; using runtime default output directory".into(),
+                }),
+            }
+        }
+    }
+    for section in ["opentelemetry", "openinference"] {
+        if section_enabled(config, section) {
+            let label = if section == "opentelemetry" {
+                "OpenTelemetry endpoint"
+            } else {
+                "OpenInference endpoint"
+            };
+            match section_endpoint(config, section) {
+                Some(endpoint) => checks.push(probe_http_named(label, &endpoint).await),
+                None => checks.push(Check {
+                    name: label,
+                    status: Status::Info,
+                    details: "enabled; using exporter default endpoint".into(),
+                }),
+            }
+        }
+    }
+}
+
+fn observability_component_config(plugin_value: &Value) -> Option<&Value> {
+    plugin_value
+        .get("components")
+        .and_then(Value::as_array)
+        .and_then(|components| {
+            components.iter().find(|component| {
+                component
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| kind == OBSERVABILITY_PLUGIN_KIND)
+            })
+        })
+        .and_then(|component| component.get("config"))
+}
+
+fn section_enabled(config: &Value, section: &str) -> bool {
+    config
+        .get(section)
+        .and_then(|section| section.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn section_output_directory(config: &Value, section: &str) -> Option<PathBuf> {
+    config
+        .get(section)
+        .and_then(|section| section.get("output_directory"))
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+}
+
+fn section_endpoint(config: &Value, section: &str) -> Option<String> {
+    config
+        .get(section)
+        .and_then(|section| section.get("endpoint"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn check_directory(name: &'static str, path: &Path) -> Check {
+    match check_dir_writable(path) {
+        Ok(()) => Check {
+            name,
+            status: Status::Pass,
+            details: format!("{} (appears writable)", path.display()),
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Check {
+            name,
+            status: Status::Warn,
+            details: format!("{}: not present; runtime will create it", path.display()),
+        },
+        Err(err) => Check {
+            name,
+            status: Status::Fail,
+            details: format!("{}: {err}", path.display()),
+        },
+    }
 }
 
 fn check_dir_writable(dir: &Path) -> Result<(), std::io::Error> {
@@ -551,12 +636,12 @@ fn check_dir_writable(dir: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-async fn probe_http(url: &str) -> Check {
+async fn probe_http_named(name: &'static str, url: &str) -> Check {
     let client = match reqwest::Client::builder().timeout(NETWORK_TIMEOUT).build() {
         Ok(c) => c,
         Err(err) => {
             return Check {
-                name: "OpenInference endpoint",
+                name,
                 status: Status::Fail,
                 details: format!("could not build HTTP client: {err}"),
             };
@@ -564,7 +649,7 @@ async fn probe_http(url: &str) -> Check {
     };
     match client.get(url).send().await {
         Ok(resp) => Check {
-            name: "OpenInference endpoint",
+            name,
             status: if resp.status().is_success() || resp.status().is_redirection() {
                 Status::Pass
             } else {
@@ -573,7 +658,7 @@ async fn probe_http(url: &str) -> Check {
             details: format!("{} (HTTP {})", url, resp.status().as_u16()),
         },
         Err(err) => Check {
-            name: "OpenInference endpoint",
+            name,
             status: Status::Fail,
             details: format!("{url}: {err}"),
         },

@@ -103,11 +103,11 @@ nemo-flow = { path = "../NeMo-Flow/crates/core" }
 nemo-flow-adaptive = { path = "../NeMo-Flow/crates/adaptive" }
 ```
 
-Install the local gateway binary from a source checkout when you need to run the
-gateway during development:
+Install the published gateway binary when you need coding-agent hook and LLM
+gateway observability:
 
 ```bash
-cargo install --path ../NeMo-Flow/crates/cli
+cargo install nemo-flow-cli
 ```
 
 ## Install from the Repository

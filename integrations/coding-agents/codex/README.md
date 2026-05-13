@@ -31,8 +31,8 @@ The bundle forwards `SessionStart`, `SessionEnd`, `SubagentStart`,
 provide private LLM correlation hints for gateway requests.
 
 Transparent setup injects these hooks with CLI config overrides. Persistent
-setup writes `hooks = true` in `.codex/config.toml` and merges the hook
-entries into `.codex/hooks.json`.
+setup writes `features.hooks = true` in `.codex/config.toml` and merges the
+hook entries into `.codex/hooks.json`.
 
 ## Transparent Setup
 
@@ -41,7 +41,7 @@ Build or install the gateway binary so `nemo-flow` is on `PATH`.
 Run Codex through the wrapper:
 
 ```bash
-nemo-flow run --atif-dir .nemo-flow/atif -- codex
+nemo-flow run -- codex
 ```
 
 The wrapper starts a per-invocation gateway on a dynamic localhost port,
@@ -54,8 +54,6 @@ Inspect the launch without starting Codex:
 
 ```bash
 nemo-flow run \
-  --atif-dir .nemo-flow/atif \
-  --openinference-endpoint http://127.0.0.1:4318/v1/traces \
   --dry-run \
   --print \
   -- codex
@@ -67,12 +65,23 @@ Use `.nemo-flow/config.toml` for project defaults or
 `~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[observability]
-atif_dir = ".nemo-flow/atif"
-metadata = { team = "agent-observability" }
-
 [agents.codex]
 command = "codex"
+```
+
+Configure observability with `nemo-flow plugins edit --project` or
+`.nemo-flow/plugins.toml`:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = ".nemo-flow/atif"
 ```
 
 Then run:
@@ -87,7 +96,7 @@ Use the long-running gateway only when you do not want to launch Codex through
 the wrapper. Start the gateway manually:
 
 ```bash
-NEMO_FLOW_ATIF_DIR=.nemo-flow/atif nemo-flow --bind 127.0.0.1:4040
+nemo-flow --bind 127.0.0.1:4040
 ```
 
 Then configure local Codex to use a gateway provider alias instead of

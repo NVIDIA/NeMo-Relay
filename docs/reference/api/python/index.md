@@ -64,7 +64,7 @@ nemo_flow <_generated/nemo_flow/index>
 Use these links to continue from the API reference into task-focused guides.
 
 - [Quick Start](../../../getting-started/quick-start.md)
-- [Python Quick Start](../../../getting-started/python.md)
+- [Python Quick Start](../../../getting-started/python/index.md)
 - [Scopes](../../../about/concepts/scopes.md)
 - [Middleware](../../../about/concepts/middleware.md)
 - [Subscribers](../../../about/concepts/subscribers.md)

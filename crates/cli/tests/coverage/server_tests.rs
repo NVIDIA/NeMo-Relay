@@ -1,20 +1,65 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::response::IntoResponse;
 use bytes::Bytes;
 use futures_util::stream;
 use http_body_util::BodyExt;
-use serde_json::{Value, json};
+use nemo_flow::plugin::{
+    ConfigDiagnostic, Plugin, PluginRegistration, PluginRegistrationContext, deregister_plugin,
+    register_plugin,
+};
+use serde_json::{Map, Value, json};
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tower::ServiceExt;
 
 use super::*;
-use crate::config::ExportersConfig;
 use crate::error::CliError;
+
+static PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
+static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
+static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
+
+struct GenericTestPlugin;
+
+impl Plugin for GenericTestPlugin {
+    fn plugin_kind(&self) -> &str {
+        GENERIC_TEST_PLUGIN_KIND
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Value>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Value>,
+        ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = nemo_flow::plugin::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            GENERIC_TEST_PLUGIN_REGISTRATIONS.fetch_add(1, Ordering::SeqCst);
+            ctx.add_registration(PluginRegistration::new(
+                "plugin",
+                GENERIC_TEST_PLUGIN_KIND,
+                Box::new(|| {
+                    GENERIC_TEST_PLUGIN_DEREGISTRATIONS.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }),
+            ));
+            Ok(())
+        })
+    }
+}
 
 struct TestServer {
     url: String,
@@ -39,7 +84,6 @@ fn test_config() -> GatewayConfig {
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     }
@@ -89,6 +133,256 @@ async fn healthz_returns_ok() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body, json!({ "status": "ok" }));
+}
+
+#[tokio::test]
+async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_flow::plugin::clear_plugin_configuration();
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    let atif_dir = temp.path().join("atif");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+    std::fs::create_dir_all(&atif_dir).unwrap();
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": atof_dir,
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                    },
+                    "atif": {
+                        "enabled": true,
+                        "output_directory": atif_dir,
+                        "filename_template": "trajectory-{session_id}.json"
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    assert!(nemo_flow::plugin::active_plugin_report().is_some());
+
+    let client = reqwest::Client::new();
+    for hook_event_name in ["on_session_start", "on_session_finalize"] {
+        let response = client
+            .post(format!("{url}/hooks/hermes"))
+            .json(&json!({
+                "session_id": "plugin-bridge-session",
+                "hook_event_name": hook_event_name
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    assert!(nemo_flow::plugin::active_plugin_report().is_none());
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    assert!(
+        events.lines().count() >= 2,
+        "expected ATOF lifecycle events, got {events:?}"
+    );
+    let atif_files = std::fs::read_dir(temp.path().join("atif"))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(atif_files.len(), 1);
+    let trajectory: Value =
+        serde_json::from_slice(&std::fs::read(atif_files[0].path()).unwrap()).unwrap();
+    assert!(
+        trajectory["extra"]["observed_events"]
+            .as_array()
+            .is_some_and(|events| events.len() >= 2)
+    );
+}
+
+#[tokio::test]
+async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_flow::plugin::clear_plugin_configuration();
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": atof_dir,
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let client = reqwest::Client::new();
+    for (path, session_id, start_event, end_event) in [
+        (
+            "/hooks/codex",
+            "codex-plugin-session",
+            "sessionStart",
+            "sessionEnd",
+        ),
+        (
+            "/hooks/claude-code",
+            "claude-plugin-session",
+            "SessionStart",
+            "SessionEnd",
+        ),
+    ] {
+        for hook_event_name in [start_event, end_event] {
+            let response = client
+                .post(format!("{url}{path}"))
+                .json(&json!({
+                    "session_id": session_id,
+                    "hook_event_name": hook_event_name
+                }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+    }
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    assert!(nemo_flow::plugin::active_plugin_report().is_none());
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    let agent_starts = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| {
+            event["kind"] == "scope"
+                && event["scope_category"] == "start"
+                && event["category"] == "agent"
+        })
+        .filter_map(|event| event["name"].as_str().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    assert!(agent_starts.contains(&"codex".to_string()));
+    assert!(agent_starts.contains(&"claude-code".to_string()));
+}
+
+#[tokio::test]
+async fn serve_listener_activates_any_registered_plugin_kind() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_flow::plugin::clear_plugin_configuration();
+    let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
+    GENERIC_TEST_PLUGIN_REGISTRATIONS.store(0, Ordering::SeqCst);
+    GENERIC_TEST_PLUGIN_DEREGISTRATIONS.store(0, Ordering::SeqCst);
+    register_plugin(Arc::new(GenericTestPlugin)).unwrap();
+
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": GENERIC_TEST_PLUGIN_KIND,
+                "enabled": true,
+                "config": {}
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    assert_eq!(GENERIC_TEST_PLUGIN_REGISTRATIONS.load(Ordering::SeqCst), 1);
+
+    let response = reqwest::Client::new()
+        .post(format!("{url}/hooks/codex"))
+        .json(&json!({
+            "session_id": "generic-plugin-session",
+            "hook_event_name": "sessionStart"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    assert_eq!(
+        GENERIC_TEST_PLUGIN_DEREGISTRATIONS.load(Ordering::SeqCst),
+        1
+    );
+    assert!(nemo_flow::plugin::active_plugin_report().is_none());
+    let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
+}
+
+#[tokio::test]
+async fn serve_listener_rejects_invalid_plugin_config() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_flow::plugin::clear_plugin_configuration();
+
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "mode": "invalid"
+                    }
+                }
+            }
+        ]
+    }));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+    let error = serve_listener(listener, config, Some(shutdown_rx))
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("ATOF mode"));
+    assert!(nemo_flow::plugin::active_plugin_report().is_none());
 }
 
 #[tokio::test]
@@ -397,6 +691,19 @@ async fn models_route_forwards_get_requests() {
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["path"], json!("/v1/models?limit=1"));
     assert_eq!(body["authorization"], json!("Bearer test"));
+}
+
+async fn wait_for_gateway(url: &str) {
+    let client = reqwest::Client::new();
+    for _ in 0..50 {
+        if let Ok(response) = client.get(format!("{url}/healthz")).send().await
+            && response.status().is_success()
+        {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("gateway did not become healthy at {url}");
 }
 
 async fn spawn_upstream(streaming: bool) -> TestServer {

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::config::{AtifExporterSettings, ExportersConfig};
 use std::path::PathBuf;
 
 fn empty_report() -> DoctorReport {
@@ -186,7 +185,7 @@ fn format_human_reports_config_resolution_failure() {
     let mut report = empty_report();
     report.configuration.resolution.status = Status::Fail;
     report.configuration.resolution.details =
-        "could not resolve merged config: invalid [exporters.atof].mode".into();
+        "could not resolve merged config: invalid plugin TOML".into();
 
     let rendered = format_human(&report);
 
@@ -241,18 +240,30 @@ async fn collect_observability_warns_for_missing_atif_dir_without_creating_it() 
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("missing-atif");
     let gateway = GatewayConfig {
-        exporters: ExportersConfig {
-            atif: AtifExporterSettings {
-                dir: Some(missing.clone()),
-            },
-            ..Default::default()
-        },
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [{
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atif": {
+                        "enabled": true,
+                        "output_directory": missing
+                    }
+                }
+            }]
+        })),
         ..GatewayConfig::default()
     };
 
     let checks = collect_observability(&gateway).await;
 
-    assert_eq!(checks[0].status, Status::Warn);
+    let atif_check = checks
+        .iter()
+        .find(|check| check.name == "ATIF dir")
+        .expect("ATIF directory check");
+    assert_eq!(atif_check.status, Status::Warn);
     assert!(!missing.exists());
 }
 

@@ -12,6 +12,7 @@ SPDX-License-Identifier: Apache-2.0
 [![npm wasm](https://img.shields.io/npm/v/nemo-flow-wasm?label=nemo-flow-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow?label=nemo-flow&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow)
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow-adaptive?label=nemo-flow-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-adaptive)
+[![Crates.io](https://img.shields.io/crates/v/nemo-flow-cli?label=nemo-flow-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-cli)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Flow)
 
 # nemo-flow-cli
@@ -50,10 +51,10 @@ with the installed `nemo-flow` command rather than link against the crate.
 
 ## Installation
 
-Install the CLI from a repository checkout:
+Install the CLI:
 
 ```bash
-cargo install --path crates/cli
+cargo install nemo-flow-cli
 ```
 
 That command installs the binary as:
@@ -103,19 +104,30 @@ Project config lives at `./.nemo-flow/config.toml`; user config lives at
 The project layer overrides system config, and the user layer overrides the
 project layer.
 
-Exporter config uses nested per-backend tables:
+Observability exporters are configured through the plugin config. Edit the user
+plugin config with:
+
+```bash
+nemo-flow plugins edit
+```
+
+The canonical plugin file is `plugins.toml`; user config lives at
+`~/.config/nemo-flow/plugins.toml` or
+`$XDG_CONFIG_HOME/nemo-flow/plugins.toml`. Project config lives at
+`.nemo-flow/plugins.toml`.
+
+Minimal ATIF example:
 
 ```toml
-[exporters.atif]
-dir = "./atif"
+version = 1
 
-[exporters.atof]
-dir = "./atof"
-mode = "append"
-filename_template = "{session_id}.jsonl"
+[[components]]
+kind = "observability"
+enabled = true
 
-[exporters.openinference]
-endpoint = "http://localhost:6006/v1/traces"
+[components.config.atif]
+enabled = true
+output_directory = "./atif"
 ```
 
 ## Documentation

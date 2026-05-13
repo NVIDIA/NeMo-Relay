@@ -128,6 +128,7 @@ The table below summarizes the support level for each binding surface.
 | Python | ✅ Fully Supported | Fully documented with Quick Start and Guides |
 | Node.js | ✅ Fully Supported | Fully documented with Quick Start and Guides  |
 | Rust | ✅ Fully Supported | Fully documented with Quick Start and Guides  |
+| Coding-Agent CLI | 🚧 Experimental | Install with `cargo install nemo-flow-cli`. |
 | Go | 🚧 Experimental | Source-first under `go/nemo_flow`. |
 | WebAssembly | 🚧 Experimental | Source-first under `crates/wasm`. |
 | FFI | 🚧 Experimental | Source-first under `crates/ffi`. |
@@ -161,6 +162,7 @@ The following table summarizes maintained third-party integrations and whether e
 | [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
 | [opencode](third_party/README-opencode.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
 | [OpenClaw](integrations/openclaw/README.md) | `nemo-flow-openclaw` package, `nemo-flow` plugin ID | ✅ Yes | ❌ No | ❌ No | ❌ No |
+| [Coding-Agent CLI](docs/integrate-frameworks/coding-agent-gateway.md) | `nemo-flow-cli` package for closed harnesses | ✅ Yes | ❌ No | ❌ No | ❌ No |
 | [Hermes Agent](third_party/README-hermes-agent.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
 
 Patch-based integrations offer experimental support. Our roadmap includes switching over to first-party plugins and packages where upstream extension points allow it.

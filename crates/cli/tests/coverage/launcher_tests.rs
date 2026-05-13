@@ -17,11 +17,6 @@ fn infers_agent_from_command_or_uses_override() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -55,11 +50,6 @@ fn uses_configured_command_when_no_argv_is_supplied() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -87,11 +77,6 @@ fn uses_configured_hermes_command_when_no_argv_is_supplied() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -112,11 +97,6 @@ fn inference_failure_has_actionable_message() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -142,11 +122,6 @@ fn missing_command_without_agent_errors() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -170,11 +145,6 @@ fn agent_without_configured_command_falls_back_to_default_binary() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -196,11 +166,6 @@ fn agent_with_passthrough_args_appends_to_configured_command() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -260,6 +225,86 @@ fn prepares_codex_config_overrides() {
             .argv
             .iter()
             .any(|arg| arg.contains("hooks.SessionStart"))
+    );
+    let path = prepared
+        .env
+        .iter()
+        .find_map(|(name, value)| (name == "PATH").then_some(value))
+        .expect("transparent run should set PATH for hook subprocesses");
+    let current_exe_dir = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let entries = std::env::split_paths(path).collect::<Vec<_>>();
+    assert!(entries.iter().any(|entry| entry == &current_exe_dir));
+    if !std::env::var_os("PATH")
+        .as_deref()
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .any(|entry| entry == current_exe_dir)
+    {
+        assert_eq!(entries.last(), Some(&current_exe_dir));
+    }
+}
+
+#[test]
+fn exporter_destinations_describe_observability_outputs() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": OBSERVABILITY_PLUGIN_KIND,
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": "logs",
+                        "filename": "events.jsonl"
+                    },
+                    "atif": {
+                        "enabled": true,
+                        "output_directory": "trajectories",
+                        "filename_template": "agent-{session_id}.json"
+                    },
+                    "opentelemetry": {
+                        "enabled": true,
+                        "endpoint": "http://127.0.0.1:4318/v1/traces"
+                    },
+                    "openinference": {
+                        "enabled": true
+                    }
+                }
+            }]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let destinations = exporter_destinations(&gateway);
+
+    assert!(destinations.iter().any(|line| line
+        == &format!(
+            "ATOF {}",
+            PathBuf::from("logs").join("events.jsonl").display()
+        )));
+    assert!(destinations.iter().any(|line| line
+        == &format!(
+            "ATIF {}",
+            PathBuf::from("trajectories")
+                .join("agent-{session_id}.json")
+                .display()
+        )));
+    assert!(
+        destinations
+            .iter()
+            .any(|line| line == "OpenTelemetry http://127.0.0.1:4318/v1/traces")
+    );
+    assert!(
+        destinations
+            .iter()
+            .any(|line| line == "OpenInference OTLP endpoint from environment/default")
     );
 }
 
@@ -585,11 +630,6 @@ async fn run_starts_gateway_injects_env_and_returns_agent_exit_code() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: false,
@@ -631,11 +671,6 @@ async fn dry_run_does_not_spawn_agent() {
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
-        atif_dir: None,
-
-        atof_dir: None,
-
-        openinference_endpoint: None,
         session_metadata: None,
         plugin_config: None,
         dry_run: true,

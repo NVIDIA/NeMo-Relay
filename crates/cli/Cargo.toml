@@ -23,6 +23,7 @@ axum = "0.8"
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
+console = "0.16"
 futures-util = "0.3"
 http = "1"
 http-body-util = "0.1"

@@ -25,6 +25,7 @@ const MODULES = [
     deppath: './declarations/index.d',
     entryTarget: './declarations/index',
     pageName: 'runtime',
+    required: true,
     title: 'Runtime',
   },
   {
@@ -158,11 +159,12 @@ function main() {
   runCommand('npm', ['run', 'build-debug'], { cwd: nodePackageDir });
   resetGeneratedDirectories();
   ensureRequiredArtifacts(['index.js', 'index.d.ts']);
-  stageDeclarationSources();
-  writeModuleEntrypoints();
+  const modules = availableModules();
+  stageDeclarationSources(modules);
+  writeModuleEntrypoints(modules);
   writeDocsPackageManifest();
   runTypeDoc();
-  writeModulePages(readTypedocItems());
+  writeModulePages(readTypedocItems(), modules);
 }
 
 function runCommand(command, args, { cwd, env = process.env } = {}) {
@@ -196,6 +198,24 @@ function ensureRequiredArtifacts(artifacts) {
   }
 }
 
+function declarationPath(module) {
+  return path.join(nodePackageDir, module.declaration);
+}
+
+function availableModules() {
+  return MODULES.filter((module) => {
+    if (existsSync(declarationPath(module))) {
+      return true;
+    }
+    if (module.required) {
+      throw new Error(`Expected generated Node docs artifact missing: ${declarationPath(module)}`);
+    }
+
+    console.warn(`Skipping Node API docs module with no declaration artifact: ${module.declaration}`);
+    return false;
+  });
+}
+
 function normalizeDeclaration(filename, contents) {
   const normalized = filename === 'index.d.ts' ? stripInternalTestHelpers(contents) : contents;
   const rewrites = DECLARATION_REWRITES.get(filename);
@@ -225,17 +245,17 @@ function applyRewrite(filename, contents, { original, replacement }) {
   return contents.replace(original, replacement);
 }
 
-function stageDeclarationSources() {
-  for (const module of MODULES) {
-    const contents = readUtf8(path.join(nodePackageDir, module.declaration));
+function stageDeclarationSources(modules) {
+  for (const module of modules) {
+    const contents = readUtf8(declarationPath(module));
     writeUtf8(path.join(nodeDocsDeclDir, module.declaration), normalizeDeclaration(module.declaration, contents));
   }
 }
 
-function writeModuleEntrypoints() {
+function writeModuleEntrypoints(modules) {
   // TypeDoc works more predictably when each documented surface has its own
   // tiny entrypoint instead of pointing it at a directory of declarations.
-  for (const module of MODULES) {
+  for (const module of modules) {
     writeUtf8(path.join(nodeDocsSourceDir, `${module.pageName}.ts`), `export * from "${module.entryTarget}";\n`);
   }
 }
@@ -302,8 +322,8 @@ function readTypedocItems() {
   throw new Error(`Unexpected TypeDoc JSON structure in ${nodeApiJsonPath}`);
 }
 
-function writeModulePages(irObjects) {
-  const grouped = new Map(MODULES.map((module) => [module.deppath, []]));
+function writeModulePages(irObjects, modules) {
+  const grouped = new Map(modules.map((module) => [module.deppath, []]));
 
   for (const item of irObjects) {
     if (!isDocumentedNodeApiItem(item)) {
@@ -314,7 +334,7 @@ function writeModulePages(irObjects) {
     }
   }
 
-  for (const module of MODULES) {
+  for (const module of modules) {
     writeModulePage(module, grouped.get(module.deppath) ?? []);
   }
 }

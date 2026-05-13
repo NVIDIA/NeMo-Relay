@@ -2,12 +2,69 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::http::HeaderMap;
-use nemo_flow::observability::atof::AtofExporterMode;
+use nemo_flow::api::event::ScopeCategory;
+use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_flow::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
 use serde_json::json;
+use std::path::Path;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use super::*;
-use crate::config::{AtifExporterSettings, AtofExporterSettings, ExportersConfig};
 use crate::model::{LlmEvent, LlmHintEvent, SessionEvent, ToolEvent};
+
+static OBSERVABILITY_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn install_test_atif_plugin(output_directory: &Path) {
+    let _ = clear_plugin_configuration();
+    std::fs::create_dir_all(output_directory).unwrap();
+    let config: PluginConfig = serde_json::from_value(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atif": {
+                        "enabled": true,
+                        "output_directory": output_directory,
+                        "filename_template": "trajectory-{session_id}.json"
+                    }
+                }
+            }
+        ]
+    }))
+    .unwrap();
+    initialize_plugins(config).await.unwrap();
+}
+
+fn read_atif_for_session(output_directory: &Path, session_id: &str) -> Value {
+    std::fs::read_dir(output_directory)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            serde_json::from_slice::<Value>(&std::fs::read(entry.path()).ok()?).ok()
+        })
+        .find(|trajectory| atif_matches_session(trajectory, session_id))
+        .unwrap_or_else(|| panic!("expected ATIF trajectory for session {session_id}"))
+}
+
+fn atif_matches_session(trajectory: &Value, session_id: &str) -> bool {
+    trajectory["session_id"] == json!(session_id)
+        || trajectory["extra"]["observed_events"]
+            .as_array()
+            .is_some_and(|events| {
+                events
+                    .iter()
+                    .any(|event| event_has_session_id(event, session_id))
+            })
+}
+
+fn event_has_session_id(event: &Value, session_id: &str) -> bool {
+    event["metadata"]["session_id"] == json!(session_id)
+        || event["data"]["session_id"] == json!(session_id)
+        || event["data"]["extra"]["session_id"] == json!(session_id)
+}
 
 #[tokio::test]
 async fn nests_agent_subagent_and_tool_lifecycle() {
@@ -16,7 +73,6 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -85,23 +141,21 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
 }
 
 #[tokio::test]
-async fn writes_atif_on_session_end_from_header_config() {
+async fn writes_atif_on_session_end_from_plugin_config() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
     let manager = SessionManager::new(config);
     let mut headers = HeaderMap::new();
-    headers.insert(
-        "x-nemo-flow-atif-dir",
-        temp.path().to_string_lossy().parse().unwrap(),
-    );
     headers.insert(
         "x-nemo-flow-session-metadata",
         r#"{"team":"coverage"}"#.parse().unwrap(),
@@ -138,79 +192,30 @@ async fn writes_atif_on_session_end_from_header_config() {
         .await
         .unwrap();
 
-    let path = temp.path().join("atif-session.atif.json");
-    let atif: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    assert_eq!(atif["agent"]["name"], json!("codex"));
-}
-
-#[tokio::test]
-async fn writes_atof_with_configured_mode_and_filename_template() {
-    let temp = tempfile::tempdir().unwrap();
-    let output = temp.path().join("custom-atof-mode.jsonl");
-    std::fs::write(&output, "{\"existing\":true}\n").unwrap();
-    let config = GatewayConfig {
-        bind: "127.0.0.1:0".parse().unwrap(),
-        openai_base_url: "http://127.0.0.1".into(),
-        anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig {
-            atof: AtofExporterSettings {
-                dir: Some(temp.path().to_path_buf()),
-                mode: AtofExporterMode::Overwrite,
-                filename_template: "custom-{session_id}.jsonl".into(),
-            },
-            ..Default::default()
-        },
-        metadata: None,
-        plugin_config: None,
-    };
-    let manager = SessionManager::new(config);
-
-    manager
-        .apply_events(
-            &HeaderMap::new(),
-            vec![
-                NormalizedEvent::AgentStarted(SessionEvent {
-                    session_id: "atof-mode".into(),
-                    agent_kind: AgentKind::Codex,
-                    event_name: "SessionStart".into(),
-                    payload: json!({}),
-                    metadata: json!({}),
-                }),
-                NormalizedEvent::AgentEnded(SessionEvent {
-                    session_id: "atof-mode".into(),
-                    agent_kind: AgentKind::Codex,
-                    event_name: "SessionEnd".into(),
-                    payload: json!({}),
-                    metadata: json!({}),
-                }),
-            ],
-        )
-        .await
-        .unwrap();
-
-    let contents = std::fs::read_to_string(output).unwrap();
-    assert!(!contents.contains("existing"));
-    assert!(contents.contains("atof-mode"));
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "atif-session");
+    assert!(
+        atif["extra"]["observed_events"]
+            .as_array()
+            .is_some_and(|events| events.len() >= 3)
+    );
 }
 
 #[tokio::test]
 async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
     // Regression test: hermes-agent and other integrations can emit terminal hooks more than once
     // per session. Without idempotency in `end_agent`, the second AgentEnded would re-open an
-    // empty agent scope via `ensure_agent_started`, close it, and `flush_observers` would write
-    // an empty ATIF on top of the just-written real trajectory.
+    // empty agent scope via `ensure_agent_started`, close it, and write an empty ATIF on top of
+    // the just-written real trajectory.
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig {
-            atif: AtifExporterSettings {
-                dir: Some(temp.path().to_path_buf()),
-            },
-            ..Default::default()
-        },
         metadata: None,
         plugin_config: None,
     };
@@ -247,8 +252,7 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
         .await
         .unwrap();
 
-    let path = temp.path().join("dup-end.atif.json");
-    let first: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let first = read_atif_for_session(&atif_dir, "dup-end");
     let first_steps = first["steps"].as_array().unwrap().len();
     assert!(
         first_steps > 0,
@@ -270,7 +274,8 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
         .await
         .unwrap();
 
-    let second: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    clear_plugin_configuration().unwrap();
+    let second = read_atif_for_session(&atif_dir, "dup-end");
     let second_steps = second["steps"].as_array().unwrap().len();
     assert_eq!(
         first_steps, second_steps,
@@ -280,22 +285,20 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
 
 #[tokio::test]
 async fn writes_hermes_api_hook_usage_to_atif_metrics() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
     let manager = SessionManager::new(config);
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "x-nemo-flow-atif-dir",
-        temp.path().to_string_lossy().parse().unwrap(),
-    );
+    let headers = HeaderMap::new();
 
     manager
         .apply_events(
@@ -348,8 +351,8 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
         .await
         .unwrap();
 
-    let path = temp.path().join("hermes-usage.atif.json");
-    let atif: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-usage");
     assert_eq!(atif["steps"][1]["metrics"]["prompt_tokens"], json!(10));
     assert_eq!(atif["steps"][1]["metrics"]["completion_tokens"], json!(5));
     assert_eq!(atif["steps"][1]["metrics"]["cached_tokens"], json!(3));
@@ -359,13 +362,193 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
 }
 
 #[tokio::test]
+async fn hermes_turn_end_snapshots_atif_without_boundary_system_step() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-clean"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-clean",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "method": "POST",
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "hello" }
+                        ]
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "hermes-clean",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "response": {
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "done"
+                    },
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_end",
+            "session_id": "hermes-clean"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-clean");
+    assert_eq!(atif["steps"].as_array().unwrap().len(), 2);
+    assert_eq!(atif["steps"][0]["source"], json!("user"));
+    assert_eq!(atif["steps"][1]["source"], json!("agent"));
+    assert!(
+        atif["steps"].as_array().unwrap().iter().all(|step| {
+            step["source"] != json!("system")
+                || step["message"].as_object().is_some_and(|message| {
+                    !message.is_empty() && message.contains_key("hook_event_name")
+                })
+        }),
+        "Hermes hook system steps must not be anonymous or empty: {}",
+        serde_json::to_string_pretty(&atif["steps"]).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-orphan"
+        }),
+        json!({
+            "hook_event_name": "subagent_stop",
+            "session_id": "hermes-orphan",
+            "extra": {
+                "subagent_id": "worker-1",
+                "child_status": "completed"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-orphan"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-orphan");
+    let steps = atif["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0]["source"], json!("system"));
+    assert_eq!(
+        steps[0]["message"]["hook_event_name"],
+        json!("subagent_stop")
+    );
+    assert_eq!(
+        steps[0]["extra"]["ancestry"]["function_name"],
+        json!("subagent_end_without_start")
+    );
+    assert_eq!(
+        steps[0]["extra"]["ancestry"]["parent_name"],
+        json!("hermes")
+    );
+}
+
+#[tokio::test]
+async fn empty_hook_marks_do_not_create_empty_atif_steps() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "empty-mark".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "on_session_start".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::HookMark(SessionEvent {
+                    session_id: "empty-mark".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "unknown".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::AgentEnded(SessionEvent {
+                    session_id: "empty-mark".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "on_session_finalize".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "empty-mark");
+    assert!(atif["steps"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn handles_out_of_order_subagent_and_tool_end_events() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -414,9 +597,7 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
 
 #[tokio::test]
 async fn terminal_retry_for_unknown_session_is_ignored() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut config = session_test_config();
-    config.exporters.atif.dir = Some(temp.path().to_path_buf());
+    let config = session_test_config();
     let manager = SessionManager::new(config);
 
     manager
@@ -434,7 +615,6 @@ async fn terminal_retry_for_unknown_session_is_ignored() {
         .unwrap();
 
     assert!(manager.inner.lock().await.is_empty());
-    assert!(!temp.path().join("retry-session.atif.json").exists());
 }
 
 #[tokio::test]
@@ -444,7 +624,6 @@ async fn out_of_order_started_subagent_end_does_not_leak_scope() {
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -516,7 +695,6 @@ async fn agent_end_closes_nested_active_subagents_lifo() {
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -572,7 +750,6 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -612,60 +789,12 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
 }
 
 #[tokio::test]
-async fn agent_end_closes_in_flight_gateway_llm() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut config = session_test_config();
-    config.exporters.atif.dir = Some(temp.path().to_path_buf());
-    let manager = SessionManager::new(config);
-    let _active = manager
-        .start_llm(
-            &HeaderMap::new(),
-            LlmGatewayStart {
-                session_id: Some("gateway-cleanup".into()),
-                provider: "openai.responses".into(),
-                model_name: Some("gpt-test".into()),
-                subagent_id: None,
-                conversation_id: None,
-                generation_id: None,
-                request_id: None,
-                request: LlmRequest {
-                    headers: Map::new(),
-                    content: json!({ "model": "gpt-test", "input": "hello" }),
-                },
-                streaming: true,
-                metadata: json!({ "gateway_path": "/v1/responses" }),
-            },
-        )
-        .await
-        .unwrap();
-
-    manager
-        .apply_events(
-            &HeaderMap::new(),
-            vec![NormalizedEvent::AgentEnded(SessionEvent {
-                session_id: "gateway-cleanup".into(),
-                agent_kind: AgentKind::Gateway,
-                event_name: "SessionEnd".into(),
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-        )
-        .await
-        .unwrap();
-
-    assert!(manager.inner.lock().await.is_empty());
-    let atif = std::fs::read_to_string(temp.path().join("gateway-cleanup.atif.json")).unwrap();
-    assert!(atif.contains("closed_by_agent_end"));
-}
-
-#[tokio::test]
 async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -722,7 +851,6 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -819,7 +947,6 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -934,7 +1061,6 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -1033,7 +1159,6 @@ async fn no_active_hint_reuses_last_llm_owner() {
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     };
@@ -1137,34 +1262,6 @@ async fn no_active_hint_reuses_last_llm_owner() {
 }
 
 #[tokio::test]
-async fn session_marks_cover_compaction_notifications_and_hook_marks() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut config = session_test_config();
-    config.exporters.atif.dir = Some(temp.path().to_path_buf());
-    let manager = SessionManager::new(config);
-    let headers = HeaderMap::new();
-
-    manager
-        .apply_events(
-            &headers,
-            vec![
-                NormalizedEvent::AgentStarted(session_event("marks", "SessionStart")),
-                NormalizedEvent::Compaction(session_event("marks", "PreCompact")),
-                NormalizedEvent::Notification(session_event("marks", "Notification")),
-                NormalizedEvent::HookMark(session_event("marks", "CustomHook")),
-                NormalizedEvent::AgentEnded(session_event("marks", "SessionEnd")),
-            ],
-        )
-        .await
-        .unwrap();
-
-    let atif = std::fs::read_to_string(temp.path().join("marks.atif.json")).unwrap();
-    assert!(atif.contains("PreCompact"));
-    assert!(atif.contains("Notification"));
-    assert!(atif.contains("CustomHook"));
-}
-
-#[tokio::test]
 async fn agent_end_closes_active_tools_and_duplicate_starts_are_ignored() {
     let manager = SessionManager::new(session_test_config());
     let headers = HeaderMap::new();
@@ -1223,6 +1320,99 @@ async fn agent_end_closes_active_tools_and_duplicate_starts_are_ignored() {
         .unwrap();
 
     assert!(manager.inner.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn gateway_shutdown_closes_codex_sessions_without_session_end_hook() {
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+
+    manager
+        .apply_events(
+            &headers,
+            vec![
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "codex-no-session-end".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SessionStart".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "codex-no-session-end".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "tool-1".into(),
+                    tool_name: "shell".into(),
+                    subagent_id: None,
+                    arguments: json!({ "cmd": "pwd" }),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    manager.close_all("gateway_shutdown").await.unwrap();
+
+    assert!(manager.inner.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn gateway_shutdown_attempts_remaining_sessions_after_close_error() {
+    let subscriber_name = "cli-close-all-deferred-error-test";
+    let _ = deregister_subscriber(subscriber_name);
+
+    let closed_sessions = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let captured = closed_sessions.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End)
+                && let Some(session_id) = event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("session_id"))
+                    .and_then(Value::as_str)
+            {
+                captured.lock().unwrap().push(session_id.to_string());
+            }
+        }),
+    )
+    .unwrap();
+
+    let config = SessionConfig::default();
+    let mut bad = Session::new("bad-shutdown".into(), AgentKind::Codex, config.clone());
+    bad.agent_scope = Some(
+        ScopeHandle::builder()
+            .name("missing-agent-scope")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    );
+
+    let mut good = Session::new("good-shutdown".into(), AgentKind::Codex, config);
+    let stack = good.scope_stack.clone();
+    TASK_SCOPE_STACK
+        .scope(stack, async {
+            good.ensure_agent_started(json!({})).unwrap();
+        })
+        .await;
+
+    let mut sessions = vec![bad, good];
+    let error = close_sessions_for_shutdown(&mut sessions, "gateway_shutdown")
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("scope handle not found"));
+
+    let closed = closed_sessions.lock().unwrap().clone();
+    assert!(
+        closed.contains(&"good-shutdown".to_string()),
+        "expected later valid session to close after first error, got {closed:?}"
+    );
+
+    deregister_subscriber(subscriber_name).unwrap();
 }
 
 #[tokio::test]
@@ -1457,26 +1647,6 @@ fn openai_response_tool_hints_ignore_non_tool_output_items() {
     assert_eq!(hints[0].tool_call_id.as_deref(), Some("call-1"));
 }
 
-#[test]
-fn write_atif_rejects_unsafe_session_id_filename() {
-    let temp = tempfile::tempdir().unwrap();
-    let exporter = AtifExporter::new(
-        "safe-session".to_string(),
-        AtifAgentInfo {
-            name: "test-agent".to_string(),
-            version: "1.0.0".to_string(),
-            model_name: None,
-            tool_definitions: None,
-            extra: None,
-        },
-    );
-
-    let error = write_atif(&temp.path().to_path_buf(), "../escape", &exporter).unwrap_err();
-
-    assert!(matches!(error, CliError::InvalidPayload(_)));
-    assert!(!temp.path().join("../escape.atif.json").exists());
-}
-
 #[tokio::test]
 async fn multiple_tool_hints_resolve_by_tool_call_id() {
     let manager = SessionManager::new(session_test_config());
@@ -1693,256 +1863,11 @@ fn session_test_config() -> GatewayConfig {
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig::default(),
         metadata: None,
         plugin_config: None,
     }
 }
 
-// Regression: an Anthropic Messages gateway request that arrives before SessionStart used to
-// freeze the session label as "gateway" (default agent_kind) for the rest of the session,
-// because observer identities are baked at scope-open time. The session must instead be labeled
-// `claude-code` from the provider, so ATIF and Phoenix root spans reflect the real agent.
-#[tokio::test]
-async fn gateway_first_anthropic_call_labels_session_as_claude_code() {
-    let temp = tempfile::tempdir().unwrap();
-    let config = GatewayConfig {
-        bind: "127.0.0.1:0".parse().unwrap(),
-        openai_base_url: "http://127.0.0.1".into(),
-
-        anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig {
-            atif: AtifExporterSettings {
-                dir: Some(temp.path().to_path_buf()),
-            },
-            ..Default::default()
-        },
-        metadata: None,
-        plugin_config: None,
-    };
-    let manager = SessionManager::new(config);
-    let mut start = llm_start();
-    start.session_id = Some("claude-uuid".into());
-    start.provider = "anthropic.messages".into();
-    let active = manager.start_llm(&HeaderMap::new(), start).await.unwrap();
-    manager
-        .end_llm(active, json!({ "ok": true }), json!({}))
-        .await
-        .unwrap();
-    // Drive an explicit AgentEnded so flush_observers writes ATIF.
-    manager
-        .apply_events(
-            &HeaderMap::new(),
-            vec![NormalizedEvent::AgentEnded(SessionEvent {
-                session_id: "claude-uuid".into(),
-                agent_kind: AgentKind::ClaudeCode,
-                event_name: "SessionEnd".into(),
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-        )
-        .await
-        .unwrap();
-
-    let atif: Value = serde_json::from_str(
-        &std::fs::read_to_string(temp.path().join("claude-uuid.atif.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        atif["agent"]["name"],
-        json!("claude-code"),
-        "session created from anthropic.messages gateway request must be labeled claude-code, not gateway"
-    );
-}
-
-// OpenAI Responses gateway requests (codex's API path) must label the session as `codex`.
-#[tokio::test]
-async fn gateway_first_openai_responses_call_labels_session_as_codex() {
-    let temp = tempfile::tempdir().unwrap();
-    let config = GatewayConfig {
-        bind: "127.0.0.1:0".parse().unwrap(),
-        openai_base_url: "http://127.0.0.1".into(),
-
-        anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig {
-            atif: AtifExporterSettings {
-                dir: Some(temp.path().to_path_buf()),
-            },
-            ..Default::default()
-        },
-        metadata: None,
-        plugin_config: None,
-    };
-    let manager = SessionManager::new(config);
-    let mut start = llm_start();
-    start.session_id = Some("codex-uuid".into());
-    start.provider = "openai.responses".into();
-    let active = manager.start_llm(&HeaderMap::new(), start).await.unwrap();
-    manager
-        .end_llm(active, json!({ "ok": true }), json!({}))
-        .await
-        .unwrap();
-    manager
-        .apply_events(
-            &HeaderMap::new(),
-            vec![NormalizedEvent::AgentEnded(SessionEvent {
-                session_id: "codex-uuid".into(),
-                agent_kind: AgentKind::Codex,
-                event_name: "SessionEnd".into(),
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-        )
-        .await
-        .unwrap();
-
-    let atif: Value = serde_json::from_str(
-        &std::fs::read_to_string(temp.path().join("codex-uuid.atif.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(atif["agent"]["name"], json!("codex"));
-}
-
-// Synthetic gateway-only sessions (pure proxy traffic, unknown provider) keep the legacy
-// `gateway` label so existing observability semantics for unattributed traffic are preserved.
-#[tokio::test]
-async fn synthetic_gateway_session_keeps_gateway_label() {
-    let temp = tempfile::tempdir().unwrap();
-    let config = GatewayConfig {
-        bind: "127.0.0.1:0".parse().unwrap(),
-        openai_base_url: "http://127.0.0.1".into(),
-
-        anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig {
-            atif: AtifExporterSettings {
-                dir: Some(temp.path().to_path_buf()),
-            },
-            ..Default::default()
-        },
-        metadata: None,
-        plugin_config: None,
-    };
-    let manager = SessionManager::new(config);
-    let mut start = llm_start();
-    start.session_id = None;
-    start.provider = "openai.chat_completions".into(); // ambiguous → Gateway
-    let active = manager.start_llm(&HeaderMap::new(), start).await.unwrap();
-    manager
-        .end_llm(active, json!({ "ok": true }), json!({}))
-        .await
-        .unwrap();
-    manager
-        .apply_events(
-            &HeaderMap::new(),
-            vec![NormalizedEvent::AgentEnded(SessionEvent {
-                session_id: "gateway-gateway".into(),
-                agent_kind: AgentKind::Gateway,
-                event_name: "SessionEnd".into(),
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-        )
-        .await
-        .unwrap();
-
-    let atif: Value = serde_json::from_str(
-        &std::fs::read_to_string(temp.path().join("gateway-gateway.atif.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(atif["agent"]["name"], json!("gateway"));
-}
-
-// `TurnEnded` (synthesized from per-turn `Stop` hooks) writes ATIF without closing the agent
-// scope. This is the codex-0.129 workaround: codex has no `SessionEnd` hook, so per-turn
-// snapshots are how its ATIF gets written. After several turns the agent scope must remain open
-// and the trajectory file must reflect cumulative state.
-#[tokio::test]
-async fn turn_ended_snapshots_atif_without_closing_scope() {
-    let temp = tempfile::tempdir().unwrap();
-    let config = GatewayConfig {
-        bind: "127.0.0.1:0".parse().unwrap(),
-        openai_base_url: "http://127.0.0.1".into(),
-
-        anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig {
-            atif: AtifExporterSettings {
-                dir: Some(temp.path().to_path_buf()),
-            },
-            ..Default::default()
-        },
-        metadata: None,
-        plugin_config: None,
-    };
-    let manager = SessionManager::new(config);
-    let headers = HeaderMap::new();
-
-    // Open a codex session.
-    manager
-        .apply_events(
-            &headers,
-            vec![NormalizedEvent::AgentStarted(SessionEvent {
-                session_id: "codex-multi-turn".into(),
-                agent_kind: AgentKind::Codex,
-                event_name: "SessionStart".into(),
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-        )
-        .await
-        .unwrap();
-    assert_eq!(manager.open_session_count().await, 1);
-
-    // First turn ends — ATIF should be written even though SessionEnd never arrived.
-    manager
-        .apply_events(
-            &headers,
-            vec![NormalizedEvent::TurnEnded(SessionEvent {
-                session_id: "codex-multi-turn".into(),
-                agent_kind: AgentKind::Codex,
-                event_name: "Stop".into(),
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-        )
-        .await
-        .unwrap();
-
-    let atif_path = temp.path().join("codex-multi-turn.atif.json");
-    assert!(
-        atif_path.exists(),
-        "TurnEnded must produce an ATIF file during an open session"
-    );
-    // Session is still open — TurnEnded must not have torn it down.
-    assert_eq!(
-        manager.open_session_count().await,
-        1,
-        "TurnEnded must NOT close the agent scope or remove the session"
-    );
-
-    // Second turn ends — file should be overwritten with a cumulative trajectory.
-    manager
-        .apply_events(
-            &headers,
-            vec![NormalizedEvent::TurnEnded(SessionEvent {
-                session_id: "codex-multi-turn".into(),
-                agent_kind: AgentKind::Codex,
-                event_name: "Stop".into(),
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-        )
-        .await
-        .unwrap();
-    assert!(atif_path.exists());
-    assert_eq!(manager.open_session_count().await, 1);
-
-    let trajectory: Value = serde_json::from_slice(&std::fs::read(&atif_path).unwrap()).unwrap();
-    assert_eq!(trajectory["session_id"], json!("codex-multi-turn"));
-    assert_eq!(trajectory["agent"]["name"], json!("codex"));
-}
-
-// TurnEnded for a session that was never opened (no AgentStarted, no gateway LLM) is a no-op —
-// no observers were ever installed, so there's nothing to flush.
 #[tokio::test]
 async fn turn_ended_is_noop_for_session_with_no_agent_scope() {
     let temp = tempfile::tempdir().unwrap();
@@ -1951,12 +1876,6 @@ async fn turn_ended_is_noop_for_session_with_no_agent_scope() {
         openai_base_url: "http://127.0.0.1".into(),
 
         anthropic_base_url: "http://127.0.0.1".into(),
-        exporters: ExportersConfig {
-            atif: AtifExporterSettings {
-                dir: Some(temp.path().to_path_buf()),
-            },
-            ..Default::default()
-        },
         metadata: None,
         plugin_config: None,
     };

@@ -181,14 +181,50 @@ pub enum ApiSpecificResponse {
         /// Details about why the response is incomplete.
         #[serde(skip_serializing_if = "Option::is_none")]
         incomplete_details: Option<Json>,
+        /// Echoed previous response ID for conversation continuation.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        previous_response_id: Option<String>,
+        /// Whether this response is marked for server-side storage.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        store: Option<bool>,
+        /// Service tier used for the response.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        service_tier: Option<String>,
+        /// Truncation behavior metadata.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        truncation: Option<Json>,
+        /// Reasoning configuration/result metadata.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning: Option<Json>,
+        /// Raw input token details payload.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input_tokens_details: Option<Json>,
+        /// Raw output token details payload.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output_tokens_details: Option<Json>,
     },
 
     /// Anthropic Messages API-specific fields.
     #[serde(rename = "anthropic_messages")]
     AnthropicMessages {
+        /// Anthropic object type (typically `"message"`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        object_type: Option<String>,
+        /// Anthropic response role (typically `"assistant"`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
+        /// Raw Anthropic stop_reason.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stop_reason: Option<String>,
         /// Which stop sequence was matched (if any).
         #[serde(skip_serializing_if = "Option::is_none")]
         stop_sequence: Option<String>,
+        /// Anthropic response service tier when present.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        service_tier: Option<String>,
+        /// Anthropic container payload when present.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        container: Option<Json>,
         /// Full content blocks array for direct access.
         #[serde(skip_serializing_if = "Option::is_none")]
         content_blocks: Option<Vec<Json>>,
@@ -219,13 +255,10 @@ impl AnnotatedLlmResponse {
     pub fn response_text(&self) -> Option<&str> {
         match self.message.as_ref()? {
             MessageContent::Text(s) => Some(s.as_str()),
-            MessageContent::Parts(parts) => parts
-                .iter()
-                .map(|p| {
-                    let super::request::ContentPart::Text { text } = p;
-                    text.as_str()
-                })
-                .next(),
+            MessageContent::Parts(parts) => parts.iter().find_map(|p| match p {
+                super::request::ContentPart::Text { text } => Some(text.as_str()),
+                super::request::ContentPart::ImageUrl { .. } => None,
+            }),
         }
     }
 

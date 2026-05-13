@@ -317,12 +317,10 @@ fn maps_hermes_real_session_boundary_without_closing_per_turn_end() {
         }),
         &headers,
     );
-    // `on_session_end` is per-turn for hermes-agent: stays a HookMark so the agent scope remains
-    // open, but a follow-up `TurnEnded` is emitted so ATIF gets snapshotted each turn even when
-    // the session never reaches `on_session_finalize`.
-    assert_eq!(per_turn.events.len(), 2);
-    assert!(matches!(per_turn.events[0], NormalizedEvent::HookMark(_)));
-    assert!(matches!(per_turn.events[1], NormalizedEvent::TurnEnded(_)));
+    // `on_session_end` is per-turn for hermes-agent, so it snapshots ATIF without becoming a
+    // user-visible system trajectory step.
+    assert_eq!(per_turn.events.len(), 1);
+    assert!(matches!(per_turn.events[0], NormalizedEvent::TurnEnded(_)));
 
     let finalized = hermes::adapt(
         json!({
@@ -336,6 +334,29 @@ fn maps_hermes_real_session_boundary_without_closing_per_turn_end() {
         finalized.events[0],
         NormalizedEvent::AgentEnded(_)
     ));
+}
+
+#[test]
+fn maps_hermes_hook_event_name_and_subagent_from_extra_payload() {
+    let outcome = hermes::adapt(
+        json!({
+            "session_id": "hermes-session",
+            "extra": {
+                "hook_event_name": "subagent_stop",
+                "subagent_id": "worker-1"
+            }
+        }),
+        &HeaderMap::new(),
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::SubagentEnded(event) => {
+            assert_eq!(event.event_name, "subagent_stop");
+            assert_eq!(event.subagent_id, "worker-1");
+            assert_eq!(event.session_id, "hermes-session");
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
 }
 
 #[test]
@@ -373,6 +394,7 @@ fn maps_hermes_api_hooks_to_llm_lifecycle() {
                 event.request["fidelity"]["provider_payload_exact"],
                 json!(false)
             );
+            assert_eq!(event.metadata["provider_payload_exact"], json!(false));
         }
         event => panic!("unexpected event: {event:?}"),
     }
@@ -403,6 +425,171 @@ fn maps_hermes_api_hooks_to_llm_lifecycle() {
             assert_eq!(event.api_call_id, "hermes-session:task-1:2");
             assert_eq!(event.response["usage"]["prompt_tokens"], json!(10));
             assert_eq!(event.response["usage"]["completion_tokens"], json!(5));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
+fn maps_hermes_exact_api_hook_payloads_to_llm_lifecycle() {
+    let headers = HeaderMap::new();
+
+    let started = hermes::adapt(
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-session",
+            "extra": {
+                "task_id": "task-1",
+                "api_request_id": "turn-1:api:2",
+                "api_call_count": 2,
+                "model": "qwen",
+                "provider": "custom",
+                "request": {
+                    "method": "POST",
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "hello" }
+                        ],
+                        "tools": [
+                            { "type": "function", "function": { "name": "search_files" } }
+                        ]
+                    }
+                }
+            }
+        }),
+        &headers,
+    );
+    match &started.events[0] {
+        NormalizedEvent::LlmStarted(event) => {
+            assert_eq!(event.api_call_id, "turn-1:api:2");
+            assert_eq!(event.request["messages"][0]["content"], json!("hello"));
+            assert_eq!(
+                event.request["tools"][0]["function"]["name"],
+                json!("search_files")
+            );
+            assert_eq!(event.metadata["provider_payload_exact"], json!(true));
+            assert_eq!(
+                event.metadata["fidelity_source"],
+                json!("hermes_api_hooks_sanitized")
+            );
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+
+    let ended = hermes::adapt(
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "hermes-session",
+            "extra": {
+                "task_id": "task-1",
+                "api_request_id": "turn-1:api:2",
+                "api_call_count": 2,
+                "model": "qwen",
+                "response": {
+                    "model": "qwen",
+                    "finish_reason": "tool_calls",
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "search_files",
+                                    "arguments": "{\"query\":\"needle\"}"
+                                }
+                            }
+                        ]
+                    },
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5
+                    }
+                }
+            }
+        }),
+        &headers,
+    );
+    match &ended.events[0] {
+        NormalizedEvent::LlmEnded(event) => {
+            assert_eq!(event.api_call_id, "turn-1:api:2");
+            assert_eq!(event.response["tool_calls"][0]["id"], json!("call-1"));
+            assert_eq!(event.response["usage"]["prompt_tokens"], json!(10));
+            assert_eq!(event.metadata["provider_payload_exact"], json!(true));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
+fn maps_hermes_api_request_error_to_llm_end() {
+    let outcome = hermes::adapt(
+        json!({
+            "hook_event_name": "api_request_error",
+            "session_id": "hermes-session",
+            "extra": {
+                "task_id": "task-1",
+                "api_request_id": "turn-1:api:3",
+                "api_call_count": 3,
+                "model": "qwen",
+                "provider": "custom",
+                "status_code": 502,
+                "retry_count": 1,
+                "max_retries": 2,
+                "retryable": true,
+                "reason": "upstream",
+                "error": {
+                    "type": "BadGateway",
+                    "message": "gateway upstream error"
+                }
+            }
+        }),
+        &HeaderMap::new(),
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::LlmEnded(event) => {
+            assert_eq!(event.api_call_id, "turn-1:api:3");
+            assert_eq!(event.response["status_code"], json!(502));
+            assert_eq!(
+                event.response["error"]["message"],
+                json!("gateway upstream error")
+            );
+            assert_eq!(event.metadata["provider_payload_exact"], json!(false));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
+fn maps_hermes_null_request_as_lossy_summary() {
+    let outcome = hermes::adapt(
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-session",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 4,
+                "model": "qwen",
+                "provider": "custom",
+                "request": null,
+                "message_count": 2
+            }
+        }),
+        &HeaderMap::new(),
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::LlmStarted(event) => {
+            assert_eq!(event.api_call_id, "hermes-session:task-1:4");
+            assert_eq!(event.request["message_count"], json!(2));
+            assert_eq!(
+                event.request["fidelity"]["provider_payload_exact"],
+                json!(false)
+            );
+            assert_eq!(event.metadata["provider_payload_exact"], json!(false));
         }
         event => panic!("unexpected event: {event:?}"),
     }

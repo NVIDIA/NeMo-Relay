@@ -8,6 +8,9 @@ use crate::api::event::{BaseEvent, EventCategory, ScopeEvent};
 use crate::api::runtime::NemoFlowContextState;
 use crate::api::runtime::global_context;
 use crate::api::scope::{PopScopeParams, PushScopeParams};
+use crate::config_editor::{EditorConfig, EditorFieldKind};
+#[cfg(feature = "schema")]
+use crate::plugin::plugin_config_schema;
 use crate::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins,
     list_plugin_kinds, lookup_plugin, validate_plugin_config,
@@ -52,6 +55,28 @@ fn plugin_config(config: Json) -> PluginConfig {
     }
 }
 
+#[test]
+fn editor_schema_tracks_observability_config_types() {
+    let schema = ObservabilityConfig::editor_schema();
+    let atof = schema.field("atof").expect("atof section");
+    assert_eq!(atof.label, "ATOF");
+    assert_eq!(atof.kind, EditorFieldKind::Section);
+    assert!(atof.optional);
+
+    let atof_schema = atof.schema().expect("atof editor schema");
+    let mode = atof_schema.field("mode").expect("atof mode field");
+    assert_eq!(mode.kind, EditorFieldKind::Enum);
+    assert_eq!(mode.enum_values, &["append", "overwrite"]);
+
+    let otlp = schema
+        .field("openinference")
+        .expect("openinference section")
+        .schema()
+        .expect("openinference editor schema");
+    let headers = otlp.field("headers").expect("headers field");
+    assert_eq!(headers.kind, EditorFieldKind::StringMap);
+}
+
 fn push_agent(name: &str) -> crate::api::scope::ScopeHandle {
     crate::api::scope::push_scope(
         PushScopeParams::builder()
@@ -82,6 +107,50 @@ fn pop(handle: &crate::api::scope::ScopeHandle) {
             .build(),
     )
     .unwrap();
+}
+
+#[cfg(feature = "schema")]
+fn schema_has_property(schema: &Json, name: &str) -> bool {
+    schema_property(schema, name).is_some()
+}
+
+#[cfg(feature = "schema")]
+fn schema_property_has_enum(schema: &Json, name: &str, expected: &[&str]) -> bool {
+    schema_property(schema, name)
+        .and_then(|property| property.get("enum"))
+        .and_then(Json::as_array)
+        .is_some_and(|values| {
+            expected
+                .iter()
+                .all(|expected| values.iter().any(|value| value == *expected))
+        })
+}
+
+#[cfg(feature = "schema")]
+fn schema_property_has_default(schema: &Json, name: &str, expected: Json) -> bool {
+    schema_property(schema, name)
+        .and_then(|property| property.get("default"))
+        .is_some_and(|default| default == &expected)
+}
+
+#[cfg(feature = "schema")]
+fn schema_property<'a>(schema: &'a Json, name: &str) -> Option<&'a Json> {
+    match schema {
+        Json::Object(object) => {
+            if let Some(property) = object
+                .get("properties")
+                .and_then(Json::as_object)
+                .and_then(|properties| properties.get(name))
+            {
+                return Some(property);
+            }
+            object
+                .values()
+                .find_map(|value| schema_property(value, name))
+        }
+        Json::Array(values) => values.iter().find_map(|value| schema_property(value, name)),
+        _ => None,
+    }
 }
 
 #[test]
@@ -127,6 +196,87 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(generic.enabled);
     assert_eq!(generic.config["version"], json!(1));
     assert_eq!(generic.config["atif"]["agent_name"], json!("NeMo Flow"));
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn schema_contains_every_supported_observability_option() {
+    let schema = observability_config_schema();
+    for field in [
+        "version",
+        "atof",
+        "atif",
+        "opentelemetry",
+        "openinference",
+        "policy",
+        "enabled",
+        "output_directory",
+        "filename",
+        "mode",
+        "agent_name",
+        "agent_version",
+        "model_name",
+        "tool_definitions",
+        "extra",
+        "filename_template",
+        "transport",
+        "endpoint",
+        "headers",
+        "resource_attributes",
+        "service_name",
+        "service_namespace",
+        "service_version",
+        "instrumentation_scope",
+        "timeout_millis",
+        "unknown_component",
+        "unknown_field",
+        "unsupported_value",
+    ] {
+        assert!(
+            schema_has_property(&schema, field),
+            "schema missing property `{field}`:\n{}",
+            serde_json::to_string_pretty(&schema).unwrap()
+        );
+    }
+    assert!(schema_property_has_enum(
+        &schema,
+        "mode",
+        &["append", "overwrite"]
+    ));
+    assert!(schema_property_has_enum(
+        &schema,
+        "transport",
+        &["http_binary", "grpc"]
+    ));
+    assert!(schema_property_has_default(
+        &schema,
+        "mode",
+        json!("append")
+    ));
+    assert!(schema_property_has_default(
+        &schema,
+        "transport",
+        json!("http_binary")
+    ));
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn plugin_schema_contains_generic_plugin_surface() {
+    let schema = plugin_config_schema();
+    for field in [
+        "version",
+        "components",
+        "policy",
+        "kind",
+        "enabled",
+        "config",
+    ] {
+        assert!(
+            schema_has_property(&schema, field),
+            "plugin schema missing property `{field}`"
+        );
+    }
 }
 
 #[test]

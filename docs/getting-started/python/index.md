@@ -5,8 +5,9 @@ SPDX-License-Identifier: Apache-2.0
 
 # Python Quick Start
 
-This quick start shows the smallest Python workflow that emits scope, tool, and LLM
-events.
+This quick start shows the smallest Python workflow that emits scope, tool, and LLM events.
+
+[LangChain](https://www.langchain.com/langchain) and [LangGraph](https://www.langchain.com/langgraph) users should start with the [LangChain integration](langchain.md) or [LangGraph integration](langgraph.md) guides for the best experience in those frameworks.
 
 ## Choose an Install Path
 
@@ -126,6 +127,20 @@ These modules are the main Python APIs to use from applications and integrations
 
 Use these links to continue from the quick start into the core runtime concepts.
 
-- [Scopes](../about/concepts/scopes.md)
-- [Middleware](../about/concepts/middleware.md)
-- [Plugins](../about/concepts/plugins.md)
+- [LangChain integration](langchain.md)
+- [LangGraph integration](langgraph.md)
+- [Scopes](../../about/concepts/scopes.md)
+- [Middleware](../../about/concepts/middleware.md)
+- [Plugins](../../about/concepts/plugins.md)
+
+## Framework Integrations
+
+Use these guides when your Python application already uses LangChain or
+LangGraph and you want NeMo Flow observability through their public APIs.
+
+```{toctree}
+:maxdepth: 1
+
+LangChain Integration <langchain>
+LangGraph Integration <langgraph>
+```

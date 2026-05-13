@@ -109,7 +109,7 @@ fn cli_bare_invocation_runs_doctor_when_config_exists() {
     std::fs::create_dir_all(&xdg).unwrap();
     let cwd = temp.path().join("workdir");
     std::fs::create_dir_all(cwd.join(".nemo-flow")).unwrap();
-    std::fs::write(cwd.join(".nemo-flow/config.toml"), "[observability]\n").unwrap();
+    std::fs::write(cwd.join(".nemo-flow/config.toml"), "[upstream]\n").unwrap();
 
     let output = Command::new(gateway_bin())
         .current_dir(&cwd)
@@ -136,15 +136,8 @@ fn cli_bare_invocation_reports_invalid_config_resolution() {
     std::fs::create_dir_all(&xdg).unwrap();
     let cwd = temp.path().join("workdir");
     std::fs::create_dir_all(cwd.join(".nemo-flow")).unwrap();
-    std::fs::write(
-        cwd.join(".nemo-flow/config.toml"),
-        r#"
-[exporters.atof]
-dir = "./atof"
-mode = "replace"
-"#,
-    )
-    .unwrap();
+    std::fs::write(cwd.join(".nemo-flow/config.toml"), "[upstream]\n").unwrap();
+    std::fs::write(cwd.join(".nemo-flow/plugins.toml"), "components = [\n").unwrap();
 
     let output = Command::new(gateway_bin())
         .current_dir(&cwd)
@@ -160,7 +153,7 @@ mode = "replace"
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Configuration"));
     assert!(stdout.contains("Resolution"));
-    assert!(stdout.contains("invalid [exporters.atof].mode"));
+    assert!(stdout.contains("invalid plugin TOML"));
 }
 
 #[test]
@@ -173,12 +166,6 @@ fn cli_run_dry_run_resolves_config_and_command() {
 [upstream]
 openai_base_url = "http://file-openai"
 anthropic_base_url = "http://file-anthropic"
-
-[observability]
-atif_dir = "file-atif"
-
-[export.openinference]
-endpoint = "http://otel"
 
 [agents.hermes]
 command = "hermes --yolo chat"
@@ -240,8 +227,6 @@ command = "codex --full-auto"
         .env("NEMO_FLOW_GATEWAY_BIND", "127.0.0.1:0")
         .env("NEMO_FLOW_OPENAI_BASE_URL", "http://env-openai")
         .env("NEMO_FLOW_ANTHROPIC_BASE_URL", "http://env-anthropic")
-        .env("NEMO_FLOW_ATIF_DIR", "env-atif")
-        .env("NEMO_FLOW_OPENINFERENCE_ENDPOINT", "http://env-otel")
         .args(["run", "--agent", "codex", "--dry-run"])
         .output()
         .unwrap();
@@ -250,8 +235,8 @@ command = "codex --full-auto"
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("openai_base_url = http://env-openai"));
     assert!(stdout.contains("anthropic_base_url = http://env-anthropic"));
-    assert!(stdout.contains("atif_dir = env-atif"));
-    assert!(stdout.contains("openinference_endpoint = http://env-otel"));
+    assert!(!stdout.contains("atif_dir"));
+    assert!(!stdout.contains("openinference_endpoint"));
     assert!(stdout.contains("argv = codex"));
 }
 
@@ -298,10 +283,6 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
             "codex",
             "--gateway-url",
             &server_url,
-            "--atif-dir",
-            "atif",
-            "--openinference-endpoint",
-            "http://otel",
             "--profile",
             "coverage",
             "--session-metadata",
@@ -332,8 +313,6 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
         r#"{"continue":true}"#
     );
     assert!(request.contains("POST /hooks/codex HTTP/1.1"));
-    assert!(request.contains("x-nemo-flow-atif-dir: atif"));
-    assert!(request.contains("x-nemo-flow-openinference-endpoint: http://otel"));
     assert!(request.contains("x-nemo-flow-config-profile: coverage"));
     assert!(request.contains("x-nemo-flow-gateway-mode: passthrough"));
     assert!(request.contains(r#"{"hook_event_name":"sessionStart"}"#));

@@ -112,6 +112,13 @@ const MODELED_REQUEST_KEYS: &[&str] = &[
     "stop",
     "tools",
     "tool_choice",
+    "store",
+    "user",
+    "metadata",
+    "service_tier",
+    "parallel_tool_calls",
+    "top_logprobs",
+    "stream",
 ];
 
 // ---------------------------------------------------------------------------
@@ -263,6 +270,22 @@ impl LlmCodec for OpenAIChatCodec {
             params,
             tools,
             tool_choice,
+            store: obj.get("store").and_then(|v| v.as_bool()),
+            previous_response_id: None,
+            truncation: None,
+            reasoning: None,
+            include: None,
+            user: obj.get("user").and_then(|v| v.as_str()).map(String::from),
+            metadata: obj.get("metadata").cloned(),
+            service_tier: obj
+                .get("service_tier")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            parallel_tool_calls: obj.get("parallel_tool_calls").and_then(|v| v.as_bool()),
+            max_output_tokens: None,
+            max_tool_calls: None,
+            top_logprobs: obj.get("top_logprobs").and_then(|v| v.as_u64()),
+            stream: obj.get("stream").and_then(|v| v.as_bool()),
             extra,
         })
     }
@@ -289,6 +312,31 @@ impl LlmCodec for OpenAIChatCodec {
 
         if let Some(ref tool_choice) = annotated.tool_choice {
             insert_serialized(obj, "tool_choice", tool_choice, "tool_choice")?;
+        }
+
+        if let Some(store) = annotated.store {
+            obj.insert("store".into(), Json::Bool(store));
+        }
+        if let Some(ref user) = annotated.user {
+            obj.insert("user".into(), Json::String(user.clone()));
+        }
+        if let Some(ref metadata) = annotated.metadata {
+            obj.insert("metadata".into(), metadata.clone());
+        }
+        if let Some(ref service_tier) = annotated.service_tier {
+            obj.insert("service_tier".into(), Json::String(service_tier.clone()));
+        }
+        if let Some(parallel_tool_calls) = annotated.parallel_tool_calls {
+            obj.insert(
+                "parallel_tool_calls".into(),
+                Json::Bool(parallel_tool_calls),
+            );
+        }
+        if let Some(top_logprobs) = annotated.top_logprobs {
+            obj.insert("top_logprobs".into(), Json::from(top_logprobs));
+        }
+        if let Some(stream) = annotated.stream {
+            obj.insert("stream".into(), Json::Bool(stream));
         }
 
         for (k, v) in &annotated.extra {

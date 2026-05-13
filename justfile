@@ -437,15 +437,20 @@ PY
     rm -f "$metadata_file"
 }
 
-set_node_package_version() {
+set_node_package_versions() {
     local version="$1"
     set_npm_package_version crates/node/package.json package-lock.json "$version" crates/node
+    set_npm_package_version integrations/openclaw/package.json package-lock.json "$version" integrations/openclaw
+}
+
+set_node_package_version() {
+    set_node_package_versions "$1"
 }
 
 set_project_version() {
     local version="$1"
     set_cargo_workspace_version "$version"
-    set_node_package_version "$version"
+    set_node_package_versions "$version"
 }
 
 set_python_package_version() {

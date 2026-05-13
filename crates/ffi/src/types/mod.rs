@@ -11,7 +11,7 @@
 //! with their corresponding `nemo_flow_*_free` function.
 
 use libc::c_char;
-use nemo_flow::api::runtime::ScopeStackHandle;
+use nemo_flow::api::runtime::{ScopeStackHandle, ThreadScopeStackBinding};
 use nemo_flow::plugin::PluginRegistrationContext;
 use serde_json::Value as Json;
 
@@ -48,6 +48,8 @@ pub struct FfiLLMRequest(pub LlmRequest);
 pub struct FfiEvent(pub Event);
 /// Opaque handle to an isolated scope stack for per-request/per-task isolation.
 pub struct FfiScopeStack(pub ScopeStackHandle);
+/// Opaque handle to a captured thread-local scope stack binding.
+pub struct FfiThreadScopeStackBinding(pub ThreadScopeStackBinding);
 /// Opaque ATIF exporter handle.
 pub struct FfiAtifExporter(pub nemo_flow::observability::atif::AtifExporter);
 /// Opaque ATOF JSONL exporter handle.

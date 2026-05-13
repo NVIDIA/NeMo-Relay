@@ -25,9 +25,12 @@ pre-release or build-metadata variants used during packaging.
   workspace version changes.
 - `crates/node/package.json` carries its own npm package version and must stay
   aligned with the workspace-root `package-lock.json`.
-- `package-lock.json` records the Node package version under
-  `packages["crates/node"].version`. The workspace-root lockfile may not have a
-  top-level `version` field.
+- `integrations/openclaw/package.json` carries the OpenClaw npm plugin version
+  and must stay aligned with the workspace-root `package-lock.json`.
+- `package-lock.json` records Node package versions under
+  `packages["crates/node"].version` and
+  `packages["integrations/openclaw"].version`. The workspace-root lockfile may
+  not have a top-level `version` field.
 - `crates/wasm/package.json` is a local dev manifest. Do not treat it as the
   publishable package manifest unless it gains an explicit `version` field.
 - The publishable WebAssembly npm package version is derived from
@@ -44,11 +47,14 @@ pre-release or build-metadata variants used during packaging.
    - `workspace.dependencies.nemo-flow-adaptive.version`
    - `workspace.dependencies.nemo-flow-ffi.version`
    - `crates/node/package.json` `version`
+   - `integrations/openclaw/package.json` `version`
    - `package-lock.json` `packages["crates/node"].version`
+   - `package-lock.json` `packages["integrations/openclaw"].version`
 3. If editing helper code, keep `set_project_version`,
-   `set_cargo_workspace_version`, and `set_node_package_version` aligned with
-   those same fields. `set_npm_package_version` remains the reusable npm JSON
-   helper for Node and WebAssembly packaging recipes.
+   `set_cargo_workspace_version`, and `set_node_package_versions` aligned with
+   those same fields. `set_node_package_version` remains a compatibility alias.
+   `set_npm_package_version` remains the reusable npm JSON helper for Node and
+   WebAssembly packaging recipes.
 4. Refresh generated surfaces:
    - Run `cargo check --workspace` to refresh `Cargo.lock` if workspace package
      entries changed.
@@ -69,7 +75,7 @@ pre-release or build-metadata variants used during packaging.
 ## Validation
 
 - `rg -n '^version =|nemo-flow = \\{ version =|nemo-flow-adaptive = \\{ version =' Cargo.toml`
-- `rg -n '\"version\"' crates/node/package.json package-lock.json`
+- `rg -n '\"version\"' crates/node/package.json integrations/openclaw/package.json package-lock.json`
 - `cargo check --workspace`
 - If Rust attribution files are expected to stay current:
   `./scripts/generate_attributions.sh rust`
@@ -101,6 +107,7 @@ pre-release or build-metadata variants used during packaging.
 - `package.json`
 - `package-lock.json`
 - `crates/node/package.json`
+- `integrations/openclaw/package.json`
 - `crates/wasm/Cargo.toml`
 - `crates/wasm/package.json`
 - `crates/wasm/scripts/prepare_pkg.mjs`
