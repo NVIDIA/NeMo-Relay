@@ -116,58 +116,82 @@ pub(crate) fn detect_installed_agents_in(path_var: Option<&std::ffi::OsStr>) -> 
 pub(crate) fn build_config(answers: &SetupAnswers) -> DocumentMut {
     let mut doc = DocumentMut::new();
 
-    // Build the exporter table once so selecting multiple backends produces nested per-exporter
-    // sections, not separate legacy observability/export blocks.
-    let want_atif = answers.backends.contains(&ObservabilityBackend::Atif);
-    let want_atof = answers.backends.contains(&ObservabilityBackend::Atof);
-    let want_openinference = answers
-        .backends
-        .contains(&ObservabilityBackend::OpenInference)
-        && answers.openinference_endpoint.is_some();
-    if want_atif || want_atof || want_openinference {
-        let mut exporters = Table::new();
-        if want_atif {
-            let mut atif = Table::new();
-            atif["dir"] = value("./atif");
-            exporters.insert("atif", Item::Table(atif));
-        }
-        if want_atof {
-            let mut atof = Table::new();
-            atof["dir"] = value("./atof");
-            atof["mode"] = value("append");
-            atof["filename_template"] = value("{session_id}.jsonl");
-            exporters.insert("atof", Item::Table(atof));
-        }
-        if let Some(endpoint) = answers.openinference_endpoint.as_deref() {
-            let mut openinference = Table::new();
-            openinference["endpoint"] = value(endpoint);
-            exporters.insert("openinference", Item::Table(openinference));
-        }
+    if let Some(exporters) = build_exporters_table(answers) {
         doc["exporters"] = Item::Table(exporters);
     }
 
-    if !answers.agents.is_empty() {
-        let mut agents_table = Table::new();
-        for agent in &answers.agents {
-            let (key, command) = match agent {
-                CodingAgent::ClaudeCode => ("claude", "claude"),
-                CodingAgent::Codex => ("codex", "codex"),
-                CodingAgent::Cursor => ("cursor", "cursor-agent"),
-                CodingAgent::Hermes => ("hermes", "hermes"),
-            };
-            let mut agent_table = Table::new();
-            agent_table["command"] = value(command);
-            if matches!(agent, CodingAgent::Hermes)
-                && let Some(path) = answers.hermes_hooks_path.as_deref()
-            {
-                agent_table["hooks_path"] = value(path.display().to_string());
-            }
-            agents_table.insert(key, Item::Table(agent_table));
-        }
+    if let Some(agents_table) = build_agents_table(answers) {
         doc["agents"] = Item::Table(agents_table);
     }
 
     doc
+}
+
+fn build_exporters_table(answers: &SetupAnswers) -> Option<Table> {
+    if !has_selected_exporter(answers) {
+        return None;
+    }
+
+    let mut exporters = Table::new();
+    if answers.backends.contains(&ObservabilityBackend::Atif) {
+        insert_atif_exporter(&mut exporters);
+    }
+    if answers.backends.contains(&ObservabilityBackend::Atof) {
+        insert_atof_exporter(&mut exporters);
+    }
+    if let Some(endpoint) = answers.openinference_endpoint.as_deref() {
+        insert_openinference_exporter(&mut exporters, endpoint);
+    }
+    Some(exporters)
+}
+
+fn has_selected_exporter(answers: &SetupAnswers) -> bool {
+    answers.backends.contains(&ObservabilityBackend::Atif)
+        || answers.backends.contains(&ObservabilityBackend::Atof)
+        || (answers
+            .backends
+            .contains(&ObservabilityBackend::OpenInference)
+            && answers.openinference_endpoint.is_some())
+}
+
+fn insert_atif_exporter(exporters: &mut Table) {
+    let mut atif = Table::new();
+    atif["dir"] = value("./atif");
+    exporters.insert("atif", Item::Table(atif));
+}
+
+fn insert_atof_exporter(exporters: &mut Table) {
+    let mut atof = Table::new();
+    atof["dir"] = value("./atof");
+    atof["mode"] = value("append");
+    atof["filename_template"] = value("{session_id}.jsonl");
+    exporters.insert("atof", Item::Table(atof));
+}
+
+fn insert_openinference_exporter(exporters: &mut Table, endpoint: &str) {
+    let mut openinference = Table::new();
+    openinference["endpoint"] = value(endpoint);
+    exporters.insert("openinference", Item::Table(openinference));
+}
+
+fn build_agents_table(answers: &SetupAnswers) -> Option<Table> {
+    if answers.agents.is_empty() {
+        return None;
+    }
+
+    let mut agents_table = Table::new();
+    for agent in &answers.agents {
+        let (key, command) = agent_key_and_command(*agent);
+        let mut agent_table = Table::new();
+        agent_table["command"] = value(command);
+        if matches!(agent, CodingAgent::Hermes)
+            && let Some(path) = answers.hermes_hooks_path.as_deref()
+        {
+            agent_table["hooks_path"] = value(path.display().to_string());
+        }
+        agents_table.insert(key, Item::Table(agent_table));
+    }
+    Some(agents_table)
 }
 
 /// Writes the setup's TOML document to the scope-appropriate path(s).
