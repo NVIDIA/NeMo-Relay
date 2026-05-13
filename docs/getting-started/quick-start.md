@@ -11,6 +11,8 @@ Choose the Quick Start guide for the primary binding that you plan to use.
 :maxdepth: 1
 
 Python Quick Start <python>
+LangChain Integration <python-langchain>
+LangGraph Integration <python-langgraph>
 Node.js Quick Start <nodejs>
 Rust Quick Start <rust>
 ```
