@@ -44,6 +44,7 @@ export class NemoFlowRuntimeState {
   private modulesValue?: NemoFlowModules;
   private backendValue: HookReplayBackend | undefined;
   private initializedPluginHost = false;
+  private pluginHostOutputsHealthy = false;
   private started = false;
   private beforeExitListener?: () => void;
   private unavailableLogged = false;
@@ -68,6 +69,7 @@ export class NemoFlowRuntimeState {
     return createHealthSnapshot({
       status: this.statusValue,
       initializedPluginHost: this.initializedPluginHost,
+      pluginHostOutputsHealthy: this.pluginHostOutputsHealthy,
       config: this.config,
       ...(backendState === undefined
         ? this.lastCounters === undefined
@@ -104,6 +106,8 @@ export class NemoFlowRuntimeState {
   /** Do the startup work behind a single-flight guard. */
   private async startInternal(ctx: StartContext): Promise<void> {
     delete this.lastCounters;
+    this.initializedPluginHost = false;
+    this.pluginHostOutputsHealthy = false;
 
     let modules: NemoFlowModules;
     try {
@@ -142,11 +146,10 @@ export class NemoFlowRuntimeState {
         const activationReport = await modules.pluginHost.initialize(hostConfig);
         logDiagnostics(ctx.logger, activationReport.diagnostics);
         this.initializedPluginHost = true;
-        if (
-          activationReport.diagnostics.some((diagnostic) => diagnostic.level === "error") &&
-          degradedReason === undefined
-        ) {
-          degradedReason = "NeMo Flow plugin host initialization reported errors";
+        const hasInitializationErrors = activationReport.diagnostics.some((diagnostic) => diagnostic.level === "error");
+        this.pluginHostOutputsHealthy = !hasInitializationErrors;
+        if (hasInitializationErrors) {
+          degradedReason ??= "NeMo Flow plugin host initialization reported errors";
         }
       } catch (error) {
         degradedReason = `failed to initialize NeMo Flow plugin host: ${toMessage(error)}`;
@@ -213,6 +216,7 @@ export class NemoFlowRuntimeState {
         log.warn?.(`failed to clear NeMo Flow plugin host: ${toMessage(error)}`);
       }
       this.initializedPluginHost = false;
+      this.pluginHostOutputsHealthy = false;
     }
 
     this.started = false;

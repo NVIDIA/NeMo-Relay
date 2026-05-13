@@ -39,12 +39,13 @@ export type NemoFlowHealthSnapshot = {
 export function createHealthSnapshot(params: {
   status: HookReplayBackendStatus;
   initializedPluginHost: boolean;
+  pluginHostOutputsHealthy: boolean;
   config: NemoFlowHookBackendConfig;
   counters?: HookReplayBackendState["counters"];
 }): NemoFlowHealthSnapshot {
   const lastError = "reason" in params.status ? params.status.reason : undefined;
   const outputs = configuredObservabilityOutputs(params.config);
-  const pluginHostFailed = params.status.state === "degraded" && !params.initializedPluginHost;
+  const pluginHostFailed = params.status.state === "degraded" && !params.pluginHostOutputsHealthy;
   return {
     id: "nemo-flow",
     backend: "hooks",

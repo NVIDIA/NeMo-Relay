@@ -272,6 +272,40 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     }
   });
 
+  it("reports configured outputs degraded when plugin host initialization returns error diagnostics", async () => {
+    const modules = createModules({
+      initializeDiagnostics: [{ level: "error", code: "activation_failed", message: "failed to activate" }],
+    });
+    const api = createApi({
+      pluginConfig: {
+        plugins: {
+          version: 1,
+          components: [
+            {
+              kind: "observability",
+              config: { version: 1, atif: { enabled: true } },
+            },
+          ],
+        },
+      },
+    });
+
+    registerPlugin(api, async () => modules);
+    const service = api.calls.services[0];
+    assert.ok(service);
+    try {
+      await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+
+      const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+      assert.equal(status.status.state, "degraded");
+      assert.equal(status.status.reason, "NeMo Flow plugin host initialization reported errors");
+      assert.equal(status.initializedPluginHost, true);
+      assert.equal(status.outputs.atif, "degraded");
+    } finally {
+      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+    }
+  });
+
   it("degrades hook replay when plugin host validation throws", async () => {
     const modules = createModules({
       validateThrows: new Error("invalid plugin document"),
