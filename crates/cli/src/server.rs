@@ -7,6 +7,7 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use nemo_flow::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
 use reqwest::Client;
 use serde_json::Value;
 use tokio::net::TcpListener;
@@ -64,19 +65,21 @@ pub(crate) async fn serve_listener(
     config: GatewayConfig,
     shutdown: Option<oneshot::Receiver<()>>,
 ) -> Result<(), CliError> {
+    let plugin_activation = PluginActivation::initialize(config.plugin_config.clone()).await?;
     let app = router(config);
-    match shutdown {
+    let serve_result = match shutdown {
         Some(receiver) => {
             axum::serve(listener, app)
                 .with_graceful_shutdown(async {
                     let _ = receiver.await;
                 })
-                .await?;
+                .await
         }
-        None => {
-            axum::serve(listener, app).await?;
-        }
-    }
+        None => axum::serve(listener, app).await,
+    };
+    let clear_result = plugin_activation.clear();
+    serve_result?;
+    clear_result?;
     Ok(())
 }
 
@@ -116,6 +119,42 @@ pub(crate) fn router(config: GatewayConfig) -> Router {
 
 async fn healthz() -> Json<Value> {
     Json(serde_json::json!({ "status": "ok" }))
+}
+
+struct PluginActivation {
+    active: bool,
+}
+
+impl PluginActivation {
+    async fn initialize(config: Option<Value>) -> Result<Self, CliError> {
+        let Some(config) = config else {
+            return Ok(Self { active: false });
+        };
+        let plugin_config: PluginConfig = serde_json::from_value(config)
+            .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?;
+        initialize_plugins(plugin_config)
+            .await
+            .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
+        Ok(Self { active: true })
+    }
+
+    fn clear(mut self) -> Result<(), CliError> {
+        if self.active {
+            self.active = false;
+            clear_plugin_configuration()
+                .map_err(|error| CliError::Config(format!("plugin teardown failed: {error}")))?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for PluginActivation {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = clear_plugin_configuration();
+            self.active = false;
+        }
+    }
 }
 
 // Normalizes a Codex hook payload, applies all resulting events before responding, and returns the

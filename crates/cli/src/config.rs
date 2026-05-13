@@ -409,9 +409,8 @@ impl Default for CursorAgentConfig {
 }
 
 // TOML file shape grouped by user intent. Sections map 1:1 onto fields already present on
-// `GatewayConfig` / `AgentConfigs`; this is a rename pass — no new runtime knobs land in this
-// pass. `[plugins]` is reserved as a forward-compatible block so users editing config today
-// need no rewrite once the plugin runtime lands.
+// `GatewayConfig` / `AgentConfigs`; plugin config is passed through to the runtime's generic
+// `PluginConfig` activation path.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileConfig {
     upstream: Option<FileUpstreamConfig>,
@@ -472,8 +471,7 @@ struct FileOpenInferenceConfig {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FilePluginsConfig {
-    // Reserved for the plugin runtime. Stored on `GatewayConfig.plugin_config` for now;
-    // nothing in-process consumes it until the plugin runtime lands.
+    // Generic plugin initialization shape. The gateway activates this process-wide at startup.
     config: Option<Value>,
 }
 
@@ -807,8 +805,8 @@ fn apply_file_exporters_config(
     Ok(())
 }
 
-// Applies plugin config. Reserved for the plugin runtime — stored on `GatewayConfig.plugin_config`
-// and forwarded through hook headers, but no in-process consumer until the runtime lands.
+// Applies plugin config. The gateway activates process-level plugin config at startup; hook headers
+// still carry the value as session metadata until scoped plugin activation exists.
 fn apply_file_plugins_config(gateway: &mut GatewayConfig, plugins: Option<FilePluginsConfig>) {
     let Some(plugins) = plugins else {
         return;

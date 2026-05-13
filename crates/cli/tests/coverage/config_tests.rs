@@ -202,6 +202,10 @@ command = "hermes --yolo chat"
     );
     assert_eq!(resolved.gateway.metadata, Some(json!({ "team": "obs" })));
     assert_eq!(
+        resolved.gateway.plugin_config,
+        Some(json!({ "components": [] }))
+    );
+    assert_eq!(
         resolved.agents.codex.command.as_deref(),
         Some("codex --approval-mode never")
     );
