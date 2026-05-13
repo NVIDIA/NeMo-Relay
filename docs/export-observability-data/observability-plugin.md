@@ -91,7 +91,9 @@ run.
 Use only one source for plugin config. The gateway reports an error when
 `plugin.toml`, `[plugins].config`, or `--plugin-config` are used together.
 
-`plugin.toml` uses the generic plugin config shape at the file root:
+`plugin.toml` uses the generic plugin config shape at the file root. The
+example below shows every observability section; include only the sections you
+want to configure. Missing sections behave like disabled sections.
 
 `version = 1` is recommended for clarity but not required. The root plugin
 config version and observability component config version both default to `1`
@@ -117,6 +119,45 @@ mode = "overwrite"
 enabled = true
 output_directory = "logs"
 filename_template = "trajectory-{session_id}.json"
+
+[components.config.opentelemetry]
+enabled = true
+transport = "http_binary"
+endpoint = "http://localhost:4318/v1/traces"
+service_name = "nemo-flow"
+service_namespace = "agent"
+service_version = "0.2.0"
+instrumentation_scope = "nemo-flow-observability"
+timeout_millis = 3000
+
+[components.config.opentelemetry.headers]
+authorization = "Bearer <token>"
+
+[components.config.opentelemetry.resource_attributes]
+"deployment.environment" = "dev"
+"service.instance.id" = "local"
+
+[components.config.openinference]
+enabled = true
+transport = "http_binary"
+endpoint = "http://localhost:6006/v1/traces"
+service_name = "nemo-flow"
+service_namespace = "agent"
+service_version = "0.2.0"
+instrumentation_scope = "nemo-flow-openinference"
+timeout_millis = 3000
+
+[components.config.openinference.headers]
+authorization = "Bearer <token>"
+
+[components.config.openinference.resource_attributes]
+"deployment.environment" = "dev"
+"service.instance.id" = "local"
+
+[components.config.policy]
+unknown_component = "warn"
+unknown_field = "warn"
+unsupported_value = "error"
 ```
 
 The file format is generic. Other plugin kinds can use the same `components`
