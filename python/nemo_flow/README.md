@@ -77,6 +77,7 @@ pip install "nemo-flow[langchain]"
 ```
 
 #### LangGraph Integration
+
 [LangGraph](https://www.langchain.com/langgraph) integration is available with the `langgraph` extra, this builds upon and includes the `langchain` extra as well.
 
 ```bash
@@ -88,6 +89,7 @@ pip install "nemo-flow[langgraph]"
 ```
 
 #### LangChain NVIDIA Integration
+
 The [LangChain NVIDIA](https://github.com/langchain-ai/langchain-nvidia) extra builds upon the `langchain` extra adding a compatible version of the `langchain-nvidia-ai-endpoints` package.
 
 ```bash
@@ -144,6 +146,7 @@ The public package modules are:
 - `nemo_flow.codecs`
 
 ### Integrations
+
 - `nemo_flow.integrations.langchain`
 - `nemo_flow.integrations.langgraph`
 
