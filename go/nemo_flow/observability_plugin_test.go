@@ -12,12 +12,12 @@ import (
 )
 
 const (
-	clearPluginConfigurationFailed = "ClearPluginConfiguration failed"
-	initializePluginsFailed        = "InitializePlugins failed"
-	trajectoryFilenamePrefix       = "trajectory-"
-	firstAgentName                 = "go-first-agent"
-	nestedAgentName                = "go-nested-agent"
-	secondAgentName                = "go-second-agent"
+	ClearPluginConfigurationFailed = "ClearPluginConfiguration failed"
+	InitializePluginsFailed        = "InitializePlugins failed"
+	TrajectoryFilenamePrefix       = "trajectory-"
+	FirstAgentName                 = "go-first-agent"
+	NestedAgentName                = "go-nested-agent"
+	SecondAgentName                = "go-second-agent"
 )
 
 func TestObservabilityConfigHelpers(t *testing.T) {
@@ -50,7 +50,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 
 func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf("%s: %v", clearPluginConfigurationFailed, err)
+		t.Fatalf("%s: %v", ClearPluginConfigurationFailed, err)
 	}
 	dir := t.TempDir()
 	config := NewObservabilityConfig()
@@ -68,7 +68,7 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 	atif.ToolDefinitions = []map[string]any{{"name": "search"}}
 	atif.Extra = map[string]any{"binding": "go"}
 	atif.OutputDirectory = dir
-	atif.FilenameTemplate = trajectoryFilenamePrefix + "{session_id}.json"
+	atif.FilenameTemplate = TrajectoryFilenamePrefix + "{session_id}.json"
 	config.Atif = &atif
 
 	if report, err := ValidatePluginConfig(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}}); err != nil {
@@ -77,7 +77,7 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 		t.Fatalf("unexpected diagnostics: %#v", report.Diagnostics)
 	}
 	if _, err := InitializePlugins(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}}); err != nil {
-		t.Fatalf("%s: %v", initializePluginsFailed, err)
+		t.Fatalf("%s: %v", InitializePluginsFailed, err)
 	}
 
 	handle, err := PushScope("go-observability-agent", ScopeTypeAgent, WithInput(json.RawMessage(`{"agent":true}`)))
@@ -91,7 +91,7 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 		t.Fatalf("PopScope failed: %v", err)
 	}
 	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf("%s: %v", clearPluginConfigurationFailed, err)
+		t.Fatalf("%s: %v", ClearPluginConfigurationFailed, err)
 	}
 
 	jsonl := string(mustReadFile(t, filepath.Join(dir, eventsJSONLFilename)))
@@ -99,7 +99,7 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 		t.Fatalf("expected 3 JSONL records, got %d: %s", got, jsonl)
 	}
 
-	trajectoryPath := trajectoryFilePath(dir, handle)
+	trajectoryPath := TrajectoryFilePath(dir, handle)
 	var trajectory map[string]any
 	if err := json.Unmarshal(mustReadFile(t, trajectoryPath), &trajectory); err != nil {
 		t.Fatalf("failed to read trajectory: %v", err)
@@ -114,36 +114,36 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 }
 
 func TestObservabilityPluginAtifSplitsMultipleTopLevelAgents(t *testing.T) {
-	dir := t.TempDir()
-	initializeAtifPlugin(t, dir)
-	first := emitAgentStart(t, "first", firstAgentName)
-	nested := emitAgentStart(t, "nested", nestedAgentName)
-	emitAgentEnd(t, "nested", nested)
-	emitAgentEnd(t, "first", first)
-	second := emitAgentTrajectory(t, "second", secondAgentName)
-	requireNoError(t, ClearPluginConfiguration(), clearPluginConfigurationFailed)
+	Dir := t.TempDir()
+	InitializeAtifPlugin(t, Dir)
+	First := EmitAgentStart(t, "first", FirstAgentName)
+	Nested := EmitAgentStart(t, "nested", NestedAgentName)
+	EmitAgentEnd(t, "nested", Nested)
+	EmitAgentEnd(t, "first", First)
+	Second := EmitAgentTrajectory(t, "second", SecondAgentName)
+	requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
 
-	files, err := filepath.Glob(filepath.Join(dir, trajectoryFilenamePrefix+"*.json"))
+	Files, err := filepath.Glob(filepath.Join(Dir, TrajectoryFilenamePrefix+"*.json"))
 	if err != nil {
 		t.Fatalf("Glob failed: %v", err)
 	}
-	if len(files) != 2 {
-		t.Fatalf("expected 2 ATIF trajectory files, got %d: %#v", len(files), files)
+	if len(Files) != 2 {
+		t.Fatalf("expected 2 ATIF trajectory files, got %d: %#v", len(Files), Files)
 	}
 
-	firstPayload := string(mustReadFile(t, trajectoryFilePath(dir, first)))
-	secondPayload := string(mustReadFile(t, trajectoryFilePath(dir, second)))
-	if !strings.Contains(firstPayload, firstAgentName) || !strings.Contains(firstPayload, nestedAgentName) {
-		t.Fatalf("expected first trajectory to include first and nested agents: %s", firstPayload)
+	FirstPayload := string(mustReadFile(t, TrajectoryFilePath(Dir, First)))
+	SecondPayload := string(mustReadFile(t, TrajectoryFilePath(Dir, Second)))
+	if !strings.Contains(FirstPayload, FirstAgentName) || !strings.Contains(FirstPayload, NestedAgentName) {
+		t.Fatalf("expected first trajectory to include first and nested agents: %s", FirstPayload)
 	}
-	if strings.Contains(firstPayload, secondAgentName) {
-		t.Fatalf("first trajectory leaked second agent events: %s", firstPayload)
+	if strings.Contains(FirstPayload, SecondAgentName) {
+		t.Fatalf("first trajectory leaked second agent events: %s", FirstPayload)
 	}
-	if !strings.Contains(secondPayload, secondAgentName) {
-		t.Fatalf("expected second trajectory to include second agent: %s", secondPayload)
+	if !strings.Contains(SecondPayload, SecondAgentName) {
+		t.Fatalf("expected second trajectory to include second agent: %s", SecondPayload)
 	}
-	if strings.Contains(secondPayload, firstAgentName) || strings.Contains(secondPayload, nestedAgentName) {
-		t.Fatalf("second trajectory leaked first trajectory events: %s", secondPayload)
+	if strings.Contains(SecondPayload, FirstAgentName) || strings.Contains(SecondPayload, NestedAgentName) {
+		t.Fatalf("second trajectory leaked first trajectory events: %s", SecondPayload)
 	}
 }
 
@@ -180,7 +180,7 @@ func TestObservabilityPluginListKindIsAutomatic(t *testing.T) {
 
 func TestObservabilityAtifOpenAgentFlushesOnClear(t *testing.T) {
 	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf("%s: %v", clearPluginConfigurationFailed, err)
+		t.Fatalf("%s: %v", ClearPluginConfigurationFailed, err)
 	}
 	dir := t.TempDir()
 	config := NewObservabilityConfig()
@@ -189,14 +189,14 @@ func TestObservabilityAtifOpenAgentFlushesOnClear(t *testing.T) {
 	atif.OutputDirectory = dir
 	config.Atif = &atif
 	if _, err := InitializePlugins(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}}); err != nil {
-		t.Fatalf("%s: %v", initializePluginsFailed, err)
+		t.Fatalf("%s: %v", InitializePluginsFailed, err)
 	}
 	handle, err := PushScope("go-open-agent", ScopeTypeAgent)
 	if err != nil {
 		t.Fatalf("PushScope failed: %v", err)
 	}
 	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf("%s: %v", clearPluginConfigurationFailed, err)
+		t.Fatalf("%s: %v", ClearPluginConfigurationFailed, err)
 	}
 	path := filepath.Join(dir, "nemo-flow-atif-"+handle.UUID()+".json")
 	if _, err := os.Stat(path); err != nil {
@@ -207,44 +207,44 @@ func TestObservabilityAtifOpenAgentFlushesOnClear(t *testing.T) {
 	}
 }
 
-func initializeAtifPlugin(t *testing.T, dir string) {
+func InitializeAtifPlugin(t *testing.T, Dir string) {
 	t.Helper()
 	t.Cleanup(func() {
-		requireNoError(t, ClearPluginConfiguration(), clearPluginConfigurationFailed)
+		requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
 	})
-	requireNoError(t, ClearPluginConfiguration(), clearPluginConfigurationFailed)
+	requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
 
-	config := NewObservabilityConfig()
-	atif := NewObservabilityAtifConfig()
-	atif.Enabled = true
-	atif.OutputDirectory = dir
-	atif.FilenameTemplate = trajectoryFilenamePrefix + "{session_id}.json"
-	config.Atif = &atif
+	Config := NewObservabilityConfig()
+	Atif := NewObservabilityAtifConfig()
+	Atif.Enabled = true
+	Atif.OutputDirectory = Dir
+	Atif.FilenameTemplate = TrajectoryFilenamePrefix + "{session_id}.json"
+	Config.Atif = &Atif
 
-	_, err := InitializePlugins(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}})
-	requireNoError(t, err, initializePluginsFailed)
+	_, Err := InitializePlugins(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(Config)}})
+	requireNoError(t, Err, InitializePluginsFailed)
 }
 
-func emitAgentTrajectory(t *testing.T, label string, name string) *ScopeHandle {
+func EmitAgentTrajectory(t *testing.T, Label string, Name string) *ScopeHandle {
 	t.Helper()
-	handle := emitAgentStart(t, label, name)
-	emitAgentEnd(t, label, handle)
-	return handle
+	Handle := EmitAgentStart(t, Label, Name)
+	EmitAgentEnd(t, Label, Handle)
+	return Handle
 }
 
-func emitAgentStart(t *testing.T, label string, name string) *ScopeHandle {
+func EmitAgentStart(t *testing.T, Label string, Name string) *ScopeHandle {
 	t.Helper()
-	handle, err := PushScope(name, ScopeTypeAgent, WithInput(json.RawMessage(`{"agent":"`+label+`"}`)))
-	requireNoError(t, err, "PushScope "+label+" failed")
-	requireNoError(t, EmitEvent("go-"+label+"-mark", WithEventParent(handle), WithEventData(json.RawMessage(`{"agent":"`+label+`"}`))), "EmitEvent "+label+" failed")
-	return handle
+	Handle, Err := PushScope(Name, ScopeTypeAgent, WithInput(json.RawMessage(`{"agent":"`+Label+`"}`)))
+	requireNoError(t, Err, "PushScope "+Label+" failed")
+	requireNoError(t, EmitEvent("go-"+Label+"-mark", WithEventParent(Handle), WithEventData(json.RawMessage(`{"agent":"`+Label+`"}`))), "EmitEvent "+Label+" failed")
+	return Handle
 }
 
-func emitAgentEnd(t *testing.T, label string, handle *ScopeHandle) {
+func EmitAgentEnd(t *testing.T, Label string, Handle *ScopeHandle) {
 	t.Helper()
-	requireNoError(t, PopScope(handle, WithOutput(json.RawMessage(`{"done":true}`))), "PopScope "+label+" failed")
+	requireNoError(t, PopScope(Handle, WithOutput(json.RawMessage(`{"done":true}`))), "PopScope "+Label+" failed")
 }
 
-func trajectoryFilePath(dir string, handle *ScopeHandle) string {
-	return filepath.Join(dir, trajectoryFilenamePrefix+handle.UUID()+".json")
+func TrajectoryFilePath(Dir string, Handle *ScopeHandle) string {
+	return filepath.Join(Dir, TrajectoryFilenamePrefix+Handle.UUID()+".json")
 }
