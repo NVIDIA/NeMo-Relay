@@ -115,6 +115,23 @@ fn build_config_emits_exporters_section_when_openinference_selected() {
 }
 
 #[test]
+fn build_config_ignores_openinference_endpoint_when_backend_not_selected() {
+    let answers = SetupAnswers {
+        scope: ConfigScope::Project,
+        agents: vec![],
+        backends: vec![ObservabilityBackend::Atif],
+        openinference_endpoint: Some("http://localhost:6006/v1/traces".into()),
+        hermes_hooks_path: None,
+    };
+
+    let rendered = build_config(&answers).to_string();
+
+    assert!(rendered.contains("[exporters.atif]"));
+    assert!(!rendered.contains("[exporters.openinference]"));
+    assert!(!rendered.contains("http://localhost:6006/v1/traces"));
+}
+
+#[test]
 fn build_config_emits_atof_write_options_when_atof_selected() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,

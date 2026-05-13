@@ -209,6 +209,9 @@ func TestObservabilityAtifOpenAgentFlushesOnClear(t *testing.T) {
 
 func initializeAtifPlugin(t *testing.T, dir string) {
 	t.Helper()
+	t.Cleanup(func() {
+		requireNoError(t, ClearPluginConfiguration(), clearPluginConfigurationFailed)
+	})
 	requireNoError(t, ClearPluginConfiguration(), clearPluginConfigurationFailed)
 
 	config := NewObservabilityConfig()

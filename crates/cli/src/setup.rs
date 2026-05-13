@@ -139,7 +139,11 @@ fn build_exporters_table(answers: &SetupAnswers) -> Option<Table> {
     if answers.backends.contains(&ObservabilityBackend::Atof) {
         insert_atof_exporter(&mut exporters);
     }
-    if let Some(endpoint) = answers.openinference_endpoint.as_deref() {
+    if answers
+        .backends
+        .contains(&ObservabilityBackend::OpenInference)
+        && let Some(endpoint) = answers.openinference_endpoint.as_deref()
+    {
         insert_openinference_exporter(&mut exporters, endpoint);
     }
     Some(exporters)
