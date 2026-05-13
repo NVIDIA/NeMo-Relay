@@ -5,20 +5,37 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Flow LangGraph Integration
 
-This directory contains the `nemo_flow.integrations.langgraph` package, which provides public-API LangGraph integration for NeMo Flow.
-
-The integration builds on `nemo_flow.integrations.langchain`: `NemoFlowCallbackHandler` inherits the LangChain callback handler, and `NemoFlowMiddleware` is re-exported for LangChain agents used inside LangGraph workflows.
-
-For an alternate approach refer to [the patch-based integration in `third_party/langchain`](../../../../third_party/README-langgraph.md).
+Use the `nemo_flow.integrations.langgraph` package to add NeMo Flow
+observability to [LangGraph](https://www.langchain.com/langgraph) workflows through public LangGraph APIs.
 
 ## Setup
 
-```bash
-uv sync --all-groups --extra langgraph
-just build-python
-```
+Install the LangGraph integration extra in your application environment.
 
-Installing the `langgraph` extra also installs the LangChain integration dependencies.
+::::{tab-set}
+:sync-group: install-tool
+
+:::{tab-item} uv
+:selected:
+:sync: uv
+
+```bash
+uv add "nemo-flow[langgraph]"
+```
+:::
+
+:::{tab-item} pip
+:sync: pip
+
+```bash
+pip install "nemo-flow[langgraph]"
+```
+:::
+
+::::
+
+Installing the `langgraph` extra also installs the LangChain integration
+dependencies.
 
 ## Usage Example
 
@@ -54,7 +71,9 @@ with nemo_flow.scope.scope("langgraph-request", nemo_flow.ScopeType.Agent):
 print(result)
 ```
 
-For LangChain agents inside a LangGraph workflow, use `NemoFlowMiddleware` from this package the same way as the LangChain integration and pass the LangGraph `config` into the nested agent call:
+For LangChain agents inside a LangGraph workflow, use `NemoFlowMiddleware` from
+this package the same way as the LangChain integration and pass the LangGraph
+`config` into the nested agent call:
 
 ```python
 from langchain.agents import create_agent
@@ -72,8 +91,31 @@ def agent_node(state: dict, config: RunnableConfig) -> dict:
     return agent.invoke({"messages": state["messages"]}, config=config)
 ```
 
-## Validation
+Install the NVIDIA LangChain provider if you want to run the nested agent
+example as written:
+
+::::{tab-set}
+:sync-group: install-tool
+
+:::{tab-item} uv
+:selected:
+:sync: uv
 
 ```bash
-uv run pytest python/tests/integrations/langgraph
+uv add "nemo-flow[langgraph,langchain-nvidia]"
 ```
+:::
+
+:::{tab-item} pip
+:sync: pip
+
+```bash
+pip install "nemo-flow[langgraph,langchain-nvidia]"
+```
+:::
+
+::::
+
+## Observability
+
+Refer to [Export Observability Data](../../export-observability-data/about.md) for details on exporting NeMo Flow observability data to third-party systems.
