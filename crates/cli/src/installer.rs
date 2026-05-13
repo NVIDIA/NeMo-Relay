@@ -60,6 +60,9 @@ const HERMES_HOOK_EVENTS: &[&str] = &[
     "post_llm_call",
     "pre_api_request",
     "post_api_request",
+    // Observer-only failure telemetry. Older Hermes versions ignore unknown hook names during
+    // install, while newer versions use this to close failed provider attempts.
+    "api_request_error",
     "pre_tool_call",
     "post_tool_call",
     "subagent_start",

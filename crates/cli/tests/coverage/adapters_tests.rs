@@ -373,6 +373,7 @@ fn maps_hermes_api_hooks_to_llm_lifecycle() {
                 event.request["fidelity"]["provider_payload_exact"],
                 json!(false)
             );
+            assert_eq!(event.metadata["provider_payload_exact"], json!(false));
         }
         event => panic!("unexpected event: {event:?}"),
     }
@@ -403,6 +404,139 @@ fn maps_hermes_api_hooks_to_llm_lifecycle() {
             assert_eq!(event.api_call_id, "hermes-session:task-1:2");
             assert_eq!(event.response["usage"]["prompt_tokens"], json!(10));
             assert_eq!(event.response["usage"]["completion_tokens"], json!(5));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
+fn maps_hermes_exact_api_hook_payloads_to_llm_lifecycle() {
+    let headers = HeaderMap::new();
+
+    let started = hermes::adapt(
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-session",
+            "extra": {
+                "task_id": "task-1",
+                "api_request_id": "turn-1:api:2",
+                "api_call_count": 2,
+                "model": "qwen",
+                "provider": "custom",
+                "request": {
+                    "method": "POST",
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "hello" }
+                        ],
+                        "tools": [
+                            { "type": "function", "function": { "name": "search_files" } }
+                        ]
+                    }
+                }
+            }
+        }),
+        &headers,
+    );
+    match &started.events[0] {
+        NormalizedEvent::LlmStarted(event) => {
+            assert_eq!(event.api_call_id, "turn-1:api:2");
+            assert_eq!(event.request["messages"][0]["content"], json!("hello"));
+            assert_eq!(
+                event.request["tools"][0]["function"]["name"],
+                json!("search_files")
+            );
+            assert_eq!(event.metadata["provider_payload_exact"], json!(true));
+            assert_eq!(
+                event.metadata["fidelity_source"],
+                json!("hermes_api_hooks_sanitized")
+            );
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+
+    let ended = hermes::adapt(
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "hermes-session",
+            "extra": {
+                "task_id": "task-1",
+                "api_request_id": "turn-1:api:2",
+                "api_call_count": 2,
+                "model": "qwen",
+                "response": {
+                    "model": "qwen",
+                    "finish_reason": "tool_calls",
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "search_files",
+                                    "arguments": "{\"query\":\"needle\"}"
+                                }
+                            }
+                        ]
+                    },
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5
+                    }
+                }
+            }
+        }),
+        &headers,
+    );
+    match &ended.events[0] {
+        NormalizedEvent::LlmEnded(event) => {
+            assert_eq!(event.api_call_id, "turn-1:api:2");
+            assert_eq!(event.response["tool_calls"][0]["id"], json!("call-1"));
+            assert_eq!(event.response["usage"]["prompt_tokens"], json!(10));
+            assert_eq!(event.metadata["provider_payload_exact"], json!(true));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
+fn maps_hermes_api_request_error_to_llm_end() {
+    let outcome = hermes::adapt(
+        json!({
+            "hook_event_name": "api_request_error",
+            "session_id": "hermes-session",
+            "extra": {
+                "task_id": "task-1",
+                "api_request_id": "turn-1:api:3",
+                "api_call_count": 3,
+                "model": "qwen",
+                "provider": "custom",
+                "status_code": 502,
+                "retry_count": 1,
+                "max_retries": 2,
+                "retryable": true,
+                "reason": "upstream",
+                "error": {
+                    "type": "BadGateway",
+                    "message": "gateway upstream error"
+                }
+            }
+        }),
+        &HeaderMap::new(),
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::LlmEnded(event) => {
+            assert_eq!(event.api_call_id, "turn-1:api:3");
+            assert_eq!(event.response["status_code"], json!(502));
+            assert_eq!(
+                event.response["error"]["message"],
+                json!("gateway upstream error")
+            );
+            assert_eq!(event.metadata["provider_payload_exact"], json!(false));
         }
         event => panic!("unexpected event: {event:?}"),
     }

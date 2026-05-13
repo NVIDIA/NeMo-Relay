@@ -332,6 +332,7 @@ fn install_hermes_hooks_writes_yaml_and_merges_existing() {
     assert_eq!(written.len(), 2);
     let project_yaml = std::fs::read_to_string(cwd.path().join(".hermes/config.yaml")).unwrap();
     assert!(project_yaml.contains("nemo-flow hook-forward hermes"));
+    assert!(project_yaml.contains("api_request_error"));
     assert!(
         project_yaml.contains("provider: auto"),
         "existing model block must survive merge"
