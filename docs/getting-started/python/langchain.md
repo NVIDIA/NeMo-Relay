@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # NeMo Flow LangChain Integration
 
 Use the `nemo_flow.integrations.langchain` package to add NeMo Flow
-observability to [LangChain](https://www.langchain.com/langchain) agents. 
+observability to [LangChain](https://www.langchain.com/langchain) agents.
 
 ## Setup
 
