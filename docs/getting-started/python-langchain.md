@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# LangChain Integration
+# NeMo Flow LangChain Integration
 
 Use the `nemo_flow.integrations.langchain` package to add NeMo Flow
 observability to [LangChain](https://www.langchain.com/langchain) agents. 

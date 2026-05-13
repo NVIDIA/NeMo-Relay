@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# LangGraph Integration
+# NeMo Flow LangGraph Integration
 
 Use the `nemo_flow.integrations.langgraph` package to add NeMo Flow
 observability to [LangGraph](https://www.langchain.com/langgraph) workflows through public LangGraph APIs.
