@@ -359,6 +359,187 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
 }
 
 #[tokio::test]
+async fn hermes_turn_end_snapshots_atif_without_boundary_system_step() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = session_test_config();
+    config.exporters.atif.dir = Some(temp.path().to_path_buf());
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-clean"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-clean",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "method": "POST",
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "hello" }
+                        ]
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "hermes-clean",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "response": {
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "done"
+                    },
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_end",
+            "session_id": "hermes-clean"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    let atif: Value = serde_json::from_str(
+        &std::fs::read_to_string(temp.path().join("hermes-clean.atif.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(atif["steps"].as_array().unwrap().len(), 2);
+    assert_eq!(atif["steps"][0]["source"], json!("user"));
+    assert_eq!(atif["steps"][1]["source"], json!("agent"));
+    assert!(
+        atif["steps"].as_array().unwrap().iter().all(|step| {
+            step["source"] != json!("system")
+                || step["message"].as_object().is_some_and(|message| {
+                    !message.is_empty() && message.contains_key("hook_event_name")
+                })
+        }),
+        "Hermes hook system steps must not be anonymous or empty: {}",
+        serde_json::to_string_pretty(&atif["steps"]).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = session_test_config();
+    config.exporters.atif.dir = Some(temp.path().to_path_buf());
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-orphan"
+        }),
+        json!({
+            "hook_event_name": "subagent_stop",
+            "session_id": "hermes-orphan",
+            "extra": {
+                "subagent_id": "worker-1",
+                "child_status": "completed"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-orphan"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    let atif: Value = serde_json::from_str(
+        &std::fs::read_to_string(temp.path().join("hermes-orphan.atif.json")).unwrap(),
+    )
+    .unwrap();
+    let steps = atif["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0]["source"], json!("system"));
+    assert_eq!(
+        steps[0]["message"]["hook_event_name"],
+        json!("subagent_stop")
+    );
+    assert_eq!(
+        steps[0]["extra"]["ancestry"]["function_name"],
+        json!("subagent_end_without_start")
+    );
+    assert_eq!(
+        steps[0]["extra"]["ancestry"]["parent_name"],
+        json!("hermes")
+    );
+}
+
+#[tokio::test]
+async fn empty_hook_marks_do_not_create_empty_atif_steps() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = session_test_config();
+    config.exporters.atif.dir = Some(temp.path().to_path_buf());
+    let manager = SessionManager::new(config);
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "empty-mark".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "on_session_start".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::HookMark(SessionEvent {
+                    session_id: "empty-mark".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "unknown".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::AgentEnded(SessionEvent {
+                    session_id: "empty-mark".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "on_session_finalize".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let atif: Value = serde_json::from_str(
+        &std::fs::read_to_string(temp.path().join("empty-mark.atif.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(atif["steps"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn handles_out_of_order_subagent_and_tool_end_events() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),

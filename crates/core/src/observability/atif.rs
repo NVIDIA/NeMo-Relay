@@ -940,15 +940,31 @@ impl StepConversionState {
             .push_tool_metadata(build_ancestry(event, &lookups.name_map), invocation);
     }
 
-    fn handle_mark(&mut self, mark: &Event) {
+    fn handle_mark(&mut self, mark: &Event, lookups: &EventLookupMaps) {
         self.flush_observations();
         let Some(data) = mark.data() else {
             return;
         };
+        if is_empty_mark_payload(data) {
+            return;
+        }
+        let extra = AtifStepExtra {
+            ancestry: build_ancestry(mark, &lookups.name_map),
+            invocation: Some(AtifInvocationInfo {
+                start_timestamp: None,
+                end_timestamp: None,
+                invocation_id: Some(mark.uuid().to_string()),
+                status: Some("completed".to_string()),
+                framework: Some("nemo_flow".to_string()),
+            }),
+            llm_request: None,
+            tool_ancestry: Vec::new(),
+            tool_invocations: None,
+        };
         self.steps.push(AtifStep {
             step_id: 0,
             source: "system".to_string(),
-            message: data.clone(),
+            message: mark_message(mark, data),
             timestamp: Some(mark.timestamp().to_rfc3339()),
             model_name: None,
             reasoning_effort: None,
@@ -957,7 +973,7 @@ impl StepConversionState {
             observation: None,
             metrics: None,
             is_copied_context: None,
-            extra: None,
+            extra: serde_json::to_value(&extra).ok(),
         });
     }
 
@@ -1034,12 +1050,39 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
             ("scope", Some(crate::api::event::ScopeCategory::End), Some("tool")) => {
                 state.handle_tool_end(event, &lookups)
             }
-            ("mark", _, _) => state.handle_mark(event),
+            ("mark", _, _) => state.handle_mark(event, &lookups),
             _ => {}
         }
     }
 
     state.finish()
+}
+
+fn is_empty_mark_payload(data: &Json) -> bool {
+    data.is_null() || data.as_object().is_some_and(|object| object.is_empty())
+}
+
+fn mark_message(mark: &Event, data: &Json) -> Json {
+    let Some(object) = data.as_object() else {
+        return data.clone();
+    };
+    let mut message = object.clone();
+    if !message.contains_key("hook_event_name")
+        && let Some(hook_event_name) = mark_hook_event_name(mark)
+    {
+        message.insert("hook_event_name".to_string(), Json::String(hook_event_name));
+    }
+    Json::Object(message)
+}
+
+fn mark_hook_event_name(mark: &Event) -> Option<String> {
+    mark.metadata()
+        .and_then(Json::as_object)
+        .and_then(|metadata| metadata.get("hook_event_name"))
+        .and_then(Json::as_str)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| Some(mark.name().to_string()).filter(|name| !name.is_empty()))
 }
 
 fn is_start_event(event: &Event) -> bool {

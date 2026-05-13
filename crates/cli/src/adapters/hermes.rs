@@ -49,7 +49,21 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
         };
     }
 
-    let mut events = classify(
+    // `on_session_end` is a Hermes per-turn boundary, not user-visible trajectory content.
+    // Emitting it as both HookMark and TurnEnded polluted ATIF with system rows whose only purpose
+    // was to trigger a snapshot. Keep the snapshot signal and leave the agent scope open.
+    if normalized == "onsessionend" {
+        return AdapterOutcome {
+            events: vec![NormalizedEvent::TurnEnded(common_session_event(
+                &payload,
+                headers,
+                AgentKind::Hermes,
+            ))],
+            response: json!({}),
+        };
+    }
+
+    let events = classify(
         &payload,
         headers,
         &ClassificationRules {
@@ -62,18 +76,6 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
             tool_end: &["post_tool_call", "postToolCall"],
         },
     );
-    // hermes-agent fires `on_session_end` at every user-turn boundary (it is intentionally distinct
-    // from `on_session_finalize`, which marks the real session close). Emit a `TurnEnded` alongside
-    // the HookMark so the session manager snapshots ATIF per turn — without this, sessions that
-    // never reach `on_session_finalize` (e.g., terminated via Ctrl+D before hermes-agent finalizes)
-    // leave their ATIF un-flushed.
-    if normalized == "onsessionend" {
-        events.push(NormalizedEvent::TurnEnded(common_session_event(
-            &payload,
-            headers,
-            AgentKind::Hermes,
-        )));
-    }
     AdapterOutcome {
         events,
         response: json!({}),

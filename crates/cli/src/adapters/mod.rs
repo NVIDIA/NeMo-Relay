@@ -69,6 +69,12 @@ fn event_name(payload: &Value) -> String {
         .or_else(|| string_at(payload, &["event"]))
         .or_else(|| string_at(payload, &["type"]))
         .or_else(|| string_at(payload, &["name"]))
+        .or_else(|| string_at(payload, &["extra", "hook_event_name"]))
+        .or_else(|| string_at(payload, &["extra", "event_name"]))
+        .or_else(|| string_at(payload, &["extra", "eventName"]))
+        .or_else(|| string_at(payload, &["extra", "event"]))
+        .or_else(|| string_at(payload, &["extra", "type"]))
+        .or_else(|| string_at(payload, &["extra", "name"]))
         .unwrap_or_else(|| "unknown".to_string())
 }
 
@@ -306,6 +312,11 @@ fn subagent_id(payload: &Value) -> Option<String> {
         .or_else(|| string_at(payload, &["agent_id"]))
         .or_else(|| string_at(payload, &["subagent", "id"]))
         .or_else(|| string_at(payload, &["agent", "id"]))
+        .or_else(|| string_at(payload, &["extra", "subagent_id"]))
+        .or_else(|| string_at(payload, &["extra", "subagentId"]))
+        .or_else(|| string_at(payload, &["extra", "agent_id"]))
+        .or_else(|| string_at(payload, &["extra", "subagent", "id"]))
+        .or_else(|| string_at(payload, &["extra", "agent", "id"]))
 }
 
 // Extracts detail fields as a synthetic tool result only for failure-like hooks. Successful tool

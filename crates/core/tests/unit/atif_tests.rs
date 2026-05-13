@@ -51,6 +51,11 @@ impl TestEventBuilder {
         self
     }
 
+    fn metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
     fn scope_type(mut self, scope_type: ScopeType) -> Self {
         self.scope_type = Some(scope_type);
         self
@@ -616,6 +621,83 @@ fn test_exporter_tool_call_id_linking() {
     assert_eq!(trajectory.steps.len(), 1);
     let obs_result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
     assert_eq!(obs_result.source_call_id, Some("call_abc".to_string()));
+}
+
+#[test]
+fn test_exporter_mark_steps_include_hook_name_and_ancestry() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let agent_uuid = Uuid::now_v7();
+    let mark_uuid = Uuid::now_v7();
+
+    let agent_start = event_builder(agent_uuid, EventType::Start)
+        .name("hermes")
+        .scope_type(ScopeType::Agent)
+        .build();
+    let mark = event_builder(mark_uuid, EventType::Mark)
+        .name("subagent_end_without_start")
+        .parent_uuid(agent_uuid)
+        .data(json!({
+            "session_id": "session-1",
+            "extra": {
+                "subagent_id": "worker-1"
+            }
+        }))
+        .metadata(json!({
+            "hook_event_name": "subagent_stop"
+        }))
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(agent_start);
+        state.events.push(mark);
+    }
+
+    let trajectory = exporter.export();
+    assert_eq!(trajectory.steps.len(), 1);
+
+    let step = &trajectory.steps[0];
+    assert_eq!(step.source, "system");
+    assert_eq!(step.message["hook_event_name"], json!("subagent_stop"));
+    assert_eq!(step.message["extra"]["subagent_id"], json!("worker-1"));
+
+    let extra: AtifStepExtra = serde_json::from_value(step.extra.clone().unwrap()).unwrap();
+    assert_eq!(extra.ancestry.function_id, mark_uuid.to_string());
+    assert_eq!(extra.ancestry.function_name, "subagent_end_without_start");
+    assert_eq!(extra.ancestry.parent_id, Some(agent_uuid.to_string()));
+    assert_eq!(extra.ancestry.parent_name, Some("hermes".to_string()));
+    assert_eq!(
+        extra.invocation.as_ref().unwrap().invocation_id,
+        Some(mark_uuid.to_string())
+    );
+}
+
+#[test]
+fn test_exporter_skips_empty_mark_payloads() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(
+            event_builder(Uuid::now_v7(), EventType::Mark)
+                .name("empty-object")
+                .data(json!({}))
+                .build(),
+        );
+        state.events.push(
+            event_builder(Uuid::now_v7(), EventType::Mark)
+                .name("empty-null")
+                .data(json!(null))
+                .build(),
+        );
+    }
+
+    let trajectory = exporter.export();
+    assert!(trajectory.steps.is_empty());
+    assert_eq!(
+        trajectory.final_metrics.as_ref().unwrap().total_steps,
+        Some(0)
+    );
 }
 
 #[test]

@@ -317,12 +317,10 @@ fn maps_hermes_real_session_boundary_without_closing_per_turn_end() {
         }),
         &headers,
     );
-    // `on_session_end` is per-turn for hermes-agent: stays a HookMark so the agent scope remains
-    // open, but a follow-up `TurnEnded` is emitted so ATIF gets snapshotted each turn even when
-    // the session never reaches `on_session_finalize`.
-    assert_eq!(per_turn.events.len(), 2);
-    assert!(matches!(per_turn.events[0], NormalizedEvent::HookMark(_)));
-    assert!(matches!(per_turn.events[1], NormalizedEvent::TurnEnded(_)));
+    // `on_session_end` is per-turn for hermes-agent, so it snapshots ATIF without becoming a
+    // user-visible system trajectory step.
+    assert_eq!(per_turn.events.len(), 1);
+    assert!(matches!(per_turn.events[0], NormalizedEvent::TurnEnded(_)));
 
     let finalized = hermes::adapt(
         json!({
@@ -336,6 +334,29 @@ fn maps_hermes_real_session_boundary_without_closing_per_turn_end() {
         finalized.events[0],
         NormalizedEvent::AgentEnded(_)
     ));
+}
+
+#[test]
+fn maps_hermes_hook_event_name_and_subagent_from_extra_payload() {
+    let outcome = hermes::adapt(
+        json!({
+            "session_id": "hermes-session",
+            "extra": {
+                "hook_event_name": "subagent_stop",
+                "subagent_id": "worker-1"
+            }
+        }),
+        &HeaderMap::new(),
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::SubagentEnded(event) => {
+            assert_eq!(event.event_name, "subagent_stop");
+            assert_eq!(event.subagent_id, "worker-1");
+            assert_eq!(event.session_id, "hermes-session");
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
 }
 
 #[test]
