@@ -225,7 +225,7 @@ fn hermes_exact_request(payload: &Value) -> Option<Value> {
     let request = hermes_value_at(payload, "request")?;
     // Hermes bounds hook payload size before invoking plugins. A truncated payload is intentionally
     // not treated as exact, because ATIF/ATOF reconstruction would otherwise trust partial context.
-    if is_truncated_payload(&request) {
+    if request.is_null() || is_truncated_payload(&request) {
         return None;
     }
     request

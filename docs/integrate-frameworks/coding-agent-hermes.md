@@ -120,15 +120,17 @@ relying on unattended capture.
 
 ## Verify Export
 
-End or finalize the Hermes session and confirm ATIF exists:
+End a Hermes turn or finalize the session and confirm ATIF exists:
 
 ```bash
 ls .nemo-flow/atif
 ```
 
-The gateway writes `<session-id>.atif.json` when it receives
-`on_session_finalize` or `on_session_reset`. `on_session_end` is treated as a
-per-turn mark and does not close the NeMo Flow session by itself.
+The gateway writes or updates an ATIF snapshot when it receives
+`on_session_end`, `on_session_finalize`, or `on_session_reset`.
+`on_session_end` is a per-turn snapshot boundary: it does not close the NeMo
+Flow session and does not emit a visible trajectory mark. `on_session_finalize`
+and `on_session_reset` close the session.
 
 ## Troubleshoot LLM Lifecycle
 

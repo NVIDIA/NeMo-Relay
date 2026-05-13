@@ -655,7 +655,7 @@ impl Session {
         self.ensure_agent_started(event.metadata.clone())?;
         let Some(scope) = self.subagents.get(&event.subagent_id).cloned() else {
             eprintln!(
-                "nemo-flow sidecar: received {} for subagent {} without a matching start",
+                "nemo-flow CLI gateway: received {} for subagent {} without a matching start",
                 event.event_name, event.subagent_id
             );
             return self.mark(

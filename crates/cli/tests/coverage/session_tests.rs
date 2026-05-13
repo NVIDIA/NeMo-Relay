@@ -45,8 +45,25 @@ fn read_atif_for_session(output_directory: &Path, session_id: &str) -> Value {
         .filter_map(|entry| {
             serde_json::from_slice::<Value>(&std::fs::read(entry.path()).ok()?).ok()
         })
-        .find(|trajectory| trajectory.to_string().contains(session_id))
+        .find(|trajectory| atif_matches_session(trajectory, session_id))
         .unwrap_or_else(|| panic!("expected ATIF trajectory for session {session_id}"))
+}
+
+fn atif_matches_session(trajectory: &Value, session_id: &str) -> bool {
+    trajectory["session_id"] == json!(session_id)
+        || trajectory["extra"]["observed_events"]
+            .as_array()
+            .is_some_and(|events| {
+                events
+                    .iter()
+                    .any(|event| event_has_session_id(event, session_id))
+            })
+}
+
+fn event_has_session_id(event: &Value, session_id: &str) -> bool {
+    event["metadata"]["session_id"] == json!(session_id)
+        || event["data"]["session_id"] == json!(session_id)
+        || event["data"]["extra"]["session_id"] == json!(session_id)
 }
 
 #[tokio::test]

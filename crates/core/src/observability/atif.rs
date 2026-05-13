@@ -1062,6 +1062,11 @@ fn is_empty_mark_payload(data: &Json) -> bool {
     data.is_null() || data.as_object().is_some_and(|object| object.is_empty())
 }
 
+// A runtime mark is point-in-time telemetry rather than a scoped call with start/end events. Agent
+// hook adapters use marks for lifecycle notifications that do not map to first-class ATIF step
+// types, for example hook-only status updates or synthetic fallback events. Preserve the original
+// mark payload, but surface the hook name in a stable `hook_event_name` field so trajectory readers
+// can label system steps without knowing adapter-specific metadata conventions.
 fn mark_message(mark: &Event, data: &Json) -> Json {
     let Some(object) = data.as_object() else {
         return data.clone();
@@ -1075,6 +1080,9 @@ fn mark_message(mark: &Event, data: &Json) -> Json {
     Json::Object(message)
 }
 
+// Prefer the adapter-provided hook name because the runtime mark name may be a generic bucket such
+// as `hook_mark` or a synthetic fallback like `subagent_end_without_start`. Falling back to the mark
+// name keeps non-hook marks readable without making this exporter depend on any one agent adapter.
 fn mark_hook_event_name(mark: &Event) -> Option<String> {
     mark.metadata()
         .and_then(Json::as_object)

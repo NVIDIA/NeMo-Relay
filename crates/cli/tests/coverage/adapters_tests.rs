@@ -564,6 +564,38 @@ fn maps_hermes_api_request_error_to_llm_end() {
 }
 
 #[test]
+fn maps_hermes_null_request_as_lossy_summary() {
+    let outcome = hermes::adapt(
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-session",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 4,
+                "model": "qwen",
+                "provider": "custom",
+                "request": null,
+                "message_count": 2
+            }
+        }),
+        &HeaderMap::new(),
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::LlmStarted(event) => {
+            assert_eq!(event.api_call_id, "hermes-session:task-1:4");
+            assert_eq!(event.request["message_count"], json!(2));
+            assert_eq!(
+                event.request["fidelity"]["provider_payload_exact"],
+                json!(false)
+            );
+            assert_eq!(event.metadata["provider_payload_exact"], json!(false));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
 fn normalizes_mark_style_events_and_header_session_ids() {
     let mut headers = HeaderMap::new();
     headers.insert("x-nemo-flow-session-id", "header-session".parse().unwrap());
