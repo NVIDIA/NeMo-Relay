@@ -338,11 +338,23 @@ impl SessionManager {
                 .map(|(_, session)| session)
                 .collect::<Vec<_>>()
         };
-        for session in &mut sessions {
-            session.close_for_shutdown(reason).await?;
-        }
-        Ok(())
+        close_sessions_for_shutdown(&mut sessions, reason).await
     }
+}
+
+async fn close_sessions_for_shutdown(
+    sessions: &mut [Session],
+    reason: &str,
+) -> Result<(), CliError> {
+    let mut first_error = None;
+    for session in sessions {
+        if let Err(error) = session.close_for_shutdown(reason).await
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
 }
 
 impl Session {

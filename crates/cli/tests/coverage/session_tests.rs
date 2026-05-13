@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::http::HeaderMap;
+use nemo_flow::api::event::ScopeCategory;
+use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
 use serde_json::json;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use super::*;
 use crate::model::{LlmHintEvent, SessionEvent, ToolEvent};
@@ -898,6 +901,60 @@ async fn gateway_shutdown_closes_codex_sessions_without_session_end_hook() {
     manager.close_all("gateway_shutdown").await.unwrap();
 
     assert!(manager.inner.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn gateway_shutdown_attempts_remaining_sessions_after_close_error() {
+    let subscriber_name = "cli-close-all-deferred-error-test";
+    let _ = deregister_subscriber(subscriber_name);
+
+    let closed_sessions = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let captured = closed_sessions.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End)
+                && let Some(session_id) = event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("session_id"))
+                    .and_then(Value::as_str)
+            {
+                captured.lock().unwrap().push(session_id.to_string());
+            }
+        }),
+    )
+    .unwrap();
+
+    let config = SessionConfig::default();
+    let mut bad = Session::new("bad-shutdown".into(), AgentKind::Codex, config.clone());
+    bad.agent_scope = Some(
+        ScopeHandle::builder()
+            .name("missing-agent-scope")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    );
+
+    let mut good = Session::new("good-shutdown".into(), AgentKind::Codex, config);
+    let stack = good.scope_stack.clone();
+    TASK_SCOPE_STACK
+        .scope(stack, async {
+            good.ensure_agent_started(json!({})).unwrap();
+        })
+        .await;
+
+    let mut sessions = vec![bad, good];
+    let error = close_sessions_for_shutdown(&mut sessions, "gateway_shutdown")
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("scope handle not found"));
+
+    let closed = closed_sessions.lock().unwrap().clone();
+    assert!(
+        closed.contains(&"good-shutdown".to_string()),
+        "expected later valid session to close after first error, got {closed:?}"
+    );
+
+    deregister_subscriber(subscriber_name).unwrap();
 }
 
 #[tokio::test]
