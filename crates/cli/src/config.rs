@@ -703,13 +703,22 @@ fn plugin_config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
             .map(|parent| vec![parent.join("plugin.toml")])
             .unwrap_or_default();
     }
+    implicit_plugin_config_paths(std::env::current_dir().ok().as_deref(), user_config_dir())
+}
+
+fn implicit_plugin_config_paths(
+    cwd: Option<&std::path::Path>,
+    user_config_dir: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    // Ordered from lowest to highest precedence. User-level plugin config intentionally loads last
+    // so an operator can override project-local plugin defaults without editing the checkout.
     let mut paths = vec![PathBuf::from("/etc/nemo-flow/plugin.toml")];
-    if let Ok(cwd) = std::env::current_dir()
-        && let Some(project) = find_project_plugin_config(&cwd)
+    if let Some(cwd) = cwd
+        && let Some(project) = find_project_plugin_config(cwd)
     {
         paths.push(project);
     }
-    if let Some(user) = user_config_dir() {
+    if let Some(user) = user_config_dir {
         paths.push(user.join("plugin.toml"));
     }
     paths
@@ -884,9 +893,16 @@ struct PluginTomlConfig {
 fn load_plugin_toml_config(
     explicit: Option<&PathBuf>,
 ) -> Result<Option<PluginTomlConfig>, CliError> {
+    load_plugin_toml_config_from_paths(plugin_config_paths(explicit))
+}
+
+fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<PluginTomlConfig>, CliError>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
     let mut merged = toml::Value::Table(toml::map::Map::new());
     let mut sources = Vec::new();
-    for path in plugin_config_paths(explicit) {
+    for path in paths {
         if path.exists() {
             let raw = std::fs::read_to_string(&path)?;
             let parsed = raw

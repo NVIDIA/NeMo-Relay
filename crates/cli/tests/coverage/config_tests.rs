@@ -303,8 +303,82 @@ fn plugin_toml_path_resolution_tracks_config_scope() {
     std::fs::create_dir_all(&nested).unwrap();
     let plugin_path = project.join(".nemo-flow/plugin.toml");
     std::fs::write(&plugin_path, "version = 1").unwrap();
+    let user_config = temp.path().join("xdg/nemo-flow");
 
     assert_eq!(find_project_plugin_config(&nested), Some(plugin_path));
+    assert_eq!(
+        implicit_plugin_config_paths(Some(&nested), Some(user_config.clone())),
+        vec![
+            PathBuf::from("/etc/nemo-flow/plugin.toml"),
+            project.join(".nemo-flow/plugin.toml"),
+            user_config.join("plugin.toml"),
+        ]
+    );
+}
+
+#[test]
+fn discovered_plugin_toml_uses_user_over_project_precedence() {
+    let temp = tempfile::tempdir().unwrap();
+    let project_plugin = temp.path().join("project-plugin.toml");
+    let user_plugin = temp.path().join("user-plugin.toml");
+    std::fs::write(
+        &project_plugin,
+        r#"
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.atof]
+enabled = true
+filename = "project.jsonl"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &user_plugin,
+        r#"
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.atof]
+enabled = true
+filename = "user.jsonl"
+"#,
+    )
+    .unwrap();
+
+    let resolved = load_plugin_toml_config_from_paths(vec![project_plugin, user_plugin]).unwrap();
+
+    assert_eq!(
+        resolved.map(|config| config.value),
+        Some(json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "observability",
+                    "enabled": true,
+                    "config": {
+                        "version": 1,
+                        "atof": {
+                            "enabled": true,
+                            "filename": "user.jsonl"
+                        }
+                    }
+                }
+            ]
+        }))
+    );
 }
 
 #[test]

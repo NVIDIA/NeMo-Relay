@@ -69,6 +69,10 @@ startup. Define it with one of these sources:
 - `plugin.toml` next to the resolved `config.toml`, or in the same discovered
   system, project, and user scopes as `config.toml`.
 
+When multiple discovered `plugin.toml` files are present, the gateway applies
+the same precedence as `config.toml`: system first, then project, then user.
+User-level plugin config overrides project-level plugin config.
+
 Use only one source for plugin config. The gateway reports an error when
 `plugin.toml`, `[plugins].config`, or `--plugin-config` are used together.
 
