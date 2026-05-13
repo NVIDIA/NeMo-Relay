@@ -12,14 +12,15 @@ SPDX-License-Identifier: Apache-2.0
 [![npm wasm](https://img.shields.io/npm/v/nemo-flow-wasm?label=nemo-flow-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow?label=nemo-flow&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow)
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow-adaptive?label=nemo-flow-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-adaptive)
+[![Crates.io](https://img.shields.io/crates/v/nemo-flow-cli?label=nemo-flow-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-cli)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Flow)
 
 # nemo-flow-cli
 
-`nemo-flow-cli` is the coding-agent gateway CLI for NeMo Flow observability.
-It installs the `nemo-flow` binary, which can configure supported coding-agent
-hooks, run agents through an ephemeral gateway, and diagnose local agent and
-exporter readiness.
+`nemo-flow-cli` is the experimental coding-agent gateway CLI for NeMo Flow
+observability. It installs the `nemo-flow` binary, which can configure
+supported coding-agent hooks, run agents through an ephemeral gateway, and
+diagnose local agent and exporter readiness.
 
 The CLI is a Rust package in this repository, but most users should interact
 with the installed `nemo-flow` command rather than link against the crate.
@@ -50,10 +51,10 @@ with the installed `nemo-flow` command rather than link against the crate.
 
 ## Installation
 
-Install the CLI from a repository checkout:
+Install the CLI:
 
 ```bash
-cargo install --path crates/cli
+cargo install nemo-flow-cli
 ```
 
 That command installs the binary as:
@@ -96,12 +97,47 @@ Use `run --dry-run` to inspect resolved config without spawning the agent:
 nemo-flow run --agent codex --dry-run
 ```
 
+## Benchmark And Eval Runs
+
+Use `nemo-flow run` for non-interactive benchmark tasks so each run gets an
+ephemeral gateway and isolated observability artifacts. Prefer absolute
+artifact directories when the benchmark harness runs from a different directory
+than the task repository.
+
+This example uses Codex CLI because it has a non-interactive `exec` mode. Use
+the equivalent non-interactive command for another coding agent when one is
+available.
+
+```bash
+RUN_ID="$(date +%Y%m%d_%H%M%S)"
+ART="/tmp/nemo-flow-eval/$RUN_ID"
+mkdir -p "$ART/atif" "$ART/atof"
+
+nemo-flow run \
+  --atif-dir "$ART/atif" \
+  --atof-dir "$ART/atof" \
+  -- codex \
+  --ask-for-approval never \
+  exec \
+  --cd /path/to/benchmark/repo \
+  --sandbox workspace-write \
+  --color never \
+  "Run the benchmark task and report the result."
+
+find "$ART" -maxdepth 3 -type f -print
+```
+
+The expected output includes one ATIF JSON file and one ATOF JSONL file for
+the run. Remote or cloud-hosted tasks are outside the local gateway's LLM
+capture boundary unless their model traffic reaches the local gateway.
+
 ## Configuration
 
-Project config lives at `./.nemo-flow/config.toml`; user config lives at
-`~/.config/nemo-flow/config.toml` or `$XDG_CONFIG_HOME/nemo-flow/config.toml`.
-The project layer overrides system config, and the user layer overrides the
-project layer.
+System config lives at `/etc/nemo-flow/config.toml`, project config lives at
+the nearest `./.nemo-flow/config.toml`, and user config lives at
+`$XDG_CONFIG_HOME/nemo-flow/config.toml` or `~/.config/nemo-flow/config.toml`.
+The CLI loads those layers in that order, then applies `NEMO_FLOW_*`
+environment variables and command flags.
 
 Exporter config uses nested per-backend tables:
 
@@ -117,6 +153,9 @@ filename_template = "{session_id}.jsonl"
 [exporters.openinference]
 endpoint = "http://localhost:6006/v1/traces"
 ```
+
+Use `plugin.toml` in the same system, project, or user config locations when
+the gateway should activate process-level plugin config.
 
 ## Documentation
 

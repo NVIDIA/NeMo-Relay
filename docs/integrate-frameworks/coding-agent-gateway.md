@@ -5,14 +5,42 @@ SPDX-License-Identifier: Apache-2.0
 
 # Advanced Guide: Coding-Agent Gateway
 
-The `nemo-flow` binary observes coding agents that do not expose every
-LLM call site directly. It combines agent-specific hook endpoints with a
-passthrough LLM gateway so NeMo Flow owns both the agent lifecycle and the model
-request lifecycle.
+The experimental `nemo-flow` CLI gateway observes coding agents that do not
+expose every LLM call site directly. It combines agent-specific hook endpoints
+with a passthrough LLM gateway so NeMo Flow can record both the agent lifecycle
+and the model request lifecycle.
 
 Use the gateway when you need one observability boundary for OpenAI Codex,
 Claude Code, Cursor, and Hermes without replacing each agent's canonical hook
 payload.
+
+## Easy Path
+
+Install the CLI, then run the setup wizard once:
+
+```bash
+cargo install nemo-flow-cli
+nemo-flow
+```
+
+The wizard detects supported agent binaries on `PATH`, asks where to save
+config, writes `.nemo-flow/config.toml` or user config, and enables local ATIF
+export by default. Re-run it with `nemo-flow config`, or scope setup to one
+agent with commands such as `nemo-flow config codex` and
+`nemo-flow config hermes`.
+
+After setup, use the agent shortcuts:
+
+```bash
+nemo-flow codex
+nemo-flow claude -- "summarize this repository"
+nemo-flow cursor
+nemo-flow hermes
+```
+
+Use `nemo-flow doctor` to inspect config layers, detected agents, hook status,
+exporter settings, and shell completions. Use `nemo-flow agents` when you only
+need the supported and locally detected agent list.
 
 ## Hook Endpoints
 
@@ -52,10 +80,10 @@ under the active session scope.
 
 ## Transparent Run
 
-Use `nemo-flow run` for no-install local observability. The wrapper
-starts a gateway on a dynamic `127.0.0.1` port, injects the resolved hook and
-gateway configuration into the launched coding agent, and stops the gateway
-when the agent exits.
+Use `nemo-flow run` for deterministic, non-interactive local observability. The
+wrapper starts a gateway on a dynamic `127.0.0.1` port, injects the resolved
+hook and gateway configuration into the launched coding agent, and stops the
+gateway when the agent exits.
 
 ```bash
 nemo-flow run -- codex
@@ -64,12 +92,22 @@ nemo-flow run -- cursor-agent
 nemo-flow run -- hermes
 ```
 
-The wrapper infers the agent from the command basename. Use `--agent` when a
-launcher or wrapper hides the real agent name:
+The wrapper infers the agent from the command basename. If a launcher or
+wrapper hides the real agent name, set that wrapper as the configured command
+and pass `--agent`:
+
+```toml
+[agents.codex]
+command = "my-codex-wrapper"
+```
 
 ```bash
-nemo-flow run --agent codex -- my-codex-wrapper
+nemo-flow run --agent codex
 ```
+
+The agent shortcuts are convenience wrappers over the same transparent launch
+path. Use `run` when scripts need `--dry-run`, `--print`, explicit command
+vectors, or command-level overrides.
 
 Hermes is different from the other transparent modes: `run --agent hermes`
 starts the gateway and exports the dynamic `NEMO_FLOW_GATEWAY_URL`, but Hermes
@@ -78,18 +116,55 @@ shell hooks still need to be installed or otherwise approved in Hermes config.
 Use `--dry-run --print` to inspect the generated hook config, gateway
 environment, gateway URL, and final command without launching the agent.
 
+## Benchmark And Eval Runs
+
+Use `nemo-flow run` for non-interactive benchmark tasks so each run gets an
+ephemeral gateway and isolated observability artifacts. Prefer absolute
+artifact directories when the benchmark harness runs from a different directory
+than the task repository.
+
+The example below uses Codex CLI because it has a non-interactive `exec` mode.
+Use the equivalent non-interactive command for another coding agent when one is
+available.
+
+```bash
+RUN_ID="$(date +%Y%m%d_%H%M%S)"
+ART="/tmp/nemo-flow-eval/$RUN_ID"
+mkdir -p "$ART/atif" "$ART/atof"
+
+nemo-flow run \
+  --atif-dir "$ART/atif" \
+  --atof-dir "$ART/atof" \
+  -- codex \
+  --ask-for-approval never \
+  exec \
+  --cd /path/to/benchmark/repo \
+  --sandbox workspace-write \
+  --color never \
+  "Run the benchmark task and report the result."
+
+find "$ART" -maxdepth 3 -type f -print
+```
+
+The expected output includes one ATIF JSON file and one ATOF JSONL file for
+the run. This path is suitable for local coding-agent eval workers. Remote or
+cloud-hosted tasks are outside the local gateway's LLM capture boundary unless
+their model traffic reaches the local gateway.
+
 ## Shared Configuration
 
-Shared TOML config is optional. The gateway loads defaults, then global config,
-then project config, then user config. User config takes priority over global
-and project config. CLI flags and environment variables override file config.
+Shared TOML config is optional. Without an explicit `--config` path, the
+gateway loads defaults, then system config, then the nearest project config,
+then user config. Environment variables and CLI flags override file config.
+Passing `--config path/to/config.toml` disables automatic discovery for that
+command.
 
 Config file locations are:
 
 - `/etc/nemo-flow/config.toml`
-- `.nemo-flow/config.toml`
-- `$XDG_CONFIG_HOME/nemo-flow/config.toml`
-- `~/.config/nemo-flow/config.toml`
+- Nearest `.nemo-flow/config.toml`, walking up from the current directory
+- `$XDG_CONFIG_HOME/nemo-flow/config.toml`, or
+  `~/.config/nemo-flow/config.toml`
 
 Example:
 
@@ -98,14 +173,15 @@ Example:
 openai_base_url = "https://api.openai.com"
 anthropic_base_url = "https://api.anthropic.com"
 
-[observability]
-atif_dir = ".nemo-flow/atif"
-metadata = { team = "agent-observability" }
+[exporters.atif]
+dir = ".nemo-flow/atif"
 
-[plugins]
-config = { components = [] }
+[exporters.atof]
+dir = ".nemo-flow/atof"
+mode = "append"
+filename_template = "{session_id}.jsonl"
 
-[export.openinference]
+[exporters.openinference]
 endpoint = "http://127.0.0.1:4318/v1/traces"
 
 [agents.claude]
@@ -122,6 +198,24 @@ patch_restore_hooks = true
 command = "hermes"
 ```
 
+Legacy `[observability]`, flat `[exporters]`, and `[export.openinference]`
+keys remain readable, but new config should use the nested `[exporters.*]`
+shape. Add `[plugins].config` only when the gateway should activate a
+process-level plugin config from `config.toml`; otherwise prefer a separate
+`plugin.toml` or the `--plugin-config` JSON override. Do not use multiple
+plugin config sources in one effective invocation.
+
+`plugin.toml` follows the same discovery scopes as `config.toml`:
+
+- `/etc/nemo-flow/plugin.toml`
+- Nearest `.nemo-flow/plugin.toml`
+- `$XDG_CONFIG_HOME/nemo-flow/plugin.toml`, or
+  `~/.config/nemo-flow/plugin.toml`
+
+Discovered plugin TOML files are merged from lowest to highest precedence.
+TOML tables merge recursively, and the top-level `components` array merges by
+component `kind`.
+
 Transparent runs always bind the managed gateway to `127.0.0.1:0`. The selected
 port is discovered by the wrapper and exposed to hooks through
 `NEMO_FLOW_GATEWAY_URL`.
@@ -133,14 +227,16 @@ Common environment variables for direct gateway server use are:
 - `NEMO_FLOW_ANTHROPIC_BASE_URL`
 - `NEMO_FLOW_OPENINFERENCE_ENDPOINT`
 - `NEMO_FLOW_ATIF_DIR`
+- `NEMO_FLOW_ATOF_DIR`
 
 Per-session configuration controls the scope-local OpenInference subscriber,
-the ATIF exporter, structured metadata on the top-level agent begin event, and
-the plugin configuration metadata associated with the session.
+the ATIF and ATOF exporters, structured metadata on the top-level agent begin
+event, and the plugin configuration metadata associated with the session.
 
 `hook-forward` can also pass per-session configuration through headers:
 
 - `x-nemo-flow-atif-dir`
+- `x-nemo-flow-atof-dir`
 - `x-nemo-flow-openinference-endpoint`
 - `x-nemo-flow-config-profile`
 - `x-nemo-flow-session-metadata`

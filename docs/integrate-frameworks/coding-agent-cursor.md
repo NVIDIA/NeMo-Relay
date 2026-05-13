@@ -21,7 +21,13 @@ model routing is configurable.
 
 ## Transparent Run
 
-Use the wrapper for no-install local observability:
+After running the setup wizard, use the shortcut for local observability:
+
+```bash
+nemo-flow cursor
+```
+
+Use `run` when you need explicit, non-interactive launch control:
 
 ```bash
 nemo-flow run --atif-dir .nemo-flow/atif -- cursor-agent
@@ -42,10 +48,11 @@ nemo-flow run \
   -- cursor-agent
 ```
 
-If a launcher hides the command name, pass the agent explicitly:
+If a launcher hides the command name, set that launcher as
+`[agents.cursor].command`, then pass the agent explicitly:
 
 ```bash
-nemo-flow run --agent cursor -- my-cursor-wrapper
+nemo-flow run --agent cursor
 ```
 
 ## Shared Config
@@ -54,9 +61,8 @@ Create `.nemo-flow/config.toml` for project defaults or
 `~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[observability]
-atif_dir = ".nemo-flow/atif"
-metadata = { team = "agent-observability" }
+[exporters.atif]
+dir = ".nemo-flow/atif"
 
 [agents.cursor]
 command = "cursor-agent"
@@ -64,7 +70,8 @@ patch_restore_hooks = true
 ```
 
 Then run `nemo-flow run --agent cursor` to use the configured command.
-User config takes priority over project and global config.
+Use `nemo-flow cursor` for the shortcut. User config takes priority over
+project and system config.
 
 ## Standalone Gateway
 

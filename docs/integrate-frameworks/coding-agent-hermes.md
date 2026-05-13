@@ -17,8 +17,14 @@ traffic to route through the gateway.
 
 ## Transparent Run
 
-Use the wrapper when you want the gateway lifetime managed for a local Hermes
-process:
+After running the setup wizard, use the shortcut when you want the gateway
+lifetime managed for a local Hermes process:
+
+```bash
+nemo-flow hermes
+```
+
+Use `run` when you need explicit, non-interactive launch control:
 
 ```bash
 nemo-flow run --atif-dir .nemo-flow/atif -- hermes
@@ -41,10 +47,11 @@ nemo-flow run \
   -- hermes
 ```
 
-If a launcher hides the command name, pass the agent explicitly:
+If a launcher hides the command name, set that launcher as
+`[agents.hermes].command`, then pass the agent explicitly:
 
 ```bash
-nemo-flow run --agent hermes -- my-hermes-wrapper
+nemo-flow run --agent hermes
 ```
 
 ## Shared Config
@@ -53,11 +60,10 @@ Create `.nemo-flow/config.toml` for project defaults or
 `~/.config/nemo-flow/config.toml` for user defaults:
 
 ```toml
-[observability]
-atif_dir = ".nemo-flow/atif"
-metadata = { team = "agent-observability" }
+[exporters.atif]
+dir = ".nemo-flow/atif"
 
-[export.openinference]
+[exporters.openinference]
 endpoint = "http://127.0.0.1:4318/v1/traces"
 
 [agents.hermes]
@@ -65,7 +71,8 @@ command = "hermes"
 ```
 
 Then run `nemo-flow run --agent hermes` to use the configured command.
-User config takes priority over project and global config.
+Use `nemo-flow hermes` for the shortcut. User config takes priority over
+project and system config.
 
 ## Hermes Hook Setup
 

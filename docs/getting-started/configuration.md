@@ -50,3 +50,58 @@ deployment manifests.
 ## Adaptive Setup
 
 Adaptive optimization is enabled through the adaptive plugin component and binding helper APIs. See [Configure Adaptive Optimization](../use-adaptive-optimization/configure.md).
+
+## CLI Gateway Setup
+
+The `nemo-flow` CLI gateway is the exception to the "no global config file"
+rule because it runs outside an application process. Use it when you want local
+observability for coding-agent sessions such as Claude Code, Codex, Cursor, or
+Hermes.
+
+Run the setup wizard:
+
+```bash
+nemo-flow
+```
+
+The wizard writes project config at `.nemo-flow/config.toml`, user config at
+`$XDG_CONFIG_HOME/nemo-flow/config.toml` or `~/.config/nemo-flow/config.toml`,
+or both. System config can be supplied at `/etc/nemo-flow/config.toml` for
+shared machines and CI images.
+
+When no explicit `--config` path is passed, CLI config precedence is:
+
+1. Built-in defaults
+2. `/etc/nemo-flow/config.toml`
+3. Nearest project `.nemo-flow/config.toml`, walking up from the current
+   directory
+4. `$XDG_CONFIG_HOME/nemo-flow/config.toml`, or
+   `~/.config/nemo-flow/config.toml`
+5. `NEMO_FLOW_*` environment variables
+6. Current command flags
+
+Use the current exporter shape in new config files:
+
+```toml
+[exporters.atif]
+dir = ".nemo-flow/atif"
+
+[exporters.atof]
+dir = ".nemo-flow/atof"
+mode = "append"
+filename_template = "{session_id}.jsonl"
+
+[exporters.openinference]
+endpoint = "http://localhost:6006/v1/traces"
+
+[agents.codex]
+command = "codex"
+```
+
+For CLI gateway plugin activation, use exactly one source per invocation:
+`--plugin-config` JSON, `[plugins].config` inside `config.toml`, or
+`plugin.toml` in the discovered system, project, or user config locations.
+
+See [CLI Gateway Quick Start](cli.md) for wizard commands and
+[Advanced Guide: Coding-Agent Gateway](../integrate-frameworks/coding-agent-gateway.md)
+for daemon mode, transparent runs, hook forwarding, and per-agent guides.

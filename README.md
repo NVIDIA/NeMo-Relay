@@ -114,7 +114,8 @@ For source builds, testing, and contribution workflow, see [CONTRIBUTING.md](CON
 
 End-user documentation lives at [nvidia.github.io/NeMo-Flow](https://nvidia.github.io/NeMo-Flow/).
 
-The primary documentation track covers Rust, Python, and Node.js.
+The primary documentation track covers Rust, Python, and Node.js. Experimental
+CLI gateway docs are available for local coding-agent observability.
 
 The Go, WebAssembly, and raw FFI surfaces are currently experimental and remain source-first under
 `go/nemo_flow`, `crates/wasm`, and `crates/ffi`.
@@ -128,6 +129,7 @@ The table below summarizes the support level for each binding surface.
 | Python | ✅ Fully Supported | Fully documented with Quick Start and Guides |
 | Node.js | ✅ Fully Supported | Fully documented with Quick Start and Guides  |
 | Rust | ✅ Fully Supported | Fully documented with Quick Start and Guides  |
+| Coding-Agent CLI | 🚧 Experimental | Binary crate under `crates/cli`. |
 | Go | 🚧 Experimental | Source-first under `go/nemo_flow`. |
 | WebAssembly | 🚧 Experimental | Source-first under `crates/wasm`. |
 | FFI | 🚧 Experimental | Source-first under `crates/ffi`. |
@@ -162,6 +164,7 @@ The following table summarizes maintained third-party integrations and whether e
 | [opencode](third_party/README-opencode.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
 | [OpenClaw](integrations/openclaw/README.md) | `nemo-flow-openclaw` package, `nemo-flow` plugin ID | ✅ Yes | ❌ No | ❌ No | ❌ No |
 | [Hermes Agent](third_party/README-hermes-agent.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| [Coding-Agent CLI](docs/integrate-frameworks/coding-agent-gateway.md) for Claude Code, Codex, Cursor, and Hermes | 🚧 Experimental `nemo-flow-cli` binary | ✅ Yes | 🚧 LLM gateway only | 🚧 LLM gateway only | 🚧 LLM gateway only |
 
 Patch-based integrations offer experimental support. Our roadmap includes switching over to first-party plugins and packages where upstream extension points allow it.
 

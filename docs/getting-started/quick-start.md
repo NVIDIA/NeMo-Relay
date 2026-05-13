@@ -13,4 +13,5 @@ Choose the Quick Start guide for the primary binding that you plan to use.
 Python Quick Start <python>
 Node.js Quick Start <nodejs>
 Rust Quick Start <rust>
+CLI Gateway Quick Start <cli>
 ```
