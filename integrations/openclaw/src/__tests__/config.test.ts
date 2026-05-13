@@ -6,6 +6,9 @@
  */
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -13,10 +16,17 @@ import {
   nemoFlowConfigSchema,
   parseConfig,
 } from "../config.js";
-import type { NemoFlowModuleLoader, NemoFlowModules, NemoFlowRuntimeModule } from "../modules.js";
+import {
+  defaultNemoFlowModuleLoader,
+  type NemoFlowModuleLoader,
+  type NemoFlowModules,
+  type NemoFlowRuntimeModule,
+} from "../modules.js";
 import { registerNemoFlowPlugin } from "../runtime-state.js";
 import type { OpenClawPluginApi, PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { callGatewayStatus, type TestGatewayMethodHandler } from "./gateway-status.js";
+
+const liveSmokeEnabled = process.env.NEMO_FLOW_OPENCLAW_LIVE_SMOKE === "1";
 
 describe("nemo-flow OpenClaw plugin shell", () => {
   it("applies hook-backend config defaults", () => {
@@ -24,17 +34,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
 
     assert.equal(config.enabled, true);
     assert.equal(config.backend, "hooks");
-    assert.deepEqual(config.nemoFlow.pluginConfig, { version: 1, components: [] });
-    assert.equal(config.atif.enabled, true);
-    assert.equal(config.atif.agentName, "openclaw");
-    assert.equal(config.telemetry.otel.enabled, false);
-    assert.equal(config.telemetry.otel.transport, "http_binary");
-    assert.equal(config.telemetry.otel.instrumentationScope, "nemo-flow-otel");
-    assert.equal(config.telemetry.openInference.enabled, false);
-    assert.equal(
-      config.telemetry.openInference.instrumentationScope,
-      "nemo-flow-openinference",
-    );
+    assert.deepEqual(config.plugins, { version: 1, components: [] });
     assert.deepEqual(config.capture, {
       includePrompts: true,
       includeResponses: true,
@@ -48,14 +48,32 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     });
   });
 
-  it("rejects unsupported backends", () => {
+  it("keeps the generic plugin config shape under top-level plugins", () => {
+    const pluginConfig = {
+      version: 1,
+      components: [
+        {
+          kind: "observability",
+          enabled: true,
+          config: {
+            version: 1,
+            atif: { enabled: true, agent_name: "openclaw" },
+          },
+        },
+      ],
+      policy: { unknown_component: "error" },
+    };
+
+    const config = parseConfig({ plugins: pluginConfig });
+
+    assert.deepEqual(config.plugins, pluginConfig);
+  });
+
+  it("rejects unsupported backends and invalid correlation values", () => {
     assert.throws(
       () => parseConfig({ backend: "managed_execution" }),
       /unsupported nemo-flow backend: managed_execution/,
     );
-  });
-
-  it("rejects invalid correlation and timeout values", () => {
     assert.throws(
       () => parseConfig({ correlation: { llmOutputGraceMs: -1 } }),
       /correlation\.llmOutputGraceMs must be a non-negative integer/,
@@ -68,9 +86,20 @@ describe("nemo-flow OpenClaw plugin shell", () => {
       () => parseConfig({ correlation: { maxRecordsPerKey: 0 } }),
       /correlation\.maxRecordsPerKey must be a positive integer/,
     );
+  });
+
+  it("rejects removed specialized OpenClaw output fields with migration errors", () => {
     assert.throws(
-      () => parseConfig({ telemetry: { otel: { timeoutMillis: 2.5 } } }),
-      /telemetry\.otel\.timeoutMillis must be a non-negative integer/,
+      () => parseConfig({ atif: { enabled: true } }),
+      /atif was removed; configure plugins\.components\[\]\.config\.atif/,
+    );
+    assert.throws(
+      () => parseConfig({ telemetry: { otel: { enabled: true } } }),
+      /telemetry was removed; configure plugins\.components\[\]\.config\.opentelemetry or openinference/,
+    );
+    assert.throws(
+      () => parseConfig({ nemoFlow: { pluginConfig: { version: 1, components: [] } } }),
+      /nemoFlow\.pluginConfig was removed; use top-level plugins instead/,
     );
   });
 
@@ -79,6 +108,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.deepEqual(nemoFlowConfigSchema.jsonSchema, NEMO_FLOW_OPENCLAW_JSON_SCHEMA);
     assert.equal(nemoFlowConfigSchema.safeParse?.({ backend: "hooks" }).success, true);
     assert.equal(nemoFlowConfigSchema.safeParse?.({ backend: "bad" }).success, false);
+    assert.equal(nemoFlowConfigSchema.safeParse?.({ atif: { enabled: true } }).success, false);
   });
 
   it("returns without side effects outside full registration mode", () => {
@@ -124,18 +154,9 @@ describe("nemo-flow OpenClaw plugin shell", () => {
 
     registerPlugin(api, async () => createModules());
 
-    assert.deepEqual(
-      api.calls.services.map((service) => service.id),
-      ["nemo-flow-observability"],
-    );
-    assert.deepEqual(
-      api.calls.lifecycle.map((lifecycle) => lifecycle.id),
-      ["nemo-flow-observability-cleanup"],
-    );
-    assert.deepEqual(
-      api.calls.gatewayMethods.map((method) => method.method),
-      ["nemoFlow.status"],
-    );
+    assert.deepEqual(api.calls.services.map((service) => service.id), ["nemo-flow-observability"]);
+    assert.deepEqual(api.calls.lifecycle.map((lifecycle) => lifecycle.id), ["nemo-flow-observability-cleanup"]);
+    assert.deepEqual(api.calls.gatewayMethods.map((method) => method.method), ["nemoFlow.status"]);
     assert.deepEqual(
       api.calls.hooks.map((hook) => hook.hookName),
       [
@@ -158,7 +179,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
   });
 
   it("uses config parsed during registration when service starts", async () => {
-    const api = createApi({ pluginConfig: { atif: { enabled: false }, correlation: { maxRecordsPerKey: 1 } } });
+    const api = createApi({ pluginConfig: { correlation: { maxRecordsPerKey: 1 } } });
 
     registerPlugin(api, async () => createModules());
     api.pluginConfig = { backend: "managed_execution" };
@@ -167,11 +188,46 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.ok(service);
     try {
       await assert.doesNotReject(async () => {
-        await service.start({
-          stateDir: "/tmp/openclaw-state",
-          config: {} as never,
-          logger: api.logger,
-        });
+        await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+      });
+    } finally {
+      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+    }
+  });
+
+  it("validates and initializes configured generic plugin components", async () => {
+    const configuredPlugins = {
+      version: 1,
+      components: [
+        {
+          kind: "observability",
+          enabled: true,
+          config: {
+            version: 1,
+            atif: { enabled: true, agent_name: "openclaw" },
+            opentelemetry: { enabled: true, endpoint: "http://otel.example" },
+            openinference: { enabled: true, endpoint: "http://phoenix.example" },
+          },
+        },
+      ],
+    };
+    const modules = createModules();
+    const api = createApi({ pluginConfig: { plugins: configuredPlugins } });
+
+    registerPlugin(api, async () => modules);
+    const service = api.calls.services[0];
+    assert.ok(service);
+    try {
+      await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+
+      assert.deepEqual(modules.pluginHost.calls.validate, [configuredPlugins]);
+      assert.deepEqual(modules.pluginHost.calls.initialize, [configuredPlugins]);
+      const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+      assert.equal(status.status.state, "ready");
+      assert.deepEqual(status.outputs, {
+        atif: "enabled",
+        otel: "enabled",
+        openInference: "enabled",
       });
     } finally {
       await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
@@ -182,7 +238,19 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     const modules = createModules({
       validateDiagnostics: [{ level: "error", code: "bad_config", message: "invalid" }],
     });
-    const api = createApi({ pluginConfig: { atif: { enabled: false } } });
+    const api = createApi({
+      pluginConfig: {
+        plugins: {
+          version: 1,
+          components: [
+            {
+              kind: "observability",
+              config: { version: 1, atif: { enabled: true } },
+            },
+          ],
+        },
+      },
+    });
 
     registerPlugin(api, async () => modules);
     const service = api.calls.services[0];
@@ -198,14 +266,111 @@ describe("nemo-flow OpenClaw plugin shell", () => {
       assert.deepEqual(modules.nf.calls.event.map((event) => event.name), ["openclaw.session_start"]);
       assert.equal(status.status.state, "degraded");
       assert.equal(status.initializedPluginHost, false);
+      assert.equal(status.outputs.atif, "degraded");
     } finally {
       await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
     }
   });
 
+  it("degrades hook replay when plugin host validation throws", async () => {
+    const modules = createModules({
+      validateThrows: new Error("invalid plugin document"),
+    });
+    const api = createApi({
+      pluginConfig: {
+        plugins: {
+          version: 1,
+          components: [{}],
+        },
+      },
+    });
+
+    registerPlugin(api, async () => modules);
+    const service = api.calls.services[0];
+    assert.ok(service);
+    try {
+      await assert.doesNotReject(async () => {
+        await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+      });
+
+      const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
+      assert.ok(sessionStart);
+      await sessionStart.handler({ sessionId: "session-1" }, { sessionId: "session-1" });
+
+      const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+      assert.equal(status.status.state, "degraded");
+      assert.equal(status.initializedPluginHost, false);
+      assert.match(status.status.reason, /failed to validate NeMo Flow plugin host config/);
+      assert.deepEqual(modules.nf.calls.event.map((event) => event.name), ["openclaw.session_start"]);
+    } finally {
+      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+    }
+  });
+
+  it(
+    "exports ATIF with the documented observability component through the real plugin host",
+    { skip: !liveSmokeEnabled },
+    async () => {
+      const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "nemo-flow-openclaw-observability-"));
+      const api = createApi({
+        pluginConfig: {
+          plugins: {
+            version: 1,
+            components: [
+              {
+                kind: "observability",
+                enabled: true,
+                config: {
+                  version: 1,
+                  atif: {
+                    enabled: true,
+                    agent_name: "openclaw",
+                    output_directory: outputDir,
+                    filename_template: "openclaw-e2e-{session_id}.json",
+                  },
+                },
+              },
+            ],
+          },
+        },
+      });
+      let serviceStarted = false;
+
+      try {
+        registerPlugin(api, defaultNemoFlowModuleLoader);
+        const service = api.calls.services[0];
+        assert.ok(service);
+        await service.start({ stateDir: outputDir, config: {} as never, logger: api.logger });
+        serviceStarted = true;
+
+        const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
+        const sessionEnd = api.calls.hooks.find((hook) => hook.hookName === "session_end");
+        assert.ok(sessionStart);
+        assert.ok(sessionEnd);
+        await sessionStart.handler({ sessionId: "session-1" }, { sessionId: "session-1" });
+        await sessionEnd.handler({ sessionId: "session-1", messageCount: 1, reason: "done" }, { sessionId: "session-1" });
+
+        const files = await fs.readdir(outputDir);
+        const atifFile = files.find((file) => file.startsWith("openclaw-e2e-") && file.endsWith(".json"));
+        assert.ok(atifFile, "expected generic observability ATIF export");
+        const exported = JSON.parse(await fs.readFile(path.join(outputDir, atifFile), "utf8")) as unknown;
+        assert.equal(typeof exported, "object");
+
+        const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+        assert.equal(status.status.state, "ready");
+        assert.equal(status.outputs.atif, "enabled");
+      } finally {
+        if (serviceStarted) {
+          await api.calls.services[0]?.stop?.({ stateDir: outputDir, config: {} as never, logger: api.logger });
+        }
+        await fs.rm(outputDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("routes gateway_stop through runtime stop", async () => {
     const modules = createModules();
-    const api = createApi({ pluginConfig: { atif: { enabled: false } } });
+    const api = createApi();
 
     registerPlugin(api, async () => modules);
     const service = api.calls.services[0];
@@ -230,7 +395,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
 
   it("keeps the runtime running for scoped lifecycle cleanup", async () => {
     const modules = createModules();
-    const api = createApi({ pluginConfig: { atif: { enabled: false } } });
+    const api = createApi();
 
     registerPlugin(api, async () => modules);
     const service = api.calls.services[0];
@@ -268,7 +433,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
 
   it("restarts hook replay after unscoped runtime restart cleanup", async () => {
     const modules = createModules();
-    const api = createApi({ pluginConfig: { atif: { enabled: false } } });
+    const api = createApi();
 
     registerPlugin(api, async () => modules);
     const service = api.calls.services[0];
@@ -296,7 +461,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
 
   it("starts hook replay from the OpenClaw runtime when service start has not run", async () => {
     const modules = createModules();
-    const api = createApi({ pluginConfig: { atif: { enabled: false } } });
+    const api = createApi();
 
     registerPlugin(api, async () => modules);
     const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
@@ -312,110 +477,6 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     const service = api.calls.services[0];
     assert.ok(service);
     await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
-  });
-
-  it("registers and shuts down telemetry subscribers in order", async () => {
-    const modules = createModules();
-    const api = createApi({
-      pluginConfig: {
-        telemetry: {
-          otel: { enabled: true, endpoint: "http://otel.example" },
-          openInference: { enabled: true, endpoint: "http://phoenix.example" },
-        },
-      },
-    });
-
-    registerPlugin(api, async () => modules);
-    const service = api.calls.services[0];
-    assert.ok(service);
-    await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
-
-    assert.deepEqual(
-      modules.nf.calls.subscribers.map((subscriber) => [subscriber.kind, subscriber.name]),
-      [
-        ["otel", "openclaw.nemo-flow.otel"],
-        ["openInference", "openclaw.nemo-flow.openinference"],
-      ],
-    );
-    assert.equal(modules.nf.calls.subscribers[0]?.config.endpoint, "http://otel.example");
-    assert.equal(modules.nf.calls.subscribers[1]?.config.endpoint, "http://phoenix.example");
-
-    await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
-
-    for (const subscriber of modules.nf.calls.subscribers) {
-      assert.deepEqual(subscriber.actions, [
-        `register:${subscriber.name}`,
-        `deregister:${subscriber.name}`,
-        "forceFlush",
-        "shutdown",
-      ]);
-    }
-  });
-
-  it("marks subscriber registration failure degraded and keeps other outputs", async () => {
-    const modules = createModules({ subscriberFailures: { otelRegister: true } });
-    const api = createApi({
-      pluginConfig: {
-        atif: { enabled: false },
-        telemetry: {
-          otel: { enabled: true },
-          openInference: { enabled: true },
-        },
-      },
-    });
-
-    registerPlugin(api, async () => modules);
-    const service = api.calls.services[0];
-    assert.ok(service);
-    try {
-      await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
-
-      const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-      assert.equal(status.status.state, "degraded");
-      assert.equal(status.outputs.otel, "degraded");
-      assert.equal(status.outputs.openInference, "enabled");
-      assert.deepEqual(
-        modules.nf.calls.subscribers.map((subscriber) => [subscriber.kind, subscriber.actions]),
-        [
-          ["otel", ["shutdown"]],
-          ["openInference", ["register:openclaw.nemo-flow.openinference"]],
-        ],
-      );
-    } finally {
-      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
-    }
-  });
-
-  it("marks subscriber shutdown failure degraded in runtime health", async () => {
-    const modules = createModules({ subscriberFailures: { otelForceFlush: true } });
-    const api = createApi({
-      pluginConfig: {
-        atif: { enabled: false },
-        telemetry: {
-          otel: { enabled: true },
-        },
-      },
-    });
-    let serviceStarted = false;
-
-    registerPlugin(api, async () => modules);
-    const service = api.calls.services[0];
-    assert.ok(service);
-    try {
-      await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
-      serviceStarted = true;
-
-      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
-      serviceStarted = false;
-
-      const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-      assert.equal(status.status.state, "stopped");
-      assert.equal(status.outputs.otel, "degraded");
-    } finally {
-      if (serviceStarted) {
-        await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
-      }
-    }
   });
 
   it("removes beforeExit listener during normal stop", async () => {
@@ -535,95 +596,59 @@ function registerPlugin(api: TestApi, moduleLoader?: NemoFlowModuleLoader): void
   registerNemoFlowPlugin(api as unknown as OpenClawPluginApi, moduleLoader);
 }
 
+type TestPluginHost = NemoFlowModules["pluginHost"] & {
+  calls: {
+    validate: unknown[];
+    initialize: unknown[];
+    clear: number;
+  };
+};
+
 type TestNemoFlowRuntime = NemoFlowModules["nf"] & {
   calls: {
     event: Array<{ name: string; handle: unknown; data: unknown }>;
-    subscribers: Array<{
-      kind: "otel" | "openInference";
-      name?: string;
-      config: Record<string, unknown>;
-      actions: string[];
-    }>;
   };
 };
 
 type TestModules = NemoFlowModules & {
   nf: TestNemoFlowRuntime;
+  pluginHost: TestPluginHost;
 };
 
 function createModules(params: {
   validateDiagnostics?: Array<{ level: "warning" | "error"; code: string; message: string }>;
-  subscriberFailures?: SubscriberFailures;
+  validateThrows?: Error;
+  initializeDiagnostics?: Array<{ level: "warning" | "error"; code: string; message: string }>;
 } = {}): TestModules {
-  const nf = createNemoFlowRuntime(params.subscriberFailures);
+  const nf = createNemoFlowRuntime();
+  const calls: TestPluginHost["calls"] = { validate: [], initialize: [], clear: 0 };
   return {
     nf,
     pluginHost: {
+      calls,
       defaultConfig: () => ({ version: 1, components: [] }),
-      validate: () => ({ diagnostics: params.validateDiagnostics ?? [] }),
-      initialize: async () => ({ diagnostics: [] }),
-      clear: () => {},
+      validate: (config) => {
+        calls.validate.push(config);
+        if (params.validateThrows) {
+          throw params.validateThrows;
+        }
+        return { diagnostics: params.validateDiagnostics ?? [] };
+      },
+      initialize: async (config) => {
+        calls.initialize.push(config);
+        return { diagnostics: params.initializeDiagnostics ?? [] };
+      },
+      clear: () => {
+        calls.clear += 1;
+      },
     },
   };
 }
 
-type SubscriberFailures = {
-  otelRegister?: boolean;
-  openInferenceRegister?: boolean;
-  otelForceFlush?: boolean;
-  openInferenceForceFlush?: boolean;
-  otelShutdown?: boolean;
-  openInferenceShutdown?: boolean;
-};
-
-function createNemoFlowRuntime(params: SubscriberFailures = {}): TestNemoFlowRuntime {
+function createNemoFlowRuntime(): TestNemoFlowRuntime {
   const calls: TestNemoFlowRuntime["calls"] = {
     event: [],
-    subscribers: [],
   };
-  const createSubscriber = (
-    kind: "otel" | "openInference",
-    failures: {
-      register: boolean;
-      forceFlush: boolean;
-      shutdown: boolean;
-    },
-  ) =>
-    class {
-      private readonly record: TestNemoFlowRuntime["calls"]["subscribers"][number];
-
-      constructor(config?: Record<string, unknown>) {
-        this.record = { kind, config: config ?? {}, actions: [] };
-        calls.subscribers.push(this.record);
-      }
-
-      register(name: string): void {
-        this.record.name = name;
-        if (failures.register) {
-          throw new Error(`${kind} register failed`);
-        }
-        this.record.actions.push(`register:${name}`);
-      }
-
-      deregister(name: string): boolean {
-        this.record.actions.push(`deregister:${name}`);
-        return true;
-      }
-
-      forceFlush(): void {
-        this.record.actions.push("forceFlush");
-        if (failures.forceFlush) {
-          throw new Error(`${kind} forceFlush failed`);
-        }
-      }
-
-      shutdown(): void {
-        this.record.actions.push("shutdown");
-        if (failures.shutdown) {
-          throw new Error(`${kind} shutdown failed`);
-        }
-      }
-    };
 
   return {
     ScopeType: { Agent: 0 } as NemoFlowRuntimeModule["ScopeType"],
@@ -638,27 +663,5 @@ function createNemoFlowRuntime(params: SubscriberFailures = {}): TestNemoFlowRun
     llmCallEnd: () => {},
     toolCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>),
     toolCallEnd: () => {},
-    AtifExporter: FakeAtifExporter,
-    OpenTelemetrySubscriber: createSubscriber("otel", {
-      register: params.otelRegister ?? false,
-      forceFlush: params.otelForceFlush ?? false,
-      shutdown: params.otelShutdown ?? false,
-    }),
-    OpenInferenceSubscriber: createSubscriber("openInference", {
-      register: params.openInferenceRegister ?? false,
-      forceFlush: params.openInferenceForceFlush ?? false,
-      shutdown: params.openInferenceShutdown ?? false,
-    }),
   };
-}
-
-class FakeAtifExporter {
-  register(): void {}
-  deregister(): boolean {
-    return true;
-  }
-  exportJson(): string {
-    return "{}";
-  }
-  clear(): void {}
 }

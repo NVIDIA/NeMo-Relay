@@ -13,19 +13,6 @@ import manifest from "../openclaw.plugin.json" with { type: "json" };
 
 export type BackendKind = "hooks";
 
-export type TelemetrySinkConfig = {
-  enabled: boolean;
-  transport?: string;
-  endpoint?: string;
-  headers?: Record<string, string>;
-  resourceAttributes?: Record<string, string>;
-  serviceName: string;
-  serviceNamespace: string;
-  serviceVersion?: string;
-  instrumentationScope?: string;
-  timeoutMillis: number;
-};
-
 export type CaptureConfig = {
   includePrompts: boolean;
   includeResponses: boolean;
@@ -39,13 +26,6 @@ export type CorrelationConfig = {
   maxRecordsPerKey: number;
 };
 
-export type AtifConfig = {
-  enabled: boolean;
-  outputDir?: string;
-  agentName: string;
-  agentVersion?: string;
-};
-
 export type NemoFlowPluginHostConfig = {
   version: number;
   components: unknown[];
@@ -55,14 +35,7 @@ export type NemoFlowPluginHostConfig = {
 export type NemoFlowHookBackendConfig = {
   enabled: boolean;
   backend: BackendKind;
-  nemoFlow: {
-    pluginConfig: NemoFlowPluginHostConfig;
-  };
-  atif: AtifConfig;
-  telemetry: {
-    openInference: TelemetrySinkConfig;
-    otel: TelemetrySinkConfig;
-  };
+  plugins: NemoFlowPluginHostConfig;
   capture: CaptureConfig;
   correlation: CorrelationConfig;
 };
@@ -77,17 +50,7 @@ export const NEMO_FLOW_OPENCLAW_JSON_SCHEMA = manifest.configSchema;
 export const DEFAULT_CONFIG: NemoFlowHookBackendConfig = {
   enabled: true,
   backend: "hooks",
-  nemoFlow: {
-    pluginConfig: DEFAULT_PLUGIN_HOST_CONFIG,
-  },
-  atif: {
-    enabled: true,
-    agentName: "openclaw",
-  },
-  telemetry: {
-    openInference: defaultTelemetrySinkConfig("nemo-flow-openinference"),
-    otel: defaultTelemetrySinkConfig("nemo-flow-otel"),
-  },
+  plugins: DEFAULT_PLUGIN_HOST_CONFIG,
   capture: {
     includePrompts: true,
     includeResponses: true,
@@ -125,43 +88,21 @@ export const nemoFlowConfigSchema = {
 /** Parse OpenClaw plugin JSON into the normalized hook backend config. */
 export function parseConfig(value: unknown): NemoFlowHookBackendConfig {
   const raw = asRecord(value, "config", true);
+  rejectRemovedFields(raw);
+  rejectUnknownFields(raw, "config", ["enabled", "backend", "plugins", "capture", "correlation"]);
   const backend = optionalString(raw.backend, "backend") ?? DEFAULT_CONFIG.backend;
 
   if (backend !== "hooks") {
     throw new Error(`unsupported nemo-flow backend: ${backend}`);
   }
 
-  const atif = asRecord(raw.atif, "atif", true);
-  const telemetry = asRecord(raw.telemetry, "telemetry", true);
-  const otel = asRecord(telemetry.otel, "telemetry.otel", true);
-  const openInference = asRecord(telemetry.openInference, "telemetry.openInference", true);
   const capture = asRecord(raw.capture, "capture", true);
   const correlation = asRecord(raw.correlation, "correlation", true);
-  const nemoFlow = asRecord(raw.nemoFlow, "nemoFlow", true);
 
   return {
     enabled: optionalBoolean(raw.enabled, "enabled") ?? DEFAULT_CONFIG.enabled,
     backend,
-    nemoFlow: {
-      pluginConfig: parsePluginHostConfig(nemoFlow.pluginConfig),
-    },
-    atif: {
-      enabled: optionalBoolean(atif.enabled, "atif.enabled") ?? DEFAULT_CONFIG.atif.enabled,
-      agentName: optionalString(atif.agentName, "atif.agentName") ?? DEFAULT_CONFIG.atif.agentName,
-      ...definedStringProperty("outputDir", optionalString(atif.outputDir, "atif.outputDir")),
-      ...definedStringProperty(
-        "agentVersion",
-        optionalString(atif.agentVersion, "atif.agentVersion"),
-      ),
-    },
-    telemetry: {
-      openInference: parseTelemetrySinkConfig(
-        openInference,
-        DEFAULT_CONFIG.telemetry.openInference,
-        "telemetry.openInference",
-      ),
-      otel: parseTelemetrySinkConfig(otel, DEFAULT_CONFIG.telemetry.otel, "telemetry.otel"),
-    },
+    plugins: parsePluginHostConfig(raw.plugins),
     capture: {
       includePrompts:
         optionalBoolean(capture.includePrompts, "capture.includePrompts") ??
@@ -190,71 +131,23 @@ export function parseConfig(value: unknown): NemoFlowHookBackendConfig {
   };
 }
 
-/** Normalize the optional NeMo Flow plugin-host config embedded in OpenClaw config. */
+/** Normalize the optional generic NeMo Flow plugin-host config embedded in OpenClaw config. */
 function parsePluginHostConfig(value: unknown): NemoFlowPluginHostConfig {
   if (value === undefined) {
     return clonePluginHostConfig(DEFAULT_PLUGIN_HOST_CONFIG);
   }
-  const record = asRecord(value, "nemoFlow.pluginConfig", false);
-  const version = optionalNumber(record.version, "nemoFlow.pluginConfig.version") ?? 1;
+  const record = asRecord(value, "plugins", false);
+  const version = optionalNumber(record.version, "plugins.version") ?? 1;
   const components = record.components === undefined ? [] : record.components;
 
   if (!Array.isArray(components)) {
-    throw new Error("nemoFlow.pluginConfig.components must be an array");
+    throw new Error("plugins.components must be an array");
   }
 
   return {
     ...record,
     version,
     components: [...components],
-  };
-}
-
-/** Merge one telemetry sink block with defaults and validate its primitive fields. */
-function parseTelemetrySinkConfig(
-  raw: Record<string, unknown>,
-  defaults: TelemetrySinkConfig,
-  path: string,
-): TelemetrySinkConfig {
-  return {
-    enabled: optionalBoolean(raw.enabled, `${path}.enabled`) ?? defaults.enabled,
-    serviceName: optionalString(raw.serviceName, `${path}.serviceName`) ?? defaults.serviceName,
-    serviceNamespace:
-      optionalString(raw.serviceNamespace, `${path}.serviceNamespace`) ?? defaults.serviceNamespace,
-    timeoutMillis:
-      optionalNonNegativeInteger(raw.timeoutMillis, `${path}.timeoutMillis`) ?? defaults.timeoutMillis,
-    ...definedStringProperty(
-      "transport",
-      optionalString(raw.transport, `${path}.transport`) ?? defaults.transport,
-    ),
-    ...definedStringProperty(
-      "serviceVersion",
-      optionalString(raw.serviceVersion, `${path}.serviceVersion`) ?? defaults.serviceVersion,
-    ),
-    ...definedStringProperty(
-      "instrumentationScope",
-      optionalString(raw.instrumentationScope, `${path}.instrumentationScope`) ??
-        defaults.instrumentationScope,
-    ),
-    ...definedStringProperty("endpoint", optionalString(raw.endpoint, `${path}.endpoint`)),
-    ...definedRecordProperty("headers", optionalStringRecord(raw.headers, `${path}.headers`)),
-    ...definedRecordProperty(
-      "resourceAttributes",
-      optionalStringRecord(raw.resourceAttributes, `${path}.resourceAttributes`),
-    ),
-  };
-}
-
-/** Build the disabled-by-default telemetry sink config used by both exporters. */
-function defaultTelemetrySinkConfig(instrumentationScope: string): TelemetrySinkConfig {
-  return {
-    enabled: false,
-    transport: "http_binary",
-    serviceName: "openclaw-nemo-flow",
-    serviceNamespace: "nemo-flow",
-    serviceVersion: "unknown",
-    instrumentationScope,
-    timeoutMillis: 3000,
   };
 }
 
@@ -275,6 +168,31 @@ function asRecord(value: unknown, path: string, optional: boolean): Record<strin
     return value as Record<string, unknown>;
   }
   throw new Error(`${path} must be an object`);
+}
+
+/** Reject config fields removed by the generic plugin-host pivot with direct migration hints. */
+function rejectRemovedFields(raw: Record<string, unknown>): void {
+  if (raw.nemoFlow !== undefined) {
+    throw new Error("nemoFlow.pluginConfig was removed; use top-level plugins instead");
+  }
+  if (raw.atif !== undefined) {
+    throw new Error("atif was removed; configure plugins.components[].config.atif on the observability component");
+  }
+  if (raw.telemetry !== undefined) {
+    throw new Error(
+      "telemetry was removed; configure plugins.components[].config.opentelemetry or openinference on the observability component",
+    );
+  }
+}
+
+/** Keep parser behavior aligned with the manifest's additionalProperties=false contract. */
+function rejectUnknownFields(raw: Record<string, unknown>, path: string, allowed: string[]): void {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(raw)) {
+    if (!allowedSet.has(key)) {
+      throw new Error(`${path}.${key} is not supported`);
+    }
+  }
 }
 
 /** Parse an optional boolean while producing config-path-specific error messages. */
@@ -332,41 +250,4 @@ function optionalString(value: unknown, path: string): string | undefined {
     throw new Error(`${path} must be a string`);
   }
   return value;
-}
-
-/** Parse optional string-only maps such as headers and resource attributes. */
-function optionalStringRecord(
-  value: unknown,
-  path: string,
-): Record<string, string> | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const record = asRecord(value, path, false);
-  const out: Record<string, string> = {};
-
-  for (const [key, item] of Object.entries(record)) {
-    if (typeof item !== "string") {
-      throw new Error(`${path}.${key} must be a string`);
-    }
-    out[key] = item;
-  }
-
-  return out;
-}
-
-/** Return a property object only when a string value is present. */
-function definedStringProperty<K extends string>(
-  key: K,
-  value: string | undefined,
-): Partial<Record<K, string>> {
-  return value === undefined ? {} : { [key]: value } as Record<K, string>;
-}
-
-/** Return a property object only when a record value is present. */
-function definedRecordProperty<K extends string>(
-  key: K,
-  value: Record<string, string> | undefined,
-): Partial<Record<K, Record<string, string>>> {
-  return value === undefined ? {} : { [key]: value } as Record<K, Record<string, string>>;
 }

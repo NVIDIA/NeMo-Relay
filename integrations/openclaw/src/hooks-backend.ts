@@ -9,7 +9,6 @@
  * owns fail-open behavior so observability never breaks the agent runtime.
  */
 import type { NemoFlowHookBackendConfig } from "./config.js";
-import { exportAtifJson, withAtifCapture } from "./atif-capture.js";
 import { emitMark, toJsonRecord } from "./hook-replay/marks.js";
 import { llmKey } from "./hook-replay/correlation.js";
 import {
@@ -64,8 +63,6 @@ export type HookReplayBackendOptions = {
   config: NemoFlowHookBackendConfig;
   logger: PluginLogger;
   agentVersion: string;
-  resolvedAtifOutputDir: string;
-  markOutputDegraded: (output: "atif" | "otel" | "openInference") => void;
 };
 
 /** Replays OpenClaw public hook events into NeMo Flow scopes, spans, and marks. */
@@ -74,8 +71,6 @@ export class HookReplayBackend {
   private readonly config: NemoFlowHookBackendConfig;
   private readonly logger: PluginLogger;
   private readonly agentVersion: string;
-  private readonly resolvedAtifOutputDir: string;
-  private readonly markOutputDegradedValue: (output: "atif" | "otel" | "openInference") => void;
   private readonly stateValue = createHookReplayState();
   private readonly warningCounts = new Map<string, number>();
 
@@ -84,8 +79,6 @@ export class HookReplayBackend {
     this.config = options.config;
     this.logger = options.logger;
     this.agentVersion = options.agentVersion;
-    this.resolvedAtifOutputDir = options.resolvedAtifOutputDir;
-    this.markOutputDegradedValue = options.markOutputDegraded;
   }
 
   /** Return mutable replay state for tests and health snapshots. */
@@ -355,7 +348,7 @@ export class HookReplayBackend {
       const previousStack = this.nf.currentScopeStack();
       try {
         this.nf.setThreadScopeStack(session.stack);
-        this.withAtifCapture(session, emit);
+        emit();
       } finally {
         this.nf.setThreadScopeStack(previousStack);
       }
@@ -381,7 +374,6 @@ export class HookReplayBackend {
   private async closeSession(session: SessionState, summary: JsonRecord): Promise<void> {
     drainSession(this.sessionManager(), session);
     closeSessionRoot(this.sessionManager(), session, summary, session.finalOutput ?? summary);
-    await exportAtifJson(this.sessionManager(), session);
     deleteSession(this.stateValue, session);
   }
 
@@ -405,11 +397,6 @@ export class HookReplayBackend {
     }
   }
 
-  /** Run replay inside the session's ATIF capture window. */
-  private withAtifCapture(_session: SessionState, emit: () => void): void {
-    withAtifCapture(this.sessionManager(), _session, emit);
-  }
-
   /** Build the narrow manager interface consumed by focused replay modules. */
   private sessionManager() {
     return {
@@ -418,13 +405,11 @@ export class HookReplayBackend {
       logger: this.logger,
       state: this.stateValue,
       agentVersion: this.agentVersion,
-      resolvedAtifOutputDir: this.resolvedAtifOutputDir,
       emitCapturedUnderSession: (label: string, session: SessionState, emit: () => void) =>
         this.emitCapturedUnderSession(label, session, emit),
       replayPendingLlmOutputsForSession: (session: SessionState, options: { allowPlaceholderRequest: boolean }) =>
         this.replayPendingLlmOutputsForSession(session, options),
       emitUnpairedModelCallTimingMarks: (session: SessionState) => this.emitUnpairedModelCallTimingMarks(session),
-      markOutputDegraded: (output: "atif" | "otel" | "openInference") => this.markOutputDegradedValue(output),
       logBoundedWarn: (key: string, message: string) => this.logBoundedWarn(key, message),
     };
   }

@@ -18,13 +18,10 @@ describe("Replay failure model", () => {
     const backend = new HookReplayBackend({
       nf: createThrowingLlmRuntime(),
       config: parseConfig({
-        atif: { enabled: false },
         correlation: { llmOutputGraceMs: 1 },
       }),
       logger,
       agentVersion: "test-version",
-      resolvedAtifOutputDir: "/tmp/openclaw-state/plugins/nemo-flow/atif",
-      markOutputDegraded: () => {},
     });
 
     backend.onLlmOutput(
@@ -79,9 +76,6 @@ function createThrowingLlmRuntime(): NemoFlowRuntimeModule {
     llmCallEnd: () => {},
     toolCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>),
     toolCallEnd: () => {},
-    AtifExporter: FakeAtifExporter,
-    OpenTelemetrySubscriber: FakeSubscriber,
-    OpenInferenceSubscriber: FakeSubscriber,
   };
 }
 
@@ -93,24 +87,4 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-}
-
-class FakeAtifExporter {
-  register(): void {}
-  deregister(): boolean {
-    return true;
-  }
-  exportJson(): string {
-    return "{}";
-  }
-  clear(): void {}
-}
-
-class FakeSubscriber {
-  register(): void {}
-  deregister(): boolean {
-    return true;
-  }
-  forceFlush(): void {}
-  shutdown(): void {}
 }

@@ -5,12 +5,8 @@
  * HookReplayBackend tests covering session lifecycle, aliases, marks, and cleanup.
  */
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { describe, it } from "node:test";
 
-import { makeSafeSessionId } from "../atif-capture.js";
 import { parseConfig } from "../config.js";
 import { errorToJson, toJsonRecord } from "../hook-replay/marks.js";
 import { HookReplayBackend } from "../hooks-backend.js";
@@ -139,31 +135,6 @@ describe("HookReplayBackend", () => {
       ],
     );
     assert.equal(nf.calls.popScope.length, 1);
-  });
-
-  it("exports ATIF JSON through the session_end backend path", async () => {
-    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "nemo-flow-backend-atif-"));
-    try {
-      const nf = createNemoFlowRuntime();
-      const backend = createBackend(nf, createLogger(), {
-        config: parseConfig({ atif: { enabled: true } }),
-        outputDir,
-      });
-
-      backend.onSessionStart({ sessionId: "../session:1" }, { sessionId: "../session:1" });
-      await backend.onSessionEnd(
-        { sessionId: "../session:1", messageCount: 1, reason: "idle" },
-        { sessionId: "../session:1" },
-      );
-
-      const targetPath = path.join(outputDir, `${makeSafeSessionId("../session:1")}.json`);
-      assert.equal(await fs.readFile(targetPath, "utf8"), "{}");
-      assert.equal(backend.state().counters.atifFilesWritten, 1);
-      assert.equal(backend.state().sessions.size, 0);
-      assert.equal(nf.calls.popScope.length, 1);
-    } finally {
-      await fs.rm(outputDir, { recursive: true, force: true });
-    }
   });
 
   it("emits blocked tool marks from after_tool_call only", () => {
@@ -381,16 +352,13 @@ function createBackend(
   logger = createLogger(),
   options: {
     config?: ReturnType<typeof parseConfig>;
-    outputDir?: string;
   } = {},
 ): HookReplayBackend {
   return new HookReplayBackend({
     nf,
-    config: options.config ?? parseConfig({ atif: { enabled: false } }),
+    config: options.config ?? parseConfig({}),
     logger,
     agentVersion: "test-version",
-    resolvedAtifOutputDir: options.outputDir ?? "/tmp/openclaw-state/plugins/nemo-flow/atif",
-    markOutputDegraded: () => {},
   });
 }
 
@@ -432,28 +400,5 @@ function createNemoFlowRuntime(): TestNemoFlowRuntime {
     llmCallEnd: () => {},
     toolCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>),
     toolCallEnd: () => {},
-    AtifExporter: FakeAtifExporter,
-    OpenTelemetrySubscriber: FakeSubscriber,
-    OpenInferenceSubscriber: FakeSubscriber,
   };
-}
-
-class FakeAtifExporter {
-  register(): void {}
-  deregister(): boolean {
-    return true;
-  }
-  exportJson(): string {
-    return "{}";
-  }
-  clear(): void {}
-}
-
-class FakeSubscriber {
-  register(): void {}
-  deregister(): boolean {
-    return true;
-  }
-  forceFlush(): void {}
-  shutdown(): void {}
 }

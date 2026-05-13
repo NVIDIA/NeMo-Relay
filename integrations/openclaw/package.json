@@ -14,7 +14,6 @@
   "files": [
     "dist/**",
     "index.ts",
-    "src/atif-capture.ts",
     "src/config.ts",
     "src/health.ts",
     "src/hook-replay/correlation.ts",
@@ -26,7 +25,6 @@
     "src/modules.ts",
     "src/openclaw-hook-types.ts",
     "src/runtime-state.ts",
-    "src/telemetry.ts",
     "src/types.ts",
     "openclaw.plugin.json",
     "README.md"

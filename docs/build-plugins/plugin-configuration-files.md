@@ -14,6 +14,13 @@ This page documents file discovery, precedence, merge behavior, editor behavior,
 and conflict rules for the CLI gateway. Component-specific fields are documented
 in the guide for each plugin component.
 
+:::{note}
+NeMo Flow plugin configuration keys use `snake_case` regardless of language or
+file format. Node.js helper APIs can have `camelCase` function names, but the
+generic plugin document and component-local `config` objects use canonical
+`snake_case` keys.
+:::
+
 ## File Shape
 
 `plugins.toml` uses the canonical plugin document shape:

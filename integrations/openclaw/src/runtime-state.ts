@@ -8,8 +8,6 @@
  * OpenClaw service/lifecycle/gateway surfaces, and forwards hooks to the replay
  * backend once runtime state is ready.
  */
-import * as path from "node:path";
-
 import type {
   OpenClawPluginApi,
   OpenClawPluginServiceContext,
@@ -28,11 +26,6 @@ import {
   type NemoFlowModules,
   type NemoFlowModuleLoader,
 } from "./modules.js";
-import {
-  registerTelemetrySubscribers,
-  shutdownTelemetrySubscribers,
-  type TelemetrySubscriberEntry,
-} from "./telemetry.js";
 import type { RuntimeStateOptions, StartContext } from "./types.js";
 
 const SERVICE_ID = "nemo-flow-observability";
@@ -55,10 +48,8 @@ export class NemoFlowRuntimeState {
   private beforeExitListener?: () => void;
   private unavailableLogged = false;
   private missingStartContextLogged = false;
-  private telemetrySubscribers: TelemetrySubscriberEntry[] = [];
   private lastStartContext?: StartContext;
   private lastCounters?: HookReplayCounters;
-  private readonly degradedOutputs = new Set<"atif" | "otel" | "openInference">();
 
   constructor(options: RuntimeStateOptions) {
     this.api = options.api;
@@ -78,19 +69,17 @@ export class NemoFlowRuntimeState {
       status: this.statusValue,
       initializedPluginHost: this.initializedPluginHost,
       config: this.config,
-      degradedOutputs: this.degradedOutputs,
       ...(backendState === undefined
         ? this.lastCounters === undefined
           ? {}
           : { counters: this.lastCounters }
         : {
             counters: backendState.counters,
-            sessions: backendState.sessions.values(),
           }),
     });
   }
 
-  /** Start NeMo Flow modules, telemetry outputs, and the hook replay backend. */
+  /** Start NeMo Flow modules, generic plugins, and the hook replay backend. */
   async start(ctx: StartContext): Promise<void> {
     this.lastStartContext = copyStartContext(ctx);
     this.missingStartContextLogged = false;
@@ -115,7 +104,6 @@ export class NemoFlowRuntimeState {
   /** Do the startup work behind a single-flight guard. */
   private async startInternal(ctx: StartContext): Promise<void> {
     delete this.lastCounters;
-    this.degradedOutputs.clear();
 
     let modules: NemoFlowModules;
     try {
@@ -132,19 +120,19 @@ export class NemoFlowRuntimeState {
       return;
     }
 
-    const { hostConfig, degradedReason: configuredDegradedReason } = this.resolvePluginHostConfig(
-      modules,
-      ctx.logger,
-    );
-    let degradedReason = configuredDegradedReason;
+    const hostConfig = this.config.plugins as Parameters<NemoFlowModules["pluginHost"]["validate"]>[0];
+    let degradedReason;
 
     const validationReport = validatePluginHostConfig(modules, hostConfig, ctx.logger);
 
-    if (validationReport.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
+    if (!validationReport.ok) {
+      degradedReason = validationReport.reason;
+      ctx.logger.warn?.(degradedReason);
+    } else if (validationReport.report.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
       degradedReason = "NeMo Flow plugin host config validation failed";
     } else {
       if (
-        validationReport.diagnostics.some((diagnostic) => diagnostic.level === "warning") &&
+        validationReport.report.diagnostics.some((diagnostic) => diagnostic.level === "warning") &&
         degradedReason === undefined
       ) {
         degradedReason = "NeMo Flow plugin host config validation produced warnings";
@@ -166,24 +154,11 @@ export class NemoFlowRuntimeState {
       }
     }
 
-    const degradedOutputCount = this.degradedOutputs.size;
-    this.telemetrySubscribers = registerTelemetrySubscribers({
-      nf: modules.nf,
-      config: this.config,
-      logger: ctx.logger,
-      markOutputDegraded: (output) => this.markOutputDegraded(output),
-    });
-    if (this.degradedOutputs.size > degradedOutputCount && degradedReason === undefined) {
-      degradedReason = "one or more NeMo Flow telemetry outputs failed to initialize";
-    }
-
     this.backendValue = new HookReplayBackend({
       nf: modules.nf,
       config: this.config,
       logger: ctx.logger,
       agentVersion: ctx.agentVersion,
-      resolvedAtifOutputDir: resolveAtifOutputDir(this.config, ctx),
-      markOutputDegraded: (output) => this.markOutputDegraded(output),
     });
     this.registerBeforeExit(ctx.logger);
     this.started = true;
@@ -230,13 +205,6 @@ export class NemoFlowRuntimeState {
       this.lastCounters = { ...backendState.counters };
     }
     this.backendValue = undefined;
-
-    shutdownTelemetrySubscribers({
-      subscribers: this.telemetrySubscribers,
-      logger: log,
-      markOutputDegraded: (output) => this.markOutputDegraded(output),
-    });
-    this.telemetrySubscribers = [];
 
     if (this.initializedPluginHost && this.modulesValue) {
       try {
@@ -397,40 +365,6 @@ export class NemoFlowRuntimeState {
     });
   }
 
-  /** Resolve the NeMo Flow plugin-host config, degrading unsupported custom components. */
-  private resolvePluginHostConfig(
-    modules: NemoFlowModules,
-    logger: PluginLogger,
-  ): {
-    hostConfig: Parameters<NemoFlowModules["pluginHost"]["validate"]>[0];
-    degradedReason?: string;
-  } {
-    const configured = this.config.nemoFlow.pluginConfig;
-
-    if (configured.components.length === 0) {
-      return { hostConfig: modules.pluginHost.defaultConfig() };
-    }
-
-    const validationReport = validatePluginHostConfig(
-      modules,
-      configured as Parameters<NemoFlowModules["pluginHost"]["validate"]>[0],
-      logger,
-    );
-    const degradedReason =
-      "nemoFlow.pluginConfig.components is not supported by the hook backend; using default NeMo Flow plugin host config";
-    logger.warn?.(degradedReason);
-    logDiagnostics(logger, validationReport.diagnostics);
-    return {
-      hostConfig: modules.pluginHost.defaultConfig(),
-      degradedReason,
-    };
-  }
-
-  /** Mark one telemetry output degraded for health reporting. */
-  private markOutputDegraded(output: "atif" | "otel" | "openInference"): void {
-    this.degradedOutputs.add(output);
-  }
-
   /** Reconstruct enough service-start context for hooks that arrive before service start. */
   private startContextFromRuntime(workspaceDir?: string): StartContext | undefined {
     try {
@@ -439,7 +373,7 @@ export class NemoFlowRuntimeState {
         stateDir,
         logger: this.api.logger,
         resolvePath: this.api.resolvePath,
-        agentVersion: this.config.atif.agentVersion ?? this.api.version ?? "unknown",
+        agentVersion: this.api.version ?? "unknown",
         ...(workspaceDir === undefined ? {} : { workspaceDir }),
       };
     } catch (error) {
@@ -507,7 +441,7 @@ export function registerNemoFlowPlugin(
         stateDir: ctx.stateDir,
         logger: ctx.logger,
         resolvePath: api.resolvePath,
-        agentVersion: config.atif.agentVersion ?? api.version ?? "unknown",
+        agentVersion: api.version ?? "unknown",
         ...(ctx.workspaceDir === undefined ? {} : { workspaceDir: ctx.workspaceDir }),
       }),
     stop: (ctx: OpenClawPluginServiceContext) => runtime.stop("service_stop", ctx.logger),
@@ -537,10 +471,19 @@ function validatePluginHostConfig(
   modules: NemoFlowModules,
   config: Parameters<NemoFlowModules["pluginHost"]["validate"]>[0],
   logger: PluginLogger,
-) {
-  const report = modules.pluginHost.validate(config);
-  logDiagnostics(logger, report.diagnostics);
-  return report;
+):
+  | { ok: true; report: ReturnType<NemoFlowModules["pluginHost"]["validate"]> }
+  | { ok: false; reason: string } {
+  try {
+    const report = modules.pluginHost.validate(config);
+    logDiagnostics(logger, report.diagnostics);
+    return { ok: true, report };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `failed to validate NeMo Flow plugin host config: ${toMessage(error)}`,
+    };
+  }
 }
 
 /** Log plugin-host diagnostics at warning or info level based on severity. */
@@ -554,15 +497,6 @@ function logDiagnostics(logger: PluginLogger, diagnostics: ConfigDiagnostic[]): 
       logger.info?.(message);
     }
   }
-}
-
-/** Resolve ATIF output relative to OpenClaw config when the path is not absolute. */
-function resolveAtifOutputDir(config: NemoFlowHookBackendConfig, ctx: StartContext): string {
-  const configured = config.atif.outputDir;
-  if (!configured) {
-    return path.join(ctx.stateDir, "plugins", "nemo-flow", "atif");
-  }
-  return path.isAbsolute(configured) ? configured : ctx.resolvePath(configured);
 }
 
 /** Copy service-start context so later lazy hook startup cannot mutate it. */
