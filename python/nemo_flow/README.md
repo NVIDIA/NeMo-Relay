@@ -65,6 +65,7 @@ pip install nemo-flow
 ### Optional Dependencies
 
 #### LangChain Integration
+
 [LangChain](https://www.langchain.com/langchain) integration is available with the `langchain` extra:
 
 ```bash
@@ -91,10 +92,10 @@ The [LangChain NVIDIA](https://github.com/langchain-ai/langchain-nvidia) extra b
 
 ```bash
 # With uv
-uv add nemo-flow[langchain-nvidia]
+uv add "nemo-flow[langchain-nvidia]"
 
 # With pip
-pip install nemo-flow[langchain-nvidia]
+pip install "nemo-flow[langchain-nvidia]"
 ```
 
 To install this along with the `langgraph` extra, use:
