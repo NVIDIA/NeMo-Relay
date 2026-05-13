@@ -24,6 +24,24 @@ fn typed_editor_model_contains_observability_sections() {
 }
 
 #[test]
+fn plugin_menu_uses_setup_theme_markers() {
+    let theme = ColorfulTheme::default();
+    let lines = render_menu(
+        &theme,
+        "plugins.toml",
+        &[MenuItem::new("First"), MenuItem::new("Second")],
+        0,
+    );
+    let rendered = lines.join("\n");
+
+    assert!(rendered.contains('?'));
+    assert!(rendered.contains('›'));
+    assert!(rendered.contains('❯'));
+    assert!(rendered.contains("↑/↓"));
+    assert!(!rendered.contains("> First"));
+}
+
+#[test]
 fn editor_model_renders_valid_observability_plugin_config() {
     let mut config = PluginConfig::default();
     ensure_observability_component(&mut config).unwrap();

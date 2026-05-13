@@ -6,7 +6,7 @@
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use console::{Key, Term};
+use console::{Key, Term, style};
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Select};
 use nemo_flow::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
@@ -60,6 +60,26 @@ impl MenuItem {
     }
 }
 
+fn status_label(enabled: bool) -> String {
+    if enabled {
+        style("on").green().to_string()
+    } else {
+        style("off").red().to_string()
+    }
+}
+
+fn shortcut_label(label: impl AsRef<str>, shortcut: &str) -> String {
+    format!(
+        "{} {}",
+        label.as_ref(),
+        style(format!("[{shortcut}]")).black().bright()
+    )
+}
+
+fn print_save_success(path: &Path) {
+    println!("  {} Saved {}", style("✔").green(), path.display());
+}
+
 pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
     ensure_tty()?;
     let scope = target_scope(&command)?;
@@ -69,31 +89,37 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
     let mut observability = component_observability_config(&config)?;
 
     let theme = ColorfulTheme::default();
+    crate::banner::print_intro();
+    println!(
+        "  Editing Observability plugin config at {}",
+        path.display()
+    );
+    println!("  Tip: ↑/↓ or j/k to move, SPACE/ENTER to select, p to preview, s to save.");
+    println!();
     loop {
         let summary = observability_summary(&config, &observability);
         let section_fields = ObservabilityConfig::editor_schema().fields;
         let mut items = vec![MenuItem::new(format!(
             "Toggle Observability component [{}]",
-            if component_enabled(&config) {
-                "on"
-            } else {
-                "off"
-            }
+            status_label(component_enabled(&config))
         ))];
         items.extend(
             section_fields
                 .iter()
                 .map(|section| MenuItem::new(format!("Edit {}", section.label))),
         );
-        items.push(MenuItem::new("Preview TOML [p]"));
-        items.push(MenuItem::new(format!("Save to {} [s]", path.display())));
-        items.push(MenuItem::new("Cancel [q]"));
+        items.push(MenuItem::new(shortcut_label("Preview TOML", "p")));
+        items.push(MenuItem::new(shortcut_label(
+            format!("Save to {}", path.display()),
+            "s",
+        )));
+        items.push(MenuItem::new(shortcut_label("Cancel", "q")));
         println!();
         println!("Observability: {summary}");
         let preview_index = section_fields.len() + 1;
         let save_index = section_fields.len() + 2;
         let cancel_index = section_fields.len() + 3;
-        let selection = prompt_menu("plugins.toml", &items, 0)?;
+        let selection = prompt_menu(&theme, "plugins.toml", &items, 0)?;
         match selection {
             MenuResponse::Selected(0) => {
                 let enabled = !component_enabled(&config);
@@ -112,7 +138,7 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
                 store_observability_config(&mut config, &observability)?;
                 validate_config(&config)?;
                 write_plugin_config(&path, &config)?;
-                println!("  Saved {}", path.display());
+                print_save_success(&path);
                 return Ok(());
             }
             MenuResponse::Selected(selection) if selection == cancel_index => {
@@ -128,12 +154,12 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
                 store_observability_config(&mut config, &observability)?;
                 validate_config(&config)?;
                 write_plugin_config(&path, &config)?;
-                println!("  Saved {}", path.display());
+                print_save_success(&path);
                 return Ok(());
             }
             MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
             MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, _) => {
-                println!("Select a section first, then use reset or clear on a field.");
+                println!("  Select a section first, then use reset or clear on a field.");
             }
             MenuResponse::Cancel | MenuResponse::Selected(_) => {
                 return Err(CliError::Config(
@@ -144,18 +170,23 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
     }
 }
 
-fn prompt_menu(prompt: &str, items: &[MenuItem], default: usize) -> Result<MenuResponse, CliError> {
+fn prompt_menu(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    items: &[MenuItem],
+    default: usize,
+) -> Result<MenuResponse, CliError> {
     if items.is_empty() {
         return Err(CliError::Config(format!("{prompt} menu has no items")));
     }
-    let term = Term::stdout();
+    let term = Term::stderr();
     let mut selected = default.min(items.len() - 1);
     let mut rendered_lines = 0;
     loop {
         if rendered_lines > 0 {
             term.clear_last_lines(rendered_lines).map_err(menu_error)?;
         }
-        let lines = render_menu(prompt, items, selected);
+        let lines = render_menu(theme, prompt, items, selected);
         rendered_lines = lines.len();
         for line in &lines {
             term.write_line(line).map_err(menu_error)?;
@@ -205,19 +236,39 @@ fn prompt_menu(prompt: &str, items: &[MenuItem], default: usize) -> Result<MenuR
     }
 }
 
-fn render_menu(prompt: &str, items: &[MenuItem], selected: usize) -> Vec<String> {
+fn render_menu(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    items: &[MenuItem],
+    selected: usize,
+) -> Vec<String> {
     let mut lines = Vec::with_capacity(items.len() + 2);
-    lines.push(format!("{prompt}:"));
+    lines.push(format!(
+        "{} {} {}",
+        theme.prompt_prefix,
+        theme.prompt_style.apply_to(prompt),
+        theme.prompt_suffix
+    ));
     lines.push(
-        "Keys: arrows/j/k move, Enter/Space select, p preview, s save, r reset, Backspace/Delete clear, ? help, q cancel."
+        theme
+            .hint_style
+            .apply_to("  ↑/↓ or j/k move, Enter/Space select, p preview, s save, r reset, Backspace/Delete clear, ? help, q cancel.")
             .to_string(),
     );
     lines.extend(items.iter().enumerate().map(|(index, item)| {
-        format!(
-            "{} {}",
-            if index == selected { ">" } else { " " },
-            item.label
-        )
+        if index == selected {
+            format!(
+                "{} {}",
+                theme.active_item_prefix,
+                theme.active_item_style.apply_to(&item.label)
+            )
+        } else {
+            format!(
+                "{} {}",
+                theme.inactive_item_prefix,
+                theme.inactive_item_style.apply_to(&item.label)
+            )
+        }
     }));
     lines
 }
@@ -242,14 +293,33 @@ fn menu_error(error: std::io::Error) -> CliError {
 
 fn print_editor_help() {
     println!();
-    println!("Plugin editor keys:");
-    println!("  arrows or j/k  move");
-    println!("  Enter or Space select/toggle the highlighted item");
-    println!("  r              reset the highlighted field or section");
-    println!("  Backspace/Del  clear the highlighted optional field");
-    println!("  p              preview TOML from the main menu");
-    println!("  s              save from the main menu");
-    println!("  q or Esc       go back/cancel");
+    println!(
+        "{} {}",
+        style("?").yellow(),
+        style("Plugin editor keys").bold()
+    );
+    println!("  {}  move", style("↑/↓ or j/k").cyan());
+    println!(
+        "  {} select/toggle the highlighted item",
+        style("Enter/Space").cyan()
+    );
+    println!(
+        "  {}             reset the highlighted field or section",
+        style("r").cyan()
+    );
+    println!(
+        "  {} clear the highlighted optional field",
+        style("Backspace/Del").cyan()
+    );
+    println!(
+        "  {}             preview TOML from the main menu",
+        style("p").cyan()
+    );
+    println!(
+        "  {}             save from the main menu",
+        style("s").cyan()
+    );
+    println!("  {}      go back/cancel", style("q or Esc").cyan());
 }
 
 fn ensure_tty() -> Result<(), CliError> {
@@ -334,7 +404,12 @@ fn write_plugin_config(path: &Path, config: &PluginConfig) -> Result<(), CliErro
 
 fn print_preview(config: &PluginConfig) -> Result<(), CliError> {
     println!();
-    println!("--- plugins.toml preview ---------------------------------");
+    println!(
+        "{} {}",
+        style("❯").green(),
+        style("plugins.toml preview").bold()
+    );
+    println!("{}", style("─".repeat(58)).black().bright());
     let mut value = serde_json::to_value(config)
         .map_err(|error| CliError::Config(format!("could not serialize plugin config: {error}")))?;
     prune_plugin_defaults(&mut value);
@@ -344,7 +419,7 @@ fn print_preview(config: &PluginConfig) -> Result<(), CliError> {
     let rendered = toml::to_string_pretty(&toml_value)
         .map_err(|error| CliError::Config(format!("could not render plugin TOML: {error}")))?;
     print!("{rendered}");
-    println!("----------------------------------------------------------");
+    println!("{}", style("─".repeat(58)).black().bright());
     Ok(())
 }
 
@@ -381,7 +456,7 @@ fn edit_section(
             let enabled = section_enabled(config, section).unwrap_or(false);
             items.push(MenuItem::new(format!(
                 "Toggle section [{}]",
-                if enabled { "on" } else { "off" }
+                status_label(enabled)
             )));
         }
         for field in fields {
@@ -395,9 +470,9 @@ fn edit_section(
                     .unwrap_or_else(|| "(default)".to_string())
             )));
         }
-        items.push(MenuItem::new("Reset section [r]"));
-        items.push(MenuItem::new("Back [q]"));
-        let selection = prompt_menu(section.name, &items, 0)?;
+        items.push(MenuItem::new(shortcut_label("Reset section", "r")));
+        items.push(MenuItem::new(shortcut_label("Back", "q")));
+        let selection = prompt_menu(theme, section.name, &items, 0)?;
         let selection = match selection {
             MenuResponse::Selected(selection) => selection,
             MenuResponse::Shortcut(MenuShortcut::Help, _) => {
@@ -415,11 +490,11 @@ fn edit_section(
                 if reset_selected_field(config, section, fields, selected)? {
                     continue;
                 }
-                println!("Select a field to clear.");
+                println!("  Select a field to clear.");
                 continue;
             }
             MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
-                println!("Preview and save are available from the main plugins.toml menu.");
+                println!("  Preview and save are available from the main plugins.toml menu.");
                 continue;
             }
             MenuResponse::Cancel => return Ok(()),
@@ -451,10 +526,14 @@ fn edit_field(
     let current = section_field_value(config, section, field.name)?;
     let actions = [
         MenuItem::new("Set value"),
-        MenuItem::new("Reset to default/none [r, Backspace, Delete]"),
-        MenuItem::new("Back [q]"),
+        MenuItem::new(shortcut_label(
+            "Reset to default/none",
+            "r, Backspace, Delete",
+        )),
+        MenuItem::new(shortcut_label("Back", "q")),
     ];
     let action = prompt_menu(
+        theme,
         &format!(
             "{}.{}, current {}",
             section.name,
@@ -478,7 +557,7 @@ fn edit_field(
         }
         MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
         MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
-            println!("Preview and save are available from the main plugins.toml menu.");
+            println!("  Preview and save are available from the main plugins.toml menu.");
         }
         _ => {}
     }
