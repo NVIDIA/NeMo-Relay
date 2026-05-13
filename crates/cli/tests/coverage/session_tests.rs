@@ -862,6 +862,45 @@ async fn agent_end_closes_active_tools_and_duplicate_starts_are_ignored() {
 }
 
 #[tokio::test]
+async fn gateway_shutdown_closes_codex_sessions_without_session_end_hook() {
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+
+    manager
+        .apply_events(
+            &headers,
+            vec![
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "codex-no-session-end".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SessionStart".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "codex-no-session-end".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "tool-1".into(),
+                    tool_name: "shell".into(),
+                    subagent_id: None,
+                    arguments: json!({ "cmd": "pwd" }),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    manager.close_all("gateway_shutdown").await.unwrap();
+
+    assert!(manager.inner.lock().await.is_empty());
+}
+
+#[tokio::test]
 async fn explicit_gateway_subagent_header_sets_llm_parent() {
     let manager = SessionManager::new(session_test_config());
     let headers = HeaderMap::new();

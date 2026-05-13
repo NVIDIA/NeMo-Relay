@@ -66,7 +66,9 @@ pub(crate) async fn serve_listener(
     shutdown: Option<oneshot::Receiver<()>>,
 ) -> Result<(), CliError> {
     let plugin_activation = PluginActivation::initialize(config.plugin_config.clone()).await?;
-    let app = router(config);
+    let state = AppState::new(config);
+    let sessions = state.sessions.clone();
+    let app = router_with_state(state);
     let serve_result = match shutdown {
         Some(receiver) => {
             axum::serve(listener, app)
@@ -77,13 +79,18 @@ pub(crate) async fn serve_listener(
         }
         None => axum::serve(listener, app).await,
     };
+    let close_result = sessions.close_all("gateway_shutdown").await;
     let clear_result = plugin_activation.clear();
     if let Err(serve_error) = serve_result {
+        if let Err(close_error) = close_result {
+            eprintln!("session teardown failed after server error: {close_error}");
+        }
         if let Err(clear_error) = clear_result {
             eprintln!("plugin teardown failed after server error: {clear_error}");
         }
         return Err(serve_error.into());
     }
+    close_result?;
     clear_result
 }
 
@@ -91,19 +98,29 @@ pub(crate) async fn serve_listener(
 ///
 /// Hook endpoints normalize agent-specific payloads into session events, while gateway endpoints
 /// proxy model traffic and emit LLM runtime events against the same `SessionManager`.
+#[cfg(test)]
 pub(crate) fn router(config: GatewayConfig) -> Router {
-    let sessions = SessionManager::new(config.clone());
-    let http = Client::builder()
-        .connect_timeout(HTTP_CONNECT_TIMEOUT)
-        .timeout(HTTP_REQUEST_TIMEOUT)
-        .read_timeout(HTTP_READ_TIMEOUT)
-        .build()
-        .expect("gateway HTTP client configuration is valid");
-    let state = AppState {
-        config,
-        http,
-        sessions,
-    };
+    router_with_state(AppState::new(config))
+}
+
+impl AppState {
+    fn new(config: GatewayConfig) -> Self {
+        let sessions = SessionManager::new(config.clone());
+        let http = Client::builder()
+            .connect_timeout(HTTP_CONNECT_TIMEOUT)
+            .timeout(HTTP_REQUEST_TIMEOUT)
+            .read_timeout(HTTP_READ_TIMEOUT)
+            .build()
+            .expect("gateway HTTP client configuration is valid");
+        Self {
+            config,
+            http,
+            sessions,
+        }
+    }
+}
+
+fn router_with_state(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/hooks/codex", post(codex_hook))

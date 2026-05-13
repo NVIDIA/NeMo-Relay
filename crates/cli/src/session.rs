@@ -324,6 +324,25 @@ impl SessionManager {
             session.add_tool_hints_from_llm_response(response, owner_subagent_id);
         }
     }
+
+    /// Closes every still-open session before gateway teardown.
+    ///
+    /// Codex transparent runs can exit without a native `SessionEnd` hook. Gateway shutdown is the
+    /// last deterministic lifecycle boundary for those sessions, so close open scopes while
+    /// observability plugins are still active.
+    pub(crate) async fn close_all(&self, reason: &str) -> Result<(), CliError> {
+        let mut sessions = {
+            let mut guard = self.inner.lock().await;
+            guard
+                .drain()
+                .map(|(_, session)| session)
+                .collect::<Vec<_>>()
+        };
+        for session in &mut sessions {
+            session.close_for_shutdown(reason).await?;
+        }
+        Ok(())
+    }
 }
 
 impl Session {
@@ -507,6 +526,24 @@ impl Session {
         self.clear_correlation_state();
         self.close_agent_scope(event.payload)?;
         Ok(())
+    }
+
+    async fn close_for_shutdown(&mut self, reason: &str) -> Result<(), CliError> {
+        let stack = self.scope_stack.clone();
+        let payload = json!({ "status": reason });
+        TASK_SCOPE_STACK
+            .scope(stack, async move {
+                if self.agent_scope.is_none() {
+                    return Ok(());
+                }
+                self.close_active_llms_for_agent_end()?;
+                self.close_active_tools_for_agent_end()?;
+                self.close_active_subagents_for_agent_end()?;
+                self.clear_correlation_state();
+                self.close_agent_scope(payload)?;
+                Ok(())
+            })
+            .await
     }
 
     // Ends all active hook-observed LLM calls before closing their containing scopes.
