@@ -124,7 +124,7 @@ NeMo Flow events.
 
 The transparent wrapper passes hook entries as Codex CLI config overrides and
 sets `features.hooks=true` for that launched process. Persistent install writes
-`.codex/config.toml` with `[features].hooks = true` and merges generated hook
+`.codex/config.toml` with `features.hooks = true` and merges generated hook
 entries into `.codex/hooks.json`. (`features.codex_hooks` is the legacy alias
 of `features.hooks`; new docs and configurations should prefer the canonical
 name.)
@@ -156,7 +156,7 @@ Codex sessions (Codex's hook surface has no `SessionEnd`-equivalent event, so
 the gateway uses each per-turn `Stop` hook to snapshot the trajectory; the file
 grows cumulatively across turns and the final write reflects the full session).
 For agents that do emit a session-end hook, the same file is written once on
-session close. If the file is missing, confirm `[features].hooks = true`, hook
+session close. If the file is missing, confirm `features.hooks = true`, hook
 config loading, and that `plugins.toml` enables the ATIF exporter with a
 writable `output_directory`.
 

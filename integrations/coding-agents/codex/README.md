@@ -31,7 +31,7 @@ The bundle forwards `SessionStart`, `SessionEnd`, `SubagentStart`,
 provide private LLM correlation hints for gateway requests.
 
 Transparent setup injects these hooks with CLI config overrides. Persistent
-setup writes `[features].hooks = true` in `.codex/config.toml` and merges the
+setup writes `features.hooks = true` in `.codex/config.toml` and merges the
 hook entries into `.codex/hooks.json`.
 
 ## Transparent Setup

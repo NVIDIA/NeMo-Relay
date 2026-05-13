@@ -332,7 +332,10 @@ fn print_editor_help() {
 }
 
 fn ensure_tty() -> Result<(), CliError> {
-    if !std::io::stdin().is_terminal() {
+    if !std::io::stdin().is_terminal()
+        || !std::io::stdout().is_terminal()
+        || !std::io::stderr().is_terminal()
+    {
         return Err(CliError::Config(
             "interactive plugin editing requires a TTY".into(),
         ));
@@ -493,7 +496,11 @@ fn edit_section(
                 if reset_selected_field(config, section, fields, selected)? {
                     continue;
                 }
-                reset_section(config, section);
+                let reset_section_index =
+                    usize::from(section_has_enabled_toggle(section)) + fields.len();
+                if selected == reset_section_index {
+                    reset_section(config, section);
+                }
                 continue;
             }
             MenuResponse::Shortcut(MenuShortcut::Clear, selected) => {

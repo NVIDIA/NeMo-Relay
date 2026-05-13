@@ -259,7 +259,11 @@ async fn collect_observability_warns_for_missing_atif_dir_without_creating_it() 
 
     let checks = collect_observability(&gateway).await;
 
-    assert!(checks.iter().any(|check| check.status == Status::Warn));
+    let atif_check = checks
+        .iter()
+        .find(|check| check.name == "ATIF dir")
+        .expect("ATIF directory check");
+    assert_eq!(atif_check.status, Status::Warn);
     assert!(!missing.exists());
 }
 

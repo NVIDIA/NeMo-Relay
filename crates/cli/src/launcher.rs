@@ -507,12 +507,13 @@ impl PreparedRun {
         Ok(())
     }
 
-    // Prints a compact pre-launch status banner so users see at a glance where their observability
-    // data is going (gateway URL, ATIF dir, OpenInference endpoint) before the agent's own UI takes
-    // over the terminal. Always emitted on stderr so it never contaminates piped/redirected agent
-    // output, and suppressed entirely when stdout is not a TTY — scripts capturing the agent stream
-    // get a clean pipe, interactive users still get the bordered frame. Distinct from `print()`,
-    // which is the verbose `--print` / `--dry-run` dump intended for inspection.
+    // Prints a compact pre-launch status banner so users see at a glance which plugin
+    // configuration is active, including plugin names and enabled/disabled state, before the
+    // agent's own UI takes over the terminal. Always emitted on stderr so it never contaminates
+    // piped/redirected agent output, and suppressed entirely when stdout is not a TTY — scripts
+    // capturing the agent stream get a clean pipe, interactive users still get the bordered frame.
+    // Distinct from `print()`, which is the verbose `--print` / `--dry-run` dump intended for
+    // inspection.
     fn print_live_status(&self, agent: CodingAgent, gateway_url: &str, resolved: &ResolvedConfig) {
         // Suppress entirely on non-TTY stdout: when the user redirects the agent's stream to a
         // file or pipes it into another tool, no banner should appear ahead of that output.

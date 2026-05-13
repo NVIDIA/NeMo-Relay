@@ -136,7 +136,6 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
 
 #[tokio::test]
 async fn terminal_retry_for_unknown_session_is_ignored() {
-    let temp = tempfile::tempdir().unwrap();
     let config = session_test_config();
     let manager = SessionManager::new(config);
 
@@ -155,7 +154,6 @@ async fn terminal_retry_for_unknown_session_is_ignored() {
         .unwrap();
 
     assert!(manager.inner.lock().await.is_empty());
-    assert!(!temp.path().join("retry-session.atif.json").exists());
 }
 
 #[tokio::test]
