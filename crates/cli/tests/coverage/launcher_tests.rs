@@ -455,6 +455,9 @@ fn cursor_patch_restore_restores_original_file() {
             .unwrap()
             .contains("hook-forward cursor")
     );
+    let patched: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(".cursor/hooks.json").unwrap()).unwrap();
+    assert_eq!(patched["version"], json!(1));
     prepared.restore().unwrap();
     assert_eq!(
         std::fs::read_to_string(".cursor/hooks.json").unwrap(),
@@ -495,6 +498,11 @@ fn cursor_patch_restore_uses_nearest_project_cursor_dir() {
             .unwrap()
             .contains("hook-forward cursor")
     );
+    let patched: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(temp.path().join(".cursor/hooks.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(patched["version"], json!(1));
     assert!(!Path::new(".cursor/hooks.json").exists());
     prepared.restore().unwrap();
     std::env::set_current_dir(previous).unwrap();
@@ -520,6 +528,9 @@ fn cursor_patch_restore_removes_temporary_file() {
     )
     .unwrap();
     assert!(Path::new(".cursor/hooks.json").exists());
+    let patched: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(".cursor/hooks.json").unwrap()).unwrap();
+    assert_eq!(patched["version"], json!(1));
     prepared.restore().unwrap();
     assert!(!Path::new(".cursor/hooks.json").exists());
     std::env::set_current_dir(previous).unwrap();

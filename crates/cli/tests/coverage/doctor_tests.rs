@@ -412,6 +412,182 @@ fn check_directory_reports_pass_warn_and_fail() {
     assert_eq!(fail.status, Status::Fail);
 }
 
+#[test]
+fn cursor_hook_status_rejects_grouped_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    let hooks_path = temp.path().join("hooks.json");
+    std::fs::write(
+        &hooks_path,
+        r#"{
+          "version": 1,
+          "hooks": {
+            "beforeShellExecution": [
+              {
+                "matcher": "*",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "nemo-flow hook-forward cursor",
+                    "timeout": 30
+                  }
+                ]
+              }
+            ]
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let (status, details) = hook_file_status(
+        Ok(hooks_path),
+        CodingAgent::Cursor,
+        true,
+        "hooks: user-managed",
+    );
+
+    assert_eq!(status, Status::Fail);
+    assert!(details.contains("nested hook groups"));
+    assert!(details.contains("direct command entries"));
+}
+
+#[test]
+fn cursor_hook_status_rejects_any_grouped_entries_when_nemo_hook_is_direct() {
+    let temp = tempfile::tempdir().unwrap();
+    let hooks_path = temp.path().join("hooks.json");
+    std::fs::write(
+        &hooks_path,
+        r#"{
+          "version": 1,
+          "hooks": {
+            "sessionStart": [
+              {
+                "command": "nemo-flow hook-forward cursor",
+                "timeout": 30
+              }
+            ],
+            "beforeShellExecution": [
+              {
+                "matcher": "*",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "existing-audit-hook",
+                    "timeout": 30
+                  }
+                ]
+              }
+            ]
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let (status, details) = hook_file_status(
+        Ok(hooks_path),
+        CodingAgent::Cursor,
+        true,
+        "hooks: user-managed",
+    );
+
+    assert_eq!(status, Status::Fail);
+    assert!(details.contains("nested hook groups"));
+    assert!(details.contains("direct command entries"));
+}
+
+#[test]
+fn cursor_hook_status_requires_version_one() {
+    let temp = tempfile::tempdir().unwrap();
+    let hooks_path = temp.path().join("hooks.json");
+    std::fs::write(
+        &hooks_path,
+        r#"{
+          "hooks": {
+            "beforeShellExecution": [
+              {
+                "command": "nemo-flow hook-forward cursor",
+                "timeout": 30
+              }
+            ]
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let (status, details) = hook_file_status(
+        Ok(hooks_path),
+        CodingAgent::Cursor,
+        true,
+        "hooks: user-managed",
+    );
+
+    assert_eq!(status, Status::Fail);
+    assert!(details.contains("version"));
+    assert!(details.contains("1"));
+}
+
+#[test]
+fn cursor_hook_status_rejects_non_one_version() {
+    let temp = tempfile::tempdir().unwrap();
+    let hooks_path = temp.path().join("hooks.json");
+    std::fs::write(
+        &hooks_path,
+        r#"{
+          "version": 2,
+          "hooks": {
+            "beforeShellExecution": [
+              {
+                "command": "nemo-flow hook-forward cursor",
+                "timeout": 30
+              }
+            ]
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let (status, details) = hook_file_status(
+        Ok(hooks_path),
+        CodingAgent::Cursor,
+        true,
+        "hooks: user-managed",
+    );
+
+    assert_eq!(status, Status::Fail);
+    assert!(details.contains("version"));
+    assert!(details.contains("1"));
+}
+
+#[test]
+fn cursor_hook_status_accepts_direct_versioned_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    let hooks_path = temp.path().join("hooks.json");
+    std::fs::write(
+        &hooks_path,
+        r#"{
+          "version": 1,
+          "hooks": {
+            "beforeShellExecution": [
+              {
+                "command": "nemo-flow hook-forward cursor",
+                "timeout": 30
+              }
+            ]
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let (status, details) = hook_file_status(
+        Ok(hooks_path),
+        CodingAgent::Cursor,
+        true,
+        "hooks: user-managed",
+    );
+
+    assert_eq!(status, Status::Pass);
+    assert!(details.contains("installed"));
+}
+
 #[tokio::test]
 async fn collect_observability_warns_for_missing_atif_dir_without_creating_it() {
     let temp = tempfile::tempdir().unwrap();

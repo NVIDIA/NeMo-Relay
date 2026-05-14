@@ -257,6 +257,8 @@ fn maps_cursor_subagent_and_permission_response() {
         event => panic!("unexpected event: {event:?}"),
     }
     assert_eq!(outcome.response["permission"], json!("allow"));
+    assert!(outcome.response.get("user_message").is_none());
+    assert!(outcome.response.get("agent_message").is_none());
 }
 
 #[test]

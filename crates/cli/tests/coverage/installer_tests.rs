@@ -140,6 +140,21 @@ fn generated_hook_dispatch_covers_all_agents() {
 }
 
 #[test]
+fn cursor_hooks_use_direct_command_entries() {
+    let hooks = cursor_hooks("nemo-flow hook-forward cursor");
+    let before_shell = &hooks["hooks"]["beforeShellExecution"][0];
+
+    assert_eq!(hooks["version"], json!(1));
+    assert_eq!(
+        before_shell["command"],
+        json!("nemo-flow hook-forward cursor")
+    );
+    assert_eq!(before_shell["timeout"], json!(30));
+    assert!(before_shell.get("hooks").is_none());
+    assert!(before_shell.get("matcher").is_none());
+}
+
+#[test]
 fn packaged_hook_configs_are_valid_json() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../integrations/coding-agents");

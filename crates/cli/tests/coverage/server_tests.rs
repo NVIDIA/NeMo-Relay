@@ -464,6 +464,8 @@ async fn cursor_hook_returns_cursor_permission_fields() {
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["continue"], json!(true));
     assert_eq!(body["permission"], json!("allow"));
+    assert!(body.get("user_message").is_none());
+    assert!(body.get("agent_message").is_none());
 }
 
 #[tokio::test]

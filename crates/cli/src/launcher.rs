@@ -823,14 +823,18 @@ fn write_merged_cursor_hooks(path: &Path) -> Result<(), CliError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let contents = serde_json::to_string_pretty(&merge_hooks(
+    let mut merged = merge_hooks(
         read_json_file(path)?,
         generated_hooks(
             CodingAgent::Cursor,
             &hook_forward_command(&transparent_hook_executable(), CodingAgent::Cursor),
         ),
-    )?)
-    .map_err(|error| CliError::Launch(error.to_string()))?;
+    )?;
+    if let Some(root) = merged.as_object_mut() {
+        root.insert("version".to_string(), json!(1));
+    }
+    let contents = serde_json::to_string_pretty(&merged)
+        .map_err(|error| CliError::Launch(error.to_string()))?;
     std::fs::write(path, contents)?;
     Ok(())
 }
