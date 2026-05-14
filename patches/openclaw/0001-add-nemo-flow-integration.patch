@@ -1,433 +1,12 @@
-diff --git a/package.json b/package.json
-index 6fcb3c780b..5e549ef256 100644
---- a/package.json
-+++ b/package.json
-@@ -1450,6 +1450,7 @@
-   "optionalDependencies": {
-     "@discordjs/opus": "^0.10.0",
-     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
-+    "nemo-flow-node": "file:../../crates/node",
-     "openshell": "0.1.0"
-   },
-   "overrides": {
-diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
-index 1524b0558d..4e2a8d48d1 100644
---- a/pnpm-lock.yaml
-+++ b/pnpm-lock.yaml
-@@ -321,6 +321,9 @@ importers:
-       '@matrix-org/matrix-sdk-crypto-nodejs':
-         specifier: ^0.4.0
-         version: 0.4.0
-+      nemo-flow-node:
-+        specifier: file:../../crates/node
-+        version: file:../../crates/node
-       openshell:
-         specifier: 0.1.0
-         version: 0.1.0
-@@ -869,6 +872,12 @@ importers:
-         specifier: workspace:*
-         version: link:../..
-
-+  extensions/nemo-flow:
-+    optionalDependencies:
-+      nemo-flow-node:
-+        specifier: file:../../../../crates/node
-+        version: file:../../crates/node
-+
-   extensions/nextcloud-talk:
-     devDependencies:
-       '@openclaw/plugin-sdk':
-@@ -5984,6 +5993,10 @@ packages:
-     resolution: {integrity: sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg==}
-     engines: {node: '>= 0.6'}
-
-+  nemo-flow-node@file:../../crates/node:
-+    resolution: {directory: ../../crates/node, type: directory}
-+    engines: {node: '>=20.0.0'}
-+
-   netmask@2.1.0:
-     resolution: {integrity: sha512-z9sZrk6wyf8/NDKKqe+Tyl58XtgkYrV4kgt1O8xrzYvpl1LvPacPo0imMLHfpStk3kgCIq1ksJ2bmJn9hue2lQ==}
-     engines: {node: '>= 0.4.0'}
-@@ -12840,6 +12853,9 @@ snapshots:
-
-   negotiator@1.0.0: {}
-
-+  nemo-flow-node@file:../../crates/node:
-+    optional: true
-+
-   netmask@2.1.0: {}
-
-   node-addon-api@8.6.0: {}
-diff --git a/src/agents/pi-embedded-runner/extra-params.ts b/src/agents/pi-embedded-runner/extra-params.ts
-index 9d4ff6fe42..2dbd050b77 100644
---- a/src/agents/pi-embedded-runner/extra-params.ts
-+++ b/src/agents/pi-embedded-runner/extra-params.ts
-@@ -4,6 +4,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
- import type { SettingsManager } from "@mariozechner/pi-coding-agent";
- import type { ThinkLevel } from "../../auto-reply/thinking.js";
- import type { OpenClawConfig } from "../../config/types.openclaw.js";
-+import { wrapStreamFnWithAgentRuntimeMiddlewares } from "../../plugins/agent-runtime-middleware.js";
- import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
- import {
-   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
-@@ -451,6 +452,11 @@ export function applyExtraParamsToAgent(
-   workspaceDir?: string,
-   model?: ProviderRuntimeModel,
-   agentDir?: string,
-+  runtimeContext?: {
-+    runId?: string;
-+    sessionId?: string;
-+    sessionKey?: string;
-+  },
- ): { effectiveExtraParams: Record<string, unknown> } {
-   const resolvedExtraParams = resolveExtraParams({
-     cfg,
-@@ -511,6 +517,17 @@ export function applyExtraParamsToAgent(
-     ...wrapperContext,
-     providerWrapperHandled,
-   });
-+  if (agent.streamFn) {
-+    agent.streamFn = wrapStreamFnWithAgentRuntimeMiddlewares({
-+      provider,
-+      modelId,
-+      streamFn: agent.streamFn,
-+      agentId,
-+      runId: runtimeContext?.runId,
-+      sessionId: runtimeContext?.sessionId,
-+      sessionKey: runtimeContext?.sessionKey,
-+    });
-+  }
-
-   return { effectiveExtraParams };
- }
-diff --git a/src/agents/pi-embedded-runner/run/attempt.ts b/src/agents/pi-embedded-runner/run/attempt.ts
-index 032595ba5d..fed941f81d 100644
---- a/src/agents/pi-embedded-runner/run/attempt.ts
-+++ b/src/agents/pi-embedded-runner/run/attempt.ts
-@@ -1081,6 +1081,11 @@ export async function runEmbeddedAttempt(
-         effectiveWorkspace,
-         params.model,
-         agentDir,
-+        {
-+          runId: params.runId,
-+          sessionId: params.sessionId,
-+          sessionKey: params.sessionKey,
-+        },
-       );
-       const effectivePromptCacheRetention = resolveCacheRetention(
-         effectiveExtraParams,
-diff --git a/src/agents/pi-tools.before-tool-call.ts b/src/agents/pi-tools.before-tool-call.ts
-index 6f27346c46..bac6d778b9 100644
---- a/src/agents/pi-tools.before-tool-call.ts
-+++ b/src/agents/pi-tools.before-tool-call.ts
-@@ -1,6 +1,7 @@
- import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
- import type { SessionState } from "../logging/diagnostic-session-state.js";
- import { createSubsystemLogger } from "../logging/subsystem.js";
-+import { executeToolWithAgentRuntimeMiddlewares } from "../plugins/agent-runtime-middleware.js";
- import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
- import { copyPluginToolMeta } from "../plugins/tools.js";
- import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plugins/types.js";
-@@ -410,26 +411,39 @@ export function wrapToolWithBeforeToolCallHook(
-         }
-       }
-       const normalizedToolName = normalizeToolName(toolName || "tool");
--      try {
--        const result = await execute(toolCallId, outcome.params, signal, onUpdate);
--        await recordLoopOutcome({
--          ctx,
--          toolName: normalizedToolName,
--          toolParams: outcome.params,
--          toolCallId,
--          result,
--        });
--        return result;
--      } catch (err) {
--        await recordLoopOutcome({
--          ctx,
--          toolName: normalizedToolName,
--          toolParams: outcome.params,
--          toolCallId,
--          error: err,
--        });
--        throw err;
--      }
-+      const executeFn = async (effectiveParams: unknown) => {
-+        try {
-+          const result = await execute(toolCallId, effectiveParams, signal, onUpdate);
-+          await recordLoopOutcome({
-+            ctx,
-+            toolName: normalizedToolName,
-+            toolParams: effectiveParams,
-+            toolCallId,
-+            result,
-+          });
-+          return result;
-+        } catch (err) {
-+          await recordLoopOutcome({
-+            ctx,
-+            toolName: normalizedToolName,
-+            toolParams: effectiveParams,
-+            toolCallId,
-+            error: err,
-+          });
-+          throw err;
-+        }
-+      };
-+
-+      return await executeToolWithAgentRuntimeMiddlewares({
-+        agentId: ctx?.agentId,
-+        sessionKey: ctx?.sessionKey,
-+        sessionId: ctx?.sessionId,
-+        runId: ctx?.runId,
-+        toolName: normalizedToolName,
-+        toolCallId,
-+        params: outcome.params,
-+        execute: executeFn,
-+      });
-     },
-   };
-   copyPluginToolMeta(tool, wrappedTool);
-diff --git a/src/plugins/api-builder.ts b/src/plugins/api-builder.ts
-index 1c95ea49da..d1e83a52e0 100644
---- a/src/plugins/api-builder.ts
-+++ b/src/plugins/api-builder.ts
-@@ -28,6 +28,7 @@ export type BuildPluginApiParams = {
-       | "registerNodeHostCommand"
-       | "registerSecurityAuditCollector"
-       | "registerService"
-+      | "registerAgentRuntimeMiddleware"
-       | "registerCliBackend"
-       | "registerTextTransforms"
-       | "registerConfigMigration"
-@@ -71,6 +72,8 @@ const noopRegisterNodeHostCommand: OpenClawPluginApi["registerNodeHostCommand"]
- const noopRegisterSecurityAuditCollector: OpenClawPluginApi["registerSecurityAuditCollector"] =
-   () => {};
- const noopRegisterService: OpenClawPluginApi["registerService"] = () => {};
-+const noopRegisterAgentRuntimeMiddleware: OpenClawPluginApi["registerAgentRuntimeMiddleware"] =
-+  () => {};
- const noopRegisterCliBackend: OpenClawPluginApi["registerCliBackend"] = () => {};
- const noopRegisterTextTransforms: OpenClawPluginApi["registerTextTransforms"] = () => {};
- const noopRegisterConfigMigration: OpenClawPluginApi["registerConfigMigration"] = () => {};
-@@ -135,6 +138,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi
-     registerSecurityAuditCollector:
-       handlers.registerSecurityAuditCollector ?? noopRegisterSecurityAuditCollector,
-     registerService: handlers.registerService ?? noopRegisterService,
-+    registerAgentRuntimeMiddleware:
-+      handlers.registerAgentRuntimeMiddleware ?? noopRegisterAgentRuntimeMiddleware,
-     registerCliBackend: handlers.registerCliBackend ?? noopRegisterCliBackend,
-     registerTextTransforms: handlers.registerTextTransforms ?? noopRegisterTextTransforms,
-     registerConfigMigration: handlers.registerConfigMigration ?? noopRegisterConfigMigration,
-diff --git a/src/plugins/loader.ts b/src/plugins/loader.ts
-index fd60f4b1c9..03f206d1a4 100644
---- a/src/plugins/loader.ts
-+++ b/src/plugins/loader.ts
-@@ -711,6 +711,7 @@ function createPluginRecord(params: {
-     gatewayMethods: [],
-     cliCommands: [],
-     services: [],
-+    agentRuntimeMiddlewareIds: [],
-     commands: [],
-     httpRoutes: 0,
-     hookCount: 0,
-diff --git a/src/plugins/registry-empty.ts b/src/plugins/registry-empty.ts
-index d3fae089f9..d169638427 100644
---- a/src/plugins/registry-empty.ts
-+++ b/src/plugins/registry-empty.ts
-@@ -30,6 +30,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
-     nodeHostCommands: [],
-     securityAuditCollectors: [],
-     services: [],
-+    agentRuntimeMiddlewares: [],
-     commands: [],
-     conversationBindingResolvedHandlers: [],
-     diagnostics: [],
-diff --git a/src/plugins/registry-types.ts b/src/plugins/registry-types.ts
-index fbd62a77b4..9942f12f52 100644
---- a/src/plugins/registry-types.ts
-+++ b/src/plugins/registry-types.ts
-@@ -23,6 +23,7 @@ import type {
-   OpenClawPluginCliCommandDescriptor,
-   OpenClawPluginCliRegistrar,
-   OpenClawPluginCommandDefinition,
-+  OpenClawAgentRuntimeMiddleware,
-   OpenClawPluginGatewayRuntimeScopeSurface,
-   OpenClawPluginHttpRouteAuth,
-   OpenClawPluginHttpRouteHandler,
-@@ -168,6 +169,14 @@ export type PluginServiceRegistration = {
-   rootDir?: string;
- };
-
-+export type AgentRuntimeMiddlewareRegistration = {
-+  pluginId: string;
-+  pluginName?: string;
-+  middleware: OpenClawAgentRuntimeMiddleware;
-+  source: string;
-+  rootDir?: string;
-+};
-+
- export type PluginReloadRegistration = {
-   pluginId: string;
-   pluginName?: string;
-@@ -251,6 +260,7 @@ export type PluginRecord = {
-   gatewayMethods: string[];
-   cliCommands: string[];
-   services: string[];
-+  agentRuntimeMiddlewareIds: string[];
-   commands: string[];
-   httpRoutes: number;
-   hookCount: number;
-@@ -290,6 +300,7 @@ export type PluginRegistry = {
-   nodeHostCommands?: PluginNodeHostCommandRegistration[];
-   securityAuditCollectors?: PluginSecurityAuditCollectorRegistration[];
-   services: PluginServiceRegistration[];
-+  agentRuntimeMiddlewares: AgentRuntimeMiddlewareRegistration[];
-   commands: PluginCommandRegistration[];
-   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
-   diagnostics: PluginDiagnostic[];
-diff --git a/src/plugins/registry.ts b/src/plugins/registry.ts
-index f30fe80139..18085c99b5 100644
---- a/src/plugins/registry.ts
-+++ b/src/plugins/registry.ts
-@@ -78,6 +78,7 @@ import type {
-   CliBackendPlugin,
-   ImageGenerationProviderPlugin,
-   MusicGenerationProviderPlugin,
-+  OpenClawAgentRuntimeMiddleware,
-   OpenClawPluginApi,
-   OpenClawPluginChannelRegistration,
-   OpenClawPluginCliCommandDescriptor,
-@@ -972,6 +973,43 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
-     });
-   };
-
-+  const registerAgentRuntimeMiddleware = (
-+    record: PluginRecord,
-+    middleware: OpenClawAgentRuntimeMiddleware,
-+  ) => {
-+    const id = middleware.id.trim();
-+    if (!id) {
-+      pushDiagnostic({
-+        level: "error",
-+        pluginId: record.id,
-+        source: record.source,
-+        message: "agent runtime middleware registration missing id",
-+      });
-+      return;
-+    }
-+    const existing = registry.agentRuntimeMiddlewares.find((entry) => entry.middleware.id === id);
-+    if (existing) {
-+      pushDiagnostic({
-+        level: "error",
-+        pluginId: record.id,
-+        source: record.source,
-+        message: `agent runtime middleware already registered: ${id} (${existing.pluginId})`,
-+      });
-+      return;
-+    }
-+    record.agentRuntimeMiddlewareIds.push(id);
-+    registry.agentRuntimeMiddlewares.push({
-+      pluginId: record.id,
-+      pluginName: record.name,
-+      middleware: {
-+        ...middleware,
-+        id,
-+      },
-+      source: record.source,
-+      rootDir: record.rootDir,
-+    });
-+  };
-+
-   const registerCommand = (record: PluginRecord, command: OpenClawPluginCommandDefinition) => {
-     const name = command.name.trim();
-     if (!name) {
-@@ -1177,6 +1215,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
-               registerGatewayMethod: (method, handler, opts) =>
-                 registerGatewayMethod(record, method, handler, opts),
-               registerService: (service) => registerService(record, service),
-+              registerAgentRuntimeMiddleware: (middleware) =>
-+                registerAgentRuntimeMiddleware(record, middleware),
-               registerCliBackend: (backend) => registerCliBackend(record, backend),
-               registerTextTransforms: (transforms) => registerTextTransforms(record, transforms),
-               registerReload: (registration) => registerReload(record, registration),
-@@ -1437,6 +1477,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
-     registerNodeHostCommand,
-     registerSecurityAuditCollector,
-     registerService,
-+    registerAgentRuntimeMiddleware,
-     registerCommand,
-     registerHook,
-     registerTypedHook,
-diff --git a/src/plugins/types.ts b/src/plugins/types.ts
-index 77fd715a9b..b9ae242c81 100644
---- a/src/plugins/types.ts
-+++ b/src/plugins/types.ts
-@@ -1844,6 +1844,36 @@ export type OpenClawPluginService = {
-   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
- };
-
-+export type OpenClawAgentRuntimeToolExecuteContext = {
-+  agentId?: string;
-+  sessionKey?: string;
-+  sessionId?: string;
-+  runId?: string;
-+  toolName: string;
-+  toolCallId?: string;
-+  params: unknown;
-+  execute: (params: unknown) => Promise<unknown>;
-+};
-+
-+export type OpenClawAgentRuntimeStreamFnContext = {
-+  provider: string;
-+  modelId: string;
-+  agentId?: string;
-+  runId?: string;
-+  sessionId?: string;
-+  sessionKey?: string;
-+  streamFn: StreamFn;
-+};
-+
-+export type OpenClawAgentRuntimeMiddleware = {
-+  id: string;
-+  priority?: number;
-+  wrapToolExecute?: (
-+    ctx: OpenClawAgentRuntimeToolExecuteContext,
-+  ) => Promise<unknown> | unknown;
-+  wrapStreamFn?: (ctx: OpenClawAgentRuntimeStreamFnContext) => StreamFn | null | undefined;
-+};
-+
- export type OpenClawPluginChannelRegistration = {
-   plugin: ChannelPlugin;
- };
-@@ -1948,6 +1978,7 @@ export type OpenClawPluginApi = {
-   registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;
-   registerSecurityAuditCollector: (collector: OpenClawPluginSecurityAuditCollector) => void;
-   registerService: (service: OpenClawPluginService) => void;
-+  registerAgentRuntimeMiddleware: (middleware: OpenClawAgentRuntimeMiddleware) => void;
-   /** Register a text-only CLI backend used by the local CLI runner. */
-   registerCliBackend: (backend: CliBackendPlugin) => void;
-   /** Register plugin-owned prompt/message compatibility text transforms. */
-diff --git a/test/helpers/plugins/plugin-api.ts b/test/helpers/plugins/plugin-api.ts
-index df12b26f98..f1568a50be 100644
---- a/test/helpers/plugins/plugin-api.ts
-+++ b/test/helpers/plugins/plugin-api.ts
-@@ -25,6 +25,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
-     registerSecurityAuditCollector() {},
-     registerConfigMigration() {},
-     registerAutoEnableProbe() {},
-+    registerAgentRuntimeMiddleware() {},
-     registerProvider() {},
-     registerSpeechProvider() {},
-     registerRealtimeTranscriptionProvider() {},
 diff --git a/extensions/nemo-flow/README.md b/extensions/nemo-flow/README.md
 new file mode 100644
-index 0000000000..fde9211575
+index 00000000..5fbc09d9
 --- /dev/null
 +++ b/extensions/nemo-flow/README.md
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,42 @@
 +# NeMo Flow
 +
-+OpenClaw plugin for NeMo Flow initialization, plugin configuration, codec-aware tool and LLM wrapping, and ATIF export.
++OpenClaw plugin for NeMo Flow plugin-host initialization and execution wrapping.
 +
 +## Install
 +
@@ -444,28 +23,19 @@ index 0000000000..fde9211575
 +      "nemo-flow": {
 +        "enabled": true,
 +        "config": {
-+          "wrapping": {
-+            "tools": true,
-+            "llm": true
-+          },
-+          "atif": {
-+            "enabled": true
-+          },
-+          "codecs": {
-+            "default": "auto",
-+            "providers": {
-+              "anthropic": "anthropic_messages"
-+            },
-+            "models": {
-+              "gpt-5*": "openai_responses"
++          "version": 1,
++          "components": [
++            {
++              "kind": "observability",
++              "config": {
++                "version": 1,
++                "otel": {
++                  "enabled": true,
++                  "endpoint": "http://localhost:4318"
++                }
++              }
 +            }
-+          },
-+          "nemoFlow": {
-+            "pluginConfig": {
-+              "version": 1,
-+              "components": []
-+            }
-+          }
++          ]
 +        }
 +      }
 +    }
@@ -478,32 +48,23 @@ index 0000000000..fde9211575
 +To test against a local checkout of `nemo-flow-node`, build the Node package first and then override the dependency to the local path from the OpenClaw workspace.
 diff --git a/extensions/nemo-flow/index.ts b/extensions/nemo-flow/index.ts
 new file mode 100644
-index 0000000000..9ff995b908
+index 00000000..77ae6b4d
 --- /dev/null
 +++ b/extensions/nemo-flow/index.ts
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,92 @@
 +import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
++import { NEMO_FLOW_PLUGIN_CONFIG_JSON_SCHEMA, resolveNemoFlowPluginConfig } from "./src/config.js";
 +import {
-+  NEMO_FLOW_PLUGIN_CONFIG_JSON_SCHEMA,
-+  resolveNemoFlowPluginConfig,
-+} from "./src/config.js";
-+import {
-+  endNemoFlowSession,
 +  executeToolWithNemoFlow,
 +  initializeNemoFlowGateway,
 +  shutdownNemoFlowGateway,
-+  startNemoFlowSession,
 +  wrapStreamFnWithNemoFlow,
 +} from "./src/runtime.js";
 +
 +const nemoFlowConfigSchema = {
 +  safeParse(value: unknown) {
 +    try {
-+      resolveNemoFlowPluginConfig(value, {
-+        stateDir: ".openclaw",
-+        resolvePath: (input) => input,
-+      });
-+      return { success: true, data: value };
++      return { success: true, data: resolveNemoFlowPluginConfig(value) };
 +    } catch (error) {
 +      return {
 +        success: false,
@@ -515,36 +76,13 @@ index 0000000000..9ff995b908
 +  },
 +  jsonSchema: NEMO_FLOW_PLUGIN_CONFIG_JSON_SCHEMA,
 +  uiHints: {
-+    enabled: {
-+      label: "Enabled",
-+      help: "Enable NeMo Flow tool and LLM wrapping for this gateway.",
++    components: {
++      label: "Components",
++      help: "NeMo Flow plugin-host components to activate.",
 +    },
-+    "atif.enabled": {
-+      label: "ATIF Export",
-+      help: "Export one ATIF trajectory JSON file per session.",
-+    },
-+    "atif.outputDir": {
-+      label: "ATIF Output Dir",
-+      help: "Directory for exported ATIF files. Defaults under the OpenClaw state dir.",
-+    },
-+    "telemetry.otel.enabled": {
-+      label: "OpenTelemetry",
-+      help: "Enable OTLP trace export through the NeMo Flow OpenTelemetry subscriber.",
-+      advanced: true,
-+    },
-+    "telemetry.openInference.enabled": {
-+      label: "OpenInference",
-+      help: "Enable OpenInference OTLP export through the NeMo Flow subscriber.",
-+      advanced: true,
-+    },
-+    "codecs.default": {
-+      label: "Default Codec",
-+      help: "Use auto-detection or force one provider payload codec for unmatched models.",
-+      advanced: true,
-+    },
-+    "nemoFlow.pluginConfig": {
-+      label: "Plugin Config",
-+      help: "Optional raw NeMo Flow plugin config document.",
++    policy: {
++      label: "Policy",
++      help: "Optional NeMo Flow plugin-host validation policy.",
 +      advanced: true,
 +    },
 +  },
@@ -553,20 +91,44 @@ index 0000000000..9ff995b908
 +export default definePluginEntry({
 +  id: "nemo-flow",
 +  name: "NeMo Flow",
-+  description: "Tool and LLM execution wrapping for NeMo Flow tracing, plugins, and ATIF export.",
++  description: "Tool and streaming LLM execution wrapping through NeMo Flow plugins.",
 +  configSchema: nemoFlowConfigSchema,
 +  register(api: OpenClawPluginApi) {
-+    const config = resolveNemoFlowPluginConfig(api.pluginConfig, {
-+      stateDir: api.runtime.state.resolveStateDir(),
-+      resolvePath: api.resolvePath,
-+      agentName: "openclaw",
-+      agentVersion: api.version ?? "unknown",
++    const config = resolveNemoFlowPluginConfig(api.pluginConfig);
++
++    api.registerService({
++      id: "nemo-flow-runtime",
++      async start() {
++        await initializeNemoFlowGateway({
++          logger: api.logger,
++          config,
++        });
++      },
++      async stop() {
++        await shutdownNemoFlowGateway({
++          logger: api.logger,
++        });
++      },
 +    });
 +
-+    api.registerAgentRuntimeMiddleware({
-+      id: "nemo-flow",
-+      priority: 100,
-+      wrapToolExecute: async (ctx) =>
++    api.registerAgentStreamingLlmMiddleware(
++      (ctx) =>
++        wrapStreamFnWithNemoFlow({
++          logger: api.logger,
++          config,
++          provider: ctx.provider,
++          modelId: ctx.modelId,
++          agentId: ctx.agentId,
++          runId: ctx.runId,
++          sessionId: ctx.sessionId,
++          sessionKey: ctx.sessionKey,
++          streamFn: ctx.streamFn,
++        }),
++      { runtimes: ["pi"], priority: 100 },
++    );
++
++    api.registerAgentToolCallMiddleware(
++      async (ctx) =>
 +        await executeToolWithNemoFlow({
 +          logger: api.logger,
 +          config,
@@ -578,270 +140,102 @@ index 0000000000..9ff995b908
 +          agentId: ctx.agentId,
 +          execute: ctx.execute,
 +        }),
-+      wrapStreamFn: (ctx) => {
-+        const wrapped = async (model, context, options) => {
-+          const streamFn = await wrapStreamFnWithNemoFlow({
-+            logger: api.logger,
-+            config,
-+            provider: ctx.provider,
-+            modelId: ctx.modelId,
-+            agentId: ctx.agentId,
-+            runId: ctx.runId,
-+            sessionId: ctx.sessionId,
-+            sessionKey: ctx.sessionKey,
-+            streamFn: ctx.streamFn,
-+          });
-+          return streamFn(model, context, options);
-+        };
-+        return wrapped;
-+      },
-+    });
-+
-+    api.on("gateway_start", async () => {
-+      await initializeNemoFlowGateway({
-+        logger: api.logger,
-+        config,
-+      });
-+    });
-+
-+    api.on("gateway_stop", async () => {
-+      await shutdownNemoFlowGateway({
-+        logger: api.logger,
-+      });
-+    });
-+
-+    api.on("session_start", async (event) => {
-+      await startNemoFlowSession({
-+        logger: api.logger,
-+        config,
-+        sessionId: event.sessionId,
-+        sessionKey: event.sessionKey,
-+      });
-+    });
-+
-+    api.on("session_end", async (event) => {
-+      await endNemoFlowSession({
-+        logger: api.logger,
-+        config,
-+        sessionId: event.sessionId,
-+        sessionKey: event.sessionKey,
-+      });
-+    });
++      { runtimes: ["pi"], priority: 100 },
++    );
 +  },
 +});
 diff --git a/extensions/nemo-flow/openclaw.plugin.json b/extensions/nemo-flow/openclaw.plugin.json
 new file mode 100644
-index 0000000000..f664a964af
+index 00000000..620bdef1
 --- /dev/null
 +++ b/extensions/nemo-flow/openclaw.plugin.json
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,70 @@
 +{
 +  "id": "nemo-flow",
 +  "name": "NeMo Flow",
-+  "description": "NeMo Flow tracing, plugin initialization, codec-aware tool/LLM wrapping, and ATIF export.",
++  "description": "NeMo Flow plugin-host initialization and execution wrapping for OpenClaw.",
++  "contracts": {
++    "agentStreamingLlmMiddleware": ["pi"],
++    "agentToolCallMiddleware": ["pi"]
++  },
 +  "configSchema": {
 +    "type": "object",
 +    "additionalProperties": false,
++    "required": ["version", "components"],
 +    "properties": {
-+      "enabled": {
-+        "type": "boolean"
++      "version": {
++        "type": "number",
++        "enum": [1]
 +      },
-+      "wrapping": {
-+        "type": "object",
-+        "additionalProperties": false,
-+        "properties": {
-+          "tools": {
-+            "type": "boolean"
-+          },
-+          "llm": {
-+            "type": "boolean"
-+          }
-+        }
-+      },
-+      "scopeIsolation": {
-+        "type": "string",
-+        "enum": ["per_session"]
-+      },
-+      "atif": {
-+        "type": "object",
-+        "additionalProperties": false,
-+        "properties": {
-+          "enabled": {
-+            "type": "boolean"
-+          },
-+          "outputDir": {
-+            "type": "string"
-+          },
-+          "agentName": {
-+            "type": "string"
-+          },
-+          "agentVersion": {
-+            "type": "string"
-+          }
-+        }
-+      },
-+      "telemetry": {
-+        "type": "object",
-+        "additionalProperties": false,
-+        "properties": {
-+          "otel": {
-+            "type": "object",
-+            "additionalProperties": false,
-+            "properties": {
-+              "enabled": {
-+                "type": "boolean"
-+              },
-+              "transport": {
-+                "type": "string"
-+              },
-+              "endpoint": {
-+                "type": "string"
-+              },
-+              "headers": {
-+                "type": "object"
-+              },
-+              "resourceAttributes": {
-+                "type": "object"
-+              },
-+              "serviceName": {
-+                "type": "string"
-+              },
-+              "serviceNamespace": {
-+                "type": "string"
-+              },
-+              "serviceVersion": {
-+                "type": "string"
-+              },
-+              "instrumentationScope": {
-+                "type": "string"
-+              },
-+              "timeoutMillis": {
-+                "type": "number"
-+              }
-+            }
-+          },
-+          "openInference": {
-+            "type": "object",
-+            "additionalProperties": false,
-+            "properties": {
-+              "enabled": {
-+                "type": "boolean"
-+              },
-+              "transport": {
-+                "type": "string"
-+              },
-+              "endpoint": {
-+                "type": "string"
-+              },
-+              "headers": {
-+                "type": "object"
-+              },
-+              "resourceAttributes": {
-+                "type": "object"
-+              },
-+              "serviceName": {
-+                "type": "string"
-+              },
-+              "serviceNamespace": {
-+                "type": "string"
-+              },
-+              "serviceVersion": {
-+                "type": "string"
-+              },
-+              "instrumentationScope": {
-+                "type": "string"
-+              },
-+              "timeoutMillis": {
-+                "type": "number"
-+              }
++      "components": {
++        "type": "array",
++        "items": {
++          "type": "object",
++          "additionalProperties": false,
++          "required": ["kind"],
++          "properties": {
++            "kind": {
++              "type": "string",
++              "minLength": 1
++            },
++            "enabled": {
++              "type": "boolean"
++            },
++            "config": {
++              "type": "object",
++              "additionalProperties": true
 +            }
 +          }
 +        }
 +      },
-+      "codecs": {
++      "policy": {
 +        "type": "object",
 +        "additionalProperties": false,
 +        "properties": {
-+          "default": {
++          "unknown_component": {
 +            "type": "string",
-+            "enum": ["auto", "none", "openai_chat", "openai_responses", "anthropic_messages"]
++            "enum": ["ignore", "warn", "error"]
 +          },
-+          "providers": {
-+            "type": "object",
-+            "additionalProperties": {
-+              "type": "string",
-+              "enum": ["none", "openai_chat", "openai_responses", "anthropic_messages"]
-+            }
++          "unknown_field": {
++            "type": "string",
++            "enum": ["ignore", "warn", "error"]
 +          },
-+          "models": {
-+            "type": "object",
-+            "additionalProperties": {
-+              "type": "string",
-+              "enum": ["none", "openai_chat", "openai_responses", "anthropic_messages"]
-+            }
-+          }
-+        }
-+      },
-+      "nemoFlow": {
-+        "type": "object",
-+        "additionalProperties": false,
-+        "properties": {
-+          "pluginConfig": {
-+            "type": "object",
-+            "additionalProperties": true
++          "unsupported_value": {
++            "type": "string",
++            "enum": ["ignore", "warn", "error"]
 +          }
 +        }
 +      }
 +    }
 +  },
 +  "uiHints": {
-+    "enabled": {
-+      "label": "Enabled",
-+      "help": "Enable NeMo Flow wrapping for this gateway."
++    "components": {
++      "label": "Components",
++      "help": "NeMo Flow plugin-host components to activate."
 +    },
-+    "atif.enabled": {
-+      "label": "ATIF Export",
-+      "help": "Write one exported ATIF JSON trajectory per session."
-+    },
-+    "atif.outputDir": {
-+      "label": "ATIF Output Dir",
-+      "help": "Optional output directory for exported trajectories."
-+    },
-+    "telemetry.otel.enabled": {
-+      "label": "OpenTelemetry",
-+      "help": "Enable OTLP export through the NeMo Flow OpenTelemetry subscriber.",
-+      "advanced": true
-+    },
-+    "telemetry.openInference.enabled": {
-+      "label": "OpenInference",
-+      "help": "Enable OTLP export through the NeMo Flow OpenInference subscriber.",
-+      "advanced": true
-+    },
-+    "codecs.default": {
-+      "label": "Default Codec",
-+      "help": "Use auto-detection or force a fallback request codec.",
-+      "advanced": true
-+    },
-+    "nemoFlow.pluginConfig": {
-+      "label": "Plugin Config",
-+      "help": "Optional raw NeMo Flow plugin config document.",
++    "policy": {
++      "label": "Policy",
++      "help": "Optional NeMo Flow plugin-host validation policy.",
 +      "advanced": true
 +    }
 +  }
 +}
 diff --git a/extensions/nemo-flow/package.json b/extensions/nemo-flow/package.json
 new file mode 100644
-index 0000000000..c0d1212778
+index 00000000..a322441f
 --- /dev/null
 +++ b/extensions/nemo-flow/package.json
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,22 @@
 +{
 +  "name": "@openclaw/nemo-flow",
 +  "version": "2026.3.14",
-+  "description": "OpenClaw NeMo Flow tracing, plugin config, and ATIF export integration",
++  "description": "OpenClaw NeMo Flow plugin-host and execution middleware integration",
 +  "type": "module",
 +  "optionalDependencies": {
 +    "nemo-flow-node": "file:../../../../crates/node"
++  },
++  "devDependencies": {
++    "openclaw": "workspace:*"
 +  },
 +  "openclaw": {
 +    "extensions": [
@@ -856,173 +250,86 @@ index 0000000000..c0d1212778
 +}
 diff --git a/extensions/nemo-flow/src/config.ts b/extensions/nemo-flow/src/config.ts
 new file mode 100644
-index 0000000000..c974002a80
+index 00000000..c2924575
 --- /dev/null
 +++ b/extensions/nemo-flow/src/config.ts
-@@ -0,0 +1,369 @@
-+import path from "node:path";
+@@ -0,0 +1,171 @@
++export type NemoFlowPluginComponentConfig = Record<string, unknown>;
 +
-+export type NemoFlowCodecName =
-+  | "auto"
-+  | "none"
-+  | "openai_chat"
-+  | "openai_responses"
-+  | "anthropic_messages";
-+
-+export type NemoFlowPluginConfig = {
-+  enabled: boolean;
-+  wrapping: {
-+    tools: boolean;
-+    llm: boolean;
-+  };
-+  scopeIsolation: "per_session";
-+  atif: {
-+    enabled: boolean;
-+    outputDir: string;
-+    agentName: string;
-+    agentVersion: string;
-+  };
-+  telemetry: {
-+    otel: {
-+      enabled: boolean;
-+      transport?: string;
-+      endpoint?: string;
-+      headers?: Record<string, unknown>;
-+      resourceAttributes?: Record<string, unknown>;
-+      serviceName?: string;
-+      serviceNamespace?: string;
-+      serviceVersion?: string;
-+      instrumentationScope?: string;
-+      timeoutMillis?: number;
-+    };
-+    openInference: {
-+      enabled: boolean;
-+      transport?: string;
-+      endpoint?: string;
-+      headers?: Record<string, unknown>;
-+      resourceAttributes?: Record<string, unknown>;
-+      serviceName?: string;
-+      serviceNamespace?: string;
-+      serviceVersion?: string;
-+      instrumentationScope?: string;
-+      timeoutMillis?: number;
-+    };
-+  };
-+  codecs: {
-+    default: NemoFlowCodecName;
-+    providers: Record<string, Exclude<NemoFlowCodecName, "auto">>;
-+    models: Record<string, Exclude<NemoFlowCodecName, "auto">>;
-+  };
-+  nemoFlow: {
-+    pluginConfig: Record<string, unknown>;
-+  };
++export type NemoFlowPluginComponent = {
++  kind: string;
++  enabled?: boolean;
++  config?: NemoFlowPluginComponentConfig;
 +};
 +
-+type ResolveConfigOptions = {
-+  stateDir?: string;
-+  resolvePath?: (input: string) => string;
-+  agentName?: string;
-+  agentVersion?: string;
++export type NemoFlowPluginPolicy = {
++  unknown_component?: "ignore" | "warn" | "error";
++  unknown_field?: "ignore" | "warn" | "error";
++  unsupported_value?: "ignore" | "warn" | "error";
++};
++
++export type NemoFlowPluginConfig = {
++  version: 1;
++  components: NemoFlowPluginComponent[];
++  policy?: NemoFlowPluginPolicy;
++};
++
++const UNSUPPORTED_WRAPPER_FIELDS = new Set([
++  "enabled",
++  "backend",
++  "capture",
++  "correlation",
++  "plugins",
++  "nemoFlow",
++  "atif",
++  "telemetry",
++]);
++
++export const DEFAULT_NEMO_FLOW_PLUGIN_CONFIG: NemoFlowPluginConfig = {
++  version: 1,
++  components: [],
 +};
 +
 +export const NEMO_FLOW_PLUGIN_CONFIG_JSON_SCHEMA = {
 +  type: "object",
 +  additionalProperties: false,
++  required: ["version", "components"],
 +  properties: {
-+    enabled: { type: "boolean", default: true },
-+    wrapping: {
-+      type: "object",
-+      additionalProperties: false,
-+      properties: {
-+        tools: { type: "boolean", default: true },
-+        llm: { type: "boolean", default: true },
-+      },
++    version: {
++      type: "number",
++      enum: [1],
 +    },
-+    scopeIsolation: {
-+      type: "string",
-+      enum: ["per_session"],
-+      default: "per_session",
-+    },
-+    atif: {
-+      type: "object",
-+      additionalProperties: false,
-+      properties: {
-+        enabled: { type: "boolean", default: true },
-+        outputDir: { type: "string" },
-+        agentName: { type: "string" },
-+        agentVersion: { type: "string" },
-+      },
-+    },
-+    telemetry: {
-+      type: "object",
-+      additionalProperties: false,
-+      properties: {
-+        otel: {
-+          type: "object",
-+          additionalProperties: false,
-+          properties: {
-+            enabled: { type: "boolean", default: false },
-+            transport: { type: "string" },
-+            endpoint: { type: "string" },
-+            headers: { type: "object" },
-+            resourceAttributes: { type: "object" },
-+            serviceName: { type: "string" },
-+            serviceNamespace: { type: "string" },
-+            serviceVersion: { type: "string" },
-+            instrumentationScope: { type: "string" },
-+            timeoutMillis: { type: "number", minimum: 1 },
-+          },
-+        },
-+        openInference: {
-+          type: "object",
-+          additionalProperties: false,
-+          properties: {
-+            enabled: { type: "boolean", default: false },
-+            transport: { type: "string" },
-+            endpoint: { type: "string" },
-+            headers: { type: "object" },
-+            resourceAttributes: { type: "object" },
-+            serviceName: { type: "string" },
-+            serviceNamespace: { type: "string" },
-+            serviceVersion: { type: "string" },
-+            instrumentationScope: { type: "string" },
-+            timeoutMillis: { type: "number", minimum: 1 },
++    components: {
++      type: "array",
++      items: {
++        type: "object",
++        additionalProperties: false,
++        required: ["kind"],
++        properties: {
++          kind: { type: "string", minLength: 1 },
++          enabled: { type: "boolean" },
++          config: {
++            type: "object",
++            additionalProperties: true,
 +          },
 +        },
 +      },
 +    },
-+    codecs: {
++    policy: {
 +      type: "object",
 +      additionalProperties: false,
 +      properties: {
-+        default: {
++        unknown_component: {
 +          type: "string",
-+          enum: ["auto", "none", "openai_chat", "openai_responses", "anthropic_messages"],
-+          default: "auto",
++          enum: ["ignore", "warn", "error"],
 +        },
-+        providers: {
-+          type: "object",
-+          additionalProperties: {
-+            type: "string",
-+            enum: ["none", "openai_chat", "openai_responses", "anthropic_messages"],
-+          },
++        unknown_field: {
++          type: "string",
++          enum: ["ignore", "warn", "error"],
 +        },
-+        models: {
-+          type: "object",
-+          additionalProperties: {
-+            type: "string",
-+            enum: ["none", "openai_chat", "openai_responses", "anthropic_messages"],
-+          },
-+        },
-+      },
-+    },
-+    nemoFlow: {
-+      type: "object",
-+      additionalProperties: false,
-+      properties: {
-+        pluginConfig: {
-+          type: "object",
-+          additionalProperties: true,
++        unsupported_value: {
++          type: "string",
++          enum: ["ignore", "warn", "error"],
 +        },
 +      },
 +    },
@@ -1030,494 +337,177 @@ index 0000000000..c974002a80
 +} as const;
 +
 +function asRecord(value: unknown, label: string): Record<string, unknown> {
-+  if (value === undefined) {
-+    return {};
-+  }
 +  if (!value || typeof value !== "object" || Array.isArray(value)) {
 +    throw new Error(`${label} must be an object`);
 +  }
 +  return value as Record<string, unknown>;
 +}
 +
-+function asBoolean(value: unknown, label: string, fallback: boolean): boolean {
-+  if (value === undefined) {
-+    return fallback;
-+  }
-+  if (typeof value !== "boolean") {
-+    throw new Error(`${label} must be a boolean`);
-+  }
-+  return value;
-+}
-+
-+function asOptionalString(value: unknown, label: string): string | undefined {
-+  if (value === undefined || value === null || value === "") {
-+    return undefined;
-+  }
-+  if (typeof value !== "string") {
-+    throw new Error(`${label} must be a string`);
-+  }
-+  return value;
-+}
-+
-+function asOptionalNumber(value: unknown, label: string): number | undefined {
-+  if (value === undefined || value === null || value === "") {
-+    return undefined;
-+  }
-+  if (typeof value !== "number" || !Number.isFinite(value)) {
-+    throw new Error(`${label} must be a finite number`);
-+  }
-+  return value;
-+}
-+
-+function isCodecName(value: unknown): value is Exclude<NemoFlowCodecName, "auto"> {
-+  return (
-+    value === "none" ||
-+    value === "openai_chat" ||
-+    value === "openai_responses" ||
-+    value === "anthropic_messages"
-+  );
-+}
-+
-+function asCodecDefault(value: unknown): NemoFlowCodecName {
-+  if (value === undefined) {
-+    return "auto";
-+  }
-+  if (
-+    value !== "auto" &&
-+    value !== "none" &&
-+    value !== "openai_chat" &&
-+    value !== "openai_responses" &&
-+    value !== "anthropic_messages"
-+  ) {
-+    throw new Error("codecs.default must be a supported codec name");
-+  }
-+  return value;
-+}
-+
-+function asCodecMap(
-+  value: unknown,
-+  label: string,
-+): Record<string, Exclude<NemoFlowCodecName, "auto">> {
-+  const record = asRecord(value, label);
-+  const normalized: Record<string, Exclude<NemoFlowCodecName, "auto">> = {};
-+  for (const [key, rawValue] of Object.entries(record)) {
-+    if (!isCodecName(rawValue)) {
-+      throw new Error(`${label}.${key} must be a supported codec name`);
++function rejectUnsupportedWrapperFields(record: Record<string, unknown>): void {
++  for (const key of Object.keys(record)) {
++    if (UNSUPPORTED_WRAPPER_FIELDS.has(key)) {
++      throw new Error(
++        `nemo-flow config.${key} is no longer supported; configure NeMo Flow components at the plugin config root`,
++      );
 +    }
-+    normalized[key] = rawValue;
++  }
++}
++
++function validatePolicy(value: unknown): NemoFlowPluginPolicy | undefined {
++  if (value === undefined) {
++    return undefined;
++  }
++  const policy = asRecord(value, "policy");
++  const normalized: NemoFlowPluginPolicy = {};
++  for (const key of Object.keys(policy)) {
++    if (key !== "unknown_component" && key !== "unknown_field" && key !== "unsupported_value") {
++      throw new Error(`policy.${key} is not supported`);
++    }
++    const raw = policy[key];
++    if (raw !== "ignore" && raw !== "warn" && raw !== "error") {
++      throw new Error(`policy.${key} must be one of ignore, warn, or error`);
++    }
++    normalized[key] = raw;
 +  }
 +  return normalized;
 +}
 +
-+function asOptionalRecord(value: unknown, label: string): Record<string, unknown> | undefined {
-+  if (value === undefined) {
-+    return undefined;
++function validateComponents(value: unknown): NemoFlowPluginComponent[] {
++  if (!Array.isArray(value)) {
++    throw new Error("components must be an array");
 +  }
-+  return asRecord(value, label);
++  return value.map((rawComponent, index) => {
++    const component = asRecord(rawComponent, `components[${index}]`);
++    for (const key of Object.keys(component)) {
++      if (key !== "kind" && key !== "enabled" && key !== "config") {
++        throw new Error(`components[${index}].${key} is not supported`);
++      }
++    }
++    if (typeof component.kind !== "string" || component.kind.trim().length === 0) {
++      throw new Error(`components[${index}].kind must be a non-empty string`);
++    }
++    if (component.enabled !== undefined && typeof component.enabled !== "boolean") {
++      throw new Error(`components[${index}].enabled must be a boolean`);
++    }
++    const config =
++      component.config === undefined
++        ? undefined
++        : asRecord(component.config, `components[${index}].config`);
++    return {
++      kind: component.kind.trim(),
++      ...(component.enabled !== undefined ? { enabled: component.enabled } : {}),
++      ...(config ? { config } : {}),
++    };
++  });
 +}
 +
-+function resolveOutputDir(
-+  rawOutputDir: unknown,
-+  stateDir: string,
-+  resolvePath: (input: string) => string,
-+): string {
-+  const outputDir = asOptionalString(rawOutputDir, "atif.outputDir");
-+  if (!outputDir) {
-+    return path.join(stateDir, "plugins", "nemo-flow", "atif");
++export function resolveNemoFlowPluginConfig(value: unknown): NemoFlowPluginConfig {
++  if (value === undefined || value === null) {
++    return { ...DEFAULT_NEMO_FLOW_PLUGIN_CONFIG, components: [] };
 +  }
-+  return path.isAbsolute(outputDir) ? outputDir : resolvePath(outputDir);
-+}
 +
-+export function resolveNemoFlowPluginConfig(
-+  rawValue: unknown,
-+  options: ResolveConfigOptions = {},
-+): NemoFlowPluginConfig {
-+  const raw = asRecord(rawValue, "nemo-flow plugin config");
-+  const wrapping = asRecord(raw.wrapping, "wrapping");
-+  const atif = asRecord(raw.atif, "atif");
-+  const telemetry = asRecord(raw.telemetry, "telemetry");
-+  const otel = asRecord(telemetry.otel, "telemetry.otel");
-+  const openInference = asRecord(telemetry.openInference, "telemetry.openInference");
-+  const codecs = asRecord(raw.codecs, "codecs");
-+  const nemoFlow = asRecord(raw.nemoFlow, "nemoFlow");
-+  const stateDir = options.stateDir ?? ".openclaw";
-+  const resolvePath = options.resolvePath ?? ((input: string) => input);
-+  const agentName = options.agentName ?? "openclaw";
-+  const agentVersion = options.agentVersion ?? "unknown";
++  const record = asRecord(value, "nemo-flow config");
++  rejectUnsupportedWrapperFields(record);
++
++  for (const key of Object.keys(record)) {
++    if (key !== "version" && key !== "components" && key !== "policy") {
++      throw new Error(`nemo-flow config.${key} is not supported`);
++    }
++  }
++
++  if (record.version !== 1) {
++    throw new Error("version must be 1");
++  }
 +
 +  return {
-+    enabled: asBoolean(raw.enabled, "enabled", true),
-+    wrapping: {
-+      tools: asBoolean(wrapping.tools, "wrapping.tools", true),
-+      llm: asBoolean(wrapping.llm, "wrapping.llm", true),
-+    },
-+    scopeIsolation: "per_session",
-+    atif: {
-+      enabled: asBoolean(atif.enabled, "atif.enabled", true),
-+      outputDir: resolveOutputDir(atif.outputDir, stateDir, resolvePath),
-+      agentName: asOptionalString(atif.agentName, "atif.agentName") ?? agentName,
-+      agentVersion: asOptionalString(atif.agentVersion, "atif.agentVersion") ?? agentVersion,
-+    },
-+    telemetry: {
-+      otel: {
-+        enabled: asBoolean(otel.enabled, "telemetry.otel.enabled", false),
-+        transport: asOptionalString(otel.transport, "telemetry.otel.transport"),
-+        endpoint: asOptionalString(otel.endpoint, "telemetry.otel.endpoint"),
-+        headers: asOptionalRecord(otel.headers, "telemetry.otel.headers"),
-+        resourceAttributes: asOptionalRecord(
-+          otel.resourceAttributes,
-+          "telemetry.otel.resourceAttributes",
-+        ),
-+        serviceName: asOptionalString(otel.serviceName, "telemetry.otel.serviceName"),
-+        serviceNamespace: asOptionalString(
-+          otel.serviceNamespace,
-+          "telemetry.otel.serviceNamespace",
-+        ),
-+        serviceVersion: asOptionalString(otel.serviceVersion, "telemetry.otel.serviceVersion"),
-+        instrumentationScope: asOptionalString(
-+          otel.instrumentationScope,
-+          "telemetry.otel.instrumentationScope",
-+        ),
-+        timeoutMillis: asOptionalNumber(otel.timeoutMillis, "telemetry.otel.timeoutMillis"),
-+      },
-+      openInference: {
-+        enabled: asBoolean(openInference.enabled, "telemetry.openInference.enabled", false),
-+        transport: asOptionalString(
-+          openInference.transport,
-+          "telemetry.openInference.transport",
-+        ),
-+        endpoint: asOptionalString(openInference.endpoint, "telemetry.openInference.endpoint"),
-+        headers: asOptionalRecord(openInference.headers, "telemetry.openInference.headers"),
-+        resourceAttributes: asOptionalRecord(
-+          openInference.resourceAttributes,
-+          "telemetry.openInference.resourceAttributes",
-+        ),
-+        serviceName: asOptionalString(
-+          openInference.serviceName,
-+          "telemetry.openInference.serviceName",
-+        ),
-+        serviceNamespace: asOptionalString(
-+          openInference.serviceNamespace,
-+          "telemetry.openInference.serviceNamespace",
-+        ),
-+        serviceVersion: asOptionalString(
-+          openInference.serviceVersion,
-+          "telemetry.openInference.serviceVersion",
-+        ),
-+        instrumentationScope: asOptionalString(
-+          openInference.instrumentationScope,
-+          "telemetry.openInference.instrumentationScope",
-+        ),
-+        timeoutMillis: asOptionalNumber(
-+          openInference.timeoutMillis,
-+          "telemetry.openInference.timeoutMillis",
-+        ),
-+      },
-+    },
-+    codecs: {
-+      default: asCodecDefault(codecs.default),
-+      providers: asCodecMap(codecs.providers, "codecs.providers"),
-+      models: asCodecMap(codecs.models, "codecs.models"),
-+    },
-+    nemoFlow: {
-+      pluginConfig:
-+        (asOptionalRecord(nemoFlow.pluginConfig, "nemoFlow.pluginConfig") as Record<string, unknown>) ??
-+        {
-+          version: 1,
-+          components: [],
-+        },
-+    },
++    version: 1,
++    components: validateComponents(record.components),
++    ...(record.policy !== undefined ? { policy: validatePolicy(record.policy) } : {}),
 +  };
 +}
 diff --git a/extensions/nemo-flow/src/runtime.test.ts b/extensions/nemo-flow/src/runtime.test.ts
 new file mode 100644
-index 0000000000..7076506aba
+index 00000000..96b5555d
 --- /dev/null
 +++ b/extensions/nemo-flow/src/runtime.test.ts
-@@ -0,0 +1,253 @@
+@@ -0,0 +1,66 @@
 +import { describe, expect, it } from "vitest";
 +import { resolveNemoFlowPluginConfig } from "./config.js";
-+import {
-+  buildCodecFinalResponse,
-+  buildProviderRequestContent,
-+  detectCodecName,
-+  ensureChatStreamUsageInclude,
-+} from "./runtime.js";
 +
 +describe("nemo-flow config", () => {
-+  it("applies defaults and resolves the ATIF output directory", () => {
-+    const config = resolveNemoFlowPluginConfig(
-+      {},
-+      {
-+        stateDir: "/tmp/openclaw-state",
-+        resolvePath: (input) => `/abs/${input}`,
-+        agentVersion: "1.2.3",
-+      },
-+    );
-+
-+    expect(config.enabled).toBe(true);
-+    expect(config.atif.outputDir).toBe("/tmp/openclaw-state/plugins/nemo-flow/atif");
-+    expect(config.atif.agentName).toBe("openclaw");
-+    expect(config.atif.agentVersion).toBe("1.2.3");
-+  });
-+});
-+
-+describe("nemo-flow codec selection", () => {
-+  const config = resolveNemoFlowPluginConfig({
-+    codecs: {
-+      default: "auto",
-+      providers: {
-+        openai: "openai_chat",
-+      },
-+      models: {
-+        "claude-*": "anthropic_messages",
-+      },
-+    },
-+  });
-+
-+  it("prefers model overrides over provider overrides", () => {
-+    const codec = detectCodecName({
-+      provider: "openai",
-+      modelId: "claude-opus-4.6",
-+      requestContent: { messages: [] },
-+      config,
++  it("defaults to an empty NeMo Flow plugin-host config", () => {
++    expect(resolveNemoFlowPluginConfig(undefined)).toEqual({
++      version: 1,
++      components: [],
 +    });
-+
-+    expect(codec).toBe("anthropic_messages");
 +  });
 +
-+  it("detects responses payloads automatically", () => {
-+    const codec = detectCodecName({
-+      provider: "openai",
-+      modelId: "gpt-5.4",
-+      requestContent: { instructions: "Be concise", input: [] },
-+      config,
-+    });
-+
-+    expect(codec).toBe("openai_responses");
-+  });
-+});
-+
-+describe("nemo-flow request/response helpers", () => {
-+  it("builds OpenAI Responses request content from system and user messages", () => {
-+    const content = buildProviderRequestContent({
-+      codecName: "openai_responses",
-+      model: { id: "gpt-5.4" },
-+      context: {
-+        messages: [
-+          { role: "system", content: [{ type: "text", text: "System prompt" }] },
-+          { role: "user", content: [{ type: "text", text: "Hello" }] },
++  it("accepts the hoisted plugin-host config shape", () => {
++    expect(
++      resolveNemoFlowPluginConfig({
++        version: 1,
++        components: [
++          {
++            kind: "observability",
++            enabled: true,
++            config: {
++              version: 1,
++              endpoint: "http://localhost:4318",
++            },
++          },
 +        ],
++        policy: {
++          unknown_component: "warn",
++        },
++      }),
++    ).toEqual({
++      version: 1,
++      components: [
++        {
++          kind: "observability",
++          enabled: true,
++          config: {
++            version: 1,
++            endpoint: "http://localhost:4318",
++          },
++        },
++      ],
++      policy: {
++        unknown_component: "warn",
 +      },
 +    });
-+
-+    expect(content).toEqual({
-+      model: "gpt-5.4",
-+      instructions: "System prompt",
-+      input: [{ role: "user", content: "Hello" }],
-+    });
 +  });
 +
-+  it("builds codec-shaped final responses from collected chunks", () => {
-+    const response = buildCodecFinalResponse({
-+      codecName: "openai_chat",
-+      model: { id: "gpt-5.4" },
-+      chunks: [
-+        { type: "text", text: "Hello" },
-+        { type: "text", text: " world" },
-+        { stopReason: "stop" },
-+      ],
-+    });
-+
-+    expect(response).toEqual({
-+      object: "chat.completion",
-+      model: "gpt-5.4",
-+      choices: [
-+        {
-+          index: 0,
-+          finish_reason: "stop",
-+          message: {
-+            role: "assistant",
-+            content: "Hello world",
-+          },
-+        },
-+      ],
-+    });
-+  });
-+});
-+describe("nemo-flow stream chunk usage extraction", () => {
-+  it("extracts usage from top-level record.usage (OpenAI chat SSE terminal)", () => {
-+    const response = buildCodecFinalResponse({
-+      codecName: "openai_chat",
-+      model: { id: "gpt-5" },
-+      chunks: [
-+        { type: "text", text: "hi" },
-+        { type: "text", text: " there" },
-+        { usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } },
-+      ],
-+    });
-+    expect((response as { usage?: unknown }).usage).toEqual({
-+      prompt_tokens: 10,
-+      completion_tokens: 3,
-+      total_tokens: 13,
-+    });
-+  });
-+
-+  it("extracts usage nested under record.partial (pi-ai text_end event)", () => {
-+    const response = buildCodecFinalResponse({
-+      codecName: "openai_chat",
-+      model: { id: "gpt-5" },
-+      chunks: [
-+        { type: "text", text: "hi" },
-+        {
-+          type: "text_end",
-+          partial: {
-+            usage: { input: 10, output: 3, totalTokens: 13 },
-+          },
-+        },
-+      ],
-+    });
-+    expect((response as { usage?: unknown }).usage).toEqual({
-+      prompt_tokens: 10,
-+      completion_tokens: 3,
-+      total_tokens: 13,
-+    });
-+  });
-+
-+  it("extracts usage nested under record.message (pi-ai message_end event)", () => {
-+    const response = buildCodecFinalResponse({
-+      codecName: "openai_chat",
-+      model: { id: "gpt-5" },
-+      chunks: [
-+        { type: "text", text: "hi" },
-+        { message: { usage: { input_tokens: 10, output_tokens: 3 } } },
-+      ],
-+    });
-+    expect((response as { usage?: unknown }).usage).toEqual({
-+      prompt_tokens: 10,
-+      completion_tokens: 3,
-+      total_tokens: 13,
-+    });
-+  });
-+
-+  it("omits usage when no chunk carries token counts", () => {
-+    const response = buildCodecFinalResponse({
-+      codecName: "openai_chat",
-+      model: { id: "gpt-5" },
-+      chunks: [{ type: "text", text: "hi" }],
-+    });
-+    expect((response as { usage?: unknown }).usage).toBeUndefined();
-+  });
-+
-+  it("rejects non-numeric usage fields", () => {
-+    const response = buildCodecFinalResponse({
-+      codecName: "openai_chat",
-+      model: { id: "gpt-5" },
-+      chunks: [
-+        { type: "text", text: "hi" },
-+        { usage: { prompt_tokens: "10", completion_tokens: null } },
-+      ],
-+    });
-+    expect((response as { usage?: unknown }).usage).toBeUndefined();
-+  });
-+});
-+
-+describe("ensureChatStreamUsageInclude (onPayload stream_options injection)", () => {
-+  it("injects stream_options.include_usage on a streaming OpenAI Chat body", () => {
-+    const body: Record<string, unknown> = {
-+      model: "gpt-4o",
-+      messages: [{ role: "user", content: "hi" }],
-+      stream: true,
-+    };
-+    ensureChatStreamUsageInclude(body);
-+    expect(body.stream_options).toEqual({ include_usage: true });
-+  });
-+
-+  it("preserves caller-provided stream_options (including opt-outs)", () => {
-+    const optOut: Record<string, unknown> = {
-+      model: "gpt-4o",
-+      messages: [{ role: "user", content: "hi" }],
-+      stream: true,
-+      stream_options: { include_usage: false },
-+    };
-+    ensureChatStreamUsageInclude(optOut);
-+    expect(optOut.stream_options).toEqual({ include_usage: false });
-+
-+    const customOpts: Record<string, unknown> = {
-+      model: "gpt-4o",
-+      messages: [{ role: "user", content: "hi" }],
-+      stream: true,
-+      stream_options: { include_usage: true, some_extra: 1 },
-+    };
-+    ensureChatStreamUsageInclude(customOpts);
-+    expect(customOpts.stream_options).toEqual({ include_usage: true, some_extra: 1 });
-+  });
-+
-+  it("skips non-streaming Chat bodies (stream !== true)", () => {
-+    const body: Record<string, unknown> = {
-+      model: "gpt-4o",
-+      messages: [{ role: "user", content: "hi" }],
-+    };
-+    ensureChatStreamUsageInclude(body);
-+    expect(body.stream_options).toBeUndefined();
-+
-+    const explicitFalse: Record<string, unknown> = {
-+      model: "gpt-4o",
-+      messages: [{ role: "user", content: "hi" }],
-+      stream: false,
-+    };
-+    ensureChatStreamUsageInclude(explicitFalse);
-+    expect(explicitFalse.stream_options).toBeUndefined();
-+  });
-+
-+  it("skips OpenAI Responses bodies (uses input, not messages)", () => {
-+    const responsesBody: Record<string, unknown> = {
-+      model: "gpt-4o",
-+      input: "hi",
-+      stream: true,
-+    };
-+    ensureChatStreamUsageInclude(responsesBody);
-+    expect(responsesBody.stream_options).toBeUndefined();
-+  });
-+
-+  it("is safe on null, undefined, arrays, and primitives", () => {
-+    expect(() => ensureChatStreamUsageInclude(null)).not.toThrow();
-+    expect(() => ensureChatStreamUsageInclude(undefined)).not.toThrow();
-+    expect(() => ensureChatStreamUsageInclude([])).not.toThrow();
-+    expect(() => ensureChatStreamUsageInclude("string")).not.toThrow();
-+    expect(() => ensureChatStreamUsageInclude(42)).not.toThrow();
++  it.each([
++    "enabled",
++    "backend",
++    "capture",
++    "correlation",
++    "plugins",
++    "nemoFlow",
++    "atif",
++    "telemetry",
++  ])("rejects old wrapper field %s", (field) => {
++    expect(() =>
++      resolveNemoFlowPluginConfig({
++        version: 1,
++        components: [],
++        [field]: {},
++      }),
++    ).toThrow(`config.${field} is no longer supported`);
 +  });
 +});
 diff --git a/extensions/nemo-flow/src/runtime.ts b/extensions/nemo-flow/src/runtime.ts
 new file mode 100644
+index 00000000..9642147e
 --- /dev/null
 +++ b/extensions/nemo-flow/src/runtime.ts
-@@ -0,0 +1,1530 @@
-+import fs from "node:fs/promises";
-+import path from "node:path";
-+import type { StreamFn } from "@mariozechner/pi-agent-core";
-+import { extractTextFromChatContent } from "../../../src/shared/chat-content.js";
-+import type { NemoFlowCodecName, NemoFlowPluginConfig } from "./config.js";
+@@ -0,0 +1,479 @@
++import type { AgentStreamingLlmMiddlewareContext } from "openclaw/plugin-sdk/core";
++import type { NemoFlowPluginConfig } from "./config.js";
 +
 +type JsonRecord = Record<string, unknown>;
-+
-+type ModelLike = {
-+  id?: string;
-+  provider?: string;
-+  api?: string;
-+};
-+
-+type ContextLike = {
-+  systemPrompt?: string;
-+  messages?: unknown[];
-+  tools?: unknown[];
-+};
-+
-+type StreamOptionsLike = {
-+  headers?: Record<string, string>;
-+  onPayload?: (payload: unknown, model: unknown) => unknown;
-+  [key: string]: unknown;
-+};
++type StreamFn = AgentStreamingLlmMiddlewareContext["streamFn"];
 +
 +type StreamLike = AsyncIterable<unknown> & {
 +  result?: () => Promise<unknown>;
@@ -1525,19 +515,6 @@ new file mode 100644
 +
 +type NemoFlowScopeHandle = unknown;
 +type NemoFlowScopeStack = unknown;
-+
-+type NemoFlowCodec = {
-+  decode: (value: unknown) => unknown;
-+  encode: (value: unknown) => unknown;
-+  decodeResponse?: (value: unknown) => unknown;
-+};
-+
-+type NemoFlowSubscriber = {
-+  register: (name: string) => void;
-+  deregister: (name: string) => boolean;
-+  forceFlush?: () => void;
-+  shutdown?: () => void;
-+};
 +
 +type NemoFlowBindings = {
 +  createScopeStack: () => NemoFlowScopeStack;
@@ -1571,36 +548,17 @@ new file mode 100644
 +    data?: unknown,
 +    metadata?: unknown,
 +    modelName?: string | null,
-+    codecDecode?: ((value: unknown) => unknown) | null,
-+    codecEncode?: ((value: unknown) => unknown) | null,
-+    responseCodecDecode?: ((value: unknown) => unknown) | null,
 +  ) => Promise<{ next: () => Promise<unknown | null> }>;
-+  AtifExporter: new (
-+    sessionId: string,
-+    agentName: string,
-+    agentVersion: string,
-+    modelName?: string | null,
-+  ) => {
-+    register: (name: string) => void;
-+    deregister: (name: string) => boolean;
-+    exportJson: () => string;
-+    clear: () => void;
-+  };
-+  OpenTelemetrySubscriber: new (config?: Record<string, unknown>) => NemoFlowSubscriber;
-+  OpenInferenceSubscriber: new (config?: Record<string, unknown>) => NemoFlowSubscriber;
++  pushStreamChunk: (streamId: number, chunk: unknown) => boolean;
++  endStream: (streamId: number) => void;
 +  ScopeType: {
 +    Agent: number;
 +  };
-+  OpenAIChatCodec: new () => NemoFlowCodec;
-+  OpenAIResponsesCodec: new () => NemoFlowCodec;
-+  AnthropicMessagesCodec: new () => NemoFlowCodec;
-+  pushStreamChunk: (streamId: number, chunk: unknown) => boolean;
-+  endStream: (streamId: number) => void;
 +};
 +
 +type NemoFlowPluginHost = {
-+  defaultConfig: () => Record<string, unknown>;
-+  validate: (config: Record<string, unknown>) => {
++  defaultConfig: () => NemoFlowPluginConfig;
++  validate: (config: NemoFlowPluginConfig) => {
 +    diagnostics?: Array<{
 +      level?: string;
 +      code?: string;
@@ -1608,7 +566,7 @@ new file mode 100644
 +      message?: string;
 +    }>;
 +  };
-+  initialize: (config: Record<string, unknown>) => Promise<unknown>;
++  initialize: (config: NemoFlowPluginConfig) => Promise<unknown>;
 +  clear: () => void;
 +};
 +
@@ -1623,877 +581,34 @@ new file mode 100644
 +  pluginHost: NemoFlowPluginHost;
 +};
 +
-+type SessionExporterState = {
-+  exporter: InstanceType<NemoFlowBindings["AtifExporter"]>;
-+  registrationName: string;
-+};
-+
-+type BenchmarkIdentifiers = {
-+  benchmark_session_id: string;
-+  benchmark_run_id: string;
-+  benchmark_task_id: string;
-+};
-+
-+const TOOL_ATTR_LOCAL = 0b01;
-+const LLM_ATTR_STREAMING = 0b10;
-+
 +type RuntimeState = {
 +  modules?: NemoFlowModules;
 +  loadPromise?: Promise<NemoFlowModules | null>;
 +  initPromise?: Promise<boolean>;
 +  initialized: boolean;
++  activeConfig?: NemoFlowPluginConfig;
 +  unavailableReason?: string;
 +  unavailableLogged: boolean;
 +  sessionScopes: Map<string, NemoFlowScopeStack>;
 +  sessionRootScopes: Map<string, NemoFlowScopeHandle>;
-+  sessionExporters: Map<string, SessionExporterState>;
-+  telemetrySubscribers: Array<{ name: string; subscriber: NemoFlowSubscriber }>;
 +};
++
++const TOOL_ATTR_LOCAL = 0b01;
++const LLM_ATTR_STREAMING = 0b10;
 +
 +const state: RuntimeState = {
 +  initialized: false,
 +  unavailableLogged: false,
 +  sessionScopes: new Map(),
 +  sessionRootScopes: new Map(),
-+  sessionExporters: new Map(),
-+  telemetrySubscribers: [],
 +};
 +
 +function asRecord(value: unknown): JsonRecord {
-+  return value && typeof value === "object" && !Array.isArray(value)
-+    ? (value as JsonRecord)
-+    : {};
++  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
 +}
 +
-+function asArray(value: unknown): unknown[] {
-+  return Array.isArray(value) ? value : [];
-+}
-+
-+function messageRole(message: unknown): string {
-+  const role = asRecord(message).role;
-+  return typeof role === "string" ? role : "user";
-+}
-+
-+function normalizeContentText(content: unknown): string | null {
-+  return extractTextFromChatContent(content, {
-+    joinWith: "\n",
-+    normalizeText: (text) => text.trim(),
-+  });
-+}
-+
-+function normalizeMessageText(message: unknown): string | null {
-+  return normalizeContentText(asRecord(message).content);
-+}
-+
-+function normalizeOptionalString(value: unknown): string | undefined {
-+  if (typeof value !== "string") {
-+    return undefined;
-+  }
-+  const trimmed = value.trim();
-+  return trimmed.length > 0 ? trimmed : undefined;
-+}
-+
-+function joinPromptSegments(segments: Array<string | null | undefined>): string | undefined {
-+  const normalized = segments
-+    .map((segment) => normalizeOptionalString(segment))
-+    .filter((segment): segment is string => !!segment);
-+  return normalized.length > 0 ? normalized.join("\n\n") : undefined;
-+}
-+
-+function systemMessageTexts(messages: unknown[]): string[] {
-+  return messages
-+    .filter((message) => messageRole(message) === "system")
-+    .map((message) => normalizeMessageText(message))
-+    .filter((value): value is string => !!value);
-+}
-+
-+function toolName(tool: unknown): string {
-+  const name = asRecord(tool).name;
-+  return typeof name === "string" ? name : "";
-+}
-+
-+function toolDescription(tool: unknown): string | undefined {
-+  const description = asRecord(tool).description;
-+  return typeof description === "string" ? description : undefined;
-+}
-+
-+function toolParameters(tool: unknown): JsonRecord {
-+  return asRecord(asRecord(tool).parameters);
-+}
-+
-+function buildOpenAIChatTools(tools: unknown[]): JsonRecord[] {
-+  return tools.map((tool) => {
-+    const description = toolDescription(tool);
-+    return {
-+      type: "function",
-+      function: {
-+        name: toolName(tool),
-+        ...(description ? { description } : {}),
-+        parameters: toolParameters(tool),
-+      },
-+    };
-+  });
-+}
-+
-+function buildOpenAIResponsesTools(tools: unknown[]): JsonRecord[] {
-+  return tools.map((tool) => {
-+    const description = toolDescription(tool);
-+    return {
-+      type: "function",
-+      name: toolName(tool),
-+      ...(description ? { description } : {}),
-+      parameters: toolParameters(tool),
-+    };
-+  });
-+}
-+
-+function buildAnthropicTools(tools: unknown[]): JsonRecord[] {
-+  return tools.map((tool) => {
-+    const parameters = toolParameters(tool);
-+    const description = toolDescription(tool);
-+    return {
-+      name: toolName(tool),
-+      ...(description ? { description } : {}),
-+      input_schema: {
-+        type: "object",
-+        properties: asRecord(parameters.properties),
-+        required: Array.isArray(parameters.required) ? parameters.required : [],
-+      },
-+    };
-+  });
-+}
-+
-+export function buildOpenClawContextContent(params: {
-+  model: ModelLike;
-+  context: ContextLike;
-+  options?: StreamOptionsLike;
-+}): JsonRecord {
-+  const messages = asArray(params.context.messages);
-+  const systemPrompt = normalizeOptionalString(params.context.systemPrompt);
-+  const tools = asArray(params.context.tools);
-+  const toolChoice = params.options?.toolChoice;
-+
-+  return {
-+    model: params.model.id ?? "",
-+    ...(systemPrompt ? { systemPrompt } : {}),
-+    messages: messages.map((message) => ({
-+      role: messageRole(message),
-+      content: normalizeMessageText(message) ?? "",
-+    })),
-+    ...(tools.length > 0
-+      ? {
-+          tools: tools.map((tool) => ({
-+            name: toolName(tool),
-+            ...(toolDescription(tool) ? { description: toolDescription(tool) } : {}),
-+            parameters: toolParameters(tool),
-+          })),
-+        }
-+      : {}),
-+    ...(toolChoice !== undefined ? { toolChoice } : {}),
-+  };
-+}
-+
-+export function buildLlmSpanMetadata(params: {
-+  provider: string;
-+  codecName: Exclude<NemoFlowCodecName, "auto">;
-+  model: ModelLike;
-+  context: ContextLike;
-+  options?: StreamOptionsLike;
-+  providerRequest: JsonRecord;
-+  sessionId?: string;
-+}): JsonRecord {
-+  return {
-+    provider: params.provider,
-+    codec: params.codecName,
-+    ...buildBenchmarkSpanMetadata(params.sessionId),
-+    openclaw_context: buildOpenClawContextContent({
-+      model: params.model,
-+      context: params.context,
-+      options: params.options,
-+    }),
-+    provider_request: params.providerRequest,
-+  };
-+}
-+
-+export function parseBenchmarkIdentifiers(sessionId?: string): BenchmarkIdentifiers | undefined {
-+  const normalizedSessionId = normalizeOptionalString(sessionId);
-+  if (!normalizedSessionId || !normalizedSessionId.startsWith("pb-")) {
-+    return undefined;
-+  }
-+
-+  const payload = normalizedSessionId.slice(3);
-+  const benchmarkMatch = payload.match(/^(\d{4}(?:-\d+)?)-(.+)$/);
-+  if (!benchmarkMatch) {
-+    return undefined;
-+  }
-+
-+  const [, benchmarkRunId, benchmarkTaskId] = benchmarkMatch;
-+  const normalizedTaskId = normalizeOptionalString(benchmarkTaskId);
-+  if (!normalizedTaskId) {
-+    return undefined;
-+  }
-+
-+  return {
-+    benchmark_session_id: normalizedSessionId,
-+    benchmark_run_id: benchmarkRunId,
-+    benchmark_task_id: normalizedTaskId,
-+  };
-+}
-+
-+export function buildBenchmarkSpanMetadata(sessionId?: string): JsonRecord {
-+  return parseBenchmarkIdentifiers(sessionId) ?? {};
-+}
-+
-+function createGlobMatcher(pattern: string): RegExp {
-+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-+  const regex = `^${escaped.replace(/\*/g, ".*").replace(/\?/g, ".")}$`;
-+  return new RegExp(regex, "i");
-+}
-+
-+function findCodecOverride(
-+  overrides: Record<string, Exclude<NemoFlowCodecName, "auto">>,
-+  key: string,
-+): Exclude<NemoFlowCodecName, "auto"> | undefined {
-+  for (const [pattern, codec] of Object.entries(overrides)) {
-+    if (createGlobMatcher(pattern).test(key)) {
-+      return codec;
-+    }
-+  }
-+  return undefined;
-+}
-+
-+export function detectCodecName(params: {
-+  provider: string;
-+  modelId: string;
-+  model?: ModelLike;
-+  requestContent: unknown;
-+  config: NemoFlowPluginConfig;
-+}): Exclude<NemoFlowCodecName, "auto"> {
-+  const modelOverride = findCodecOverride(params.config.codecs.models, params.modelId);
-+  if (modelOverride) {
-+    return modelOverride;
-+  }
-+  const modelApi = typeof params.model?.api === "string" ? params.model.api : undefined;
-+  if (
-+    modelApi === "openai-responses" ||
-+    modelApi === "openai-codex-responses" ||
-+    modelApi === "azure-openai-responses"
-+  ) {
-+    return "openai_responses";
-+  }
-+  if (modelApi === "anthropic-messages") {
-+    return "anthropic_messages";
-+  }
-+  const content = asRecord(params.requestContent);
-+  if (content.input !== undefined || content.instructions !== undefined) {
-+    return "openai_responses";
-+  }
-+  const providerOverride = params.config.codecs.providers[params.provider];
-+  if (providerOverride) {
-+    return providerOverride;
-+  }
-+  if (params.provider === "anthropic") {
-+    return "anthropic_messages";
-+  }
-+  if (content.messages !== undefined) {
-+    return "openai_chat";
-+  }
-+  return params.config.codecs.default === "auto" ? "none" : params.config.codecs.default;
-+}
-+
-+function safeJsonParse(text: string): unknown {
-+  try {
-+    return JSON.parse(text);
-+  } catch {
-+    return {};
-+  }
-+}
-+
-+function piaiToolCallsToOpenAI(content: unknown[]): JsonRecord[] {
-+  const toolCalls: JsonRecord[] = [];
-+  for (const block of content) {
-+    const b = asRecord(block);
-+    if (b.type === "toolCall" || b.type === "tool_call") {
-+      toolCalls.push({
-+        id: typeof b.id === "string" ? b.id : "",
-+        type: "function",
-+        function: {
-+          name: typeof b.name === "string" ? b.name : "",
-+          arguments:
-+            typeof b.arguments === "string"
-+              ? b.arguments
-+              : JSON.stringify(b.arguments ?? {}),
-+        },
-+      });
-+    }
-+  }
-+  return toolCalls;
-+}
-+
-+function toOpenAIChatMessage(message: unknown): JsonRecord {
-+  const record = asRecord(message);
-+  const role = messageRole(message);
-+
-+  // tool-result messages (pi-ai role "toolResult" -> OpenAI role "tool")
-+  if (role === "toolResult" || role === "tool") {
-+    return {
-+      role: "tool",
-+      tool_call_id: typeof record.toolCallId === "string" ? record.toolCallId
-+                   : typeof record.tool_call_id === "string" ? record.tool_call_id
-+                   : "",
-+      content: normalizeMessageText(record) ?? "",
-+    };
-+  }
-+
-+  // assistant messages may contain tool calls in content array
-+  if (role === "assistant" && Array.isArray(record.content)) {
-+    const toolCalls = piaiToolCallsToOpenAI(record.content);
-+    const text = normalizeMessageText(record);
-+    const result: JsonRecord = { role: "assistant", content: text ?? "" };
-+    if (toolCalls.length > 0) result.tool_calls = toolCalls;
-+    return result;
-+  }
-+
-+  // user / system / plain assistant
-+  return {
-+    role,
-+    content: normalizeMessageText(record) ?? "",
-+  };
-+}
-+
-+function toAnthropicMessage(message: unknown): JsonRecord {
-+  const record = asRecord(message);
-+  const rawRole = messageRole(message);
-+
-+  // tool-result messages -> Anthropic tool_result content block inside a user message
-+  if (rawRole === "toolResult" || rawRole === "tool") {
-+    return {
-+      role: "user",
-+      content: [{
-+        type: "tool_result",
-+        tool_use_id: typeof record.toolCallId === "string" ? record.toolCallId
-+                    : typeof record.tool_call_id === "string" ? record.tool_call_id
-+                    : typeof record.tool_use_id === "string" ? record.tool_use_id
-+                    : "",
-+        content: normalizeMessageText(record) ?? "",
-+      }],
-+    };
-+  }
-+
-+  // assistant messages with tool calls -> Anthropic content blocks
-+  if (rawRole === "assistant" && Array.isArray(record.content)) {
-+    const content: unknown[] = [];
-+    const text = normalizeMessageText(record);
-+    if (text) content.push({ type: "text", text });
-+    for (const block of record.content as unknown[]) {
-+      const b = asRecord(block);
-+      if (b.type === "toolCall" || b.type === "tool_call" || b.type === "tool_use") {
-+        content.push({
-+          type: "tool_use",
-+          id: typeof b.id === "string" ? b.id : "",
-+          name: typeof b.name === "string" ? b.name : "",
-+          input: typeof b.arguments === "string"
-+            ? safeJsonParse(b.arguments as string)
-+            : (b.arguments ?? b.input ?? {}),
-+        });
-+      }
-+    }
-+    if (content.length > 0) return { role: "assistant", content };
-+    return { role: "assistant", content: text ?? "" };
-+  }
-+
-+  const role = rawRole === "assistant" ? "assistant" : "user";
-+  return { role, content: normalizeMessageText(message) ?? "" };
-+}
-+
-+function toResponsesInputItem(message: unknown): JsonRecord[] {
-+  const record = asRecord(message);
-+  const role = messageRole(message);
-+
-+  // tool-result -> function_call_output item
-+  if (role === "toolResult" || role === "tool") {
-+    return [{
-+      type: "function_call_output",
-+      call_id: typeof record.toolCallId === "string" ? record.toolCallId
-+              : typeof record.tool_call_id === "string" ? record.tool_call_id
-+              : "",
-+      output: normalizeMessageText(record) ?? "",
-+    }];
-+  }
-+
-+  // assistant with tool calls -> message item + function_call items
-+  if (role === "assistant" && Array.isArray(record.content)) {
-+    const items: JsonRecord[] = [];
-+    const text = normalizeMessageText(record);
-+    if (text) {
-+      items.push({ type: "message", role: "assistant", content: [{ type: "output_text", text }] });
-+    }
-+    for (const block of record.content as unknown[]) {
-+      const b = asRecord(block);
-+      if (b.type === "toolCall" || b.type === "tool_call") {
-+        items.push({
-+          type: "function_call",
-+          call_id: typeof b.id === "string" ? b.id : "",
-+          name: typeof b.name === "string" ? b.name : "",
-+          arguments:
-+            typeof b.arguments === "string"
-+              ? b.arguments
-+              : JSON.stringify(b.arguments ?? {}),
-+        });
-+      }
-+    }
-+    if (items.length > 0) return items;
-+  }
-+
-+  return [{ role, content: normalizeMessageText(message) ?? "" }];
-+}
-+
-+export function buildProviderRequestContent(params: {
-+  codecName: Exclude<NemoFlowCodecName, "auto">;
-+  model: ModelLike;
-+  context: ContextLike;
-+  options?: StreamOptionsLike;
-+}): JsonRecord {
-+  const messages = asArray(params.context.messages);
-+  const systemMessages = messages.filter((message) => messageRole(message) === "system");
-+  const nonSystemMessages = messages.filter((message) => messageRole(message) !== "system");
-+  const tools = asArray(params.context.tools);
-+  const systemPrompt = joinPromptSegments([
-+    params.context.systemPrompt,
-+    ...systemMessageTexts(messages),
-+  ]);
-+  const toolChoice = params.options?.toolChoice;
-+
-+  switch (params.codecName) {
-+    case "openai_chat": {
-+      const request: JsonRecord = {
-+        model: params.model.id ?? "",
-+        messages: [
-+          ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),
-+          ...messages.map((message) => toOpenAIChatMessage(message)),
-+        ],
-+      };
-+      if (tools.length > 0) {
-+        request.tools = buildOpenAIChatTools(tools);
-+        if (toolChoice !== undefined) {
-+          request.tool_choice = toolChoice;
-+        }
-+      }
-+      return request;
-+    }
-+    case "openai_responses": {
-+      const request: JsonRecord = {
-+        model: params.model.id ?? "",
-+        ...(systemPrompt ? { instructions: systemPrompt } : {}),
-+        input: nonSystemMessages.flatMap((message) => toResponsesInputItem(message)),
-+      };
-+      if (tools.length > 0) {
-+        request.tools = buildOpenAIResponsesTools(tools);
-+        if (toolChoice !== undefined) {
-+          request.tool_choice = toolChoice;
-+        }
-+      }
-+      return request;
-+    }
-+    case "anthropic_messages": {
-+      const request: JsonRecord = {
-+        model: params.model.id ?? "",
-+        ...(systemPrompt ? { system: systemPrompt } : {}),
-+        messages: nonSystemMessages.map((message) => toAnthropicMessage(message)),
-+      };
-+      if (tools.length > 0) {
-+        request.tools = buildAnthropicTools(tools);
-+        if (toolChoice !== undefined) {
-+          request.tool_choice =
-+            typeof toolChoice === "string" ? { type: toolChoice } : toolChoice;
-+        }
-+      }
-+      return request;
-+    }
-+    case "none":
-+    default:
-+      return {
-+        model: params.model.id ?? "",
-+        messages: [
-+          ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),
-+          ...messages.map((message) => ({
-+            role: messageRole(message),
-+            content: normalizeMessageText(message) ?? "",
-+          })),
-+        ],
-+      };
-+  }
-+}
-+
-+function buildCodecRequestContent(params: {
-+  codecName: Exclude<NemoFlowCodecName, "auto">;
-+  model: ModelLike;
-+  context: ContextLike;
-+  options?: StreamOptionsLike;
-+}): JsonRecord {
-+  const request = buildProviderRequestContent(params);
-+  if (params.codecName !== "openai_responses") {
-+    return request;
-+  }
-+  const tools = asArray(params.context.tools);
-+  if (tools.length === 0) {
-+    return request;
-+  }
-+  return {
-+    ...request,
-+    tools: buildOpenAIChatTools(tools),
-+  };
-+}
-+
-+type AggregatedStreamOutput = {
-+  text: string;
-+  toolCalls: unknown[];
-+  stopReason?: string;
-+  usage?: JsonRecord;
-+};
-+
-+function pickUsageFromChunk(record: JsonRecord): JsonRecord | undefined {
-+  // Streaming usage may appear in several shapes depending on where we
-+  // intercept the stream:
-+  //   record.usage           : raw SSE chunk from an OpenAI-compatible API
-+  //                            (terminal chunk when stream_options.include_usage
-+  //                            is true)
-+  //   record.partial.usage   : pi-ai text_end event carrying the interim
-+  //                            message object with its usage block
-+  //   record.message.usage   : pi-ai message_end event (terminal message)
-+  //   record.response.usage  : OpenAI Responses API envelope
-+  //
-+  // Only one of these carries the authoritative token counts for any given
-+  // chunk; we search in order and take the first populated shape.
-+  const raw =
-+    record.usage ??
-+    (record.partial && asRecord(record.partial).usage) ??
-+    (record.message && asRecord(record.message).usage) ??
-+    (record.response && asRecord(record.response).usage);
-+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
-+  const u = raw as JsonRecord;
-+  const num = (v: unknown): number | undefined =>
-+    typeof v === 'number' && Number.isFinite(v) ? v : undefined;
-+  // Key aliases observed across providers/libraries:
-+  //   OpenAI Chat      prompt_tokens       / completion_tokens   / total_tokens
-+  //   OpenAI Responses input_tokens        / output_tokens       / total_tokens
-+  //   Pi-ai normalized input               / output              / totalTokens
-+  // The camelCase promptTokens/completionTokens/... variants are kept for
-+  // defensive matching; no provider currently emits them but stripping
-+  // would be a behavioral change we scope out of this fix.
-+  const prompt =
-+    num(u.prompt_tokens) ?? num(u.promptTokens) ??
-+    num(u.input_tokens) ?? num(u.inputTokens) ?? num(u.input);
-+  const completion =
-+    num(u.completion_tokens) ?? num(u.completionTokens) ??
-+    num(u.output_tokens) ?? num(u.outputTokens) ?? num(u.output);
-+  const total = num(u.total_tokens) ?? num(u.totalTokens);
-+  if (prompt === undefined && completion === undefined && total === undefined) return undefined;
-+  const out: JsonRecord = {};
-+  if (prompt !== undefined) out.prompt_tokens = prompt;
-+  if (completion !== undefined) out.completion_tokens = completion;
-+  out.total_tokens = total !== undefined ? total : (prompt ?? 0) + (completion ?? 0);
-+  return out;
-+}
-+
-+function normalizeToolCall(chunk: JsonRecord): unknown | null {
-+  if (chunk.toolCall !== undefined) {
-+    return chunk.toolCall;
-+  }
-+  if (chunk.tool_call !== undefined) {
-+    return chunk.tool_call;
-+  }
-+  if (chunk.toolCalls !== undefined) {
-+    return chunk.toolCalls;
-+  }
-+  if (chunk.tool_calls !== undefined) {
-+    return chunk.tool_calls;
-+  }
-+  if (chunk.function_call !== undefined) {
-+    return chunk.function_call;
-+  }
-+  if (chunk.functionCall !== undefined) {
-+    return chunk.functionCall;
-+  }
-+  if (
-+    (chunk.type === "tool_call" || chunk.type === "tool-call" || chunk.type === "tool_use") &&
-+    (chunk.name !== undefined || chunk.id !== undefined)
-+  ) {
-+    return chunk;
-+  }
-+  return null;
-+}
-+
-+function textFromChunk(chunk: JsonRecord): string | null {
-+  if (typeof chunk.text === "string") {
-+    return chunk.text;
-+  }
-+  if (typeof chunk.delta === "string") {
-+    return chunk.delta;
-+  }
-+  if (typeof chunk.content === "string") {
-+    return chunk.content;
-+  }
-+  if (Array.isArray(chunk.content)) {
-+    const text = normalizeContentText(chunk.content);
-+    if (text) {
-+      return text;
-+    }
-+  }
-+  if (chunk.message) {
-+    return normalizeMessageText(chunk.message);
-+  }
-+  return null;
-+}
-+
-+function aggregateStreamChunks(chunks: unknown[]): AggregatedStreamOutput {
-+  if (process.env.NEMOFLOW_DEBUG_TOKENS === '1') {
-+    process.stderr.write('[NEMOFLOW_DEBUG] aggregateStreamChunks chunks=' + chunks.length + '\n');
-+    for (const c of chunks.slice(-3)) {
-+      try { process.stderr.write('[NEMOFLOW_DEBUG] chunk=' + JSON.stringify(c).slice(0, 600) + '\n'); } catch {}
-+    }
-+  }
-+  const texts: string[] = [];
-+  const toolCalls: unknown[] = [];
-+  let stopReason: string | undefined;
-+  let usage: JsonRecord | undefined;
-+
-+  for (const chunk of chunks) {
-+    const record = asRecord(chunk);
-+    const text = textFromChunk(record);
-+    if (text) {
-+      texts.push(text);
-+    }
-+    const toolCall = normalizeToolCall(record);
-+    if (toolCall !== null) {
-+      if (Array.isArray(toolCall)) {
-+        toolCalls.push(...toolCall);
-+      } else {
-+        toolCalls.push(toolCall);
-+      }
-+    }
-+    const chunkStopReason = record.stopReason ?? record.stop_reason ?? record.finish_reason;
-+    if (typeof chunkStopReason === "string" && chunkStopReason) {
-+      stopReason = chunkStopReason;
-+    }
-+    const maybeUsage = pickUsageFromChunk(record);
-+    if (maybeUsage) {
-+      usage = maybeUsage;
-+    }
-+  }
-+
-+  return {
-+    text: texts.join(""),
-+    toolCalls,
-+    stopReason,
-+    usage,
-+  };
-+}
-+
-+export function buildCodecFinalResponse(params: {
-+  codecName: Exclude<NemoFlowCodecName, "auto">;
-+  model: ModelLike;
-+  chunks: unknown[];
-+}): JsonRecord {
-+  const aggregated = aggregateStreamChunks(params.chunks);
-+  const model = params.model.id ?? "";
-+
-+  switch (params.codecName) {
-+    case "openai_chat":
-+      return {
-+        object: "chat.completion",
-+        model,
-+        choices: [
-+          {
-+            index: 0,
-+            finish_reason: aggregated.stopReason ?? "stop",
-+            message: {
-+              role: "assistant",
-+              content: aggregated.text,
-+              ...(aggregated.toolCalls.length > 0 ? { tool_calls: aggregated.toolCalls } : {}),
-+            },
-+          },
-+        ],
-+        ...(aggregated.usage ? { usage: aggregated.usage } : {}),
-+      };
-+    case "openai_responses": {
-+      const output: unknown[] = [];
-+      if (aggregated.text) {
-+        output.push({
-+          type: "message",
-+          role: "assistant",
-+          content: [
-+            {
-+              type: "output_text",
-+              text: aggregated.text,
-+            },
-+          ],
-+        });
-+      }
-+      for (const toolCall of aggregated.toolCalls) {
-+        output.push({
-+          type: "function_call",
-+          ...asRecord(toolCall),
-+        });
-+      }
-+      return {
-+        model,
-+        status: "completed",
-+        output,
-+        ...(aggregated.usage ? { usage: aggregated.usage } : {}),
-+      };
-+    }
-+    case "anthropic_messages": {
-+      const content: unknown[] = [];
-+      if (aggregated.text) {
-+        content.push({ type: "text", text: aggregated.text });
-+      }
-+      for (const toolCall of aggregated.toolCalls) {
-+        content.push({
-+          type: "tool_use",
-+          ...asRecord(toolCall),
-+        });
-+      }
-+      return {
-+        model,
-+        role: "assistant",
-+        type: "message",
-+        content,
-+        stop_reason: aggregated.stopReason ?? "end_turn",
-+        ...(aggregated.usage ? { usage: aggregated.usage } : {}),
-+      };
-+    }
-+    case "none":
-+    default:
-+      return {
-+        model,
-+        text: aggregated.text,
-+        toolCalls: aggregated.toolCalls,
-+        stopReason: aggregated.stopReason ?? "stop",
-+      };
-+  }
-+}
-+
-+function mergeRecord(target: JsonRecord, patch: JsonRecord): void {
-+  for (const [key, value] of Object.entries(patch)) {
-+    if (
-+      value &&
-+      typeof value === "object" &&
-+      !Array.isArray(value) &&
-+      target[key] &&
-+      typeof target[key] === "object" &&
-+      !Array.isArray(target[key])
-+    ) {
-+      mergeRecord(target[key] as JsonRecord, value as JsonRecord);
-+      continue;
-+    }
-+    target[key] = value;
-+  }
-+}
-+
-+/**
-+ * Ensures a streaming OpenAI Chat Completions request body carries
-+ * `stream_options.include_usage: true` so the provider emits a terminal
-+ * SSE chunk with token counts.
-+ *
-+ * Rationale: pi-ai only sets `stream_options` when the model's compat
-+ * declares `supportsUsageInStreaming`. For providers like NVIDIA Inference
-+ * Hub / NIM / vLLM (proxies to the OpenAI Chat API), OpenClaw's detector
-+ * defaults this to `false`, so no `stream_options` is ever sent and the
-+ * provider never emits its terminal usage chunk. Without this fix every
-+ * OpenInference/Phoenix LLM span shows zero tokens.
-+ *
-+ * Scope: Only mutates payloads that look like OpenAI Chat Completions
-+ * requests (shape check: `messages` is an array, `stream === true`).
-+ * Anthropic Messages bodies never reach this hook (pi-ai's Anthropic
-+ * provider does not invoke `onPayload`). OpenAI Responses bodies are
-+ * skipped because they use `input` instead of `messages`.
-+ *
-+ * Respects caller intent: if `stream_options` is already present (even
-+ * a deliberate `{ include_usage: false }` opt-out), it is left alone.
-+ *
-+ * Exported for direct unit testing; also called from
-+ * `applyAnnotatedRequestToOptions`'s `onPayload` wrapper.
-+ */
-+export function ensureChatStreamUsageInclude(payload: unknown): void {
-+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-+    return;
-+  }
-+  const p = payload as JsonRecord;
-+  if (
-+    Array.isArray(p.messages) &&
-+    p.stream === true &&
-+    p.stream_options === undefined
-+  ) {
-+    p.stream_options = { include_usage: true };
-+  }
-+}
-+
-+function applyAnnotatedRequestToOptions(params: {
-+  request: unknown;
-+  payloadContent?: JsonRecord;
-+  mergePayload?: boolean;
-+  options: StreamOptionsLike | undefined;
-+  model: ModelLike;
-+}): StreamOptionsLike {
-+  const request = asRecord(params.request);
-+  const requestHeaders = asRecord(request.headers);
-+  const requestContent = params.payloadContent ?? asRecord(request.content);
-+  const originalOnPayload = params.options?.onPayload;
-+
-+  return {
-+    ...params.options,
-+    headers: {
-+      ...params.options?.headers,
-+      ...Object.fromEntries(
-+        Object.entries(requestHeaders).filter(
-+          (entry): entry is [string, string] => typeof entry[1] === "string",
-+        ),
-+      ),
-+    },
-+    onPayload: (payload, modelArg) => {
-+      if (
-+        params.mergePayload !== false &&
-+        payload &&
-+        typeof payload === "object" &&
-+        !Array.isArray(payload)
-+      ) {
-+        // Exclude messages/input from the merge: buildProviderRequestContent
-+        // produces a text-only snapshot for telemetry that strips tool_calls
-+        // and tool_call_id. Merging it into the real payload would overwrite
-+        // the full conversation history that OpenClaw already built correctly.
-+        const { messages, input, ...rest } = requestContent;
-+        mergeRecord(payload as JsonRecord, rest);
-+      }
-+      ensureChatStreamUsageInclude(payload);
-+      return originalOnPayload?.(payload, modelArg ?? params.model);
-+    },
-+  };
-+}
-+
-+function codecFromName(
-+  modules: NemoFlowModules,
-+  codecName: Exclude<NemoFlowCodecName, "auto">,
-+): NemoFlowCodec | null {
-+  switch (codecName) {
-+    case "openai_chat":
-+      return new modules.bindings.OpenAIChatCodec();
-+    case "openai_responses":
-+      return new modules.bindings.OpenAIResponsesCodec();
-+    case "anthropic_messages":
-+      return new modules.bindings.AnthropicMessagesCodec();
-+    case "none":
-+    default:
-+      return null;
-+  }
-+}
-+
-+function defaultHostedConfig(pluginHost: NemoFlowPluginHost): Record<string, unknown> {
-+  try {
-+    return pluginHost.defaultConfig();
-+  } catch {
-+    return { version: 1, components: [] };
-+  }
++function normalizeJsonObject(value: unknown): JsonRecord {
++  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
 +}
 +
 +async function loadModules(): Promise<NemoFlowModules | null> {
@@ -2539,7 +654,9 @@ new file mode 100644
 +): boolean {
 +  let hasErrors = false;
 +  for (const diagnostic of diagnostics) {
-+    const summary = [diagnostic.code, diagnostic.field, diagnostic.message].filter(Boolean).join(" ");
++    const summary = [diagnostic.code, diagnostic.field, diagnostic.message]
++      .filter(Boolean)
++      .join(" ");
 +    if (diagnostic.level === "error") {
 +      hasErrors = true;
 +      logger.warn(`nemo-flow host config error: ${summary}`);
@@ -2550,81 +667,75 @@ new file mode 100644
 +  return hasErrors;
 +}
 +
-+function stopTelemetry(): void {
-+  for (const entry of state.telemetrySubscribers.splice(0)) {
-+    try {
-+      entry.subscriber.deregister(entry.name);
-+    } catch {
-+      // ignore
-+    }
-+    try {
-+      entry.subscriber.forceFlush?.();
-+    } catch {
-+      // ignore
-+    }
-+    try {
-+      entry.subscriber.shutdown?.();
-+    } catch {
-+      // ignore
-+    }
-+  }
++export function getNemoFlowRuntimeStatus(): {
++  initialized: boolean;
++  wrappingActive: boolean;
++  unavailableReason?: string;
++} {
++  return {
++    initialized: state.initialized,
++    wrappingActive: state.initialized,
++    ...(state.unavailableReason ? { unavailableReason: state.unavailableReason } : {}),
++  };
 +}
 +
-+function registerTelemetry(
-+  modules: NemoFlowModules,
-+  config: NemoFlowPluginConfig,
-+): void {
-+  stopTelemetry();
-+
-+  if (config.telemetry.otel.enabled) {
-+    const subscriber = new modules.bindings.OpenTelemetrySubscriber(config.telemetry.otel);
-+    const name = "openclaw.nemo-flow.otel";
-+    subscriber.register(name);
-+    state.telemetrySubscribers.push({ name, subscriber });
++export async function initializeNemoFlowGateway(params: {
++  logger: Logger;
++  config: NemoFlowPluginConfig;
++}): Promise<boolean> {
++  const modules = await ensureModules(params.logger);
++  if (!modules) {
++    return false;
 +  }
-+
-+  if (config.telemetry.openInference.enabled) {
-+    const subscriber = new modules.bindings.OpenInferenceSubscriber(config.telemetry.openInference);
-+    const name = "openclaw.nemo-flow.openinference";
-+    subscriber.register(name);
-+    state.telemetrySubscribers.push({ name, subscriber });
++  if (state.initialized && state.activeConfig === params.config) {
++    return true;
 +  }
++  if (!state.initPromise) {
++    state.initPromise = (async () => {
++      const report = modules.pluginHost.validate(params.config);
++      if (logPluginDiagnostics(params.logger, report?.diagnostics)) {
++        return false;
++      }
++      try {
++        await modules.pluginHost.initialize(params.config);
++        state.initialized = true;
++        state.activeConfig = params.config;
++        return true;
++      } catch (error) {
++        params.logger.warn(`nemo-flow initialization failed; wrapping disabled (${String(error)})`);
++        return false;
++      }
++    })();
++  }
++  return await state.initPromise;
++}
++
++export async function shutdownNemoFlowGateway(params: { logger: Logger }): Promise<void> {
++  try {
++    state.modules?.pluginHost.clear();
++  } catch (error) {
++    params.logger.warn(`nemo-flow shutdown failed (${String(error)})`);
++  }
++  for (const rootHandle of state.sessionRootScopes.values()) {
++    try {
++      state.modules?.bindings.popScope(rootHandle);
++    } catch {
++      // ignore cleanup errors
++    }
++  }
++  state.sessionRootScopes.clear();
++  state.sessionScopes.clear();
++  state.initialized = false;
++  state.activeConfig = undefined;
++  state.initPromise = undefined;
 +}
 +
 +async function ensureInitialized(
 +  logger: Logger,
 +  config: NemoFlowPluginConfig,
 +): Promise<NemoFlowModules | null> {
-+  const modules = await ensureModules(logger);
-+  if (!modules) {
-+    return null;
-+  }
-+  if (state.initialized) {
-+    return modules;
-+  }
-+  if (!state.initPromise) {
-+    state.initPromise = (async () => {
-+      const hostConfig =
-+        Object.keys(config.nemoFlow.hostConfig).length > 0
-+          ? config.nemoFlow.hostConfig
-+          : defaultHostedConfig(modules.pluginHost);
-+      const report = modules.pluginHost.validate(hostConfig);
-+      if (logPluginDiagnostics(logger, report?.diagnostics)) {
-+        return false;
-+      }
-+      try {
-+        await modules.pluginHost.initialize(hostConfig);
-+        registerTelemetry(modules, config);
-+        state.initialized = true;
-+        return true;
-+      } catch (error) {
-+        logger.warn(`nemo-flow initialization failed; wrapping disabled (${String(error)})`);
-+        return false;
-+      }
-+    })();
-+  }
-+  const initialized = await state.initPromise;
-+  return initialized ? modules : null;
++  const initialized = await initializeNemoFlowGateway({ logger, config });
++  return initialized ? (state.modules ?? null) : null;
 +}
 +
 +function sessionScopeKey(sessionId?: string, sessionKey?: string): string {
@@ -2641,165 +752,66 @@ new file mode 100644
 +  return stack;
 +}
 +
-+let exitHandlerRegistered = false;
-+
-+function registerExitHandler(): void {
-+  if (exitHandlerRegistered) {
-+    return;
-+  }
-+  exitHandlerRegistered = true;
-+  process.on("beforeExit", () => {
-+    for (const [key, rootHandle] of state.sessionRootScopes) {
-+      if (state.modules) {
-+        popScope(state.modules, rootHandle);
-+      }
-+      state.sessionRootScopes.delete(key);
-+    }
-+    stopTelemetry();
-+  });
-+}
-+
 +function ensureSessionRootScope(
 +  modules: NemoFlowModules,
 +  stack: NemoFlowScopeStack,
 +  sessionId?: string,
 +  sessionKey?: string,
-+): void {
++) {
 +  const key = sessionScopeKey(sessionId, sessionKey);
-+  if (!state.sessionRootScopes.has(key)) {
++  let rootHandle = state.sessionRootScopes.get(key);
++  if (!rootHandle) {
 +    modules.bindings.setThreadScopeStack(stack);
-+    const rootHandle = pushAgentScope(modules, sessionId ?? "__openclaw__", {
-+      sessionId: sessionId ?? "__openclaw__",
-+      ...buildBenchmarkSpanMetadata(sessionId),
-+    });
++    rootHandle = modules.bindings.pushScope("openclaw.agent", modules.bindings.ScopeType.Agent);
 +    state.sessionRootScopes.set(key, rootHandle);
-+    registerExitHandler();
 +  }
++  return rootHandle;
 +}
 +
-+function pushAgentScope(
-+  modules: NemoFlowModules,
-+  name: string,
-+  data?: Record<string, unknown>,
-+): NemoFlowScopeHandle {
-+  return modules.bindings.pushScope(
-+    name,
-+    modules.bindings.ScopeType.Agent,
-+    null,
-+    null,
-+    data ?? null,
-+    null,
-+  );
++function withSessionScope(modules: NemoFlowModules, sessionId?: string, sessionKey?: string): void {
++  const stack = ensureSessionScope(modules, sessionId, sessionKey);
++  ensureSessionRootScope(modules, stack, sessionId, sessionKey);
++  modules.bindings.setThreadScopeStack(stack);
 +}
 +
-+function popScope(modules: NemoFlowModules, handle: NemoFlowScopeHandle | null): void {
-+  if (!handle) {
-+    return;
-+  }
-+  try {
-+    modules.bindings.popScope(handle);
-+  } catch {
-+    // ignore
-+  }
++function buildLlmRequest(params: {
++  provider: string;
++  modelId: string;
++  model: unknown;
++  context: unknown;
++  options: unknown;
++}) {
++  const options = asRecord(params.options);
++  const headers = normalizeJsonObject(options.headers);
++  return {
++    headers,
++    content: {
++      provider: params.provider,
++      model: params.modelId,
++      modelInfo: normalizeJsonObject(params.model),
++      context: params.context ?? null,
++      options,
++    },
++  };
 +}
 +
-+export async function initializeNemoFlowGateway(params: {
-+  logger: Logger;
-+  config: NemoFlowPluginConfig;
-+}): Promise<void> {
-+  if (!params.config.enabled) {
-+    return;
-+  }
-+  await ensureInitialized(params.logger, params.config);
++function applyRequestToStreamCall(params: {
++  request: unknown;
++  context: unknown;
++  options: unknown;
++}): { context: unknown; options: unknown } {
++  const request = asRecord(params.request);
++  const content = asRecord(request.content);
++  return {
++    context: content.context ?? params.context,
++    options: content.options ?? params.options,
++  };
 +}
 +
-+export async function shutdownNemoFlowGateway(params: {
-+  logger: Logger;
-+}): Promise<void> {
-+  void params.logger;
-+  stopTelemetry();
-+  for (const entry of state.sessionExporters.values()) {
-+    try {
-+      entry.exporter.deregister(entry.registrationName);
-+    } catch {
-+      // ignore
-+    }
-+  }
-+  state.sessionExporters.clear();
-+  state.sessionScopes.clear();
-+  if (state.modules && state.initialized) {
-+    try {
-+      state.modules.pluginHost.clear();
-+    } catch {
-+      // ignore
-+    }
-+  }
-+  state.initialized = false;
-+  state.initPromise = undefined;
-+}
-+
-+export async function startNemoFlowSession(params: {
-+  logger: Logger;
-+  config: NemoFlowPluginConfig;
-+  sessionId: string;
-+  sessionKey?: string;
-+}): Promise<void> {
-+  if (!params.config.enabled) {
-+    return;
-+  }
-+  const modules = await ensureInitialized(params.logger, params.config);
-+  if (!modules) {
-+    return;
-+  }
-+  ensureSessionScope(modules, params.sessionId, params.sessionKey);
-+  if (!params.config.atif.enabled || state.sessionExporters.has(params.sessionId)) {
-+    return;
-+  }
-+  const exporter = new modules.bindings.AtifExporter(
-+    params.sessionId,
-+    params.config.atif.agentName,
-+    params.config.atif.agentVersion,
-+    null,
-+  );
-+  const registrationName = `openclaw.nemo-flow.atif.${params.sessionId}`;
-+  exporter.register(registrationName);
-+  state.sessionExporters.set(params.sessionId, {
-+    exporter,
-+    registrationName,
-+  });
-+}
-+
-+export async function endNemoFlowSession(params: {
-+  logger: Logger;
-+  config: NemoFlowPluginConfig;
-+  sessionId: string;
-+  sessionKey?: string;
-+}): Promise<void> {
-+  const exporterState = state.sessionExporters.get(params.sessionId);
-+  if (exporterState && params.config.atif.enabled) {
-+    try {
-+      await fs.mkdir(params.config.atif.outputDir, { recursive: true });
-+      const targetPath = path.join(params.config.atif.outputDir, `${params.sessionId}.json`);
-+      await fs.writeFile(targetPath, exporterState.exporter.exportJson(), "utf8");
-+      params.logger.info(`nemo-flow exported ATIF to ${targetPath}`);
-+    } catch (error) {
-+      params.logger.warn(`nemo-flow ATIF export failed (${String(error)})`);
-+    }
-+    try {
-+      exporterState.exporter.deregister(exporterState.registrationName);
-+    } catch {
-+      // ignore
-+    }
-+    exporterState.exporter.clear();
-+    state.sessionExporters.delete(params.sessionId);
-+  }
-+  const key = sessionScopeKey(params.sessionId, params.sessionKey);
-+  const rootHandle = state.sessionRootScopes.get(key);
-+  if (rootHandle && state.modules) {
-+    popScope(state.modules, rootHandle);
-+    state.sessionRootScopes.delete(key);
-+  }
-+  state.sessionScopes.delete(key);
++function buildFinalStreamResponse(chunks: unknown[]): unknown {
++  return {
++    chunks,
++  };
 +}
 +
 +export async function executeToolWithNemoFlow(params: {
@@ -2813,17 +825,12 @@ new file mode 100644
 +  agentId?: string;
 +  execute: (args: unknown) => Promise<unknown>;
 +}): Promise<unknown> {
-+  if (!params.config.enabled || !params.config.wrapping.tools) {
-+    return await params.execute(params.args);
-+  }
 +  const modules = await ensureInitialized(params.logger, params.config);
 +  if (!modules) {
 +    return await params.execute(params.args);
 +  }
 +
-+  const stack = ensureSessionScope(modules, params.sessionId, params.sessionKey);
-+  ensureSessionRootScope(modules, stack, params.sessionId, params.sessionKey);
-+  modules.bindings.setThreadScopeStack(stack);
++  withSessionScope(modules, params.sessionId, params.sessionKey);
 +
 +  return await modules.bindings.toolCallExecuteAsync(
 +    params.toolName,
@@ -2832,11 +839,16 @@ new file mode 100644
 +    null,
 +    TOOL_ATTR_LOCAL,
 +    null,
-+    buildBenchmarkSpanMetadata(params.sessionId),
++    {
++      ...(params.runId && { runId: params.runId }),
++      ...(params.agentId && { agentId: params.agentId }),
++      ...(params.sessionId && { sessionId: params.sessionId }),
++      ...(params.sessionKey && { sessionKey: params.sessionKey }),
++    },
 +  );
 +}
 +
-+export async function wrapStreamFnWithNemoFlow(params: {
++export function wrapStreamFnWithNemoFlow(params: {
 +  logger: Logger;
 +  config: NemoFlowPluginConfig;
 +  provider: string;
@@ -2846,375 +858,631 @@ new file mode 100644
 +  sessionId?: string;
 +  sessionKey?: string;
 +  streamFn: StreamFn;
-+}): Promise<StreamFn> {
-+  if (!params.config.enabled || !params.config.wrapping.llm) {
-+    return params.streamFn;
-+  }
-+  const modules = await ensureInitialized(params.logger, params.config);
-+  if (!modules) {
-+    return params.streamFn;
-+  }
++}): StreamFn {
++  const wrapped: StreamFn = ((
++    model: Parameters<StreamFn>[0],
++    context: Parameters<StreamFn>[1],
++    options: Parameters<StreamFn>[2],
++  ) => {
++    const stream = (async () => {
++      const modules = await ensureInitialized(params.logger, params.config);
++      if (!modules) {
++        return params.streamFn(model, context, options) as unknown as StreamLike;
++      }
 +
-+  const wrapped: StreamFn = (model, context, options) => {
-+    const initialContent = buildProviderRequestContent({
-+      codecName: "none",
-+      model: model as ModelLike,
-+      context: context as ContextLike,
-+      options,
-+    });
-+    const codecName = detectCodecName({
-+      provider: params.provider,
-+      modelId: params.modelId,
-+      model: model as ModelLike,
-+      requestContent: initialContent,
-+      config: params.config,
-+    });
-+    const codec = codecFromName(modules, codecName);
-+    const providerRequest = buildProviderRequestContent({
-+      codecName,
-+      model: model as ModelLike,
-+      context: context as ContextLike,
-+      options,
-+    });
-+    const codecRequest = buildCodecRequestContent({
-+      codecName,
-+      model: model as ModelLike,
-+      context: context as ContextLike,
-+      options,
-+    });
-+    const request = {
-+      headers: options?.headers ?? {},
-+      content: codecRequest,
-+    };
-+    const metadata = buildLlmSpanMetadata({
-+      provider: params.provider,
-+      codecName,
-+      model: model as ModelLike,
-+      context: context as ContextLike,
-+      options,
-+      providerRequest,
-+      sessionId: params.sessionId,
-+    });
-+    const stack = ensureSessionScope(modules, params.sessionId, params.sessionKey);
-+    ensureSessionRootScope(modules, stack, params.sessionId, params.sessionKey);
-+    modules.bindings.setThreadScopeStack(stack);
++      withSessionScope(modules, params.sessionId, params.sessionKey);
 +
-+    let underlyingStreamPromise: Promise<StreamLike> | null = null;
-+    const collectedChunks: unknown[] = [];
-+    let iterated = false;
-+    let completed = false;
-+    let completePromiseResolve: (() => void) | null = null;
-+    let completePromiseReject: ((error: unknown) => void) | null = null;
-+    const completePromise = new Promise<void>((resolve, reject) => {
-+      completePromiseResolve = resolve;
-+      completePromiseReject = reject;
-+    });
++      const request = buildLlmRequest({
++        provider: params.provider,
++        modelId: params.modelId,
++        model,
++        context,
++        options,
++      });
++      let underlyingStreamPromise: Promise<StreamLike> | null = null;
++      const collectedChunks: unknown[] = [];
 +
-+    const llmStreamPromise = modules.bindings.llmStreamCallExecute(
-+      params.provider,
-+      request,
-+      (wrapper: Record<string, unknown>) => {
-+        const streamId = wrapper.__nemo_flow_stream_id as number;
-+        const annotatedRequest = wrapper.__nemo_flow_native;
-+        const effectiveOptions = applyAnnotatedRequestToOptions({
-+          request: annotatedRequest,
-+          payloadContent: providerRequest,
-+          mergePayload: codecName !== "openai_responses",
-+          options: options as StreamOptionsLike | undefined,
-+          model: model as ModelLike,
-+        });
-+        const streamResult = params.streamFn(
-+          model,
-+          context,
-+          effectiveOptions,
-+        ) as unknown as StreamLike | Promise<StreamLike>;
-+        underlyingStreamPromise = Promise.resolve(streamResult);
-+
-+        underlyingStreamPromise
-+          .then(async (stream) => {
-+            try {
-+              for await (const chunk of stream as AsyncIterable<unknown>) {
-+                const chunkJson =
-+                  chunk != null && typeof chunk === "object" ? chunk : { value: chunk };
-+                modules.bindings.pushStreamChunk(streamId, chunkJson);
-+              }
-+            } finally {
-+              modules.bindings.endStream(streamId);
-+            }
-+          })
-+          .catch(() => {
-+            modules.bindings.endStream(streamId);
++      const llmStreamPromise = modules.bindings.llmStreamCallExecute(
++        params.provider,
++        request,
++        (rawWrapper: unknown) => {
++          const wrapper = asRecord(rawWrapper);
++          const streamId = wrapper.__nemo_flow_stream_id as number;
++          const effective = applyRequestToStreamCall({
++            request: wrapper.__nemo_flow_native ?? request,
++            context,
++            options,
 +          });
++          underlyingStreamPromise = Promise.resolve(
++            params.streamFn(
++              model,
++              effective.context as Parameters<StreamFn>[1],
++              effective.options as Parameters<StreamFn>[2],
++            ) as unknown as StreamLike,
++          );
 +
-+        return null;
-+      },
-+      (chunk) => {
-+        collectedChunks.push(chunk);
-+        return null;
-+      },
-+      () =>
-+        buildCodecFinalResponse({
-+          codecName,
-+          model: model as ModelLike,
-+          chunks: collectedChunks,
-+        }),
-+      null,
-+      LLM_ATTR_STREAMING,
-+      null,
-+      metadata,
-+      params.modelId,
-+      codec ? codec.decode.bind(codec) : null,
-+      codec
-+        ? (bundled: Record<string, unknown>) =>
-+            codec.encode(bundled.annotated, bundled.original)
-+        : null,
-+      codec?.decodeResponse ? codec.decodeResponse.bind(codec) : null,
-+    );
++          underlyingStreamPromise
++            .then(async (source) => {
++              try {
++                for await (const chunk of source as AsyncIterable<unknown>) {
++                  const chunkJson =
++                    chunk != null && typeof chunk === "object" ? chunk : { value: chunk };
++                  modules.bindings.pushStreamChunk(streamId, chunkJson);
++                }
++              } finally {
++                modules.bindings.endStream(streamId);
++              }
++            })
++            .catch(() => {
++              modules.bindings.endStream(streamId);
++            });
 +
-+    const ensureConsumed = async () => {
-+      if (completed) {
-+        return;
-+      }
-+      const llmStream = await llmStreamPromise;
-+      try {
-+        while ((await llmStream.next()) !== null) {
-+          // discard
-+        }
-+        completed = true;
-+        completePromiseResolve?.();
-+      } catch (error) {
-+        completed = true;
-+        completePromiseReject?.(error);
-+        throw error;
-+      }
-+    };
++          return null;
++        },
++        (chunk) => {
++          collectedChunks.push(chunk);
++          return null;
++        },
++        () => buildFinalStreamResponse(collectedChunks),
++        null,
++        LLM_ATTR_STREAMING,
++        null,
++        {
++          ...(params.runId && { runId: params.runId }),
++          ...(params.agentId && { agentId: params.agentId }),
++          ...(params.sessionId && { sessionId: params.sessionId }),
++          ...(params.sessionKey && { sessionKey: params.sessionKey }),
++        },
++        params.modelId,
++      );
 +
-+    return {
-+      async *[Symbol.asyncIterator]() {
++      let iterated = false;
++      let completed = false;
++      const consume = async function* () {
 +        if (iterated) {
 +          throw new Error("nemo-flow wrapped stream already consumed");
 +        }
 +        iterated = true;
 +        const llmStream = await llmStreamPromise;
-+        try {
-+          while (true) {
-+            const chunk = await llmStream.next();
-+            if (chunk === null) {
-+              break;
-+            }
-+            yield chunk;
++        while (true) {
++          const chunk = await llmStream.next();
++          if (chunk === null) {
++            break;
 +          }
-+          completed = true;
-+          completePromiseResolve?.();
-+        } catch (error) {
-+          completed = true;
-+          completePromiseReject?.(error);
-+          throw error;
++          yield chunk;
 +        }
++        completed = true;
++      };
++
++      return {
++        async *[Symbol.asyncIterator]() {
++          yield* consume();
++        },
++        result: async () => {
++          if (!completed) {
++            for await (const chunk of consume()) {
++              void chunk;
++              // drain stream so NeMo Flow finalizers run before result() resolves
++            }
++          }
++          const underlying = await underlyingStreamPromise;
++          return await underlying?.result?.();
++        },
++      } as StreamLike;
++    })();
++
++    return {
++      async *[Symbol.asyncIterator]() {
++        const resolved = await stream;
++        yield* resolved;
 +      },
-+      result: async () => {
-+        await ensureConsumed();
-+        await completePromise;
-+        const underlyingStream = await underlyingStreamPromise;
-+        return await underlyingStream?.result?.();
-+      },
-+    } as StreamLike;
-+  };
++      result: async () => await (await stream).result?.(),
++    } as unknown as ReturnType<StreamFn>;
++  }) as StreamFn;
 +
 +  return wrapped;
 +}
-diff --git a/src/plugins/agent-runtime-middleware.test.ts b/src/plugins/agent-runtime-middleware.test.ts
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 48b6819d..c03718ab 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -997,6 +997,16 @@ importers:
+         specifier: workspace:*
+         version: link:../../packages/plugin-sdk
+ 
++  extensions/nemo-flow:
++    optionalDependencies:
++      nemo-flow-node:
++        specifier: file:../../../../crates/node
++        version: file:../../crates/node
++    devDependencies:
++      openclaw:
++        specifier: workspace:*
++        version: link:../..
++
+   extensions/memory-wiki:
+     dependencies:
+       typebox:
+@@ -6433,6 +6443,10 @@ packages:
+     resolution: {integrity: sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg==}
+     engines: {node: '>= 0.6'}
+ 
++  nemo-flow-node@file:../../crates/node:
++    resolution: {directory: ../../crates/node, type: directory}
++    engines: {node: '>=20.0.0'}
++
+   netmask@2.1.1:
+     resolution: {integrity: sha512-eonl3sLUha+S1GzTPxychyhnUzKyeQkZ7jLjKrBagJgPla13F+uQ71HgpFefyHgqrjEbCPkDArxYsjY8/+gLKA==}
+     engines: {node: '>= 0.4.0'}
+@@ -13446,6 +13460,9 @@ snapshots:
+ 
+   negotiator@1.0.0: {}
+ 
++  nemo-flow-node@file:../../crates/node:
++    optional: true
++
+   netmask@2.1.1: {}
+ 
+   node-addon-api@8.7.0: {}
+diff --git a/src/agents/pi-embedded-runner/run/attempt.ts b/src/agents/pi-embedded-runner/run/attempt.ts
+index bc741295..a022eae4 100644
+--- a/src/agents/pi-embedded-runner/run/attempt.ts
++++ b/src/agents/pi-embedded-runner/run/attempt.ts
+@@ -26,6 +26,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
+ import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
+ import { getMachineDisplayName } from "../../../infra/machine-name.js";
+ import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
++import { wrapStreamFnWithAgentStreamingLlmMiddlewares } from "../../../plugins/agent-streaming-llm-middleware.js";
+ import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
+ import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
+ import { buildAgentHookContextChannelFields } from "../../../plugins/hook-agent-context.js";
+@@ -2436,6 +2437,16 @@ export async function runEmbeddedAttempt(
+           (error) => idleTimeoutTrigger?.(error),
+         );
+       }
++      activeSession.agent.streamFn = wrapStreamFnWithAgentStreamingLlmMiddlewares({
++        provider: params.provider,
++        modelId: params.modelId,
++        model: params.model,
++        agentId: sessionAgentId,
++        ...(params.sessionKey && { sessionKey: params.sessionKey }),
++        ...(params.sessionId && { sessionId: params.sessionId }),
++        runId: params.runId,
++        streamFn: activeSession.agent.streamFn,
++      });
+       let diagnosticModelCallSeq = 0;
+       activeSession.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
+         activeSession.agent.streamFn,
+diff --git a/src/agents/pi-tools.before-tool-call.ts b/src/agents/pi-tools.before-tool-call.ts
+index 399e603e..f877821f 100644
+--- a/src/agents/pi-tools.before-tool-call.ts
++++ b/src/agents/pi-tools.before-tool-call.ts
+@@ -15,6 +15,7 @@ import {
+ } from "../infra/diagnostic-trace-context.js";
+ import type { SessionState } from "../logging/diagnostic-session-state.js";
+ import { createSubsystemLogger } from "../logging/subsystem.js";
++import { executeToolWithAgentToolCallMiddlewares } from "../plugins/agent-tool-call-middleware.js";
+ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+ import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
+ import { copyPluginToolMeta } from "../plugins/tools.js";
+@@ -743,7 +744,16 @@ export function wrapToolWithBeforeToolCallHook(
+       });
+       const startedAt = Date.now();
+       try {
+-        const result = await execute(toolCallId, outcome.params, signal, onUpdate);
++        const result = await executeToolWithAgentToolCallMiddlewares({
++          agentId: ctx?.agentId,
++          ...(ctx?.sessionKey && { sessionKey: ctx.sessionKey }),
++          ...(ctx?.sessionId && { sessionId: ctx.sessionId }),
++          ...(ctx?.runId && { runId: ctx.runId }),
++          toolName: normalizedToolName,
++          ...(toolCallId && { toolCallId }),
++          params: outcome.params,
++          execute: async (nextParams) => await execute(toolCallId, nextParams, signal, onUpdate),
++        });
+         const durationMs = Date.now() - startedAt;
+         await recordLoopOutcome({
+           ctx,
+diff --git a/src/gateway/test-helpers.plugin-registry.ts b/src/gateway/test-helpers.plugin-registry.ts
+index a6cc60e5..9a80028b 100644
+--- a/src/gateway/test-helpers.plugin-registry.ts
++++ b/src/gateway/test-helpers.plugin-registry.ts
+@@ -25,6 +25,8 @@ function createStubPluginRegistry(): PluginRegistry {
+     webSearchProviders: [],
+     migrationProviders: [],
+     codexAppServerExtensionFactories: [],
++    agentStreamingLlmMiddlewares: [],
++    agentToolCallMiddlewares: [],
+     agentToolResultMiddlewares: [],
+     memoryEmbeddingProviders: [],
+     textTransforms: [],
+diff --git a/src/plugin-sdk/core.ts b/src/plugin-sdk/core.ts
+index 9e09bd8e..26da458a 100644
+--- a/src/plugin-sdk/core.ts
++++ b/src/plugin-sdk/core.ts
+@@ -39,6 +39,14 @@ import {
+ export type {
+   AgentHarness,
+   AnyAgentTool,
++  AgentStreamingLlmMiddleware,
++  AgentStreamingLlmMiddlewareContext,
++  AgentStreamingLlmMiddlewareOptions,
++  AgentStreamingLlmMiddlewareRuntime,
++  AgentToolCallMiddleware,
++  AgentToolCallMiddlewareContext,
++  AgentToolCallMiddlewareOptions,
++  AgentToolCallMiddlewareRuntime,
+   MediaUnderstandingProviderPlugin,
+   OpenClawPluginApi,
+   OpenClawPluginCommandDefinition,
+diff --git a/src/plugin-sdk/plugin-entry.ts b/src/plugin-sdk/plugin-entry.ts
+index c5f01102..fea09e4b 100644
+--- a/src/plugin-sdk/plugin-entry.ts
++++ b/src/plugin-sdk/plugin-entry.ts
+@@ -2,7 +2,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
+ import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+ import type {
+   AnyAgentTool,
++  AgentStreamingLlmMiddleware,
++  AgentStreamingLlmMiddlewareContext,
++  AgentStreamingLlmMiddlewareOptions,
++  AgentStreamingLlmMiddlewareRuntime,
+   AgentHarness,
++  AgentToolCallMiddleware,
++  AgentToolCallMiddlewareContext,
++  AgentToolCallMiddlewareOptions,
++  AgentToolCallMiddlewareRuntime,
+   MediaUnderstandingProviderPlugin,
+   MigrationApplyResult,
+   MigrationDetection,
+@@ -119,7 +127,15 @@ import { createCachedLazyValueGetter } from "./lazy-value.js";
+ 
+ export type {
+   AnyAgentTool,
++  AgentStreamingLlmMiddleware,
++  AgentStreamingLlmMiddlewareContext,
++  AgentStreamingLlmMiddlewareOptions,
++  AgentStreamingLlmMiddlewareRuntime,
+   AgentHarness,
++  AgentToolCallMiddleware,
++  AgentToolCallMiddlewareContext,
++  AgentToolCallMiddlewareOptions,
++  AgentToolCallMiddlewareRuntime,
+   MediaUnderstandingProviderPlugin,
+   MigrationApplyResult,
+   MigrationDetection,
+diff --git a/src/plugin-sdk/plugin-test-api.ts b/src/plugin-sdk/plugin-test-api.ts
+index a0f560cd..dcb14113 100644
+--- a/src/plugin-sdk/plugin-test-api.ts
++++ b/src/plugin-sdk/plugin-test-api.ts
+@@ -54,6 +54,8 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
+     registerAgentHarness() {},
+     registerCodexAppServerExtensionFactory() {},
+     registerAgentToolResultMiddleware() {},
++    registerAgentStreamingLlmMiddleware() {},
++    registerAgentToolCallMiddleware() {},
+     registerDetachedTaskRuntime() {},
+     registerSessionExtension() {},
+     enqueueNextTurnInjection: async (injection) => ({
+diff --git a/src/plugins/agent-execution-middleware.test.ts b/src/plugins/agent-execution-middleware.test.ts
 new file mode 100644
-index 0000000000..35ed731909
+index 00000000..811efec3
 --- /dev/null
-+++ b/src/plugins/agent-runtime-middleware.test.ts
-@@ -0,0 +1,140 @@
-+import { afterEach, describe, expect, it } from "vitest";
++++ b/src/plugins/agent-execution-middleware.test.ts
+@@ -0,0 +1,186 @@
++import type { StreamFn } from "@earendil-works/pi-agent-core";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { wrapStreamFnWithAgentStreamingLlmMiddlewares } from "./agent-streaming-llm-middleware.js";
++import { executeToolWithAgentToolCallMiddlewares } from "./agent-tool-call-middleware.js";
 +import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
-+import {
-+  executeToolWithAgentRuntimeMiddlewares,
-+  wrapStreamFnWithAgentRuntimeMiddlewares,
-+} from "./agent-runtime-middleware.js";
-+import { createEmptyPluginRegistry } from "./registry.js";
++import { createEmptyPluginRegistry } from "./registry-empty.js";
 +
-+afterEach(() => {
-+  resetGlobalHookRunner();
-+});
++describe("agent execution middleware", () => {
++  beforeEach(() => {
++    resetGlobalHookRunner();
++  });
 +
-+describe("agent-runtime-middleware", () => {
-+  it("applies higher priority tool middleware outermost", async () => {
-+    const calls: string[] = [];
++  afterEach(() => {
++    resetGlobalHookRunner();
++  });
++
++  it("wraps streaming LLM execution in priority order", async () => {
 +    const registry = createEmptyPluginRegistry();
-+    registry.agentRuntimeMiddlewares.push(
++    const seenContexts: unknown[] = [];
++    const baseStreamFn: StreamFn = ((_model, context) => {
++      seenContexts.push(context);
++      return {
++        async *[Symbol.asyncIterator]() {
++          yield { type: "text", text: "ok" };
++        },
++      };
++    }) as StreamFn;
++
++    registry.agentStreamingLlmMiddlewares.push(
 +      {
 +        pluginId: "low",
-+        middleware: {
-+          id: "low",
-+          priority: 10,
-+          wrapToolExecute: async (ctx) => {
-+            calls.push("low:before");
-+            const result = await ctx.execute(ctx.params);
-+            calls.push("low:after");
-+            return result;
-+          },
-+        },
++        pluginName: "Low",
++        rawHandler: (ctx) => ctx.streamFn,
++        handler: (ctx) =>
++          ((model, context, options) =>
++            ctx.streamFn(
++              model,
++              {
++                ...(context as object),
++                order: [...((context as { order?: string[] }).order ?? []), "low"],
++              },
++              options,
++            )) as StreamFn,
++        runtimes: ["pi"],
++        priority: 5,
 +        source: "test",
 +      },
 +      {
 +        pluginId: "high",
-+        middleware: {
-+          id: "high",
-+          priority: 100,
-+          wrapToolExecute: async (ctx) => {
-+            calls.push("high:before");
-+            const result = await ctx.execute(ctx.params);
-+            calls.push("high:after");
-+            return result;
-+          },
-+        },
++        pluginName: "High",
++        rawHandler: (ctx) => ctx.streamFn,
++        handler: (ctx) =>
++          ((model, context, options) =>
++            ctx.streamFn(
++              model,
++              {
++                ...(context as object),
++                order: [...((context as { order?: string[] }).order ?? []), "high"],
++              },
++              options,
++            )) as StreamFn,
++        runtimes: ["pi"],
++        priority: 50,
 +        source: "test",
 +      },
 +    );
 +    initializeGlobalHookRunner(registry);
 +
-+    const result = await executeToolWithAgentRuntimeMiddlewares({
-+      toolName: "demo",
-+      params: { ok: true },
-+      execute: async () => {
-+        calls.push("execute");
-+        return { done: true };
-+      },
++    const wrapped = wrapStreamFnWithAgentStreamingLlmMiddlewares({
++      provider: "openai",
++      modelId: "gpt-test",
++      streamFn: baseStreamFn,
 +    });
++    for await (const chunk of wrapped({} as never, {}, {} as never) as AsyncIterable<unknown>) {
++      void chunk;
++      // drain
++    }
 +
-+    expect(result).toEqual({ done: true });
-+    expect(calls).toEqual([
-+      "high:before",
-+      "low:before",
-+      "execute",
-+      "low:after",
-+      "high:after",
-+    ]);
++    expect(seenContexts).toEqual([{ order: ["high", "low"] }]);
 +  });
 +
-+  it("falls back to the original tool execute when middleware throws before delegating", async () => {
++  it("lets tool-call middleware rewrite params and wrap execution", async () => {
 +    const registry = createEmptyPluginRegistry();
-+    registry.agentRuntimeMiddlewares.push({
-+      pluginId: "broken",
-+      middleware: {
-+        id: "broken",
-+        wrapToolExecute: async () => {
-+          throw new Error("boom");
-+        },
++    const baseExecute = vi.fn(async (params: unknown) => ({ params }));
++    registry.agentToolCallMiddlewares.push(
++      {
++        pluginId: "low",
++        pluginName: "Low",
++        rawHandler: async (ctx) => await ctx.execute(ctx.params),
++        handler: async (ctx) =>
++          await ctx.execute({
++            ...(ctx.params as object),
++            low: true,
++          }),
++        runtimes: ["pi"],
++        priority: 5,
++        source: "test",
 +      },
++      {
++        pluginId: "high",
++        pluginName: "High",
++        rawHandler: async (ctx) => await ctx.execute(ctx.params),
++        handler: async (ctx) =>
++          await ctx.execute({
++            ...(ctx.params as object),
++            high: true,
++          }),
++        runtimes: ["pi"],
++        priority: 50,
++        source: "test",
++      },
++    );
++    initializeGlobalHookRunner(registry);
++
++    await expect(
++      executeToolWithAgentToolCallMiddlewares({
++        toolName: "demo",
++        params: { original: true },
++        execute: baseExecute,
++      }),
++    ).resolves.toEqual({
++      params: {
++        original: true,
++        high: true,
++        low: true,
++      },
++    });
++    expect(baseExecute).toHaveBeenCalledWith({
++      original: true,
++      high: true,
++      low: true,
++    });
++  });
++
++  it("lets tool-call middleware block execution", async () => {
++    const registry = createEmptyPluginRegistry();
++    const baseExecute = vi.fn(async () => ({ executed: true }));
++    registry.agentToolCallMiddlewares.push({
++      pluginId: "blocker",
++      pluginName: "Blocker",
++      rawHandler: () => ({ blocked: true }),
++      handler: () => ({ blocked: true }),
++      runtimes: ["pi"],
++      priority: 10,
 +      source: "test",
 +    });
 +    initializeGlobalHookRunner(registry);
 +
-+    const result = await executeToolWithAgentRuntimeMiddlewares({
-+      toolName: "demo",
-+      params: { ok: true },
-+      execute: async () => ({ fallback: true }),
-+    });
-+
-+    expect(result).toEqual({ fallback: true });
++    await expect(
++      executeToolWithAgentToolCallMiddlewares({
++        toolName: "demo",
++        params: {},
++        execute: baseExecute,
++      }),
++    ).resolves.toEqual({ blocked: true });
++    expect(baseExecute).not.toHaveBeenCalled();
 +  });
 +
-+  it("applies higher priority stream middleware outermost", () => {
-+    const order: string[] = [];
++  it("lets tool-call middleware throw without running the tool", async () => {
 +    const registry = createEmptyPluginRegistry();
-+    registry.agentRuntimeMiddlewares.push(
-+      {
-+        pluginId: "low",
-+        middleware: {
-+          id: "low",
-+          priority: 5,
-+          wrapStreamFn: (ctx) => (_model, _context, _options) => {
-+            order.push("low:before");
-+            const result = ctx.streamFn({} as never, {} as never, undefined) as {
-+              marker?: string;
-+            };
-+            order.push("low:after");
-+            return { ...result, marker: `${result.marker ?? ""}L` };
-+          },
-+        },
-+        source: "test",
++    const baseExecute = vi.fn(async () => ({ executed: true }));
++    registry.agentToolCallMiddlewares.push({
++      pluginId: "thrower",
++      pluginName: "Thrower",
++      rawHandler: () => {
++        throw new Error("blocked");
 +      },
-+      {
-+        pluginId: "high",
-+        middleware: {
-+          id: "high",
-+          priority: 50,
-+          wrapStreamFn: (ctx) => (_model, _context, _options) => {
-+            order.push("high:before");
-+            const result = ctx.streamFn({} as never, {} as never, undefined) as {
-+              marker?: string;
-+            };
-+            order.push("high:after");
-+            return { ...result, marker: `${result.marker ?? ""}H` };
-+          },
-+        },
-+        source: "test",
++      handler: () => {
++        throw new Error("blocked");
 +      },
-+    );
++      runtimes: ["pi"],
++      priority: 10,
++      source: "test",
++    });
 +    initializeGlobalHookRunner(registry);
 +
-+    const wrapped = wrapStreamFnWithAgentRuntimeMiddlewares({
-+      provider: "openai",
-+      modelId: "gpt-5.4",
-+      streamFn: () => ({ marker: "" }) as never,
-+    });
-+    const result = wrapped({} as never, {} as never, undefined) as { marker: string };
-+
-+    expect(result.marker).toBe("LH");
-+    expect(order).toEqual(["high:before", "low:before", "low:after", "high:after"]);
++    await expect(
++      executeToolWithAgentToolCallMiddlewares({
++        toolName: "demo",
++        params: {},
++        execute: baseExecute,
++      }),
++    ).rejects.toThrow("blocked");
++    expect(baseExecute).not.toHaveBeenCalled();
 +  });
 +});
-diff --git a/src/plugins/agent-runtime-middleware.ts b/src/plugins/agent-runtime-middleware.ts
+diff --git a/src/plugins/agent-streaming-llm-middleware-types.ts b/src/plugins/agent-streaming-llm-middleware-types.ts
 new file mode 100644
-index 0000000000..462f858cb2
+index 00000000..e081bea6
 --- /dev/null
-+++ b/src/plugins/agent-runtime-middleware.ts
-@@ -0,0 +1,91 @@
-+import type { StreamFn } from "@mariozechner/pi-agent-core";
++++ b/src/plugins/agent-streaming-llm-middleware-types.ts
+@@ -0,0 +1,25 @@
++import type { StreamFn } from "@earendil-works/pi-agent-core";
++import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
++
++export type AgentStreamingLlmMiddlewareRuntime = "pi";
++
++export type AgentStreamingLlmMiddlewareContext = {
++  runtime: AgentStreamingLlmMiddlewareRuntime;
++  provider: string;
++  modelId: string;
++  model?: ProviderRuntimeModel;
++  agentId?: string;
++  sessionId?: string;
++  sessionKey?: string;
++  runId?: string;
++  streamFn: StreamFn;
++};
++
++export type AgentStreamingLlmMiddleware = (
++  ctx: AgentStreamingLlmMiddlewareContext,
++) => StreamFn | null | undefined;
++
++export type AgentStreamingLlmMiddlewareOptions = {
++  runtimes?: AgentStreamingLlmMiddlewareRuntime[];
++  priority?: number;
++};
+diff --git a/src/plugins/agent-streaming-llm-middleware.ts b/src/plugins/agent-streaming-llm-middleware.ts
+new file mode 100644
+index 00000000..b085cab3
+--- /dev/null
++++ b/src/plugins/agent-streaming-llm-middleware.ts
+@@ -0,0 +1,104 @@
++import type { StreamFn } from "@earendil-works/pi-agent-core";
 +import { createSubsystemLogger } from "../logging/subsystem.js";
-+import { getGlobalPluginRegistry } from "./hook-runner-global.js";
 +import type {
-+  OpenClawAgentRuntimeMiddleware,
-+  OpenClawAgentRuntimeStreamFnContext,
-+  OpenClawAgentRuntimeToolExecuteContext,
-+} from "./types.js";
++  AgentStreamingLlmMiddleware,
++  AgentStreamingLlmMiddlewareContext,
++  AgentStreamingLlmMiddlewareOptions,
++  AgentStreamingLlmMiddlewareRuntime,
++} from "./agent-streaming-llm-middleware-types.js";
++import { getGlobalPluginRegistry } from "./hook-runner-global.js";
 +
-+const log = createSubsystemLogger("plugins/agent-runtime-middleware");
++const log = createSubsystemLogger("plugins/agent-streaming-llm-middleware");
 +
-+function listMiddlewares(): OpenClawAgentRuntimeMiddleware[] {
-+  const registry = getGlobalPluginRegistry();
-+  if (!registry?.agentRuntimeMiddlewares?.length) {
-+    return [];
-+  }
-+  return registry.agentRuntimeMiddlewares
-+    .map((entry) => entry.middleware)
-+    .slice()
-+    .sort((a, b) => {
-+      const priorityDelta = (a.priority ?? 0) - (b.priority ?? 0);
-+      if (priorityDelta !== 0) {
-+        return priorityDelta;
-+      }
-+      return a.id.localeCompare(b.id);
-+    });
++export const AGENT_STREAMING_LLM_MIDDLEWARE_RUNTIMES = [
++  "pi",
++] as const satisfies AgentStreamingLlmMiddlewareRuntime[];
++
++const AGENT_STREAMING_LLM_MIDDLEWARE_RUNTIME_SET = new Set<string>(
++  AGENT_STREAMING_LLM_MIDDLEWARE_RUNTIMES,
++);
++
++function normalizeAgentStreamingLlmMiddlewareRuntime(
++  runtime: string,
++): AgentStreamingLlmMiddlewareRuntime | undefined {
++  const normalized = runtime.trim().toLowerCase();
++  return AGENT_STREAMING_LLM_MIDDLEWARE_RUNTIME_SET.has(normalized)
++    ? (normalized as AgentStreamingLlmMiddlewareRuntime)
++    : undefined;
 +}
 +
-+export function wrapStreamFnWithAgentRuntimeMiddlewares(
-+  params: OpenClawAgentRuntimeStreamFnContext,
++export function normalizeAgentStreamingLlmMiddlewareRuntimes(
++  options?: AgentStreamingLlmMiddlewareOptions,
++): AgentStreamingLlmMiddlewareRuntime[] {
++  const requested = options?.runtimes;
++  if (!requested || requested.length === 0) {
++    return [...AGENT_STREAMING_LLM_MIDDLEWARE_RUNTIMES];
++  }
++  const normalized: AgentStreamingLlmMiddlewareRuntime[] = [];
++  for (const runtime of requested) {
++    const value = normalizeAgentStreamingLlmMiddlewareRuntime(runtime);
++    if (value && !normalized.includes(value)) {
++      normalized.push(value);
++    }
++  }
++  return normalized;
++}
++
++export function normalizeAgentStreamingLlmMiddlewareRuntimeIds(
++  runtimes: readonly string[] | undefined,
++): AgentStreamingLlmMiddlewareRuntime[] {
++  const normalized: AgentStreamingLlmMiddlewareRuntime[] = [];
++  for (const runtime of runtimes ?? []) {
++    const value = normalizeAgentStreamingLlmMiddlewareRuntime(runtime);
++    if (value && !normalized.includes(value)) {
++      normalized.push(value);
++    }
++  }
++  return normalized;
++}
++
++function listAgentStreamingLlmMiddlewares(
++  runtime: AgentStreamingLlmMiddlewareRuntime,
++): Array<{ handler: AgentStreamingLlmMiddleware; priority: number; pluginId: string }> {
++  return (
++    getGlobalPluginRegistry()
++      ?.agentStreamingLlmMiddlewares?.filter((entry) => entry.runtimes.includes(runtime))
++      .map((entry) => ({
++        handler: entry.handler,
++        priority: entry.priority ?? 0,
++        pluginId: entry.pluginId,
++      }))
++      .sort((left, right) => {
++        const priorityDelta = left.priority - right.priority;
++        return priorityDelta === 0 ? left.pluginId.localeCompare(right.pluginId) : priorityDelta;
++      }) ?? []
++  );
++}
++
++export function wrapStreamFnWithAgentStreamingLlmMiddlewares(
++  params: Omit<AgentStreamingLlmMiddlewareContext, "runtime"> & {
++    runtime?: AgentStreamingLlmMiddlewareRuntime;
++  },
 +): StreamFn {
++  const runtime = params.runtime ?? "pi";
 +  let current = params.streamFn;
 +
-+  for (const middleware of listMiddlewares()) {
-+    if (!middleware.wrapStreamFn) {
-+      continue;
-+    }
++  for (const entry of listAgentStreamingLlmMiddlewares(runtime)) {
 +    try {
-+      const next = middleware.wrapStreamFn({
++      const next = entry.handler({
 +        ...params,
++        runtime,
 +        streamFn: current,
 +      });
 +      if (next) {
@@ -3222,56 +1490,787 @@ index 0000000000..462f858cb2
 +      }
 +    } catch (error) {
 +      log.warn(
-+        `agent runtime stream middleware failed: id=${middleware.id} error=${String(error)}`,
++        `agent streaming LLM middleware failed: plugin=${entry.pluginId} error=${String(error)}`,
 +      );
 +    }
 +  }
 +
 +  return current;
 +}
+diff --git a/src/plugins/agent-tool-call-middleware-types.ts b/src/plugins/agent-tool-call-middleware-types.ts
+new file mode 100644
+index 00000000..e569e1be
+--- /dev/null
++++ b/src/plugins/agent-tool-call-middleware-types.ts
+@@ -0,0 +1,22 @@
++export type AgentToolCallMiddlewareRuntime = "pi";
 +
-+export async function executeToolWithAgentRuntimeMiddlewares(
-+  params: OpenClawAgentRuntimeToolExecuteContext,
++export type AgentToolCallMiddlewareContext = {
++  runtime: AgentToolCallMiddlewareRuntime;
++  agentId?: string;
++  sessionId?: string;
++  sessionKey?: string;
++  runId?: string;
++  toolName: string;
++  toolCallId?: string;
++  params: unknown;
++  execute: (params: unknown) => Promise<unknown>;
++};
++
++export type AgentToolCallMiddleware = (
++  ctx: AgentToolCallMiddlewareContext,
++) => Promise<unknown> | unknown;
++
++export type AgentToolCallMiddlewareOptions = {
++  runtimes?: AgentToolCallMiddlewareRuntime[];
++  priority?: number;
++};
+diff --git a/src/plugins/agent-tool-call-middleware.ts b/src/plugins/agent-tool-call-middleware.ts
+new file mode 100644
+index 00000000..bba3bd30
+--- /dev/null
++++ b/src/plugins/agent-tool-call-middleware.ts
+@@ -0,0 +1,107 @@
++import { createSubsystemLogger } from "../logging/subsystem.js";
++import type {
++  AgentToolCallMiddleware,
++  AgentToolCallMiddlewareContext,
++  AgentToolCallMiddlewareOptions,
++  AgentToolCallMiddlewareRuntime,
++} from "./agent-tool-call-middleware-types.js";
++import { getGlobalPluginRegistry } from "./hook-runner-global.js";
++
++const log = createSubsystemLogger("plugins/agent-tool-call-middleware");
++
++export const AGENT_TOOL_CALL_MIDDLEWARE_RUNTIMES = [
++  "pi",
++] as const satisfies AgentToolCallMiddlewareRuntime[];
++
++const AGENT_TOOL_CALL_MIDDLEWARE_RUNTIME_SET = new Set<string>(AGENT_TOOL_CALL_MIDDLEWARE_RUNTIMES);
++
++function normalizeAgentToolCallMiddlewareRuntime(
++  runtime: string,
++): AgentToolCallMiddlewareRuntime | undefined {
++  const normalized = runtime.trim().toLowerCase();
++  return AGENT_TOOL_CALL_MIDDLEWARE_RUNTIME_SET.has(normalized)
++    ? (normalized as AgentToolCallMiddlewareRuntime)
++    : undefined;
++}
++
++export function normalizeAgentToolCallMiddlewareRuntimes(
++  options?: AgentToolCallMiddlewareOptions,
++): AgentToolCallMiddlewareRuntime[] {
++  const requested = options?.runtimes;
++  if (!requested || requested.length === 0) {
++    return [...AGENT_TOOL_CALL_MIDDLEWARE_RUNTIMES];
++  }
++  const normalized: AgentToolCallMiddlewareRuntime[] = [];
++  for (const runtime of requested) {
++    const value = normalizeAgentToolCallMiddlewareRuntime(runtime);
++    if (value && !normalized.includes(value)) {
++      normalized.push(value);
++    }
++  }
++  return normalized;
++}
++
++export function normalizeAgentToolCallMiddlewareRuntimeIds(
++  runtimes: readonly string[] | undefined,
++): AgentToolCallMiddlewareRuntime[] {
++  const normalized: AgentToolCallMiddlewareRuntime[] = [];
++  for (const runtime of runtimes ?? []) {
++    const value = normalizeAgentToolCallMiddlewareRuntime(runtime);
++    if (value && !normalized.includes(value)) {
++      normalized.push(value);
++    }
++  }
++  return normalized;
++}
++
++function listAgentToolCallMiddlewares(
++  runtime: AgentToolCallMiddlewareRuntime,
++): Array<{ handler: AgentToolCallMiddleware; priority: number; pluginId: string }> {
++  return (
++    getGlobalPluginRegistry()
++      ?.agentToolCallMiddlewares?.filter((entry) => entry.runtimes.includes(runtime))
++      .map((entry) => ({
++        handler: entry.handler,
++        priority: entry.priority ?? 0,
++        pluginId: entry.pluginId,
++      }))
++      .sort((left, right) => {
++        const priorityDelta = left.priority - right.priority;
++        return priorityDelta === 0 ? left.pluginId.localeCompare(right.pluginId) : priorityDelta;
++      }) ?? []
++  );
++}
++
++export async function executeToolWithAgentToolCallMiddlewares(
++  params: Omit<AgentToolCallMiddlewareContext, "runtime"> & {
++    runtime?: AgentToolCallMiddlewareRuntime;
++  },
 +): Promise<unknown> {
++  const runtime = params.runtime ?? "pi";
 +  let execute = params.execute;
 +
-+  for (const middleware of listMiddlewares()) {
-+    if (!middleware.wrapToolExecute) {
-+      continue;
-+    }
-+
++  for (const entry of listAgentToolCallMiddlewares(runtime)) {
 +    const priorExecute = execute;
 +    execute = async (nextParams) => {
-+      let delegated = false;
 +      const next = async (effectiveParams: unknown) => {
-+        delegated = true;
 +        return await priorExecute(effectiveParams);
 +      };
 +
 +      try {
-+        return await middleware.wrapToolExecute({
++        return await entry.handler({
 +          ...params,
++          runtime,
 +          params: nextParams,
 +          execute: next,
 +        });
 +      } catch (error) {
-+        log.warn(`agent runtime tool middleware failed: id=${middleware.id} error=${String(error)}`);
-+        if (delegated) {
-+          throw error;
-+        }
-+        return await priorExecute(nextParams);
++        log.warn(
++          `agent tool-call middleware failed: plugin=${entry.pluginId} error=${String(error)}`,
++        );
++        throw error;
 +      }
 +    };
 +  }
 +
 +  return await execute(params.params);
 +}
-diff --git a/uv.lock b/uv.lock
-new file mode 100644
-index 0000000000..7518fc90bf
---- /dev/null
-+++ b/uv.lock
-@@ -0,0 +1,3 @@
-+version = 1
-+revision = 3
-+requires-python = ">=3.12"
+diff --git a/src/plugins/api-builder.ts b/src/plugins/api-builder.ts
+index a2256a50..1efdbfe9 100644
+--- a/src/plugins/api-builder.ts
++++ b/src/plugins/api-builder.ts
+@@ -56,6 +56,8 @@ export type BuildPluginApiParams = {
+       | "registerAgentHarness"
+       | "registerCodexAppServerExtensionFactory"
+       | "registerAgentToolResultMiddleware"
++      | "registerAgentStreamingLlmMiddleware"
++      | "registerAgentToolCallMiddleware"
+       | "registerSessionExtension"
+       | "enqueueNextTurnInjection"
+       | "registerTrustedToolPolicy"
+@@ -134,6 +136,10 @@ const noopRegisterCodexAppServerExtensionFactory: OpenClawPluginApi["registerCod
+   () => {};
+ const noopRegisterAgentToolResultMiddleware: OpenClawPluginApi["registerAgentToolResultMiddleware"] =
+   () => {};
++const noopRegisterAgentStreamingLlmMiddleware: OpenClawPluginApi["registerAgentStreamingLlmMiddleware"] =
++  () => {};
++const noopRegisterAgentToolCallMiddleware: OpenClawPluginApi["registerAgentToolCallMiddleware"] =
++  () => {};
+ const noopRegisterSessionExtension: OpenClawPluginApi["registerSessionExtension"] = () => {};
+ const noopEnqueueNextTurnInjection: OpenClawPluginApi["enqueueNextTurnInjection"] = async (
+   injection,
+@@ -246,6 +252,10 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi
+       handlers.registerCodexAppServerExtensionFactory ?? noopRegisterCodexAppServerExtensionFactory,
+     registerAgentToolResultMiddleware:
+       handlers.registerAgentToolResultMiddleware ?? noopRegisterAgentToolResultMiddleware,
++    registerAgentStreamingLlmMiddleware:
++      handlers.registerAgentStreamingLlmMiddleware ?? noopRegisterAgentStreamingLlmMiddleware,
++    registerAgentToolCallMiddleware:
++      handlers.registerAgentToolCallMiddleware ?? noopRegisterAgentToolCallMiddleware,
+     registerSessionExtension: handlers.registerSessionExtension ?? noopRegisterSessionExtension,
+     enqueueNextTurnInjection: handlers.enqueueNextTurnInjection ?? noopEnqueueNextTurnInjection,
+     registerTrustedToolPolicy: handlers.registerTrustedToolPolicy ?? noopRegisterTrustedToolPolicy,
+diff --git a/src/plugins/captured-registration.test.ts b/src/plugins/captured-registration.test.ts
+index 5213faae..fd7d6a51 100644
+--- a/src/plugins/captured-registration.test.ts
++++ b/src/plugins/captured-registration.test.ts
+@@ -85,6 +85,14 @@ describe("captured plugin registration", () => {
+         api.registerAgentToolResultMiddleware(() => undefined, {
+           runtimes: ["codex"],
+         });
++        api.registerAgentStreamingLlmMiddleware((ctx) => ctx.streamFn, {
++          runtimes: ["pi"],
++          priority: 10,
++        });
++        api.registerAgentToolCallMiddleware(async (ctx) => await ctx.execute(ctx.params), {
++          runtimes: ["pi"],
++          priority: 20,
++        });
+       },
+     });
+ 
+@@ -103,6 +111,12 @@ describe("captured plugin registration", () => {
+     expect(captured.textTransforms[0]?.input).toHaveLength(1);
+     expect(captured.agentToolResultMiddlewares).toHaveLength(1);
+     expect(captured.agentToolResultMiddlewares[0]?.runtimes).toEqual(["codex"]);
++    expect(captured.agentStreamingLlmMiddlewares).toHaveLength(1);
++    expect(captured.agentStreamingLlmMiddlewares[0]?.runtimes).toEqual(["pi"]);
++    expect(captured.agentStreamingLlmMiddlewares[0]?.priority).toBe(10);
++    expect(captured.agentToolCallMiddlewares).toHaveLength(1);
++    expect(captured.agentToolCallMiddlewares[0]?.runtimes).toEqual(["pi"]);
++    expect(captured.agentToolCallMiddlewares[0]?.priority).toBe(20);
+     expect(captured.api.registerMemoryEmbeddingProvider).toBeTypeOf("function");
+   });
+ 
+diff --git a/src/plugins/captured-registration.ts b/src/plugins/captured-registration.ts
+index edcec6aa..ef949ecf 100644
+--- a/src/plugins/captured-registration.ts
++++ b/src/plugins/captured-registration.ts
+@@ -1,4 +1,14 @@
+ import type { OpenClawConfig } from "../config/types.openclaw.js";
++import type {
++  AgentStreamingLlmMiddleware,
++  AgentStreamingLlmMiddlewareOptions,
++} from "./agent-streaming-llm-middleware-types.js";
++import { normalizeAgentStreamingLlmMiddlewareRuntimes } from "./agent-streaming-llm-middleware.js";
++import type {
++  AgentToolCallMiddleware,
++  AgentToolCallMiddlewareOptions,
++} from "./agent-tool-call-middleware-types.js";
++import { normalizeAgentToolCallMiddlewareRuntimes } from "./agent-tool-call-middleware.js";
+ import type {
+   AgentToolResultMiddleware,
+   AgentToolResultMiddlewareOptions,
+@@ -17,7 +27,11 @@ import type {
+   PluginTrustedToolPolicyRegistration,
+ } from "./host-hooks.js";
+ import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
+-import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
++import type {
++  PluginAgentStreamingLlmMiddlewareRegistration,
++  PluginAgentToolCallMiddlewareRegistration,
++  PluginAgentToolResultMiddlewareRegistration,
++} from "./registry-types.js";
+ import type { PluginRuntime } from "./runtime/types.js";
+ import type {
+   AnyAgentTool,
+@@ -57,6 +71,8 @@ export type CapturedPluginRegistration = {
+   textTransforms: PluginTextTransformRegistration[];
+   codexAppServerExtensionFactories: CodexAppServerExtensionFactory[];
+   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
++  agentStreamingLlmMiddlewares: PluginAgentStreamingLlmMiddlewareRegistration[];
++  agentToolCallMiddlewares: PluginAgentToolCallMiddlewareRegistration[];
+   speechProviders: SpeechProviderPlugin[];
+   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
+   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
+@@ -94,6 +110,8 @@ export function createCapturedPluginRegistration(params?: {
+   const textTransforms: PluginTextTransformRegistration[] = [];
+   const codexAppServerExtensionFactories: CodexAppServerExtensionFactory[] = [];
+   const agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[] = [];
++  const agentStreamingLlmMiddlewares: PluginAgentStreamingLlmMiddlewareRegistration[] = [];
++  const agentToolCallMiddlewares: PluginAgentToolCallMiddlewareRegistration[] = [];
+   const speechProviders: SpeechProviderPlugin[] = [];
+   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
+   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
+@@ -134,6 +152,8 @@ export function createCapturedPluginRegistration(params?: {
+     textTransforms,
+     codexAppServerExtensionFactories,
+     agentToolResultMiddlewares,
++    agentStreamingLlmMiddlewares,
++    agentToolCallMiddlewares,
+     speechProviders,
+     realtimeTranscriptionProviders,
+     realtimeVoiceProviders,
+@@ -218,6 +238,36 @@ export function createCapturedPluginRegistration(params?: {
+             source: pluginSource,
+           });
+         },
++        registerAgentStreamingLlmMiddleware(
++          handler: AgentStreamingLlmMiddleware,
++          options?: AgentStreamingLlmMiddlewareOptions,
++        ) {
++          const runtimes = normalizeAgentStreamingLlmMiddlewareRuntimes(options);
++          agentStreamingLlmMiddlewares.push({
++            pluginId,
++            pluginName,
++            rawHandler: handler,
++            handler,
++            runtimes,
++            priority: options?.priority,
++            source: pluginSource,
++          });
++        },
++        registerAgentToolCallMiddleware(
++          handler: AgentToolCallMiddleware,
++          options?: AgentToolCallMiddlewareOptions,
++        ) {
++          const runtimes = normalizeAgentToolCallMiddlewareRuntimes(options);
++          agentToolCallMiddlewares.push({
++            pluginId,
++            pluginName,
++            rawHandler: handler,
++            handler,
++            runtimes,
++            priority: options?.priority,
++            source: pluginSource,
++          });
++        },
+         registerCliBackend(backend: CliBackendPlugin) {
+           cliBackends.push(backend);
+         },
+diff --git a/src/plugins/hook-registry.types.ts b/src/plugins/hook-registry.types.ts
+index dc53765f..679f48ce 100644
+--- a/src/plugins/hook-registry.types.ts
++++ b/src/plugins/hook-registry.types.ts
+@@ -1,5 +1,9 @@
+ import type { HookEntry } from "../hooks/types.js";
+ import type { PluginHookRegistration as TypedPluginHookRegistration } from "./hook-types.js";
++import type {
++  PluginAgentStreamingLlmMiddlewareRegistration,
++  PluginAgentToolCallMiddlewareRegistration,
++} from "./registry-types.js";
+ 
+ export type PluginLegacyHookRegistration = {
+   pluginId: string;
+@@ -19,4 +23,6 @@ export type GlobalHookRunnerRegistry = HookRunnerRegistry & {
+     id: string;
+     status: "loaded" | "disabled" | "error";
+   }>;
++  agentStreamingLlmMiddlewares?: PluginAgentStreamingLlmMiddlewareRegistration[];
++  agentToolCallMiddlewares?: PluginAgentToolCallMiddlewareRegistration[];
+ };
+diff --git a/src/plugins/hooks.test-helpers.ts b/src/plugins/hooks.test-helpers.ts
+index 59e98655..3bea1a85 100644
+--- a/src/plugins/hooks.test-helpers.ts
++++ b/src/plugins/hooks.test-helpers.ts
+@@ -44,6 +44,8 @@ export function createMockPluginRegistry(
+     webSearchProviders: [],
+     migrationProviders: [],
+     codexAppServerExtensionFactories: [],
++    agentStreamingLlmMiddlewares: [],
++    agentToolCallMiddlewares: [],
+     agentToolResultMiddlewares: [],
+     memoryEmbeddingProviders: [],
+     agentHarnesses: [],
+diff --git a/src/plugins/loader.ts b/src/plugins/loader.ts
+index 6a63be71..afd4e280 100644
+--- a/src/plugins/loader.ts
++++ b/src/plugins/loader.ts
+@@ -358,6 +358,8 @@ type PluginRegistrySnapshot = {
+     migrationProviders: PluginRegistry["migrationProviders"];
+     codexAppServerExtensionFactories: PluginRegistry["codexAppServerExtensionFactories"];
+     agentToolResultMiddlewares: PluginRegistry["agentToolResultMiddlewares"];
++    agentStreamingLlmMiddlewares: PluginRegistry["agentStreamingLlmMiddlewares"];
++    agentToolCallMiddlewares: PluginRegistry["agentToolCallMiddlewares"];
+     memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
+     agentHarnesses: PluginRegistry["agentHarnesses"];
+     httpRoutes: PluginRegistry["httpRoutes"];
+@@ -401,6 +403,8 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
+       migrationProviders: [...registry.migrationProviders],
+       codexAppServerExtensionFactories: [...registry.codexAppServerExtensionFactories],
+       agentToolResultMiddlewares: [...registry.agentToolResultMiddlewares],
++      agentStreamingLlmMiddlewares: [...registry.agentStreamingLlmMiddlewares],
++      agentToolCallMiddlewares: [...registry.agentToolCallMiddlewares],
+       memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
+       agentHarnesses: [...registry.agentHarnesses],
+       httpRoutes: [...registry.httpRoutes],
+@@ -443,6 +447,8 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
+   registry.migrationProviders = snapshot.arrays.migrationProviders;
+   registry.codexAppServerExtensionFactories = snapshot.arrays.codexAppServerExtensionFactories;
+   registry.agentToolResultMiddlewares = snapshot.arrays.agentToolResultMiddlewares;
++  registry.agentStreamingLlmMiddlewares = snapshot.arrays.agentStreamingLlmMiddlewares;
++  registry.agentToolCallMiddlewares = snapshot.arrays.agentToolCallMiddlewares;
+   registry.memoryEmbeddingProviders = snapshot.arrays.memoryEmbeddingProviders;
+   registry.agentHarnesses = snapshot.arrays.agentHarnesses;
+   registry.httpRoutes = snapshot.arrays.httpRoutes;
+diff --git a/src/plugins/manifest-registry.ts b/src/plugins/manifest-registry.ts
+index 11e63e68..9f97b1f8 100644
+--- a/src/plugins/manifest-registry.ts
++++ b/src/plugins/manifest-registry.ts
+@@ -287,6 +287,8 @@ function mergeManifestContracts(
+   for (const key of [
+     "embeddedExtensionFactories",
+     "agentToolResultMiddleware",
++    "agentStreamingLlmMiddleware",
++    "agentToolCallMiddleware",
+     "externalAuthProviders",
+     "memoryEmbeddingProviders",
+     "speechProviders",
+diff --git a/src/plugins/manifest.ts b/src/plugins/manifest.ts
+index e94eb8d8..f94d89a7 100644
+--- a/src/plugins/manifest.ts
++++ b/src/plugins/manifest.ts
+@@ -396,6 +396,8 @@ export type PluginManifest = {
+ export type PluginManifestContracts = {
+   embeddedExtensionFactories?: string[];
+   agentToolResultMiddleware?: string[];
++  agentStreamingLlmMiddleware?: string[];
++  agentToolCallMiddleware?: string[];
+   /**
+    * Provider ids whose external auth profile hook can contribute runtime-only
+    * credentials. Declaring this lets auth-store overlays load only the owning
+@@ -791,6 +793,8 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
+ 
+   const embeddedExtensionFactories = normalizeTrimmedStringList(value.embeddedExtensionFactories);
+   const agentToolResultMiddleware = normalizeTrimmedStringList(value.agentToolResultMiddleware);
++  const agentStreamingLlmMiddleware = normalizeTrimmedStringList(value.agentStreamingLlmMiddleware);
++  const agentToolCallMiddleware = normalizeTrimmedStringList(value.agentToolCallMiddleware);
+   const externalAuthProviders = normalizeTrimmedStringList(value.externalAuthProviders);
+   const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
+   const speechProviders = normalizeTrimmedStringList(value.speechProviders);
+@@ -811,6 +815,8 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
+   const contracts = {
+     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
+     ...(agentToolResultMiddleware.length > 0 ? { agentToolResultMiddleware } : {}),
++    ...(agentStreamingLlmMiddleware.length > 0 ? { agentStreamingLlmMiddleware } : {}),
++    ...(agentToolCallMiddleware.length > 0 ? { agentToolCallMiddleware } : {}),
+     ...(externalAuthProviders.length > 0 ? { externalAuthProviders } : {}),
+     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
+     ...(speechProviders.length > 0 ? { speechProviders } : {}),
+diff --git a/src/plugins/registry-empty.ts b/src/plugins/registry-empty.ts
+index 1bbddd8f..15793c02 100644
+--- a/src/plugins/registry-empty.ts
++++ b/src/plugins/registry-empty.ts
+@@ -24,6 +24,8 @@ export function createEmptyPluginRegistry(): PluginRegistry {
+     migrationProviders: [],
+     codexAppServerExtensionFactories: [],
+     agentToolResultMiddlewares: [],
++    agentStreamingLlmMiddlewares: [],
++    agentToolCallMiddlewares: [],
+     memoryEmbeddingProviders: [],
+     agentHarnesses: [],
+     gatewayHandlers: {},
+diff --git a/src/plugins/registry-types.ts b/src/plugins/registry-types.ts
+index 027ce092..91e92853 100644
+--- a/src/plugins/registry-types.ts
++++ b/src/plugins/registry-types.ts
+@@ -4,6 +4,14 @@ import type { OperatorScope } from "../gateway/operator-scopes.js";
+ import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
+ import type { HookEntry } from "../hooks/types.js";
+ import type { JsonSchemaObject } from "../shared/json-schema.types.js";
++import type {
++  AgentStreamingLlmMiddleware,
++  AgentStreamingLlmMiddlewareRuntime,
++} from "./agent-streaming-llm-middleware-types.js";
++import type {
++  AgentToolCallMiddleware,
++  AgentToolCallMiddlewareRuntime,
++} from "./agent-tool-call-middleware-types.js";
+ import type {
+   AgentToolResultMiddleware,
+   AgentToolResultMiddlewareRuntime,
+@@ -209,6 +217,26 @@ export type PluginAgentToolResultMiddlewareRegistration = {
+   source: string;
+   rootDir?: string;
+ };
++export type PluginAgentStreamingLlmMiddlewareRegistration = {
++  pluginId: string;
++  pluginName?: string;
++  rawHandler: AgentStreamingLlmMiddleware;
++  handler: AgentStreamingLlmMiddleware;
++  runtimes: AgentStreamingLlmMiddlewareRuntime[];
++  priority?: number;
++  source: string;
++  rootDir?: string;
++};
++export type PluginAgentToolCallMiddlewareRegistration = {
++  pluginId: string;
++  pluginName?: string;
++  rawHandler: AgentToolCallMiddleware;
++  handler: AgentToolCallMiddleware;
++  runtimes: AgentToolCallMiddlewareRuntime[];
++  priority?: number;
++  source: string;
++  rootDir?: string;
++};
+ export type PluginAgentHarnessRegistration = {
+   pluginId: string;
+   pluginName?: string;
+@@ -441,6 +469,8 @@ export type PluginRegistry = {
+   migrationProviders: PluginMigrationProviderRegistration[];
+   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
+   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
++  agentStreamingLlmMiddlewares: PluginAgentStreamingLlmMiddlewareRegistration[];
++  agentToolCallMiddlewares: PluginAgentToolCallMiddlewareRegistration[];
+   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
+   agentHarnesses: PluginAgentHarnessRegistration[];
+   gatewayHandlers: GatewayRequestHandlers;
+diff --git a/src/plugins/registry.ts b/src/plugins/registry.ts
+index 51364ce2..1dac1eaa 100644
+--- a/src/plugins/registry.ts
++++ b/src/plugins/registry.ts
+@@ -42,6 +42,16 @@ import {
+ } from "../tasks/detached-task-runtime-state.js";
+ import { resolveUserPath } from "../utils.js";
+ import { emitPluginAgentEvent } from "./agent-event-emission.js";
++import type { AgentStreamingLlmMiddleware } from "./agent-streaming-llm-middleware-types.js";
++import {
++  normalizeAgentStreamingLlmMiddlewareRuntimeIds,
++  normalizeAgentStreamingLlmMiddlewareRuntimes,
++} from "./agent-streaming-llm-middleware.js";
++import type { AgentToolCallMiddleware } from "./agent-tool-call-middleware-types.js";
++import {
++  normalizeAgentToolCallMiddlewareRuntimeIds,
++  normalizeAgentToolCallMiddlewareRuntimes,
++} from "./agent-tool-call-middleware.js";
+ import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
+ import {
+   normalizeAgentToolResultMiddlewareRuntimeIds,
+@@ -201,6 +211,8 @@ export type {
+   PluginConversationBindingResolvedHandlerRegistration,
+   PluginHookRegistration,
+   PluginAgentHarnessRegistration,
++  PluginAgentStreamingLlmMiddlewareRegistration,
++  PluginAgentToolCallMiddlewareRegistration,
+   PluginMemoryEmbeddingProviderRegistration,
+   PluginNodeHostCommandRegistration,
+   PluginProviderRegistration,
+@@ -526,6 +538,156 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
+     });
+   };
+ 
++  const registerAgentStreamingLlmMiddleware = (
++    record: PluginRecord,
++    handler: Parameters<OpenClawPluginApi["registerAgentStreamingLlmMiddleware"]>[0],
++    options: Parameters<OpenClawPluginApi["registerAgentStreamingLlmMiddleware"]>[1],
++  ) => {
++    if (record.origin !== "bundled") {
++      pushDiagnostic({
++        level: "error",
++        pluginId: record.id,
++        source: record.source,
++        message: "only bundled plugins can register agent streaming LLM middleware",
++      });
++      return;
++    }
++    if (typeof (handler as unknown) !== "function") {
++      pushDiagnostic({
++        level: "error",
++        pluginId: record.id,
++        source: record.source,
++        message: "agent streaming LLM middleware must be a function",
++      });
++      return;
++    }
++    const runtimes = normalizeAgentStreamingLlmMiddlewareRuntimes(options);
++    if (runtimes.length === 0) {
++      pushDiagnostic({
++        level: "error",
++        pluginId: record.id,
++        source: record.source,
++        message: "agent streaming LLM middleware must target at least one supported runtime",
++      });
++      return;
++    }
++    const declared = normalizeAgentStreamingLlmMiddlewareRuntimeIds(
++      record.contracts?.agentStreamingLlmMiddleware,
++    );
++    const missing = runtimes.filter((runtime) => !declared.includes(runtime));
++    if (missing.length > 0) {
++      pushDiagnostic({
++        level: "error",
++        pluginId: record.id,
++        source: record.source,
++        message: `plugin must declare contracts.agentStreamingLlmMiddleware for: ${missing.join(", ")}`,
++      });
++      return;
++    }
++    const existing = registry.agentStreamingLlmMiddlewares.find(
++      (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
++    );
++    if (existing) {
++      existing.runtimes = [...new Set([...existing.runtimes, ...runtimes])];
++      existing.priority = options?.priority ?? existing.priority;
++      return;
++    }
++    const safeHandler: AgentStreamingLlmMiddleware = (ctx) => {
++      try {
++        return handler(ctx);
++      } catch (error) {
++        registryParams.logger.warn(
++          `[plugins] agent streaming LLM middleware failed for ${record.id}`,
++        );
++        throw error;
++      }
++    };
++    registry.agentStreamingLlmMiddlewares.push({
++      pluginId: record.id,
++      pluginName: record.name,
++      rawHandler: handler,
++      handler: safeHandler,
++      runtimes,
++      priority: options?.priority,
++      source: record.source,
++      rootDir: record.rootDir,
++    });
++  };
++
++  const registerAgentToolCallMiddleware = (
++    record: PluginRecord,
++    handler: Parameters<OpenClawPluginApi["registerAgentToolCallMiddleware"]>[0],
++    options: Parameters<OpenClawPluginApi["registerAgentToolCallMiddleware"]>[1],
++  ) => {
++    if (record.origin !== "bundled") {
++      pushDiagnostic({
++        level: "error",
++        pluginId: record.id,
++        source: record.source,
++        message: "only bundled plugins can register agent tool-call middleware",
++      });
++      return;
++    }
++    if (typeof (handler as unknown) !== "function") {
++      pushDiagnostic({
++        level: "error",
++        pluginId: record.id,
++        source: record.source,
++        message: "agent tool-call middleware must be a function",
++      });
++      return;
++    }
++    const runtimes = normalizeAgentToolCallMiddlewareRuntimes(options);
++    if (runtimes.length === 0) {
++      pushDiagnostic({
++        level: "error",
++        pluginId: record.id,
++        source: record.source,
++        message: "agent tool-call middleware must target at least one supported runtime",
++      });
++      return;
++    }
++    const declared = normalizeAgentToolCallMiddlewareRuntimeIds(
++      record.contracts?.agentToolCallMiddleware,
++    );
++    const missing = runtimes.filter((runtime) => !declared.includes(runtime));
++    if (missing.length > 0) {
++      pushDiagnostic({
++        level: "error",
++        pluginId: record.id,
++        source: record.source,
++        message: `plugin must declare contracts.agentToolCallMiddleware for: ${missing.join(", ")}`,
++      });
++      return;
++    }
++    const existing = registry.agentToolCallMiddlewares.find(
++      (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
++    );
++    if (existing) {
++      existing.runtimes = [...new Set([...existing.runtimes, ...runtimes])];
++      existing.priority = options?.priority ?? existing.priority;
++      return;
++    }
++    const safeHandler: AgentToolCallMiddleware = async (ctx) => {
++      try {
++        return await handler(ctx);
++      } catch (error) {
++        registryParams.logger.warn(`[plugins] agent tool-call middleware failed for ${record.id}`);
++        throw error;
++      }
++    };
++    registry.agentToolCallMiddlewares.push({
++      pluginId: record.id,
++      pluginName: record.name,
++      rawHandler: handler,
++      handler: safeHandler,
++      runtimes,
++      priority: options?.priority,
++      source: record.source,
++      rootDir: record.rootDir,
++    });
++  };
++
+   const registerTool = (
+     record: PluginRecord,
+     tool: AnyAgentTool | OpenClawPluginToolFactory,
+@@ -2644,6 +2806,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
+               registerAgentToolResultMiddleware: (handler, options) => {
+                 registerAgentToolResultMiddleware(record, handler, options);
+               },
++              registerAgentStreamingLlmMiddleware: (handler, options) => {
++                registerAgentStreamingLlmMiddleware(record, handler, options);
++              },
++              registerAgentToolCallMiddleware: (handler, options) => {
++                registerAgentToolCallMiddleware(record, handler, options);
++              },
+               registerSessionExtension: (extension) => registerSessionExtension(record, extension),
+               enqueueNextTurnInjection: (injection) => {
+                 if (params.hookPolicy?.allowPromptInjection === false) {
+@@ -2979,6 +3147,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
+     registerNodeHostCommand,
+     registerSecurityAuditCollector,
+     registerService,
++    registerAgentStreamingLlmMiddleware,
++    registerAgentToolCallMiddleware,
+     registerCommand,
+     registerSessionExtension,
+     registerTrustedToolPolicy,
+diff --git a/src/plugins/status.test-helpers.ts b/src/plugins/status.test-helpers.ts
+index 1d8cc62a..c9df3f96 100644
+--- a/src/plugins/status.test-helpers.ts
++++ b/src/plugins/status.test-helpers.ts
+@@ -144,6 +144,8 @@ export function createPluginLoadResult(
+     webSearchProviders: [],
+     migrationProviders: [],
+     codexAppServerExtensionFactories: [],
++    agentStreamingLlmMiddlewares: [],
++    agentToolCallMiddlewares: [],
+     agentToolResultMiddlewares: [],
+     memoryEmbeddingProviders: [],
+     textTransforms: [],
+diff --git a/src/plugins/types.ts b/src/plugins/types.ts
+index 8dbec0b9..52d4ee8b 100644
+--- a/src/plugins/types.ts
++++ b/src/plugins/types.ts
+@@ -80,6 +80,14 @@ import type {
+ } from "../tts/provider-types.js";
+ import type { VideoGenerationProvider } from "../video-generation/types.js";
+ import type { WizardPrompter } from "../wizard/prompts.js";
++import type {
++  AgentStreamingLlmMiddleware,
++  AgentStreamingLlmMiddlewareOptions,
++} from "./agent-streaming-llm-middleware-types.js";
++import type {
++  AgentToolCallMiddleware,
++  AgentToolCallMiddlewareOptions,
++} from "./agent-tool-call-middleware-types.js";
+ import type {
+   AgentToolResultMiddleware,
+   AgentToolResultMiddlewareOptions,
+@@ -177,6 +185,18 @@ export type {
+   AgentToolResultMiddlewareRuntime,
+   OpenClawAgentToolResult,
+ } from "./agent-tool-result-middleware-types.js";
++export type {
++  AgentStreamingLlmMiddleware,
++  AgentStreamingLlmMiddlewareContext,
++  AgentStreamingLlmMiddlewareOptions,
++  AgentStreamingLlmMiddlewareRuntime,
++} from "./agent-streaming-llm-middleware-types.js";
++export type {
++  AgentToolCallMiddleware,
++  AgentToolCallMiddlewareContext,
++  AgentToolCallMiddlewareOptions,
++  AgentToolCallMiddlewareRuntime,
++} from "./agent-tool-call-middleware-types.js";
+ export type {
+   PluginConversationBinding,
+   PluginConversationBindingRequestParams,
+@@ -2694,6 +2714,22 @@ export type OpenClawPluginApi = {
+     handler: AgentToolResultMiddleware,
+     options?: AgentToolResultMiddlewareOptions,
+   ) => void;
++  /**
++   * Register runtime-neutral streaming LLM middleware. Declare
++   * `contracts.agentStreamingLlmMiddleware` for every targeted runtime.
++   */
++  registerAgentStreamingLlmMiddleware: (
++    handler: AgentStreamingLlmMiddleware,
++    options?: AgentStreamingLlmMiddlewareOptions,
++  ) => void;
++  /**
++   * Register runtime-neutral tool-call middleware. Declare
++   * `contracts.agentToolCallMiddleware` for every targeted runtime.
++   */
++  registerAgentToolCallMiddleware: (
++    handler: AgentToolCallMiddleware,
++    options?: AgentToolCallMiddlewareOptions,
++  ) => void;
+   /**
+    * Register plugin-owned session state that can be projected into Gateway session rows.
+    * @deprecated Use `api.session.state.registerSessionExtension(...)`.
+diff --git a/src/test-utils/channel-plugins.ts b/src/test-utils/channel-plugins.ts
+index 00857196..8fdd2e19 100644
+--- a/src/test-utils/channel-plugins.ts
++++ b/src/test-utils/channel-plugins.ts
+@@ -38,6 +38,8 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
+   webSearchProviders: [],
+   migrationProviders: [],
+   codexAppServerExtensionFactories: [],
++  agentStreamingLlmMiddlewares: [],
++  agentToolCallMiddlewares: [],
+   agentToolResultMiddlewares: [],
+   memoryEmbeddingProviders: [],
+   textTransforms: [],

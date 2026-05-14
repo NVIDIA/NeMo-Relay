@@ -313,6 +313,75 @@ try {
 NODE
 }
 
+set_npm_package_dependency_version() {
+    local pkg_path="$1"
+    local lock_path="${2:-}"
+    local lock_package_path="$3"
+    local dependency_name="$4"
+    local version="$5"
+
+    node - "$pkg_path" "$lock_path" "$lock_package_path" "$dependency_name" "$version" <<'NODE'
+const fs = require('fs');
+const [pkgPath, lockPath, lockPackagePath, dependencyName, version] = process.argv.slice(2);
+
+function readJson(path) {
+  return JSON.parse(fs.readFileSync(path, 'utf8'));
+}
+
+function writeJson(path, value) {
+  fs.writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
+}
+
+function requireDependency(container, label) {
+  if (
+    !container.dependencies ||
+    !Object.prototype.hasOwnProperty.call(container.dependencies, dependencyName)
+  ) {
+    throw new Error(`${label} missing dependencies["${dependencyName}"]`);
+  }
+}
+
+try {
+  const manifest = readJson(pkgPath);
+  requireDependency(manifest, pkgPath);
+  const manifestChanged = manifest.dependencies[dependencyName] !== version;
+
+  let lock = null;
+  let lockChanged = false;
+  if (lockPath) {
+    lock = readJson(lockPath);
+    if (!lock.packages) {
+      throw new Error(`${lockPath} missing packages`);
+    }
+    const packageEntry = lock.packages[lockPackagePath];
+    if (!packageEntry) {
+      throw new Error(`${lockPath} missing packages["${lockPackagePath}"]`);
+    }
+    requireDependency(packageEntry, `${lockPath} packages["${lockPackagePath}"]`);
+    lockChanged = packageEntry.dependencies[dependencyName] !== version;
+  }
+
+  manifest.dependencies[dependencyName] = version;
+  if (lock) {
+    lock.packages[lockPackagePath].dependencies[dependencyName] = version;
+  }
+
+  if (manifestChanged) {
+    writeJson(pkgPath, manifest);
+  }
+
+  if (lockPath) {
+    if (lockChanged) {
+      writeJson(lockPath, lock);
+    }
+  }
+} catch (error) {
+  console.error(`Error updating package dependency: ${error.message}`);
+  process.exit(1);
+}
+NODE
+}
+
 read_workspace_version() {
     local python_executable=""
     python_executable="$(uv_python_executable)"
@@ -441,6 +510,7 @@ set_node_package_versions() {
     local version="$1"
     set_npm_package_version crates/node/package.json package-lock.json "$version" crates/node
     set_npm_package_version integrations/openclaw/package.json package-lock.json "$version" integrations/openclaw
+    set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-flow-node "$version"
 }
 
 set_node_package_version() {
@@ -918,6 +988,7 @@ test-openclaw:
     fi
     npm run typecheck --workspace=nemo-flow-openclaw
     npm test --workspace=nemo-flow-openclaw
+    npm run test:live --workspace=nemo-flow-openclaw
     npm run pack:check --workspace=nemo-flow-openclaw
 
 # --set [output_dir=<path>] [ci=true|false]
@@ -992,10 +1063,12 @@ package-node:
         package_version="${version}+${sha}"
         echo "Non-release build: appending commit hash to version"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
+        set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-flow-node "$package_version"
     else
         package_version="{{ ref_name }}"
         echo "Using explicit version {{ ref_name }}"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
+        set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-flow-node "$package_version"
     fi
     build_args=(build)
     if is_true "{{ ci }}" && [[ "$(uname -s)" == "Linux" ]]; then
@@ -1016,7 +1089,7 @@ package-node:
         exit 1
     fi
 
-# --set [output_dir=<path>] [ref_name=<name>]
+# --set [output_dir=<path>] [ref_name=<name>] [ci=true|false]
 package-openclaw:
     #!/usr/bin/env bash
     {{ bash_helpers }}
@@ -1028,13 +1101,24 @@ package-openclaw:
     if [[ -z "{{ ref_name }}" ]]; then
         sha="$(head_git_sha)"
         version="$(read_npm_package_version integrations/openclaw/package.json)"
+        package_version="${version}+${sha}"
         echo "Non-release build: appending commit hash to version"
-        set_npm_package_version integrations/openclaw/package.json package-lock.json "${version}-${sha}" integrations/openclaw
+        set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
+        set_npm_package_version integrations/openclaw/package.json package-lock.json "$package_version" integrations/openclaw
+        set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-flow-node "$package_version"
     else
+        package_version="{{ ref_name }}"
         echo "Using explicit version {{ ref_name }}"
-        set_npm_package_version integrations/openclaw/package.json package-lock.json "{{ ref_name }}" integrations/openclaw
+        set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
+        set_npm_package_version integrations/openclaw/package.json package-lock.json "$package_version" integrations/openclaw
+        set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-flow-node "$package_version"
     fi
-    npm install --workspace=nemo-flow-openclaw --ignore-scripts
+    npm install --workspace=nemo-flow-node --workspace=nemo-flow-openclaw --ignore-scripts
+    if is_true "{{ ci }}"; then
+        npm run build-debug --workspace=nemo-flow-node
+    else
+        npm run build --workspace=nemo-flow-node
+    fi
     npm pack --workspace=nemo-flow-openclaw --pack-destination "$package_dir"
     shopt -s nullglob
     packages=("$package_dir"/*.tgz)
