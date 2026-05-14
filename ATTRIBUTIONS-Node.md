@@ -10571,86 +10571,92 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
 ## @mariozechner/clipboard - 0.3.5
-**Repository URL**: https://github.com/badlogic/clipboard
+**Repository URL**: https://www.npmjs.com/package/@mariozechner/clipboard
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-# @mariozechner/clipboard
-
-> **Fork of [@crosscopy/clipboard](https://github.com/CrossCopy/clipboard)**
->
-> This fork updates to the latest `clipboard-rs` (0.3.1) and adds musl (Alpine Linux) support.
-> All credit goes to the original authors.
-
-![NPM Version](https://img.shields.io/npm/v/@mariozechner/clipboard)
-[![CI](https://github.com/badlogic/clipboard/actions/workflows/CI.yml/badge.svg)](https://github.com/badlogic/clipboard/actions/workflows/CI.yml)
-
-**NPM Package**: https://www.npmjs.com/package/@mariozechner/clipboard
-
-**GitHub**: https://github.com/badlogic/clipboard
-
-> This is a clipboard API npm package that allows you to copy and paste data to and from the clipboard.
-> There doesn't seem to be a good clipboard package for node.js (that supports data format beyond text), so I decided to make one.
-> Data Format Supported
->
-> - Text
-> - Image
-> - Rich Text Format
-> - Files
-> - HTML
-
-## Acknowledgements
-
-- [ChurchTao/clipboard-rs](https://github.com/ChurchTao/clipboard-rs) is written in rust, which is used to provide the native clipboard support for this package across Linux, Windows and MacOS. This package is basically a wrapper around this rust package.
-  - https://crates.io/crates/clipboard-rs
-- [napi.rs](https://napi.rs/) was used to create the node.js addon for this package, so that API calls written in rust can be called from node.js.
-
-## API
-
-Detailed API function declarations can be found in the [index.d.ts](./index.d.ts).
-
-Or you can refer to the source code in [src/lib.rs](./src/lib.rs).
-
-## Sample
-
-```javascript
-import Clipboard from "@mariozechner/clipboard";
-
-console.log(await Clipboard.getText());
-
-console.log(await Clipboard.getHtml());
-
-if (await Clipboard.hasImage()) {
-  console.log(await Clipboard.getImageBase64());
-} else {
-  console.log("No Image");
-}
+(No license file read from node_modules for @mariozechner/clipboard; see npm metadata.)
 ```
-
-## Publish
-
-Everything is done with GitHub Action.
-
-Run `npm version patch` to bump the version.
-Then `git push --follow-tags` to push the changes and tags to GitHub. GitHub Action will automatically build and publish.```
 
 ## @mariozechner/clipboard-darwin-arm64 - 0.3.2
-**Repository URL**: https://github.com/badlogic/clipboard
+**Repository URL**: https://www.npmjs.com/package/@mariozechner/clipboard-darwin-arm64
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-# `@mariozechner/clipboard-darwin-arm64`
-
-This is the **aarch64-apple-darwin** binary for `@mariozechner/clipboard````
+(No license file read from node_modules for @mariozechner/clipboard-darwin-arm64; see npm metadata.)
+```
 
 ## @mariozechner/clipboard-darwin-universal - 0.3.2
-**Repository URL**: https://github.com/badlogic/clipboard
+**Repository URL**: https://www.npmjs.com/package/@mariozechner/clipboard-darwin-universal
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-# `@mariozechner/clipboard-darwin-universal`
+(No license file read from node_modules for @mariozechner/clipboard-darwin-universal; see npm metadata.)
+```
 
-This is the **universal-apple-darwin** binary for `@mariozechner/clipboard````
+## @mariozechner/clipboard-darwin-x64 - 0.3.2
+**Repository URL**: https://www.npmjs.com/package/@mariozechner/clipboard-darwin-x64
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from node_modules for @mariozechner/clipboard-darwin-x64; see npm metadata.)
+```
+
+## @mariozechner/clipboard-linux-arm64-gnu - 0.3.2
+**Repository URL**: https://www.npmjs.com/package/@mariozechner/clipboard-linux-arm64-gnu
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from node_modules for @mariozechner/clipboard-linux-arm64-gnu; see npm metadata.)
+```
+
+## @mariozechner/clipboard-linux-arm64-musl - 0.3.2
+**Repository URL**: https://www.npmjs.com/package/@mariozechner/clipboard-linux-arm64-musl
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from node_modules for @mariozechner/clipboard-linux-arm64-musl; see npm metadata.)
+```
+
+## @mariozechner/clipboard-linux-riscv64-gnu - 0.3.2
+**Repository URL**: https://www.npmjs.com/package/@mariozechner/clipboard-linux-riscv64-gnu
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from node_modules for @mariozechner/clipboard-linux-riscv64-gnu; see npm metadata.)
+```
+
+## @mariozechner/clipboard-linux-x64-gnu - 0.3.2
+**Repository URL**: https://www.npmjs.com/package/@mariozechner/clipboard-linux-x64-gnu
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from node_modules for @mariozechner/clipboard-linux-x64-gnu; see npm metadata.)
+```
+
+## @mariozechner/clipboard-linux-x64-musl - 0.3.2
+**Repository URL**: https://www.npmjs.com/package/@mariozechner/clipboard-linux-x64-musl
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from node_modules for @mariozechner/clipboard-linux-x64-musl; see npm metadata.)
+```
+
+## @mariozechner/clipboard-win32-arm64-msvc - 0.3.2
+**Repository URL**: https://www.npmjs.com/package/@mariozechner/clipboard-win32-arm64-msvc
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from node_modules for @mariozechner/clipboard-win32-arm64-msvc; see npm metadata.)
+```
+
+## @mariozechner/clipboard-win32-x64-msvc - 0.3.2
+**Repository URL**: https://www.npmjs.com/package/@mariozechner/clipboard-win32-x64-msvc
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from node_modules for @mariozechner/clipboard-win32-x64-msvc; see npm metadata.)
+```
 
 ## @mistralai/mistralai - 2.2.1
 **Repository URL**: https://github.com/mistralai/client-ts
@@ -13770,31 +13776,12 @@ MIT License
     SOFTWARE```
 
 ## @types/yauzl - 2.10.3
-**Repository URL**: https://github.com/DefinitelyTyped/DefinitelyTyped
+**Repository URL**: https://www.npmjs.com/package/@types/yauzl
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-MIT License
-
-    Copyright (c) Microsoft Corporation.
-
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to deal
-    in the Software without restriction, including without limitation the rights
-    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-    copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
-
-    The above copyright notice and this permission notice shall be included in all
-    copies or substantial portions of the Software.
-
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-    SOFTWARE```
+(No license file read from node_modules for @types/yauzl; see npm metadata.)
+```
 
 ## abort-controller - 3.0.0
 **Repository URL**: https://github.com/mysticatea/abort-controller
@@ -20278,32 +20265,12 @@ FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TOR
 ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
 
 ## koffi - 2.16.2
-**Repository URL**: https://github.com/Koromix/koffi
+**Repository URL**: https://www.npmjs.com/package/koffi
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-MIT License
-
-Copyright (C) 2025  Niels Martignène <niels.martignene@protonmail.com>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the “Software”), to deal in
-the Software without restriction, including without limitation the rights to use,
-copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
-Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
-OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
-HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
-WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-OTHER DEALINGS IN THE SOFTWARE.```
+(No license file read from node_modules for koffi; see npm metadata.)
+```
 
 ## kysely - 0.29.0
 **Repository URL**: https://github.com/kysely-org/kysely
@@ -24947,18 +24914,52 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
 ## sqlite-vec - 0.1.9
-**Repository URL**: https://github.com/asg017/sqlite-vec
-**License Type(s)**: MIT*
-### License: https://opensource.org/licenses/
+**Repository URL**: https://www.npmjs.com/package/sqlite-vec
+**License Type(s)**: MIT OR Apache
+### License: https://spdx.org/licenses/
 ```
-TODO```
+(No license file read from node_modules for sqlite-vec; see npm metadata.)
+```
 
 ## sqlite-vec-darwin-arm64 - 0.1.9
-**Repository URL**: https://github.com/asg017/sqlite-vec
-**License Type(s)**: MIT*
-### License: https://opensource.org/licenses/
+**Repository URL**: https://www.npmjs.com/package/sqlite-vec-darwin-arm64
+**License Type(s)**: MIT OR Apache
+### License: https://spdx.org/licenses/
 ```
-TODO```
+(No license file read from node_modules for sqlite-vec-darwin-arm64; see npm metadata.)
+```
+
+## sqlite-vec-darwin-x64 - 0.1.9
+**Repository URL**: https://www.npmjs.com/package/sqlite-vec-darwin-x64
+**License Type(s)**: MIT OR Apache
+### License: https://spdx.org/licenses/
+```
+(No license file read from node_modules for sqlite-vec-darwin-x64; see npm metadata.)
+```
+
+## sqlite-vec-linux-arm64 - 0.1.9
+**Repository URL**: https://www.npmjs.com/package/sqlite-vec-linux-arm64
+**License Type(s)**: MIT OR Apache
+### License: https://spdx.org/licenses/
+```
+(No license file read from node_modules for sqlite-vec-linux-arm64; see npm metadata.)
+```
+
+## sqlite-vec-linux-x64 - 0.1.9
+**Repository URL**: https://www.npmjs.com/package/sqlite-vec-linux-x64
+**License Type(s)**: MIT OR Apache
+### License: https://spdx.org/licenses/
+```
+(No license file read from node_modules for sqlite-vec-linux-x64; see npm metadata.)
+```
+
+## sqlite-vec-windows-x64 - 0.1.9
+**Repository URL**: https://www.npmjs.com/package/sqlite-vec-windows-x64
+**License Type(s)**: MIT OR Apache
+### License: https://spdx.org/licenses/
+```
+(No license file read from node_modules for sqlite-vec-windows-x64; see npm metadata.)
+```
 
 ## statuses - 2.0.2
 **Repository URL**: https://github.com/jshttp/statuses
@@ -25156,65 +25157,12 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
 
 ## tar - 7.5.13
-**Repository URL**: https://github.com/isaacs/node-tar
+**Repository URL**: https://www.npmjs.com/package/tar
 **License Type(s)**: BlueOak-1.0.0
 ### License: https://spdx.org/licenses/BlueOak-1.0.0.html
 ```
-# Blue Oak Model License
-
-Version 1.0.0
-
-## Purpose
-
-This license gives everyone as much permission to work with
-this software as possible, while protecting contributors
-from liability.
-
-## Acceptance
-
-In order to receive this license, you must agree to its
-rules.  The rules of this license are both obligations
-under that agreement and conditions to your license.
-You must not do anything with this software that triggers
-a rule that you cannot or will not follow.
-
-## Copyright
-
-Each contributor licenses you to do everything with this
-software that would otherwise infringe that contributor's
-copyright in it.
-
-## Notices
-
-You must ensure that everyone who gets a copy of
-any part of this software from you, with or without
-changes, also gets the text of this license or a link to
-<https://blueoakcouncil.org/license/1.0.0>.
-
-## Excuse
-
-If anyone notifies you in writing that you have not
-complied with [Notices](#notices), you can keep your
-license by taking all practical steps to comply within 30
-days after the notice.  If you do not do so, your license
-ends immediately.
-
-## Patent
-
-Each contributor licenses you to do everything with this
-software that would otherwise infringe any patent claims
-they can license or become able to license.
-
-## Reliability
-
-No contributor can revoke this license.
-
-## No Liability
-
-***As far as the law allows, this software comes as is,
-without any warranty or condition, and no contributor
-will be liable to anyone for any damages related to this
-software or this license, under any kind of legal claim.***```
+(No license file read from node_modules for tar; see npm metadata.)
+```
 
 ## tar - 7.5.15
 **Repository URL**: https://github.com/isaacs/node-tar

@@ -47,6 +47,16 @@ class LicenseInventoryEntry(TypedDict):
     license: str
 
 
+class NodeAttributionPackage(TypedDict):
+    """Normalized Node.js package data ready to be rendered into markdown."""
+
+    name: str
+    version: str
+    license_name: str
+    key: str
+    platform_gated: bool
+
+
 RUST_HEADER = (
     ATTRIBUTIONS_MD_LICENSE_PREFIX
     + "\n# Third-Party Software Attributions\n\n"
@@ -796,6 +806,47 @@ def _node_license_checker_data() -> tuple[dict[str, dict[str, str]], set[str]]:
     return data, workspace_package_keys
 
 
+def _node_attribution_packages(lock: dict[str, Any], workspace_package_keys: set[str]) -> list[NodeAttributionPackage]:
+    """Return all third-party Node.js packages from package-lock.json.
+
+    `license-checker` only sees packages installed for the current platform. The
+    lockfile is the source of truth for attribution so platform-gated optional
+    packages stay present on every machine that regenerates this file.
+    """
+    packages = lock.get("packages") or {}
+    if not isinstance(packages, dict):
+        return []
+
+    rows: dict[str, NodeAttributionPackage] = {}
+    for path, meta in packages.items():
+        normalized_path = str(path).replace("\\", "/")
+        if "node_modules" not in normalized_path.split("/"):
+            continue
+        if not isinstance(meta, dict):
+            continue
+        if meta.get("extraneous"):
+            continue
+        version = str(meta.get("version") or "").strip()
+        if not version:
+            continue
+        name = str(meta.get("name") or _node_package_name_from_lock_path(normalized_path)).strip()
+        if not name:
+            continue
+        key = f"{name}@{version}"
+        if key in workspace_package_keys:
+            continue
+        license_name = str(meta.get("license") or "UNKNOWN")
+        rows[key] = {
+            "name": name,
+            "version": version,
+            "license_name": license_name,
+            "key": key,
+            "platform_gated": bool(meta.get("optional") or meta.get("os") or meta.get("cpu")),
+        }
+
+    return sorted(rows.values(), key=lambda row: (row["name"].lower(), row["version"], row["license_name"]))
+
+
 def _node_package_name_from_lock_path(path: str) -> str:
     """Infer an npm package name from a package-lock packages path."""
     parts = path.replace("\\", "/").split("node_modules/")
@@ -837,17 +888,20 @@ def _node_license_inventory() -> list[LicenseInventoryEntry]:
 
 
 def cmd_node() -> int:
-    """Generate ATTRIBUTIONS-Node.md from package-lock.json via license-checker."""
+    """Generate ATTRIBUTIONS-Node.md from package-lock.json."""
     out = ROOT / "ATTRIBUTIONS-Node.md"
+    lockfile = _node_lockfile_path()
+    lock = cast(dict[str, Any], json.loads(lockfile.read_text(encoding="utf-8")))
     data, workspace_package_keys = _node_license_checker_data()
-    package_rows = [(*_split_node_package_key(key), key) for key in data.keys() if key not in workspace_package_keys]
-    package_rows.sort(key=lambda row: (row[0].lower(), row[1]))
+    package_rows = _node_attribution_packages(lock, workspace_package_keys)
 
     parts: list[str] = [NODE_HEADER]
-    for name, ver, key in package_rows:
-        meta = data[key]
+    for pkg in package_rows:
+        name = pkg["name"]
+        ver = pkg["version"]
+        meta = {} if pkg["platform_gated"] else data.get(pkg["key"], {})
 
-        lic = meta.get("licenses") or "UNKNOWN"
+        lic = meta.get("licenses") or pkg["license_name"] or "UNKNOWN"
         repo = (meta.get("repository") or "").strip()
         if not repo:
             repo = f"https://www.npmjs.com/package/{name}"
