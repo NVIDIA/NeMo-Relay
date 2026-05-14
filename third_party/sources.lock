@@ -22,7 +22,7 @@
 [submodule "third_party/openclaw"]
 	path = third_party/openclaw
 	url = https://github.com/openclaw/openclaw
-	commit = 769908ec3f713ecde067eb8c8aa54d8f57217aff
+	commit = 83d7ab0d362fdb50922c4875a0cad8e02ec9a344
 
 [submodule "third_party/langgraph"]
 	path = third_party/langgraph
