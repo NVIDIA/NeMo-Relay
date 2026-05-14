@@ -114,7 +114,7 @@ jobs:
   Package:
     name: Package (${{ matrix.platform }})
     needs: [Test]
-    if: ${{ !cancelled() && needs.Test.result == 'success' && (inputs.run_package || (inputs.run_openclaw && matrix.platform == 'linux-amd64')) }}
+    if: ${{ inputs.run_package && !cancelled() && needs.Test.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
@@ -215,8 +215,31 @@ jobs:
           path: ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/npm/*.tgz
           if-no-files-found: error
 
+  PackageOpenClaw:
+    name: Package OpenClaw plugin
+    needs: [Test]
+    if: ${{ inputs.run_openclaw && !cancelled() && needs.Test.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: ${{ steps.ci-config.outputs.node_version }}
+
+      - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+        with:
+          tool: just@${{ steps.ci-config.outputs.just_version }}
+
       - name: Derive OpenClaw package version
-        if: ${{ inputs.run_openclaw && matrix.platform == 'linux-amd64' }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: |
           set -e
@@ -230,7 +253,6 @@ jobs:
           printf 'NEMO_FLOW_OPENCLAW_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
       - name: Package OpenClaw plugin
-        if: ${{ inputs.run_openclaw && matrix.platform == 'linux-amd64' }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: |
           set -euo pipefail
@@ -241,7 +263,6 @@ jobs:
 
       - name: Upload OpenClaw plugin artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        if: ${{ inputs.run_openclaw && matrix.platform == 'linux-amd64' }}
         with:
           name: openclaw-npm
           path: ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/openclaw/*.tgz
