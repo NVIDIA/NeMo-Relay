@@ -233,15 +233,24 @@ def test_e2e_agent(
     assert found_write_file_message
     assert found_subagent_message
 
-    marks = _filter_mark_events(subscribed_events)
-    configured_subagents = [
-        subagent
-        for mark in marks
-        if mark.name == "DeepAgents Skills Configured"
-        for subagent in _mark_data(mark).get("subagents", [])
-        if isinstance(subagent, dict)
+    expected_events = [
+        "scope.start.deepagents-request",
+        "mark..DeepAgents Skills Configured",
+        "scope.start.mock-model",
+        "scope.end.mock-model",
+        "scope.start.write_file",
+        "scope.end.write_file",
+        "scope.start.mock-model",
+        "scope.end.mock-model",
+        "scope.start.task",
+        "mark..DeepAgents Skills Configured",
+        "scope.start.mock-model",
+        "scope.end.mock-model",
+        "scope.end.task",
+        "scope.start.mock-model",
+        "scope.end.mock-model",
+        "scope.end.deepagents-request",
     ]
-    assert any(
-        subagent.get("name") == "reviewer" and subagent.get("description") == reviewer_description
-        for subagent in configured_subagents
-    )
+    event_strings = [f"{event.kind}.{getattr(event, 'scope_category', '')}.{event.name}" for event in subscribed_events]
+
+    assert event_strings == expected_events
