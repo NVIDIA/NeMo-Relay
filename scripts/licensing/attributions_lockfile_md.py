@@ -5,7 +5,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
+import hmac
 import io
 import json
 import re
@@ -28,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[2]
 NODE = ROOT
 MARKDOWN_CODE_FENCE = "```\n"
 MARKDOWN_CODE_BLOCK_END = "```\n\n"
+_NODE_TARBALL_LICENSE_CACHE: dict[tuple[str, str], str | None] = {}
 
 
 class RenderedPythonPackage(TypedDict):
@@ -54,6 +58,8 @@ class NodeAttributionPackage(TypedDict):
     version: str
     license_name: str
     key: str
+    resolved: str
+    integrity: str
     platform_gated: bool
 
 
@@ -841,10 +847,75 @@ def _node_attribution_packages(lock: dict[str, Any], workspace_package_keys: set
             "version": version,
             "license_name": license_name,
             "key": key,
+            "resolved": str(meta.get("resolved") or ""),
+            "integrity": str(meta.get("integrity") or ""),
             "platform_gated": bool(meta.get("optional") or meta.get("os") or meta.get("cpu")),
         }
 
     return sorted(rows.values(), key=lambda row: (row["name"].lower(), row["version"], row["license_name"]))
+
+
+def _node_integrity_matches(data: bytes, integrity: str) -> bool:
+    """Validate downloaded npm artifact bytes against package-lock integrity."""
+    if not integrity:
+        return True
+    algorithms = {
+        "sha1": hashlib.sha1,
+        "sha256": hashlib.sha256,
+        "sha384": hashlib.sha384,
+        "sha512": hashlib.sha512,
+    }
+    saw_supported = False
+    for token in integrity.split():
+        algorithm, sep, encoded = token.partition("-")
+        if not sep or algorithm not in algorithms:
+            continue
+        saw_supported = True
+        try:
+            expected = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error):
+            return False
+        if hmac.compare_digest(algorithms[algorithm](data).digest(), expected):
+            return True
+    return not saw_supported
+
+
+def _node_license_text_from_tarball(resolved: str, integrity: str) -> str:
+    """Return license text from a locked npm tarball URL, if available."""
+    if not resolved.startswith(("http://", "https://")):
+        return ""
+    cache_key = (resolved, integrity)
+    cached = _NODE_TARBALL_LICENSE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    if cache_key in _NODE_TARBALL_LICENSE_CACHE:
+        return ""
+
+    try:
+        with urllib.request.urlopen(resolved, timeout=60) as response:  # noqa: S310
+            raw = response.read()
+    except OSError:
+        _NODE_TARBALL_LICENSE_CACHE[cache_key] = None
+        return ""
+    if not _node_integrity_matches(raw, integrity):
+        _NODE_TARBALL_LICENSE_CACHE[cache_key] = None
+        return ""
+
+    try:
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as tf:
+            heuristic_candidates: list[tuple[str, str, str]] = []
+            for member_name in _common_license_candidates(tf.getnames()):
+                text = _extract_tar_text(tf, member_name)
+                if text and _is_useful_license_text(text):
+                    display_path = member_name.split("/", 1)[1] if "/" in member_name else member_name
+                    heuristic_candidates.append((display_path, display_path, text))
+            selected = _choose_heuristic_license(heuristic_candidates)
+    except (OSError, tarfile.TarError):
+        selected = None
+
+    text = selected[1] if selected else ""
+    _NODE_TARBALL_LICENSE_CACHE[cache_key] = text or None
+    return text
 
 
 def _node_package_name_from_lock_path(path: str) -> str:
@@ -906,21 +977,24 @@ def cmd_node() -> int:
         if not repo:
             repo = f"https://www.npmjs.com/package/{name}"
         lic_url = spdx_url(str(lic), fallback="https://opensource.org/licenses/")
-        text = ""
-        lf = meta.get("licenseFile")
+        text = _node_license_text_from_tarball(pkg["resolved"], pkg["integrity"]) if pkg["platform_gated"] else ""
+        lf = meta.get("licenseFile") if not text else None
         if lf:
             try:
                 raw = Path(lf).read_text(encoding="utf-8", errors="replace").strip()
                 text = "\n".join(line.rstrip() for line in raw.splitlines())
             except OSError:
                 text = ""
+        if not text:
+            text = _node_license_text_from_tarball(pkg["resolved"], pkg["integrity"])
 
         parts.append(f"## {name} - {ver}\n")
         parts.append(f"**Repository URL**: {repo}\n")
         parts.append(f"**License Type(s)**: {lic}\n")
         parts.append(f"### License: {lic_url}\n")
         parts.append(MARKDOWN_CODE_FENCE)
-        parts.append(text if text else f"(No license file read from node_modules for {name}; see npm metadata.)\n")
+        fallback = f"(No license file read from locked npm artifact for {name}; see npm metadata.)\n"
+        parts.append(text if text else fallback)
         parts.append(MARKDOWN_CODE_BLOCK_END)
 
     out.write_text("".join(parts).rstrip("\n") + "\n", encoding="utf-8")

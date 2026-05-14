@@ -10575,7 +10575,7 @@ SOFTWARE.```
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-(No license file read from node_modules for @mariozechner/clipboard; see npm metadata.)
+(No license file read from locked npm artifact for @mariozechner/clipboard; see npm metadata.)
 ```
 
 ## @mariozechner/clipboard-darwin-arm64 - 0.3.2
@@ -10583,7 +10583,7 @@ SOFTWARE.```
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-(No license file read from node_modules for @mariozechner/clipboard-darwin-arm64; see npm metadata.)
+(No license file read from locked npm artifact for @mariozechner/clipboard-darwin-arm64; see npm metadata.)
 ```
 
 ## @mariozechner/clipboard-darwin-universal - 0.3.2
@@ -10591,7 +10591,7 @@ SOFTWARE.```
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-(No license file read from node_modules for @mariozechner/clipboard-darwin-universal; see npm metadata.)
+(No license file read from locked npm artifact for @mariozechner/clipboard-darwin-universal; see npm metadata.)
 ```
 
 ## @mariozechner/clipboard-darwin-x64 - 0.3.2
@@ -10599,7 +10599,7 @@ SOFTWARE.```
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-(No license file read from node_modules for @mariozechner/clipboard-darwin-x64; see npm metadata.)
+(No license file read from locked npm artifact for @mariozechner/clipboard-darwin-x64; see npm metadata.)
 ```
 
 ## @mariozechner/clipboard-linux-arm64-gnu - 0.3.2
@@ -10607,7 +10607,7 @@ SOFTWARE.```
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-(No license file read from node_modules for @mariozechner/clipboard-linux-arm64-gnu; see npm metadata.)
+(No license file read from locked npm artifact for @mariozechner/clipboard-linux-arm64-gnu; see npm metadata.)
 ```
 
 ## @mariozechner/clipboard-linux-arm64-musl - 0.3.2
@@ -10615,7 +10615,7 @@ SOFTWARE.```
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-(No license file read from node_modules for @mariozechner/clipboard-linux-arm64-musl; see npm metadata.)
+(No license file read from locked npm artifact for @mariozechner/clipboard-linux-arm64-musl; see npm metadata.)
 ```
 
 ## @mariozechner/clipboard-linux-riscv64-gnu - 0.3.2
@@ -10623,7 +10623,7 @@ SOFTWARE.```
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-(No license file read from node_modules for @mariozechner/clipboard-linux-riscv64-gnu; see npm metadata.)
+(No license file read from locked npm artifact for @mariozechner/clipboard-linux-riscv64-gnu; see npm metadata.)
 ```
 
 ## @mariozechner/clipboard-linux-x64-gnu - 0.3.2
@@ -10631,7 +10631,7 @@ SOFTWARE.```
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-(No license file read from node_modules for @mariozechner/clipboard-linux-x64-gnu; see npm metadata.)
+(No license file read from locked npm artifact for @mariozechner/clipboard-linux-x64-gnu; see npm metadata.)
 ```
 
 ## @mariozechner/clipboard-linux-x64-musl - 0.3.2
@@ -10639,7 +10639,7 @@ SOFTWARE.```
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-(No license file read from node_modules for @mariozechner/clipboard-linux-x64-musl; see npm metadata.)
+(No license file read from locked npm artifact for @mariozechner/clipboard-linux-x64-musl; see npm metadata.)
 ```
 
 ## @mariozechner/clipboard-win32-arm64-msvc - 0.3.2
@@ -10647,7 +10647,7 @@ SOFTWARE.```
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-(No license file read from node_modules for @mariozechner/clipboard-win32-arm64-msvc; see npm metadata.)
+(No license file read from locked npm artifact for @mariozechner/clipboard-win32-arm64-msvc; see npm metadata.)
 ```
 
 ## @mariozechner/clipboard-win32-x64-msvc - 0.3.2
@@ -10655,7 +10655,7 @@ SOFTWARE.```
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-(No license file read from node_modules for @mariozechner/clipboard-win32-x64-msvc; see npm metadata.)
+(No license file read from locked npm artifact for @mariozechner/clipboard-win32-x64-msvc; see npm metadata.)
 ```
 
 ## @mistralai/mistralai - 2.2.1
@@ -13780,8 +13780,27 @@ MIT License
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-(No license file read from node_modules for @types/yauzl; see npm metadata.)
-```
+MIT License
+
+    Copyright (c) Microsoft Corporation.
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE```
 
 ## abort-controller - 3.0.0
 **Repository URL**: https://github.com/mysticatea/abort-controller
@@ -20269,8 +20288,28 @@ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEAL
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-(No license file read from node_modules for koffi; see npm metadata.)
-```
+MIT License
+
+Copyright (C) 2025  Niels Martignène <niels.martignene@protonmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the “Software”), to deal in
+the Software without restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
 
 ## kysely - 0.29.0
 **Repository URL**: https://github.com/kysely-org/kysely
@@ -24918,7 +24957,7 @@ SOFTWARE.```
 **License Type(s)**: MIT OR Apache
 ### License: https://spdx.org/licenses/
 ```
-(No license file read from node_modules for sqlite-vec; see npm metadata.)
+(No license file read from locked npm artifact for sqlite-vec; see npm metadata.)
 ```
 
 ## sqlite-vec-darwin-arm64 - 0.1.9
@@ -24926,7 +24965,7 @@ SOFTWARE.```
 **License Type(s)**: MIT OR Apache
 ### License: https://spdx.org/licenses/
 ```
-(No license file read from node_modules for sqlite-vec-darwin-arm64; see npm metadata.)
+(No license file read from locked npm artifact for sqlite-vec-darwin-arm64; see npm metadata.)
 ```
 
 ## sqlite-vec-darwin-x64 - 0.1.9
@@ -24934,7 +24973,7 @@ SOFTWARE.```
 **License Type(s)**: MIT OR Apache
 ### License: https://spdx.org/licenses/
 ```
-(No license file read from node_modules for sqlite-vec-darwin-x64; see npm metadata.)
+(No license file read from locked npm artifact for sqlite-vec-darwin-x64; see npm metadata.)
 ```
 
 ## sqlite-vec-linux-arm64 - 0.1.9
@@ -24942,7 +24981,7 @@ SOFTWARE.```
 **License Type(s)**: MIT OR Apache
 ### License: https://spdx.org/licenses/
 ```
-(No license file read from node_modules for sqlite-vec-linux-arm64; see npm metadata.)
+(No license file read from locked npm artifact for sqlite-vec-linux-arm64; see npm metadata.)
 ```
 
 ## sqlite-vec-linux-x64 - 0.1.9
@@ -24950,7 +24989,7 @@ SOFTWARE.```
 **License Type(s)**: MIT OR Apache
 ### License: https://spdx.org/licenses/
 ```
-(No license file read from node_modules for sqlite-vec-linux-x64; see npm metadata.)
+(No license file read from locked npm artifact for sqlite-vec-linux-x64; see npm metadata.)
 ```
 
 ## sqlite-vec-windows-x64 - 0.1.9
@@ -24958,7 +24997,7 @@ SOFTWARE.```
 **License Type(s)**: MIT OR Apache
 ### License: https://spdx.org/licenses/
 ```
-(No license file read from node_modules for sqlite-vec-windows-x64; see npm metadata.)
+(No license file read from locked npm artifact for sqlite-vec-windows-x64; see npm metadata.)
 ```
 
 ## statuses - 2.0.2
@@ -25161,8 +25200,61 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 **License Type(s)**: BlueOak-1.0.0
 ### License: https://spdx.org/licenses/BlueOak-1.0.0.html
 ```
-(No license file read from node_modules for tar; see npm metadata.)
-```
+# Blue Oak Model License
+
+Version 1.0.0
+
+## Purpose
+
+This license gives everyone as much permission to work with
+this software as possible, while protecting contributors
+from liability.
+
+## Acceptance
+
+In order to receive this license, you must agree to its
+rules.  The rules of this license are both obligations
+under that agreement and conditions to your license.
+You must not do anything with this software that triggers
+a rule that you cannot or will not follow.
+
+## Copyright
+
+Each contributor licenses you to do everything with this
+software that would otherwise infringe that contributor's
+copyright in it.
+
+## Notices
+
+You must ensure that everyone who gets a copy of
+any part of this software from you, with or without
+changes, also gets the text of this license or a link to
+<https://blueoakcouncil.org/license/1.0.0>.
+
+## Excuse
+
+If anyone notifies you in writing that you have not
+complied with [Notices](#notices), you can keep your
+license by taking all practical steps to comply within 30
+days after the notice.  If you do not do so, your license
+ends immediately.
+
+## Patent
+
+Each contributor licenses you to do everything with this
+software that would otherwise infringe any patent claims
+they can license or become able to license.
+
+## Reliability
+
+No contributor can revoke this license.
+
+## No Liability
+
+***As far as the law allows, this software comes as is,
+without any warranty or condition, and no contributor
+will be liable to anyone for any damages related to this
+software or this license, under any kind of legal claim.***```
 
 ## tar - 7.5.15
 **Repository URL**: https://github.com/isaacs/node-tar
@@ -25373,7 +25465,7 @@ SOFTWARE.```
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
 ```
-(No license file read from node_modules for tr46; see npm metadata.)
+(No license file read from locked npm artifact for tr46; see npm metadata.)
 ```
 
 ## tree-sitter-bash - 0.25.1
