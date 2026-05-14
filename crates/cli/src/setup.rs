@@ -31,7 +31,10 @@ use self::model::{
 };
 
 #[cfg(test)]
-use self::model::{Defaults, detect_installed_agents_in, read_agents_from_doc, write_or_merge};
+use self::model::{Defaults, read_agents_from_doc, write_or_merge};
+
+#[cfg(all(test, unix))]
+use self::model::detect_installed_agents_in;
 
 ///
 /// When `agent_hint` is `Some`, the agent multi-select is skipped — the user already declared
