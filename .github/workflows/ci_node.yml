@@ -19,6 +19,11 @@ on:
         required: false
         default: true
         type: boolean
+      run_openclaw:
+        description: 'Whether to run OpenClaw integration checks'
+        required: false
+        default: false
+        type: boolean
     secrets:
       CODECOV_TOKEN:
         required: false
@@ -89,6 +94,11 @@ jobs:
       - name: Run Node tests with coverage
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-node
+
+      - name: Run OpenClaw integration checks
+        if: ${{ inputs.run_openclaw }}
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: just --set ci true test-openclaw
 
       - name: Upload Node coverage to Codecov
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
@@ -167,11 +177,13 @@ jobs:
           tool: just@${{ steps.ci-config.outputs.just_version }}
 
       - name: Create packaging output directory
+        if: ${{ inputs.run_package }}
         run: |
           set -e
           mkdir -p "${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/npm"
 
       - name: Derive Node package version
+        if: ${{ inputs.run_package }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: |
           set -e
@@ -185,6 +197,7 @@ jobs:
           printf 'NEMO_FLOW_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
       - name: Package Node
+        if: ${{ inputs.run_package }}
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
         run: |
           set -e
@@ -196,15 +209,83 @@ jobs:
 
       - name: Upload npm package artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: ${{ inputs.run_package }}
         with:
           name: npm-${{ matrix.platform }}
           path: ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/npm/*.tgz
           if-no-files-found: error
 
+  PackageOpenClaw:
+    name: Package OpenClaw plugin
+    needs: [Test]
+    if: ${{ inputs.run_openclaw && !cancelled() && needs.Test.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        with:
+          cache: false
+          toolchain: ${{ steps.ci-config.outputs.rust_version }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: nemo-flow-rust-openclaw-package-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          workspaces: . -> target
+          cache-all-crates: true
+          cache-bin: false
+          save-if: false
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: ${{ steps.ci-config.outputs.node_version }}
+
+      - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+        with:
+          tool: just@${{ steps.ci-config.outputs.just_version }}
+
+      - name: Derive OpenClaw package version
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: |
+          set -e
+          version="$(node -e 'const fs = require("fs"); const pkg = JSON.parse(fs.readFileSync("integrations/openclaw/package.json", "utf8")); if (!pkg.version) { throw new Error("integrations/openclaw/package.json missing version field"); } console.log(pkg.version);')"
+          sha="${GITHUB_SHA::8}"
+          if [ "${{ inputs.ref_type }}" = "tag" ]; then
+            version="${{ inputs.ref_name }}"
+          else
+            version="${version}+${sha}"
+          fi
+          printf 'NEMO_FLOW_OPENCLAW_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+
+      - name: Package OpenClaw plugin
+        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          just \
+            --set ci true \
+            --set output_dir "${NEMO_FLOW_CI_WORKSPACE_TMP}" \
+            --set ref_name "${NEMO_FLOW_OPENCLAW_PACKAGE_VERSION}" \
+            package-openclaw
+
+      - name: Upload OpenClaw plugin artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: openclaw-npm
+          path: ${{ env.NEMO_FLOW_CI_WORKSPACE_TMP }}/openclaw/*.tgz
+          if-no-files-found: error
+
   Consolidate:
     name: Consolidate
     needs: [Package]
-    if: ${{ !cancelled() && needs.Package.result == 'success' }}
+    if: ${{ inputs.run_package && !cancelled() && needs.Package.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
