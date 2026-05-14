@@ -525,39 +525,53 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
 
 async fn collect_observability_component_checks(checks: &mut Vec<Check>, config: &Value) {
     for section in ["atof", "atif"] {
-        if section_enabled(config, section) {
-            let label = if section == "atof" {
-                "ATOF dir"
-            } else {
-                "ATIF dir"
-            };
-            match section_output_directory(config, section) {
-                Some(path) => checks.push(check_directory(label, &path)),
-                None => checks.push(Check {
-                    name: label,
-                    status: Status::Info,
-                    details: "enabled; using runtime default output directory".into(),
-                }),
-            }
+        if let Some(check) = observability_file_exporter_check(config, section) {
+            checks.push(check);
         }
     }
     for section in ["opentelemetry", "openinference"] {
-        if section_enabled(config, section) {
-            let label = if section == "opentelemetry" {
-                "OpenTelemetry endpoint"
-            } else {
-                "OpenInference endpoint"
-            };
-            match section_endpoint(config, section) {
-                Some(endpoint) => checks.push(probe_http_named(label, &endpoint).await),
-                None => checks.push(Check {
-                    name: label,
-                    status: Status::Info,
-                    details: "enabled; using exporter default endpoint".into(),
-                }),
-            }
+        if let Some(check) = observability_http_exporter_check(config, section).await {
+            checks.push(check);
         }
     }
+}
+
+fn observability_file_exporter_check(config: &Value, section: &str) -> Option<Check> {
+    if !section_enabled(config, section) {
+        return None;
+    }
+    let label = if section == "atof" {
+        "ATOF dir"
+    } else {
+        "ATIF dir"
+    };
+    Some(match section_output_directory(config, section) {
+        Some(path) => check_directory(label, &path),
+        None => Check {
+            name: label,
+            status: Status::Info,
+            details: "enabled; using runtime default output directory".into(),
+        },
+    })
+}
+
+async fn observability_http_exporter_check(config: &Value, section: &str) -> Option<Check> {
+    if !section_enabled(config, section) {
+        return None;
+    }
+    let label = if section == "opentelemetry" {
+        "OpenTelemetry endpoint"
+    } else {
+        "OpenInference endpoint"
+    };
+    Some(match section_endpoint(config, section) {
+        Some(endpoint) => probe_http_named(label, &endpoint).await,
+        None => Check {
+            name: label,
+            status: Status::Info,
+            details: "enabled; using exporter default endpoint".into(),
+        },
+    })
 }
 
 fn observability_component_config(plugin_value: &Value) -> Option<&Value> {
