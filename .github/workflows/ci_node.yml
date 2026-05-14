@@ -114,7 +114,7 @@ jobs:
   Package:
     name: Package (${{ matrix.platform }})
     needs: [Test]
-    if: ${{ (inputs.run_package || inputs.run_openclaw) && !cancelled() && needs.Test.result == 'success' }}
+    if: ${{ !cancelled() && needs.Test.result == 'success' && (inputs.run_package || (inputs.run_openclaw && matrix.platform == 'linux-amd64')) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
