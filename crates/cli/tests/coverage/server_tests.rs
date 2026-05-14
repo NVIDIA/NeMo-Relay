@@ -30,6 +30,11 @@ const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
 static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 
+fn test_http_client() -> reqwest::Client {
+    crate::tls::install_rustls_crypto_provider();
+    reqwest::Client::new()
+}
+
 struct GenericTestPlugin;
 
 impl Plugin for GenericTestPlugin {
@@ -180,7 +185,7 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
     wait_for_gateway(&url).await;
     assert!(nemo_flow::plugin::active_plugin_report().is_some());
 
-    let client = reqwest::Client::new();
+    let client = test_http_client();
     for hook_event_name in ["on_session_start", "on_session_finalize"] {
         let response = client
             .post(format!("{url}/hooks/hermes"))
@@ -253,7 +258,7 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
         tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
 
     wait_for_gateway(&url).await;
-    let client = reqwest::Client::new();
+    let client = test_http_client();
     for (path, session_id, start_event, end_event) in [
         (
             "/hooks/codex",
@@ -332,7 +337,7 @@ async fn serve_listener_activates_any_registered_plugin_kind() {
     wait_for_gateway(&url).await;
     assert_eq!(GENERIC_TEST_PLUGIN_REGISTRATIONS.load(Ordering::SeqCst), 1);
 
-    let response = reqwest::Client::new()
+    let response = test_http_client()
         .post(format!("{url}/hooks/codex"))
         .json(&json!({
             "session_id": "generic-plugin-session",
@@ -727,7 +732,7 @@ async fn gateway_forwards_anthropic_count_tokens_without_llm_codec() {
 }
 
 async fn wait_for_gateway(url: &str) {
-    let client = reqwest::Client::new();
+    let client = test_http_client();
     for _ in 0..50 {
         if let Ok(response) = client.get(format!("{url}/healthz")).send().await
             && response.status().is_success()

@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import tarfile
+import tomllib
 import urllib.request
 import zipfile
 from email.parser import Parser
@@ -255,8 +256,40 @@ def _cargo_workspace_members() -> set[str]:
     return {str(member) for member in metadata.get("workspace_members", [])}
 
 
+def _cargo_fetch_locked() -> None:
+    """Ensure locked registry crate sources are available for fallback license file reads."""
+    subprocess.run(  # noqa: S607
+        ["cargo", "fetch", "--locked", "--manifest-path", str(ROOT / "Cargo.toml")],
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=True,
+    )
+
+
+def _cargo_metadata() -> dict[str, Any]:
+    """Return full Cargo metadata for the all-features workspace graph."""
+    _cargo_fetch_locked()
+    proc = subprocess.run(  # noqa: S607
+        [
+            "cargo",
+            "metadata",
+            "--format-version=1",
+            "--all-features",
+            "--manifest-path",
+            str(ROOT / "Cargo.toml"),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return cast(dict[str, Any], json.loads(proc.stdout))
+
+
 def _cargo_about_json() -> dict[str, Any]:
     """Generate cargo-about JSON for the workspace dependency graph."""
+    _cargo_fetch_locked()
     proc = subprocess.run(  # noqa: S607
         [
             "cargo",
@@ -276,6 +309,119 @@ def _cargo_about_json() -> dict[str, Any]:
         check=True,
     )
     return cast(dict[str, Any], json.loads(proc.stdout))
+
+
+def _rust_package_key(name: str, version: str) -> tuple[str, str]:
+    """Return the stable key used to reconcile Cargo.lock, metadata, and cargo-about rows."""
+    return name, version
+
+
+def _cargo_lock_registry_package_keys() -> set[tuple[str, str]]:
+    """Return third-party package keys from Cargo.lock."""
+    with open(ROOT / "Cargo.lock", "rb") as f:
+        lock: dict[str, Any] = tomllib.load(f)
+
+    keys: set[tuple[str, str]] = set()
+    for pkg in cast(list[dict[str, Any]], lock.get("package", [])):
+        name = str(pkg.get("name") or "")
+        version = str(pkg.get("version") or "")
+        source = str(pkg.get("source") or "")
+        if name and version and source:
+            keys.add(_rust_package_key(name, version))
+    return keys
+
+
+def _cargo_metadata_packages_by_key() -> dict[tuple[str, str], dict[str, Any]]:
+    """Return Cargo metadata package records keyed by package name and version."""
+    metadata = _cargo_metadata()
+    packages: dict[tuple[str, str], dict[str, Any]] = {}
+    for pkg in cast(list[dict[str, Any]], metadata.get("packages", [])):
+        name = str(pkg.get("name") or "")
+        version = str(pkg.get("version") or "")
+        source = str(pkg.get("source") or "")
+        if name and version and source:
+            packages.setdefault(_rust_package_key(name, version), pkg)
+    return packages
+
+
+def _rust_license_files(crate: dict[str, Any]) -> list[tuple[str, str]]:
+    """Return root license files from a downloaded Cargo package."""
+    manifest_path = str(crate.get("manifest_path") or "")
+    if not manifest_path:
+        return []
+    package_dir = Path(manifest_path).parent
+    candidates: list[Path] = []
+
+    license_file = str(crate.get("license_file") or "")
+    if license_file:
+        p = Path(license_file)
+        candidates.append(p if p.is_absolute() else package_dir / p)
+
+    if package_dir.is_dir():
+        for child in package_dir.iterdir():
+            name = child.name.lower()
+            if child.is_file() and (name.startswith(("license", "licence")) or name.startswith("copying")):
+                candidates.append(child)
+
+    seen: set[Path] = set()
+    texts: list[tuple[str, str]] = []
+    for path in sorted(candidates, key=lambda item: item.name.lower()):
+        resolved = path.resolve()
+        if resolved in seen or not path.is_file():
+            continue
+        seen.add(resolved)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        label = path.name if path.parent == package_dir else str(path)
+        if _is_useful_license_text(text):
+            texts.append((label, text))
+    return texts
+
+
+def _render_rust_metadata_fallback_attribution(crate: dict[str, Any]) -> tuple[str, str, str]:
+    """Render one Rust Cargo.lock package omitted by cargo-about."""
+    name = str(crate.get("name") or "unknown")
+    version = str(crate.get("version") or "")
+    repo = str(crate.get("repository") or "").strip()
+    if not repo:
+        repo = f"https://crates.io/crates/{name}"
+    license_name = _normalize_license_name(str(crate.get("license") or "UNKNOWN"))
+
+    parts = [
+        f"## {name} - {version}\n",
+        f"**Repository URL**: {repo}\n",
+        f"**License Type(s)**: {license_name}\n",
+        f"### License: {spdx_url(license_name, fallback='https://spdx.org/licenses/')}\n",
+    ]
+    license_files = _rust_license_files(crate)
+    if license_files:
+        for label, text in license_files:
+            parts.append(f"### License File: {label}\n")
+            parts.append(MARKDOWN_CODE_FENCE)
+            parts.append(text if text.endswith("\n") else text + "\n")
+            parts.append(MARKDOWN_CODE_BLOCK_END)
+    else:
+        parts.append(MARKDOWN_CODE_FENCE)
+        parts.append(f"License expression from Cargo metadata: {license_name}\n")
+        parts.append("No package license file was found in the downloaded crate archive.\n")
+        parts.append(MARKDOWN_CODE_BLOCK_END)
+
+    return name, version, "".join(parts)
+
+
+def _rust_missing_cargo_about_packages(rendered_keys: set[tuple[str, str]]) -> list[dict[str, Any]]:
+    """Return Cargo.lock packages that cargo-about did not render."""
+    lock_keys = _cargo_lock_registry_package_keys()
+    metadata_by_key = _cargo_metadata_packages_by_key()
+    missing: list[dict[str, Any]] = []
+    for key in sorted(lock_keys - rendered_keys, key=lambda item: (item[0].lower(), item[1])):
+        pkg = metadata_by_key.get(key)
+        if pkg is None:
+            raise RuntimeError(f"Cargo.lock package {key[0]} {key[1]} is missing from cargo metadata")
+        missing.append(pkg)
+    return missing
 
 
 def _render_rust_crate_attribution(
@@ -307,9 +453,10 @@ def _render_rust_crate_attribution(
 
 
 def _render_rust_attributions(data: dict[str, Any], workspace_members: set[str]) -> str:
-    """Render cargo-about output while omitting local workspace crates."""
+    """Render Rust attributions for every non-workspace package in Cargo.lock."""
     parts: list[str] = [RUST_HEADER]
     rendered_crates: list[tuple[str, str, str]] = []
+    rendered_keys: set[tuple[str, str]] = set()
     for license_group in cast(list[dict[str, Any]], data.get("licenses", [])):
         license_id = str(license_group.get("id") or "UNKNOWN")
         license_text = str(license_group.get("text") or "")
@@ -321,7 +468,13 @@ def _render_rust_attributions(data: dict[str, Any], workspace_members: set[str])
                 workspace_members=workspace_members,
             )
             if rendered:
+                rendered_keys.add(_rust_package_key(rendered[0], rendered[1]))
                 rendered_crates.append(rendered)
+
+    for crate in _rust_missing_cargo_about_packages(rendered_keys):
+        rendered = _render_rust_metadata_fallback_attribution(crate)
+        rendered_keys.add(_rust_package_key(rendered[0], rendered[1]))
+        rendered_crates.append(rendered)
 
     for _, _, rendered in sorted(rendered_crates, key=lambda row: (row[0].lower(), row[1])):
         parts.append(rendered)
@@ -340,7 +493,7 @@ def _rendered_python_package_inventory(pkg: RenderedPythonPackage) -> LicenseInv
 
 
 def _rust_license_inventory(data: dict[str, Any], workspace_members: set[str]) -> list[LicenseInventoryEntry]:
-    """Return minimal Rust dependency license rows while omitting local workspace crates."""
+    """Return Rust license rows for every non-workspace package in Cargo.lock."""
     rows: dict[tuple[str, str], set[str]] = {}
     for license_group in cast(list[dict[str, Any]], data.get("licenses", [])):
         license_id = str(license_group.get("id") or "UNKNOWN")
@@ -350,7 +503,13 @@ def _rust_license_inventory(data: dict[str, Any], workspace_members: set[str]) -
                 continue
             name = str(crate.get("name") or "unknown")
             version = str(crate.get("version") or "")
-            rows.setdefault((name, version), set()).add(license_id)
+            rows.setdefault(_rust_package_key(name, version), set()).add(license_id)
+
+    for crate in _rust_missing_cargo_about_packages(set(rows)):
+        name = str(crate.get("name") or "unknown")
+        version = str(crate.get("version") or "")
+        license_name = _normalize_license_name(str(crate.get("license") or "UNKNOWN"))
+        rows.setdefault(_rust_package_key(name, version), set()).add(license_name)
 
     return [
         _license_inventory_entry(name, version, " OR ".join(sorted(licenses)))

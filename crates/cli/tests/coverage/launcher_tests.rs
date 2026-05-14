@@ -619,6 +619,8 @@ fn cursor_dry_run_does_not_write_hooks() {
 #[tokio::test]
 async fn run_starts_gateway_injects_env_and_returns_agent_exit_code() {
     let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(&config, "[upstream]\n").unwrap();
     let output = temp.path().join("env.txt");
     let command_argv = fake_agent_command(temp.path(), &output);
     let command = RunCommand {
@@ -627,7 +629,7 @@ async fn run_starts_gateway_injects_env_and_returns_agent_exit_code() {
         // command as pass-through after the configured/default binary — not what this test
         // wants, since it specifically asserts that argv[0] is the fake script.
         agent: None,
-        config: None,
+        config: Some(config),
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
