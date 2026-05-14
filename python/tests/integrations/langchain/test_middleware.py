@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
-from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 

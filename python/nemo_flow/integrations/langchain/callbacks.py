@@ -102,4 +102,4 @@ class NemoFlowCallbackHandler(BaseCallbackHandler):
             prepared_outputs = _prepare_outputs(output) if output is not None else None
             nemo_flow.scope.pop(handle, output=prepared_outputs)
         except Exception:
-            _logger.debug("NeMo Flow: scope.pop failed", exc_info=True)
+            _logger.warning("NeMo Flow: scope.pop failed", exc_info=True)

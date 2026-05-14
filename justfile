@@ -725,7 +725,7 @@ build-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_FLOW_REPO_ROOT"
-    uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain
+    uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain --extra langgraph --extra deepagents
     activate_project_venv
     if is_true "{{ ci }}"; then
         prepare_llvm_cov_workspace
@@ -854,7 +854,7 @@ test-python:
         fi
         cargo test -p nemo-flow-python --lib
     fi
-    uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain
+    uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain --extra langgraph --extra deepagents
     activate_project_venv
     python_executable="$(project_python_executable)"
     use_project_python_source "$python_executable"

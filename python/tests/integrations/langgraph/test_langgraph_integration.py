@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
@@ -57,19 +56,6 @@ def graph_fixture() -> CompiledStateGraph:
 @pytest.fixture(name="async_graph")
 def async_graph_fixture() -> CompiledStateGraph:
     return _build_graph(use_async=True)
-
-
-@pytest.fixture(name="subscribed_events")
-def subscribed_events_fixture() -> Iterator[list[nemo_flow.Event]]:
-    events: list[nemo_flow.Event] = []
-
-    def event_recorder(event: nemo_flow.Event) -> None:
-        events.append(event)
-
-    subscriber_name = f"langgraph-test-{uuid4()}"
-    nemo_flow.subscribers.register(subscriber_name, event_recorder)
-    yield events
-    nemo_flow.subscribers.deregister(subscriber_name)
 
 
 def events_to_strings(events: list[nemo_flow.Event]) -> list[str]:
