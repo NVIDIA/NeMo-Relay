@@ -349,28 +349,7 @@ fn edit_section(
         .ok_or_else(|| CliError::Config(format!("{} is not an editable section", section.name)))?
         .fields;
     loop {
-        let mut items = Vec::new();
-        if section_has_enabled_toggle(section) {
-            let enabled = section_enabled(config, section).unwrap_or(false);
-            items.push(MenuItem::new(format!(
-                "Toggle section [{}]",
-                status_label(enabled)
-            )));
-        }
-        for field in fields {
-            let configured = section_field_configured(config, section, *field)?;
-            items.push(MenuItem::new(format!(
-                "{} = {}",
-                configured_label(configured, field.name),
-                section_field_value(config, section, field.name)?
-                    .map(|value| display_field_value(section, *field, &value))
-                    .or_else(|| default_field_value(section, *field)
-                        .map(|value| format!("{} (default)", display_value(&value))))
-                    .unwrap_or_else(|| "(default)".to_string())
-            )));
-        }
-        items.push(MenuItem::new(shortcut_label("Reset section", "r")));
-        items.push(MenuItem::new(shortcut_label("Back", "q")));
+        let items = section_menu_items(config, section, fields)?;
         let selection = prompt_menu(theme, section.name, &items, 0)?;
         let selection = match selection {
             MenuResponse::Selected(selection) => selection,
@@ -379,14 +358,7 @@ fn edit_section(
                 continue;
             }
             MenuResponse::Shortcut(MenuShortcut::Reset, selected) => {
-                if reset_selected_field(config, section, fields, selected)? {
-                    continue;
-                }
-                let reset_section_index =
-                    usize::from(section_has_enabled_toggle(section)) + fields.len();
-                if selected == reset_section_index {
-                    reset_section(config, section);
-                }
+                reset_selected_item(config, section, fields, selected)?;
                 continue;
             }
             MenuResponse::Shortcut(MenuShortcut::Clear, selected) => {
@@ -402,22 +374,97 @@ fn edit_section(
             }
             MenuResponse::Cancel => return Ok(()),
         };
-        let mut index = selection;
-        if section_has_enabled_toggle(section) {
-            if index == 0 {
-                toggle_section(config, section);
-                continue;
-            }
-            index -= 1;
-        }
-        if index < fields.len() {
-            edit_field(theme, config, section, &fields[index])?;
-        } else if index == fields.len() {
-            reset_section(config, section);
-        } else {
+        if !edit_selected_section_item(theme, config, section, fields, selection)? {
             return Ok(());
         }
     }
+}
+
+fn section_menu_items(
+    config: &ObservabilityConfig,
+    section: EditorFieldSpec,
+    fields: &[EditorFieldSpec],
+) -> Result<Vec<MenuItem>, CliError> {
+    let mut items = Vec::new();
+    if section_has_enabled_toggle(section) {
+        let enabled = section_enabled(config, section).unwrap_or(false);
+        items.push(MenuItem::new(format!(
+            "Toggle section [{}]",
+            status_label(enabled)
+        )));
+    }
+    for field in fields {
+        items.push(section_field_menu_item(config, section, *field)?);
+    }
+    items.push(MenuItem::new(shortcut_label("Reset section", "r")));
+    items.push(MenuItem::new(shortcut_label("Back", "q")));
+    Ok(items)
+}
+
+fn section_field_menu_item(
+    config: &ObservabilityConfig,
+    section: EditorFieldSpec,
+    field: EditorFieldSpec,
+) -> Result<MenuItem, CliError> {
+    let configured = section_field_configured(config, section, field)?;
+    let value = section_field_value(config, section, field.name)?
+        .map(|value| display_field_value(section, field, &value))
+        .or_else(|| {
+            default_field_value(section, field)
+                .map(|value| format!("{} (default)", display_value(&value)))
+        })
+        .unwrap_or_else(|| "(default)".to_string());
+    Ok(MenuItem::new(format!(
+        "{} = {}",
+        configured_label(configured, field.name),
+        value
+    )))
+}
+
+fn selected_field_index(section: EditorFieldSpec, selected: usize) -> usize {
+    selected - usize::from(section_has_enabled_toggle(section))
+}
+
+fn reset_section_index(section: EditorFieldSpec, fields: &[EditorFieldSpec]) -> usize {
+    usize::from(section_has_enabled_toggle(section)) + fields.len()
+}
+
+fn reset_selected_item(
+    config: &mut ObservabilityConfig,
+    section: EditorFieldSpec,
+    fields: &[EditorFieldSpec],
+    selected: usize,
+) -> Result<(), CliError> {
+    if reset_selected_field(config, section, fields, selected)? {
+        return Ok(());
+    }
+    if selected == reset_section_index(section, fields) {
+        reset_section(config, section);
+    }
+    Ok(())
+}
+
+fn edit_selected_section_item(
+    theme: &ColorfulTheme,
+    config: &mut ObservabilityConfig,
+    section: EditorFieldSpec,
+    fields: &[EditorFieldSpec],
+    selection: usize,
+) -> Result<bool, CliError> {
+    if section_has_enabled_toggle(section) && selection == 0 {
+        toggle_section(config, section);
+        return Ok(true);
+    }
+    let index = selected_field_index(section, selection);
+    if let Some(field) = fields.get(index) {
+        edit_field(theme, config, section, field)?;
+        return Ok(true);
+    }
+    if index == fields.len() {
+        reset_section(config, section);
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 fn edit_field(

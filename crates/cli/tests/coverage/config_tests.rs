@@ -16,6 +16,10 @@ fn config() -> GatewayConfig {
     }
 }
 
+fn isolated_config_path(temp: &tempfile::TempDir) -> std::path::PathBuf {
+    temp.path().join("config.toml")
+}
+
 #[test]
 fn session_config_prefers_headers_and_parses_json() {
     let mut headers = HeaderMap::new();
@@ -607,7 +611,9 @@ openai_base_url = "http://file-openai"
 
 #[test]
 fn run_plugin_config_overrides_inherited_top_level_plugin_config() {
+    let temp = tempfile::tempdir().unwrap();
     let server = ServerArgs {
+        config: Some(isolated_config_path(&temp)),
         plugin_config: Some(r#"{"components":["top-level"]}"#.into()),
         ..ServerArgs::default()
     };
@@ -633,8 +639,9 @@ fn run_plugin_config_overrides_inherited_top_level_plugin_config() {
 
 #[test]
 fn server_resolution_applies_all_server_overrides() {
+    let temp = tempfile::tempdir().unwrap();
     let args = ServerArgs {
-        config: None,
+        config: Some(isolated_config_path(&temp)),
         bind: Some("127.0.0.1:0".parse().unwrap()),
         openai_base_url: Some("http://cli-openai".into()),
         anthropic_base_url: Some("http://cli-anthropic".into()),
@@ -655,9 +662,10 @@ fn server_resolution_applies_all_server_overrides() {
 
 #[test]
 fn run_resolution_applies_all_run_overrides() {
+    let temp = tempfile::tempdir().unwrap();
     let command = RunCommand {
         agent: Some(CodingAgent::Codex),
-        config: None,
+        config: Some(isolated_config_path(&temp)),
         openai_base_url: Some("http://run-openai".into()),
         anthropic_base_url: Some("http://run-anthropic".into()),
         session_metadata: Some(r#"{"team":"run"}"#.into()),
