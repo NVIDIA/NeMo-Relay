@@ -696,6 +696,7 @@ fn exit_code(status: std::process::ExitStatus) -> ExitCode {
 // Polls the ephemeral gateway health endpoint for roughly one second before launching the agent.
 // Startup failures return a launcher error so the child command is never run against a dead proxy.
 async fn wait_for_health(gateway_url: &str) -> Result<(), CliError> {
+    crate::tls::install_rustls_crypto_provider();
     let client = Client::new();
     let url = format!("{}/healthz", gateway_url.trim_end_matches('/'));
     for _ in 0..50 {

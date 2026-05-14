@@ -75,13 +75,13 @@ docs = [
 
 [project.optional-dependencies]
 langchain = [
-    "langchain>=1.2.11,<2.0.0",
+    "langchain>=1.3.0,<2.0.0",
     "langchain-core",
 ]
 
 langgraph = [
     "nemo-flow[langchain]",
-    "langgraph>=1.1.10,<2.0.0",
+    "langgraph>=1.2.0,<2.0.0",
 ]
 
 langchain-nvidia = [
