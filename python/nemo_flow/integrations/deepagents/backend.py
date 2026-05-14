@@ -24,7 +24,7 @@ from deepagents.backends.protocol import (
 )
 
 import nemo_flow
-from nemo_flow.integrations.deepagents._events import backend_event_data, backend_kind, json_safe, mark_base_name
+from nemo_flow.integrations.deepagents._events import backend_event_data, backend_kind, json_safe, event_base_name
 
 
 class NemoFlowDeepAgentsBackend(BackendProtocol):
@@ -171,7 +171,7 @@ class NemoFlowDeepAgentsBackend(BackendProtocol):
     ) -> Any:
         event_method_name = event_name or method_name
         kind = backend_kind(event_method_name)
-        base_name = mark_base_name(kind)
+        base_name = event_base_name(kind)
         with nemo_flow.scope.scope(
             f"{base_name} - {event_method_name}",
             _backend_scope_type(kind),
@@ -190,7 +190,7 @@ class NemoFlowDeepAgentsBackend(BackendProtocol):
     ) -> Any:
         event_method_name = event_name or method_name
         kind = backend_kind(event_method_name)
-        base_name = mark_base_name(kind)
+        base_name = event_base_name(kind)
         with nemo_flow.scope.scope(
             f"{base_name} - {event_method_name}",
             _backend_scope_type(kind),

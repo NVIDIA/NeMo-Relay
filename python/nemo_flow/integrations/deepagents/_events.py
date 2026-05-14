@@ -56,8 +56,8 @@ def backend_kind(method_name: str) -> str:
     return "backend"
 
 
-def mark_base_name(kind: str) -> str:
-    """Return a stable mark-event base name for a Deep Agents category."""
+def event_base_name(kind: str) -> str:
+    """Return a stable event base name for a Deep Agents category."""
     return {
         "subagent": "DeepAgents Subagent",
         "async_subagent": "DeepAgents Async Subagent",

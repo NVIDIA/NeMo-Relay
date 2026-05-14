@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from nemo_flow.integrations.deepagents._events import emit_mark, mark_base_name
+from nemo_flow.integrations.deepagents._events import emit_mark, event_base_name
 from nemo_flow.integrations.langgraph.callbacks import NemoFlowCallbackHandler as LangGraphNemoFlowCallbackHandler
 
 _GraphEventKey = tuple[str | None, str | None, tuple[str, ...]]
@@ -37,7 +37,7 @@ class NemoFlowDeepAgentsCallbackHandler(LangGraphNemoFlowCallbackHandler):
 
     def _emit_human_in_the_loop_mark(self, name: str, phase: str, data: dict[str, Any]) -> None:
         emit_mark(
-            mark_base_name("human_in_the_loop"),
+            event_base_name("human_in_the_loop"),
             "human_in_the_loop",
             phase,
             data,

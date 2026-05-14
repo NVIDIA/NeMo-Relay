@@ -102,7 +102,7 @@ def _mk_tool_request(tool_name: str, args: dict[str, Any]) -> ToolCallRequest:
 
 
 @pytest.mark.parametrize(
-    ("tool_name", "args", "expected_kind", "expected_mark"),
+    ("tool_name", "args", "expected_kind", "expected_scope"),
     [
         ("task", {"name": "researcher", "task": "research GPUs"}, "subagent", "DeepAgents Subagent"),
         (
@@ -115,11 +115,11 @@ def _mk_tool_request(tool_name: str, args: dict[str, Any]) -> ToolCallRequest:
         ("execute", {"command": "python main.py"}, "sandbox", "DeepAgents Sandbox"),
     ],
 )
-def test_wrap_tool_call_emits_deepagents_marks(
+def test_wrap_tool_call_emits_deepagents_scopes(
     tool_name: str,
     args: dict[str, Any],
     expected_kind: str,
-    expected_mark: str,
+    expected_scope: str,
     middleware: NemoFlowDeepAgentsMiddleware,
     mock_tool_execute: AsyncMock,
     subscribed_events: list[nemo_flow.Event],
@@ -133,15 +133,17 @@ def test_wrap_tool_call_emits_deepagents_marks(
     assert result.content == "done"
     mock_tool_execute.assert_awaited_once()
 
-    marks = _filter_mark_events(subscribed_events)
-    assert [mark.name for mark in marks] == [f"{expected_mark} Start", f"{expected_mark} End"]
-    assert _mark_metadata(marks[0])["deepagents_kind"] == expected_kind
-    assert _mark_metadata(marks[0])["phase"] == "start"
-    assert _mark_data(marks[0])["tool_name"] == tool_name
-    assert _mark_metadata(marks[1])["phase"] == "end"
+    scopes = _filter_deepagents_scope_events(subscribed_events)
+    assert [(event.name, event.scope_category) for event in scopes] == [
+        (expected_scope, "start"),
+        (expected_scope, "end"),
+    ]
+    assert _scope_metadata(scopes[0])["deepagents_kind"] == expected_kind
+    assert _scope_data(scopes[0])["tool_name"] == tool_name
+    assert scopes[1].data is None
 
 
-async def test_awrap_tool_call_emits_deepagents_marks(
+async def test_awrap_tool_call_emits_deepagents_scopes(
     middleware: NemoFlowDeepAgentsMiddleware,
     mock_tool_execute: AsyncMock,
     subscribed_events: list[nemo_flow.Event],
@@ -158,15 +160,15 @@ async def test_awrap_tool_call_emits_deepagents_marks(
     assert result.content == "started"
     mock_tool_execute.assert_awaited_once()
 
-    marks = _filter_mark_events(subscribed_events)
-    assert [mark.name for mark in marks] == [
-        "DeepAgents Async Subagent Start",
-        "DeepAgents Async Subagent End",
+    scopes = _filter_deepagents_scope_events(subscribed_events)
+    assert [(event.name, event.scope_category) for event in scopes] == [
+        ("DeepAgents Async Subagent", "start"),
+        ("DeepAgents Async Subagent", "end"),
     ]
-    assert _mark_data(marks[0])["task_id"] == "task-1"
+    assert _scope_data(scopes[0])["task_id"] == "task-1"
 
 
-def test_wrap_tool_call_emits_error_mark(
+def test_wrap_tool_call_emits_error_scope(
     middleware: NemoFlowDeepAgentsMiddleware,
     mock_tool_execute: AsyncMock,
     subscribed_events: list[nemo_flow.Event],
@@ -179,9 +181,12 @@ def test_wrap_tool_call_emits_error_mark(
             middleware.wrap_tool_call(_mk_tool_request("task", {"name": "researcher"}), handler)
 
     mock_tool_execute.assert_awaited_once()
-    marks = _filter_mark_events(subscribed_events)
-    assert [mark.name for mark in marks] == ["DeepAgents Subagent Start", "DeepAgents Subagent Error"]
-    assert "RuntimeError" in _mark_data(marks[1])["error"]
+    scopes = _filter_deepagents_scope_events(subscribed_events)
+    assert [(event.name, event.scope_category) for event in scopes] == [
+        ("DeepAgents Subagent", "start"),
+        ("DeepAgents Subagent", "end"),
+    ]
+    assert scopes[1].data is None
 
 
 def test_before_agent_emits_configuration_mark(subscribed_events: list[nemo_flow.Event]):
@@ -302,8 +307,8 @@ def test_observe_backend_emits_sync_scopes(
 
     scopes = _filter_deepagents_scope_events(subscribed_events)
     assert [(event.name, event.scope_category) for event in scopes] == [
-        ("DeepAgents Filesystem", "start"),
-        ("DeepAgents Filesystem", "end"),
+        (f"DeepAgents Filesystem - {method_name}", "start"),
+        (f"DeepAgents Filesystem - {method_name}", "end"),
     ]
     assert _scope_metadata(scopes[0])["deepagents_kind"] == expected_kind
     assert _scope_data(scopes[0])["backend"] == "MockBackend"
@@ -324,8 +329,8 @@ async def test_observe_backend_emits_async_scopes(subscribed_events: list[nemo_f
 
     scopes = _filter_deepagents_scope_events(subscribed_events)
     assert [(event.name, event.scope_category) for event in scopes] == [
-        ("DeepAgents Filesystem", "start"),
-        ("DeepAgents Filesystem", "end"),
+        ("DeepAgents Filesystem - aread", "start"),
+        ("DeepAgents Filesystem - aread", "end"),
     ]
     assert scopes[1].data is None
 
@@ -341,8 +346,8 @@ def test_observe_backend_emits_error_scope(subscribed_events: list[nemo_flow.Eve
 
     scopes = _filter_deepagents_scope_events(subscribed_events)
     assert [(event.name, event.scope_category) for event in scopes] == [
-        ("DeepAgents Filesystem", "start"),
-        ("DeepAgents Filesystem", "end"),
+        ("DeepAgents Filesystem - read", "start"),
+        ("DeepAgents Filesystem - read", "end"),
     ]
     assert scopes[1].data is None
 
@@ -373,8 +378,8 @@ def test_observe_backend_preserves_sandbox_protocol(subscribed_events: list[nemo
 
     scopes = _filter_deepagents_scope_events(subscribed_events)
     assert [(event.name, event.scope_category) for event in scopes] == [
-        ("DeepAgents Sandbox", "start"),
-        ("DeepAgents Sandbox", "end"),
+        ("DeepAgents Sandbox - execute", "start"),
+        ("DeepAgents Sandbox - execute", "end"),
     ]
     assert _scope_data(scopes[0])["method"] == "execute"
 
@@ -452,7 +457,8 @@ def test_e2e_agent(
 
     assert found_write_file_message
 
-    marks = _filter_mark_events(subscribed_events)
-    assert any(_mark_data(mark).get("tool_name") == "write_file" for mark in marks)
     scopes = _filter_deepagents_scope_events(subscribed_events)
+    assert any(
+        _scope_data(event).get("tool_name") == "write_file" for event in scopes if event.scope_category == "start"
+    )
     assert any(_scope_data(event).get("method") == "write" for event in scopes if event.scope_category == "start")

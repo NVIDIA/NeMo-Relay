@@ -11,10 +11,10 @@ integrations.
 
 Deep Agents is built on LangChain `AgentMiddleware` and the LangGraph runtime.
 The integration therefore composes the existing NeMo Flow LangChain and
-LangGraph hooks, then emits stable mark events for Deep Agents concepts:
-subagents, async subagents, human-in-the-loop interrupts and resumes, skills,
-filesystem tool calls, and sandbox tool calls. Direct backend operations are
-captured as NeMo Flow scopes.
+LangGraph hooks, then emits stable scopes for Deep Agents tool concepts:
+subagents, async subagents, filesystem tool calls, and sandbox tool calls.
+Human-in-the-loop interrupts, resumes, and configured skills remain marks.
+Direct backend operations are captured as NeMo Flow scopes.
 
 ## Setup
 
@@ -54,11 +54,11 @@ with nemo_flow.scope.scope("deepagents-request", nemo_flow.ScopeType.Agent):
 - LangChain model and tool calls through NeMo Flow managed execution.
 - LangGraph run scopes through callbacks.
 - Human-in-the-loop interrupt and resume marks.
-- Deep Agents `task` delegation marks for synchronous subagents.
-- Deep Agents async subagent tool lifecycle marks.
-- Filesystem tool marks for `ls`, `read_file`, `write_file`, `edit_file`,
+- Deep Agents `task` delegation scopes for synchronous subagents.
+- Deep Agents async subagent tool lifecycle scopes.
+- Filesystem tool scopes for `ls`, `read_file`, `write_file`, `edit_file`,
   `glob`, and `grep`.
-- Sandbox/local shell `execute` marks.
+- Sandbox/local shell `execute` scopes.
 - Configured skills and subagent summaries at agent-run start.
 - Direct backend method call scopes when the backend is wrapped with
   `observe_backend()` or via `add_nemo_flow_integration(..., backend=...)`.

@@ -8,7 +8,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from nemo_flow.integrations.deepagents._events import emit_mark, mark_base_name, tool_event_data, tool_kind
+import nemo_flow
+from nemo_flow.integrations.deepagents._events import emit_mark, event_base_name, json_safe, tool_event_data, tool_kind
 from nemo_flow.integrations.langchain.middleware import NemoFlowMiddleware
 
 if TYPE_CHECKING:
@@ -18,11 +19,11 @@ if TYPE_CHECKING:
 
 
 class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
-    """Route Deep Agents model/tool calls through NeMo Flow and emit semantic marks.
+    """Route Deep Agents model/tool calls through NeMo Flow and emit semantic events.
 
     Deep Agents is built on LangChain ``AgentMiddleware`` and LangGraph. This
     middleware keeps the existing NeMo Flow LangChain wrapping behavior, then
-    adds stable mark events for Deep Agents-specific tools such as ``task``,
+    adds stable scopes for Deep Agents-specific tools such as ``task``,
     async subagent tools, filesystem tools, and sandbox execution.
     """
 
@@ -54,36 +55,36 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
     ) -> ToolMessage | Command[Any]:
-        """Wrap a sync Deep Agents tool call with NeMo Flow tool execution and marks."""
+        """Wrap a sync Deep Agents tool call with NeMo Flow tool execution and scopes."""
         tool_name, tool_args, kind = self._tool_context(request)
-        self._emit_tool_mark(kind, "start", tool_name, tool_args)
+        if kind is None:
+            return super().wrap_tool_call(request, handler)
 
-        try:
-            result = super().wrap_tool_call(request, handler)
-        except Exception as error:
-            self._emit_tool_mark(kind, "error", tool_name, tool_args, error=error)
-            raise
-
-        self._emit_tool_mark(kind, "end", tool_name, tool_args, result=result)
-        return result
+        with nemo_flow.scope.scope(
+            event_base_name(kind),
+            _tool_scope_type(kind),
+            input=json_safe(tool_event_data(tool_name, tool_args)),
+            metadata=json_safe(self._tool_scope_metadata(kind)),
+        ):
+            return super().wrap_tool_call(request, handler)
 
     async def awrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
-        """Wrap an async Deep Agents tool call with NeMo Flow tool execution and marks."""
+        """Wrap an async Deep Agents tool call with NeMo Flow tool execution and scopes."""
         tool_name, tool_args, kind = self._tool_context(request)
-        self._emit_tool_mark(kind, "start", tool_name, tool_args)
+        if kind is None:
+            return await super().awrap_tool_call(request, handler)
 
-        try:
-            result = await super().awrap_tool_call(request, handler)
-        except Exception as error:
-            self._emit_tool_mark(kind, "error", tool_name, tool_args, error=error)
-            raise
-
-        self._emit_tool_mark(kind, "end", tool_name, tool_args, result=result)
-        return result
+        with nemo_flow.scope.scope(
+            event_base_name(kind),
+            _tool_scope_type(kind),
+            input=json_safe(tool_event_data(tool_name, tool_args)),
+            metadata=json_safe(self._tool_scope_metadata(kind)),
+        ):
+            return await super().awrap_tool_call(request, handler)
 
     def _emit_agent_configuration(self) -> None:
         data: dict[str, Any] = {}
@@ -101,7 +102,7 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
 
         if data:
             emit_mark(
-                mark_base_name("skill"),
+                event_base_name("skill"),
                 "skill",
                 "configured",
                 data,
@@ -120,21 +121,17 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
 
         return tool_name, tool_args, tool_kind(tool_name)
 
-    def _emit_tool_mark(
-        self,
-        kind: str | None,
-        phase: str,
-        tool_name: str,
-        tool_args: Mapping[str, Any],
-        *,
-        result: Any = None,
-        error: BaseException | None = None,
-    ) -> None:
-        if kind is not None:
-            emit_mark(
-                mark_base_name(kind),
-                kind,
-                phase,
-                tool_event_data(tool_name, tool_args, result=result, error=error),
-                metadata={"agent_name": self._agent_name} if self._agent_name is not None else None,
-            )
+    def _tool_scope_metadata(self, kind: str) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "integration": "deepagents",
+            "deepagents_kind": kind,
+        }
+        if self._agent_name is not None:
+            metadata["agent_name"] = self._agent_name
+        return metadata
+
+
+def _tool_scope_type(kind: str) -> nemo_flow.ScopeType:
+    if kind in {"subagent", "async_subagent"}:
+        return nemo_flow.ScopeType.Agent
+    return nemo_flow.ScopeType.Tool
