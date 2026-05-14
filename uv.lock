@@ -1532,11 +1532,13 @@ deepagents = [
 langchain = [
     { name = "langchain" },
     { name = "langchain-core" },
+    { name = "langgraph" },
 ]
 langchain-nvidia = [
     { name = "langchain" },
     { name = "langchain-core" },
     { name = "langchain-nvidia-ai-endpoints" },
+    { name = "langgraph" },
 ]
 langgraph = [
     { name = "langchain" },
@@ -1580,6 +1582,7 @@ requires-dist = [
     { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.2.11,<2.0.0" },
     { name = "langchain-core", marker = "extra == 'langchain'" },
     { name = "langchain-nvidia-ai-endpoints", marker = "extra == 'langchain-nvidia'", specifier = "~=1.0" },
+    { name = "langgraph", marker = "extra == 'langchain'" },
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.1.10,<2.0.0" },
     { name = "nemo-flow", extras = ["langchain"], marker = "extra == 'langchain-nvidia'" },
     { name = "nemo-flow", extras = ["langchain"], marker = "extra == 'langgraph'" },
