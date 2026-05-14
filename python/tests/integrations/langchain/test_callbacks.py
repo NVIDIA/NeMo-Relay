@@ -120,9 +120,7 @@ class TestScopeLifecycle:
         mock_nemo_flow.scope.pop.assert_called_once_with(handle, output={"error": "RuntimeError('boom')"})
         assert run_id not in handler._scope_handles
 
-    def test_on_chain_end_prepares_command_outputs(
-        self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock
-    ):
+    def test_on_chain_end_prepares_command_outputs(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock):
         run_id = uuid4()
         handler.on_chain_start(
             {"name": "MyChain"},
