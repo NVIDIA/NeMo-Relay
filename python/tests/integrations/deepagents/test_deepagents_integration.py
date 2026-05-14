@@ -62,6 +62,16 @@ def _filter_mark_events(events: list[nemo_flow.Event]) -> list[nemo_flow.MarkEve
     return [event for event in events if isinstance(event, nemo_flow.MarkEvent)]
 
 
+def _filter_deepagents_scope_events(events: list[nemo_flow.Event]) -> list[nemo_flow.ScopeEvent]:
+    return [
+        event
+        for event in events
+        if isinstance(event, nemo_flow.ScopeEvent)
+        and isinstance(event.metadata, dict)
+        and event.metadata.get("integration") == "deepagents"
+    ]
+
+
 def _mark_data(mark: nemo_flow.MarkEvent) -> dict[str, Any]:
     assert isinstance(mark.data, dict)
     return cast(dict[str, Any], mark.data)
@@ -70,6 +80,16 @@ def _mark_data(mark: nemo_flow.MarkEvent) -> dict[str, Any]:
 def _mark_metadata(mark: nemo_flow.MarkEvent) -> dict[str, Any]:
     assert isinstance(mark.metadata, dict)
     return cast(dict[str, Any], mark.metadata)
+
+
+def _scope_data(event: nemo_flow.ScopeEvent) -> dict[str, Any]:
+    assert isinstance(event.data, dict)
+    return cast(dict[str, Any], event.data)
+
+
+def _scope_metadata(event: nemo_flow.ScopeEvent) -> dict[str, Any]:
+    assert isinstance(event.metadata, dict)
+    return cast(dict[str, Any], event.metadata)
 
 
 def _mk_tool_request(tool_name: str, args: dict[str, Any]) -> ToolCallRequest:
@@ -262,7 +282,7 @@ def test_callback_handler_falls_back_for_non_hitl_interrupt(subscribed_events: l
         ("grep", ("TODO",), {"path": "/workspace"}, {"path": "/workspace", "glob": None}, "filesystem"),
     ],
 )
-def test_observe_backend_emits_sync_marks(
+def test_observe_backend_emits_sync_scopes(
     method_name: str,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
@@ -280,14 +300,18 @@ def test_observe_backend_emits_sync_marks(
     assert result == {"ok": True}
     getattr(mock_backend, method_name).assert_called_once_with(*args, **expected_call_kwargs)
 
-    marks = _filter_mark_events(subscribed_events)
-    assert _mark_metadata(marks[0])["deepagents_kind"] == expected_kind
-    assert _mark_data(marks[0])["backend"] == "MockBackend"
-    assert _mark_data(marks[0])["method"] == method_name
-    assert _mark_metadata(marks[1])["phase"] == "end"
+    scopes = _filter_deepagents_scope_events(subscribed_events)
+    assert [(event.name, event.scope_category) for event in scopes] == [
+        ("DeepAgents Filesystem", "start"),
+        ("DeepAgents Filesystem", "end"),
+    ]
+    assert _scope_metadata(scopes[0])["deepagents_kind"] == expected_kind
+    assert _scope_data(scopes[0])["backend"] == "MockBackend"
+    assert _scope_data(scopes[0])["method"] == method_name
+    assert scopes[1].data is None
 
 
-async def test_observe_backend_emits_async_marks(subscribed_events: list[nemo_flow.Event]):
+async def test_observe_backend_emits_async_scopes(subscribed_events: list[nemo_flow.Event]):
     mock_backend = MagicMock(name="mock_backend")
     mock_backend.aread = AsyncMock(return_value=ReadResult(file_data={"content": "contents", "encoding": "utf-8"}))
     backend = observe_backend(mock_backend, name="MockBackend")
@@ -298,9 +322,29 @@ async def test_observe_backend_emits_async_marks(subscribed_events: list[nemo_fl
     assert result == ReadResult(file_data={"content": "contents", "encoding": "utf-8"})
     mock_backend.aread.assert_awaited_once_with("/workspace/notes.md", offset=0, limit=2000)
 
-    marks = _filter_mark_events(subscribed_events)
-    assert [mark.name for mark in marks] == ["DeepAgents Filesystem Start", "DeepAgents Filesystem End"]
-    assert "ReadResult" in _mark_data(marks[1])["result"]
+    scopes = _filter_deepagents_scope_events(subscribed_events)
+    assert [(event.name, event.scope_category) for event in scopes] == [
+        ("DeepAgents Filesystem", "start"),
+        ("DeepAgents Filesystem", "end"),
+    ]
+    assert scopes[1].data is None
+
+
+def test_observe_backend_emits_error_scope(subscribed_events: list[nemo_flow.Event]):
+    mock_backend = MagicMock(name="mock_backend")
+    mock_backend.read.side_effect = RuntimeError("read failed")
+    backend = observe_backend(mock_backend, name="MockBackend")
+
+    with pytest.raises(RuntimeError, match="read failed"):
+        with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
+            backend.read("/workspace/notes.md")
+
+    scopes = _filter_deepagents_scope_events(subscribed_events)
+    assert [(event.name, event.scope_category) for event in scopes] == [
+        ("DeepAgents Filesystem", "start"),
+        ("DeepAgents Filesystem", "end"),
+    ]
+    assert scopes[1].data is None
 
 
 def test_observe_backend_preserves_sandbox_protocol(subscribed_events: list[nemo_flow.Event]):
@@ -327,9 +371,12 @@ def test_observe_backend_preserves_sandbox_protocol(subscribed_events: list[nemo
 
     assert result == ExecuteResponse(output="python main.py:10", exit_code=0)
 
-    marks = _filter_mark_events(subscribed_events)
-    assert [mark.name for mark in marks] == ["DeepAgents Sandbox Start", "DeepAgents Sandbox End"]
-    assert _mark_data(marks[0])["method"] == "execute"
+    scopes = _filter_deepagents_scope_events(subscribed_events)
+    assert [(event.name, event.scope_category) for event in scopes] == [
+        ("DeepAgents Sandbox", "start"),
+        ("DeepAgents Sandbox", "end"),
+    ]
+    assert _scope_data(scopes[0])["method"] == "execute"
 
 
 @pytest.mark.parametrize("use_sandbox", [False, True])
@@ -407,4 +454,5 @@ def test_e2e_agent(
 
     marks = _filter_mark_events(subscribed_events)
     assert any(_mark_data(mark).get("tool_name") == "write_file" for mark in marks)
-    assert any(_mark_data(mark).get("method") == "write" for mark in marks)
+    scopes = _filter_deepagents_scope_events(subscribed_events)
+    assert any(_scope_data(event).get("method") == "write" for event in scopes if event.scope_category == "start")

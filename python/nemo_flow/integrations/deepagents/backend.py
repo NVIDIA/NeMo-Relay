@@ -23,11 +23,12 @@ from deepagents.backends.protocol import (
     execute_accepts_timeout,
 )
 
-from nemo_flow.integrations.deepagents._events import backend_event_data, backend_kind, emit_mark, mark_base_name
+import nemo_flow
+from nemo_flow.integrations.deepagents._events import backend_event_data, backend_kind, json_safe, mark_base_name
 
 
 class NemoFlowDeepAgentsBackend(BackendProtocol):
-    """Proxy a Deep Agents backend and emit NeMo Flow marks for backend operations."""
+    """Proxy a Deep Agents backend and emit NeMo Flow scopes for backend operations."""
 
     def __init__(self, backend: BackendProtocol, *, name: str | None = None) -> None:
         self._backend = backend
@@ -171,24 +172,13 @@ class NemoFlowDeepAgentsBackend(BackendProtocol):
         event_method_name = event_name or method_name
         kind = backend_kind(event_method_name)
         base_name = mark_base_name(kind)
-        emit_mark(base_name, kind, "start", backend_event_data(self._name, event_method_name, args, kwargs))
-        try:
-            result = getattr(self._backend, method_name)(*args, **kwargs)
-        except Exception as error:
-            emit_mark(
-                base_name,
-                kind,
-                "error",
-                backend_event_data(self._name, event_method_name, args, kwargs, error=error),
-            )
-            raise
-        emit_mark(
-            base_name,
-            kind,
-            "end",
-            backend_event_data(self._name, event_method_name, args, kwargs, result=result),
-        )
-        return result
+        with nemo_flow.scope.scope(
+            f"{base_name} - {event_method_name}",
+            _backend_scope_type(kind),
+            input=json_safe(backend_event_data(self._name, event_method_name, args, kwargs)),
+            metadata=json_safe(_backend_scope_metadata(kind)),
+        ):
+            return getattr(self._backend, method_name)(*args, **kwargs)
 
     async def _call_async(
         self,
@@ -201,24 +191,13 @@ class NemoFlowDeepAgentsBackend(BackendProtocol):
         event_method_name = event_name or method_name
         kind = backend_kind(event_method_name)
         base_name = mark_base_name(kind)
-        emit_mark(base_name, kind, "start", backend_event_data(self._name, event_method_name, args, kwargs))
-        try:
-            result = await getattr(self._backend, method_name)(*args, **kwargs)
-        except Exception as error:
-            emit_mark(
-                base_name,
-                kind,
-                "error",
-                backend_event_data(self._name, event_method_name, args, kwargs, error=error),
-            )
-            raise
-        emit_mark(
-            base_name,
-            kind,
-            "end",
-            backend_event_data(self._name, event_method_name, args, kwargs, result=result),
-        )
-        return result
+        with nemo_flow.scope.scope(
+            f"{base_name} - {event_method_name}",
+            _backend_scope_type(kind),
+            input=json_safe(backend_event_data(self._name, event_method_name, args, kwargs)),
+            metadata=json_safe(_backend_scope_metadata(kind)),
+        ):
+            return await getattr(self._backend, method_name)(*args, **kwargs)
 
 
 class NemoFlowDeepAgentsSandboxBackend(NemoFlowDeepAgentsBackend, SandboxBackendProtocol):
@@ -248,8 +227,21 @@ def _execute_kwargs(backend: BackendProtocol, timeout: int | None) -> dict[str, 
     return {"timeout": timeout}
 
 
+def _backend_scope_metadata(kind: str) -> dict[str, str]:
+    return {
+        "integration": "deepagents",
+        "deepagents_kind": kind,
+    }
+
+
+def _backend_scope_type(kind: str) -> nemo_flow.ScopeType:
+    if kind in {"filesystem", "sandbox"}:
+        return nemo_flow.ScopeType.Tool
+    return nemo_flow.ScopeType.Function
+
+
 def observe_backend(backend: Any, *, name: str | None = None) -> NemoFlowDeepAgentsBackend:
-    """Wrap a Deep Agents backend so direct backend calls emit NeMo Flow marks."""
+    """Wrap a Deep Agents backend so direct backend calls emit NeMo Flow scopes."""
     if isinstance(backend, NemoFlowDeepAgentsBackend):
         return backend
     if isinstance(backend, SandboxBackendProtocol):
