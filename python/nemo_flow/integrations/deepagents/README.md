@@ -11,9 +11,8 @@ integrations.
 
 Deep Agents is built on LangChain `AgentMiddleware` and the LangGraph runtime.
 The integration therefore composes the existing NeMo Flow LangChain and
-LangGraph hooks, then emits stable scopes for Deep Agents tool concepts:
-subagents, async subagents, filesystem tool calls, and sandbox tool calls.
-Human-in-the-loop interrupts, resumes, and configured skills remain marks.
+LangGraph hooks, then emits Deep Agents-specific marks for configured skills,
+subagents, and human-in-the-loop lifecycle events.
 
 ## Setup
 
@@ -53,13 +52,10 @@ with nemo_flow.scope.scope("deepagents-request", nemo_flow.ScopeType.Agent):
 - LangChain model and tool calls through NeMo Flow managed execution.
 - LangGraph run scopes through callbacks.
 - Human-in-the-loop interrupt and resume marks.
-- Deep Agents `task` delegation scopes for synchronous subagents.
-- Deep Agents async subagent tool lifecycle scopes.
-- Filesystem tool scopes for `ls`, `read_file`, `write_file`, `edit_file`,
-  `glob`, and `grep`.
-- Sandbox/local shell `execute` scopes.
 - Configured skills and subagent summaries at agent-run start.
+- In-process dictionary-style subagents are instrumented with the same NeMo
+  Flow middleware so their model and tool calls are captured when Deep Agents
+  invokes them.
 
-Remote async subagents still need NeMo Flow instrumentation in the remote graph
-or process to capture their internal model and tool calls. Supervisor-side
-observability captures the task lifecycle and returned status.
+Remote graphs or processes still need NeMo Flow instrumentation in that graph
+or process to capture their internal model and tool calls.

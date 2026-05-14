@@ -7,13 +7,11 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 from uuid import uuid4
 
-import pytest
 from deepagents import create_deep_agent
 from deepagents.backends import LocalShellBackend
-from langchain.agents.middleware import ToolCallRequest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.callbacks import GraphInterruptEvent, GraphResumeEvent
@@ -27,20 +25,6 @@ from nemo_flow.integrations.deepagents import (
 )
 
 
-@pytest.fixture(name="mock_tool_execute")
-def mock_tool_execute_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
-    async def execute_side_effect(*, func: Any, args: Any, **kwargs: Any) -> Any:
-        result = func(args)
-        if hasattr(result, "__await__"):
-            return await result
-        return result
-
-    mock_execute = AsyncMock(side_effect=execute_side_effect)
-    monkeypatch.setattr(nemo_flow.scope, "get_handle", lambda: MagicMock(name="mock_handle"))
-    monkeypatch.setattr(nemo_flow.typed, "tool_execute", mock_execute)
-    return mock_execute
-
-
 class _MockDeepAgentsChatModel(FakeMessagesListChatModel):
     model: str = "mock-model"
 
@@ -48,23 +32,8 @@ class _MockDeepAgentsChatModel(FakeMessagesListChatModel):
         return self
 
 
-@pytest.fixture(name="middleware")
-def middleware_fixture() -> NemoFlowDeepAgentsMiddleware:
-    return NemoFlowDeepAgentsMiddleware(agent_name="main-agent")
-
-
 def _filter_mark_events(events: list[nemo_flow.Event]) -> list[nemo_flow.MarkEvent]:
     return [event for event in events if isinstance(event, nemo_flow.MarkEvent)]
-
-
-def _filter_deepagents_scope_events(events: list[nemo_flow.Event]) -> list[nemo_flow.ScopeEvent]:
-    return [
-        event
-        for event in events
-        if isinstance(event, nemo_flow.ScopeEvent)
-        and isinstance(event.metadata, dict)
-        and event.metadata.get("integration") == "deepagents"
-    ]
 
 
 def _mark_data(mark: nemo_flow.MarkEvent) -> dict[str, Any]:
@@ -75,113 +44,6 @@ def _mark_data(mark: nemo_flow.MarkEvent) -> dict[str, Any]:
 def _mark_metadata(mark: nemo_flow.MarkEvent) -> dict[str, Any]:
     assert isinstance(mark.metadata, dict)
     return cast(dict[str, Any], mark.metadata)
-
-
-def _scope_data(event: nemo_flow.ScopeEvent) -> dict[str, Any]:
-    assert isinstance(event.data, dict)
-    return cast(dict[str, Any], event.data)
-
-
-def _scope_metadata(event: nemo_flow.ScopeEvent) -> dict[str, Any]:
-    assert isinstance(event.metadata, dict)
-    return cast(dict[str, Any], event.metadata)
-
-
-def _mk_tool_request(tool_name: str, args: dict[str, Any]) -> ToolCallRequest:
-    return ToolCallRequest(
-        tool_call={"name": tool_name, "args": args, "id": "call-1"},
-        tool=None,
-        state={},
-        runtime=MagicMock(name="mock_runtime"),
-    )
-
-
-@pytest.mark.parametrize(
-    ("tool_name", "args", "expected_kind", "expected_scope"),
-    [
-        ("task", {"name": "researcher", "task": "research GPUs"}, "subagent", "DeepAgents Subagent"),
-        (
-            "start_async_task",
-            {"agent_name": "researcher", "task": "research GPUs"},
-            "async_subagent",
-            "DeepAgents Async Subagent",
-        ),
-        ("read_file", {"path": "/workspace/notes.md"}, "filesystem", "DeepAgents Filesystem"),
-        ("execute", {"command": "python main.py"}, "sandbox", "DeepAgents Sandbox"),
-    ],
-)
-def test_wrap_tool_call_emits_deepagents_scopes(
-    tool_name: str,
-    args: dict[str, Any],
-    expected_kind: str,
-    expected_scope: str,
-    middleware: NemoFlowDeepAgentsMiddleware,
-    mock_tool_execute: AsyncMock,
-    subscribed_events: list[nemo_flow.Event],
-):
-    def handler(request: ToolCallRequest) -> ToolMessage:
-        return ToolMessage(content="done", tool_call_id=request.tool_call["id"])
-
-    with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-        result = middleware.wrap_tool_call(_mk_tool_request(tool_name, args), handler)
-
-    assert result.content == "done"
-    mock_tool_execute.assert_awaited_once()
-
-    scopes = _filter_deepagents_scope_events(subscribed_events)
-    assert [(event.name, event.scope_category) for event in scopes] == [
-        (expected_scope, "start"),
-        (expected_scope, "end"),
-    ]
-    assert _scope_metadata(scopes[0])["deepagents_kind"] == expected_kind
-    assert _scope_data(scopes[0])["tool_name"] == tool_name
-    assert scopes[1].data is None
-
-
-async def test_awrap_tool_call_emits_deepagents_scopes(
-    middleware: NemoFlowDeepAgentsMiddleware,
-    mock_tool_execute: AsyncMock,
-    subscribed_events: list[nemo_flow.Event],
-):
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        return ToolMessage(content="started", tool_call_id=request.tool_call["id"])
-
-    with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-        result = await middleware.awrap_tool_call(
-            _mk_tool_request("check_async_task", {"task_id": "task-1"}),
-            handler,
-        )
-
-    assert result.content == "started"
-    mock_tool_execute.assert_awaited_once()
-
-    scopes = _filter_deepagents_scope_events(subscribed_events)
-    assert [(event.name, event.scope_category) for event in scopes] == [
-        ("DeepAgents Async Subagent", "start"),
-        ("DeepAgents Async Subagent", "end"),
-    ]
-    assert _scope_data(scopes[0])["task_id"] == "task-1"
-
-
-def test_wrap_tool_call_emits_error_scope(
-    middleware: NemoFlowDeepAgentsMiddleware,
-    mock_tool_execute: AsyncMock,
-    subscribed_events: list[nemo_flow.Event],
-):
-    def handler(request: ToolCallRequest) -> ToolMessage:
-        raise RuntimeError("approval failed")
-
-    with pytest.raises(RuntimeError, match="approval failed"):
-        with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-            middleware.wrap_tool_call(_mk_tool_request("task", {"name": "researcher"}), handler)
-
-    mock_tool_execute.assert_awaited_once()
-    scopes = _filter_deepagents_scope_events(subscribed_events)
-    assert [(event.name, event.scope_category) for event in scopes] == [
-        ("DeepAgents Subagent", "start"),
-        ("DeepAgents Subagent", "end"),
-    ]
-    assert scopes[1].data is None
 
 
 def test_before_agent_emits_configuration_mark(subscribed_events: list[nemo_flow.Event]):
@@ -298,7 +160,6 @@ def test_add_nemo_flow_integration_preserves_backend():
 
 def test_e2e_agent(
     tmp_path: Path,
-    subscribed_events: list[nemo_flow.Event],
 ):
     model = _MockDeepAgentsChatModel(
         responses=[
@@ -339,8 +200,3 @@ def test_e2e_agent(
             break
 
     assert found_write_file_message
-
-    scopes = _filter_deepagents_scope_events(subscribed_events)
-    assert any(
-        _scope_data(event).get("tool_name") == "write_file" for event in scopes if event.scope_category == "start"
-    )

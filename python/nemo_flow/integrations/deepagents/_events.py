@@ -13,45 +13,12 @@ import nemo_flow
 
 _logger = logging.getLogger(__name__)
 
-SYNC_SUBAGENT_TOOLS = frozenset({"task"})
-ASYNC_SUBAGENT_TOOLS = frozenset(
-    {
-        "start_async_task",
-        "check_async_task",
-        "update_async_task",
-        "cancel_async_task",
-        "list_async_tasks",
-    }
-)
-# Mirrors the Deep Agents built-in filesystem tools listed in the backend docs:
-# https://docs.langchain.com/oss/python/deepagents/backends
-FILESYSTEM_TOOLS = frozenset({"ls", "read_file", "write_file", "edit_file", "glob", "grep"})
-# Deep Agents sandbox backends expose execute()/aexecute(); the tool name is execute.
-SANDBOX_TOOLS = frozenset({"execute"})
-
-
-def tool_kind(tool_name: str) -> str | None:
-    """Return the Deep Agents semantic category for a known built-in tool."""
-    if tool_name in SYNC_SUBAGENT_TOOLS:
-        return "subagent"
-    if tool_name in ASYNC_SUBAGENT_TOOLS:
-        return "async_subagent"
-    if tool_name in SANDBOX_TOOLS:
-        return "sandbox"
-    if tool_name in FILESYSTEM_TOOLS:
-        return "filesystem"
-    return None
-
 
 def event_base_name(kind: str) -> str:
     """Return a stable event base name for a Deep Agents category."""
     return {
-        "subagent": "DeepAgents Subagent",
-        "async_subagent": "DeepAgents Async Subagent",
         "human_in_the_loop": "DeepAgents Human In The Loop",
         "skill": "DeepAgents Skills",
-        "sandbox": "DeepAgents Sandbox",
-        "filesystem": "DeepAgents Filesystem",
     }.get(kind, "DeepAgents")
 
 
@@ -66,62 +33,6 @@ def json_safe(value: Any) -> nemo_flow.Json:
     if isinstance(value, bytes | bytearray):
         return f"<{type(value).__name__}: {len(value)} bytes>"
     return repr(value)
-
-
-def summarize_value(value: Any) -> nemo_flow.Json:
-    """Return a JSON-compatible representation for observability payloads."""
-    if value is None or isinstance(value, int | float | bool):
-        return value
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bytes | bytearray):
-        return f"<{type(value).__name__}: {len(value)} bytes>"
-    if isinstance(value, Mapping):
-        return {str(key): summarize_value(item) for key, item in value.items()}
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return [summarize_value(item) for item in value]
-
-    content = getattr(value, "content", None)
-    if isinstance(content, str):
-        summary: dict[str, nemo_flow.Json] = {"content": content}
-        for attr in ("name", "id", "tool_call_id"):
-            attr_value = getattr(value, attr, None)
-            if attr_value is not None:
-                summary[attr] = summarize_value(attr_value)
-        return summary
-
-    return repr(value)
-
-
-def tool_event_data(
-    tool_name: str,
-    args: Mapping[str, Any],
-    *,
-    result: Any = None,
-    error: BaseException | None = None,
-) -> dict[str, nemo_flow.Json]:
-    """Build a stable Deep Agents tool event payload."""
-    data: dict[str, nemo_flow.Json] = {
-        "tool_name": tool_name,
-        "args": summarize_value(args),
-    }
-
-    for key in ("name", "agent_name", "task_id", "thread_id", "run_id", "graph_id", "status"):
-        value = args.get(key)
-        if value is not None:
-            data[key] = summarize_value(value)
-
-    for key in ("path", "file_path", "pattern", "glob", "command"):
-        value = args.get(key)
-        if value is not None:
-            data[key] = summarize_value(value)
-
-    if result is not None:
-        data["result"] = summarize_value(result)
-    if error is not None:
-        data["error"] = repr(error)
-
-    return data
 
 
 def emit_mark(

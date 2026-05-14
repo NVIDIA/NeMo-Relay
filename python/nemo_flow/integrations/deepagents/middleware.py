@@ -5,17 +5,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping, Sequence
+from typing import Any
 
-import nemo_flow
-from nemo_flow.integrations.deepagents._events import emit_mark, event_base_name, json_safe, tool_event_data, tool_kind
+from nemo_flow.integrations.deepagents._events import emit_mark, event_base_name
 from nemo_flow.integrations.langchain.middleware import NemoFlowMiddleware
-
-if TYPE_CHECKING:
-    from langchain.agents.middleware import ToolCallRequest
-    from langchain_core.messages import ToolMessage
-    from langgraph.types import Command
 
 
 class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
@@ -23,8 +17,7 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
 
     Deep Agents is built on LangChain ``AgentMiddleware`` and LangGraph. This
     middleware keeps the existing NeMo Flow LangChain wrapping behavior, then
-    adds stable scopes for Deep Agents-specific tools such as ``task``,
-    async subagent tools, filesystem tools, and sandbox execution.
+    emits Deep Agents configuration marks.
     """
 
     def __init__(
@@ -50,7 +43,6 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
         """Emit run configuration metadata for async Deep Agents runs."""
         self._emit_agent_configuration()
 
-
     def _emit_agent_configuration(self) -> None:
         data: dict[str, Any] = {}
         if self._agent_name is not None:
@@ -73,4 +65,3 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
                 data,
                 metadata={"agent_name": self._agent_name} if self._agent_name is not None else None,
             )
-
