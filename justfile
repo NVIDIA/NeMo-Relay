@@ -918,6 +918,7 @@ test-openclaw:
     fi
     npm run typecheck --workspace=nemo-flow-openclaw
     npm test --workspace=nemo-flow-openclaw
+    npm run test:live --workspace=nemo-flow-openclaw
     npm run pack:check --workspace=nemo-flow-openclaw
 
 # --set [output_dir=<path>] [ci=true|false]
