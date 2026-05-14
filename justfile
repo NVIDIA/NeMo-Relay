@@ -1089,7 +1089,7 @@ package-node:
         exit 1
     fi
 
-# --set [output_dir=<path>] [ref_name=<name>]
+# --set [output_dir=<path>] [ref_name=<name>] [ci=true|false]
 package-openclaw:
     #!/usr/bin/env bash
     {{ bash_helpers }}
@@ -1103,15 +1103,22 @@ package-openclaw:
         version="$(read_npm_package_version integrations/openclaw/package.json)"
         package_version="${version}+${sha}"
         echo "Non-release build: appending commit hash to version"
+        set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_version integrations/openclaw/package.json package-lock.json "$package_version" integrations/openclaw
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-flow-node "$package_version"
     else
         package_version="{{ ref_name }}"
         echo "Using explicit version {{ ref_name }}"
+        set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_version integrations/openclaw/package.json package-lock.json "$package_version" integrations/openclaw
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-flow-node "$package_version"
     fi
-    npm install --workspace=nemo-flow-openclaw --ignore-scripts
+    npm install --workspace=nemo-flow-node --workspace=nemo-flow-openclaw --ignore-scripts
+    if is_true "{{ ci }}"; then
+        npm run build-debug --workspace=nemo-flow-node
+    else
+        npm run build --workspace=nemo-flow-node
+    fi
     npm pack --workspace=nemo-flow-openclaw --pack-destination "$package_dir"
     shopt -s nullglob
     packages=("$package_dir"/*.tgz)

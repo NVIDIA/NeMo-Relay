@@ -231,6 +231,19 @@ jobs:
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
 
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        with:
+          cache: false
+          toolchain: ${{ steps.ci-config.outputs.rust_version }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: nemo-flow-rust-openclaw-package-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          workspaces: . -> target
+          cache-all-crates: true
+          cache-bin: false
+          save-if: false
+
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
@@ -257,6 +270,7 @@ jobs:
         run: |
           set -euo pipefail
           just \
+            --set ci true \
             --set output_dir "${NEMO_FLOW_CI_WORKSPACE_TMP}" \
             --set ref_name "${NEMO_FLOW_OPENCLAW_PACKAGE_VERSION}" \
             package-openclaw
