@@ -89,6 +89,11 @@ def _serialize_value(value: object) -> Json:
         return [_serialize_value(item) for item in value]
     if isinstance(value, dict):
         return {cast(str, key): _serialize_value(item) for key, item in value.items()}
+    if hasattr(value, "model_dump"):
+        try:
+            return cast(_SupportsModelDump, value).model_dump(mode="json")
+        except Exception:
+            pass  # Intentional: fall through to the default string encoding
     return cast(Json, value)
 
 
