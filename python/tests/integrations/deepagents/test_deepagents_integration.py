@@ -160,7 +160,14 @@ def test_add_nemo_flow_integration_preserves_backend():
 
 def test_e2e_agent(
     tmp_path: Path,
+    subscribed_events: list[nemo_flow.Event],
 ):
+    reviewer_description = "Reviews filesystem work performed by the main agent."
+    reviewer_model = _MockDeepAgentsChatModel(
+        responses=[
+            AIMessage(content="reviewer verified turtle"),
+        ]
+    )
     model = _MockDeepAgentsChatModel(
         responses=[
             AIMessage(
@@ -173,7 +180,20 @@ def test_e2e_agent(
                     }
                 ],
             ),
-            AIMessage(content="created turtle"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "task",
+                        "args": {
+                            "description": "Review the file creation result and report whether turtle was created.",
+                            "subagent_type": "reviewer",
+                        },
+                        "id": "call-2",
+                    }
+                ],
+            ),
+            AIMessage(content="created turtle after reviewer verified turtle"),
         ]
     )
     kwargs = add_nemo_flow_integration(
@@ -181,6 +201,15 @@ def test_e2e_agent(
         tools=[],
         name="main-agent",
         backend=LocalShellBackend(root_dir=tmp_path, virtual_mode=True),
+        subagents=[
+            {
+                "name": "reviewer",
+                "description": reviewer_description,
+                "system_prompt": "Review the delegated task and return one concise verification sentence.",
+                "model": reviewer_model,
+                "tools": [],
+            }
+        ],
     )
     agent = create_deep_agent(**kwargs)
 
@@ -188,8 +217,9 @@ def test_e2e_agent(
         result = agent.invoke({"messages": [{"role": "user", "content": "Create a file named turtle."}]})
 
     assert (tmp_path / "turtle").read_text() == "shell"
-    assert result["messages"][-1].content == "created turtle"
+    assert result["messages"][-1].content == "created turtle after reviewer verified turtle"
     found_write_file_message = False
+    found_subagent_message = False
     for message in result["messages"]:
         if (
             isinstance(message, ToolMessage)
@@ -197,6 +227,21 @@ def test_e2e_agent(
             and message.content == "Updated file /turtle"
         ):
             found_write_file_message = True
-            break
+        if isinstance(message, ToolMessage) and message.content == "reviewer verified turtle":
+            found_subagent_message = True
 
     assert found_write_file_message
+    assert found_subagent_message
+
+    marks = _filter_mark_events(subscribed_events)
+    configured_subagents = [
+        subagent
+        for mark in marks
+        if mark.name == "DeepAgents Skills Configured"
+        for subagent in _mark_data(mark).get("subagents", [])
+        if isinstance(subagent, dict)
+    ]
+    assert any(
+        subagent.get("name") == "reviewer" and subagent.get("description") == reviewer_description
+        for subagent in configured_subagents
+    )
