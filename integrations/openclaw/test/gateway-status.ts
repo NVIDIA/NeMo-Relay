@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 
-import type { NemoFlowHealthSnapshot } from "../health.js";
+import type { NemoFlowHealthSnapshot } from "../src/health.js";
 
 export type TestGatewayMethodHandler = Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
 

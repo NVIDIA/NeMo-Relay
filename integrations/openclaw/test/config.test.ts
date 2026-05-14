@@ -15,14 +15,14 @@ import {
   NEMO_FLOW_OPENCLAW_JSON_SCHEMA,
   nemoFlowConfigSchema,
   parseConfig,
-} from "../config.js";
+} from "../src/config.js";
 import {
   defaultNemoFlowModuleLoader,
   type NemoFlowModuleLoader,
   type NemoFlowModules,
   type NemoFlowRuntimeModule,
-} from "../modules.js";
-import { registerNemoFlowPlugin } from "../runtime-state.js";
+} from "../src/modules.js";
+import { registerNemoFlowPlugin } from "../src/runtime-state.js";
 import type { OpenClawPluginApi, PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { callGatewayStatus, type TestGatewayMethodHandler } from "./gateway-status.js";
 

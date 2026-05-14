@@ -10,12 +10,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { it } from "node:test";
 
-import { registerNemoFlowPlugin } from "../runtime-state.js";
+import { registerNemoFlowPlugin } from "../src/runtime-state.js";
 import {
   defaultNemoFlowModuleLoader,
   type NemoFlowModuleLoader,
   type NemoFlowModules,
-} from "../modules.js";
+} from "../src/modules.js";
 import type { OpenClawPluginApi, PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { callGatewayStatus, type TestGatewayMethodHandler } from "./gateway-status.js";
 

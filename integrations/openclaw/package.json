@@ -51,7 +51,7 @@
     "pack:check": "node scripts/check-pack-payload.mjs",
     "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build:test && node --test \".test-dist/src/__tests__/*.test.js\"",
+    "test": "npm run build:test && node --test \".test-dist/test/*.test.js\"",
     "test:live": "npm run build:test && node scripts/test-live.mjs"
   },
   "peerDependencies": {

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const result = spawnSync(process.execPath, ["--test", ".test-dist/src/__tests__/live-smoke.test.js"], {
+const result = spawnSync(process.execPath, ["--test", ".test-dist/test/live-smoke.test.js"], {
   cwd: packageRoot,
   env: {
     ...process.env,
