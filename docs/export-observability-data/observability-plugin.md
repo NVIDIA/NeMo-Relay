@@ -13,6 +13,13 @@ The plugin kind is `observability`. It is registered by the core runtime, so
 applications do not need to register a plugin implementation before validation
 or initialization.
 
+:::{note}
+Observability plugin configuration uses the generic NeMo Flow plugin document
+shape, so field names are `snake_case` in every binding. This differs from
+Node.js runtime classes such as `OpenTelemetrySubscriber`, which use
+Node-native `camelCase` option names outside the plugin system.
+:::
+
 ## What It Installs
 
 The component accepts four optional sections:

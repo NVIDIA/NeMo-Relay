@@ -45,6 +45,13 @@ The table below summarizes the adaptive configuration areas and when to use them
 
 The top-level adaptive object contains `version`, `agent_id`, `state`, `telemetry`, `adaptive_hints`, `tool_parallelism`, `acg`, and `policy`. You wrap that object with `ComponentSpec(...)`, insert it into a plugin configuration, validate, and initialize through the plugin system.
 
+:::{note}
+Adaptive plugin configuration uses the generic NeMo Flow plugin document shape,
+so configuration field names stay `snake_case` in every binding. Node.js helper
+function names such as `toolParallelismConfig(...)` are `camelCase`, but the
+config object they create uses canonical `snake_case` keys.
+:::
+
 ## Create a Minimal Adaptive Component
 
 The examples below create a minimal adaptive component configuration for each binding.

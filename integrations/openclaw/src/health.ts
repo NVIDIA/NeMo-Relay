@@ -8,7 +8,7 @@
  * stable, JSON-friendly status payload for operators and tests.
  */
 import type { NemoFlowHookBackendConfig } from "./config.js";
-import type { HookReplayBackendState, SessionState } from "./hook-replay/session.js";
+import type { HookReplayBackendState } from "./hook-replay/session.js";
 
 export type HookReplayBackendStatus =
   | { state: "not_initialized"; reason?: string }
@@ -35,16 +35,17 @@ export type NemoFlowHealthSnapshot = {
   lastError?: string;
 };
 
-/** Build a complete health payload from runtime status, outputs, and counters. */
+/** Build a complete health payload from runtime status, configured outputs, and counters. */
 export function createHealthSnapshot(params: {
   status: HookReplayBackendStatus;
   initializedPluginHost: boolean;
+  pluginHostOutputsHealthy: boolean;
   config: NemoFlowHookBackendConfig;
-  degradedOutputs: ReadonlySet<"atif" | "otel" | "openInference">;
   counters?: HookReplayBackendState["counters"];
-  sessions?: Iterable<SessionState>;
 }): NemoFlowHealthSnapshot {
   const lastError = "reason" in params.status ? params.status.reason : undefined;
+  const outputs = configuredObservabilityOutputs(params.config);
+  const pluginHostFailed = params.status.state === "degraded" && !params.pluginHostOutputsHealthy;
   return {
     id: "nemo-flow",
     backend: "hooks",
@@ -52,44 +53,55 @@ export function createHealthSnapshot(params: {
     initializedPluginHost: params.initializedPluginHost,
     state: params.status.state,
     outputs: {
-      atif: atifOutputHealth(params.config, params.degradedOutputs, params.sessions),
-      otel: telemetryOutputHealth(params.config.telemetry.otel.enabled, params.degradedOutputs.has("otel")),
-      openInference: telemetryOutputHealth(
-        params.config.telemetry.openInference.enabled,
-        params.degradedOutputs.has("openInference"),
-      ),
+      atif: outputHealth(outputs.atif, pluginHostFailed),
+      otel: outputHealth(outputs.otel, pluginHostFailed),
+      openInference: outputHealth(outputs.openInference, pluginHostFailed),
     },
     counters: params.counters ?? emptyCounters(),
     ...(lastError === undefined ? {} : { lastError }),
   };
 }
 
-/** Report ATIF degradation from config, global output state, or active sessions. */
-function atifOutputHealth(
-  config: NemoFlowHookBackendConfig,
-  degradedOutputs: ReadonlySet<"atif" | "otel" | "openInference">,
-  sessions: Iterable<SessionState> | undefined,
-): OutputHealthState {
-  if (!config.atif.enabled) {
-    return "disabled";
-  }
-  if (degradedOutputs.has("atif")) {
-    return "degraded";
-  }
-  for (const session of sessions ?? []) {
-    if (session.atif?.disabled || session.atif?.leakedRegistration) {
-      return "degraded";
-    }
-  }
-  return "enabled";
-}
-
-/** Report telemetry sink health using the sink's enabled and degraded states. */
-function telemetryOutputHealth(enabled: boolean, degraded: boolean): OutputHealthState {
+function outputHealth(enabled: boolean, pluginHostFailed: boolean): OutputHealthState {
   if (!enabled) {
     return "disabled";
   }
-  return degraded ? "degraded" : "enabled";
+  return pluginHostFailed ? "degraded" : "enabled";
+}
+
+/** Inspect generic PluginConfig components for configured observability outputs. */
+function configuredObservabilityOutputs(config: NemoFlowHookBackendConfig): {
+  atif: boolean;
+  otel: boolean;
+  openInference: boolean;
+} {
+  const outputs = { atif: false, otel: false, openInference: false };
+
+  for (const component of config.plugins.components) {
+    const record = asRecord(component);
+    if (record?.kind !== "observability" || record.enabled === false) {
+      continue;
+    }
+
+    const componentConfig = asRecord(record.config);
+    outputs.atif ||= sectionEnabled(componentConfig?.atif);
+    outputs.otel ||= sectionEnabled(componentConfig?.opentelemetry);
+    outputs.openInference ||= sectionEnabled(componentConfig?.openinference);
+  }
+
+  return outputs;
+}
+
+function sectionEnabled(value: unknown): boolean {
+  const section = asRecord(value);
+  return section?.enabled === true;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
 }
 
 /** Provide zero counters before hook replay has initialized. */
@@ -98,7 +110,6 @@ function emptyCounters(): HookReplayBackendState["counters"] {
     llmSpansReplayed: 0,
     toolSpansReplayed: 0,
     marksEmitted: 0,
-    atifFilesWritten: 0,
     replayErrors: 0,
     skippedEvents: 0,
   };

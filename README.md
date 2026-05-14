@@ -145,7 +145,8 @@ API-based integrations live under language-specific integration packages such as
 `python/nemo_flow/integrations/` and `integrations/`.
 
 The OpenClaw observability plugin is available under `integrations/openclaw/`
-and uses OpenClaw public plugin hooks to export NeMo Flow telemetry. See the
+and uses OpenClaw public plugin hooks plus the generic NeMo Flow plugin
+configuration shape to export telemetry. See the
 [OpenClaw package README](integrations/openclaw/README.md).
 
 ### Patch-based Integrations

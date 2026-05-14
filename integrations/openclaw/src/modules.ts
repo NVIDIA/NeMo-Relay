@@ -21,10 +21,7 @@ type NemoFlowRuntimeKeys =
   | "llmCall"
   | "llmCallEnd"
   | "toolCall"
-  | "toolCallEnd"
-  | "AtifExporter"
-  | "OpenTelemetrySubscriber"
-  | "OpenInferenceSubscriber";
+  | "toolCallEnd";
 
 type NemoFlowPluginHostKeys = "defaultConfig" | "validate" | "initialize" | "clear";
 
@@ -46,18 +43,6 @@ export type NemoFlowRuntimeModule = Omit<Pick<typeof NemoFlowRuntime, NemoFlowRu
  * `nemo-flow-node/plugin` namespace used by this integration.
  */
 export type NemoFlowPluginHostModule = Pick<typeof NemoFlowPluginHost, NemoFlowPluginHostKeys>;
-
-/** @internal Subscriber surface used by runtime shutdown and health tracking. */
-export type NemoFlowSubscriber = Pick<
-  InstanceType<typeof NemoFlowRuntime.OpenTelemetrySubscriber>,
-  "register" | "deregister" | "forceFlush" | "shutdown"
->;
-
-/** @internal ATIF exporter surface used by per-session capture/export. */
-export type AtifExporterLike = Pick<
-  InstanceType<typeof NemoFlowRuntime.AtifExporter>,
-  "register" | "deregister" | "exportJson" | "clear"
->;
 
 export type NemoFlowModules = {
   nf: NemoFlowRuntimeModule;

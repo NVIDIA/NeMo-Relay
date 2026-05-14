@@ -10,7 +10,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { it } from "node:test";
 
-import { makeSafeSessionId } from "../atif-capture.js";
 import { registerNemoFlowPlugin } from "../runtime-state.js";
 import {
   defaultNemoFlowModuleLoader,
@@ -30,13 +29,23 @@ it(
     const modules = await loadRealNemoFlowModules();
     const api = createApi({
       pluginConfig: {
-        atif: {
-          enabled: true,
-          outputDir,
-        },
-        telemetry: {
-          otel: { enabled: false },
-          openInference: { enabled: false },
+        plugins: {
+          version: 1,
+          components: [
+            {
+              kind: "observability",
+              enabled: true,
+              config: {
+                version: 1,
+                atif: {
+                  enabled: true,
+                  agent_name: "openclaw",
+                  output_directory: outputDir,
+                  filename_template: "live-{session_id}.json",
+                },
+              },
+            },
+          ],
         },
       },
     });
@@ -111,15 +120,16 @@ it(
         { sessionId: "../live-session:1" },
       );
 
-      const targetPath = path.join(outputDir, `${makeSafeSessionId("../live-session:1")}.json`);
-      const exported = JSON.parse(await fs.readFile(targetPath, "utf8")) as unknown;
+      const files = await fs.readdir(outputDir);
+      const exportedPath = files.find((file) => file.startsWith("live-") && file.endsWith(".json"));
+      assert.ok(exportedPath, "expected generic observability ATIF export");
+      const exported = JSON.parse(await fs.readFile(path.join(outputDir, exportedPath), "utf8")) as unknown;
       assert.equal(typeof exported, "object");
 
       const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
       assert.equal(status.outputs.atif, "enabled");
       assert.equal(status.counters.llmSpansReplayed, 1);
       assert.equal(status.counters.toolSpansReplayed, 1);
-      assert.equal(status.counters.atifFilesWritten, 1);
 
     } finally {
       if (serviceStarted) {

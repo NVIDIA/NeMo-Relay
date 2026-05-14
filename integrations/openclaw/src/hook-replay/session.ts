@@ -9,9 +9,7 @@
  * those identifiers and owns the root `openclaw.session` scope lifecycle.
  */
 import type { NemoFlowHookBackendConfig } from "../config.js";
-import { createAtifExporter } from "../atif-capture.js";
 import { evictExpiredRecords, tupleKey as tupleKeyFromCorrelation } from "./correlation.js";
-import type { AtifExporterLike } from "../modules.js";
 import type {
   PluginHookAgentContext,
   PluginHookLlmOutputEvent,
@@ -53,14 +51,6 @@ export type SessionState = {
   assistantMessageWrites?: AssistantMessageRecord[];
   stack: ReturnType<NemoFlowRuntimeModule["createScopeStack"]>;
   rootHandle?: ReturnType<NemoFlowRuntimeModule["pushScope"]>;
-  atif?: {
-    exporter: AtifExporterLike;
-    registrationName: string;
-    capturing: boolean;
-    registeredOnce?: boolean;
-    disabled?: boolean;
-    leakedRegistration?: boolean;
-  };
 };
 
 export type PendingLlmOutputRecord = {
@@ -130,7 +120,6 @@ export type HookReplayCounters = {
   llmSpansReplayed: number;
   toolSpansReplayed: number;
   marksEmitted: number;
-  atifFilesWritten: number;
   replayErrors: number;
   skippedEvents: number;
 };
@@ -151,14 +140,12 @@ export type SessionManager = {
   logger: PluginLogger;
   state: HookReplayBackendState;
   agentVersion: string;
-  resolvedAtifOutputDir: string;
   emitCapturedUnderSession: (label: string, session: SessionState, emit: () => void) => void;
   replayPendingLlmOutputsForSession: (
     session: SessionState,
     options: { allowPlaceholderRequest: boolean },
   ) => void;
   emitUnpairedModelCallTimingMarks: (session: SessionState) => void;
-  markOutputDegraded: (output: "atif" | "otel" | "openInference") => void;
   logBoundedWarn: (key: string, message: string) => void;
 };
 
@@ -215,7 +202,6 @@ export function createHookReplayState(): HookReplayBackendState {
       llmSpansReplayed: 0,
       toolSpansReplayed: 0,
       marksEmitted: 0,
-      atifFilesWritten: 0,
       replayErrors: 0,
       skippedEvents: 0,
     },
@@ -261,7 +247,6 @@ export function ensureSession(manager: SessionManager, input: EnsureSessionInput
     session.resumedFrom = input.resumedFrom;
   }
 
-  createAtifExporter(manager, session);
   openSessionRoot(manager, session, input);
   manager.state.sessions.set(session.sessionId, session);
   rememberSessionAliases(manager.state, session, input);

@@ -989,11 +989,13 @@ package-node:
     if [[ -z "{{ ref_name }}" ]]; then
         sha="$(head_git_sha)"
         version="$(read_npm_package_version crates/node/package.json)"
+        package_version="${version}+${sha}"
         echo "Non-release build: appending commit hash to version"
-        set_npm_package_version crates/node/package.json package-lock.json "${version}-${sha}" crates/node
+        set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
     else
+        package_version="{{ ref_name }}"
         echo "Using explicit version {{ ref_name }}"
-        set_npm_package_version crates/node/package.json package-lock.json "{{ ref_name }}" crates/node
+        set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
     fi
     build_args=(build)
     if is_true "{{ ci }}" && [[ "$(uname -s)" == "Linux" ]]; then

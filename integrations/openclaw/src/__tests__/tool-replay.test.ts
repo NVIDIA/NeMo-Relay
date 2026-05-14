@@ -162,13 +162,10 @@ function createBackend(
   return new HookReplayBackend({
     nf,
     config: parseConfig({
-      atif: { enabled: false },
       capture: overrides.capture,
     }),
     logger: createLogger(),
     agentVersion: "test-version",
-    resolvedAtifOutputDir: "/tmp/openclaw-state/plugins/nemo-flow/atif",
-    markOutputDegraded: () => {},
   });
 }
 
@@ -219,28 +216,5 @@ function createNemoFlowRuntime(): TestNemoFlowRuntime {
       return handle as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>;
     },
     toolCallEnd: (handle, result, data) => calls.toolCallEnd.push({ handle, result, data }),
-    AtifExporter: FakeAtifExporter,
-    OpenTelemetrySubscriber: FakeSubscriber,
-    OpenInferenceSubscriber: FakeSubscriber,
   };
-}
-
-class FakeAtifExporter {
-  register(): void {}
-  deregister(): boolean {
-    return true;
-  }
-  exportJson(): string {
-    return "{}";
-  }
-  clear(): void {}
-}
-
-class FakeSubscriber {
-  register(): void {}
-  deregister(): boolean {
-    return true;
-  }
-  forceFlush(): void {}
-  shutdown(): void {}
 }

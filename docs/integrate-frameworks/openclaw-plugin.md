@@ -8,7 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 Use the OpenClaw plugin when OpenClaw owns the agent, tool, and LLM lifecycle
 that needs NeMo Flow observability. The plugin observes supported OpenClaw
 plugin hooks and converts them into NeMo Flow sessions, LLM spans, tool spans,
-marks, ATIF JSON, OpenTelemetry spans, and OpenInference/Phoenix spans.
+and marks that the generic NeMo Flow observability component can export as
+ATIF JSON, OpenTelemetry spans, and OpenInference/Phoenix spans.
 
 Use this guide to install the plugin, enable it in OpenClaw, configure telemetry
 outputs, verify exported traces, and understand current LLM replay fidelity.
@@ -51,10 +52,11 @@ Installing with npm makes the package available to that project. Use
 `openclaw plugins install` when you want OpenClaw to register and manage the
 plugin.
 
-## Enable the Plugin
+## Enable and Configure the Plugin
 
-Allow the `nemo-flow` plugin ID and grant conversation hook access when OpenClaw
-runs with restrictive plugin settings:
+Add the `nemo-flow` plugin ID to `plugins.allow`, grant conversation hook
+access, and place the OpenClaw plugin configuration under
+`plugins.entries["nemo-flow"].config`:
 
 ```json
 {
@@ -66,17 +68,85 @@ runs with restrictive plugin settings:
         "hooks": {
           "allowConversationAccess": true
         },
-        "config": {}
+        "config": {
+          "enabled": true,
+          "backend": "hooks",
+          "plugins": {
+            "version": 1,
+            "components": [
+              {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                  "version": 1,
+                  "atif": {
+                    "enabled": true,
+                    "agent_name": "openclaw",
+                    "output_directory": "./nemo-flow-atif"
+                  },
+                  "opentelemetry": {
+                    "enabled": false,
+                    "transport": "http_binary",
+                    "endpoint": "http://localhost:4318/v1/traces",
+                    "service_name": "openclaw-nemo-flow"
+                  },
+                  "openinference": {
+                    "enabled": false,
+                    "transport": "http_binary",
+                    "endpoint": "http://localhost:6006/v1/traces",
+                    "service_name": "openclaw-nemo-flow"
+                  }
+                }
+              }
+            ]
+          },
+          "capture": {
+            "includePrompts": true,
+            "includeResponses": true,
+            "stripToolArgs": true,
+            "stripToolResults": true
+          },
+          "correlation": {
+            "llmOutputGraceMs": 250,
+            "recordTtlMs": 600000,
+            "maxRecordsPerKey": 32
+          }
+        }
       }
     }
   }
 }
 ```
 
-`plugins.allow` controls plugin trust and loading.
-`hooks.allowConversationAccess` lets trusted non-bundled plugins receive
-conversation-sensitive hook payloads such as LLM prompts, LLM responses, agent
-finalization messages, and tool payloads.
+This example enables local ATIF export and leaves OTLP exporters disabled until
+you point them at a collector or Phoenix endpoint. Remove exporter sections you
+do not use, or set their `enabled` fields to `false`.
+
+- `plugins.allow` controls OpenClaw plugin trust and loading. Include
+  `nemo-flow` when OpenClaw runs with restrictive plugin settings.
+- `plugins.entries["nemo-flow"].enabled` controls whether OpenClaw starts this
+  plugin entry.
+- `hooks.allowConversationAccess` lets trusted non-bundled plugins receive
+  conversation-sensitive hook payloads such as LLM prompts, LLM responses,
+  agent finalization messages, and tool payloads.
+- `config.enabled` disables or enables the NeMo Flow OpenClaw wrapper without
+  removing the plugin entry. `config.backend` currently supports only `hooks`.
+- `config.plugins` is the generic NeMo Flow plugin configuration document. Use
+  this object to configure built-in components such as `observability`.
+- `config.plugins.components[].config.atif` writes ATIF trajectory JSON files.
+  Set `output_directory` to the directory where OpenClaw should write files.
+- `config.plugins.components[].config.opentelemetry` sends generic OTLP spans to
+  an OpenTelemetry collector when `enabled` is `true`.
+- `config.plugins.components[].config.openinference` sends OpenInference OTLP
+  spans to Phoenix or another OpenInference-compatible collector when `enabled`
+  is `true`.
+- `config.capture` controls prompt, response, tool argument, and tool result
+  capture. Tool arguments and tool results are stripped by default because they
+  often contain user data, local paths, tokens, or large payloads.
+- `config.correlation` controls bounded in-memory hook correlation. By default,
+  the plugin waits 250 ms for a matching `llm_input` after an `llm_output`,
+  keeps correlation records for 600 seconds, and keeps at most 32 records per
+  correlation key.
 
 Restart the gateway after changing plugin configuration:
 
@@ -84,83 +154,24 @@ Restart the gateway after changing plugin configuration:
 openclaw gateway restart
 ```
 
-## Configure Outputs
+## Configuration Key Names
 
-Plugin configuration is passed through
-`plugins.entries["nemo-flow"].config`.
+The OpenClaw wrapper owns `enabled`, `backend`, `capture`, and `correlation`.
+The top-level `plugins` object inside the wrapper is the generic NeMo Flow
+plugin configuration document.
 
-ATIF export is enabled by default. OpenTelemetry and OpenInference subscribers
-are disabled until explicitly configured.
+:::{note}
+OpenClaw wrapper fields such as `includePrompts` and `llmOutputGraceMs` follow
+the OpenClaw plugin schema. Fields inside `config.plugins` are NeMo Flow generic
+plugin configuration, so they use `snake_case` regardless of language.
+:::
 
-Use the following configuration for ATIF-only local export:
-
-```json
-{
-  "atif": {
-    "enabled": true,
-    "outputDir": "./nemo-flow-atif"
-  },
-  "telemetry": {
-    "otel": {
-      "enabled": false
-    },
-    "openInference": {
-      "enabled": false
-    }
-  }
-}
-```
-
-Use the following configuration for OpenTelemetry OTLP export:
-
-```json
-{
-  "telemetry": {
-    "otel": {
-      "enabled": true,
-      "transport": "http_binary",
-      "endpoint": "http://localhost:4318/v1/traces",
-      "serviceName": "openclaw-nemo-flow"
-    }
-  }
-}
-```
-
-Use the following configuration for OpenInference/Phoenix OTLP export:
-
-```json
-{
-  "telemetry": {
-    "openInference": {
-      "enabled": true,
-      "transport": "http_binary",
-      "endpoint": "http://localhost:6006/v1/traces",
-      "serviceName": "openclaw-nemo-flow"
-    }
-  }
-}
-```
-
-Privacy defaults capture prompts and responses, and strip tool arguments and
-tool results:
-
-```json
-{
-  "capture": {
-    "includePrompts": true,
-    "includeResponses": true,
-    "stripToolArgs": true,
-    "stripToolResults": true
-  }
-}
-```
-
-Tool arguments and tool results are stripped by default because they often
-contain user data, local paths, tokens, or large payloads.
-
-Correlation uses bounded in-memory records. By default, the plugin waits 250 ms
-for a matching `llm_input` after an `llm_output`, keeps correlation records for
-600 seconds, and keeps at most 32 records per correlation key.
+Missing observability sections are disabled. Plugin-host validation or
+initialization errors degrade the NeMo Flow runtime as a whole, and the status
+method reports configured output health from the generic observability
+component. See
+[Configure the Observability Plugin](../export-observability-data/observability-plugin.md)
+for the complete `observability` component schema and exporter-specific fields.
 
 ## Verify the Integration
 
@@ -177,7 +188,8 @@ surface is active in a running gateway.
 Run an OpenClaw session with the plugin enabled, then verify the configured
 sink:
 
-- ATIF: confirm JSON files appear in the configured `atif.outputDir`.
+- ATIF: confirm JSON files appear in the configured
+  `config.plugins.components[].config.atif.output_directory`.
 - OpenTelemetry: confirm spans arrive at the configured OTLP collector.
 - OpenInference: confirm spans arrive at the configured OpenInference/Phoenix
   endpoint.
@@ -213,7 +225,7 @@ changing OpenClaw execution behavior.
 | `gateway_start` | Touches the replay backend early; session roots still open lazily from session-scoped hooks. |
 | `gateway_stop` | Drains open sessions, shuts down subscribers, and clears the NeMo Flow plugin host. |
 | `session_start` | Opens or aliases a NeMo Flow session scope. |
-| `session_end` | Closes the session, flushes pending replay state, and exports ATIF if enabled. |
+| `session_end` | Closes the session and flushes pending replay state; the generic observability component exports ATIF when enabled. |
 | `model_call_started` / `model_call_ended` | Records provider timing for later LLM span correlation. |
 | `llm_input` / `llm_output` | Replays direct LLM spans when request and response hooks can be paired safely. |
 | `before_message_write` | Records assistant turns for ordered LLM replay when provider timing can be paired later. |
@@ -261,8 +273,9 @@ If tool spans exist but LLM spans are incomplete:
 
 If no export output appears:
 
-- verify `atif.outputDir`, `telemetry.otel.endpoint`, or
-  `telemetry.openInference.endpoint`
+- verify `config.plugins.components[].config.atif.output_directory`,
+  `config.plugins.components[].config.opentelemetry.endpoint`, or
+  `config.plugins.components[].config.openinference.endpoint`
 - verify the configured collector or output directory is reachable
 - verify session end or gateway stop hooks fired so pending replay state can
   drain
