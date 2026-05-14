@@ -197,17 +197,7 @@ jobs:
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
       run_package: ${{ needs.ci_changes.outputs.run_node_package == 'true' }}
-
-  ci_openclaw:
-    name: OpenClaw
-    needs: [prepare, ci_changes, ci_check]
-    uses: ./.github/workflows/ci_openclaw.yml
-    if: ${{ needs.ci_check.result == 'success' && needs.ci_changes.outputs.run_openclaw == 'true' }}
-    permissions:
-      contents: read
-    with:
-      ref_type: ${{ github.ref_type }}
-      ref_name: ${{ github.ref_name }}
+      run_openclaw: ${{ needs.ci_changes.outputs.run_openclaw == 'true' }}
 
   ci_python:
     name: Python
@@ -247,7 +237,6 @@ jobs:
       - ci_rust
       - ci_go
       - ci_node
-      - ci_openclaw
       - ci_python
       - ci_wasm
     if: ${{ always() && !cancelled() && needs.prepare.result == 'success' && ! fromJSON(needs.prepare.outputs.has_skip_ci_label) }}
@@ -263,7 +252,6 @@ jobs:
           RUST_RESULT: ${{ needs.ci_rust.result }}
           GO_RESULT: ${{ needs.ci_go.result }}
           NODE_RESULT: ${{ needs.ci_node.result }}
-          OPENCLAW_RESULT: ${{ needs.ci_openclaw.result }}
           PYTHON_RESULT: ${{ needs.ci_python.result }}
           WEBASSEMBLY_RESULT: ${{ needs.ci_wasm.result }}
           publish_docs: ${{ needs.prepare.outputs.publish_docs }}
@@ -302,13 +290,11 @@ jobs:
           if [[ "$publish_packages" == "true" ]]; then
             require_success "Rust" "$RUST_RESULT"
             require_success "Node.js" "$NODE_RESULT"
-            require_success "OpenClaw" "$OPENCLAW_RESULT"
             require_success "Python" "$PYTHON_RESULT"
             require_success "WebAssembly" "$WEBASSEMBLY_RESULT"
           else
             allow_success_or_skipped "Rust" "$RUST_RESULT"
             allow_success_or_skipped "Node.js" "$NODE_RESULT"
-            allow_success_or_skipped "OpenClaw" "$OPENCLAW_RESULT"
             allow_success_or_skipped "Python" "$PYTHON_RESULT"
             allow_success_or_skipped "WebAssembly" "$WEBASSEMBLY_RESULT"
           fi

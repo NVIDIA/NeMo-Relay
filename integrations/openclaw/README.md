@@ -226,8 +226,9 @@ npm run pack:check --workspace=nemo-flow-openclaw
 
 `npm run build --workspace=nemo-flow-openclaw` emits production files under
 `integrations/openclaw/dist/`. Tests compile to
-`integrations/openclaw/.test-dist/` so test artifacts do not enter the
-installable package.
+`integrations/openclaw/.test-dist/` from the sibling
+`integrations/openclaw/test/` directory so test artifacts do not enter the
+installable package or production source tree.
 
 The optional live smoke test requires a working installed `nemo-flow-node`
 binding:

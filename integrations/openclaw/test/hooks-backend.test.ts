@@ -7,10 +7,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { parseConfig } from "../config.js";
-import { errorToJson, toJsonRecord } from "../hook-replay/marks.js";
-import { HookReplayBackend } from "../hooks-backend.js";
-import type { NemoFlowRuntimeModule } from "../modules.js";
+import { parseConfig } from "../src/config.js";
+import { errorToJson, toJsonRecord } from "../src/hook-replay/marks.js";
+import { HookReplayBackend } from "../src/hooks-backend.js";
+import type { NemoFlowRuntimeModule } from "../src/modules.js";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 
 describe("HookReplayBackend", () => {

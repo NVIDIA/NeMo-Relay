@@ -8,7 +8,7 @@
     "outDir": "dist"
   },
   "exclude": [
-    "src/__tests__/**",
+    "test/**",
     "src/**/*.test.ts",
     ".test-dist/**",
     "dist/**"
