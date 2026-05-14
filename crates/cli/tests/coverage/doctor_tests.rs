@@ -2,7 +2,46 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct EnvScope {
+    values: Vec<(&'static str, Option<OsString>)>,
+}
+
+impl EnvScope {
+    fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
+        let previous = values
+            .iter()
+            .map(|(key, _)| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+        for (key, value) in values {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+        Self { values: previous }
+    }
+}
+
+impl Drop for EnvScope {
+    fn drop(&mut self) {
+        for (key, value) in self.values.drain(..) {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+}
 
 fn empty_report() -> DoctorReport {
     DoctorReport {
@@ -233,6 +272,144 @@ fn check_dir_writable_does_not_create_missing_dir() {
         !missing.exists(),
         "doctor should not create missing ATIF directories while probing"
     );
+}
+
+#[test]
+fn layer_status_reports_missing_valid_invalid_and_non_directory_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing.toml");
+    assert_eq!(layer_status(&missing).status, Status::Info);
+
+    let valid = temp.path().join("config.toml");
+    std::fs::write(&valid, "[upstream]\nopenai_base_url = \"http://local\"\n").unwrap();
+    let valid_layer = layer_status(&valid);
+    assert_eq!(valid_layer.status, Status::Pass);
+    assert!(valid_layer.active);
+
+    let invalid = temp.path().join("invalid.toml");
+    std::fs::write(&invalid, "[upstream\n").unwrap();
+    let invalid_layer = layer_status(&invalid);
+    assert_eq!(invalid_layer.status, Status::Fail);
+    assert!(invalid_layer.details.contains("invalid TOML"));
+
+    let dir = temp.path().join("config-dir");
+    std::fs::create_dir(&dir).unwrap();
+    let dir_layer = layer_status(&dir);
+    assert_eq!(dir_layer.status, Status::Fail);
+    assert!(
+        dir_layer.details.contains("unreadable") || dir_layer.details.contains("Is a directory")
+    );
+}
+
+#[test]
+fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
+    assert_eq!(command_executable("codex --full-auto"), "codex");
+    assert_eq!(command_executable(""), "");
+    assert_eq!(
+        agent_command_status(Some(std::path::Path::new("/bin/codex")), false, true),
+        Status::Warn
+    );
+    assert_eq!(agent_command_status(None, true, false), Status::Fail);
+    assert_eq!(
+        combine_status(Status::Pass, Status::Warn, true),
+        Status::Warn
+    );
+    assert_eq!(
+        combine_status(Status::Pass, Status::Warn, false),
+        Status::Pass
+    );
+
+    let mut agents = AgentConfigs::default();
+    agents.hermes.hooks_path = Some(PathBuf::from("/tmp/hermes.yaml"));
+    assert!(agent_configured(CodingAgent::Hermes, &agents));
+    assert_eq!(configured_agent_names(&agents), vec!["hermes".to_string()]);
+
+    let temp = tempfile::tempdir().unwrap();
+    let hook = temp.path().join("hooks.yaml");
+    std::fs::write(&hook, "cmd: nemo-flow hook-forward hermes\n").unwrap();
+    let (status, details) = hook_file_status(Ok(hook.clone()), CodingAgent::Hermes, true, "hooks");
+    assert_eq!(status, Status::Pass);
+    assert!(details.contains(hook.to_str().unwrap()));
+
+    std::fs::write(&hook, "cmd: custom\n").unwrap();
+    let (status, details) = hook_file_status(Ok(hook.clone()), CodingAgent::Hermes, true, "hooks");
+    assert_eq!(status, Status::Fail);
+    assert!(details.contains("missing NeMo Flow hook"));
+    let (status, _) = hook_file_status(Ok(hook), CodingAgent::Hermes, false, "hooks");
+    assert_eq!(status, Status::Info);
+}
+
+#[test]
+fn collect_completions_reports_shell_specific_paths() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let zsh_completion = temp.path().join(".zfunc/_nemo-flow");
+    std::fs::create_dir_all(zsh_completion.parent().unwrap()).unwrap();
+    std::fs::write(&zsh_completion, "#compdef nemo-flow\n").unwrap();
+
+    let _env = EnvScope::set(&[("SHELL", Some(std::ffi::OsStr::new("/bin/zsh")))]);
+    let checks = collect_completions(Some(temp.path()));
+    assert_eq!(checks[0].status, Status::Pass);
+    assert!(checks[0].details.contains("_nemo-flow"));
+
+    drop(_env);
+    let _env = EnvScope::set(&[("SHELL", Some(std::ffi::OsStr::new("/bin/fish")))]);
+    let checks = collect_completions(Some(temp.path()));
+    assert_eq!(checks[0].status, Status::Info);
+    assert!(checks[0].details.contains("nemo-flow.fish"));
+
+    drop(_env);
+    let _env = EnvScope::set(&[("SHELL", None)]);
+    let checks = collect_completions(Some(temp.path()));
+    assert_eq!(checks[0].status, Status::Info);
+    assert!(checks[0].details.contains("no $SHELL"));
+}
+
+#[test]
+fn observability_component_helpers_cover_disabled_and_default_paths() {
+    let plugin = serde_json::json!({
+        "version": 1,
+        "components": [{
+            "kind": OBSERVABILITY_PLUGIN_KIND,
+            "enabled": true,
+            "config": {
+                "version": 1,
+                "atof": { "enabled": true },
+                "openinference": {
+                    "enabled": true,
+                    "endpoint": "http://127.0.0.1:1"
+                }
+            }
+        }]
+    });
+    let config = observability_component_config(&plugin).unwrap();
+    assert!(section_enabled(config, "atof"));
+    assert_eq!(section_output_directory(config, "atof"), None);
+    assert_eq!(
+        section_endpoint(config, "openinference").as_deref(),
+        Some("http://127.0.0.1:1")
+    );
+    assert!(
+        observability_component_config(&serde_json::json!({
+            "components": [{ "kind": "other", "config": {} }]
+        }))
+        .is_none()
+    );
+}
+
+#[test]
+fn check_directory_reports_pass_warn_and_fail() {
+    let temp = tempfile::tempdir().unwrap();
+    let pass = check_directory("ATOF dir", temp.path());
+    assert_eq!(pass.status, Status::Pass);
+
+    let missing = check_directory("ATOF dir", &temp.path().join("missing"));
+    assert_eq!(missing.status, Status::Warn);
+
+    let file = temp.path().join("file");
+    std::fs::write(&file, "").unwrap();
+    let fail = check_directory("ATOF dir", &file);
+    assert_eq!(fail.status, Status::Fail);
 }
 
 #[tokio::test]

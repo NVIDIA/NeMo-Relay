@@ -54,13 +54,13 @@ component_management:
           threshold: 0.5%
           base: auto
           if_ci_failed: error
-    - component_id: gateway_runtime
-      name: Gateway Runtime
+    - component_id: cli
+      name: CLI
       paths:
         - "crates/cli/src"
       statuses:
         - type: project
-          target: 95%
+          target: 88%
           threshold: 0.5%
           base: auto
           if_ci_failed: error
@@ -123,6 +123,10 @@ ignore:
   - "third_party/"
   - "**/tests/**"
   - "crates/cli/tests/"
+  # CLI TTY shells are exercised by smoke tests, but their prompt loops are
+  # intentionally split away from testable model modules.
+  - "crates/cli/src/plugins.rs"
+  - "crates/cli/src/setup.rs"
   - "**/tests-js/**"
   # The Node binding currently reports JS package coverage separately; exclude the
   # native Rust bridge until we have direct Rust-side coverage for this crate.

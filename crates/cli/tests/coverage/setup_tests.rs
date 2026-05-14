@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 // Tests that exercise the global-config write path must run serially with respect to each other
@@ -44,6 +45,29 @@ impl<'a> Drop for XdgScope<'a> {
                 None => std::env::remove_var("XDG_CONFIG_HOME"),
             }
         }
+    }
+}
+
+struct CwdScope<'a> {
+    _guard: std::sync::MutexGuard<'a, ()>,
+    prev: PathBuf,
+}
+
+impl<'a> CwdScope<'a> {
+    fn enter(path: &std::path::Path) -> Self {
+        let guard = xdg_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(path).unwrap();
+        Self {
+            _guard: guard,
+            prev,
+        }
+    }
+}
+
+impl<'a> Drop for CwdScope<'a> {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.prev).unwrap();
     }
 }
 
@@ -242,6 +266,91 @@ fn build_config_emits_hooks_path_for_hermes_when_set() {
 }
 
 #[test]
+fn config_scope_labels_are_user_facing_and_stable() {
+    assert!(
+        ConfigScope::Project
+            .label()
+            .contains(".nemo-flow/config.toml")
+    );
+    assert!(
+        ConfigScope::Global
+            .label()
+            .contains(".config/nemo-flow/config.toml")
+    );
+    assert!(
+        ConfigScope::Both
+            .label()
+            .contains("project overrides global")
+    );
+}
+
+#[test]
+fn hermes_hook_paths_follow_selected_scope() {
+    let cwd = PathBuf::from("/workspace");
+    let home = PathBuf::from("/home/user");
+    let agents = [CodingAgent::Hermes];
+
+    assert_eq!(
+        hermes_hooks_path_for_scope(&agents, ConfigScope::Project, &cwd, &home),
+        Some(PathBuf::from("/workspace/.hermes/config.yaml"))
+    );
+    assert_eq!(
+        hermes_hooks_path_for_scope(&agents, ConfigScope::Both, &cwd, &home),
+        Some(PathBuf::from("/workspace/.hermes/config.yaml"))
+    );
+    assert_eq!(
+        hermes_hooks_path_for_scope(&agents, ConfigScope::Global, &cwd, &home),
+        Some(PathBuf::from("/home/user/.hermes/config.yaml"))
+    );
+    assert_eq!(
+        hermes_hooks_path_for_scope(&[], ConfigScope::Project, &cwd, &home),
+        None
+    );
+    assert_eq!(
+        hermes_hook_targets(ConfigScope::Both, &cwd, &home),
+        vec![
+            PathBuf::from("/workspace/.hermes/config.yaml"),
+            PathBuf::from("/home/user/.hermes/config.yaml")
+        ]
+    );
+}
+
+#[test]
+fn existing_defaults_detects_scope_and_agents_from_docs() {
+    let empty = Defaults::default();
+    assert!(!empty.has_any());
+    assert!(
+        Defaults {
+            scope: Some(ConfigScope::Project),
+            agents: vec![]
+        }
+        .has_any()
+    );
+    assert!(
+        Defaults {
+            scope: None,
+            agents: vec![CodingAgent::Codex]
+        }
+        .has_any()
+    );
+
+    let doc: DocumentMut = r#"
+[agents.claude]
+command = "claude"
+
+[agents.codex]
+command = "codex"
+
+[agents.unknown]
+command = "custom"
+"#
+    .parse()
+    .unwrap();
+    let agents = read_agents_from_doc(&doc);
+    assert_eq!(agents, vec![CodingAgent::ClaudeCode, CodingAgent::Codex]);
+}
+
+#[test]
 fn install_hermes_hooks_writes_yaml_and_merges_existing() {
     let cwd = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
@@ -266,4 +375,86 @@ fn install_hermes_hooks_writes_yaml_and_merges_existing() {
     );
     let home_yaml = std::fs::read_to_string(home.path().join(".hermes/config.yaml")).unwrap();
     assert!(home_yaml.contains("nemo-flow hook-forward hermes"));
+}
+
+#[test]
+fn write_or_merge_recovers_from_non_table_agents_value() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+agents = "not-a-table"
+
+[plugins]
+enabled = true
+"#,
+    )
+    .unwrap();
+    let doc = build_config(&SetupAnswers {
+        scope: ConfigScope::Project,
+        agents: vec![CodingAgent::Codex],
+        hermes_hooks_path: None,
+    });
+
+    write_or_merge(&path, &doc, Some(CodingAgent::Codex)).unwrap();
+
+    let merged = std::fs::read_to_string(path).unwrap();
+    assert!(merged.contains("[agents.codex]"));
+    assert!(merged.contains(r#"command = "codex""#));
+    assert!(merged.contains("[plugins]"));
+}
+
+#[test]
+fn reset_removes_whole_project_config_or_one_agent() {
+    let temp = tempfile::tempdir().unwrap();
+    let _cwd = CwdScope::enter(temp.path());
+    let config_dir = temp.path().join(".nemo-flow");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let path = config_dir.join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[agents.claude]
+command = "claude"
+
+[agents.codex]
+command = "codex"
+"#,
+    )
+    .unwrap();
+
+    reset(Some(CodingAgent::ClaudeCode)).unwrap();
+
+    let scoped = std::fs::read_to_string(&path).unwrap();
+    assert!(!scoped.contains("[agents.claude]"));
+    assert!(scoped.contains("[agents.codex]"));
+
+    reset(None).unwrap();
+
+    assert!(!path.exists());
+}
+
+#[test]
+fn reset_reports_missing_or_malformed_agent_blocks_without_rewriting() {
+    let temp = tempfile::tempdir().unwrap();
+    let _cwd = CwdScope::enter(temp.path());
+    let config_dir = temp.path().join(".nemo-flow");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let path = config_dir.join("config.toml");
+    std::fs::write(&path, "agents = \"not-a-table\"\n").unwrap();
+
+    reset(Some(CodingAgent::Hermes)).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "agents = \"not-a-table\"\n"
+    );
+
+    std::fs::write(&path, "not valid toml = [\n").unwrap();
+    let error = reset(Some(CodingAgent::Hermes)).unwrap_err().to_string();
+    assert!(
+        error.contains("could not parse existing config"),
+        "error was: {error}"
+    );
 }

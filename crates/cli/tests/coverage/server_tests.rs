@@ -693,6 +693,39 @@ async fn models_route_forwards_get_requests() {
     assert_eq!(body["authorization"], json!("Bearer test"));
 }
 
+#[tokio::test]
+async fn gateway_forwards_anthropic_count_tokens_without_llm_codec() {
+    let upstream = spawn_anthropic_upstream().await;
+    let mut config = test_config();
+    config.anthropic_base_url = upstream.url();
+    let app = router(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/messages/count_tokens")
+                .header("content-type", "application/json")
+                .header("x-api-key", "sk-ant-test")
+                .body(Body::from(
+                    json!({
+                        "model": "claude-test",
+                        "messages": [{ "role": "user", "content": "hello" }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["path"], json!("/v1/messages/count_tokens"));
+    assert_eq!(body["x_api_key"], json!("sk-ant-test"));
+    assert_eq!(body["input_tokens"], json!(12));
+}
+
 async fn wait_for_gateway(url: &str) {
     let client = reqwest::Client::new();
     for _ in 0..50 {
@@ -795,6 +828,29 @@ async fn spawn_models_upstream() -> TestServer {
     }
 
     let app = Router::new().route("/v1/models", get(models));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    TestServer {
+        url: format!("http://{address}"),
+        handle,
+    }
+}
+
+async fn spawn_anthropic_upstream() -> TestServer {
+    async fn count_tokens(headers: HeaderMap, request: Request<Body>) -> impl IntoResponse {
+        Json(json!({
+            "path": request.uri().path(),
+            "x_api_key": headers
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            "input_tokens": 12
+        }))
+    }
+
+    let app = Router::new().route("/v1/messages/count_tokens", post(count_tokens));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let handle = tokio::spawn(async move {

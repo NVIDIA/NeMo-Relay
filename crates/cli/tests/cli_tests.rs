@@ -33,6 +33,71 @@ fn cli_version_exits_successfully() {
 }
 
 #[test]
+fn cli_agents_json_emits_supported_agent_shapes() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["agents", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let agents = parsed.as_array().unwrap();
+    assert!(agents.iter().any(|agent| agent["name"] == "codex"));
+    assert!(agents.iter().all(|agent| agent["status"].is_string()));
+}
+
+#[test]
+fn cli_doctor_json_emits_versioned_report() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["schema_version"], 1);
+    assert!(parsed["environment"].is_object());
+    assert!(parsed["configuration"].is_object());
+    assert!(parsed["agents"].is_array());
+}
+
+#[test]
+fn cli_completions_prints_script_for_requested_shell() {
+    let output = Command::new(gateway_bin())
+        .args(["completions", "zsh"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("#compdef nemo-flow") || stdout.contains("_nemo-flow"));
+}
+
+#[test]
+fn cli_plugins_edit_requires_tty() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "edit", "--user"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("requires a TTY"),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn cli_help_lists_easy_path_agent_shortcuts() {
     let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
