@@ -8,7 +8,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from nemo_flow.integrations.deepagents.backend import NemoFlowDeepAgentsBackend, observe_backend
 from nemo_flow.integrations.deepagents.callbacks import NemoFlowDeepAgentsCallbackHandler
 from nemo_flow.integrations.deepagents.middleware import NemoFlowDeepAgentsMiddleware
 
@@ -17,7 +16,6 @@ def add_nemo_flow_integration(
     kwargs: Mapping[str, Any] | None = None,
     *,
     instrument_subagents: bool = True,
-    instrument_backend: bool = True,
     **overrides: Any,
 ) -> dict[str, Any]:
     """
@@ -26,7 +24,7 @@ def add_nemo_flow_integration(
     Use this helper as ``create_deep_agent(**add_nemo_flow_integration(...))``.
     It injects Deep Agents-aware middleware at the top level, adds the same
     middleware to dictionary-style custom subagents that do not inherit parent
-    middleware, and optionally wraps the backend.
+    middleware, and leaves any provided backend unchanged.
     """
     observed = dict(kwargs or {})
     observed.update(overrides)
@@ -35,17 +33,7 @@ def add_nemo_flow_integration(
     subagents = list(observed.get("subagents") or ())
     subagent_summaries = [_subagent_summary(subagent) for subagent in subagents]
     backend = observed.get("backend")
-
-    if isinstance(backend, NemoFlowDeepAgentsBackend):
-        observed["backend"] = backend
-        backend_name = type(backend.__wrapped__).__name__
-    elif instrument_backend and backend is not None:
-        observed["backend"] = observe_backend(backend)
-        backend_name = type(backend).__name__
-    elif backend is not None:
-        backend_name = type(backend).__name__
-    else:
-        backend_name = None
+    backend_name = type(backend).__name__ if backend is not None else None
 
     middleware = list(observed.get("middleware") or ())
     _append_middleware(
@@ -119,9 +107,7 @@ def _string_sequence(value: Any) -> Sequence[str] | None:
 
 
 __all__ = [
-    "NemoFlowDeepAgentsBackend",
     "NemoFlowDeepAgentsCallbackHandler",
     "NemoFlowDeepAgentsMiddleware",
     "add_nemo_flow_integration",
-    "observe_backend",
 ]

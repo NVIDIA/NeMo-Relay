@@ -26,7 +26,6 @@ ASYNC_SUBAGENT_TOOLS = frozenset(
 # Mirrors the Deep Agents built-in filesystem tools listed in the backend docs:
 # https://docs.langchain.com/oss/python/deepagents/backends
 FILESYSTEM_TOOLS = frozenset({"ls", "read_file", "write_file", "edit_file", "glob", "grep"})
-FILESYSTEM_BACKEND_METHODS = frozenset({"ls", "read", "write", "edit", "glob", "grep"})
 # Deep Agents sandbox backends expose execute()/aexecute(); the tool name is execute.
 SANDBOX_TOOLS = frozenset({"execute"})
 
@@ -44,18 +43,6 @@ def tool_kind(tool_name: str) -> str | None:
     return None
 
 
-def backend_kind(method_name: str) -> str:
-    """Return the Deep Agents semantic category for a backend method."""
-    normalized = method_name.removeprefix("a")
-    if normalized in SANDBOX_TOOLS:
-        return "sandbox"
-    if normalized in FILESYSTEM_TOOLS or normalized in FILESYSTEM_BACKEND_METHODS:
-        return "filesystem"
-    if normalized in {"upload_files", "download_file", "download_files"}:
-        return "filesystem"
-    return "backend"
-
-
 def event_base_name(kind: str) -> str:
     """Return a stable event base name for a Deep Agents category."""
     return {
@@ -65,7 +52,6 @@ def event_base_name(kind: str) -> str:
         "skill": "DeepAgents Skills",
         "sandbox": "DeepAgents Sandbox",
         "filesystem": "DeepAgents Filesystem",
-        "backend": "DeepAgents Backend",
     }.get(kind, "DeepAgents")
 
 
@@ -135,29 +121,6 @@ def tool_event_data(
     if error is not None:
         data["error"] = repr(error)
 
-    return data
-
-
-def backend_event_data(
-    backend_name: str,
-    method_name: str,
-    args: tuple[Any, ...],
-    kwargs: Mapping[str, Any],
-    *,
-    result: Any = None,
-    error: BaseException | None = None,
-) -> dict[str, nemo_flow.Json]:
-    """Build a stable Deep Agents backend event payload."""
-    data: dict[str, nemo_flow.Json] = {
-        "backend": backend_name,
-        "method": method_name,
-        "args": summarize_value(args),
-        "kwargs": summarize_value(kwargs),
-    }
-    if result is not None:
-        data["result"] = summarize_value(result)
-    if error is not None:
-        data["error"] = repr(error)
     return data
 
 

@@ -13,8 +13,6 @@ from uuid import uuid4
 import pytest
 from deepagents import create_deep_agent
 from deepagents.backends import LocalShellBackend
-from deepagents.backends.protocol import ExecuteResponse, LsResult, ReadResult, SandboxBackendProtocol
-from deepagents.middleware.filesystem import supports_execution
 from langchain.agents.middleware import ToolCallRequest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, ToolMessage
@@ -23,13 +21,10 @@ from langgraph.types import Interrupt
 
 import nemo_flow
 from nemo_flow.integrations.deepagents import (
-    NemoFlowDeepAgentsBackend,
     NemoFlowDeepAgentsCallbackHandler,
     NemoFlowDeepAgentsMiddleware,
     add_nemo_flow_integration,
-    observe_backend,
 )
-from nemo_flow.integrations.deepagents.backend import NemoFlowDeepAgentsSandboxBackend
 
 
 @pytest.fixture(name="mock_tool_execute")
@@ -280,119 +275,8 @@ def test_callback_handler_falls_back_for_non_hitl_interrupt(subscribed_events: l
     assert "deepagents_kind" not in _mark_metadata(marks[0])
 
 
-@pytest.mark.parametrize(
-    ("method_name", "args", "kwargs", "expected_call_kwargs", "expected_kind"),
-    [
-        ("read", ("/workspace/notes.md",), {}, {"offset": 0, "limit": 2000}, "filesystem"),
-        ("grep", ("TODO",), {"path": "/workspace"}, {"path": "/workspace", "glob": None}, "filesystem"),
-    ],
-)
-def test_observe_backend_emits_sync_scopes(
-    method_name: str,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-    expected_call_kwargs: dict[str, Any],
-    expected_kind: str,
-    subscribed_events: list[nemo_flow.Event],
-):
+def test_add_nemo_flow_integration_preserves_backend():
     mock_backend = MagicMock(name="mock_backend")
-    getattr(mock_backend, method_name).return_value = {"ok": True}
-    backend = observe_backend(mock_backend, name="MockBackend")
-
-    with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-        result = getattr(backend, method_name)(*args, **kwargs)
-
-    assert result == {"ok": True}
-    getattr(mock_backend, method_name).assert_called_once_with(*args, **expected_call_kwargs)
-
-    scopes = _filter_deepagents_scope_events(subscribed_events)
-    assert [(event.name, event.scope_category) for event in scopes] == [
-        (f"DeepAgents Filesystem - {method_name}", "start"),
-        (f"DeepAgents Filesystem - {method_name}", "end"),
-    ]
-    assert _scope_metadata(scopes[0])["deepagents_kind"] == expected_kind
-    assert _scope_data(scopes[0])["backend"] == "MockBackend"
-    assert _scope_data(scopes[0])["method"] == method_name
-    assert scopes[1].data is None
-
-
-async def test_observe_backend_emits_async_scopes(subscribed_events: list[nemo_flow.Event]):
-    mock_backend = MagicMock(name="mock_backend")
-    mock_backend.aread = AsyncMock(return_value=ReadResult(file_data={"content": "contents", "encoding": "utf-8"}))
-    backend = observe_backend(mock_backend, name="MockBackend")
-
-    with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-        result = await backend.aread("/workspace/notes.md")
-
-    assert result == ReadResult(file_data={"content": "contents", "encoding": "utf-8"})
-    mock_backend.aread.assert_awaited_once_with("/workspace/notes.md", offset=0, limit=2000)
-
-    scopes = _filter_deepagents_scope_events(subscribed_events)
-    assert [(event.name, event.scope_category) for event in scopes] == [
-        ("DeepAgents Filesystem - aread", "start"),
-        ("DeepAgents Filesystem - aread", "end"),
-    ]
-    assert scopes[1].data is None
-
-
-def test_observe_backend_emits_error_scope(subscribed_events: list[nemo_flow.Event]):
-    mock_backend = MagicMock(name="mock_backend")
-    mock_backend.read.side_effect = RuntimeError("read failed")
-    backend = observe_backend(mock_backend, name="MockBackend")
-
-    with pytest.raises(RuntimeError, match="read failed"):
-        with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-            backend.read("/workspace/notes.md")
-
-    scopes = _filter_deepagents_scope_events(subscribed_events)
-    assert [(event.name, event.scope_category) for event in scopes] == [
-        ("DeepAgents Filesystem - read", "start"),
-        ("DeepAgents Filesystem - read", "end"),
-    ]
-    assert scopes[1].data is None
-
-
-def test_observe_backend_preserves_sandbox_protocol(subscribed_events: list[nemo_flow.Event]):
-    class MockSandboxBackend(SandboxBackendProtocol):
-        @property
-        def id(self) -> str:
-            return "sandbox-1"
-
-        def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
-            return ExecuteResponse(output=f"{command}:{timeout}", exit_code=0)
-
-        def ls(self, path: str) -> LsResult:
-            return LsResult(entries=[{"path": path}])
-
-    plain_backend = observe_backend(MagicMock(name="plain_backend"))
-    sandbox_backend = observe_backend(MockSandboxBackend(), name="MockSandbox")
-
-    assert not supports_execution(plain_backend)
-    assert supports_execution(sandbox_backend)
-    assert sandbox_backend.id == "sandbox-1"
-
-    with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-        result = sandbox_backend.execute("python main.py", timeout=10)
-
-    assert result == ExecuteResponse(output="python main.py:10", exit_code=0)
-
-    scopes = _filter_deepagents_scope_events(subscribed_events)
-    assert [(event.name, event.scope_category) for event in scopes] == [
-        ("DeepAgents Sandbox - execute", "start"),
-        ("DeepAgents Sandbox - execute", "end"),
-    ]
-    assert _scope_data(scopes[0])["method"] == "execute"
-
-
-@pytest.mark.parametrize("use_sandbox", [False, True])
-def test_add_nemo_flow_integration(use_sandbox: bool):
-    if use_sandbox:
-        mock_backend = MagicMock(name="mock_sandbox_backend", spec=SandboxBackendProtocol)
-        expected_nemo_class = NemoFlowDeepAgentsSandboxBackend
-    else:
-        mock_backend = MagicMock(name="mock_backend")
-        expected_nemo_class = NemoFlowDeepAgentsBackend
-
     mock_compiled_subagent = MagicMock(name="mock_compiled_subagent")
     kwargs = add_nemo_flow_integration(
         model="mock-model",
@@ -406,7 +290,7 @@ def test_add_nemo_flow_integration(use_sandbox: bool):
         ],
     )
 
-    assert isinstance(kwargs["backend"], expected_nemo_class)
+    assert kwargs["backend"] is mock_backend
     assert any(isinstance(item, NemoFlowDeepAgentsMiddleware) for item in kwargs["middleware"])
     assert any(isinstance(item, NemoFlowDeepAgentsMiddleware) for item in kwargs["subagents"][0]["middleware"])
     assert kwargs["subagents"][1] is mock_compiled_subagent
@@ -442,7 +326,6 @@ def test_e2e_agent(
     with nemo_flow.scope.scope("deepagents-request", nemo_flow.ScopeType.Agent):
         result = agent.invoke({"messages": [{"role": "user", "content": "Create a file named turtle."}]})
 
-    assert isinstance(kwargs["backend"], NemoFlowDeepAgentsSandboxBackend)
     assert (tmp_path / "turtle").read_text() == "shell"
     assert result["messages"][-1].content == "created turtle"
     found_write_file_message = False
@@ -461,4 +344,3 @@ def test_e2e_agent(
     assert any(
         _scope_data(event).get("tool_name") == "write_file" for event in scopes if event.scope_category == "start"
     )
-    assert any(_scope_data(event).get("method") == "write" for event in scopes if event.scope_category == "start")

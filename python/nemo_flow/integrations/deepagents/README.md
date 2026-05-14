@@ -14,7 +14,6 @@ The integration therefore composes the existing NeMo Flow LangChain and
 LangGraph hooks, then emits stable scopes for Deep Agents tool concepts:
 subagents, async subagents, filesystem tool calls, and sandbox tool calls.
 Human-in-the-loop interrupts, resumes, and configured skills remain marks.
-Direct backend operations are captured as NeMo Flow scopes.
 
 ## Setup
 
@@ -60,8 +59,6 @@ with nemo_flow.scope.scope("deepagents-request", nemo_flow.ScopeType.Agent):
   `glob`, and `grep`.
 - Sandbox/local shell `execute` scopes.
 - Configured skills and subagent summaries at agent-run start.
-- Direct backend method call scopes when the backend is wrapped with
-  `observe_backend()` or via `add_nemo_flow_integration(..., backend=...)`.
 
 Remote async subagents still need NeMo Flow instrumentation in the remote graph
 or process to capture their internal model and tool calls. Supervisor-side
