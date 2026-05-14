@@ -50,41 +50,6 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
         """Emit run configuration metadata for async Deep Agents runs."""
         self._emit_agent_configuration()
 
-    def wrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
-    ) -> ToolMessage | Command[Any]:
-        """Wrap a sync Deep Agents tool call with NeMo Flow tool execution and scopes."""
-        tool_name, tool_args, kind = self._tool_context(request)
-        if kind is None:
-            return super().wrap_tool_call(request, handler)
-
-        with nemo_flow.scope.scope(
-            event_base_name(kind),
-            _tool_scope_type(kind),
-            input=json_safe(tool_event_data(tool_name, tool_args)),
-            metadata=json_safe(self._tool_scope_metadata(kind)),
-        ):
-            return super().wrap_tool_call(request, handler)
-
-    async def awrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
-    ) -> ToolMessage | Command[Any]:
-        """Wrap an async Deep Agents tool call with NeMo Flow tool execution and scopes."""
-        tool_name, tool_args, kind = self._tool_context(request)
-        if kind is None:
-            return await super().awrap_tool_call(request, handler)
-
-        with nemo_flow.scope.scope(
-            event_base_name(kind),
-            _tool_scope_type(kind),
-            input=json_safe(tool_event_data(tool_name, tool_args)),
-            metadata=json_safe(self._tool_scope_metadata(kind)),
-        ):
-            return await super().awrap_tool_call(request, handler)
 
     def _emit_agent_configuration(self) -> None:
         data: dict[str, Any] = {}
