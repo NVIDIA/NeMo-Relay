@@ -39,8 +39,9 @@ jobs:
 
           size_labels=("size:XS" "size:S" "size:M" "size:L" "size:XL" "size:XXL")
           classifier_labels=("build" "chore" "ci" "docs" "feat" "fix" "perf" "refactor" "revert" "style" "test")
+          type_labels=("Automation" "Bug" "Documentation" "Feature" "Improvement" "Maintenance" "Test")
           lang_labels=("lang:go" "lang:js" "lang:python" "lang:rust")
-          controlled_labels=("${size_labels[@]}" "${classifier_labels[@]}" "${lang_labels[@]}")
+          controlled_labels=("${size_labels[@]}" "${classifier_labels[@]}" "${type_labels[@]}" "${lang_labels[@]}")
 
           contains_label() {
             local needle="$1"
@@ -111,12 +112,31 @@ jobs:
           desired_labels=("$size_label")
 
           title_lower="${PR_TITLE,,}"
-          classifier_label=""
+          type_label=""
           title_pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?(!)?:'
           breaking_pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?!:'
           if [[ "$title_lower" =~ $title_pattern ]]; then
-            classifier_label="${BASH_REMATCH[1]}"
-            desired_labels+=("$classifier_label")
+            case "${BASH_REMATCH[1]}" in
+              feat)
+                type_label="Feature"
+                ;;
+              perf|refactor)
+                type_label="Improvement"
+                ;;
+              fix|revert)
+                type_label="Bug"
+                ;;
+              test)
+                type_label="Test"
+                ;;
+              docs)
+                type_label="Documentation"
+                ;;
+              build|chore|ci|style)
+                type_label="Maintenance"
+                ;;
+            esac
+            desired_labels+=("$type_label")
           fi
           if [[ "$PR_TITLE" =~ $breaking_pattern ]]; then
             desired_labels+=("breaking")

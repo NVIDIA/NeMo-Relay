@@ -11,7 +11,7 @@
 //! with their corresponding `nemo_flow_*_free` function.
 
 use libc::c_char;
-use nemo_flow::api::runtime::ScopeStackHandle;
+use nemo_flow::api::runtime::{ScopeStackHandle, ThreadScopeStackBinding};
 use nemo_flow::plugin::PluginRegistrationContext;
 use serde_json::Value as Json;
 
@@ -48,8 +48,12 @@ pub struct FfiLLMRequest(pub LlmRequest);
 pub struct FfiEvent(pub Event);
 /// Opaque handle to an isolated scope stack for per-request/per-task isolation.
 pub struct FfiScopeStack(pub ScopeStackHandle);
+/// Opaque handle to a captured thread-local scope stack binding.
+pub struct FfiThreadScopeStackBinding(pub ThreadScopeStackBinding);
 /// Opaque ATIF exporter handle.
 pub struct FfiAtifExporter(pub nemo_flow::observability::atif::AtifExporter);
+/// Opaque ATOF JSONL exporter handle.
+pub struct FfiAtofExporter(pub nemo_flow::observability::atof::AtofExporter);
 /// Opaque OpenTelemetry subscriber handle.
 pub struct FfiOpenTelemetrySubscriber(pub nemo_flow::observability::otel::OpenTelemetrySubscriber);
 /// Opaque OpenInference subscriber handle.
@@ -224,6 +228,17 @@ pub unsafe extern "C" fn nemo_flow_scope_stack_free(ptr: *mut FfiScopeStack) {
 /// `ptr` must be a valid pointer returned by `nemo_flow_atif_exporter_create`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_flow_atif_exporter_free(ptr: *mut FfiAtifExporter) {
+    if !ptr.is_null() {
+        drop(unsafe { Box::from_raw(ptr) });
+    }
+}
+
+/// Free an ATOF JSONL exporter handle previously returned by `nemo_flow_atof_exporter_create`.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `nemo_flow_atof_exporter_create`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_atof_exporter_free(ptr: *mut FfiAtofExporter) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }

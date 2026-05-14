@@ -4,12 +4,9 @@
 # Default ownership for repository files.
 * @nvidia/nat-developers
 
-# Project configurations and lockfiles require dependency approver review.
-Cargo.toml @nvidia/nat-dep-approvers
+# Lockfiles and attribution files require dependency approver review.
 Cargo.lock @nvidia/nat-dep-approvers
-
-pyproject.toml @nvidia/nat-dep-approvers
 uv.lock @nvidia/nat-dep-approvers
-
-package.json @nvidia/nat-dep-approvers
 package-lock.json @nvidia/nat-dep-approvers
+
+ATTRIBUTIONS-*.md @nvidia/nat-dep-approvers

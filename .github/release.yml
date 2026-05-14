@@ -14,25 +14,25 @@ changelog:
         - breaking
     - title: ✨ New Features
       labels:
-        - feat
+        - Feature
     - title: ⚡ Improvements
       labels:
-        - perf
-        - refactor
+        - Improvement
     - title: 🐛 Bug Fixes
       labels:
-        - fix
-        - revert
+        - Bug
+    - title: ✅ Tests
+      labels:
+        - Test
+    - title: 🤖 Automation
+      labels:
+        - Automation
     - title: 🧰 Maintenance
       labels:
-        - build
-        - chore
-        - ci
-        - style
-        - test
+        - Maintenance
     - title: 📝 Documentation Updates
       labels:
-        - docs
+        - Documentation
     - title: Other Changes
       labels:
         - "*"

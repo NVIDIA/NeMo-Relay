@@ -10,7 +10,7 @@ Choose the Quick Start guide for the primary binding that you plan to use.
 ```{toctree}
 :maxdepth: 1
 
-Python Quick Start <python>
+Python Quick Start <python/index>
 Node.js Quick Start <nodejs>
 Rust Quick Start <rust>
 ```

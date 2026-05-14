@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-flow-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Coding-agent gateway CLI for NeMo Flow observability."
+
+[[bin]]
+name = "nemo-flow"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+nemo-flow = { workspace = true, features = ["openinference"] }
+async-stream = "0.3"
+axum = "0.8"
+bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+console = "0.16"
+futures-util = "0.3"
+http = "1"
+http-body-util = "0.1"
+dialoguer = { version = "0.11", default-features = false }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+toml = "0.9"
+toml_edit = "0.23"
+uuid = { workspace = true, features = ["serde", "v7"] }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

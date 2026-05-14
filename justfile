@@ -155,8 +155,23 @@ ensure_docs_dependencies() {
     npm install --ignore-scripts
 }
 
+ensure_docs_node_workspace_compat() {
+    local node_modules="$NEMO_FLOW_REPO_ROOT/crates/node/node_modules"
+    local root_node_modules="$NEMO_FLOW_REPO_ROOT/node_modules"
+
+    # Historical versioned docs builds run older docs hooks that resolve
+    # TypeDoc peers only from crates/node/node_modules. A root npm install may
+    # hoist TypeScript to root node_modules, so materialize it where those
+    # immutable release tags expect it before sphinx-multiversion copies them.
+    if [[ ! -e "$node_modules/typescript" && -d "$root_node_modules/typescript" ]]; then
+        mkdir -p "$node_modules"
+        cp -R "$root_node_modules/typescript" "$node_modules/typescript"
+    fi
+}
+
 configure_docs_environment() {
     export SPHINX_AUTODOC_RELOAD_MODULES="${SPHINX_AUTODOC_RELOAD_MODULES:-1}"
+    ensure_docs_node_workspace_compat
 }
 
 prepare_parent_dir() {
@@ -335,7 +350,7 @@ section = ""
 output = []
 changed = []
 found_workspace_version = False
-local_dependencies = ("nemo-flow", "nemo-flow-adaptive", "nemo-flow-ffi")
+local_dependencies = ("nemo-flow", "nemo-flow-adaptive", "nemo-flow-ffi", "nemo-flow-cli")
 found_dependencies = set()
 
 for line in text.splitlines(keepends=True):
@@ -422,15 +437,20 @@ PY
     rm -f "$metadata_file"
 }
 
-set_node_package_version() {
+set_node_package_versions() {
     local version="$1"
     set_npm_package_version crates/node/package.json package-lock.json "$version" crates/node
+    set_npm_package_version integrations/openclaw/package.json package-lock.json "$version" integrations/openclaw
+}
+
+set_node_package_version() {
+    set_node_package_versions "$1"
 }
 
 set_project_version() {
     local version="$1"
     set_cargo_workspace_version "$version"
-    set_node_package_version "$version"
+    set_node_package_versions "$version"
 }
 
 set_python_package_version() {
@@ -635,13 +655,14 @@ build-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_FLOW_REPO_ROOT"
-    uv sync --inexact --no-install-project --no-install-package nemo-flow
+    uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain
     activate_project_venv
     if is_true "{{ ci }}"; then
         prepare_llvm_cov_workspace
     fi
     python_executable="$(project_python_executable)"
     "$python_executable" -m maturin develop
+
 
 # --set [ci=true|false]
 build-go:
@@ -701,6 +722,10 @@ clean:
         crates/wasm/node_modules \
         crates/wasm/pkg-test/ \
         crates/wasm/pkg/ \
+        integrations/openclaw/.test-dist \
+        integrations/openclaw/dist \
+        integrations/openclaw/node_modules \
+        node_modules \
         docs/_build/ \
         docs/reference/api/**/_generated/ \
         docs/reference/api/**/_source/ \
@@ -742,7 +767,7 @@ test-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     output_dir="{{ output_dir }}"
-    pytest_cmd=(pytest python/tests)
+    pytest_cmd=(pytest)
     coverage_out=""
     junit_out=""
     rust_coverage_out=""
@@ -759,7 +784,7 @@ test-python:
         fi
         cargo test -p nemo-flow-python --lib
     fi
-    uv sync --inexact --no-install-project --no-install-package nemo-flow
+    uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain
     activate_project_venv
     python_executable="$(project_python_executable)"
     use_project_python_source "$python_executable"
@@ -880,6 +905,21 @@ test-node:
         npm test --workspace=nemo-flow-node
     fi
 
+# --set [ci=true|false]
+test-openclaw:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_FLOW_REPO_ROOT"
+    if is_true "{{ ci }}"; then
+        npm ci --ignore-scripts
+        npm run build-debug --workspace=nemo-flow-node
+    else
+        npm install --ignore-scripts
+    fi
+    npm run typecheck --workspace=nemo-flow-openclaw
+    npm test --workspace=nemo-flow-openclaw
+    npm run pack:check --workspace=nemo-flow-openclaw
+
 # --set [output_dir=<path>] [ci=true|false]
 test-wasm:
     #!/usr/bin/env bash
@@ -887,13 +927,31 @@ test-wasm:
     output_dir="{{ output_dir }}"
     coverage_out=""
     junit_out=""
+    rust_host="$(rustc -vV | sed -n 's/^host: //p')"
+    is_windows_arm64=false
+    case "${RUNNER_OS:-}:${RUNNER_ARCH:-}:$rust_host" in
+        Windows:ARM64:*|*:*:aarch64-pc-windows-msvc)
+            is_windows_arm64=true
+            ;;
+    esac
     cd "$NEMO_FLOW_REPO_ROOT"
     wasm-pack test --node crates/wasm
     npm install --workspace=nemo-flow-wasm --ignore-scripts
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact wasm-js.xml)"
         junit_out="$(prepare_artifact wasm-junit.xml)"
-        npm run coverage:pkg --workspace=nemo-flow-wasm
+        if [[ "$is_windows_arm64" == true ]]; then
+            echo "Skipping wasm-opt for the Windows Arm64 wasm-pack package build"
+            rm -rf crates/wasm/pkg
+            (
+                cd crates/wasm
+                wasm-pack build --no-opt --target nodejs --out-dir pkg
+            )
+            node crates/wasm/scripts/prepare_pkg.mjs
+            npm --workspace=nemo-flow-wasm --ignore-scripts run coverage:pkg
+        else
+            npm run coverage:pkg --workspace=nemo-flow-wasm
+        fi
         cp crates/wasm/coverage/cobertura-coverage.xml "$coverage_out"
         cp crates/wasm/junit.xml "$junit_out"
     else
@@ -901,7 +959,7 @@ test-wasm:
     fi
 
 # --set [output_dir=<path>] [ci=true|false]
-test-all: test-rust test-python test-go test-node test-wasm
+test-all: test-rust test-python test-go test-node test-openclaw test-wasm
 
 # [version] or --set ref_name=<version>
 set-version version="":
@@ -931,11 +989,13 @@ package-node:
     if [[ -z "{{ ref_name }}" ]]; then
         sha="$(head_git_sha)"
         version="$(read_npm_package_version crates/node/package.json)"
+        package_version="${version}+${sha}"
         echo "Non-release build: appending commit hash to version"
-        set_npm_package_version crates/node/package.json package-lock.json "${version}-${sha}" crates/node
+        set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
     else
+        package_version="{{ ref_name }}"
         echo "Using explicit version {{ ref_name }}"
-        set_npm_package_version crates/node/package.json package-lock.json "{{ ref_name }}" crates/node
+        set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
     fi
     build_args=(build)
     if is_true "{{ ci }}" && [[ "$(uname -s)" == "Linux" ]]; then
@@ -953,6 +1013,33 @@ package-node:
     packages=("$package_dir"/*.tgz)
     if ((${#packages[@]} == 0)); then
         echo "Error: No npm packages found in $package_dir"
+        exit 1
+    fi
+
+# --set [output_dir=<path>] [ref_name=<name>]
+package-openclaw:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    # If `ref_name` is empty, append the current short HEAD SHA to the version.
+    # If `ref_name` is set, write it as the exact package version before packing.
+    output_dir="{{ output_dir }}"
+    cd "$NEMO_FLOW_REPO_ROOT"
+    package_dir="$(prepare_package_dir openclaw)"
+    if [[ -z "{{ ref_name }}" ]]; then
+        sha="$(head_git_sha)"
+        version="$(read_npm_package_version integrations/openclaw/package.json)"
+        echo "Non-release build: appending commit hash to version"
+        set_npm_package_version integrations/openclaw/package.json package-lock.json "${version}-${sha}" integrations/openclaw
+    else
+        echo "Using explicit version {{ ref_name }}"
+        set_npm_package_version integrations/openclaw/package.json package-lock.json "{{ ref_name }}" integrations/openclaw
+    fi
+    npm install --workspace=nemo-flow-openclaw --ignore-scripts
+    npm pack --workspace=nemo-flow-openclaw --pack-destination "$package_dir"
+    shopt -s nullglob
+    packages=("$package_dir"/*.tgz)
+    if ((${#packages[@]} == 0)); then
+        echo "Error: No OpenClaw npm packages found in $package_dir"
         exit 1
     fi
 

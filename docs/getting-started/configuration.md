@@ -28,12 +28,20 @@ Plugins use a structured plugin configuration with:
 
 Start with [Basic Guide: Define a Plugin](../build-plugins/basic-guide.md) when you need reusable middleware, subscribers, or adaptive behavior.
 
+The `nemo-flow` CLI gateway reads plugin files named `plugins.toml`. See
+[Plugin Configuration Files](../build-plugins/plugin-configuration-files.md)
+for file locations, precedence, merge behavior, editor controls, and validation
+rules.
+
 ## Observability Setup
 
-ATIF exporters, OpenTelemetry subscribers, and OpenInference subscribers are
-configured through their binding-native config objects. See
-[Export Observability Data](../export-observability-data/code-examples.md) for
-the supported export paths.
+ATOF exporters, ATIF exporters, OpenTelemetry subscribers, and OpenInference
+subscribers can be configured directly through binding-native config objects.
+Use the built-in `observability` plugin when you want one plugin component to
+own standard exporter setup and teardown. See
+[Configure the Observability Plugin](../export-observability-data/observability-plugin.md)
+and [Export Observability Data](../export-observability-data/code-examples.md)
+for the supported export paths.
 
 NeMo Flow does not require application-level environment variables for normal
 runtime use. Configure most behavior through API objects, registration calls, or

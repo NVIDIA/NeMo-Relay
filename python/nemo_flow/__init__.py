@@ -15,6 +15,7 @@ The main entry points are:
 - ``nemo_flow.typed`` for codec-based typed wrappers
 - ``nemo_flow.plugin`` for global plugin configuration and custom plugin registration
 - ``nemo_flow.adaptive`` for adaptive component configuration helpers
+- ``nemo_flow.observability`` for observability component configuration helpers
 
 Top-level exports also include:
 
@@ -22,7 +23,7 @@ Top-level exports also include:
   ``set_thread_scope_stack()``, and ``scope_stack_active()``
 - native runtime types such as ``ScopeHandle``, ``ToolHandle``, ``LLMHandle``,
   ``LLMRequest``, ``ScopeType``, and the lifecycle event classes
-- observability helpers such as ``AtifExporter``,
+- observability helpers such as ``AtifExporter``, ``AtofExporter``,
   ``OpenTelemetrySubscriber``, and ``OpenInferenceSubscriber``
 - JSON and callback type aliases used by middleware, typed wrappers, and
   plugin-facing configuration helpers
@@ -80,6 +81,9 @@ from nemo_flow._native import (
     AnnotatedLLMRequest,
     AnnotatedLLMResponse,
     AtifExporter,
+    AtofExporter,
+    AtofExporterConfig,
+    AtofExporterMode,
     LLMAttributes,
     LLMHandle,
     LLMRequest,
@@ -171,12 +175,14 @@ LlmStreamExecutionIntercept: TypeAlias = Callable[
     AsyncIterator[Json] | Awaitable[AsyncIterator[Json]],
 ]
 
+# intentionally not importing utils.py to avoid overhead of creating the ThreadPoolExecutor unless it is needed
 from nemo_flow import (  # noqa: E402
     adaptive,
     codecs,
     guardrails,
     intercepts,
     llm,
+    observability,
     plugin,
     scope,
     scope_local,
@@ -418,6 +424,7 @@ __all__ = [
     "typed",
     "plugin",
     "adaptive",
+    "observability",
     # Scope stack isolation
     "ScopeStack",
     "create_scope_stack",
@@ -440,6 +447,9 @@ __all__ = [
     "AnnotatedLLMRequest",
     "AnnotatedLLMResponse",
     "AtifExporter",
+    "AtofExporterMode",
+    "AtofExporterConfig",
+    "AtofExporter",
     "OpenInferenceConfig",
     "OpenInferenceSubscriber",
     "OpenTelemetryConfig",

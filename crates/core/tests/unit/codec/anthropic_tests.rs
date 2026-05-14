@@ -224,8 +224,13 @@ fn test_decode_response_thinking_blocks_in_api_specific() {
     let resp = codec.decode_response(&full_anthropic_response()).unwrap();
     match resp.api_specific.unwrap() {
         ApiSpecificResponse::AnthropicMessages {
+            object_type,
+            role,
+            stop_reason,
             content_blocks,
             stop_sequence,
+            service_tier,
+            container,
         } => {
             let blocks = content_blocks.unwrap();
             // Should contain ALL content blocks
@@ -239,7 +244,12 @@ fn test_decode_response_thinking_blocks_in_api_specific() {
             assert!(types.contains(&"redacted_thinking"));
             assert!(types.contains(&"text"));
             assert!(types.contains(&"tool_use"));
+            assert_eq!(object_type.as_deref(), Some("message"));
+            assert_eq!(role.as_deref(), Some("assistant"));
+            assert_eq!(stop_reason.as_deref(), Some("end_turn"));
             assert_eq!(stop_sequence, None);
+            assert_eq!(service_tier, None);
+            assert_eq!(container, None);
         }
         other => panic!("Expected AnthropicMessages, got {other:?}"),
     }
@@ -261,6 +271,11 @@ fn test_decode_response_stop_sequence_value() {
         ApiSpecificResponse::AnthropicMessages {
             stop_sequence,
             content_blocks: _,
+            object_type: _,
+            role: _,
+            stop_reason: _,
+            service_tier: _,
+            container: _,
         } => {
             assert_eq!(stop_sequence, Some("\n\nHuman:".into()));
         }
@@ -282,13 +297,23 @@ fn test_decode_response_extra_fields_preserved() {
         "container": { "id": "container_abc123" }
     });
     let resp = codec.decode_response(&response).unwrap();
-    // type, role, container should be in extra
-    assert_eq!(resp.extra.get("type"), Some(&json!("message")));
-    assert_eq!(resp.extra.get("role"), Some(&json!("assistant")));
-    assert_eq!(
-        resp.extra.get("container"),
-        Some(&json!({"id": "container_abc123"}))
-    );
+    // type/role/container are now modeled in api_specific.
+    assert!(resp.extra.get("type").is_none());
+    assert!(resp.extra.get("role").is_none());
+    assert!(resp.extra.get("container").is_none());
+    match resp.api_specific.unwrap() {
+        ApiSpecificResponse::AnthropicMessages {
+            object_type,
+            role,
+            container,
+            ..
+        } => {
+            assert_eq!(object_type.as_deref(), Some("message"));
+            assert_eq!(role.as_deref(), Some("assistant"));
+            assert_eq!(container, Some(json!({"id":"container_abc123"})));
+        }
+        other => panic!("Expected AnthropicMessages, got {other:?}"),
+    }
 }
 
 #[test]
@@ -495,11 +520,129 @@ fn test_decode_request_extra_fields() {
         "stream": true
     }));
     let annotated = codec.decode(&request).unwrap();
-    assert_eq!(
-        annotated.extra.get("metadata"),
-        Some(&json!({"user_id": "abc"}))
-    );
+    assert_eq!(annotated.metadata, Some(json!({"user_id": "abc"})));
     assert_eq!(annotated.extra.get("stream"), Some(&json!(true)));
+}
+
+#[test]
+fn test_decode_request_service_tier_and_parallel_tool_calls() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(json!({
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 100,
+        "service_tier": "default",
+        "tool_choice": { "type": "auto", "disable_parallel_tool_use": true }
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    assert_eq!(annotated.service_tier.as_deref(), Some("default"));
+    assert_eq!(annotated.parallel_tool_calls, Some(false));
+}
+
+#[test]
+fn test_decode_request_vllm_tool_choice_none_and_extensions_preserved() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "max_tokens": 100,
+        "tool_choice": { "type": "none", "disable_parallel_tool_use": true },
+        "kv_transfer_params": { "mode": "decode" },
+        "chat_template_kwargs": { "include_system": true }
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    assert_eq!(annotated.tool_choice, Some(ToolChoice::None));
+    assert_eq!(annotated.parallel_tool_calls, Some(false));
+    assert_eq!(
+        annotated.extra.get("kv_transfer_params"),
+        Some(&json!({"mode":"decode"}))
+    );
+    assert_eq!(
+        annotated.extra.get("chat_template_kwargs"),
+        Some(&json!({"include_system":true}))
+    );
+}
+
+#[test]
+fn test_decode_request_vllm_system_array_ignores_non_text_blocks() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "messages": [{ "role": "user", "content": "Describe this" }],
+        "max_tokens": 100,
+        "system": [
+            {
+                "type": "image",
+                "source": { "type": "base64", "media_type": "image/png", "data": "abcd" }
+            },
+            { "type": "text", "text": "Only answer in one sentence." }
+        ]
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    assert_eq!(
+        annotated.system_prompt(),
+        Some("Only answer in one sentence.")
+    );
+}
+
+#[test]
+fn test_decode_request_litellm_bridge_thinking_output_config_preserved_in_extra() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "max_tokens": 128,
+        "thinking": { "type": "enabled", "budget_tokens": 2048 },
+        "output_config": { "effort": "low" },
+        "reasoning_effort": "minimal",
+        "tool_choice": { "type": "any", "disable_parallel_tool_use": false }
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    // stable extraction
+    assert_eq!(annotated.tool_choice, Some(ToolChoice::Required));
+    assert_eq!(annotated.parallel_tool_calls, Some(true));
+    // bridge-specific controls preserved losslessly
+    assert_eq!(
+        annotated.extra.get("thinking"),
+        Some(&json!({"type":"enabled","budget_tokens":2048}))
+    );
+    assert_eq!(
+        annotated.extra.get("output_config"),
+        Some(&json!({"effort":"low"}))
+    );
+    assert_eq!(
+        annotated.extra.get("reasoning_effort"),
+        Some(&json!("minimal"))
+    );
+}
+
+#[test]
+fn test_decode_request_litellm_cache_control_blocks_preserved() {
+    let codec = AnthropicMessagesCodec;
+    let request = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 128,
+        "system": [
+            { "type": "text", "text": "Be terse", "cache_control": { "type": "ephemeral" } }
+        ],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello",
+                        "cache_control": { "type": "ephemeral", "scope": "global" }
+                    }
+                ]
+            }
+        ]
+    }));
+    let annotated = codec.decode(&request).unwrap();
+    // System text should still extract.
+    assert_eq!(annotated.system_prompt(), Some("Be terse"));
+    // `system` is a modeled key in Anthropic decode and should not live in extra.
+    assert!(annotated.extra.get("system").is_none());
 }
 
 // ===================================================================
@@ -523,6 +666,41 @@ fn test_encode_round_trip_preserves_unmodeled_fields() {
     // Unmodeled fields preserved
     assert_eq!(obj.get("metadata"), Some(&json!({"user_id": "abc"})));
     assert_eq!(obj.get("stream"), Some(&json!(true)));
+}
+
+#[test]
+fn test_encode_writes_anthropic_modeled_controls() {
+    let codec = AnthropicMessagesCodec;
+    let mut annotated = codec
+        .decode(&make_request(json!({
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 100,
+            "tool_choice": { "type": "auto" }
+        })))
+        .unwrap();
+    annotated.metadata = Some(json!({"user_id":"abc"}));
+    annotated.service_tier = Some("default".into());
+    annotated.parallel_tool_calls = Some(false);
+    let encoded = codec
+        .encode(
+            &annotated,
+            &make_request(json!({
+                "messages": [{ "role": "user", "content": "Hi" }],
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 100,
+                "tool_choice": { "type": "auto" }
+            })),
+        )
+        .unwrap();
+    let obj = encoded.content.as_object().unwrap();
+    assert_eq!(obj.get("metadata"), Some(&json!({"user_id":"abc"})));
+    assert_eq!(obj.get("service_tier"), Some(&json!("default")));
+    assert_eq!(
+        obj.get("tool_choice")
+            .and_then(|v| v.get("disable_parallel_tool_use")),
+        Some(&json!(true))
+    );
 }
 
 #[test]
@@ -692,6 +870,19 @@ fn test_helper_and_error_paths_cover_remaining_anthropic_branches() {
             },
         }]),
         tool_choice: Some(ToolChoice::None),
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
         extra: serde_json::Map::new(),
     };
 
@@ -708,7 +899,7 @@ fn test_helper_and_error_paths_cover_remaining_anthropic_branches() {
     assert_eq!(obj.get("temperature"), Some(&json!(0.3)));
     assert_eq!(obj.get("top_p"), Some(&json!(0.8)));
     assert_eq!(obj.get("stop_sequences"), Some(&json!(["END"])));
-    assert_eq!(obj.get("tool_choice"), Some(&json!({"type": "auto"})));
+    assert_eq!(obj.get("tool_choice"), Some(&json!({"type": "none"})));
     assert_eq!(obj.get("system"), Some(&json!("First\nSecond")));
 
     let tools = obj.get("tools").unwrap().as_array().unwrap();
@@ -755,4 +946,259 @@ fn test_encode_tool_choice_specific_to_anthropic() {
         obj.get("tool_choice"),
         Some(&json!({"type": "tool", "name": "my_func"}))
     );
+}
+
+// ===================================================================
+// Streaming codec tests
+// ===================================================================
+
+use super::super::streaming::StreamingCodec;
+
+#[test]
+fn anthropic_streaming_codec_assembles_text_response() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_01ABC",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5-20251001",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {"input_tokens": 100, "output_tokens": 0}
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "text", "text": ""}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hello, "}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "world."}
+    }))
+    .unwrap();
+    collector(json!({"type": "content_block_stop", "index": 0})).unwrap();
+    collector(json!({
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+        "usage": {"input_tokens": 100, "output_tokens": 5}
+    }))
+    .unwrap();
+    collector(json!({"type": "message_stop"})).unwrap();
+
+    let assembled = finalizer();
+    // Wire-compatible with RawAnthropicResponse — feed it back through the existing decoder.
+    let annotated = AnthropicMessagesCodec
+        .decode_response(&assembled)
+        .expect("assembled response should decode");
+    assert_eq!(annotated.id.as_deref(), Some("msg_01ABC"));
+    assert_eq!(
+        annotated.model.as_deref(),
+        Some("claude-haiku-4-5-20251001")
+    );
+    assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
+    assert_eq!(
+        annotated.message,
+        Some(MessageContent::Text("Hello, world.".to_string()))
+    );
+    let usage = annotated.usage.as_ref().unwrap();
+    assert_eq!(usage.prompt_tokens, Some(100));
+    assert_eq!(usage.completion_tokens, Some(5));
+}
+
+#[test]
+fn anthropic_streaming_codec_assembles_tool_use_input_from_partial_json() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_tool",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5-20251001",
+            "content": [],
+            "usage": {"input_tokens": 50, "output_tokens": 0}
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+            "type": "tool_use",
+            "id": "toolu_01",
+            "name": "lookup",
+            "input": {}
+        }
+    }))
+    .unwrap();
+    for fragment in &["{\"q", "uery\":", " \"weath", "er\"}"] {
+        collector(json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": fragment}
+        }))
+        .unwrap();
+    }
+    collector(json!({"type": "content_block_stop", "index": 0})).unwrap();
+    collector(json!({
+        "type": "message_delta",
+        "delta": {"stop_reason": "tool_use"},
+        "usage": {"input_tokens": 50, "output_tokens": 12}
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    let annotated = AnthropicMessagesCodec
+        .decode_response(&assembled)
+        .expect("assembled response should decode");
+    assert_eq!(annotated.finish_reason, Some(FinishReason::ToolUse));
+    let tool_calls = annotated.tool_calls.expect("tool_calls present");
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].id, "toolu_01");
+    assert_eq!(tool_calls[0].name, "lookup");
+    assert_eq!(tool_calls[0].arguments, json!({"query": "weather"}));
+}
+
+#[test]
+fn anthropic_streaming_codec_preserves_unknown_block_types() {
+    // Server-side tool blocks (web_search_tool_result) ship full content at content_block_start
+    // and have no deltas; the codec must preserve them in the assembled content array.
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_ws",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5-20251001",
+            "usage": {"input_tokens": 1, "output_tokens": 0}
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_42",
+            "content": [
+                {"type": "web_search_result", "title": "First", "url": "https://a"},
+                {"type": "web_search_result", "title": "Second", "url": "https://b"}
+            ]
+        }
+    }))
+    .unwrap();
+    collector(json!({"type": "content_block_stop", "index": 0})).unwrap();
+
+    let assembled = finalizer();
+    let block = &assembled["content"][0];
+    assert_eq!(block["type"], json!("web_search_tool_result"));
+    assert_eq!(block["tool_use_id"], json!("srvtoolu_42"));
+    assert_eq!(block["content"][0]["title"], json!("First"));
+    assert_eq!(block["content"][1]["url"], json!("https://b"));
+}
+
+#[test]
+fn anthropic_streaming_codec_attaches_citations_to_text_blocks() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_c", "type": "message", "role": "assistant",
+            "model": "claude-haiku-4-5-20251001", "usage": {}
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "text", "text": ""}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "citations_delta", "citation": {
+            "type": "web_search_result_location",
+            "cited_text": "Hello",
+            "url": "https://example.com",
+            "title": "Source"
+        }}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hello"}
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    let block = &assembled["content"][0];
+    assert_eq!(block["text"], json!("Hello"));
+    let citations = block["citations"].as_array().expect("citations array");
+    assert_eq!(citations.len(), 1);
+    assert_eq!(citations[0]["url"], json!("https://example.com"));
+}
+
+#[test]
+fn anthropic_streaming_codec_keeps_partial_json_when_unparseable() {
+    // Truncated stream: input_json_delta fragments don't form valid JSON. Codec must not drop
+    // the tool_use block; surface the raw concatenation as a string fallback so observability
+    // captures partial intent.
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_p", "type": "message", "role": "assistant",
+            "model": "claude-haiku-4-5-20251001", "usage": {}
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "tool_use", "id": "toolu_p", "name": "go", "input": {}}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "input_json_delta", "partial_json": "{\"q\": \"trun"}
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    let block = &assembled["content"][0];
+    assert_eq!(block["type"], json!("tool_use"));
+    assert_eq!(block["id"], json!("toolu_p"));
+    assert_eq!(block["input"], json!("{\"q\": \"trun"));
 }

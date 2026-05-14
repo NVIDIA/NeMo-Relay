@@ -167,6 +167,193 @@ scope_register_subscriber(&scope.uuid, "scoped-logger", Arc::new(|event| {
 
 ::::
 
+## Observability Plugin Configuration
+
+Use the built-in plugin when one config document should own standard exporter
+setup and teardown. Each exporter section stays disabled unless it explicitly
+sets `enabled: true`.
+
+::::{tab-set}
+:sync-group: language
+
+:::{tab-item} Python
+:sync: python
+
+```python
+from nemo_flow import plugin
+from nemo_flow.observability import (
+    AtifConfig,
+    AtofConfig,
+    ComponentSpec,
+    ObservabilityConfig,
+)
+
+await plugin.initialize(
+    plugin.PluginConfig(
+        components=[
+            ComponentSpec(
+                ObservabilityConfig(
+                    atof=AtofConfig(
+                        enabled=True,
+                        output_directory="logs",
+                        filename="events.jsonl",
+                        mode="overwrite",
+                    ),
+                    atif=AtifConfig(
+                        enabled=True,
+                        output_directory="logs",
+                        filename_template="trajectory-{session_id}.json",
+                    ),
+                )
+            )
+        ]
+    )
+)
+```
+:::
+
+:::{tab-item} Node.js
+:sync: node
+
+```ts
+import * as plugin from 'nemo-flow-node/plugin';
+import * as observability from 'nemo-flow-node/observability';
+
+await plugin.initialize({
+  version: 1,
+  components: [
+    observability.ComponentSpec({
+      version: 1,
+      atof: observability.atofConfig({
+        enabled: true,
+        output_directory: 'logs',
+        filename: 'events.jsonl',
+        mode: 'overwrite',
+      }),
+      atif: observability.atifConfig({
+        enabled: true,
+        output_directory: 'logs',
+        filename_template: 'trajectory-{session_id}.json',
+      }),
+    }),
+  ],
+});
+```
+:::
+
+:::{tab-item} Rust
+:sync: rust
+
+```rust
+use nemo_flow::observability::plugin_component::{
+    AtifSectionConfig, AtofSectionConfig, ComponentSpec, ObservabilityConfig,
+};
+use nemo_flow::plugin::{initialize_plugins, PluginConfig};
+
+let component = ComponentSpec::new(ObservabilityConfig {
+    atof: Some(AtofSectionConfig {
+        enabled: true,
+        output_directory: Some("logs".into()),
+        filename: Some("events.jsonl".into()),
+        mode: "overwrite".into(),
+    }),
+    atif: Some(AtifSectionConfig {
+        enabled: true,
+        output_directory: Some("logs".into()),
+        filename_template: "trajectory-{session_id}.json".into(),
+        ..AtifSectionConfig::default()
+    }),
+    ..ObservabilityConfig::default()
+});
+
+initialize_plugins(PluginConfig {
+    version: 1,
+    components: vec![component.into()],
+    policy: Default::default(),
+})
+.await?;
+```
+:::
+
+::::
+
+## ATOF JSONL Export
+
+Use the ATOF JSONL exporter when you want the raw canonical event stream on
+disk. The exporter writes one ATOF event JSON object per line, opens files in
+append mode by default, and flushes after every event.
+
+::::{tab-set}
+:sync-group: language
+
+:::{tab-item} Python
+:sync: python
+
+```python
+from nemo_flow import AtofExporter, AtofExporterConfig, AtofExporterMode
+
+config = AtofExporterConfig()
+config.output_directory = "logs"
+config.mode = AtofExporterMode.Append
+config.filename = "nemo-flow-events.jsonl"
+
+exporter = AtofExporter(config)
+exporter.register("atof-jsonl")
+
+# Run instrumented application work here.
+
+exporter.deregister("atof-jsonl")
+exporter.shutdown()
+```
+:::
+
+:::{tab-item} Node.js
+:sync: node
+
+```ts
+import { AtofExporter } from 'nemo-flow-node';
+
+const exporter = new AtofExporter({
+  outputDirectory: 'logs',
+  mode: 'append',
+  filename: 'nemo-flow-events.jsonl',
+});
+
+exporter.register('atof-jsonl');
+
+// Run instrumented application work here.
+
+exporter.deregister('atof-jsonl');
+exporter.shutdown();
+```
+:::
+
+:::{tab-item} Rust
+:sync: rust
+
+```rust
+use nemo_flow::observability::atof::{
+    AtofExporter, AtofExporterConfig, AtofExporterMode,
+};
+
+let exporter = AtofExporter::new(
+    AtofExporterConfig::new()
+        .with_output_directory("logs")
+        .with_mode(AtofExporterMode::Append)
+        .with_filename("nemo-flow-events.jsonl"),
+)?;
+
+exporter.register("atof-jsonl")?;
+
+// Run instrumented application work here.
+
+exporter.deregister("atof-jsonl")?;
+exporter.shutdown()?;
+```
+:::
+
+::::
+
 ## ATIF Export
 
 The ATIF exporter collects lifecycle events and exports an ATIF trajectory for offline analysis, replay, or debugging.
@@ -332,6 +519,7 @@ The table below summarizes which exporter or subscriber to start with for each g
 | Subscriber / Exporter | Purpose |
 |---|---|
 | Custom subscriber | Consume events in process. |
+| ATOF JSONL exporter | Write raw ATOF events as one JSON object per line. |
 | ATIF exporter | Collect events and export ATIF v1.6 trajectories. |
 | OpenTelemetry subscriber | Export lifecycle events as OTLP spans. |
 | OpenInference subscriber | Export lifecycle events as OTLP spans with OpenInference-oriented semantics. |

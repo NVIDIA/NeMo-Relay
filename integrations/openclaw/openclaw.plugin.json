@@ -1,0 +1,159 @@
+{
+  "id": "nemo-flow",
+  "name": "NeMo Flow Observability",
+  "description": "ATIF, OpenInference, and OpenTelemetry telemetry through NeMo Flow.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enables the NeMo Flow OpenClaw hook replay plugin."
+      },
+      "backend": {
+        "type": "string",
+        "enum": [
+          "hooks"
+        ],
+        "default": "hooks",
+        "description": "Hook replay backend implementation. Only the hook-backed backend is supported."
+      },
+      "plugins": {
+        "$ref": "#/$defs/nemoFlowPluginConfig",
+        "description": "Generic NeMo Flow plugin configuration document. Use the observability component to configure ATIF, OpenTelemetry, and OpenInference exporters."
+      },
+      "capture": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "includePrompts": {
+            "type": "boolean",
+            "default": true,
+            "description": "Includes LLM prompt text in replayed telemetry when true."
+          },
+          "includeResponses": {
+            "type": "boolean",
+            "default": true,
+            "description": "Includes LLM response text in replayed telemetry when true."
+          },
+          "stripToolArgs": {
+            "type": "boolean",
+            "default": true,
+            "description": "Strips tool arguments from replayed tool spans by default."
+          },
+          "stripToolResults": {
+            "type": "boolean",
+            "default": true,
+            "description": "Strips tool results from replayed tool spans by default."
+          }
+        },
+        "description": "Controls sensitive payload capture for replayed LLM and tool telemetry."
+      },
+      "correlation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "llmOutputGraceMs": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 250,
+            "description": "Milliseconds to wait for a matching llm_input before replaying an llm_output with a placeholder request."
+          },
+          "recordTtlMs": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 600000,
+            "description": "Maximum age in milliseconds for buffered correlation records."
+          },
+          "maxRecordsPerKey": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 32,
+            "description": "Maximum buffered records per correlation key."
+          }
+        },
+        "description": "Bounded correlation settings for matching OpenClaw hook events into replay spans."
+      }
+    },
+    "$defs": {
+      "nemoFlowPluginConfig": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "version": {
+            "type": "integer",
+            "default": 1,
+            "description": "NeMo Flow generic plugin config version."
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/pluginComponent"
+            },
+            "default": [],
+            "description": "NeMo Flow plugin components to validate and initialize."
+          },
+          "policy": {
+            "$ref": "#/$defs/pluginPolicy",
+            "description": "Policy for unknown or unsupported plugin configuration."
+          }
+        },
+        "default": {
+          "version": 1,
+          "components": []
+        }
+      },
+      "pluginComponent": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "Registered NeMo Flow plugin kind."
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether this component should be initialized."
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Component-local plugin configuration."
+          }
+        }
+      },
+      "pluginPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unknown_component": {
+            "$ref": "#/$defs/unsupportedBehavior"
+          },
+          "unknown_field": {
+            "$ref": "#/$defs/unsupportedBehavior"
+          },
+          "unsupported_value": {
+            "$ref": "#/$defs/unsupportedBehavior"
+          }
+        }
+      },
+      "unsupportedBehavior": {
+        "type": "string",
+        "enum": [
+          "ignore",
+          "warn",
+          "error"
+        ]
+      }
+    },
+    "description": "Configuration for the NeMo Flow OpenClaw hook replay plugin."
+  }
+}

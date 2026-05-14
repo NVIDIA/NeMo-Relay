@@ -60,7 +60,7 @@ what did not.
 flowchart TB
     subgraph Config[Plugin Configuration]
         Document[<strong>Plugin Config</strong><br/>version + components + policy]
-        Components[<strong>Components</strong><br/>custom or adaptive]
+        Components[<strong>Components</strong><br/>custom, adaptive, or observability]
 
         Document --> Components
     end
@@ -126,7 +126,13 @@ that should activate once for the running process rather than once per request.
 Scope-local behavior still matters after plugin installation, but the plugin
 system itself is a global activation layer.
 
-## Built-In Plugin Example: Adaptive
+## Built-In Plugin Examples
+
+Core plugin APIs register built-in components before lookup, validation, and
+initialization. Applications can still register custom plugins, but first-party
+components are available by kind without an explicit registration call.
+
+### Adaptive
 
 Adaptive is implemented as a built-in plugin component. It is not a separate
 runtime model. It uses the same plugin system as custom components.
@@ -139,6 +145,18 @@ through the same component lifecycle as other plugins:
 - Inspect the activation result if needed
 
 Detailed adaptive configuration belongs in [Configure Adaptive Optimization](../../use-adaptive-optimization/configure.md), [Adaptive Code Examples](../../use-adaptive-optimization/code-examples.md), and [Advanced Guide: Configure Adaptive Components](../../use-adaptive-optimization/adaptive-components.md).
+
+### Observability
+
+The core crate ships a built-in `observability` plugin component for ATOF,
+ATIF, OpenTelemetry, and OpenInference exporters. Each exporter section is
+disabled unless its section sets `enabled: true`, and subscriber names are
+inferred from the plugin namespace instead of exposed in public config.
+
+Detailed observability plugin configuration belongs in [Configure the Observability Plugin](../../export-observability-data/observability-plugin.md).
+
+For the CLI gateway's `plugins.toml` discovery, precedence, merge, and editing
+rules, see [Plugin Configuration Files](../../build-plugins/plugin-configuration-files.md).
 
 ## Practical Guidance
 

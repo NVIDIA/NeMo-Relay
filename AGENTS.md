@@ -204,6 +204,7 @@ truth.
 
 ## Third-Party Integrations And Patches
 
+### Patch-based Integrations
 Sample integrations are maintained as patch sets, not as primary package source. The pinned upstream checkouts are listed in `third_party/sources.lock`, local checkouts live under `third_party/`, and NeMo Flow patches live under `patches/`.
 
 Current integration patch sets include:
@@ -225,6 +226,12 @@ Use the stable root-level wrappers:
 ```
 
 `apply-patches.sh` expects clean third-party checkouts. After editing an integration checkout, run `./scripts/generate-patches.sh` to regenerate patch files and verify they apply to a clean detached checkout.
+
+### Public API-based Integrations
+Some integrations can be implemented using public APIs without patching. Currently the Python based integrations are located under `python/nemo_flow/integrations/` with their own README files and test suites.
+
+Current public API-based integrations include:
+- LangChain: `python/nemo_flow/integrations/langchain`
 
 ## Documentation And Contribution Workflow
 

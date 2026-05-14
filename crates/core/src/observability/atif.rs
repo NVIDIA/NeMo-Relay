@@ -233,6 +233,9 @@ pub struct AtifStepExtra {
     /// Step-level invocation timing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invocation: Option<AtifInvocationInfo>,
+    /// Full unwrapped LLM request payload for request-level fidelity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub llm_request: Option<Json>,
     /// Per-tool callable lineage, aligned with `tool_calls`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_ancestry: Vec<AtifAncestry>,
@@ -427,13 +430,21 @@ const TOKEN_USAGE_KNOWN_KEYS: &[&str] = &[
 
 /// Try to extract `AtifMetrics` from a `token_usage` object in the LLM response.
 ///
-/// Populates `extra` with any unknown token_usage keys (e.g. reasoning_tokens).
-/// Returns `None` if the response has no `token_usage` or it is not an object.
+/// Supports NeMo Flow `token_usage` and provider-native `usage` payloads.
+/// Populates `extra` with any unknown usage keys (e.g. reasoning_tokens or total_tokens).
+/// Returns `None` if the response has no recognized token counts.
 fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
-    let usage = output.as_object()?.get("token_usage")?.as_object()?;
-    let prompt = usage.get("prompt_tokens").and_then(Json::as_u64);
-    let completion = usage.get("completion_tokens").and_then(Json::as_u64);
-    let cached = usage.get("cached_tokens").and_then(Json::as_u64);
+    let usage = token_usage_object(output)?;
+    let prompt = usage_u64(usage, &["prompt_tokens", "input_tokens"]);
+    let completion = usage_u64(usage, &["completion_tokens", "output_tokens"]);
+    let cached = usage_u64(usage, &["cached_tokens"])
+        .or_else(|| prompt_tokens_detail_u64(usage, "cached_tokens"))
+        .or_else(|| {
+            sum_usage_u64(
+                usage,
+                &["cache_read_input_tokens", "cache_creation_input_tokens"],
+            )
+        });
     let cost = usage.get("cost_usd").and_then(Json::as_f64);
     let prompt_ids = usage
         .get("prompt_token_ids")
@@ -471,6 +482,39 @@ fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
         logprobs,
         extra,
     })
+}
+
+fn token_usage_object(output: &Json) -> Option<&serde_json::Map<String, Json>> {
+    let output = output.as_object()?;
+    output
+        .get("token_usage")
+        .or_else(|| output.get("usage"))
+        .and_then(Json::as_object)
+}
+
+fn usage_u64(usage: &serde_json::Map<String, Json>, keys: &[&str]) -> Option<u64> {
+    keys.iter()
+        .find_map(|key| usage.get(*key).and_then(Json::as_u64))
+}
+
+fn sum_usage_u64(usage: &serde_json::Map<String, Json>, keys: &[&str]) -> Option<u64> {
+    let mut total = 0;
+    let mut found = false;
+    for key in keys {
+        if let Some(value) = usage.get(*key).and_then(Json::as_u64) {
+            total += value;
+            found = true;
+        }
+    }
+    found.then_some(total)
+}
+
+fn prompt_tokens_detail_u64(usage: &serde_json::Map<String, Json>, key: &str) -> Option<u64> {
+    usage
+        .get("prompt_tokens_details")
+        .and_then(Json::as_object)
+        .and_then(|details| details.get(key))
+        .and_then(Json::as_u64)
 }
 
 /// Extract `reasoning_effort` from an LLM request (string or number).
@@ -696,6 +740,7 @@ impl PendingAgentStep {
         let extra = AtifStepExtra {
             ancestry,
             invocation: self.invocation.take(),
+            llm_request: None,
             tool_ancestry: std::mem::take(&mut self.tool_ancestry),
             tool_invocations: if self.tool_invocations.is_empty() {
                 None
@@ -803,6 +848,7 @@ impl StepConversionState {
         let extra = AtifStepExtra {
             ancestry: build_ancestry(event, &lookups.name_map),
             invocation: None,
+            llm_request: Some(content.clone()),
             tool_ancestry: Vec::new(),
             tool_invocations: None,
         };
@@ -894,15 +940,31 @@ impl StepConversionState {
             .push_tool_metadata(build_ancestry(event, &lookups.name_map), invocation);
     }
 
-    fn handle_mark(&mut self, mark: &Event) {
+    fn handle_mark(&mut self, mark: &Event, lookups: &EventLookupMaps) {
         self.flush_observations();
         let Some(data) = mark.data() else {
             return;
         };
+        if is_empty_mark_payload(data) {
+            return;
+        }
+        let extra = AtifStepExtra {
+            ancestry: build_ancestry(mark, &lookups.name_map),
+            invocation: Some(AtifInvocationInfo {
+                start_timestamp: None,
+                end_timestamp: None,
+                invocation_id: Some(mark.uuid().to_string()),
+                status: Some("completed".to_string()),
+                framework: Some("nemo_flow".to_string()),
+            }),
+            llm_request: None,
+            tool_ancestry: Vec::new(),
+            tool_invocations: None,
+        };
         self.steps.push(AtifStep {
             step_id: 0,
             source: "system".to_string(),
-            message: data.clone(),
+            message: mark_message(mark, data),
             timestamp: Some(mark.timestamp().to_rfc3339()),
             model_name: None,
             reasoning_effort: None,
@@ -911,7 +973,7 @@ impl StepConversionState {
             observation: None,
             metrics: None,
             is_copied_context: None,
-            extra: None,
+            extra: serde_json::to_value(&extra).ok(),
         });
     }
 
@@ -988,12 +1050,47 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
             ("scope", Some(crate::api::event::ScopeCategory::End), Some("tool")) => {
                 state.handle_tool_end(event, &lookups)
             }
-            ("mark", _, _) => state.handle_mark(event),
+            ("mark", _, _) => state.handle_mark(event, &lookups),
             _ => {}
         }
     }
 
     state.finish()
+}
+
+fn is_empty_mark_payload(data: &Json) -> bool {
+    data.is_null() || data.as_object().is_some_and(|object| object.is_empty())
+}
+
+// A runtime mark is point-in-time telemetry rather than a scoped call with start/end events. Agent
+// hook adapters use marks for lifecycle notifications that do not map to first-class ATIF step
+// types, for example hook-only status updates or synthetic fallback events. Preserve the original
+// mark payload, but surface the hook name in a stable `hook_event_name` field so trajectory readers
+// can label system steps without knowing adapter-specific metadata conventions.
+fn mark_message(mark: &Event, data: &Json) -> Json {
+    let Some(object) = data.as_object() else {
+        return data.clone();
+    };
+    let mut message = object.clone();
+    if !message.contains_key("hook_event_name")
+        && let Some(hook_event_name) = mark_hook_event_name(mark)
+    {
+        message.insert("hook_event_name".to_string(), Json::String(hook_event_name));
+    }
+    Json::Object(message)
+}
+
+// Prefer the adapter-provided hook name because the runtime mark name may be a generic bucket such
+// as `hook_mark` or a synthetic fallback like `subagent_end_without_start`. Falling back to the mark
+// name keeps non-hook marks readable without making this exporter depend on any one agent adapter.
+fn mark_hook_event_name(mark: &Event) -> Option<String> {
+    mark.metadata()
+        .and_then(Json::as_object)
+        .and_then(|metadata| metadata.get("hook_event_name"))
+        .and_then(Json::as_str)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| Some(mark.name().to_string()).filter(|name| !name.is_empty()))
 }
 
 fn is_start_event(event: &Event) -> bool {

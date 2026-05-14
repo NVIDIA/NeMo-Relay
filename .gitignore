@@ -27,11 +27,14 @@ crates/node/index.js
 crates/node/index.d.ts
 crates/node/coverage/
 crates/node/junit.xml
+integrations/openclaw/dist/
+integrations/openclaw/.test-dist/
 
 # WebAssembly
 crates/wasm/pkg/
 crates/wasm/pkg-test/
 crates/wasm/package-lock.json
+crates/wasm/junit.xml
 
 # Shared libraries
 *.dylib
@@ -70,6 +73,7 @@ $RECYCLE.BIN/
 /.cursor/
 .env
 benchmarks/
+**/.nemoflow/
 
 # Local third-party upstream checkouts. These are bootstrapped from
 # third_party/sources.lock and are intentionally excluded from the tracked
@@ -91,4 +95,5 @@ CHANGELOG.md
 crates/wasm/coverage/
 .scannerwork/
 
-**/.nemoflow/
+# VSCode
+/.vscode

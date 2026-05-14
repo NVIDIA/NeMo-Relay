@@ -22,7 +22,7 @@ Good starting points:
 - [Basic Guide: Adding Scopes and Marks](../instrument-applications/adding-scopes-and-marks.md)
 - [Basic Guide: Instrument a Tool Call](../instrument-applications/instrument-tool-call.md)
 - [Basic Guide: Instrument an LLM Call](../instrument-applications/instrument-llm-call.md)
-- [Python Quick Start](../getting-started/python.md)
+- [Python Quick Start](../getting-started/python/index.md)
 - [Node.js Quick Start](../getting-started/nodejs.md)
 - [Rust Quick Start](../getting-started/rust.md)
 
@@ -132,9 +132,11 @@ The table below compares subscriber and exporter options for common observabilit
 |---|---|
 | Custom subscriber | Consume events in process. |
 | Scope-local subscriber | Observe one request or tenant and clean up when its scope closes. |
+| ATOF JSONL exporter | Write raw ATOF events as one JSON object per line. |
 | ATIF exporter | Collect events and export ATIF v1.6 trajectories. |
 | OpenTelemetry subscriber | Export lifecycle events as OTLP spans. |
 | OpenInference subscriber | Export lifecycle events as OTLP spans with OpenInference-oriented semantics. |
+| Observability plugin | Configure ATOF, per-agent ATIF, OpenTelemetry, and OpenInference from one built-in plugin component. |
 
 ## Validate the Subscriber
 
@@ -163,5 +165,6 @@ Use these links to continue from this workflow into the next related task.
 - Export generic OTLP spans with [Advanced Guide: Export OpenTelemetry Data](opentelemetry.md).
 - Export traces with [Advanced Guide: Export OpenInference Data](advanced-guide.md).
 - Export trajectory artifacts with [Advanced Guide: Export ATIF](atif.md).
+- Configure standard exporters with [Basic Guide: Configure the Observability Plugin](observability-plugin.md).
 - Use [Code Examples](code-examples.md) for event shape, scope-local subscribers, ATIF, and OpenTelemetry snippets.
 - Add redaction with [Advanced Guide: Add Middleware](../instrument-applications/advanced-guide.md).

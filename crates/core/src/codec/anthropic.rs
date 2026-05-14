@@ -45,10 +45,15 @@ pub struct AnthropicMessagesCodec;
 #[derive(Deserialize)]
 struct RawAnthropicResponse {
     id: Option<String>,
+    #[serde(rename = "type")]
+    object_type: Option<String>,
+    role: Option<String>,
     model: Option<String>,
     content: Option<Vec<Json>>,
     stop_reason: Option<String>,
     stop_sequence: Option<String>,
+    service_tier: Option<String>,
+    container: Option<Json>,
     usage: Option<RawAnthropicUsage>,
     #[serde(flatten)]
     extra: serde_json::Map<String, Json>,
@@ -94,6 +99,8 @@ const MODELED_REQUEST_KEYS: &[&str] = &[
     "stop_sequences",
     "tools",
     "tool_choice",
+    "metadata",
+    "service_tier",
 ];
 
 /// Decode the Anthropic `tool_choice` JSON value into a normalized [`ToolChoice`].
@@ -101,6 +108,7 @@ const MODELED_REQUEST_KEYS: &[&str] = &[
 /// Anthropic format:
 /// - `{"type": "auto"}` -> `ToolChoice::Auto`
 /// - `{"type": "any"}` -> `ToolChoice::Required`
+/// - `{"type": "none"}` -> `ToolChoice::None`
 /// - `{"type": "tool", "name": "X"}` -> `ToolChoice::Specific`
 fn decode_anthropic_tool_choice(val: &Json) -> Option<ToolChoice> {
     let obj = val.as_object()?;
@@ -108,6 +116,7 @@ fn decode_anthropic_tool_choice(val: &Json) -> Option<ToolChoice> {
     match tc_type {
         "auto" => Some(ToolChoice::Auto),
         "any" => Some(ToolChoice::Required),
+        "none" => Some(ToolChoice::None),
         "tool" => {
             let name = obj.get("name")?.as_str()?.to_string();
             Some(ToolChoice::Specific(ToolChoiceFunction {
@@ -119,16 +128,36 @@ fn decode_anthropic_tool_choice(val: &Json) -> Option<ToolChoice> {
     }
 }
 
+/// Extract Anthropic `disable_parallel_tool_use` from tool_choice and map
+/// to normalized `parallel_tool_calls` semantics.
+fn decode_parallel_tool_calls(val: &Json) -> Option<bool> {
+    let obj = val.as_object()?;
+    obj.get("disable_parallel_tool_use")
+        .and_then(|v| v.as_bool())
+        .map(|disabled| !disabled)
+}
+
 /// Encode a normalized [`ToolChoice`] back into Anthropic JSON format.
 fn encode_anthropic_tool_choice(tc: &ToolChoice) -> Json {
     match tc {
         ToolChoice::Auto => serde_json::json!({"type": "auto"}),
         ToolChoice::Required => serde_json::json!({"type": "any"}),
-        ToolChoice::None => serde_json::json!({"type": "auto"}), // Anthropic has no "none"; fall back to auto
+        ToolChoice::None => serde_json::json!({"type": "none"}),
         ToolChoice::Specific(func) => {
             serde_json::json!({"type": "tool", "name": func.function.name})
         }
     }
+}
+
+fn encode_tool_choice_with_parallel_hint(
+    tc: &ToolChoice,
+    parallel_tool_calls: Option<bool>,
+) -> Json {
+    let mut value = encode_anthropic_tool_choice(tc);
+    if let (Some(parallel), Some(obj)) = (parallel_tool_calls, value.as_object_mut()) {
+        obj.insert("disable_parallel_tool_use".into(), Json::Bool(!parallel));
+    }
+    value
 }
 
 /// Extract the system prompt from an Anthropic top-level `system` field.
@@ -179,9 +208,9 @@ fn extract_system_text(msg: &Message) -> Option<String> {
         } => {
             let texts: Vec<&str> = parts
                 .iter()
-                .map(|p| {
-                    let super::request::ContentPart::Text { text } = p;
-                    text.as_str()
+                .filter_map(|p| match p {
+                    super::request::ContentPart::Text { text } => Some(text.as_str()),
+                    super::request::ContentPart::ImageUrl { .. } => None,
                 })
                 .collect();
             if texts.is_empty() {
@@ -339,7 +368,12 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
         // Build API-specific fields: all content blocks + stop_sequence.
         let api_specific_content_blocks = raw.content.clone();
         let api_specific = Some(ApiSpecificResponse::AnthropicMessages {
+            object_type: raw.object_type,
+            role: raw.role,
+            stop_reason: raw.stop_reason,
             stop_sequence: raw.stop_sequence,
+            service_tier: raw.service_tier,
+            container: raw.container,
             content_blocks: api_specific_content_blocks,
         });
 
@@ -435,6 +469,7 @@ impl LlmCodec for AnthropicMessagesCodec {
         let tool_choice = obj
             .get("tool_choice")
             .and_then(decode_anthropic_tool_choice);
+        let parallel_tool_calls = obj.get("tool_choice").and_then(decode_parallel_tool_calls);
 
         // Collect extra fields (keys not in MODELED_REQUEST_KEYS).
         let extra: serde_json::Map<String, Json> = obj
@@ -449,6 +484,22 @@ impl LlmCodec for AnthropicMessagesCodec {
             params,
             tools,
             tool_choice,
+            store: None,
+            previous_response_id: None,
+            truncation: None,
+            reasoning: None,
+            include: None,
+            user: None,
+            metadata: obj.get("metadata").cloned(),
+            service_tier: obj
+                .get("service_tier")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            parallel_tool_calls,
+            max_output_tokens: None,
+            max_tool_calls: None,
+            top_logprobs: None,
+            stream: None,
             extra,
         })
     }
@@ -493,8 +544,15 @@ impl LlmCodec for AnthropicMessagesCodec {
         if let Some(ref tool_choice) = annotated.tool_choice {
             obj.insert(
                 "tool_choice".into(),
-                encode_anthropic_tool_choice(tool_choice),
+                encode_tool_choice_with_parallel_hint(tool_choice, annotated.parallel_tool_calls),
             );
+        }
+
+        if let Some(ref metadata) = annotated.metadata {
+            obj.insert("metadata".into(), metadata.clone());
+        }
+        if let Some(ref service_tier) = annotated.service_tier {
+            obj.insert("service_tier".into(), Json::String(service_tier.clone()));
         }
 
         // Merge extra fields back.
@@ -506,6 +564,268 @@ impl LlmCodec for AnthropicMessagesCodec {
             headers: original.headers.clone(),
             content,
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming codec
+// ---------------------------------------------------------------------------
+
+/// Streaming counterpart to [`AnthropicMessagesCodec`].
+///
+/// Replays the Anthropic Messages SSE event sequence into the same JSON shape Anthropic returns
+/// for a non-streaming request (`{id, type, role, model, content, stop_reason, stop_sequence,
+/// usage}`). Once finalized, the assembled JSON can be fed back through
+/// [`AnthropicMessagesCodec::decode_response`] to produce an
+/// [`AnnotatedLlmResponse`](crate::codec::response::AnnotatedLlmResponse) — meaning streaming and
+/// non-streaming Anthropic requests converge on the same observability output.
+///
+/// Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer
+/// closures share access. Each instance is single-use because [`LlmFinalizerFn`] consumes the
+/// finalize step.
+///
+/// [`LlmFinalizerFn`]: crate::api::runtime::LlmFinalizerFn
+pub struct AnthropicMessagesStreamingCodec {
+    state: std::sync::Arc<std::sync::Mutex<AnthropicMessagesStreamingState>>,
+}
+
+impl AnthropicMessagesStreamingCodec {
+    /// Creates a fresh streaming codec with empty accumulator state.
+    pub fn new() -> Self {
+        Self {
+            state: std::sync::Arc::new(std::sync::Mutex::new(
+                AnthropicMessagesStreamingState::default(),
+            )),
+        }
+    }
+}
+
+impl Default for AnthropicMessagesStreamingCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl super::streaming::StreamingCodec for AnthropicMessagesStreamingCodec {
+    fn collector(&self) -> crate::api::runtime::LlmCollectorFn {
+        let state = std::sync::Arc::clone(&self.state);
+        Box::new(move |event: Json| -> Result<()> {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.observe(&event);
+            Ok(())
+        })
+    }
+
+    fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
+        let state = std::sync::Arc::clone(&self.state);
+        Box::new(move || -> Json {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            // Move state out so finalize can consume it; the codec is single-use, so leaving a
+            // default behind is intentional and never observed by another caller.
+            std::mem::take(&mut *guard).finalize()
+        })
+    }
+}
+
+#[derive(Debug, Default)]
+struct AnthropicMessagesStreamingState {
+    id: Option<String>,
+    type_: Option<String>,
+    role: Option<String>,
+    model: Option<String>,
+    /// Latest usage snapshot. `message_start` carries an initial value (input tokens, zero output
+    /// so far); `message_delta` updates it cumulatively. Last write wins.
+    usage: Option<Json>,
+    stop_reason: Option<String>,
+    /// Stored as raw `Json` to preserve `null` (Anthropic's wire shape) versus omitted.
+    stop_sequence: Option<Json>,
+    /// Indexed by the SSE event's `index` field. `None` slots accommodate sparse indices though
+    /// Anthropic emits them in order today.
+    blocks: Vec<Option<StreamingBlock>>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct StreamingBlock {
+    /// The `content_block` JSON captured at `content_block_start`. Deltas mutate fields directly
+    /// for blocks Anthropic delivers incrementally (text, tool_use input, citations); other block
+    /// types (server_tool_use results) ship complete at start and pass through unchanged.
+    skeleton: serde_json::Map<String, Json>,
+    text: String,
+    has_text: bool,
+    partial_json: String,
+    has_partial_json: bool,
+    citations: Vec<Json>,
+    has_citations: bool,
+}
+
+impl AnthropicMessagesStreamingState {
+    fn observe(&mut self, event: &Json) {
+        let event_type = event.get("type").and_then(Json::as_str).unwrap_or("");
+        match event_type {
+            "message_start" => self.observe_message_start(event),
+            "content_block_start" => self.observe_content_block_start(event),
+            "content_block_delta" => self.observe_content_block_delta(event),
+            "message_delta" => self.observe_message_delta(event),
+            // content_block_stop, message_stop, ping, and any unknown event type carry no
+            // accumulator-relevant payload. Unknown types are ignored rather than erroring so a
+            // future Anthropic event addition does not break observability.
+            _ => {}
+        }
+    }
+
+    fn observe_message_start(&mut self, event: &Json) {
+        let Some(message) = event.get("message") else {
+            return;
+        };
+        if let Some(id) = message.get("id").and_then(Json::as_str) {
+            self.id = Some(id.to_string());
+        }
+        if let Some(model) = message.get("model").and_then(Json::as_str) {
+            self.model = Some(model.to_string());
+        }
+        if let Some(role) = message.get("role").and_then(Json::as_str) {
+            self.role = Some(role.to_string());
+        }
+        if let Some(t) = message.get("type").and_then(Json::as_str) {
+            self.type_ = Some(t.to_string());
+        }
+        if let Some(usage) = message.get("usage") {
+            self.usage = Some(usage.clone());
+        }
+    }
+
+    fn observe_content_block_start(&mut self, event: &Json) {
+        let Some(index) = event.get("index").and_then(Json::as_u64) else {
+            return;
+        };
+        let Some(content_block) = event.get("content_block") else {
+            return;
+        };
+        let skeleton = match content_block {
+            Json::Object(map) => map.clone(),
+            _ => return,
+        };
+        let index = index as usize;
+        while self.blocks.len() <= index {
+            self.blocks.push(None);
+        }
+        self.blocks[index] = Some(StreamingBlock {
+            skeleton,
+            ..StreamingBlock::default()
+        });
+    }
+
+    fn observe_content_block_delta(&mut self, event: &Json) {
+        let Some(index) = event.get("index").and_then(Json::as_u64) else {
+            return;
+        };
+        let index = index as usize;
+        let Some(delta) = event.get("delta") else {
+            return;
+        };
+        let delta_type = delta.get("type").and_then(Json::as_str).unwrap_or("");
+        let Some(slot) = self.blocks.get_mut(index) else {
+            return;
+        };
+        let Some(block) = slot.as_mut() else { return };
+        match delta_type {
+            "text_delta" => {
+                if let Some(text) = delta.get("text").and_then(Json::as_str) {
+                    block.text.push_str(text);
+                    block.has_text = true;
+                }
+            }
+            "input_json_delta" => {
+                if let Some(partial) = delta.get("partial_json").and_then(Json::as_str) {
+                    block.partial_json.push_str(partial);
+                    block.has_partial_json = true;
+                }
+            }
+            "citations_delta" => {
+                if let Some(citation) = delta.get("citation") {
+                    block.citations.push(citation.clone());
+                    block.has_citations = true;
+                }
+            }
+            // thinking_delta, signature_delta, and any future delta types fall through; the block
+            // skeleton retains whatever shape was set at content_block_start.
+            _ => {}
+        }
+    }
+
+    fn observe_message_delta(&mut self, event: &Json) {
+        if let Some(delta) = event.get("delta") {
+            if let Some(reason) = delta.get("stop_reason").and_then(Json::as_str) {
+                self.stop_reason = Some(reason.to_string());
+            }
+            if let Some(seq) = delta.get("stop_sequence") {
+                self.stop_sequence = Some(seq.clone());
+            }
+        }
+        if let Some(usage) = event.get("usage") {
+            self.usage = Some(usage.clone());
+        }
+    }
+
+    fn finalize(self) -> Json {
+        let mut output = serde_json::Map::new();
+        if let Some(id) = self.id {
+            output.insert("id".to_string(), Json::String(id));
+        }
+        if let Some(t) = self.type_ {
+            output.insert("type".to_string(), Json::String(t));
+        }
+        if let Some(role) = self.role {
+            output.insert("role".to_string(), Json::String(role));
+        }
+        if let Some(model) = self.model {
+            output.insert("model".to_string(), Json::String(model));
+        }
+        let content: Vec<Json> = self
+            .blocks
+            .into_iter()
+            .filter_map(|block| block.map(StreamingBlock::finalize))
+            .collect();
+        output.insert("content".to_string(), Json::Array(content));
+        if let Some(reason) = self.stop_reason {
+            output.insert("stop_reason".to_string(), Json::String(reason));
+        }
+        if let Some(seq) = self.stop_sequence {
+            output.insert("stop_sequence".to_string(), seq);
+        }
+        if let Some(usage) = self.usage {
+            output.insert("usage".to_string(), usage);
+        }
+        Json::Object(output)
+    }
+}
+
+impl StreamingBlock {
+    fn finalize(mut self) -> Json {
+        if self.has_text {
+            self.skeleton
+                .insert("text".to_string(), Json::String(self.text));
+        }
+        if self.has_partial_json {
+            // Concatenated `partial_json` fragments are expected to parse as a JSON object — that's
+            // the assembled tool input. If parsing fails (Anthropic emits malformed deltas, stream
+            // truncated mid-block), surface the raw concatenation so observability still captures
+            // something rather than dropping the call.
+            let parsed = match serde_json::from_str::<Json>(&self.partial_json) {
+                Ok(value) => value,
+                Err(_) => Json::String(self.partial_json),
+            };
+            self.skeleton.insert("input".to_string(), parsed);
+        }
+        if self.has_citations {
+            self.skeleton
+                .insert("citations".to_string(), Json::Array(self.citations));
+        }
+        Json::Object(self.skeleton)
     }
 }
 

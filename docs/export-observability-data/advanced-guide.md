@@ -26,8 +26,6 @@ Complete these steps:
 3. Start an OTLP/HTTP collector or tracing backend.
 4. Redact sensitive event payloads with sanitize guardrails before production export.
 
-Use `http_binary` transport for the current OpenInference path. The configuration surfaces expose `grpc`, but the current core OpenInference subscriber returns an unsupported-transport error for gRPC.
-
 ## Configure the Exporter
 
 Set these fields first:

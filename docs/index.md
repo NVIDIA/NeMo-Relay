@@ -56,6 +56,7 @@ targets.
 These paths map common reader goals to the most relevant documentation entry points.
 
 - **End Users**: Start with [Prerequisites](getting-started/prerequisites.md) and [Quick Start](getting-started/quick-start.md).
+- **Coding-Agent CLI Users**: Start with [Advanced Guide: Coding-Agent Gateway](integrate-frameworks/coding-agent-gateway.md), then use the per-agent guide for Claude Code, Codex, Cursor, or Hermes.
 - **Agent Framework Developers**: Start with [Integrate into Frameworks](integrate-frameworks/about.md).
 - **Plugin Writers**: Start with [Build Plugins](build-plugins/about.md), then continue to [Basic Guide: Define a Plugin](build-plugins/basic-guide.md).
 - **Contributors**: Start with [Contribute](contribute/about.md) and the repository root `CONTRIBUTING.md` guide.
@@ -161,6 +162,12 @@ About <integrate-frameworks/about>
 Basic Guide: Adding Scopes <integrate-frameworks/adding-scopes>
 Basic Guide: Wrap Tool Calls <integrate-frameworks/wrap-tool-calls>
 Basic Guide: Wrap LLM Calls <integrate-frameworks/wrap-llm-calls>
+Advanced Guide: Coding-Agent Gateway <integrate-frameworks/coding-agent-gateway>
+OpenClaw Plugin Guide <integrate-frameworks/openclaw-plugin>
+Claude Code Gateway Guide <integrate-frameworks/coding-agent-claude-code>
+Codex Gateway Guide <integrate-frameworks/coding-agent-codex>
+Cursor Gateway Guide <integrate-frameworks/coding-agent-cursor>
+Hermes Gateway Guide <integrate-frameworks/coding-agent-hermes>
 Advanced Guide: Handle Non-Serializable Data <integrate-frameworks/non-serializable-data>
 Advanced Guide: Using Codecs <integrate-frameworks/using-codecs>
 Advanced Guide: Provider Codecs <integrate-frameworks/provider-codecs>
@@ -177,6 +184,7 @@ Code Examples <integrate-frameworks/code-examples>
 About <build-plugins/about>
 Basic Guide: Define a Plugin <build-plugins/basic-guide>
 Basic Guide: Validate Plugin Configuration <build-plugins/validate-configuration>
+Basic Guide: Plugin Configuration Files <build-plugins/plugin-configuration-files>
 Basic Guide: Register Plugin Behavior <build-plugins/register-behavior>
 Advanced Guide: Design Plugin Configuration <build-plugins/advanced-configuration>
 NeMo Guardrails Example Plugin <build-plugins/nemoguardrails>
@@ -190,6 +198,7 @@ Code Examples <build-plugins/code-examples>
 
 About <export-observability-data/about>
 Basic Guide: Register a Subscriber <export-observability-data/basic-guide>
+Basic Guide: Configure the Observability Plugin <export-observability-data/observability-plugin>
 Advanced Guide: Export OpenTelemetry Data <export-observability-data/opentelemetry>
 Advanced Guide: Export OpenInference Data <export-observability-data/advanced-guide>
 Advanced Guide: Export ATIF <export-observability-data/atif>

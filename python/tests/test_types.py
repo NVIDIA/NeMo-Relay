@@ -10,8 +10,12 @@ from typing import TypedDict, cast
 from uuid import uuid4
 
 import pytest
+
 from nemo_flow import (
     AtifExporter,
+    AtofExporter,
+    AtofExporterConfig,
+    AtofExporterMode,
     JsonObject,
     LLMAttributes,
     LLMRequest,
@@ -438,6 +442,74 @@ class TestAtifExporterType:
             scope.pop(parent)
             assert exporter.deregister("py_atif_exporter") is True
             assert exporter.deregister("py_atif_exporter") is False
+
+
+class TestAtofExporterType:
+    def test_config_defaults_mutation_and_repr(self, tmp_path):
+        config = AtofExporterConfig()
+
+        assert config.mode == AtofExporterMode.Append
+        assert config.filename.startswith("nemo-flow-events-")
+        assert config.filename.endswith(".jsonl")
+        assert "AtofExporterConfig" in repr(config)
+
+        config.output_directory = str(tmp_path)
+        config.mode = AtofExporterMode.Overwrite
+        config.filename = "events.jsonl"
+
+        assert config.output_directory == str(tmp_path)
+        assert config.mode == AtofExporterMode.Overwrite
+        assert config.filename == "events.jsonl"
+
+    def test_exporter_lifecycle_writes_raw_jsonl_events(self, tmp_path):
+        config = AtofExporterConfig()
+        config.output_directory = str(tmp_path)
+        config.mode = AtofExporterMode.Overwrite
+        config.filename = "events.jsonl"
+
+        exporter = AtofExporter(config)
+        assert "<AtofExporter>" in repr(exporter)
+        assert exporter.path.endswith("events.jsonl")
+
+        subscriber_name = f"py_atof_{uuid4().hex}"
+        exporter.register(subscriber_name)
+        try:
+            handle = scope.push("atof_scope", ScopeType.Agent, input={"scope": True})
+            try:
+                scope.event("atof_mark", handle=handle, data={"step": 1})
+            finally:
+                scope.pop(handle, output={"done": True})
+        finally:
+            assert exporter.deregister(subscriber_name) is True
+            assert exporter.deregister(subscriber_name) is False
+            exporter.force_flush()
+            exporter.shutdown()
+            subscribers.deregister(subscriber_name)
+
+        lines = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+        assert [line["kind"] for line in lines] == ["scope", "mark", "scope"]
+        assert lines[0]["name"] == "atof_scope"
+        assert lines[1]["data"] == {"step": 1}
+        assert lines[2]["scope_category"] == "end"
+
+    def test_append_and_overwrite_modes(self, tmp_path):
+        path = tmp_path / "events.jsonl"
+        path.write_text('{"existing": true}\n')
+
+        append_config = AtofExporterConfig()
+        append_config.output_directory = str(tmp_path)
+        append_config.filename = "events.jsonl"
+        append_exporter = AtofExporter(append_config)
+        append_exporter.shutdown()
+        assert path.read_text().startswith('{"existing": true}\n')
+
+        overwrite_config = AtofExporterConfig()
+        overwrite_config.output_directory = str(tmp_path)
+        overwrite_config.mode = AtofExporterMode.Overwrite
+        overwrite_config.filename = "events.jsonl"
+        overwrite_exporter = AtofExporter(overwrite_config)
+        overwrite_exporter.shutdown()
+        assert path.read_text() == ""
 
 
 class TestOpenTelemetryTypes:

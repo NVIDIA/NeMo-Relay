@@ -1,0 +1,141 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+
+# Hermes Gateway Guide
+
+Use this guide to observe local Hermes Agent sessions with NeMo Flow through
+Hermes shell hooks and the `nemo-flow` gateway. This gateway path is
+separate from the Hermes third-party patch set under `patches/hermes-agent/`;
+use the gateway when you want hook forwarding without rebuilding a patched
+Hermes checkout.
+
+Hermes shell hooks provide session, subagent, tool, and LLM hint lifecycle
+events. Complete LLM request and response observability still requires model
+traffic to route through the gateway.
+
+## Transparent Run
+
+Use the wrapper when you want the gateway lifetime managed for a local Hermes
+process:
+
+```bash
+nemo-flow hermes
+```
+
+Pass Hermes arguments after `--`:
+
+```bash
+nemo-flow hermes -- chat --provider custom
+```
+
+This shortcut is equivalent to `nemo-flow run -- hermes`. The wrapper starts a
+gateway on a dynamic `127.0.0.1` port and exports `NEMO_FLOW_GATEWAY_URL` for
+the launched process. Hermes hook configuration is not temporary in this mode.
+Install hooks first, or configure equivalent Hermes shell hooks, so approved
+hook commands can discover the dynamic gateway URL.
+
+Inspect what would be launched without starting Hermes:
+
+```bash
+nemo-flow run \
+  --dry-run \
+  --print \
+  -- hermes
+```
+
+## Shared Config
+
+Create `.nemo-flow/config.toml` for project defaults or
+`~/.config/nemo-flow/config.toml` for user defaults:
+
+```toml
+[agents.hermes]
+command = "hermes"
+```
+
+Then configure observability with `nemo-flow plugins edit --project` or
+`.nemo-flow/plugins.toml`:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = ".nemo-flow/atif"
+
+[components.config.openinference]
+enabled = true
+endpoint = "http://127.0.0.1:4318/v1/traces"
+```
+
+Run `nemo-flow run --agent hermes` to use the configured command and plugin
+config. User config takes priority over project and system config.
+
+## Hermes Hook Setup
+
+Unlike the other agents, Hermes reads hooks from `.hermes/config.yaml`. The
+setup wizard writes that file for you when you select hermes — running
+`nemo-flow config` (or `nemo-flow config hermes` to scope to one agent) merges
+NeMo Flow hook commands into the YAML, preserving any existing config, and
+records the path under `[agents.hermes].hooks_path` in `.nemo-flow/config.toml`.
+
+The generated Hermes hooks cover `on_session_start`, `on_session_end`,
+`on_session_finalize`, `on_session_reset`, `pre_llm_call`, `post_llm_call`,
+`pre_tool_call`, `post_tool_call`, `subagent_start`, and `subagent_stop`.
+
+Hermes hook forwarding prefers `NEMO_FLOW_GATEWAY_URL` when set (this is what
+`nemo-flow hermes` injects on every run). When launched outside the wrapper —
+e.g., bare `hermes` against a long-running gateway — the hook command falls
+back to `--gateway-url http://127.0.0.1:4040`.
+
+For standalone gateway mode, start the daemon manually:
+
+```bash
+nemo-flow --bind 127.0.0.1:4040
+```
+
+Then point Hermes provider traffic at `http://127.0.0.1:4040` for any provider
+mode that exposes a local OpenAI-compatible or Anthropic-compatible base URL.
+
+## Smoke Test
+
+Run a small Hermes session that starts, invokes one tool, and exits. Then check
+hook forwarding directly:
+
+```bash
+curl -f http://127.0.0.1:4040/healthz
+printf '{"session_id":"smoke-hermes","hook_event_name":"on_session_start"}' \
+  | NEMO_FLOW_GATEWAY_URL=http://127.0.0.1:4040 nemo-flow hook-forward hermes --fail-closed
+```
+
+The response should be `{}`. If Hermes prompts for hook consent, approve the
+NeMo Flow hook command interactively or through Hermes configuration before
+relying on unattended capture.
+
+## Verify Export
+
+End a Hermes turn or finalize the session and confirm ATIF exists:
+
+```bash
+ls .nemo-flow/atif
+```
+
+The gateway writes or updates an ATIF snapshot when it receives
+`on_session_end`, `on_session_finalize`, or `on_session_reset`.
+`on_session_end` is a per-turn snapshot boundary: it does not close the NeMo
+Flow session and does not emit a visible trajectory mark. `on_session_finalize`
+and `on_session_reset` close the session.
+
+## Troubleshoot LLM Lifecycle
+
+If hook events appear but LLM spans are missing, Hermes model traffic is not
+routed through the gateway. If LLM spans exist but attach to the top-level agent
+instead of a subagent, include shared identifiers in Hermes hook payloads and
+gateway requests, such as `conversation_id`, `generation_id`, `request_id`, or
+`x-nemo-flow-subagent-id`.

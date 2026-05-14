@@ -22,7 +22,8 @@ use crate::error::{FlowError, Result};
 use crate::json::Json;
 
 use super::request::{
-    AnnotatedLlmRequest, GenerationParams, Message, MessageContent, ToolChoice, ToolDefinition,
+    AnnotatedLlmRequest, GenerationParams, Message, MessageContent, ToolChoice, ToolChoiceFunction,
+    ToolChoiceFunctionName, ToolDefinition,
 };
 use super::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, ResponseToolCall, Usage,
@@ -48,6 +49,11 @@ struct RawResponsesResponse {
     output: Option<Vec<Json>>,
     usage: Option<RawResponsesUsage>,
     incomplete_details: Option<Json>,
+    previous_response_id: Option<String>,
+    store: Option<bool>,
+    service_tier: Option<String>,
+    truncation: Option<Json>,
+    reasoning: Option<Json>,
     #[serde(flatten)]
     extra: serde_json::Map<String, Json>,
 }
@@ -58,11 +64,21 @@ struct RawResponsesUsage {
     output_tokens: Option<u64>,
     total_tokens: Option<u64>,
     input_tokens_details: Option<RawInputTokensDetails>,
+    output_tokens_details: Option<RawOutputTokensDetails>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct RawInputTokensDetails {
     cached_tokens: Option<u64>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, Json>,
+}
+
+#[derive(Deserialize, Clone)]
+struct RawOutputTokensDetails {
+    reasoning_tokens: Option<u64>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, Json>,
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +114,24 @@ fn parse_arguments(arguments: &str) -> Json {
     serde_json::from_str(arguments).unwrap_or_else(|_| Json::String(arguments.to_string()))
 }
 
+fn input_tokens_details_to_json(details: &RawInputTokensDetails) -> Json {
+    let mut obj = serde_json::Map::new();
+    if let Some(cached_tokens) = details.cached_tokens {
+        obj.insert("cached_tokens".into(), Json::from(cached_tokens));
+    }
+    obj.extend(details.extra.clone());
+    Json::Object(obj)
+}
+
+fn output_tokens_details_to_json(details: &RawOutputTokensDetails) -> Json {
+    let mut obj = serde_json::Map::new();
+    if let Some(reasoning_tokens) = details.reasoning_tokens {
+        obj.insert("reasoning_tokens".into(), Json::from(reasoning_tokens));
+    }
+    obj.extend(details.extra.clone());
+    Json::Object(obj)
+}
+
 /// Keys that are modeled in [`AnnotatedLlmRequest`] and should NOT go into `extra`.
 const MODELED_REQUEST_KEYS: &[&str] = &[
     "input",
@@ -108,7 +142,20 @@ const MODELED_REQUEST_KEYS: &[&str] = &[
     "top_p",
     "tools",
     "tool_choice",
+    "store",
+    "previous_response_id",
+    "truncation",
+    "reasoning",
+    "include",
+    "user",
+    "metadata",
+    "service_tier",
+    "parallel_tool_calls",
+    "max_tool_calls",
+    "top_logprobs",
+    "stream",
 ];
+const UNPARSED_INPUT_ITEMS_KEY: &str = "_openai_responses_unparsed_input_items";
 
 /// Helper to construct a [`Json`] number from an `f64`.
 fn json_f64(v: f64) -> Json {
@@ -248,6 +295,40 @@ fn overlay_generation_params(obj: &mut serde_json::Map<String, Json>, params: &G
     }
 }
 
+fn decode_openai_or_anthropic_tool_choice(value: &Json) -> Option<ToolChoice> {
+    if let Ok(parsed) = serde_json::from_value::<ToolChoice>(value.clone()) {
+        return Some(parsed);
+    }
+
+    let obj = value.as_object()?;
+    match obj.get("type").and_then(|v| v.as_str()) {
+        Some("auto") => Some(ToolChoice::Auto),
+        Some("any") => Some(ToolChoice::Required),
+        Some("none") => Some(ToolChoice::None),
+        Some("tool") => {
+            let name = obj.get("name").and_then(|v| v.as_str())?.to_string();
+            Some(ToolChoice::Specific(ToolChoiceFunction {
+                choice_type: "function".to_string(),
+                function: ToolChoiceFunctionName { name },
+            }))
+        }
+        _ => None,
+    }
+}
+
+fn decode_openai_or_anthropic_parallel_tool_calls(
+    obj: &serde_json::Map<String, Json>,
+) -> Option<bool> {
+    if let Some(value) = obj.get("parallel_tool_calls").and_then(|v| v.as_bool()) {
+        return Some(value);
+    }
+    let tool_choice = obj.get("tool_choice")?.as_object()?;
+    tool_choice
+        .get("disable_parallel_tool_use")
+        .and_then(|v| v.as_bool())
+        .map(|disabled| !disabled)
+}
+
 // ---------------------------------------------------------------------------
 // LlmResponseCodec implementation
 // ---------------------------------------------------------------------------
@@ -266,12 +347,26 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
         let finish_reason =
             map_responses_finish_reason(raw.status.as_deref(), raw.incomplete_details.as_ref());
 
+        let input_tokens_details = raw.usage.as_ref().and_then(|u| {
+            u.input_tokens_details
+                .as_ref()
+                .map(input_tokens_details_to_json)
+        });
+        let output_tokens_details = raw.usage.as_ref().and_then(|u| {
+            u.output_tokens_details
+                .as_ref()
+                .map(output_tokens_details_to_json)
+        });
+
         // Map usage.
         let usage = raw.usage.map(|u| Usage {
             prompt_tokens: u.input_tokens,
             completion_tokens: u.output_tokens,
             total_tokens: u.total_tokens,
-            cache_read_tokens: u.input_tokens_details.and_then(|d| d.cached_tokens),
+            cache_read_tokens: u
+                .input_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
             cache_write_tokens: None,
         });
 
@@ -280,6 +375,13 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
             output_items: all_output_items,
             status: raw.status,
             incomplete_details: raw.incomplete_details,
+            previous_response_id: raw.previous_response_id,
+            store: raw.store,
+            service_tier: raw.service_tier,
+            truncation: raw.truncation,
+            reasoning: raw.reasoning,
+            input_tokens_details,
+            output_tokens_details,
         });
 
         Ok(AnnotatedLlmResponse {
@@ -307,6 +409,7 @@ impl LlmCodec for OpenAIResponsesCodec {
             .ok_or_else(|| FlowError::Internal("request content is not an object".into()))?;
 
         let mut messages: Vec<Message> = Vec::new();
+        let mut preserved_unparsed_input: Option<Json> = None;
 
         // Extract instructions -> system message (first).
         if let Some(instructions) = obj.get("instructions").and_then(|v| v.as_str()) {
@@ -325,10 +428,14 @@ impl LlmCodec for OpenAIResponsesCodec {
                     name: None,
                 });
             } else if input.is_array() {
-                // Input is an array of message items.
-                let input_messages: Vec<Message> =
-                    serde_json::from_value(input.clone()).unwrap_or_default();
-                messages.extend(input_messages);
+                // Strict-first parse to avoid partial normalized state.
+                match serde_json::from_value::<Vec<Message>>(input.clone()) {
+                    Ok(input_messages) => messages.extend(input_messages),
+                    Err(_) => {
+                        // Preserve full original array for lossless handling.
+                        preserved_unparsed_input = Some(input.clone());
+                    }
+                }
             }
         }
 
@@ -362,18 +469,17 @@ impl LlmCodec for OpenAIResponsesCodec {
         // Extract tool_choice.
         let tool_choice: Option<ToolChoice> = obj
             .get("tool_choice")
-            .map(|v| serde_json::from_value(v.clone()))
-            .transpose()
-            .map_err(|e| {
-                FlowError::Internal(format!("OpenAI Responses tool_choice decode: {e}"))
-            })?;
+            .and_then(decode_openai_or_anthropic_tool_choice);
 
         // Collect extra fields (keys not in MODELED_REQUEST_KEYS).
-        let extra: serde_json::Map<String, Json> = obj
+        let mut extra: serde_json::Map<String, Json> = obj
             .iter()
             .filter(|(k, _)| !MODELED_REQUEST_KEYS.contains(&k.as_str()))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        if let Some(input_items) = preserved_unparsed_input {
+            extra.insert(UNPARSED_INPUT_ITEMS_KEY.into(), input_items);
+        }
 
         Ok(AnnotatedLlmRequest {
             messages,
@@ -381,6 +487,25 @@ impl LlmCodec for OpenAIResponsesCodec {
             params,
             tools,
             tool_choice,
+            store: obj.get("store").and_then(|v| v.as_bool()),
+            previous_response_id: obj
+                .get("previous_response_id")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            truncation: obj.get("truncation").cloned(),
+            reasoning: obj.get("reasoning").cloned(),
+            include: obj.get("include").cloned(),
+            user: obj.get("user").and_then(|v| v.as_str()).map(String::from),
+            metadata: obj.get("metadata").cloned(),
+            service_tier: obj
+                .get("service_tier")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            parallel_tool_calls: decode_openai_or_anthropic_parallel_tool_calls(obj),
+            max_output_tokens: obj.get("max_output_tokens").and_then(|v| v.as_u64()),
+            max_tool_calls: obj.get("max_tool_calls").and_then(|v| v.as_u64()),
+            top_logprobs: obj.get("top_logprobs").and_then(|v| v.as_u64()),
+            stream: obj.get("stream").and_then(|v| v.as_bool()),
             extra,
         })
     }
@@ -393,7 +518,11 @@ impl LlmCodec for OpenAIResponsesCodec {
 
         let (system_text, input_messages) = split_system_and_input_messages(&annotated.messages);
         set_or_remove_string(obj, "instructions", system_text);
-        insert_serialized(obj, "input", &input_messages, "input")?;
+        if let Some(raw_input_items) = annotated.extra.get(UNPARSED_INPUT_ITEMS_KEY) {
+            obj.insert("input".into(), raw_input_items.clone());
+        } else {
+            insert_serialized(obj, "input", &input_messages, "input")?;
+        }
 
         // Overlay model if present.
         if let Some(ref model) = annotated.model {
@@ -415,8 +544,57 @@ impl LlmCodec for OpenAIResponsesCodec {
             insert_serialized(obj, "tool_choice", tool_choice, "tool_choice")?;
         }
 
+        if let Some(store) = annotated.store {
+            obj.insert("store".into(), Json::Bool(store));
+        }
+        if let Some(ref previous_response_id) = annotated.previous_response_id {
+            obj.insert(
+                "previous_response_id".into(),
+                Json::String(previous_response_id.clone()),
+            );
+        }
+        if let Some(ref truncation) = annotated.truncation {
+            obj.insert("truncation".into(), truncation.clone());
+        }
+        if let Some(ref reasoning) = annotated.reasoning {
+            obj.insert("reasoning".into(), reasoning.clone());
+        }
+        if let Some(ref include) = annotated.include {
+            obj.insert("include".into(), include.clone());
+        }
+        if let Some(ref user) = annotated.user {
+            obj.insert("user".into(), Json::String(user.clone()));
+        }
+        if let Some(ref metadata) = annotated.metadata {
+            obj.insert("metadata".into(), metadata.clone());
+        }
+        if let Some(ref service_tier) = annotated.service_tier {
+            obj.insert("service_tier".into(), Json::String(service_tier.clone()));
+        }
+        if let Some(parallel_tool_calls) = annotated.parallel_tool_calls {
+            obj.insert(
+                "parallel_tool_calls".into(),
+                Json::Bool(parallel_tool_calls),
+            );
+        }
+        if let Some(max_output_tokens) = annotated.max_output_tokens {
+            obj.insert("max_output_tokens".into(), Json::from(max_output_tokens));
+        }
+        if let Some(max_tool_calls) = annotated.max_tool_calls {
+            obj.insert("max_tool_calls".into(), Json::from(max_tool_calls));
+        }
+        if let Some(top_logprobs) = annotated.top_logprobs {
+            obj.insert("top_logprobs".into(), Json::from(top_logprobs));
+        }
+        if let Some(stream) = annotated.stream {
+            obj.insert("stream".into(), Json::Bool(stream));
+        }
+
         // Merge extra fields back.
         for (k, v) in &annotated.extra {
+            if k == UNPARSED_INPUT_ITEMS_KEY {
+                continue;
+            }
             obj.insert(k.clone(), v.clone());
         }
 
@@ -424,6 +602,150 @@ impl LlmCodec for OpenAIResponsesCodec {
             headers: original.headers.clone(),
             content,
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming codec
+// ---------------------------------------------------------------------------
+
+/// Streaming counterpart to [`OpenAIResponsesCodec`].
+///
+/// Replays the OpenAI Responses SSE event sequence into the same JSON shape the API returns for a
+/// non-streaming request (`{id, model, status, output, usage, incomplete_details, ...}`). Once
+/// finalized, the assembled JSON can be fed back through [`OpenAIResponsesCodec::decode_response`]
+/// to produce the canonical [`AnnotatedLlmResponse`].
+///
+/// # Strategy
+///
+/// The Responses API is a relatively forgiving streaming target because every event carries
+/// either the full `response` snapshot (`response.created`, `response.in_progress`,
+/// `response.completed`, `response.failed`, `response.incomplete`) or the final-state output item
+/// (`response.output_item.done`). We:
+///
+/// 1. Track the latest `response` snapshot — terminal events (`completed`/`failed`/`incomplete`)
+///    typically carry the complete state including `output`, so we prefer those when present.
+/// 2. Track output items by `output_index` — `output_item.done` events deliver the final per-item
+///    state, used as a fallback when the terminal `response.output` is missing or empty.
+/// 3. Per-token `output_text.delta` and `function_call_arguments.delta` events are ignored
+///    because their content is redelivered in the matching `output_item.done` event. Skipping
+///    deltas keeps the codec resilient to schema additions and avoids double-accumulation.
+///
+/// Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer
+/// closures share access. Each instance is single-use because [`LlmFinalizerFn`] consumes the
+/// finalize step.
+///
+/// [`AnnotatedLlmResponse`]: crate::codec::response::AnnotatedLlmResponse
+/// [`LlmFinalizerFn`]: crate::api::runtime::LlmFinalizerFn
+pub struct OpenAIResponsesStreamingCodec {
+    state: std::sync::Arc<std::sync::Mutex<OpenAIResponsesStreamingState>>,
+}
+
+impl OpenAIResponsesStreamingCodec {
+    /// Creates a fresh streaming codec with empty accumulator state.
+    pub fn new() -> Self {
+        Self {
+            state: std::sync::Arc::new(std::sync::Mutex::new(
+                OpenAIResponsesStreamingState::default(),
+            )),
+        }
+    }
+}
+
+impl Default for OpenAIResponsesStreamingCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl super::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
+    fn collector(&self) -> crate::api::runtime::LlmCollectorFn {
+        let state = std::sync::Arc::clone(&self.state);
+        Box::new(move |event: Json| -> Result<()> {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.observe(&event);
+            Ok(())
+        })
+    }
+
+    fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
+        let state = std::sync::Arc::clone(&self.state);
+        Box::new(move || -> Json {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            std::mem::take(&mut *guard).finalize()
+        })
+    }
+}
+
+#[derive(Debug, Default)]
+struct OpenAIResponsesStreamingState {
+    /// Latest `response` snapshot from any event that carries one. Last write wins, so terminal
+    /// events with the complete state will end up here when they fire.
+    response: Option<serde_json::Map<String, Json>>,
+    /// Items keyed by `output_index`. Captured from `response.output_item.added` (initial) and
+    /// replaced on `response.output_item.done` (final). Used as a fallback for `output` when the
+    /// terminal `response` snapshot lacks it.
+    items: std::collections::BTreeMap<usize, Json>,
+}
+
+impl OpenAIResponsesStreamingState {
+    fn observe(&mut self, event: &Json) {
+        let event_type = event.get("type").and_then(Json::as_str).unwrap_or("");
+        match event_type {
+            "response.created"
+            | "response.in_progress"
+            | "response.completed"
+            | "response.failed"
+            | "response.incomplete" => self.observe_response_snapshot(event),
+            "response.output_item.added" | "response.output_item.done" => {
+                self.observe_output_item(event);
+            }
+            // response.output_text.delta, response.function_call_arguments.delta,
+            // response.content_part.added/done — content is redelivered in output_item.done, so we
+            // don't accumulate deltas. Unknown events are ignored.
+            _ => {}
+        }
+    }
+
+    fn observe_response_snapshot(&mut self, event: &Json) {
+        let Some(response) = event.get("response") else {
+            return;
+        };
+        if let Json::Object(map) = response {
+            self.response = Some(map.clone());
+        }
+    }
+
+    fn observe_output_item(&mut self, event: &Json) {
+        let Some(index) = event.get("output_index").and_then(Json::as_u64) else {
+            return;
+        };
+        let Some(item) = event.get("item") else {
+            return;
+        };
+        self.items.insert(index as usize, item.clone());
+    }
+
+    fn finalize(self) -> Json {
+        let mut output = self.response.unwrap_or_default();
+        // If the latest snapshot lacked `output` (or has an empty array because it came from an
+        // early `response.created` event), backfill from per-item accumulator. Terminal events
+        // typically carry the complete output, so this branch is a safety net for truncated
+        // streams or schemas that drop output from terminal events.
+        let snapshot_output_empty = output
+            .get("output")
+            .and_then(Json::as_array)
+            .map(|arr| arr.is_empty())
+            .unwrap_or(true);
+        if snapshot_output_empty && !self.items.is_empty() {
+            let items: Vec<Json> = self.items.into_values().collect();
+            output.insert("output".to_string(), Json::Array(items));
+        }
+        Json::Object(output)
     }
 }
 

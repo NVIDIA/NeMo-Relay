@@ -62,8 +62,8 @@ pub trait LlmCodec: Send + Sync {
 /// - **`Send + Sync`**: Required for storage in `Arc` behind `RwLock`.
 /// - **Trait object**: Codecs are registered at runtime, stored as
 ///   `Arc<dyn LlmResponseCodec>`.
-/// - **Non-fatal**: Returns `Result` but callers treat errors as
-///   "no annotation available" rather than pipeline failure.
+/// - **Fallible**: Returns `Result`; managed call sites may omit annotations on
+///   decode failure, while manual lifecycle bindings may surface the error.
 ///
 /// # Two-Phase Decode
 ///
@@ -73,8 +73,6 @@ pub trait LlmCodec: Send + Sync {
 pub trait LlmResponseCodec: Send + Sync {
     /// Parse a raw JSON response into normalized structured form.
     ///
-    /// Callers treat errors as "no annotation available" (pipeline continues
-    /// with `annotated_response: None`), so implementations should return
-    /// `Err` only for genuinely unparseable input.
+    /// Implementations should return `Err` only for genuinely unparseable input.
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse>;
 }

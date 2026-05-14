@@ -115,6 +115,11 @@ typedef int32_t NemoFlowScopeType;
 typedef struct FfiAtifExporter FfiAtifExporter;
 
 /**
+ * Opaque ATOF JSONL exporter handle.
+ */
+typedef struct FfiAtofExporter FfiAtofExporter;
+
+/**
  * Opaque handle carrying both request and response codec trait objects.
  *
  * Created by `nemo_flow_openai_chat_codec_new` (and similar constructors).
@@ -178,6 +183,11 @@ typedef struct FfiScopeStack FfiScopeStack;
  * Use `nemo_flow_stream_next` to poll and `nemo_flow_stream_free` to release.
  */
 typedef struct FfiStream FfiStream;
+
+/**
+ * Opaque handle to a captured thread-local scope stack binding.
+ */
+typedef struct FfiThreadScopeStackBinding FfiThreadScopeStackBinding;
 
 /**
  * Opaque handle representing an active tool call.
@@ -837,6 +847,35 @@ NemoFlowStatus nemo_flow_register_subscriber(const char *name,
 NemoFlowStatus nemo_flow_deregister_subscriber(const char *name);
 
 /**
+ * Return the built-in observability plugin kind.
+ *
+ * The caller owns the returned string and must free it with `nemo_flow_string_free`.
+ */
+char *nemo_flow_observability_plugin_kind(void);
+
+/**
+ * Return the default observability plugin config as JSON.
+ *
+ * # Safety
+ * `out_json` must be a valid, non-null pointer.
+ */
+NemoFlowStatus nemo_flow_observability_default_config_json(char **out_json);
+
+/**
+ * Wrap an observability config JSON object as a top-level plugin component.
+ *
+ * Pass null for `config_json` to use the default observability config. The
+ * returned JSON can be inserted into `PluginConfig.components`.
+ *
+ * # Safety
+ * `config_json`, when non-null, must be a valid C string. `out_json` must be a
+ * valid, non-null pointer.
+ */
+NemoFlowStatus nemo_flow_observability_component_spec_json(const char *config_json,
+                                                           bool enabled,
+                                                           char **out_json);
+
+/**
  * Creates a new ATIF exporter.
  *
  * # Parameters
@@ -902,6 +941,64 @@ NemoFlowStatus nemo_flow_atif_exporter_export(const struct FfiAtifExporter *expo
  * `exporter` must be a valid, non-null `FfiAtifExporter` pointer.
  */
 NemoFlowStatus nemo_flow_atif_exporter_clear(const struct FfiAtifExporter *exporter);
+
+/**
+ * Creates a new filesystem-backed ATOF JSONL exporter.
+ *
+ * # Parameters
+ * - `output_directory`: Output directory path (nullable for current directory).
+ * - `mode`: `"append"` or `"overwrite"` (nullable for `"append"`).
+ * - `filename`: Output filename (nullable for generated default).
+ * - `out`: On success, receives a heap-allocated `FfiAtofExporter`.
+ *
+ * # Safety
+ * All non-null string pointers must be valid C strings. `out` must be valid.
+ */
+NemoFlowStatus nemo_flow_atof_exporter_create(const char *output_directory,
+                                              const char *mode,
+                                              const char *filename,
+                                              struct FfiAtofExporter **out);
+
+/**
+ * Registers the ATOF exporter as an event subscriber.
+ *
+ * # Safety
+ * `exporter` and `name` must be valid, non-null pointers.
+ */
+NemoFlowStatus nemo_flow_atof_exporter_register(const struct FfiAtofExporter *exporter,
+                                                const char *name);
+
+/**
+ * Deregisters the ATOF exporter subscriber.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoFlowStatus nemo_flow_atof_exporter_deregister(const char *name);
+
+/**
+ * Flushes the ATOF exporter output file.
+ *
+ * # Safety
+ * `exporter` must be a valid, non-null pointer.
+ */
+NemoFlowStatus nemo_flow_atof_exporter_force_flush(const struct FfiAtofExporter *exporter);
+
+/**
+ * Shuts down the ATOF exporter by flushing output.
+ *
+ * # Safety
+ * `exporter` must be a valid, non-null pointer.
+ */
+NemoFlowStatus nemo_flow_atof_exporter_shutdown(const struct FfiAtofExporter *exporter);
+
+/**
+ * Returns the ATOF exporter output path as a string.
+ *
+ * # Safety
+ * `exporter` and `out` must be valid, non-null pointers.
+ */
+NemoFlowStatus nemo_flow_atof_exporter_path(const struct FfiAtofExporter *exporter, char **out);
 
 /**
  * Creates a new OpenTelemetry subscriber.
@@ -1679,6 +1776,29 @@ NemoFlowStatus nemo_flow_scope_stack_create(struct FfiScopeStack **out);
 NemoFlowStatus nemo_flow_scope_stack_set_thread(const struct FfiScopeStack *stack);
 
 /**
+ * Capture the current thread-local scope stack binding.
+ *
+ * The returned binding must be restored with
+ * `nemo_flow_scope_stack_restore_thread`.
+ *
+ * # Parameters
+ * - `out`: On success, receives a heap-allocated binding handle.
+ *
+ * # Safety
+ * `out` must be a valid, non-null pointer.
+ */
+NemoFlowStatus nemo_flow_scope_stack_capture_thread(struct FfiThreadScopeStackBinding **out);
+
+/**
+ * Restore and free a captured thread-local scope stack binding.
+ *
+ * # Safety
+ * `binding` must be a valid pointer returned by
+ * `nemo_flow_scope_stack_capture_thread`.
+ */
+NemoFlowStatus nemo_flow_scope_stack_restore_thread(struct FfiThreadScopeStackBinding *binding);
+
+/**
  * Returns whether the current execution context has an explicitly-initialized
  * scope stack.
  *
@@ -1954,6 +2074,14 @@ void nemo_flow_scope_stack_free(struct FfiScopeStack *ptr);
  * `ptr` must be a valid pointer returned by `nemo_flow_atif_exporter_create`, or null.
  */
 void nemo_flow_atif_exporter_free(struct FfiAtifExporter *ptr);
+
+/**
+ * Free an ATOF JSONL exporter handle previously returned by `nemo_flow_atof_exporter_create`.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `nemo_flow_atof_exporter_create`, or null.
+ */
+void nemo_flow_atof_exporter_free(struct FfiAtofExporter *ptr);
 
 /**
  * Free an OpenTelemetry subscriber handle previously returned by

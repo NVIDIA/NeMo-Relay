@@ -35,9 +35,9 @@ use crate::error::{
     status_from_plugin_error,
 };
 use crate::types::{
-    FfiAtifExporter, FfiCodecHandle, FfiLLMHandle, FfiOpenInferenceSubscriber,
-    FfiOpenTelemetrySubscriber, FfiPluginContext, FfiScopeHandle, FfiScopeStack, FfiToolHandle,
-    NemoFlowScopeType,
+    FfiAtifExporter, FfiAtofExporter, FfiCodecHandle, FfiLLMHandle, FfiOpenInferenceSubscriber,
+    FfiOpenTelemetrySubscriber, FfiPluginContext, FfiScopeHandle, FfiScopeStack,
+    FfiThreadScopeStackBinding, FfiToolHandle, NemoFlowScopeType,
 };
 pub use crate::types::{nemo_flow_openinference_subscriber_free, nemo_flow_otel_subscriber_free};
 use libc::c_char;
@@ -46,8 +46,8 @@ use nemo_flow::api::llm::{LlmAttributes, LlmRequest};
 use nemo_flow::api::registry as core_registry_api;
 use nemo_flow::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
 use nemo_flow::api::runtime::{
-    TASK_SCOPE_STACK, create_scope_stack, current_scope_stack, scope_stack_active,
-    set_thread_scope_stack,
+    TASK_SCOPE_STACK, capture_thread_scope_stack, create_scope_stack, current_scope_stack,
+    restore_thread_scope_stack, scope_stack_active, set_thread_scope_stack,
 };
 use nemo_flow::api::scope as core_scope_api;
 use nemo_flow::api::scope::ScopeAttributes;

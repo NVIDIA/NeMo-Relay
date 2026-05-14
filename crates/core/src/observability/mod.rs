@@ -12,7 +12,9 @@ pub(crate) fn test_mutex() -> &'static Mutex<()> {
 }
 
 pub mod atif;
+pub mod atof;
 #[cfg(feature = "openinference")]
 pub mod openinference;
 #[cfg(feature = "otel")]
 pub mod otel;
+pub mod plugin_component;

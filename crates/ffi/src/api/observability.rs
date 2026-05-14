@@ -2,15 +2,112 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    Duration, FfiAtifExporter, FfiOpenInferenceSubscriber, FfiOpenTelemetrySubscriber,
-    NemoFlowStatus, c_char, c_str_to_string, clear_last_error, core_subscriber_api, set_last_error,
-    status_from_error, str_to_c_string, tokio_runtime,
+    Duration, FfiAtifExporter, FfiAtofExporter, FfiOpenInferenceSubscriber,
+    FfiOpenTelemetrySubscriber, NemoFlowStatus, c_char, c_str_to_json, c_str_to_string,
+    clear_last_error, core_subscriber_api, json_to_c_string, set_last_error, status_from_error,
+    str_to_c_string, tokio_runtime,
 };
 
+type AtofExporter = nemo_flow::observability::atof::AtofExporter;
+type AtofExporterConfig = nemo_flow::observability::atof::AtofExporterConfig;
+type AtofExporterError = nemo_flow::observability::atof::AtofExporterError;
+type AtofExporterMode = nemo_flow::observability::atof::AtofExporterMode;
 type OpenTelemetryConfig = nemo_flow::observability::otel::OpenTelemetryConfig;
 type OpenTelemetrySubscriber = nemo_flow::observability::otel::OpenTelemetrySubscriber;
 type OpenInferenceConfig = nemo_flow::observability::openinference::OpenInferenceConfig;
 type OpenInferenceSubscriber = nemo_flow::observability::openinference::OpenInferenceSubscriber;
+type ObservabilityComponentSpec = nemo_flow::observability::plugin_component::ComponentSpec;
+type ObservabilityConfig = nemo_flow::observability::plugin_component::ObservabilityConfig;
+
+fn status_from_atof_error(error: &AtofExporterError) -> NemoFlowStatus {
+    set_last_error(&error.to_string());
+    match error {
+        AtofExporterError::Runtime(error) => status_from_error(error),
+        _ => NemoFlowStatus::Internal,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Observability plugin component helpers
+// ---------------------------------------------------------------------------
+
+/// Return the built-in observability plugin kind.
+///
+/// The caller owns the returned string and must free it with `nemo_flow_string_free`.
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_flow_observability_plugin_kind() -> *mut c_char {
+    str_to_c_string(nemo_flow::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND)
+}
+
+/// Return the default observability plugin config as JSON.
+///
+/// # Safety
+/// `out_json` must be a valid, non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_observability_default_config_json(
+    out_json: *mut *mut c_char,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if out_json.is_null() {
+        set_last_error("out_json pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let config_json = match serde_json::to_value(ObservabilityConfig::default()) {
+        Ok(value) => value,
+        Err(error) => {
+            set_last_error(&error.to_string());
+            return NemoFlowStatus::Internal;
+        }
+    };
+    unsafe { *out_json = json_to_c_string(&config_json) };
+    NemoFlowStatus::Ok
+}
+
+/// Wrap an observability config JSON object as a top-level plugin component.
+///
+/// Pass null for `config_json` to use the default observability config. The
+/// returned JSON can be inserted into `PluginConfig.components`.
+///
+/// # Safety
+/// `config_json`, when non-null, must be a valid C string. `out_json` must be a
+/// valid, non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_observability_component_spec_json(
+    config_json: *const c_char,
+    enabled: bool,
+    out_json: *mut *mut c_char,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if out_json.is_null() {
+        set_last_error("out_json pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let config = if config_json.is_null() {
+        ObservabilityConfig::default()
+    } else {
+        let Some(config_value) = c_str_to_json(config_json) else {
+            return NemoFlowStatus::InvalidJson;
+        };
+        match serde_json::from_value::<ObservabilityConfig>(config_value) {
+            Ok(config) => config,
+            Err(error) => {
+                set_last_error(&error.to_string());
+                return NemoFlowStatus::InvalidJson;
+            }
+        }
+    };
+    let component: nemo_flow::plugin::PluginComponentSpec =
+        ObservabilityComponentSpec { enabled, config }.into();
+    let component_json = match serde_json::to_value(component) {
+        Ok(value) => value,
+        Err(error) => {
+            set_last_error(&error.to_string());
+            return NemoFlowStatus::Internal;
+        }
+    };
+    unsafe { *out_json = json_to_c_string(&component_json) };
+    NemoFlowStatus::Ok
+}
 
 // ---------------------------------------------------------------------------
 // ATIF exporter
@@ -176,6 +273,169 @@ pub unsafe extern "C" fn nemo_flow_atif_exporter_clear(
         return NemoFlowStatus::NullPointer;
     }
     unsafe { &*exporter }.0.clear();
+    NemoFlowStatus::Ok
+}
+
+// ---------------------------------------------------------------------------
+// ATOF JSONL exporter
+// ---------------------------------------------------------------------------
+
+/// Creates a new filesystem-backed ATOF JSONL exporter.
+///
+/// # Parameters
+/// - `output_directory`: Output directory path (nullable for current directory).
+/// - `mode`: `"append"` or `"overwrite"` (nullable for `"append"`).
+/// - `filename`: Output filename (nullable for generated default).
+/// - `out`: On success, receives a heap-allocated `FfiAtofExporter`.
+///
+/// # Safety
+/// All non-null string pointers must be valid C strings. `out` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_atof_exporter_create(
+    output_directory: *const c_char,
+    mode: *const c_char,
+    filename: *const c_char,
+    out: *mut *mut FfiAtofExporter,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if let Err(status) = required_out_ptr(out) {
+        return status;
+    }
+
+    let output_directory = match parse_optional_string(output_directory) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let mode = match parse_string_or_default(mode, "append") {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let filename = match parse_optional_string(filename) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+
+    let Some(mode) = AtofExporterMode::parse(&mode) else {
+        set_last_error("ATOF exporter mode must be 'append' or 'overwrite'");
+        return NemoFlowStatus::InvalidArg;
+    };
+
+    let mut config = AtofExporterConfig::new().with_mode(mode);
+    if let Some(output_directory) = output_directory {
+        config = config.with_output_directory(output_directory);
+    }
+    if let Some(filename) = filename {
+        config = config.with_filename(filename);
+    }
+
+    match AtofExporter::new(config) {
+        Ok(exporter) => {
+            unsafe { *out = Box::into_raw(Box::new(FfiAtofExporter(exporter))) };
+            NemoFlowStatus::Ok
+        }
+        Err(error) => status_from_atof_error(&error),
+    }
+}
+
+/// Registers the ATOF exporter as an event subscriber.
+///
+/// # Safety
+/// `exporter` and `name` must be valid, non-null pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_atof_exporter_register(
+    exporter: *const FfiAtofExporter,
+    name: *const c_char,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if exporter.is_null() {
+        set_last_error("exporter pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    match unsafe { &*exporter }.0.register(&name) {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(error) => status_from_atof_error(&error),
+    }
+}
+
+/// Deregisters the ATOF exporter subscriber.
+///
+/// # Safety
+/// `name` must be a valid C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_atof_exporter_deregister(name: *const c_char) -> NemoFlowStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(s) => s,
+        Err(status) => return status,
+    };
+    match core_subscriber_api::deregister_subscriber(&name) {
+        Ok(_) => NemoFlowStatus::Ok,
+        Err(e) => status_from_error(&e),
+    }
+}
+
+/// Flushes the ATOF exporter output file.
+///
+/// # Safety
+/// `exporter` must be a valid, non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_atof_exporter_force_flush(
+    exporter: *const FfiAtofExporter,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if exporter.is_null() {
+        set_last_error("exporter pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    match unsafe { &*exporter }.0.force_flush() {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(error) => status_from_atof_error(&error),
+    }
+}
+
+/// Shuts down the ATOF exporter by flushing output.
+///
+/// # Safety
+/// `exporter` must be a valid, non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_atof_exporter_shutdown(
+    exporter: *const FfiAtofExporter,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if exporter.is_null() {
+        set_last_error("exporter pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    match unsafe { &*exporter }.0.shutdown() {
+        Ok(()) => NemoFlowStatus::Ok,
+        Err(error) => status_from_atof_error(&error),
+    }
+}
+
+/// Returns the ATOF exporter output path as a string.
+///
+/// # Safety
+/// `exporter` and `out` must be valid, non-null pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_atof_exporter_path(
+    exporter: *const FfiAtofExporter,
+    out: *mut *mut c_char,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if exporter.is_null() {
+        set_last_error("exporter pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let path = unsafe { &*exporter }.0.path().to_string_lossy();
+    unsafe { *out = str_to_c_string(&path) };
     NemoFlowStatus::Ok
 }
 

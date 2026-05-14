@@ -15,6 +15,7 @@ workspace = true
 
 [features]
 default = ["otel", "openinference"]
+schema = ["dep:schemars"]
 otel = [
     "dep:async-trait",
     "dep:getrandom",
@@ -47,6 +48,7 @@ openinference = [
 uuid = { workspace = true, features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+schemars = { version = "0.8", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 bitflags = { version = "2", features = ["serde"] }
 thiserror = "2"
@@ -102,5 +104,5 @@ path = "tests/integration/api_surface_tests.rs"
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "grpc-tonic"], optional = true }
+opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "grpc-tonic"], optional = true }
 tonic = { version = "0.14.1", default-features = false, optional = true }

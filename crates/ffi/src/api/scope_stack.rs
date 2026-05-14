@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    FfiScopeStack, NemoFlowStatus, clear_last_error, create_scope_stack, scope_stack_active,
+    FfiScopeStack, FfiThreadScopeStackBinding, NemoFlowStatus, capture_thread_scope_stack,
+    clear_last_error, create_scope_stack, restore_thread_scope_stack, scope_stack_active,
     set_last_error, set_thread_scope_stack,
 };
 
@@ -72,6 +73,49 @@ pub unsafe extern "C" fn nemo_flow_scope_stack_set_thread(
     }
     let handle = unsafe { &*stack }.0.clone();
     set_thread_scope_stack(handle);
+    NemoFlowStatus::Ok
+}
+
+/// Capture the current thread-local scope stack binding.
+///
+/// The returned binding must be restored with
+/// `nemo_flow_scope_stack_restore_thread`.
+///
+/// # Parameters
+/// - `out`: On success, receives a heap-allocated binding handle.
+///
+/// # Safety
+/// `out` must be a valid, non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_stack_capture_thread(
+    out: *mut *mut FfiThreadScopeStackBinding,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let binding = capture_thread_scope_stack();
+    unsafe { *out = Box::into_raw(Box::new(FfiThreadScopeStackBinding(binding))) };
+    NemoFlowStatus::Ok
+}
+
+/// Restore and free a captured thread-local scope stack binding.
+///
+/// # Safety
+/// `binding` must be a valid pointer returned by
+/// `nemo_flow_scope_stack_capture_thread`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_scope_stack_restore_thread(
+    binding: *mut FfiThreadScopeStackBinding,
+) -> NemoFlowStatus {
+    clear_last_error();
+    if binding.is_null() {
+        set_last_error("binding pointer is null");
+        return NemoFlowStatus::NullPointer;
+    }
+    let binding = unsafe { Box::from_raw(binding) };
+    restore_thread_scope_stack(binding.0);
     NemoFlowStatus::Ok
 }
 

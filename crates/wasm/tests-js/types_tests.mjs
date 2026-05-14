@@ -14,6 +14,7 @@ test('WebAssembly package exports canonical runtime classes and scope type enum 
   assert.equal(typeof wasm.OpenTelemetrySubscriber, 'function');
   assert.equal(typeof wasm.OpenInferenceSubscriber, 'function');
   assert.equal(typeof wasm.AtifExporter, 'function');
+  assert.equal(typeof wasm.AtofExporter, 'undefined');
 
   assert.equal(wasm.ScopeType.Agent, 0);
   assert.equal(wasm.ScopeType.Function, 1);

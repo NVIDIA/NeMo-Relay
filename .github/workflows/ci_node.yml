@@ -14,6 +14,11 @@ on:
         description: 'The ref name from the triggering workflow'
         required: true
         type: string
+      run_package:
+        description: 'Whether to build package artifacts after tests pass'
+        required: false
+        default: true
+        type: boolean
     secrets:
       CODECOV_TOKEN:
         required: false
@@ -99,7 +104,7 @@ jobs:
   Package:
     name: Package (${{ matrix.platform }})
     needs: [Test]
-    if: ${{ !cancelled() && needs.Test.result == 'success' }}
+    if: ${{ inputs.run_package && !cancelled() && needs.Test.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
@@ -175,7 +180,7 @@ jobs:
           if [ "${{ inputs.ref_type }}" = "tag" ]; then
             version="${{ inputs.ref_name }}"
           else
-            version="${version}-${sha}"
+            version="${version}+${sha}"
           fi
           printf 'NEMO_FLOW_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 

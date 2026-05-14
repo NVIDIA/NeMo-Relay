@@ -12,6 +12,7 @@ SPDX-License-Identifier: Apache-2.0
 [![npm wasm](https://img.shields.io/npm/v/nemo-flow-wasm?label=nemo-flow-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow?label=nemo-flow&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow)
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow-adaptive?label=nemo-flow-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-adaptive)
+[![Crates.io](https://img.shields.io/crates/v/nemo-flow-cli?label=nemo-flow-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-cli)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Flow)
 
 # NeMo Flow
@@ -48,8 +49,8 @@ consistent across frameworks and languages.
   ecosystem components, third-party agent frameworks, provider adapters, or
   direct application code.
 - ⚙️ **Install reusable runtime behavior**: Plugins configure middleware,
-  subscribers, adaptive components, and custom runtime behavior from one shared
-  system.
+  subscribers, adaptive components, observability exporters, and custom runtime
+  behavior from one shared system.
 
 ## What You Get
 
@@ -63,6 +64,9 @@ consistent across frameworks and languages.
 - ✅ **Observability-ready events**: Preserve model metadata, tool call IDs,
   inputs, outputs, scope relationships, and lifecycle timing for downstream
   analysis.
+- ✅ **Built-in observability plugin**: Configure Agent Trajectory Observability
+  Format (ATOF), ATIF, OpenTelemetry, and OpenInference exporters without
+  registering subscribers by hand.
 - ✅ **Extension points for framework authors**: Wrap stable tool and provider
   callbacks while preserving framework-owned scheduling, retries, memory, and
   result handling.
@@ -124,30 +128,45 @@ The table below summarizes the support level for each binding surface.
 | Python | ✅ Fully Supported | Fully documented with Quick Start and Guides |
 | Node.js | ✅ Fully Supported | Fully documented with Quick Start and Guides  |
 | Rust | ✅ Fully Supported | Fully documented with Quick Start and Guides  |
+| Coding-Agent CLI | 🚧 Experimental | Install with `cargo install nemo-flow-cli`. |
 | Go | 🚧 Experimental | Source-first under `go/nemo_flow`. |
 | WebAssembly | 🚧 Experimental | Source-first under `crates/wasm`. |
 | FFI | 🚧 Experimental | Source-first under `crates/ffi`. |
 
 ## Third-Party Integrations
 
-Some framework integrations are maintained as patch sets against upstream
-projects rather than as packages in this repository.
+Some framework integrations are maintained as packages in this repository. Other
+sample integrations are maintained as patch sets against upstream projects.
+
+### Public API-based Integrations
+
+Some integrations can be implemented using public APIs without patching. Public
+API-based integrations live under language-specific integration packages such as
+`python/nemo_flow/integrations/` and `integrations/`.
+
+The OpenClaw observability plugin is available under `integrations/openclaw/`
+and uses OpenClaw public plugin hooks plus the generic NeMo Flow plugin
+configuration shape to export telemetry. See the
+[OpenClaw package README](integrations/openclaw/README.md).
+
+### Patch-based Integrations
 
 Use [third_party/README.md](third_party/README.md) for the clone, checkout, and
 patch-application workflow for those integrations.
 
 ### Support Matrix
 
-The following table summarizes maintained third-party patch integrations and whether each provides observability, request intercepts, execution intercepts, and conditional execution.
+The following table summarizes maintained third-party integrations and whether each provides observability, request intercepts, execution intercepts, and conditional execution.
 
 | Integration | Method | Observability | Request Intercepts | Execution Intercepts | Conditional Execution |
 |---|---|---|---|---|---|
 | [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
 | [opencode](third_party/README-opencode.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
-| [OpenClaw](third_party/README-openclaw.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| [OpenClaw](integrations/openclaw/README.md) | `nemo-flow-openclaw` package, `nemo-flow` plugin ID | ✅ Yes | ❌ No | ❌ No | ❌ No |
+| [Coding-Agent CLI](docs/integrate-frameworks/coding-agent-gateway.md) | `nemo-flow-cli` package for closed harnesses | ✅ Yes | ❌ No | ❌ No | ❌ No |
 | [Hermes Agent](third_party/README-hermes-agent.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
 
-All patches offer experimental support. Our roadmap includes switching over to first-party plugins and packages.
+Patch-based integrations offer experimental support. Our roadmap includes switching over to first-party plugins and packages where upstream extension points allow it.
 
 ## Roadmap
 

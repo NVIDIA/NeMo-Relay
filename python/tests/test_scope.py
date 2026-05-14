@@ -4,6 +4,7 @@
 """Tests for NeMo Flow scope operations."""
 
 import pytest
+
 from nemo_flow import (
     ScopeAttributes,
     ScopeHandle,

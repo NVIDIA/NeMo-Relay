@@ -51,6 +51,11 @@ impl TestEventBuilder {
         self
     }
 
+    fn metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
     fn scope_type(mut self, scope_type: ScopeType) -> Self {
         self.scope_type = Some(scope_type);
         self
@@ -310,7 +315,22 @@ fn test_exporter_llm_lifecycle() {
         .name("gpt-4")
         .scope_type(ScopeType::Llm)
         .input(json!({
-            "content": {"messages": [{"role": "user", "content": "hello"}]},
+            "content": {
+                "messages": [{"role": "user", "content": "hello"}],
+                "temperature": 0.1,
+                "tools": [{
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": { "type": "string" }
+                            }
+                        }
+                    }
+                }]
+            },
             "headers": {}
         }))
         .model_name("gpt-4")
@@ -349,6 +369,13 @@ fn test_exporter_llm_lifecycle() {
     // extract_user_messages pulls out just the messages array
     assert_eq!(step1.message, json!([{"role": "user", "content": "hello"}]));
     assert_eq!(step1.model_name, None);
+    let extra: AtifStepExtra = serde_json::from_value(step1.extra.clone().unwrap()).unwrap();
+    let llm_request = extra.llm_request.unwrap();
+    assert_eq!(llm_request["temperature"], json!(0.1));
+    assert_eq!(
+        llm_request["tools"][0]["function"]["name"],
+        json!("read_file")
+    );
 
     // Second step: agent (LLM end with extracted content + metrics)
     let step2 = &trajectory.steps[1];
@@ -368,6 +395,41 @@ fn test_exporter_llm_lifecycle() {
     assert_eq!(fm.total_prompt_tokens, Some(10));
     assert_eq!(fm.total_completion_tokens, Some(20));
     assert_eq!(fm.total_steps, Some(2));
+}
+
+#[test]
+fn test_extract_metrics_supports_provider_usage_payloads() {
+    let openai_metrics = extract_metrics(&json!({
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30,
+            "prompt_tokens_details": {
+                "cached_tokens": 4
+            }
+        }
+    }))
+    .unwrap();
+    assert_eq!(openai_metrics.prompt_tokens, Some(10));
+    assert_eq!(openai_metrics.completion_tokens, Some(20));
+    assert_eq!(openai_metrics.cached_tokens, Some(4));
+    assert_eq!(
+        openai_metrics.extra.as_ref().unwrap()["total_tokens"],
+        json!(30)
+    );
+
+    let anthropic_metrics = extract_metrics(&json!({
+        "usage": {
+            "input_tokens": 11,
+            "output_tokens": 22,
+            "cache_read_input_tokens": 3,
+            "cache_creation_input_tokens": 5
+        }
+    }))
+    .unwrap();
+    assert_eq!(anthropic_metrics.prompt_tokens, Some(11));
+    assert_eq!(anthropic_metrics.completion_tokens, Some(22));
+    assert_eq!(anthropic_metrics.cached_tokens, Some(8));
 }
 
 #[test]
@@ -559,6 +621,83 @@ fn test_exporter_tool_call_id_linking() {
     assert_eq!(trajectory.steps.len(), 1);
     let obs_result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
     assert_eq!(obs_result.source_call_id, Some("call_abc".to_string()));
+}
+
+#[test]
+fn test_exporter_mark_steps_include_hook_name_and_ancestry() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let agent_uuid = Uuid::now_v7();
+    let mark_uuid = Uuid::now_v7();
+
+    let agent_start = event_builder(agent_uuid, EventType::Start)
+        .name("hermes")
+        .scope_type(ScopeType::Agent)
+        .build();
+    let mark = event_builder(mark_uuid, EventType::Mark)
+        .name("subagent_end_without_start")
+        .parent_uuid(agent_uuid)
+        .data(json!({
+            "session_id": "session-1",
+            "extra": {
+                "subagent_id": "worker-1"
+            }
+        }))
+        .metadata(json!({
+            "hook_event_name": "subagent_stop"
+        }))
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(agent_start);
+        state.events.push(mark);
+    }
+
+    let trajectory = exporter.export();
+    assert_eq!(trajectory.steps.len(), 1);
+
+    let step = &trajectory.steps[0];
+    assert_eq!(step.source, "system");
+    assert_eq!(step.message["hook_event_name"], json!("subagent_stop"));
+    assert_eq!(step.message["extra"]["subagent_id"], json!("worker-1"));
+
+    let extra: AtifStepExtra = serde_json::from_value(step.extra.clone().unwrap()).unwrap();
+    assert_eq!(extra.ancestry.function_id, mark_uuid.to_string());
+    assert_eq!(extra.ancestry.function_name, "subagent_end_without_start");
+    assert_eq!(extra.ancestry.parent_id, Some(agent_uuid.to_string()));
+    assert_eq!(extra.ancestry.parent_name, Some("hermes".to_string()));
+    assert_eq!(
+        extra.invocation.as_ref().unwrap().invocation_id,
+        Some(mark_uuid.to_string())
+    );
+}
+
+#[test]
+fn test_exporter_skips_empty_mark_payloads() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(
+            event_builder(Uuid::now_v7(), EventType::Mark)
+                .name("empty-object")
+                .data(json!({}))
+                .build(),
+        );
+        state.events.push(
+            event_builder(Uuid::now_v7(), EventType::Mark)
+                .name("empty-null")
+                .data(json!(null))
+                .build(),
+        );
+    }
+
+    let trajectory = exporter.export();
+    assert!(trajectory.steps.is_empty());
+    assert_eq!(
+        trajectory.final_metrics.as_ref().unwrap().total_steps,
+        Some(0)
+    );
 }
 
 #[test]

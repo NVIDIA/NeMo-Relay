@@ -44,7 +44,7 @@ runtime semantics as the Rust and Node.js surfaces.
 - ✅ **Subscribers and exporters**: Event consumers for observability and
   diagnostics.
 - ✅ **Plugin and typed helpers**: Public modules for plugins, codecs, typed
-  wrappers, and adaptive runtime behavior.
+  wrappers, adaptive runtime behavior, and observability plugin configuration.
 - ✅ **Shared Rust runtime semantics**: Python behavior aligned with the Rust
   and Node.js surfaces.
 
@@ -60,6 +60,53 @@ If you are not using `uv`, install it with `pip`:
 
 ```bash
 pip install nemo-flow
+```
+
+### Optional Dependencies
+
+#### LangChain Integration
+
+[LangChain](https://www.langchain.com/langchain) integration is available with the `langchain` extra:
+
+```bash
+# With uv
+uv add "nemo-flow[langchain]"
+
+# With pip
+pip install "nemo-flow[langchain]"
+```
+
+#### LangGraph Integration
+
+[LangGraph](https://www.langchain.com/langgraph) integration is available with the `langgraph` extra, this builds upon and includes the `langchain` extra as well.
+
+```bash
+# With uv
+uv add "nemo-flow[langgraph]"
+
+# With pip
+pip install "nemo-flow[langgraph]"
+```
+
+#### LangChain NVIDIA Integration
+
+The [LangChain NVIDIA](https://github.com/langchain-ai/langchain-nvidia) extra builds upon the `langchain` extra adding a compatible version of the `langchain-nvidia-ai-endpoints` package.
+
+```bash
+# With uv
+uv add "nemo-flow[langchain-nvidia]"
+
+# With pip
+pip install "nemo-flow[langchain-nvidia]"
+```
+
+To install this along with the `langgraph` extra, use:
+
+```bash
+# With uv
+uv add nemo-flow[langgraph,langchain-nvidia]
+# With pip
+pip install nemo-flow[langgraph,langchain-nvidia]
 ```
 
 ## Getting Started
@@ -94,8 +141,14 @@ The public package modules are:
 - `nemo_flow.subscribers`
 - `nemo_flow.plugin`
 - `nemo_flow.adaptive`
+- `nemo_flow.observability`
 - `nemo_flow.typed`
 - `nemo_flow.codecs`
+
+### Integrations
+
+- `nemo_flow.integrations.langchain`
+- `nemo_flow.integrations.langgraph`
 
 The compiled extension is exposed as `nemo_flow._native`.
 

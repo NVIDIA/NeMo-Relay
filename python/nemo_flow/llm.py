@@ -29,6 +29,7 @@ Example::
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -56,6 +57,8 @@ from nemo_flow._native import (
 )
 
 if TYPE_CHECKING:
+    from nemo_flow import Json
+    from nemo_flow._native import AnnotatedLLMResponse
     from nemo_flow.codecs import LlmCodec, LlmResponseCodec
 
 
@@ -128,7 +131,16 @@ def call(
     )
 
 
-def call_end(handle, response, *, data=None, metadata=None, timestamp: datetime | None = None) -> None:
+def call_end(
+    handle,
+    response,
+    *,
+    data=None,
+    metadata=None,
+    annotated_response: AnnotatedLLMResponse | Mapping[str, Json] | None = None,
+    response_codec: LlmResponseCodec | None = None,
+    timestamp: datetime | None = None,
+) -> None:
     """Finish a manual LLM span started by ``call()``.
 
     Args:
@@ -136,6 +148,12 @@ def call_end(handle, response, *, data=None, metadata=None, timestamp: datetime 
         response: Raw JSON-compatible response to record on the end event.
         data: Optional JSON payload used when the sanitized ``response`` is JSON null.
         metadata: Optional JSON metadata recorded on the emitted end event.
+        annotated_response: Optional normalized response annotation attached to
+            the emitted end event. Accepts an ``AnnotatedLLMResponse`` returned
+            by a codec, or a JSON-compatible mapping matching that schema.
+        response_codec: Optional response codec used to derive
+            ``annotated_response`` from the sanitized end-event payload for
+            observability. Ignored when ``annotated_response`` is provided.
         timestamp: Optional timezone-aware ``datetime`` recorded on the emitted
             end event. When omitted, the runtime default end timestamp is used.
 
@@ -144,11 +162,22 @@ def call_end(handle, response, *, data=None, metadata=None, timestamp: datetime 
 
     Notes:
         ``call_end()`` applies sanitize-response guardrails to the emitted
-        end-event payload but does not normalize or decode the response
-        automatically. ``timestamp`` must be a timezone-aware ``datetime``;
-        strings and naive datetimes are rejected.
+        end-event payload. ``response_codec`` and ``annotated_response`` enrich
+        observability output only and do not rewrite the recorded response.
+        Response codec failures are raised after the end event is emitted
+        without an annotation.
+        ``timestamp`` must be a timezone-aware ``datetime``; strings and naive
+        datetimes are rejected.
     """
-    return _native_llm_call_end(handle, response, data=data, metadata=metadata, timestamp=timestamp)
+    return _native_llm_call_end(
+        handle,
+        response,
+        data=data,
+        metadata=metadata,
+        annotated_response=annotated_response,
+        response_codec=response_codec,
+        timestamp=timestamp,
+    )
 
 
 def execute(

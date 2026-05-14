@@ -6,6 +6,10 @@
   },
   "workspaces": [
     "crates/node",
-    "crates/wasm"
-  ]
+    "crates/wasm",
+    "integrations/openclaw"
+  ],
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
 }

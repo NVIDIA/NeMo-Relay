@@ -31,6 +31,7 @@ package nemo_flow
 
 typedef struct FfiScopeHandle FfiScopeHandle;
 typedef struct FfiScopeStack FfiScopeStack;
+typedef struct FfiThreadScopeStackBinding FfiThreadScopeStackBinding;
 typedef struct FfiToolHandle FfiToolHandle;
 typedef struct FfiLLMHandle FfiLLMHandle;
 typedef struct FfiLLMRequest FfiLLMRequest;
@@ -211,6 +212,8 @@ extern void nemo_flow_string_free(char* ptr);
 // Scope stack isolation
 extern int32_t nemo_flow_scope_stack_create(FfiScopeStack** out);
 extern int32_t nemo_flow_scope_stack_set_thread(const FfiScopeStack* stack);
+extern int32_t nemo_flow_scope_stack_capture_thread(FfiThreadScopeStackBinding** out);
+extern int32_t nemo_flow_scope_stack_restore_thread(FfiThreadScopeStackBinding* binding);
 extern _Bool nemo_flow_scope_stack_active(void);
 extern void nemo_flow_scope_stack_free(FfiScopeStack* ptr);
 
@@ -221,6 +224,15 @@ extern int32_t nemo_flow_atif_exporter_deregister(const char*);
 extern int32_t nemo_flow_atif_exporter_export(const void*, char**);
 extern int32_t nemo_flow_atif_exporter_clear(const void*);
 extern void nemo_flow_atif_exporter_free(void*);
+
+// ATOF JSONL exporter
+extern int32_t nemo_flow_atof_exporter_create(const char*, const char*, const char*, void**);
+extern int32_t nemo_flow_atof_exporter_register(const void*, const char*);
+extern int32_t nemo_flow_atof_exporter_deregister(const char*);
+extern int32_t nemo_flow_atof_exporter_force_flush(const void*);
+extern int32_t nemo_flow_atof_exporter_shutdown(const void*);
+extern int32_t nemo_flow_atof_exporter_path(const void*, char**);
+extern void nemo_flow_atof_exporter_free(void*);
 
 // OpenTelemetry subscriber
 extern int32_t nemo_flow_otel_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
@@ -305,6 +317,30 @@ var (
 		var ptr unsafe.Pointer
 		status := C.nemo_flow_atif_exporter_create(cSessionID, cAgentName, cAgentVersion, cModelName, &ptr)
 		return checkedValue(int32(status), &AtifExporter{ptr: ptr})
+	}
+	newAtofExporterFunc = func(config AtofExporterConfig) (*AtofExporter, error) {
+		if config.Mode == "" {
+			config.Mode = AtofExporterModeAppend
+		}
+
+		var cOutputDirectory *C.char
+		if config.OutputDirectory != "" {
+			cOutputDirectory = C.CString(config.OutputDirectory)
+			defer C.free(unsafe.Pointer(cOutputDirectory))
+		}
+
+		cMode := C.CString(string(config.Mode))
+		defer C.free(unsafe.Pointer(cMode))
+
+		var cFilename *C.char
+		if config.Filename != "" {
+			cFilename = C.CString(config.Filename)
+			defer C.free(unsafe.Pointer(cFilename))
+		}
+
+		var ptr unsafe.Pointer
+		status := C.nemo_flow_atof_exporter_create(cOutputDirectory, cMode, cFilename, &ptr)
+		return checkedValue(int32(status), &AtofExporter{ptr: ptr})
 	}
 )
 
@@ -1467,8 +1503,22 @@ func (s *ScopeStack) Close() {
 // This is the canonical way to propagate a scope stack to a worker goroutine.
 func (s *ScopeStack) Run(fn func()) {
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	C.nemo_flow_scope_stack_set_thread(s.ptr)
+	var binding *C.FfiThreadScopeStackBinding
+	if err := checkStatus(C.nemo_flow_scope_stack_capture_thread(&binding)); err != nil {
+		runtime.UnlockOSThread()
+		panic(err)
+	}
+	defer func() {
+		status := C.nemo_flow_scope_stack_restore_thread(binding)
+		if err := checkStatus(status); err != nil {
+			runtime.UnlockOSThread()
+			panic(err)
+		}
+		runtime.UnlockOSThread()
+	}()
+	if err := checkStatus(C.nemo_flow_scope_stack_set_thread(s.ptr)); err != nil {
+		panic(err)
+	}
 	fn()
 }
 
@@ -1533,6 +1583,91 @@ func (e *AtifExporter) Clear() {
 func (e *AtifExporter) Close() {
 	if e.ptr != nil {
 		C.nemo_flow_atif_exporter_free(e.ptr)
+		e.ptr = nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ATOF JSONL Exporter
+// ---------------------------------------------------------------------------
+
+// AtofExporterMode controls how an ATOF JSONL exporter opens its output file.
+type AtofExporterMode string
+
+const (
+	// AtofExporterModeAppend appends events to an existing file.
+	AtofExporterModeAppend AtofExporterMode = "append"
+	// AtofExporterModeOverwrite truncates an existing file when the exporter is created.
+	AtofExporterModeOverwrite AtofExporterMode = "overwrite"
+)
+
+// AtofExporterConfig configures the filesystem-backed ATOF JSONL exporter.
+type AtofExporterConfig struct {
+	OutputDirectory string
+	Mode            AtofExporterMode
+	Filename        string
+}
+
+// NewAtofExporterConfig returns a config initialized with native defaults.
+func NewAtofExporterConfig() AtofExporterConfig {
+	return AtofExporterConfig{
+		Mode: AtofExporterModeAppend,
+	}
+}
+
+// AtofExporter writes raw NeMo Flow ATOF lifecycle events as JSONL.
+type AtofExporter struct {
+	ptr unsafe.Pointer
+}
+
+// NewAtofExporter creates a new filesystem-backed ATOF JSONL exporter.
+func NewAtofExporter(config AtofExporterConfig) (*AtofExporter, error) {
+	return newAtofExporterFunc(config)
+}
+
+// Path returns the JSONL output path.
+func (e *AtofExporter) Path() (string, error) {
+	var cOut *C.char
+	status := C.nemo_flow_atof_exporter_path(e.ptr, &cOut)
+	if err := checkStatus(status); err != nil {
+		return "", err
+	}
+	defer C.nemo_flow_string_free(cOut)
+	return C.GoString(cOut), nil
+}
+
+// Register registers the exporter as a global event subscriber.
+func (e *AtofExporter) Register(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	status := C.nemo_flow_atof_exporter_register(e.ptr, cName)
+	return checkStatus(status)
+}
+
+// Deregister removes the exporter subscriber by name.
+func (e *AtofExporter) Deregister(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	status := C.nemo_flow_atof_exporter_deregister(cName)
+	return checkStatus(status)
+}
+
+// ForceFlush flushes the output file.
+func (e *AtofExporter) ForceFlush() error {
+	status := C.nemo_flow_atof_exporter_force_flush(e.ptr)
+	return checkStatus(status)
+}
+
+// Shutdown flushes the output file.
+func (e *AtofExporter) Shutdown() error {
+	status := C.nemo_flow_atof_exporter_shutdown(e.ptr)
+	return checkStatus(status)
+}
+
+// Close frees the exporter handle.
+func (e *AtofExporter) Close() {
+	if e.ptr != nil {
+		C.nemo_flow_atof_exporter_free(e.ptr)
 		e.ptr = nil
 	}
 }
