@@ -74,29 +74,3 @@ class NemoFlowDeepAgentsMiddleware(NemoFlowMiddleware):
                 metadata={"agent_name": self._agent_name} if self._agent_name is not None else None,
             )
 
-    def _tool_context(self, request: ToolCallRequest) -> tuple[str, Mapping[str, Any], str | None]:
-        tool_name = request.tool_call["name"]
-        raw_args = request.tool_call.get("args")
-        if raw_args is None:
-            tool_args = {}
-        elif isinstance(raw_args, Mapping):
-            tool_args = raw_args
-        else:
-            tool_args = {"value": raw_args}
-
-        return tool_name, tool_args, tool_kind(tool_name)
-
-    def _tool_scope_metadata(self, kind: str) -> dict[str, Any]:
-        metadata: dict[str, Any] = {
-            "integration": "deepagents",
-            "deepagents_kind": kind,
-        }
-        if self._agent_name is not None:
-            metadata["agent_name"] = self._agent_name
-        return metadata
-
-
-def _tool_scope_type(kind: str) -> nemo_flow.ScopeType:
-    if kind in {"subagent", "async_subagent"}:
-        return nemo_flow.ScopeType.Agent
-    return nemo_flow.ScopeType.Tool
