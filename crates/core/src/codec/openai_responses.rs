@@ -295,6 +295,118 @@ fn overlay_generation_params(obj: &mut serde_json::Map<String, Json>, params: &G
     }
 }
 
+fn encode_openai_responses_input(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+) -> Result<()> {
+    let (system_text, input_messages) = split_system_and_input_messages(&annotated.messages);
+    set_or_remove_string(obj, "instructions", system_text);
+    if let Some(raw_input_items) = annotated.extra.get(UNPARSED_INPUT_ITEMS_KEY) {
+        obj.insert("input".into(), raw_input_items.clone());
+    } else {
+        insert_serialized(obj, "input", &input_messages, "input")?;
+    }
+    Ok(())
+}
+
+fn encode_openai_responses_tools(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+) -> Result<()> {
+    if let Some(ref tools) = annotated.tools {
+        insert_serialized(obj, "tools", tools, "tools")?;
+    }
+    if let Some(ref tool_choice) = annotated.tool_choice {
+        insert_serialized(obj, "tool_choice", tool_choice, "tool_choice")?;
+    }
+    Ok(())
+}
+
+fn overlay_openai_responses_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+) {
+    if let Some(ref model) = annotated.model {
+        obj.insert("model".into(), Json::String(model.clone()));
+    }
+    overlay_openai_responses_json_fields(obj, annotated);
+    overlay_openai_responses_string_fields(obj, annotated);
+    overlay_openai_responses_bool_fields(obj, annotated);
+    overlay_openai_responses_u64_fields(obj, annotated);
+}
+
+fn overlay_openai_responses_json_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+) {
+    for (key, value) in [
+        ("truncation", &annotated.truncation),
+        ("reasoning", &annotated.reasoning),
+        ("include", &annotated.include),
+        ("metadata", &annotated.metadata),
+    ] {
+        if let Some(value) = value {
+            obj.insert(key.into(), value.clone());
+        }
+    }
+}
+
+fn overlay_openai_responses_string_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+) {
+    for (key, value) in [
+        ("previous_response_id", &annotated.previous_response_id),
+        ("user", &annotated.user),
+        ("service_tier", &annotated.service_tier),
+    ] {
+        if let Some(value) = value {
+            obj.insert(key.into(), Json::String(value.clone()));
+        }
+    }
+}
+
+fn overlay_openai_responses_bool_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+) {
+    for (key, value) in [
+        ("store", annotated.store),
+        ("parallel_tool_calls", annotated.parallel_tool_calls),
+        ("stream", annotated.stream),
+    ] {
+        if let Some(value) = value {
+            obj.insert(key.into(), Json::Bool(value));
+        }
+    }
+}
+
+fn overlay_openai_responses_u64_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    annotated: &AnnotatedLlmRequest,
+) {
+    for (key, value) in [
+        ("max_output_tokens", annotated.max_output_tokens),
+        ("max_tool_calls", annotated.max_tool_calls),
+        ("top_logprobs", annotated.top_logprobs),
+    ] {
+        if let Some(value) = value {
+            obj.insert(key.into(), Json::from(value));
+        }
+    }
+}
+
+fn merge_openai_responses_extra_fields(
+    obj: &mut serde_json::Map<String, Json>,
+    extra: &serde_json::Map<String, Json>,
+) {
+    for (k, v) in extra {
+        if k != UNPARSED_INPUT_ITEMS_KEY {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
+}
+
 fn decode_openai_or_anthropic_tool_choice(value: &Json) -> Option<ToolChoice> {
     if let Ok(parsed) = serde_json::from_value::<ToolChoice>(value.clone()) {
         return Some(parsed);
@@ -516,87 +628,13 @@ impl LlmCodec for OpenAIResponsesCodec {
             .as_object_mut()
             .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
 
-        let (system_text, input_messages) = split_system_and_input_messages(&annotated.messages);
-        set_or_remove_string(obj, "instructions", system_text);
-        if let Some(raw_input_items) = annotated.extra.get(UNPARSED_INPUT_ITEMS_KEY) {
-            obj.insert("input".into(), raw_input_items.clone());
-        } else {
-            insert_serialized(obj, "input", &input_messages, "input")?;
-        }
-
-        // Overlay model if present.
-        if let Some(ref model) = annotated.model {
-            obj.insert("model".into(), Json::String(model.clone()));
-        }
-
-        // Overlay generation params.
+        encode_openai_responses_input(obj, annotated)?;
         if let Some(ref params) = annotated.params {
             overlay_generation_params(obj, params);
         }
-
-        // Overlay tools if present.
-        if let Some(ref tools) = annotated.tools {
-            insert_serialized(obj, "tools", tools, "tools")?;
-        }
-
-        // Overlay tool_choice if present.
-        if let Some(ref tool_choice) = annotated.tool_choice {
-            insert_serialized(obj, "tool_choice", tool_choice, "tool_choice")?;
-        }
-
-        if let Some(store) = annotated.store {
-            obj.insert("store".into(), Json::Bool(store));
-        }
-        if let Some(ref previous_response_id) = annotated.previous_response_id {
-            obj.insert(
-                "previous_response_id".into(),
-                Json::String(previous_response_id.clone()),
-            );
-        }
-        if let Some(ref truncation) = annotated.truncation {
-            obj.insert("truncation".into(), truncation.clone());
-        }
-        if let Some(ref reasoning) = annotated.reasoning {
-            obj.insert("reasoning".into(), reasoning.clone());
-        }
-        if let Some(ref include) = annotated.include {
-            obj.insert("include".into(), include.clone());
-        }
-        if let Some(ref user) = annotated.user {
-            obj.insert("user".into(), Json::String(user.clone()));
-        }
-        if let Some(ref metadata) = annotated.metadata {
-            obj.insert("metadata".into(), metadata.clone());
-        }
-        if let Some(ref service_tier) = annotated.service_tier {
-            obj.insert("service_tier".into(), Json::String(service_tier.clone()));
-        }
-        if let Some(parallel_tool_calls) = annotated.parallel_tool_calls {
-            obj.insert(
-                "parallel_tool_calls".into(),
-                Json::Bool(parallel_tool_calls),
-            );
-        }
-        if let Some(max_output_tokens) = annotated.max_output_tokens {
-            obj.insert("max_output_tokens".into(), Json::from(max_output_tokens));
-        }
-        if let Some(max_tool_calls) = annotated.max_tool_calls {
-            obj.insert("max_tool_calls".into(), Json::from(max_tool_calls));
-        }
-        if let Some(top_logprobs) = annotated.top_logprobs {
-            obj.insert("top_logprobs".into(), Json::from(top_logprobs));
-        }
-        if let Some(stream) = annotated.stream {
-            obj.insert("stream".into(), Json::Bool(stream));
-        }
-
-        // Merge extra fields back.
-        for (k, v) in &annotated.extra {
-            if k == UNPARSED_INPUT_ITEMS_KEY {
-                continue;
-            }
-            obj.insert(k.clone(), v.clone());
-        }
+        encode_openai_responses_tools(obj, annotated)?;
+        overlay_openai_responses_fields(obj, annotated);
+        merge_openai_responses_extra_fields(obj, &annotated.extra);
 
         Ok(LlmRequest {
             headers: original.headers.clone(),
