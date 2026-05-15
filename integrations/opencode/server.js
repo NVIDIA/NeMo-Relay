@@ -1,12 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import fsSync from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 
-const PLUGIN_ID = "@nvidia/nemoflow-opencode-plugin"
-const AGENT_VERSION = "opencode-plugin-0.2.0"
+const PLUGIN_ID = "nemo-flow-opencode"
+const DEFAULT_PLUGIN_HOST_CONFIG = Object.freeze({
+  version: 1,
+  components: Object.freeze([]),
+})
+const RECENT_FLUSH_TTL_MS = 2000
 const RELEVANT_EVENTS = new Set([
   "session.created",
   "session.updated",
@@ -79,16 +82,124 @@ function resolveOutputPath(baseDir, value) {
 }
 
 /**
+ * Resolve an output directory inside generic observability plugin config.
+ */
+function resolveOutputDirectory(baseDir, value) {
+  if (typeof value !== "string" || value.trim() === "") return value
+  if (path.isAbsolute(value)) return value
+  return path.resolve(baseDir, value)
+}
+
+/**
  * Normalize OpenCode plugin options into concrete runtime settings.
  */
 function normalizeOptions(input, options = {}) {
   const baseDir = input?.directory ?? process.cwd()
+  const rawOptions = options ?? {}
+  rejectRemovedOption(rawOptions, "atofPath", "configure plugins.components[].config.atof instead")
+  rejectRemovedOption(rawOptions, "atifPath", "configure plugins.components[].config.atif instead")
+
   return {
-    enabled: options.enabled !== false,
-    atofPath: resolveOutputPath(baseDir, options.atofPath ?? "./.nemoflow/opencode.atof.jsonl"),
-    atifPath: resolveOutputPath(baseDir, options.atifPath ?? "./.nemoflow/opencode.atif.json"),
-    logPath: resolveOutputPath(baseDir, options.logPath ?? "./.nemoflow/opencode-plugin.log"),
+    enabled: rawOptions.enabled !== false,
+    plugins: normalizePluginHostConfig(baseDir, rawOptions.plugins),
+    logPath: resolveOutputPath(baseDir, rawOptions.logPath ?? "./.nemoflow/opencode-plugin.log"),
   }
+}
+
+/**
+ * Normalize the embedded generic NeMo Flow plugin-host configuration.
+ */
+function normalizePluginHostConfig(baseDir, value) {
+  if (value === undefined) {
+    return clonePluginHostConfig(DEFAULT_PLUGIN_HOST_CONFIG)
+  }
+
+  const raw = asRecord(value, "plugins", false)
+  const version = optionalNumber(raw.version, "plugins.version") ?? 1
+  const components = raw.components === undefined ? [] : raw.components
+
+  if (!Array.isArray(components)) {
+    throw new Error("plugins.components must be an array")
+  }
+
+  return {
+    ...raw,
+    version,
+    components: components.map((component, index) =>
+      normalizePluginComponent(baseDir, component, `plugins.components[${index}]`),
+    ),
+  }
+}
+
+/**
+ * Clone the mutable generic plugin config before giving it to the runtime.
+ */
+function clonePluginHostConfig(config) {
+  return {
+    ...config,
+    components: [...config.components],
+  }
+}
+
+/**
+ * Normalize path-bearing sections on the built-in observability component.
+ */
+function normalizePluginComponent(baseDir, value, fieldPath) {
+  const component = asRecord(value, fieldPath, false)
+  const normalized = { ...component }
+
+  if (component.kind !== "observability" || component.config === undefined) {
+    return normalized
+  }
+
+  normalized.config = normalizeObservabilityConfig(baseDir, asRecord(component.config, `${fieldPath}.config`, false))
+  return normalized
+}
+
+/**
+ * Keep OpenCode project-relative paths ergonomic while preserving NeMo Flow's
+ * generic plugin config shape.
+ */
+function normalizeObservabilityConfig(baseDir, config) {
+  const normalized = { ...config }
+  for (const sectionName of ["atof", "atif"]) {
+    if (normalized[sectionName] === undefined) continue
+    const section = asRecord(normalized[sectionName], `observability.${sectionName}`, false)
+    normalized[sectionName] = {
+      ...section,
+      output_directory: resolveOutputDirectory(baseDir, section.output_directory),
+    }
+  }
+  return normalized
+}
+
+/**
+ * Reject exporter options that were replaced by the generic plugin config.
+ */
+function rejectRemovedOption(options, name, hint) {
+  if (Object.prototype.hasOwnProperty.call(options, name)) {
+    throw new Error(`${name} was removed; ${hint}`)
+  }
+}
+
+/**
+ * Require an object config section, optionally treating undefined as empty.
+ */
+function asRecord(value, fieldPath, optional) {
+  if (value === undefined && optional) return {}
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) return value
+  throw new Error(`${fieldPath} must be an object`)
+}
+
+/**
+ * Parse an optional finite number.
+ */
+function optionalNumber(value, fieldPath) {
+  if (value === undefined) return undefined
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${fieldPath} must be a finite number`)
+  }
+  return value
 }
 
 /**
@@ -190,59 +301,89 @@ function shouldFlushEvent(event) {
 }
 
 /**
+ * Log plugin-host validation or activation diagnostics.
+ */
+async function logDiagnostics(logger, diagnostics = []) {
+  for (const diagnostic of diagnostics) {
+    const prefix = diagnostic.component ? `${diagnostic.component}: ` : ""
+    const message = `${prefix}${diagnostic.code}: ${diagnostic.message}`
+    if (diagnostic.level === "error") {
+      await logger.warn(message, diagnostic)
+    } else {
+      await logger.info(message, diagnostic)
+    }
+  }
+}
+
+/**
+ * Return true when a plugin-host report contains error diagnostics.
+ */
+function hasErrorDiagnostics(report) {
+  return report?.diagnostics?.some((diagnostic) => diagnostic.level === "error") === true
+}
+
+/**
+ * Validate and activate NeMo Flow's generic plugin-host config.
+ */
+async function initializePluginHost(pluginHost, config, logger) {
+  const validationReport = pluginHost.validate(config)
+  await logDiagnostics(logger, validationReport.diagnostics)
+  if (hasErrorDiagnostics(validationReport)) {
+    throw new Error("NeMo Flow plugin host config validation failed")
+  }
+
+  const activationReport = await pluginHost.initialize(config)
+  await logDiagnostics(logger, activationReport.diagnostics)
+  if (hasErrorDiagnostics(activationReport)) {
+    await logger.warn("NeMo Flow plugin host initialized with error diagnostics")
+  }
+}
+
+/**
+ * Summarize the active generic plugin config for diagnostics.
+ */
+function pluginConfigSummary(config) {
+  const components = Array.isArray(config?.components) ? config.components : []
+  return {
+    version: config?.version,
+    components: components.map((component) => ({
+      kind: component?.kind,
+      enabled: component?.enabled !== false,
+    })),
+  }
+}
+
+/**
+ * Convert thrown values into stable log records.
+ */
+function toMessage(error) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
  * Create the NeMo Flow adapter behind the OpenCode plugin hooks.
  */
-function createNemoFlowAdapter(lib, options, logger) {
+function createNemoFlowAdapter(lib, pluginHost, logger) {
   const sessions = new Map()
   const recentFlushes = new Map()
-  const trajectories = []
-  let atofSubscriberName
-  let atofDeregisterTimer
   let closed = false
 
   /**
-   * Register the process-local ATOF JSONL subscriber on first use.
+   * Prune duplicate-flush suppression state so it cannot grow indefinitely.
    */
-  function registerAtOfJsonlExporter() {
-    if (atofDeregisterTimer) {
-      clearTimeout(atofDeregisterTimer)
-      atofDeregisterTimer = undefined
-    }
-    if (atofSubscriberName || !options.atofPath) return
-    fsSync.mkdirSync(path.dirname(options.atofPath), { recursive: true })
-    atofSubscriberName = `${PLUGIN_ID}:atof:${process.pid}:${Date.now()}`
-    lib.registerSubscriber(atofSubscriberName, (event) => {
-      fsSync.appendFileSync(options.atofPath, JSON.stringify(event) + "\n")
-    })
-    void logger.info("registered ATOF JSONL exporter", { path: options.atofPath })
-  }
-
-  /**
-   * Deregister the ATOF JSONL subscriber after the last session closes.
-   */
-  function deregisterAtOfJsonlExporter() {
-    if (atofDeregisterTimer) {
-      clearTimeout(atofDeregisterTimer)
-      atofDeregisterTimer = undefined
-    }
-    if (!atofSubscriberName) return
-    try {
-      lib.deregisterSubscriber(atofSubscriberName)
-    } catch (error) {
-      void logger.warnOnce("atof-deregister", "failed to deregister ATOF JSONL exporter", error)
-    } finally {
-      atofSubscriberName = undefined
+  function pruneRecentFlushes(now = Date.now()) {
+    for (const [sessionID, timestamp] of recentFlushes) {
+      if (now - timestamp > RECENT_FLUSH_TTL_MS) recentFlushes.delete(sessionID)
     }
   }
 
   /**
-   * Delay ATOF subscriber cleanup so adjacent events can still flush.
+   * Return true when a just-closed session receives a duplicate idle/delete event.
    */
-  function scheduleAtOfJsonlExporterDeregister() {
-    if (!atofSubscriberName || atofDeregisterTimer) return
-    atofDeregisterTimer = setTimeout(() => {
-      deregisterAtOfJsonlExporter()
-    }, 250)
+  function wasRecentlyFlushed(sessionID) {
+    pruneRecentFlushes()
+    const recentFlushAt = recentFlushes.get(sessionID)
+    return recentFlushAt !== undefined && Date.now() - recentFlushAt <= RECENT_FLUSH_TTL_MS
   }
 
   /**
@@ -255,7 +396,7 @@ function createNemoFlowAdapter(lib, options, logger) {
     try {
       return callback()
     } finally {
-      if (previous) lib.setThreadScopeStack(previous)
+      if (previous !== undefined) lib.setThreadScopeStack(previous)
     }
   }
 
@@ -264,7 +405,6 @@ function createNemoFlowAdapter(lib, options, logger) {
    */
   function ensureSession(sessionID, metadata = {}) {
     if (!sessionID) return undefined
-    registerAtOfJsonlExporter()
 
     let session = sessions.get(sessionID)
     if (session) {
@@ -279,13 +419,9 @@ function createNemoFlowAdapter(lib, options, logger) {
       model: metadata.model,
       stack: typeof lib.createScopeStack === "function" ? lib.createScopeStack() : undefined,
       scope: undefined,
-      exporter: undefined,
-      exporterName: `${PLUGIN_ID}:atif:${sessionID}:${Date.now()}`,
       pendingTools: new Map(),
     }
 
-    session.exporter = new lib.AtifExporter(session.id, session.agent, AGENT_VERSION, session.model ?? null)
-    session.exporter.register(session.exporterName)
     session.scope = withStack(session, () =>
       lib.pushScope(
         "opencode.session",
@@ -325,22 +461,13 @@ function createNemoFlowAdapter(lib, options, logger) {
   }
 
   /**
-   * Write all collected ATIF trajectories to the configured file.
-   */
-  function writeAtifFile() {
-    if (!options.atifPath) return
-    const payload = trajectories.length === 1 ? trajectories[0] : { trajectories }
-    fsSync.mkdirSync(path.dirname(options.atifPath), { recursive: true })
-    fsSync.writeFileSync(options.atifPath, JSON.stringify(payload, null, 2))
-  }
-
-  /**
-   * Close an OpenCode session scope and export its trajectory.
+   * Close an OpenCode session scope so generic observability plugins can flush.
    */
   function flushSession(sessionID, reason) {
     const session = sessions.get(sessionID)
     if (!session) return
     recentFlushes.set(sessionID, Date.now())
+    pruneRecentFlushes()
     emitMark(session, "opencode.session.flush", { sessionID, reason })
     for (const [key, tool] of session.pendingTools) {
       try {
@@ -364,20 +491,7 @@ function createNemoFlowAdapter(lib, options, logger) {
       }
     }
 
-    try {
-      trajectories.push(JSON.parse(session.exporter.exportJson()))
-      writeAtifFile()
-    } catch (error) {
-      void logger.warnOnce(`atif-export:${sessionID}`, "failed to export ATIF trajectory", error)
-    }
-
-    try {
-      session.exporter.deregister(session.exporterName)
-    } catch (error) {
-      void logger.warnOnce(`atif-deregister:${sessionID}`, "failed to deregister ATIF exporter", error)
-    }
     sessions.delete(sessionID)
-    if (sessions.size === 0) scheduleAtOfJsonlExporterDeregister()
   }
 
   return {
@@ -399,8 +513,7 @@ function createNemoFlowAdapter(lib, options, logger) {
       if (closed || !RELEVANT_EVENTS.has(event?.type)) return
       const sessionID = eventSessionID(event)
       if (!sessionID) return
-      const recentFlushAt = recentFlushes.get(sessionID)
-      if (shouldFlushEvent(event) && recentFlushAt && Date.now() - recentFlushAt < 2000) return
+      if (shouldFlushEvent(event) && wasRecentlyFlushed(sessionID)) return
       const props = event.properties ?? {}
       const session = ensureSession(sessionID, {
         agent: agentName(props.info, undefined),
@@ -534,29 +647,65 @@ function createNemoFlowAdapter(lib, options, logger) {
       for (const sessionID of [...sessions.keys()]) {
         flushSession(sessionID, "plugin-close")
       }
-      deregisterAtOfJsonlExporter()
+      try {
+        pluginHost.clear()
+      } catch (error) {
+        await logger.warnOnce("plugin-host-clear", "failed to clear NeMo Flow plugin host", error)
+      }
     },
   }
 }
 
 /**
- * Load the default NeMo Flow Node.js runtime.
+ * Load the default NeMo Flow Node.js runtime and plugin host.
  */
-async function loadDefaultRuntime() {
+async function loadDefaultModules() {
   if (process.env.NEMO_FLOW_OPENCODE_FORCE_INIT_FAILURE === "1") {
     throw new Error("forced initialization failure")
   }
-  const mod = await import("nemo-flow-node")
-  return mod.default ?? mod
+  const [runtimeModule, pluginHostModule] = await Promise.all([
+    import("nemo-flow-node"),
+    import("nemo-flow-node/plugin"),
+  ])
+  return {
+    lib: runtimeModule.default ?? runtimeModule,
+    pluginHost: pluginHostModule.default ?? pluginHostModule,
+  }
+}
+
+/**
+ * Register process cleanup for OpenCode runs without an explicit close hook.
+ */
+function registerBeforeExitCleanup(close, logger) {
+  const listener = () => {
+    void close().catch((error) => {
+      void logger.warnOnce("before-exit-cleanup", "failed to clean up NeMo Flow OpenCode plugin", error)
+    })
+  }
+  process.on("beforeExit", listener)
+  return () => process.removeListener("beforeExit", listener)
 }
 
 /**
  * Create the OpenCode server plugin entrypoint.
  */
-export function createServerPlugin({ loadRuntime = loadDefaultRuntime } = {}) {
+export function createServerPlugin({
+  loadModules = loadDefaultModules,
+  registerCleanup = registerBeforeExitCleanup,
+} = {}) {
   return async function server(input, options) {
-    const normalized = normalizeOptions(input, options)
-    const logger = createLogger(normalized.logPath)
+    let normalized
+    let logger
+
+    try {
+      normalized = normalizeOptions(input, options)
+      logger = createLogger(normalized.logPath)
+    } catch (error) {
+      const baseDir = input?.directory ?? process.cwd()
+      logger = createLogger(resolveOutputPath(baseDir, options?.logPath ?? "./.nemoflow/opencode-plugin.log"))
+      await logger.warnOnce("config-invalid", "NeMo Flow OpenCode plugin config invalid; running pass-through", error)
+      return {}
+    }
 
     if (!normalized.enabled) {
       await logger.warnOnce("disabled", "NeMo Flow OpenCode plugin disabled by configuration")
@@ -565,16 +714,21 @@ export function createServerPlugin({ loadRuntime = loadDefaultRuntime } = {}) {
 
     let adapter
     try {
-      const lib = await loadRuntime()
-      adapter = createNemoFlowAdapter(lib, normalized, logger)
+      const { lib, pluginHost } = await loadModules()
+      await initializePluginHost(pluginHost, normalized.plugins, logger)
+      adapter = createNemoFlowAdapter(lib, pluginHost, logger)
+      let unregisterCleanup
+      unregisterCleanup = registerCleanup(async () => {
+        unregisterCleanup?.()
+        await adapter.close()
+      }, logger)
       await logger.info("initialized NeMo Flow OpenCode plugin", {
-        atofPath: normalized.atofPath,
-        atifPath: normalized.atifPath,
+        plugins: pluginConfigSummary(normalized.plugins),
       })
     } catch (error) {
       await logger.warnOnce(
         "init-failed",
-        "NeMo Flow runtime unavailable; OpenCode plugin is running pass-through",
+        `NeMo Flow runtime unavailable or misconfigured; OpenCode plugin is running pass-through: ${toMessage(error)}`,
         error,
       )
       return {}

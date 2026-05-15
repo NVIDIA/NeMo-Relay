@@ -7,7 +7,8 @@
   "workspaces": [
     "crates/node",
     "crates/wasm",
-    "integrations/openclaw"
+    "integrations/openclaw",
+    "integrations/opencode"
   ],
   "devDependencies": {
     "typescript": "^5.9.3"

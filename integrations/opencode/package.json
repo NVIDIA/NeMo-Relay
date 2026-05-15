@@ -1,17 +1,15 @@
 {
   "name": "nemo-flow-opencode",
   "version": "0.2.0",
-  "description": "OpenCode server plugin that exports NeMo Flow observability data.",
+  "description": "OpenCode server plugin that maps OpenCode activity into NeMo Flow observability.",
   "type": "module",
   "main": "./server.js",
   "exports": {
     ".": {
-      "default": "./server.js",
-      "import": "./server.js"
+      "default": "./server.js"
     },
     "./server": {
-      "default": "./server.js",
-      "import": "./server.js"
+      "default": "./server.js"
     }
   },
   "files": [
@@ -29,22 +27,21 @@
     "atof",
     "plugin"
   ],
-  "homepage": "https://github.com/NVIDIA/NeMo-Flow#readme",
+  "homepage": "https://github.com/NVIDIA/NeMo-Flow/blob/main/docs/integrate-frameworks/opencode.md",
   "bugs": {
     "url": "https://github.com/NVIDIA/NeMo-Flow/issues"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/NVIDIA/NeMo-Flow.git",
-    "directory": "integrations/opencode-plugin"
+    "directory": "integrations/opencode"
   },
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=20.0.0",
-    "opencode": ">=1.14.40"
+    "node": ">=20.0.0"
   },
   "dependencies": {
-    "nemo-flow-node": "file:../../crates/node"
+    "nemo-flow-node": ">0.1.0 <1.0.0"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.14.40"

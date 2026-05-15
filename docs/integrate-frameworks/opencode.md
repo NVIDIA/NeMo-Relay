@@ -11,13 +11,18 @@ OpenCode checkout.
 
 Use this plugin when you want NeMo Flow observability for OpenCode sessions,
 messages, LLM request metadata, successful tool calls, and session errors.
+The OpenCode plugin maps those hook payloads into NeMo Flow scopes and events.
+The generic NeMo Flow `observability` plugin config controls ATOF, ATIF,
+OpenTelemetry, and OpenInference export.
 
 ## What You Build
 
 You will configure stock OpenCode to load the NeMo Flow plugin in the
 background. After that, you can use OpenCode normally through the interactive
-interface or `opencode run`. The plugin observes OpenCode hooks and writes
-NeMo Flow ATOF and ATIF files under the OpenCode project directory.
+interface or `opencode run`.
+
+The diagram shows the split between OpenCode hook capture and generic NeMo Flow
+export configuration.
 
 ```{mermaid}
 flowchart LR
@@ -25,21 +30,28 @@ flowchart LR
     OpenCode[Stock OpenCode]
     Plugin[NeMo Flow<br/>OpenCode plugin]
     Runtime[NeMo Flow<br/>Node.js binding]
+    Host[Generic NeMo Flow<br/>plugin host]
     ATOF[(ATOF JSONL)]
     ATIF[(ATIF JSON)]
+    OTLP[(OTLP traces)]
 
     User -->|uses normally| OpenCode
     OpenCode -->|public plugin hooks| Plugin
     Plugin -->|scopes, marks,<br/>tool lifecycle| Runtime
-    Runtime -->|append events| ATOF
-    Runtime -->|export on idle<br/>or deleted session| ATIF
+    Plugin -->|plugins config| Host
+    Host -->|observability component| Runtime
+    Runtime -->|raw events| ATOF
+    Runtime -->|agent trajectories| ATIF
+    Runtime -->|optional traces| OTLP
 
     class User blue-lightest;
     class OpenCode green-lightest;
     class Plugin purple-lightest;
+    class Host purple-light;
     class Runtime green-light;
     class ATOF yellow-lightest;
     class ATIF yellow-lightest;
+    class OTLP yellow-lightest;
 ```
 
 The plugin is passive. It records observability output but does not rewrite
@@ -65,37 +77,69 @@ npm install -g opencode-ai@latest
 opencode --version
 ```
 
-When the plugin package is published, use
-`@nvidia/nemoflow-opencode-plugin` in the OpenCode config instead of the local
-file URL.
+When the plugin package is published, use `nemo-flow-opencode` in the OpenCode
+config instead of the local file URL.
 
 ## Configure OpenCode
 
-Create or update `opencode.json` in the OpenCode project directory:
+Create or update `opencode.json` in the OpenCode project directory. The
+top-level OpenCode plugin fields use JavaScript-style names such as `logPath`.
+The nested `plugins` object is the generic NeMo Flow plugin config, so its
+field names are `snake_case` in every language.
 
 ```json
 {
   "plugin": [
     [
-      "nemo-flow-opencode",
+      "file:///absolute/path/to/NeMo-Flow/integrations/opencode",
       {
         "enabled": true,
-        "atofPath": "./.nemoflow/opencode.atof.jsonl",
-        "atifPath": "./.nemoflow/opencode.atif.json",
-        "logPath": "./.nemoflow/opencode-plugin.log"
+        "logPath": "./.nemoflow/opencode-plugin.log",
+        "plugins": {
+          "version": 1,
+          "components": [
+            {
+              "kind": "observability",
+              "enabled": true,
+              "config": {
+                "version": 1,
+                "atof": {
+                  "enabled": true,
+                  "output_directory": "./.nemoflow",
+                  "filename": "opencode.atof.jsonl",
+                  "mode": "overwrite"
+                },
+                "atif": {
+                  "enabled": true,
+                  "agent_name": "opencode",
+                  "output_directory": "./.nemoflow",
+                  "filename_template": "opencode-{session_id}.atif.json"
+                }
+              }
+            }
+          ]
+        }
       }
     ]
   ]
 }
 ```
 
-The paths are resolved relative to the OpenCode project directory. If
-`nemo-flow-node` is missing or cannot initialize, the plugin logs one warning
+The OpenCode plugin resolves `logPath` and observability `output_directory`
+values relative to the OpenCode project directory. Other generic plugin fields
+keep NeMo Flow's standard behavior. If `nemo-flow-node` is missing, plugin
+validation fails, or plugin initialization fails, the plugin logs one warning
 and returns no hooks, so OpenCode continues in pass-through mode.
 
-## Run the Demo
+The ATIF filename placeholder `{session_id}` is the NeMo Flow top-level agent
+scope UUID. The OpenCode session ID is still recorded in event metadata.
 
-Use this demo when you want to show the integration end to end. It uses a
+For the complete `observability` component schema, see
+[Configure the Observability Plugin](../export-observability-data/observability-plugin.md).
+
+## Run A Local Smoke
+
+Use this smoke when you want to check the integration end to end. It uses a
 source checkout plugin path because the package is not published yet.
 
 ```bash
@@ -110,12 +154,34 @@ cat > opencode.json <<JSON
 {
   "plugin": [
     [
-      "file://$NEMO_FLOW_REPO/integrations/opencode-plugin",
+      "file://$NEMO_FLOW_REPO/integrations/opencode",
       {
         "enabled": true,
-        "atofPath": "./.nemoflow/opencode.atof.jsonl",
-        "atifPath": "./.nemoflow/opencode.atif.json",
-        "logPath": "./.nemoflow/opencode-plugin.log"
+        "logPath": "./.nemoflow/opencode-plugin.log",
+        "plugins": {
+          "version": 1,
+          "components": [
+            {
+              "kind": "observability",
+              "enabled": true,
+              "config": {
+                "version": 1,
+                "atof": {
+                  "enabled": true,
+                  "output_directory": "./.nemoflow",
+                  "filename": "opencode.atof.jsonl",
+                  "mode": "overwrite"
+                },
+                "atif": {
+                  "enabled": true,
+                  "agent_name": "opencode",
+                  "output_directory": "./.nemoflow",
+                  "filename_template": "opencode-{session_id}.atif.json"
+                }
+              }
+            }
+          ]
+        }
       }
     ]
   ]
@@ -127,10 +193,10 @@ Check that stock OpenCode sees the plugin:
 
 ```bash
 opencode debug info | tee ./.nemoflow/debug-info.txt
-grep "integrations/opencode-plugin" ./.nemoflow/debug-info.txt
+grep "integrations/opencode" ./.nemoflow/debug-info.txt
 ```
 
-Run OpenCode normally. For a repeatable demo, use `opencode run`:
+Run OpenCode normally. For a repeatable smoke, use `opencode run`:
 
 ```bash
 opencode run \
@@ -139,37 +205,36 @@ opencode run \
   "Create phase1-demo.txt with one line: hello from NeMo Flow OpenCode. Then read it back."
 ```
 
-For an interactive demo, start OpenCode and use it as you normally would:
+For an interactive run, start OpenCode and use it as you normally would:
 
 ```bash
 opencode
 ```
 
 Ask OpenCode to create or read a small file so the plugin can observe a
-successful tool call. When the session becomes idle or is deleted, the plugin
-writes the ATIF trajectory.
+successful tool call. When the session becomes idle or is deleted, the generic
+observability component writes the ATIF trajectory.
 
-## Inspect the Output
+## Inspect The Output
 
 Confirm that OpenCode completed the work and that NeMo Flow output exists:
 
 ```bash
 test -f phase1-demo.txt
 test -s ./.nemoflow/opencode.atof.jsonl
-test -s ./.nemoflow/opencode.atif.json
+ls ./.nemoflow/opencode-*.atif.json
 ```
 
-`opencode.atof.jsonl` contains raw NeMo Flow lifecycle events. `opencode.atif.json`
-contains the exported session trajectory when OpenCode reports the session as
-idle or deleted.
+`opencode.atof.jsonl` contains raw NeMo Flow lifecycle events. Each
+`opencode-*.atif.json` file contains one exported top-level agent trajectory.
 
-Use these checks while recording a demo or debugging a local setup:
+Use these checks while debugging a local setup:
 
 ```bash
 grep -E 'opencode\.chat\.message|opencode\.llm\.request|"category":"tool"' \
   ./.nemoflow/opencode.atof.jsonl
 
-jq '.session_id // .trajectories // .' ./.nemoflow/opencode.atif.json
+jq '.session_id // .trajectories // .' ./.nemoflow/opencode-*.atif.json
 
 tail -n 20 ./.nemoflow/opencode-plugin.log
 ```
@@ -182,9 +247,9 @@ The expected ATOF output includes:
 | `opencode.llm.request` | OpenCode `chat.params` hook |
 | Tool start and end records | OpenCode `tool.execute.before` and `tool.execute.after` hooks |
 | `opencode.session.*` marks | OpenCode session lifecycle events |
-| `opencode.session.flush` | Session idle or deleted event |
+| `opencode.session.flush` | Session idle, deleted, or plugin cleanup |
 
-## How the Background Export Works
+## How The Background Export Works
 
 This sequence is what you should see in a successful run.
 
@@ -193,12 +258,13 @@ sequenceDiagram
     participant Dev as Developer
     participant OC as OpenCode
     participant Plug as NeMo Flow plugin
+    participant Host as NeMo Flow plugin host
     participant NF as NeMo Flow runtime
     participant Files as .nemoflow files
 
     Dev->>OC: Start OpenCode in a project
-    OC->>Plug: config(input)
-    Plug->>Files: Write plugin diagnostics
+    OC->>Plug: server(input, options)
+    Plug->>Host: Validate and initialize plugins config
     Dev->>OC: Send a prompt or run a task
     OC->>Plug: chat.message and chat.params
     Plug->>NF: Emit session and LLM request marks
@@ -207,14 +273,15 @@ sequenceDiagram
     Plug->>NF: Open and close tool lifecycle records
     NF->>Files: Append ATOF JSONL
     OC->>Plug: session.status idle or session.deleted
-    Plug->>NF: Flush session trajectory
+    Plug->>NF: Close session scope
     NF->>Files: Write ATIF JSON
 ```
 
 ## Pass-Through Checks
 
-The plugin should not change OpenCode behavior when observability is disabled
-or when the NeMo Flow runtime is unavailable.
+The plugin should not change OpenCode behavior when observability is disabled,
+when the NeMo Flow runtime is unavailable, or when the generic plugin config is
+invalid.
 
 Disable the plugin:
 
@@ -228,7 +295,7 @@ opencode run --title "nemo-flow disabled smoke" \
   "Reply with exactly: plugin disabled smoke."
 
 test ! -s ./.nemoflow/opencode.atof.jsonl
-test ! -s ./.nemoflow/opencode.atif.json
+test -z "$(find ./.nemoflow -name 'opencode-*.atif.json' -print -quit)"
 mv opencode.enabled.json opencode.json
 ```
 
@@ -244,23 +311,6 @@ NEMO_FLOW_OPENCODE_FORCE_INIT_FAILURE=1 opencode run \
 grep -i "pass-through" ./.nemoflow/opencode-plugin.log
 test ! -s ./.nemoflow/opencode.atof.jsonl
 ```
-
-## Demo Video Script
-
-Use this storyboard to record a short walkthrough.
-
-| Shot | Show | Narration |
-|---|---|---|
-| 1 | `opencode.json` with the plugin file URL | Stock OpenCode loads the NeMo Flow plugin through normal plugin config. |
-| 2 | `opencode debug info` output | OpenCode sees the plugin without applying an OpenCode patch. |
-| 3 | `opencode run` or the interactive OpenCode UI | The developer uses OpenCode normally. |
-| 4 | `ls -la .nemoflow` | The plugin writes observability files in the background. |
-| 5 | `grep` against `opencode.atof.jsonl` | ATOF contains session, message, LLM request, and tool lifecycle events. |
-| 6 | `jq` against `opencode.atif.json` | ATIF contains the exported session trajectory. |
-| 7 | Disabled or forced-failure smoke | OpenCode still runs when the plugin is disabled or pass-through. |
-
-Keep the recording focused on the user-visible contract: install the plugin,
-use OpenCode normally, and inspect `.nemoflow` output after the session.
 
 ## Limits
 
